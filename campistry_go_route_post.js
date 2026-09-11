@@ -36,8 +36,17 @@ window.CampistryGoRoutePost = (function () {
 
     const DEFAULTS = {
         avgSpeedMph: 25,
-        avgStopMin: 2,
+        avgStopMin: 2,             // base dwell per stop (minutes)
+        secPerRider: 0,            // extra dwell per child boarding/alighting (seconds); school-bus studies
+                                   // measure ~19s + 2.6s/student, camps set their own
         roadFactor: 1.35,
+        busOverheadMin: 5,         // cost of running a bus at all (min-equivalent); raise to prefer fewer buses
+        maxRideRatio: 2.0,         // a child should not ride more than this x their direct trip (+ slack)
+        rideRatioSlackMin: 10,
+        // Road network (when the OSM graph is available)
+        roadEdgePenaltyMin: 0.05,  // ~3s per edge: intersections, turns, slowing for stops
+        roadOffMph: 10,            // speed for the off-graph bit between a stop and its nearest node
+        legMinutes: null,          // (a, b) -> minutes on the road network; null = straight-line x roadFactor
         // Containment
         minArcRadiusMi: 1.5,        // stops closer than this to camp don't count toward the arc
         maxDistrictArcDeg: 110,     // a bus may fan out this wide around camp; beyond it, it straddles
@@ -50,7 +59,7 @@ window.CampistryGoRoutePost = (function () {
         // Capacity-aware sweep (shared by both districting pipelines)
         sweepRotations: 48,        // seam positions tried around the ring
         sweepRidersPerStop: 2.5,   // stops ≈ riders / this
-        sweepBusOverheadMin: 5,    // cost of using a bus at all
+        sweepBusOverheadMin: null, // cost of using a bus at all (null = busOverheadMin)
         sweepGroupCutMin: 6,       // cost of splitting one group (neighbourhood) between two buses
         sweepMaxRideMin: 60,       // soft riding budget per bus (0 = off)
         // District polish (relocate / swap atoms between buses)
@@ -58,10 +67,16 @@ window.CampistryGoRoutePost = (function () {
         polishTimeBudgetMs: 1500,
         polishRideBudgetMin: 60,   // soft riding budget per bus (0 = off)
         polishMinGainMin: 0.05,
+        polishLnsIters: 0,         // ruin-and-recreate attempts after local search converges.
+                                   // Measured on camp-shaped layouts: no gain over relocate/swap,
+                                   // and it spends the whole time budget — off unless experimenting.
+        polishLnsRuinMin: 4,       // atoms removed per attempt (radial cluster)
+        polishLnsRuinMax: 12,
         polishReachMi: 5.0,        // only consider a bus whose nearest atom is within this of the moving atom
         polishReachOverBudgetX: 2.5, // ...unless the source bus is over its ride budget: reach this much further
         // Stop ordering
         tspUnfairWeight: 2,        // weight on minutes a child rides beyond their allowance
+        tspNeighborK: 10,          // candidate moves only among each stop's K nearest (LKH-style neighbour lists)
     };
     function opts(o) { return Object.assign({}, DEFAULTS, o || {}); }
 
@@ -76,6 +91,12 @@ window.CampistryGoRoutePost = (function () {
     function isStaff(s) { return !!(s && (s.isMonitor || s.isCounselor)); }
     function riders(s) { return Array.isArray(s && s.campers) ? s.campers.length : 0; }
     function headcount(stops) { let n = 0; for (const s of (stops || [])) if (!isStaff(s)) n += riders(s); return n; }
+    // Dwell at a stop: base minutes plus seconds per child. Flat when secPerRider is 0.
+    function stopDwellMin(stop, o) {
+        o = o && Number.isFinite(o.avgStopMin) ? o : opts(o);
+        const k = stop ? (Number.isFinite(stop.count) ? stop.count : riders(stop)) : 0;
+        return o.avgStopMin + (o.secPerRider > 0 ? k * o.secPerRider / 60 : 0);
+    }
     function driveMin(a, b, o) {
         if (!o || !Number.isFinite(o.roadFactor)) o = opts(o);
         if (!hasPos(a) || !hasPos(b)) return 3;
@@ -160,16 +181,31 @@ window.CampistryGoRoutePost = (function () {
         const n = movable.length;
         if (n < 2) return all.slice();
 
-        const stopMin = o.avgStopMin;
-        const M = new Array(n), C = new Array(n), cnt = new Array(n), allow = new Array(n);
+        const M = new Array(n), C = new Array(n), cnt = new Array(n), allow = new Array(n), dwell = new Array(n);
+        const L = typeof o.legMinutes === 'function' ? o.legMinutes : null;
+        const legOf = (a, b) => L ? L(a, b) : driveMin(a, b, o);
         for (let i = 0; i < n; i++) {
             M[i] = new Float64Array(n);
-            C[i] = driveMin(depot, movable[i], o);
+            C[i] = legOf(depot, movable[i]);
             cnt[i] = riders(movable[i]) || 1;
-            allow[i] = C[i] * 2 + 25;
+            allow[i] = C[i] * o.maxRideRatio + 25;
+            dwell[i] = stopDwellMin(movable[i], o);
         }
-        for (let i = 0; i < n; i++) for (let j = i + 1; j < n; j++) { const d = driveMin(movable[i], movable[j], o); M[i][j] = d; M[j][i] = d; }
+        // Road legs can be asymmetric (one-way streets): fill both directions.
+        for (let i = 0; i < n; i++) for (let j = 0; j < n; j++) { if (i === j) continue; M[i][j] = L ? L(movable[i], movable[j]) : (j > i ? driveMin(movable[i], movable[j], o) : M[j][i]); }
 
+        // Neighbour lists: each stop's K nearest by leg time. Local moves only
+        // consider edges to a neighbour, which is what keeps a 50-stop bus
+        // ordering in a fraction of a second without hurting quality.
+        const K = Math.min(n - 1, Math.max(3, o.tspNeighborK | 0));
+        const nbr = new Array(n);
+        for (let i = 0; i < n; i++) {
+            const cand = [];
+            for (let j = 0; j < n; j++) if (j !== i) cand.push(j);
+            cand.sort((a, b) => Math.min(M[i][a], M[a][i]) - Math.min(M[i][b], M[b][i]));
+            nbr[i] = cand.slice(0, K);
+        }
+        const pos = new Int32Array(n);
         const arr = new Float64Array(n);
         // cost of the tour given by pos -> stop index function
         function costOf(at) {
@@ -177,12 +213,12 @@ window.CampistryGoRoutePost = (function () {
             for (let p = 0; p < n; p++) {
                 const idx = at(p);
                 const leg = prev < 0 ? C[idx] : M[prev][idx];
-                time += leg + stopMin; tour += leg; arr[p] = time; prev = idx;
+                time += leg + dwell[idx]; tour += leg; arr[p] = time; prev = idx;
             }
             // Arrival: everyone aboard still rides from the last pickup back to
             // camp. Leaving that leg out let the search end a route five miles
             // out and hand every child the drive back.
-            if (isArrival) { const back = C[prev]; time += back; tour += back; }
+            if (isArrival) { const back = L ? L(movable[prev], depot) : C[prev]; time += back; tour += back; }
             let total = 0, head = 0, unfair = 0;
             for (let p = 0; p < n; p++) {
                 const idx = at(p), k = cnt[idx];
@@ -233,12 +269,20 @@ window.CampistryGoRoutePost = (function () {
             let improved = true, guard = 0;
             while (improved && guard++ < 30) {
                 improved = false;
+                for (let p = 0; p < n; p++) pos[t[p]] = p;
                 for (let i = 0; i < n - 1 && !improved; i++) {
-                    for (let j = i + 1; j < n && !improved; j++) {
+                    // reversing [i..j] creates edges (t[i-1],t[j]) and (t[i],t[j+1]):
+                    // only try j where t[j] neighbours t[i-1], or t[j+1] neighbours t[i]
+                    const cands = new Set();
+                    if (i > 0) for (const nb of nbr[t[i - 1]]) { const j = pos[nb]; if (j > i) cands.add(j); }
+                    for (const nb of nbr[t[i]]) { const j = pos[nb] - 1; if (j > i) cands.add(j); }
+                    if (i === 0) for (const nb of nbr[t[0]]) { const j = pos[nb]; if (j > 0) cands.add(j); }
+                    cands.add(n - 1);
+                    for (const j of cands) {
                         const c = costOf(p => (p < i || p > j) ? t[p] : t[j - (p - i)]);
                         if (c < best - 1e-9) {
                             for (let x = i, y = j; x < y; x++, y--) { const tmp = t[x]; t[x] = t[y]; t[y] = tmp; }
-                            best = c; improved = true;
+                            best = c; improved = true; break;
                         }
                     }
                 }
@@ -256,8 +300,16 @@ window.CampistryGoRoutePost = (function () {
                         const rest = t.slice(0, i).concat(t.slice(i + len));
                         const seg = t.slice(i, i + len);
                         if (rest.length < 2) continue;
+                        // insertion slots next to a neighbour of either segment end (+ the ends of the route)
+                        for (let p = 0; p < rest.length; p++) pos[rest[p]] = p;
+                        const slots = new Set([0, rest.length]);
+                        for (const end of [seg[0], seg[len - 1]]) for (const nb of nbr[end]) {
+                            const q = pos[nb];
+                            if (rest[q] !== nb) continue; // nb is inside the segment
+                            slots.add(q); slots.add(q + 1);
+                        }
                         let bestPos = -1, bestC = base - 1e-9, bestRev = false;
-                        for (let j = 0; j <= rest.length; j++) {
+                        for (const j of slots) {
                             if (j === i) continue; // same place, same orientation is a no-op
                             for (let rev = 0; rev < 2; rev++) {
                                 const c = costOf(p => p < j ? rest[p] : p < j + len ? (rev ? seg[len - 1 - (p - j)] : seg[p - j]) : rest[p - len]);
@@ -323,15 +375,50 @@ window.CampistryGoRoutePost = (function () {
         return best.map(i => movable[i]).concat(tail);
     }
 
+    // The ordering objective of a given order (children-minutes + fairness +
+    // tour tie-break), for tests and diagnostics.
+    function routeObjective(stops, depot, isArrival, o) {
+        o = opts(o);
+        const movable = (stops || []).filter(s => hasPos(s) && !s.isMonitor);
+        const n = movable.length;
+        if (n < 1) return 0;
+        const L = typeof o.legMinutes === 'function' ? o.legMinutes : null;
+        const legOf = (a, b) => L ? L(a, b) : driveMin(a, b, o);
+        let time = 0, tour = 0, prev = depot; const arr = [];
+        for (const s of movable) { const l = legOf(prev, s); time += l + stopDwellMin(s, o); tour += l; arr.push(time); prev = s; }
+        if (isArrival) { const back = legOf(prev, depot); time += back; tour += back; }
+        let total = 0, head = 0, unfair = 0;
+        movable.forEach((s, i) => {
+            const k = riders(s) || 1, ride = isArrival ? (time - arr[i]) : arr[i];
+            head += k; total += k * ride;
+            const allow = legOf(depot, s) * o.maxRideRatio + 25;
+            if (ride > allow) unfair += k * (ride - allow);
+        });
+        return total + unfair * o.tspUnfairWeight + (tour * 60) * Math.max(1, head / 40);
+    }
+
     function routeLastDropMin(route, depot, o) {
         o = opts(o);
         let t = 0, prev = depot;
+        const L = typeof o.legMinutes === 'function' ? o.legMinutes : null;
         for (const s of ((route && route.stops) || [])) {
             if (!hasPos(s) || isStaff(s)) continue;
-            t += driveMin(prev, s, o) + o.avgStopMin;
+            t += (L ? L(prev, s) : driveMin(prev, s, o)) + stopDwellMin(s, o);
             prev = s;
         }
         return t;
+    }
+    // Per-leg seconds along the route's current order (index i = leg INTO stop
+    // i, last entry = leg back to camp), the shape the ETA pass consumes.
+    function stampLegTimes(route, depot, L) {
+        const stops = ((route && route.stops) || []).filter(s => hasPos(s) && !isStaff(s));
+        if (!stops.length || typeof L !== 'function') { if (route) delete route._tspLegTimes; return null; }
+        const legs = [];
+        let prev = depot;
+        for (const s of stops) { legs.push(Math.round(L(prev, s) * 60)); prev = s; }
+        legs.push(Math.round(L(prev, depot) * 60));
+        route._tspLegTimes = legs;
+        return legs;
     }
     function renumber(route) { (route.stops || []).forEach((s, i) => { s.stopNum = i + 1; }); route.camperCount = headcount(route.stops); }
     function reorder(route, depot, isArrival, o) {
@@ -341,6 +428,7 @@ window.CampistryGoRoutePost = (function () {
         }
         renumber(route);
         delete route._tspLegTimes; delete route._roadPts; delete route._encodedPolyline;
+        if (typeof o.legMinutes === 'function') stampLegTimes(route, depot, o.legMinutes);
         route.totalDuration = Math.round(routeLastDropMin(route, depot, o));
     }
     function orderRoutes(routes, depot, isArrival, o) {
@@ -604,6 +692,137 @@ window.CampistryGoRoutePost = (function () {
         return { moved, stranded, uncontained };
     }
 
+    // ---- road network -------------------------------------------------------
+    // Travel times on the real street network, the way every commercial
+    // routing product measures them: class-based speeds, one-way streets,
+    // rivers and highways with no crossing, cul-de-sacs. Built from the
+    // OpenStreetMap graph the neighbourhood pass already fetches, so it costs
+    // no extra network call. Straight-line x roadFactor remains the fallback.
+    const CLASS_MPH = {
+        motorway: 55, motorway_link: 35, trunk: 45, trunk_link: 30, primary: 35, primary_link: 25,
+        secondary: 30, secondary_link: 25, tertiary: 25, tertiary_link: 20,
+        unclassified: 22, residential: 20, living_street: 12, service: 12,
+    };
+    function buildRoadNet(graph, o) {
+        o = opts(o);
+        if (!graph || !graph.nodes || !Array.isArray(graph.edges) || !graph.edges.length) return null;
+        const ids = Object.keys(graph.nodes);
+        const N = ids.length;
+        if (N < 2) return null;
+        const idx = new Map();
+        const lat = new Float64Array(N), lng = new Float64Array(N);
+        ids.forEach((id, i) => { idx.set(String(id), i); lat[i] = graph.nodes[id].lat; lng[i] = graph.nodes[id].lng; });
+        // The camp's Avg Speed setting calibrates the whole table (25 = as listed).
+        const scale = Math.max(0.2, (o.avgSpeedMph || 25) / 25);
+        const arcs = [];
+        for (const e of graph.edges) {
+            const a = idx.get(String(e.fromNodeId)), b = idx.get(String(e.toNodeId));
+            if (a == null || b == null || a === b) continue;
+            const mph = (CLASS_MPH[e.hwClass] || 20) * scale;
+            const min = (Number(e.lenMi) || 0) / mph * 60 + o.roadEdgePenaltyMin;
+            const ow = e.oneway;
+            if (ow !== -1 && ow !== 'reverse') arcs.push(a, b, min);
+            if (!ow || ow === -1 || ow === 'reverse' || ow === false) arcs.push(b, a, min);
+        }
+        // CSR adjacency
+        const head = new Int32Array(N + 1);
+        for (let k = 0; k < arcs.length; k += 3) head[arcs[k] + 1]++;
+        for (let i = 0; i < N; i++) head[i + 1] += head[i];
+        const to = new Int32Array(arcs.length / 3), w = new Float64Array(arcs.length / 3), fill = head.slice(0, N);
+        for (let k = 0; k < arcs.length; k += 3) { const a = arcs[k]; to[fill[a]] = arcs[k + 1]; w[fill[a]] = arcs[k + 2]; fill[a]++; }
+        // spatial grid for nearest-node lookup
+        const CELL = 0.005;
+        const grid = new Map();
+        for (let i = 0; i < N; i++) {
+            const key = Math.floor(lat[i] / CELL) + ':' + Math.floor(lng[i] / CELL);
+            let arr = grid.get(key); if (!arr) { arr = []; grid.set(key, arr); } arr.push(i);
+        }
+        function nearest(pLat, pLng) {
+            const cy = Math.floor(pLat / CELL), cx = Math.floor(pLng / CELL);
+            let best = -1, bestD = Infinity;
+            for (let ring = 0; ring <= 4 && best < 0; ring++) {
+                for (let dy = -ring; dy <= ring; dy++) for (let dx = -ring; dx <= ring; dx++) {
+                    if (ring && Math.abs(dy) !== ring && Math.abs(dx) !== ring) continue;
+                    const arr = grid.get((cy + dy) + ':' + (cx + dx)); if (!arr) continue;
+                    for (const i of arr) { const d = haversineMi(pLat, pLng, lat[i], lng[i]); if (d < bestD) { bestD = d; best = i; } }
+                }
+            }
+            return best < 0 ? null : { i: best, offMi: bestD };
+        }
+        // Binary-heap Dijkstra from `src`, stopping once every node in `targets`
+        // is settled. Returns a sparse Map(node -> minutes).
+        function dijkstra(src, targets) {
+            const dist = new Map(); dist.set(src, 0);
+            const settled = new Set();
+            let want = 0; for (const t of targets) if (!settled.has(t)) want++;
+            const hd = [0], hn = [src];
+            const push = (d, n) => { hd.push(d); hn.push(n); let i = hd.length - 1; while (i > 0) { const p = (i - 1) >> 1; if (hd[p] <= hd[i]) break; [hd[p], hd[i]] = [hd[i], hd[p]]; [hn[p], hn[i]] = [hn[i], hn[p]]; i = p; } };
+            const pop = () => { const d = hd[0], n = hn[0]; const ld = hd.pop(), ln = hn.pop(); if (hd.length) { hd[0] = ld; hn[0] = ln; let i = 0; for (;;) { const l = 2 * i + 1, r = l + 1; let m = i; if (l < hd.length && hd[l] < hd[m]) m = l; if (r < hd.length && hd[r] < hd[m]) m = r; if (m === i) break; [hd[m], hd[i]] = [hd[i], hd[m]]; [hn[m], hn[i]] = [hn[i], hn[m]]; i = m; } } return [d, n]; };
+            while (hd.length && want > 0) {
+                const [d, n] = pop();
+                if (settled.has(n)) continue;
+                settled.add(n);
+                if (targets.has(n)) want--;
+                for (let k = head[n]; k < head[n + 1]; k++) {
+                    const m = to[k], nd = d + w[k];
+                    const cur = dist.get(m);
+                    if (cur == null || nd < cur) { dist.set(m, nd); push(nd, m); }
+                }
+            }
+            return dist;
+        }
+        const snapCache = new WeakMap();
+        const rowCache = new Map(); // "srcNode|targetsKey" -> Map(targetNode -> minutes)
+        function snap(p) {
+            if (!hasPos(p)) return null;
+            let s = snapCache.get(p);
+            if (s === undefined) { s = nearest(p.lat, p.lng); snapCache.set(p, s); }
+            return s;
+        }
+        const offMin = mi => mi / Math.max(1, o.roadOffMph) * 60;
+        // Minutes between every pair of `points` (stop objects with lat/lng).
+        // Returns legMinutes(a, b) that answers from the matrix for known
+        // points and falls back to straight-line x roadFactor otherwise.
+        function legMinutesFor(points) {
+            const pts = points.filter(hasPos);
+            const snaps = pts.map(snap);
+            const targets = new Set(snaps.filter(Boolean).map(x => x.i));
+            const targetsKey = Array.from(targets).sort((a, b) => a - b).join(',');
+            const bySrc = new Map(); // node -> Map(node -> min)
+            const table = new Map(); // point -> Map(point -> min)
+            for (let i = 0; i < pts.length; i++) {
+                const si = snaps[i]; if (!si) continue;
+                let dist = bySrc.get(si.i);
+                if (!dist) {
+                    const key = si.i + '|' + targetsKey;
+                    dist = rowCache.get(key);
+                    if (!dist) {
+                        const full = dijkstra(si.i, targets);
+                        dist = new Map();
+                        for (const t of targets) { const d = full.get(t); if (d != null) dist.set(t, d); }
+                        if (rowCache.size > 4000) rowCache.clear();
+                        rowCache.set(key, dist);
+                    }
+                    bySrc.set(si.i, dist);
+                }
+                const row = new Map();
+                for (let j = 0; j < pts.length; j++) {
+                    if (j === i) { row.set(pts[j], 0); continue; }
+                    const sj = snaps[j]; if (!sj) continue;
+                    const d = dist.get(sj.i);
+                    if (d != null) row.set(pts[j], d + offMin(si.offMi) + offMin(sj.offMi));
+                }
+                table.set(pts[i], row);
+            }
+            return function legMinutes(a, b) {
+                const row = table.get(a);
+                const v = row && row.get(b);
+                return v != null ? v : driveMin(a, b, o);
+            };
+        }
+        return { nodeCount: N, arcCount: to.length, snap, legMinutesFor, dijkstra, _nearest: nearest };
+    }
+
     // ---- capacity-aware sweep -----------------------------------------------
     // `ring`: atoms in circular order around camp, each {count, lat, lng,
     // groupId?}. `caps`: seats per bus, in the order arcs are handed out.
@@ -623,14 +842,16 @@ window.CampistryGoRoutePost = (function () {
         if (M < 2 || !N || !depot) return null;
         const total = ring.reduce((a, x) => a + (x.count || 0), 0);
         if (total > caps.reduce((a, c) => a + c, 0)) return null;
-        const PER_STOP = o.sweepRidersPerStop, OVERHEAD = o.sweepBusOverheadMin, CUT = o.sweepGroupCutMin;
+        const PER_STOP = o.sweepRidersPerStop, CUT = o.sweepGroupCutMin;
+        const OVERHEAD = Number.isFinite(o.sweepBusOverheadMin) ? o.sweepBusOverheadMin : o.busOverheadMin;
         const dist = ring.map(a => haversineMi(depot.lat, depot.lng, a.lat, a.lng));
 
         function arcCost(agg, cutInsideGroup) {
             const stops = Math.max(1, Math.round(agg.count / PER_STOP));
             const diag = haversineMi(agg.mnLa, agg.mnLo, agg.mxLa, agg.mxLo);
             const miles = agg.far + 0.5 * Math.sqrt(stops) * diag;
-            const ride = (miles * o.roadFactor / Math.max(1, o.avgSpeedMph)) * 60 + stops * o.avgStopMin;
+            const ride = (miles * o.roadFactor / Math.max(1, o.avgSpeedMph)) * 60 +
+                stops * o.avgStopMin + (o.secPerRider > 0 ? agg.count * o.secPerRider / 60 : 0);
             const over = o.sweepMaxRideMin > 0 ? Math.max(0, ride - o.sweepMaxRideMin) : 0;
             return ride + over * 2 + OVERHEAD + (cutInsideGroup ? CUT : 0);
         }
@@ -694,10 +915,11 @@ window.CampistryGoRoutePost = (function () {
     function polishDistricts(buckets, caps, depot, o) {
         o = opts(o);
         const t0 = Date.now();
-        const speed = Math.max(1, o.avgSpeedMph), stopMin = o.avgStopMin, budget = o.polishRideBudgetMin;
+        const speed = Math.max(1, o.avgSpeedMph), budget = o.polishRideBudgetMin, OVERHEAD = o.busOverheadMin;
         const leg = (a, b) => (haversineMi(a.lat, a.lng, b.lat, b.lng) * o.roadFactor / speed) * 60;
         // Riders per atom: an explicit count, else the campers list, else one.
         const cnt = x => Number.isFinite(x.count) ? x.count : (riders(x) || 1);
+        const dwellOf = x => o.avgStopMin + (o.secPerRider > 0 ? cnt(x) * o.secPerRider / 60 : 0);
         const B = (buckets || []).map((atoms, i) => ({
             atoms: atoms.slice(), cap: Number.isFinite(caps && caps[i]) ? caps[i] : Infinity,
             count: atoms.reduce((a, x) => a + cnt(x), 0), tour: [], len: 0, wedge: 0,
@@ -707,7 +929,7 @@ window.CampistryGoRoutePost = (function () {
 
         function tourLen(atoms, tour) {
             let t = 0, prev = depot;
-            for (const i of tour) { t += leg(prev, atoms[i]) + stopMin; prev = atoms[i]; }
+            for (const i of tour) { t += leg(prev, atoms[i]) + dwellOf(atoms[i]); prev = atoms[i]; }
             return t;
         }
         function buildTour(b) {
@@ -739,14 +961,14 @@ window.CampistryGoRoutePost = (function () {
             }
             b.tour = t; b.len = tourLen(b.atoms, t); b.wedge = arcDeg(b.atoms, depot, o);
         }
-        const busCost = len => len + (budget > 0 ? 2 * Math.max(0, len - budget) : 0);
+        const busCost = len => len <= 0 ? 0 : len + OVERHEAD + (budget > 0 ? 2 * Math.max(0, len - budget) : 0);
         const objective = () => B.reduce((a, b) => a + busCost(b.len), 0);
         // Saving from removing tour position `pos` from bus b.
         function removalSaving(b, pos) {
             const t = b.tour, cur = b.atoms[t[pos]];
             const prev = pos > 0 ? b.atoms[t[pos - 1]] : depot;
-            if (pos + 1 < t.length) { const next = b.atoms[t[pos + 1]]; return leg(prev, cur) + leg(cur, next) - leg(prev, next) + stopMin; }
-            return leg(prev, cur) + stopMin;
+            if (pos + 1 < t.length) { const next = b.atoms[t[pos + 1]]; return leg(prev, cur) + leg(cur, next) - leg(prev, next) + dwellOf(cur); }
+            return leg(prev, cur) + dwellOf(cur);
         }
         // Cheapest insertion of `atom` into bus b's tour, optionally treating
         // position `excludePos` as already removed. Returns { cost, at } where
@@ -762,7 +984,7 @@ window.CampistryGoRoutePost = (function () {
                 if (!next) break;
                 prev = next; j++;
             }
-            return { cost: best + stopMin, at };
+            return { cost: best + dwellOf(atom), at };
         }
         // Nearest distance (mi) from an atom to any atom of bus b — cheap
         // pruning so we never price a move onto a bus that is nowhere near.
@@ -801,6 +1023,7 @@ window.CampistryGoRoutePost = (function () {
         const EPS = o.polishMinGainMin;
 
         let stop = false;
+        function localSearch() {
         for (let pass = 0; pass < o.polishMaxPasses && !stop; pass++) {
             if (outOfTime()) break;
             let improved = false;
@@ -879,11 +1102,127 @@ window.CampistryGoRoutePost = (function () {
             for (const b of B) buildTour(b);
             if (!improved) break;
         }
+        }
+
+        // ── ruin & recreate (the jsprit / VROOM large-neighbourhood step) ──
+        // Single relocate/swap moves get stuck when several atoms have to move
+        // together. Remove a radial cluster of atoms (a random seed and its
+        // nearest neighbours, across buses), re-insert them cheapest-first
+        // under seats + containment, and keep the result only if the fleet
+        // objective fell. Deterministic seed, so a re-run reproduces itself.
+        function ruinAndRecreate() {
+            let seed = 0x9e3779b1 ^ B.reduce((a, b) => a + b.atoms.length * 31, 0);
+            const rnd = () => { seed = (seed * 1103515245 + 12345) & 0x7fffffff; return seed / 0x7fffffff; };
+            let accepted = 0;
+            for (let it = 0; it < o.polishLnsIters; it++) {
+                if (outOfTime()) break;
+                const pool = [];
+                B.forEach((b, bi) => b.atoms.forEach(a => pool.push({ a, bi })));
+                if (pool.length < 6) break;
+                const k = Math.min(pool.length - 2, o.polishLnsRuinMin + Math.floor(rnd() * (o.polishLnsRuinMax - o.polishLnsRuinMin + 1)));
+                const seedAtom = pool[Math.floor(rnd() * pool.length)].a;
+                pool.sort((x, y) => haversineMi(seedAtom.lat, seedAtom.lng, x.a.lat, x.a.lng) - haversineMi(seedAtom.lat, seedAtom.lng, y.a.lat, y.a.lng));
+                const removed = pool.slice(0, k);
+                const snapshot = B.map(b => ({ atoms: b.atoms.slice(), tour: b.tour.slice(), count: b.count, len: b.len, wedge: b.wedge }));
+                const objBefore = objective();
+                const touched = new Set();
+                for (const { a, bi } of removed) {
+                    const b = B[bi];
+                    const idx = b.atoms.indexOf(a); if (idx < 0) continue;
+                    const pos = b.tour.indexOf(idx); if (pos < 0) continue;
+                    removeAt(b, pos); touched.add(b);
+                }
+                for (const b of touched) refresh(b);
+                // farthest-from-camp first: the hardest atoms to place go while
+                // there is still room next to them
+                removed.sort((x, y) => haversineMi(depot.lat, depot.lng, y.a.lat, y.a.lng) - haversineMi(depot.lat, depot.lng, x.a.lat, x.a.lng));
+                let ok = true;
+                for (const { a } of removed) {
+                    let best = null;
+                    for (let bi = 0; bi < N; bi++) {
+                        const Bb = B[bi];
+                        if (Bb.count + cnt(a) > Bb.cap) continue;
+                        if (Bb.atoms.length && reachMi(Bb, a) > o.polishReachMi) continue;
+                        const ins = cheapestInsert(Bb, a, -1);
+                        const c = busCost(Bb.len + ins.cost) - busCost(Bb.len);
+                        if (!best || c < best.c) { if (!wedgeOk(Bb, [a], -1)) continue; best = { c, bi, at: ins.at }; }
+                    }
+                    if (!best) { ok = false; break; }
+                    insertAt(B[best.bi], a, best.at); refresh(B[best.bi]);
+                }
+                if (ok) for (const b of B) buildTour(b);
+                if (!ok || objective() > objBefore - EPS) {
+                    B.forEach((b, i) => { const sn = snapshot[i]; b.atoms = sn.atoms; b.tour = sn.tour; b.count = sn.count; b.len = sn.len; b.wedge = sn.wedge; });
+                } else { accepted++; moves++; }
+            }
+            return accepted;
+        }
+
+        localSearch();
+        for (let round = 0; round < 4 && !stop && !outOfTime(); round++) {
+            if (!ruinAndRecreate()) break;
+            localSearch();
+        }
         const after = objective();
         return { buckets: B.map(b => b.tour.map(i => b.atoms[i])), moves, before, after };
     }
 
     // ---- audit --------------------------------------------------------------
+    // Children whose ride is longer than maxRideRatio x their direct trip from
+    // camp (+ slack). Uses the ETA pass's _rideTimeMin when present, else a
+    // straight-line estimate along the current order.
+    function rideRatioViolations(route, depot, isArrival, o) {
+        o = opts(o);
+        const out = [];
+        const stops = ((route && route.stops) || []).filter(s => hasPos(s) && !isStaff(s));
+        if (!stops.length) return out;
+        let t = 0, prev = depot; const arr = [];
+        for (const s of stops) { t += driveMin(prev, s, o) + stopDwellMin(s, o); arr.push(t); prev = s; }
+        const back = isArrival ? driveMin(prev, depot, o) : 0;
+        stops.forEach((s, i) => {
+            const ride = Number.isFinite(s._rideTimeMin) ? s._rideTimeMin : (isArrival ? t + back - arr[i] : arr[i]);
+            const direct = driveMin(depot, s, o);
+            const limit = direct * o.maxRideRatio + o.rideRatioSlackMin;
+            if (ride > limit) out.push({ stop: s, rideMin: Math.round(ride), directMin: Math.round(direct), limitMin: Math.round(limit) });
+        });
+        return out;
+    }
+    // Stops the bus drives past (within `nearMi` of a leg) before it serves
+    // them — the "the bus went right by our house and came back twenty minutes
+    // later" complaint. Dismissal: a later stop passed by an earlier leg.
+    // Arrival: an earlier pickup passed by a later leg (mirror).
+    function passBys(route, depot, isArrival, o, nearMi) {
+        o = opts(o);
+        const near = nearMi || 0.08; // ~400ft
+        const stops = ((route && route.stops) || []).filter(s => hasPos(s) && !isStaff(s));
+        if (stops.length < 3) return [];
+        // distance from point p to segment a-b in miles (equirectangular, fine at this scale)
+        const kx = 69 * Math.cos((depot.lat || stops[0].lat) * Math.PI / 180), ky = 69;
+        function segDist(p, a, b) {
+            const ax = a.lng * kx, ay = a.lat * ky, bx = b.lng * kx, by = b.lat * ky, px = p.lng * kx, py = p.lat * ky;
+            const dx = bx - ax, dy = by - ay, l2 = dx * dx + dy * dy;
+            let t = l2 > 0 ? ((px - ax) * dx + (py - ay) * dy) / l2 : 0;
+            t = Math.max(0, Math.min(1, t));
+            const qx = ax + t * dx, qy = ay + t * dy;
+            return Math.hypot(px - qx, py - qy);
+        }
+        const seq = isArrival ? stops.slice().reverse() : stops; // walk in "riding" direction
+        const out = [];
+        for (let k = 1; k < seq.length; k++) {
+            const target = seq[k];
+            let prev = depot;
+            for (let i = 0; i < k; i++) {
+                const cur = seq[i];
+                // ignore legs that start or end at a stop within `near` of the target (adjacent stops)
+                if (haversineMi(cur.lat, cur.lng, target.lat, target.lng) > near && segDist(target, prev, cur) <= near) {
+                    out.push({ stop: target, passedOnLegTo: cur });
+                    break;
+                }
+                prev = cur;
+            }
+        }
+        return out;
+    }
     function containmentReport(routes, depot, o) {
         o = opts(o);
         return (routes || []).filter(r => r && r.stops && r.stops.length).map(r => {
@@ -902,5 +1241,6 @@ window.CampistryGoRoutePost = (function () {
         localTspOrder, routeLastDropMin, orderRoutes,
         relieveLongRoutes, splitOverlongRoutes, rebalanceBusLoads, enforceCapacity,
         sweepPartition, polishDistricts, containmentReport,
+        stopDwellMin, rideRatioViolations, passBys, buildRoadNet, stampLegTimes, routeObjective,
     };
 })();

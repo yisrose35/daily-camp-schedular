@@ -79,7 +79,13 @@
             clusterSpreadRatio: 150, clusterMaxSpreadMi: 3.5,
             // Post-routing load balancing is OFF: the camp wants efficient,
             // contained routes, not equal head-counts. Opt back in from Setup.
-            equalizeBusLoads: false
+            equalizeBusLoads: false,
+            // Dwell = Time Per Stop + this many seconds per child. 0 keeps the flat
+            // per-stop time; school-bus studies measure ~19s + 2.6s per student.
+            secPerRider: 0,
+            // 'as-needed' uses the fleet the camp gave; 'fewer' makes an extra bus
+            // expensive so routes consolidate onto fewer vehicles when they can.
+            fleetUse: 'as-needed'
         },
         activeMode: 'dismissal',
         buses: [], shifts: [], monitors: [], counselors: [],
@@ -179,11 +185,23 @@ let _toastTimer = null;
     }
 
     // Settings handed to the pure post-routing module (campistry_go_route_post.js).
+    function _busOverheadMin() { return D.setup.fleetUse === 'fewer' ? 40 : 5; }
+    // Road network from the last neighbourhood run (null in sandbox / when the
+    // road graph is unavailable). Ordering and ETAs use real street travel
+    // times when it is present.
+    let _activeRoadNet = null;
+    function _roadLegsFor(stops, campLat, campLng) {
+        if (!_activeRoadNet) return null;
+        try { return _activeRoadNet.legMinutesFor([{ lat: campLat, lng: campLng }].concat(stops || [])); }
+        catch (e) { console.warn('[Go] Road-network legs unavailable: ' + e.message); return null; }
+    }
     function _routePostOpts(extra) {
         return Object.assign({
             avgSpeedMph: D.setup.avgSpeed || 25,
             avgStopMin: D.setup.avgStopTime || 2,
+            secPerRider: Math.max(0, parseFloat(D.setup.secPerRider) || 0),
             roadFactor: ROAD_FACTOR,
+            busOverheadMin: _busOverheadMin(),
             equalizeLoads: D.setup.equalizeBusLoads === true
         }, extra || {});
     }
@@ -1485,6 +1503,8 @@ let _toastTimer = null;
         if (document.getElementById('clusterFloorPct')) document.getElementById('clusterFloorPct').value = s.clusterFloorPct ?? 30;
         if (document.getElementById('clusterSpreadRatio')) document.getElementById('clusterSpreadRatio').value = s.clusterSpreadRatio ?? 150;
         if (document.getElementById('equalizeBusLoads')) document.getElementById('equalizeBusLoads').value = s.equalizeBusLoads === true ? 'on' : 'off';
+        if (document.getElementById('secPerRider')) document.getElementById('secPerRider').value = s.secPerRider ?? 0;
+        if (document.getElementById('fleetUse')) document.getElementById('fleetUse').value = s.fleetUse === 'fewer' ? 'fewer' : 'as-needed';
         window._GoSetup = () => D.setup;
         if (document.getElementById('standaloneToggle')) document.getElementById('standaloneToggle').checked = !!s.standaloneMode;
     }
@@ -1516,6 +1536,8 @@ let _toastTimer = null;
         D.setup.clusterFloorPct = parseInt(el('clusterFloorPct')?.value) || 30;
         D.setup.clusterSpreadRatio = parseInt(el('clusterSpreadRatio')?.value) || 150;
         D.setup.equalizeBusLoads = el('equalizeBusLoads')?.value === 'on';
+        D.setup.secPerRider = Math.max(0, parseFloat(el('secPerRider')?.value) || 0);
+        D.setup.fleetUse = el('fleetUse')?.value === 'fewer' ? 'fewer' : 'as-needed';
         window._GoSetup = () => D.setup;
         save(); toast('Setup saved');
     }
@@ -3950,6 +3972,33 @@ async function generateRoutes() {
             });
         }
 
+        // Final street-time pass: the passes above may have moved stops between
+        // buses using straight-line estimates. Re-sequence every touched bus on
+        // real road times and stamp per-leg seconds so the ETAs match.
+        if (_activeRoadNet) {
+            let roadOrdered = 0;
+            for (const r of routes) {
+                if (!r.stops || r.stops.length < 2) continue;
+                // A bus the post passes never touched still carries the road-leg
+                // times stamped when it was ordered; only re-sequence the others.
+                if (Array.isArray(r._tspLegTimes) && r._tspLegTimes.length === r.stops.length + 1) continue;
+                const legs = _roadLegsFor(r.stops, campLat, campLng);
+                if (!legs) continue;
+                const before = r.stops.map(s => s.address).join('|');
+                r.stops = window.CampistryGoRoutePost.localTspOrder(
+                    r.stops, { lat: campLat, lng: campLng }, isArrival, _routePostOpts({ legMinutes: legs }));
+                r.stops.forEach((s, i) => s.stopNum = i + 1);
+                window.CampistryGoRoutePost.stampLegTimes(r, { lat: campLat, lng: campLng }, legs);
+                if (r.stops.map(s => s.address).join('|') !== before) roadOrdered++;
+            }
+            _applyETAsAndAudits(routes, {
+                shift, isArrival, campLat, campLng,
+                avgStopMin,
+                shiftNeedsReturn: si === shifts.length - 1 && !isArrival
+            });
+            console.log('[Go] Street travel times: ETAs on road legs; ' + roadOrdered + ' bus(es) re-sequenced');
+        }
+
         // Containment audit: every bus should cover ONE side of camp. Stamp
         // the result on the route so the dispatcher dashboard can show it.
         {
@@ -4107,6 +4156,18 @@ async function _tryNeighborhoodPipeline({
         return null;
     }
 
+    // Street network for travel times (class speeds, one-way, no-crossing
+    // rivers/highways). Falls back to straight-line x road factor when absent.
+    _activeRoadNet = null;
+    if (nhResult.roadEdges && nhResult.roadEdges.length && window.CampistryGoRoutePost.buildRoadNet) {
+        try {
+            _activeRoadNet = window.CampistryGoRoutePost.buildRoadNet(
+                { nodes: nhResult.nodes, edges: nhResult.roadEdges }, _routePostOpts());
+            if (_activeRoadNet) console.log('[Go v5] Road network: ' + _activeRoadNet.nodeCount + ' nodes, ' +
+                _activeRoadNet.arcCount + ' arcs — ordering and ETAs on street travel times');
+        } catch (e) { console.warn('[Go v5] Road network unavailable: ' + e.message); _activeRoadNet = null; }
+    }
+
     // ── Safety gate: don't ship a roster missing too many kids ──
     const unattachedCount = nhResult.unattachedCampers?.length || 0;
     const unattachedPct = unattachedCount / Math.max(1, allCampers.length);
@@ -4139,7 +4200,9 @@ async function _tryNeighborhoodPipeline({
         // than the rest of the camp.
         rideSpeedMph: D.setup.avgSpeed || 25,
         rideStopMin: D.setup.avgStopTime || 1,
-        maxChildRideMin: 60
+        maxChildRideMin: 60,
+        secPerRider: Math.max(0, parseFloat(D.setup.secPerRider) || 0),
+        busOverheadMin: _busOverheadMin()
     });
 
     showProgress(shiftLabel + ': generating per-zone stops...', pctBase + 40);
@@ -4342,11 +4405,15 @@ async function _tryNeighborhoodPipeline({
         let improvedBuses = 0;
         for (const r of routes) {
             if (r.stops.length < 3) continue;
-            r.stops = _localTspOrder(r.stops, campLat, campLng, isArrival);
+            const legs = _roadLegsFor(r.stops, campLat, campLng);
+            r.stops = window.CampistryGoRoutePost.localTspOrder(
+                r.stops, { lat: campLat, lng: campLng }, isArrival, _routePostOpts({ legMinutes: legs }));
             r.stops.forEach((s, i) => s.stopNum = i + 1);
+            if (legs) window.CampistryGoRoutePost.stampLegTimes(r, { lat: campLat, lng: campLng }, legs);
             improvedBuses++;
         }
-        console.log('[Go v5] Local TSP ordered stops on ' + improvedBuses + ' bus(es)');
+        console.log('[Go v5] Local TSP ordered stops on ' + improvedBuses + ' bus(es)' +
+            (_activeRoadNet ? ' (street travel times)' : ''));
     }
 
     // Even out the worst ride once stop order is settled.
@@ -5292,10 +5359,9 @@ async function _trySpatialSortPipeline({
                           .sort((x, y) => x.b - y.b);
         let sweep = null;
         try {
-            sweep = post.sweepPartition(ring, hardCaps, depot, {
-                avgSpeedMph: D.setup.avgSpeed || 25, avgStopMin: D.setup.avgStopTime || 2,
+            sweep = post.sweepPartition(ring, hardCaps, depot, _routePostOpts({
                 sweepMaxRideMin: 60, sweepGroupCutMin: 0,
-            });
+            }));
         } catch (e) { console.warn('[Go v6] Sweep candidate failed: ' + e.message); }
         if (sweep) {
             const pairs = [];
@@ -5347,7 +5413,7 @@ async function _trySpatialSortPipeline({
         try {
             res = post.polishDistricts(
                 busBuckets.map(b => b.map(a => ({ atom: a, count: a.size, lat: a.lat, lng: a.lng }))),
-                caps, depot, { avgSpeedMph: D.setup.avgSpeed || 25, avgStopMin: D.setup.avgStopTime || 2, polishRideBudgetMin: 60 });
+                caps, depot, _routePostOpts({ polishRideBudgetMin: 60 }));
         } catch (e) { console.warn('[Go v6] Polish skipped: ' + e.message); }
         if (res && res.moves) {
             const pairs = [];
@@ -5891,6 +5957,9 @@ function _applyETAsAndAudits(routes, {
         if (s.lat) return drivingDist(campLat, campLng, s.lat, s.lng) / 60;
         return 15;
     }
+    // Dwell per stop: Time Per Stop plus seconds per child (Setup).
+    const _dwellOpts = _routePostOpts({ avgStopMin });
+    const dwellMin = s => window.CampistryGoRoutePost.stopDwellMin(s, _dwellOpts);
     function stopToCamp(s) {
         if (s.lat) return drivingDist(s.lat, s.lng, campLat, campLng) / 60;
         return 15;
@@ -5920,7 +5989,7 @@ function _applyETAsAndAudits(routes, {
                 const tLeg = legMinAt(i);
                 if (i === 0) totalDur += (tLeg != null ? tLeg : campToStop(r.stops[0]));
                 else totalDur += (tLeg != null ? tLeg : driveMin(r.stops[i - 1], r.stops[i]));
-                totalDur += avgStopMin;
+                totalDur += dwellMin(r.stops[i]);
             }
             const returnLeg = legMinAt(r.stops.length);
             totalDur += (returnLeg != null ? returnLeg : stopToCamp(r.stops[r.stops.length - 1]));
@@ -5930,7 +5999,7 @@ function _applyETAsAndAudits(routes, {
                 const tLeg = legMinAt(i);
                 if (i === 0) cum += (tLeg != null ? tLeg : campToStop(r.stops[0]));
                 else cum += (tLeg != null ? tLeg : driveMin(r.stops[i - 1], r.stops[i]));
-                cum += avgStopMin;
+                cum += dwellMin(r.stops[i]);
                 r.stops[i].estimatedTime = formatTime(cum);
                 r.stops[i].estimatedMin = cum;
             }
@@ -5942,7 +6011,7 @@ function _applyETAsAndAudits(routes, {
                 const tLeg = legMinAt(i);
                 if (i === 0) cum += (tLeg != null ? tLeg : campToStop(r.stops[0]));
                 else cum += (tLeg != null ? tLeg : driveMin(r.stops[i - 1], r.stops[i]));
-                cum += avgStopMin;
+                cum += dwellMin(r.stops[i]);
                 r.stops[i].estimatedTime = formatTime(cum);
                 r.stops[i].estimatedMin = cum;
             }
@@ -5972,6 +6041,8 @@ function _applyETAsAndAudits(routes, {
                 ? (shiftTargetMin - st.estimatedMin)
                 : (st.estimatedMin - shiftTargetMin);
             st._rideTimeMin = Math.round(Math.abs(rideMin));
+            // Direct trip from camp — the yardstick for "rides far longer than they should".
+            st._directMin = Math.round(campToStop(st));
             if (st._rideTimeMin > maxRideMin) {
                 st._rideTimeWarning = true;
                 violations++;
@@ -6277,8 +6348,11 @@ function findAnchorStop(campers, intersections, walkMi = 0.2) {
         // Counselor stops with coordinates ride in the sequence; monitor-only
         // stops (no location) stay as tail metadata.
         const before = route.totalDuration;
-        route.stops = _localTspOrder(route.stops, campLat, campLng, isArrival);
+        const legs = _roadLegsFor(route.stops, campLat, campLng);
+        route.stops = window.CampistryGoRoutePost.localTspOrder(
+            route.stops, { lat: campLat, lng: campLng }, isArrival, _routePostOpts({ legMinutes: legs }));
         route.stops.forEach((s, i) => { s.stopNum = i + 1; });
+        if (legs) window.CampistryGoRoutePost.stampLegTimes(route, { lat: campLat, lng: campLng }, legs);
         route.camperCount = route.stops.reduce((s, st) =>
             s + (st.isMonitor || st.isCounselor ? 0 : (st.campers || []).length), 0);
         delete route._tspLegTimes;
@@ -8293,6 +8367,31 @@ function _analyzeRoute(route, shiftIdx, campLat, campLng, maxRideMin, isArrival,
     if (rideViolations > 0) {
         issues.push({ type: 'ride-violations', severity: 'error',
             msg: rideViolations + ' stop(s) over ' + maxRideMin + ' min ride' });
+    }
+
+    // Exception checks the way commercial routing products report them:
+    // children riding far longer than their direct trip warrants, and stops
+    // the bus drives past before it serves them.
+    if (window.CampistryGoRoutePost && campLat && campLng) {
+        const post = window.CampistryGoRoutePost, depot = { lat: campLat, lng: campLng };
+        try {
+            const ratio = post.rideRatioViolations(route, depot, isArrival, _routePostOpts());
+            if (ratio.length) {
+                const worst = ratio.reduce((a, b) => b.rideMin - b.limitMin > a.rideMin - a.limitMin ? b : a);
+                const kids = ratio.reduce((a, v) => a + (v.stop.campers || []).length, 0);
+                details.rideRatio = ratio;
+                issues.push({ type: 'ride-ratio', severity: 'warn',
+                    msg: kids + ' child(ren) ride more than ' + _routePostOpts().maxRideRatio + '× their direct trip — worst ' +
+                        worst.rideMin + ' min vs ' + worst.directMin + ' min direct at ' + (worst.stop.address || '?') });
+            }
+            const passed = post.passBys(route, depot, isArrival, _routePostOpts());
+            if (passed.length) {
+                details.passBys = passed;
+                issues.push({ type: 'pass-by', severity: 'info',
+                    msg: 'Bus drives past ' + passed.length + ' stop(s) before serving them (e.g. ' +
+                        (passed[0].stop.address || '?') + ')' });
+            }
+        } catch (_) { /* advisory only */ }
     }
 
     // Containment: a bus that serves both sides of camp drives out one way,

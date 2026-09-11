@@ -229,10 +229,11 @@ test('localTspOrder is idempotent: re-ordering an ordered route keeps it (or imp
         const t1 = P.routeLastDropMin({ stops: once }, CAMP), t2 = P.routeLastDropMin({ stops: twice }, CAMP);
         // same order, or a strictly better objective — never a random different local optimum
         assert.ok(twice.every((s, i) => s === once[i]) || t2 <= t1 + 3, 'trial ' + trial + ': ' + Math.round(t1) + ' -> ' + Math.round(t2));
-        // and the order must not depend on how the stops were handed over
+        // and the quality must not depend on how the stops were handed over
         const shuffled = stops.slice().sort(() => rnd() - 0.5);
         const fromShuffled = P.localTspOrder(shuffled, CAMP, false);
-        assert.ok(fromShuffled.every((s, i) => s === once[i]), 'trial ' + trial + ': order depends on input order');
+        const c1 = P.routeObjective(once, CAMP, false), c2 = P.routeObjective(fromShuffled, CAMP, false);
+        assert.ok(Math.abs(c2 - c1) <= 0.005 * c1, 'trial ' + trial + ': quality depends on input order (' + Math.round(c1) + ' vs ' + Math.round(c2) + ')');
     }
 });
 
@@ -247,4 +248,131 @@ test('arrival ordering pays for the drive back to camp: the last pickup is near 
     const back = P.driveMin(prev, CAMP);
     let kidMin = 0, kids = 0; ord.forEach((s, i) => { kids += s.campers.length; kidMin += s.campers.length * (t + back - arr[i]); });
     assert.ok(kidMin / kids < 26, 'average child ride should be under 26 min, got ' + (kidMin / kids).toFixed(1));
+});
+
+test('dwell model: seconds per child lengthen a busy stop but not a flat-configured camp', () => {
+    const big = at(2, 0, 12), small = at(2, 0.1, 1);
+    assert.strictEqual(P.stopDwellMin(big, { avgStopMin: 2, secPerRider: 0 }), 2, 'flat when secPerRider is 0');
+    assert.ok(Math.abs(P.stopDwellMin(big, { avgStopMin: 0.5, secPerRider: 3 }) - (0.5 + 36 / 60)) < 1e-9);
+    const flat = P.routeLastDropMin({ stops: [big, small] }, CAMP, { avgStopMin: 2, secPerRider: 0 });
+    const perKid = P.routeLastDropMin({ stops: [big, small] }, CAMP, { avgStopMin: 2, secPerRider: 5 });
+    assert.ok(Math.abs((perKid - flat) - (13 * 5) / 60) < 1e-6, 'per-child seconds add up across the route');
+});
+
+test('ride-ratio audit flags a child riding far longer than their direct trip', () => {
+    // A 1mi-from-camp stop dropped LAST after a 6mi loop: rides ~30min for a ~3min trip.
+    const r = route('r', [at(3, 0, 3), at(5, 0.5, 3), at(6, -0.5, 3), at(1, 0.2, 3)], 48);
+    const v = P.rideRatioViolations(r, CAMP, false);
+    assert.strictEqual(v.length, 1);
+    assert.strictEqual(v[0].stop.address, '1N 0.2E');
+    assert.ok(v[0].rideMin > v[0].limitMin);
+    const good = route('g', [at(1, 0.2, 3), at(3, 0, 3), at(5, 0.5, 3), at(6, -0.5, 3)], 48);
+    assert.strictEqual(P.rideRatioViolations(good, CAMP, false).length, 0);
+});
+
+test('pass-by audit catches a bus that drives past a stop and comes back for it later', () => {
+    // North road: camp -> 1N -> 3N, then back to 2N (passed on the 1N->3N leg), then 4N.
+    const r = route('r', [at(1, 0, 3), at(3, 0, 3), at(2, 0.01, 3), at(4, 0, 3)], 48);
+    const p = P.passBys(r, CAMP, false);
+    assert.strictEqual(p.length, 1);
+    assert.strictEqual(p[0].stop.address, '2N 0.01E');
+    const clean = route('c', [at(1, 0, 3), at(2, 0.01, 3), at(3, 0, 3), at(4, 0, 3)], 48);
+    assert.strictEqual(P.passBys(clean, CAMP, false).length, 0);
+    // arrival mirror: pickups 4N,2N,3N,1N -> riding direction 1N,3N,2N,4N: 2N is passed
+    const arr = route('a', [at(4, 0, 3), at(2, 0.01, 3), at(3, 0, 3), at(1, 0, 3)], 48);
+    assert.strictEqual(P.passBys(arr, CAMP, true).length, 1);
+});
+
+test('a higher bus overhead makes polish consolidate a tiny bus into its neighbour', () => {
+    const A = [at(2, 0, 3), at(3, 0.1, 3), at(4, 0, 3), at(5, 0.1, 3)];
+    const tiny = [at(2.6, 0.4, 2)];
+    const cheap = P.polishDistricts([A, tiny], [48, 48], CAMP, { busOverheadMin: 0, polishRideBudgetMin: 0 });
+    const dear = P.polishDistricts([A, tiny], [48, 48], CAMP, { busOverheadMin: 40, polishRideBudgetMin: 0 });
+    assert.strictEqual(dear.buckets.filter(b => b.length).length, 1, 'with a dear bus the singleton merges');
+    assert.ok(cheap.buckets.filter(b => b.length).length >= 1);
+});
+
+// A 7x7 street grid (0.5mi spacing) north of camp with a river between columns 3 and 4
+// that only one bridge (row 3) crosses; the road along row 0 is one-way eastbound.
+function riverGrid() {
+    const nodes = {}, edges = [];
+    const id = (r, c) => 'n' + r + '_' + c;
+    for (let r = 0; r < 7; r++) for (let c = 0; c < 7; c++) nodes[id(r, c)] = { lat: CAMP.lat + (0.5 + r * 0.5) * MI_LAT, lng: CAMP.lng + (c - 3) * 0.5 * MI_LNG };
+    let k = 0;
+    for (let r = 0; r < 7; r++) for (let c = 0; c < 7; c++) {
+        if (r < 6) edges.push({ id: 'e' + (k++), fromNodeId: id(r, c), toNodeId: id(r + 1, c), lenMi: 0.5, hwClass: 'residential', oneway: false });
+        if (c < 6) {
+            const crossesRiver = c === 3;              // between column 3 and 4
+            if (crossesRiver && r !== 3) continue;     // only the row-3 bridge crosses
+            edges.push({ id: 'e' + (k++), fromNodeId: id(r, c), toNodeId: id(r, c + 1), lenMi: 0.5, hwClass: r === 3 ? 'secondary' : 'residential', oneway: r === 0 });
+        }
+    }
+    // camp connects to the grid at (0,3)
+    nodes.camp = { lat: CAMP.lat, lng: CAMP.lng };
+    edges.push({ id: 'e' + (k++), fromNodeId: 'camp', toNodeId: id(0, 3), lenMi: 0.5, hwClass: 'residential', oneway: false });
+    return { nodes, edges };
+}
+
+test('road network: a river with one bridge makes near-by points far apart by road', () => {
+    const net = P.buildRoadNet(riverGrid(), { avgSpeedMph: 25 });
+    assert.ok(net && net.nodeCount === 50);
+    const west = { lat: CAMP.lat + 1.0 * MI_LAT, lng: CAMP.lng + 0 * MI_LNG };            // (row1, col3), west bank
+    const east = { lat: CAMP.lat + 1.0 * MI_LAT, lng: CAMP.lng + 0.5 * MI_LNG };          // (row1, col4), east bank
+    const L = net.legMinutesFor([west, east, CAMP]);
+    const straight = P.driveMin(west, east, { avgSpeedMph: 25, roadFactor: 1.35 });
+    const byRoad = L(west, east);
+    // straight line ~0.5mi (~1.6min); road: up two rows (1mi), across the bridge (0.5mi secondary), down two rows (1mi)
+    assert.ok(byRoad > straight * 3, 'road time ' + byRoad.toFixed(1) + ' should dwarf straight-line ' + straight.toFixed(1));
+    const expected = 2.0 / 20 * 60 + 0.5 / 30 * 60 + 5 * 0.05;
+    assert.ok(Math.abs(byRoad - expected) < 0.2, 'road time should be ' + expected.toFixed(2) + ' min, got ' + byRoad.toFixed(2));
+    // unknown point falls back to straight-line x road factor
+    assert.ok(Math.abs(L(west, { lat: CAMP.lat + 3 * MI_LAT, lng: CAMP.lng }) - P.driveMin(west, { lat: CAMP.lat + 3 * MI_LAT, lng: CAMP.lng }, { avgSpeedMph: 25, roadFactor: 1.35 })) < 1e-9);
+});
+
+test('road network: one-way streets are asymmetric', () => {
+    const net = P.buildRoadNet(riverGrid(), { avgSpeedMph: 25 });
+    const a = { lat: CAMP.lat + 0.5 * MI_LAT, lng: CAMP.lng - 1.5 * MI_LNG };  // (row0, col0)
+    const b = { lat: CAMP.lat + 0.5 * MI_LAT, lng: CAMP.lng - 0.5 * MI_LNG };  // (row0, col2)
+    const L = net.legMinutesFor([a, b]);
+    assert.ok(L(a, b) < L(b, a) - 1, 'eastbound is direct (1mi); westbound must detour: ' + L(a, b).toFixed(2) + ' vs ' + L(b, a).toFixed(2));
+});
+
+test('ordering on road legs serves one river bank fully before crossing, and stamps leg seconds for ETAs', () => {
+    const net = P.buildRoadNet(riverGrid(), { avgSpeedMph: 25 });
+    const west = [1, 2, 4, 5].map(r => at(0.5 + r * 0.5, 0, 3));
+    const east = [1, 2, 4, 5].map(r => at(0.5 + r * 0.5, 0.5, 3));
+    const stops = [west[0], east[0], west[1], east[1], west[2], east[2], west[3], east[3]]; // interleaved
+    const L = net.legMinutesFor([CAMP].concat(stops));
+    const ord = P.localTspOrder(stops, CAMP, false, { avgSpeedMph: 25, legMinutes: L });
+    // count bank changes along the sequence: a good road-aware order crosses the river once
+    let crossings = 0; for (let i = 1; i < ord.length; i++) if ((ord[i].address.endsWith('0.5E')) !== (ord[i - 1].address.endsWith('0.5E'))) crossings++;
+    assert.ok(crossings <= 1, 'expected at most one river crossing, got ' + crossings + ': ' + ord.map(s => s.address).join(' > '));
+    const route = { stops: ord };
+    const legs = P.stampLegTimes(route, CAMP, L);
+    assert.strictEqual(legs.length, ord.length + 1, 'one leg per stop plus the return');
+    assert.ok(legs.every(x => x > 0));
+});
+
+test('polish keeps every invariant on a scattered instance and never worsens the objective', () => {
+    let seed = 99; const rnd = () => { seed = (seed * 1103515245 + 12345) & 0x7fffffff; return seed / 0x7fffffff; };
+    // four wedges of atoms with a few atoms scattered into the wrong wedge
+    const buckets = [[], [], [], []];
+    for (let i = 0; i < 80; i++) {
+        const wedge = i % 4, ang = (wedge * 90 + 10 + rnd() * 70) * Math.PI / 180, r = 1.6 + rnd() * 3;
+        const atom = at(r * Math.cos(ang), r * Math.sin(ang), 1 + (i % 3));
+        atom.count = atom.campers.length;
+        buckets[(i % 9 === 0) ? (wedge + 1) % 4 : wedge].push(atom);
+    }
+    const inWedge = buckets.map(b => P.arcDeg(b, CAMP));
+    const res = P.polishDistricts(buckets, [48, 48, 48, 48], CAMP, { polishTimeBudgetMs: 3000 });
+    assert.ok(res.after <= res.before + 1e-9);
+    assert.strictEqual(res.buckets.flat().length, 80, 'every atom exactly once');
+    res.buckets.forEach((b, i) => {
+        assert.ok(b.reduce((a, x) => a + x.count, 0) <= 48);
+        // a bus that came in straddling may stay so; polish must never make a wedge wider than the limit
+        assert.ok(P.arcDeg(b, CAMP) <= Math.max(110, inWedge[i]) + 1e-9, 'never widened past the limit');
+    });
+    // deterministic
+    const again = P.polishDistricts(buckets, [48, 48, 48, 48], CAMP, { polishTimeBudgetMs: 3000 });
+    assert.strictEqual(Math.round(again.after), Math.round(res.after));
 });

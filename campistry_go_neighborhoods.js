@@ -436,10 +436,13 @@ window.CampistryGoNeighborhoods = (function () {
                 const [lo, hi] = fromId < toId ? [fromId, toId] : [toId, fromId];
                 const segId = 'seg_' + hash(wayId + ':' + lo + ':' + hi);
 
+                const owTag = String(w.tags.oneway || '').toLowerCase();
+                const oneway = (owTag === 'yes' || owTag === '1' || owTag === 'true') ? true
+                             : (owTag === '-1' || owTag === 'reverse') ? -1 : false;
                 edges.push({
                     id: segId,
                     fromNodeId: fromId, toNodeId: toId,
-                    wayId, hwClass, name, lenMi,
+                    wayId, hwClass, name, lenMi, oneway,
                     rank: classRank(hwClass),
                 });
             }
@@ -995,6 +998,10 @@ window.CampistryGoNeighborhoods = (function () {
             neighborhoods,
             segments,
             nodes: graph.nodes,
+            // The whole street graph (not just streets with homes), so travel
+            // times can be measured on the road network downstream.
+            roadEdges: graph.edges.map(e => ({ id: e.id, fromNodeId: e.fromNodeId, toNodeId: e.toNodeId,
+                                              lenMi: e.lenMi, hwClass: e.hwClass, oneway: e.oneway })),
             homes,
             unattachedCampers,
             stats,
@@ -1018,7 +1025,8 @@ window.CampistryGoNeighborhoods = (function () {
     //      silently dropping the neighborhood's campers.
     // -------------------------------------------------------------------------
     function packIntoBuses({ result, buses, priorAssignments = {}, siblingGroups = {}, depot = null, maxRideMin = 45, avgStopMin = 2, paceMinPerMi = 6,
-                             rideSpeedMph = 25, rideStopMin = 1, maxChildRideMin = 0 }) {
+                             rideSpeedMph = 25, rideStopMin = 1, maxChildRideMin = 0,
+                             busOverheadMin = 5, secPerRider = 0 }) {
         if (!result || !result.neighborhoods.length) return [];
 
         // Input audit: any duplicate nhIds in result.neighborhoods, or duplicate
@@ -1929,7 +1937,7 @@ window.CampistryGoNeighborhoods = (function () {
 
             const byCapDesc = vehicles.slice().sort((a, b) => b.capacity - a.capacity);
             const best = post.sweepPartition(ring, byCapDesc.map(v => v.capacity), depot, {
-                avgSpeedMph: rideSpeedMph, avgStopMin: rideStopMin,
+                avgSpeedMph: rideSpeedMph, avgStopMin: rideStopMin, secPerRider, busOverheadMin,
                 sweepMaxRideMin: maxChildRideMin > 0 ? maxChildRideMin : 0,
             });
             if (!best) return null;
@@ -2016,7 +2024,7 @@ window.CampistryGoNeighborhoods = (function () {
                 let res = null;
                 try {
                     res = post.polishDistricts(buckets, assignments.map(b => b.capacity), depot, {
-                        avgSpeedMph: rideSpeedMph, avgStopMin: rideStopMin,
+                        avgSpeedMph: rideSpeedMph, avgStopMin: rideStopMin, secPerRider, busOverheadMin,
                         polishRideBudgetMin: maxChildRideMin > 0 ? maxChildRideMin : 0,
                     });
                 } catch (e) { console.warn('[Go-NH] Polish skipped: ' + e.message); }
