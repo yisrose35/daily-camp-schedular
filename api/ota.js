@@ -25,12 +25,36 @@
 //   CANNOT — native changes (plugins, permissions, app icon, native config).
 //            Those still need a real App Store / Play Store release.
 
+// Load each manifest defensively. The literal require() is what lets Vercel's
+// file tracer bundle the JSON into this function, but if it ever throws at
+// cold-start (a bad deploy, the file left out of the trace, a parse error in
+// the deployed copy) an unguarded require at module scope takes the WHOLE
+// function down with FUNCTION_INVOCATION_FAILED — which means every phone's
+// launch-time update check hits a 500 and no device can ever learn a new
+// bundle exists. So: try require, fall back to reading it off disk, and only
+// then give up to null (reported cleanly as "nothing published"). A crashed
+// update endpoint is far worse than one that briefly says "no update".
+const fs = require('fs');
+const path = require('path');
+function loadManifest(app) {
+    try {
+        // Literal per-app require() so node-file-trace still bundles both files.
+        return app === 'lite' ? require('../ota/lite.json') : require('../ota/link.json');
+    } catch (_) { /* fall through to disk */ }
+    try {
+        return JSON.parse(fs.readFileSync(path.join(__dirname, '..', 'ota', app + '.json'), 'utf8'));
+    } catch (e) {
+        console.error('[ota] could not load ' + app + ' manifest:', (e && e.message) || e);
+        return null;
+    }
+}
 const MANIFESTS = {
-    lite: require('../ota/lite.json'),
-    link: require('../ota/link.json')
+    lite: loadManifest('lite'),
+    link: loadManifest('link')
 };
 
 module.exports = async function handler(req, res) {
+  try {
     res.setHeader('Access-Control-Allow-Origin', '*');
     res.setHeader('Access-Control-Allow-Methods', 'GET, POST, OPTIONS');
     res.setHeader('Access-Control-Allow-Headers', 'Content-Type');
@@ -64,6 +88,13 @@ module.exports = async function handler(req, res) {
         url: manifest.url,
         checksum: manifest.checksum || undefined
     });
+  } catch (e) {
+    // Never let the update endpoint 500 with an opaque crash — a readable
+    // error is diagnosable AND keeps the plugin from treating it as a hard
+    // failure it can't reason about.
+    console.error('[ota] handler error:', e);
+    try { res.status(500).json({ error: 'ota_handler_failed', message: String((e && e.message) || e) }); } catch (_) {}
+  }
 };
 
 function safeParse(s) {
