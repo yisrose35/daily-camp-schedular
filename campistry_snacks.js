@@ -858,9 +858,97 @@ window.savePosPin = function() {
 };
 
 // ==========================================================================
-// OFFLINE POS — export data for the standalone offline register, and import
-// transactions that were recorded offline back into the main ledger.
+// OFFLINE POS — download the self-contained register with data baked in,
+// export data for an existing offline register, and import transactions
+// that were recorded offline back into the main ledger.
 // ==========================================================================
+
+function buildOfflineExportData() {
+    var data = loadSnacksData();
+    var roster = getRoster();
+    var exportAccounts = {};
+    Object.keys(data.accounts || {}).forEach(function(name) {
+        var a = data.accounts[name];
+        var camper = roster[name] || {};
+        exportAccounts[name] = {
+            balance: a.balance || 0,
+            dailyLimit: a.dailyLimit || 10,
+            spentToday: a.spentToday || 0,
+            lastSpendDate: a.lastSpendDate || '',
+            balanceFloor: a.balanceFloor || 0,
+            creditLimit: a.creditLimit || 0,
+            division: camper.division || '',
+            bunk: camper.bunk || ''
+        };
+    });
+    Object.keys(roster).forEach(function(name) {
+        if (!exportAccounts[name]) {
+            var c = roster[name];
+            exportAccounts[name] = {
+                balance: 0, dailyLimit: 10, spentToday: 0, lastSpendDate: '',
+                balanceFloor: 0, creditLimit: 0,
+                division: c.division || '', bunk: c.bunk || ''
+            };
+        }
+    });
+
+    var campName = '';
+    try {
+        var gs = JSON.parse(localStorage.getItem('campGlobalSettings_v1') || '{}');
+        campName = (gs.campistryMe && gs.campistryMe.campName) || '';
+    } catch (_) {}
+
+    return {
+        exportedAt: new Date().toISOString(),
+        accounts: exportAccounts,
+        inventory: (data.inventory || []).map(function(item) {
+            return {
+                id: item.id, name: item.name, cat: item.cat || '',
+                price: item.price || 0, cost: item.cost || null,
+                stock: item.stock, soldToday: item.soldToday || 0,
+                totalSold: item.totalSold || 0, barcode: item.barcode || ''
+            };
+        }),
+        settings: {
+            campName: campName,
+            defaultDailyLimit: ((data.settings || {}).defaultDailyLimit) || 10
+        }
+    };
+}
+
+window.downloadOfflinePOS = async function() {
+    var statusEl = document.getElementById('offlinePosStatus');
+    if (statusEl) statusEl.textContent = 'Preparing download...';
+
+    try {
+        var resp = await fetch('campistry_snacks_pos_offline.html');
+        if (!resp.ok) throw new Error('Could not load offline POS template');
+        var html = resp.text ? await resp.text() : '';
+
+        var exportData = buildOfflineExportData();
+        var preloadScript = '<script>window.__OFFLINE_POS_PRELOAD__ = ' +
+            JSON.stringify(exportData) + ';<\/script>';
+        html = html.replace('<!-- __PRELOAD_SLOT__ -->', preloadScript);
+
+        var blob = new Blob([html], { type: 'text/html' });
+        var url = URL.createObjectURL(blob);
+        var a = document.createElement('a');
+        a.href = url;
+        a.download = 'Campistry_Offline_POS.html';
+        document.body.appendChild(a);
+        a.click();
+        document.body.removeChild(a);
+        URL.revokeObjectURL(url);
+
+        var acctCount = Object.keys(exportData.accounts).length;
+        var itemCount = exportData.inventory.length;
+        if (statusEl) statusEl.textContent = 'Downloaded with ' + acctCount + ' accounts, ' + itemCount + ' items baked in';
+        toast('Offline POS downloaded');
+    } catch (err) {
+        if (statusEl) statusEl.textContent = 'Download failed: ' + (err.message || err);
+        toast('Download failed', true);
+    }
+};
 
 window.exportForOfflinePOS = function() {
     var data = loadSnacksData();

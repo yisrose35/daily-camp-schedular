@@ -664,6 +664,7 @@ body.camper-open .camper-backdrop { display: block; }
 
 <div class="toast" id="toast"></div>
 
+<!-- __PRELOAD_SLOT__ -->
 <script>
 // =============================================================================
 // Campistry Snacks — Offline POS
@@ -1043,7 +1044,13 @@ function showSetupStep(n) {
         else if (s < n) el.classList.add('done');
     });
 
-    if (n === 1) { var el = document.getElementById('setupCampName'); if (el) el.focus(); }
+    if (n === 1) {
+        var el = document.getElementById('setupCampName');
+        if (el) {
+            if (!el.value && meta.campName) el.value = meta.campName;
+            el.focus();
+        }
+    }
     if (n === 2) { var el = document.getElementById('setupPin'); if (el) el.focus(); }
 }
 
@@ -1840,8 +1847,21 @@ async function init() {
         return;
     }
 
-    // First run?
+    // First run — check for preloaded data baked into the file
     if (!meta.setupComplete) {
+        if (window.__OFFLINE_POS_PRELOAD__) {
+            try {
+                await performImport(window.__OFFLINE_POS_PRELOAD__);
+                if (window.__OFFLINE_POS_PRELOAD__.settings && window.__OFFLINE_POS_PRELOAD__.settings.campName) {
+                    await saveMeta('campName', window.__OFFLINE_POS_PRELOAD__.settings.campName);
+                }
+                document.getElementById('setupImportStatus').textContent =
+                    'Pre-loaded: ' + Object.keys(accounts).length + ' accounts, ' + inventory.length + ' items';
+                document.getElementById('setupImportStatus').hidden = false;
+                document.getElementById('setupFinishBtn').disabled = false;
+            } catch (_) {}
+            delete window.__OFFLINE_POS_PRELOAD__;
+        }
         showSetup();
         return;
     }
