@@ -535,7 +535,7 @@ body.camper-open .camper-backdrop { display: block; }
                 <input type="date" id="setupExpiry">
             </div>
             <p style="font-size:.78rem;color:var(--text-muted);margin-top:4px">
-                The register will lock after this date. Default: 30 days from today.
+                The register will lock after this date. Default: 30 days from today. Maximum: 8 months.
             </p>
             <button class="btn-primary" onclick="POS.setupNext(3)">Next</button>
         </div>
@@ -568,13 +568,15 @@ body.camper-open .camper-backdrop { display: block; }
     <div class="overlay-card" style="text-align:center">
         <div class="expiry-icon">🔒</div>
         <h2>License Expired</h2>
-        <p>Connect to the internet and re-sync with the online system to continue using this register.</p>
-        <p style="margin-top:12px;font-size:.78rem;color:var(--text-muted)">
-            If you have a new data export, you can re-import to extend the license.
-        </p>
-        <button class="btn-secondary" onclick="POS.triggerImport('expiry')" style="margin-top:16px">
-            Import New Data File
-        </button>
+        <p id="expiryMessage">Connect to the internet and re-sync with the online system to continue using this register.</p>
+        <div id="expiryReimport">
+            <p style="margin-top:12px;font-size:.78rem;color:var(--text-muted)">
+                If you have a new data export, you can re-import to extend the license.
+            </p>
+            <button class="btn-secondary" onclick="POS.triggerImport('expiry')" style="margin-top:16px">
+                Import New Data File
+            </button>
+        </div>
     </div>
 </div>
 
@@ -938,22 +940,54 @@ document.getElementById('pinInput').addEventListener('input', function() {
 
 // ─── License / Expiry Module ────────────────────────────────────────────
 
+var MAX_LICENSE_MONTHS = 8;
+
+function hardCapDate() {
+    var activated = meta.firstActivated;
+    if (!activated) return null;
+    var d = new Date(activated);
+    d.setMonth(d.getMonth() + MAX_LICENSE_MONTHS);
+    d.setHours(23, 59, 59, 999);
+    return d;
+}
+
+function effectiveExpiryDate() {
+    var dates = [];
+    if (meta.expiryDate) dates.push(new Date(meta.expiryDate + 'T23:59:59'));
+    var cap = hardCapDate();
+    if (cap) dates.push(cap);
+    if (!dates.length) return null;
+    return dates.reduce(function(a, b) { return a < b ? a : b; });
+}
+
 function checkExpiry() {
-    var expiry = meta.expiryDate;
-    if (!expiry) return false; // no expiry set = not expired
-    var now = new Date();
-    var exp = new Date(expiry + 'T23:59:59');
-    return now > exp;
+    var eff = effectiveExpiryDate();
+    if (!eff) return false;
+    return new Date() > eff;
+}
+
+function isHardCapReached() {
+    var cap = hardCapDate();
+    if (!cap) return false;
+    return new Date() > cap;
 }
 
 function daysRemaining() {
-    var expiry = meta.expiryDate;
-    if (!expiry) return Infinity;
+    var eff = effectiveExpiryDate();
+    if (!eff) return Infinity;
     var now = new Date();
     now.setHours(0,0,0,0);
-    var exp = new Date(expiry + 'T00:00:00');
+    var exp = new Date(eff);
+    exp.setHours(0,0,0,0);
     var diff = Math.ceil((exp - now) / (1000 * 60 * 60 * 24));
     return diff;
+}
+
+function capExpiryDate(dateStr) {
+    var cap = hardCapDate();
+    if (!cap) return dateStr;
+    var capStr = cap.toISOString().split('T')[0];
+    return dateStr > capStr ? capStr : dateStr;
 }
 
 function updateExpiryBadge() {
@@ -980,8 +1014,18 @@ function updateExpiryBadge() {
 
 function enforceExpiry() {
     if (checkExpiry()) {
-        document.getElementById('expiryOverlay').hidden = false;
+        var overlay = document.getElementById('expiryOverlay');
+        overlay.hidden = false;
         document.getElementById('mainApp').hidden = true;
+        var msgEl = document.getElementById('expiryMessage');
+        var reimportEl = document.getElementById('expiryReimport');
+        if (isHardCapReached()) {
+            if (msgEl) msgEl.textContent = 'This offline register has reached its ' + MAX_LICENSE_MONTHS + '-month maximum. Contact your camp administrator for a new offline POS file.';
+            if (reimportEl) reimportEl.hidden = true;
+        } else {
+            if (msgEl) msgEl.textContent = 'Connect to the internet and re-sync with the online system to continue using this register.';
+            if (reimportEl) reimportEl.hidden = false;
+        }
         return true;
     }
     document.getElementById('expiryOverlay').hidden = true;
@@ -1018,12 +1062,18 @@ function showSetupStep(n) {
     if (n === 1) { var el = document.getElementById('setupCampName'); if (el) el.focus(); }
     if (n === 2) { var el = document.getElementById('setupPin'); if (el) el.focus(); }
     if (n === 3) {
-        // Set default expiry to 30 days from now
         var el = document.getElementById('setupExpiry');
-        if (el && !el.value) {
-            var d = new Date();
-            d.setDate(d.getDate() + 30);
-            el.value = d.toISOString().split('T')[0];
+        if (el) {
+            // Cap date picker to MAX_LICENSE_MONTHS from today
+            var maxDate = new Date();
+            maxDate.setMonth(maxDate.getMonth() + MAX_LICENSE_MONTHS);
+            el.max = maxDate.toISOString().split('T')[0];
+            el.min = new Date().toISOString().split('T')[0];
+            if (!el.value) {
+                var d = new Date();
+                d.setDate(d.getDate() + 30);
+                el.value = d.toISOString().split('T')[0];
+            }
         }
     }
 }
@@ -1056,6 +1106,11 @@ POS.setupNext = async function(fromStep) {
             var d = new Date(); d.setDate(d.getDate() + 30);
             expiry = d.toISOString().split('T')[0];
         }
+        // Enforce hard cap: expiry cannot exceed MAX_LICENSE_MONTHS from today
+        var maxDate = new Date();
+        maxDate.setMonth(maxDate.getMonth() + MAX_LICENSE_MONTHS);
+        var maxStr = maxDate.toISOString().split('T')[0];
+        if (expiry > maxStr) expiry = maxStr;
         await saveMeta('expiryDate', expiry);
         showSetupStep(4);
     }
@@ -1073,6 +1128,11 @@ POS.setupNext = async function(fromStep) {
 });
 
 POS.setupFinish = async function() {
+    if (!meta.firstActivated) {
+        var now = new Date().toISOString();
+        await saveMeta('firstActivated', now);
+        meta.firstActivated = now;
+    }
     await saveMeta('setupComplete', true);
     document.getElementById('setupOverlay').hidden = true;
     pinUnlocked = true;
@@ -1166,7 +1226,11 @@ async function performImport(data) {
     // Settings
     if (data.settings) {
         if (data.settings.campName) await saveMeta('campName', data.settings.campName);
-        if (data.settings.expiryDate) await saveMeta('expiryDate', data.settings.expiryDate);
+        if (data.settings.expiryDate) {
+            var importedExpiry = capExpiryDate(data.settings.expiryDate);
+            await saveMeta('expiryDate', importedExpiry);
+            meta.expiryDate = importedExpiry;
+        }
     }
 
     // Record import timestamp
