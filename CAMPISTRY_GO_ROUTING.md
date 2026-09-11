@@ -77,6 +77,15 @@ addresses ─ geocode ─┬─ road graph (OpenStreetMap) ─ neighbourhoods �
     cutting the number of split streets). Arrival mode (`isArrival`) prices
     a bus to its return at camp and a child from pickup to camp.
 
+* **Road-time polish** (`_roadPolishRoutes`): once the routes exist and the
+  street network is loaded, the same relocate/swap search runs again on the
+  finished stops with real driving minutes between every pair of stops
+  (one Dijkstra row per stop), under seats, containment and *Max Route
+  Duration* as the soft budget, and re-sequences the buses that changed. The
+  districting above prices distance as the crow flies, which on the camp's
+  first road-graph run left one Jackson bus at 137 minutes while another
+  carried 13 children.
+
 ### Containment
 
 The arc a bus covers around camp is the smallest wedge containing all its

@@ -946,9 +946,16 @@ window.CampistryGoRoutePost = (function () {
                 }
                 table.set(pts[i], row);
             }
+            // Callers rebuild the depot as a fresh {lat,lng} object all the
+            // time, so answer by coordinates too, not only by object identity.
+            const ck = p => p.lat.toFixed(6) + ',' + p.lng.toFixed(6);
+            const byKey = new Map();
+            for (const p of pts) if (!byKey.has(ck(p))) byKey.set(ck(p), p);
+            const resolve = p => table.has(p) ? p : (hasPos(p) ? byKey.get(ck(p)) : undefined);
             const legMinutes = function (a, b) {
-                const row = table.get(a);
-                const v = row && row.get(b);
+                const pa = resolve(a), pb = resolve(b);
+                const row = pa && table.get(pa);
+                const v = row && pb ? row.get(pb) : undefined;
                 return v != null ? v : driveMin(a, b, o);
             };
             // Street path between two known points: [[lat,lng],...] from a to b
@@ -1064,7 +1071,10 @@ window.CampistryGoRoutePost = (function () {
         const SPLIT = Math.max(0, o.polishStreetSplitMin || 0);
         const ARR = !!o.isArrival;
         const MERGE_SAME = Math.max(0, o.polishMergeSameStreetMi || 0), MERGE_ANY = Math.max(0, o.polishMergeAnyMi || 0);
-        const leg = (a, b) => (haversineMi(a.lat, a.lng, b.lat, b.lng) * o.roadFactor / speed) * 60;
+        // Street travel times when the caller has the road network (legMinutes),
+        // else straight-line x road factor.
+        const L = typeof o.legMinutes === 'function' ? o.legMinutes : null;
+        const leg = (a, b) => L ? L(a, b) : (haversineMi(a.lat, a.lng, b.lat, b.lng) * o.roadFactor / speed) * 60;
         // Riders per atom: an explicit count, else the campers list, else one.
         const cnt = x => Number.isFinite(x.count) ? x.count : (riders(x) || 1);
         const perRider = x => o.secPerRider > 0 ? cnt(x) * o.secPerRider / 60 : 0;

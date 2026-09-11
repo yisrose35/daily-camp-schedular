@@ -3589,6 +3589,54 @@ function _capByIdOf(shiftVehicles) {
     return capById;
 }
 
+// Road-time polish. Districting priced every stop as the crow flies; with
+// the street network in hand, re-trade stops between buses on real driving
+// minutes — under seats, containment and the route cap — and re-sequence the
+// buses that changed. This is what catches a bus the straight-line proxy
+// thought was 70 minutes and the roads make 137.
+function _roadPolishRoutes(routes, shiftVehicles, campLat, campLng, isArrival, maxRouteMin) {
+    const P = window.CampistryGoRoutePost;
+    const live = routes.filter(r => r.stops && r.stops.length);
+    if (!_activeRoadNet || live.length < 2) return { moves: 0 };
+    const depot = { lat: campLat, lng: campLng };
+    const movable = new Set();
+    for (const r of live) for (const st of r.stops) {
+        if (!Number.isFinite(st.lat) || !Number.isFinite(st.lng) || st.isMonitor || st.isCounselor) continue;
+        st.streetKey = (parseAddress(String(st.address || '').split(',')[0]).street || '').toLowerCase();
+        movable.add(st);
+    }
+    let legs;
+    try { legs = _activeRoadNet.legMinutesFor([depot].concat([...movable])); }
+    catch (e) { console.warn('[Go] Road polish skipped: ' + e.message); return { moves: 0 }; }
+    const reserve = D.setup.reserveSeats || 0, capById = _capByIdOf(shiftVehicles);
+    const buckets = live.map(r => r.stops.filter(st => movable.has(st)));
+    const caps = live.map(r => Math.max(0, (capById[r.busId] || r._cap || 0) - reserve));
+    let res;
+    try {
+        res = P.polishDistricts(buckets, caps, depot, _routePostOpts({
+            legMinutes: legs, isArrival: !!isArrival, polishRideBudgetMin: maxRouteMin || 90,
+            polishReachMi: 5, polishTimeBudgetMs: 3000, polishMergeSameStreetMi: 0, polishMergeAnyMi: 0 }));
+    } catch (e) { console.warn('[Go] Road polish skipped: ' + e.message); return { moves: 0 }; }
+    if (!res || !res.moves) return res || { moves: 0 };
+    let changed = 0;
+    live.forEach((r, i) => {
+        const before = buckets[i], after = res.buckets[i];
+        const same = after.length === before.length && after.every(st => before.includes(st));
+        if (same) return;
+        changed++;
+        const fixed = r.stops.filter(st => !movable.has(st));
+        r.stops = after.concat(fixed);
+        const rl = _roadLegsFor(r.stops, campLat, campLng);
+        r.stops = P.localTspOrder(r.stops, depot, !!isArrival, _routePostOpts(rl ? { legMinutes: rl } : {}));
+        r.stops.forEach((st, k) => st.stopNum = k + 1);
+        r.camperCount = r.stops.reduce((a, st) => a + ((st.campers || []).length), 0);
+        if (rl) { P.stampLegTimes(r, depot, rl); P.stampRoadPath(r, depot, rl, !!isArrival, false); }
+        else { delete r._tspLegTimes; delete r._roadPts; }
+    });
+    res.changedBuses = changed;
+    return res;
+}
+
 function _splitOverlongRoutes(routes, shiftVehicles, campLat, campLng, maxRouteMin, isArrival) {
     return window.CampistryGoRoutePost.splitOverlongRoutes(
         routes, _capByIdOf(shiftVehicles), { lat: campLat, lng: campLng },
@@ -3959,6 +4007,13 @@ async function generateRoutes() {
         if (_capRes.stranded) {
             console.error('[Go] Capacity: ' + _capRes.stranded + ' rider(s) exceed the fleet\'s seats — add a bus or raise capacity');
             toast(_capRes.stranded + ' rider(s) over the fleet\'s seat count — add a bus', 'error');
+        }
+
+        // With the street network, re-trade stops on real driving minutes.
+        if (_activeRoadNet) {
+            const _rp = _roadPolishRoutes(routes, shiftVehicles, campLat, campLng, isArrival, D.setup.maxRouteDuration || 90);
+            if (_rp && _rp.moves) console.log('[Go] Road polish: ' + _rp.moves + ' stop move(s) on street times across ' + _rp.changedBuses +
+                ' bus(es), est. fleet ' + Math.round(_rp.fleetBefore) + ' → ' + Math.round(_rp.fleetAfter) + ' min');
         }
 
         // Equalising head-counts is opt-in. It was the single biggest source of
@@ -4391,6 +4446,27 @@ async function _tryNeighborhoodPipeline({
             if (s.lat + ',' + s.lng !== before) resnapped++;
         }
         if (resnapped) console.log('[Go v5] Corner stops: ' + resnapped + ' merged stop(s) moved to the corner nearest their homes');
+        // Two groups that snapped to the SAME intersection are one stop: the
+        // camp's biggest corner takes 20 and "Benjamin St @ Reynolds Ave" twice,
+        // a minute apart, is not two stops. Cap the merged corner at 24.
+        let sameCorner = 0;
+        for (const bus of nhPhysical) {
+            const byKey = new Map(), out = [];
+            for (const s of (bus.stops || [])) {
+                const k = s._homes ? (s.lat.toFixed(6) + ',' + s.lng.toFixed(6)) : null;
+                const prev = k && byKey.get(k);
+                if (prev && (prev.campers || []).length + (s.campers || []).length <= 24) {
+                    prev.campers = (prev.campers || []).concat(s.campers || []);
+                    prev._homes = (prev._homes || []).concat(s._homes || []);
+                    sameCorner++;
+                    continue;
+                }
+                if (k) byKey.set(k, s);
+                out.push(s);
+            }
+            bus.stops = out;
+        }
+        if (sameCorner) console.log('[Go v5] Corner stops: ' + sameCorner + ' group(s) folded into the stop already at their corner');
     }
 
     // ── Build route objects (still in NH-spine order — will be TSP'd next) ──

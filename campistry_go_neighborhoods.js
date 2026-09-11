@@ -2309,7 +2309,14 @@ window.CampistryGoNeighborhoods = (function () {
             const node = nearestCorner(cLat, cLng, streetName, hs);
             stop._cLat = cLat; stop._cLng = cLng;
             stop.lat = node ? node.lat : cLat; stop.lng = node ? node.lng : cLng;
-            stop.address = cornerName(node, streetName);
+            if (node) stop.address = cornerName(node, streetName);
+            else {
+                // No intersection within walking reach: say where on the street,
+                // so two such stops on one road do not both read "X corner".
+                const num = (hs.find(h => h.houseNum) || {}).houseNum;
+                stop.address = streetName ? (streetName + (num ? ' near ' + num : ' corner'))
+                    : ((hs.find(h => h.addr) || {}).addr || 'Stop corner');
+            }
             return stop;
         }
         return { snap, nearestCorner, cornerName, WALK };
@@ -2323,7 +2330,7 @@ window.CampistryGoNeighborhoods = (function () {
                    : 'door';
         const corner = mode === 'corner';
         const WALK = Math.max(0.03, maxWalkMi);
-        const MAX_PER_STOP = 15;
+        const MAX_PER_STOP = 20; // the camp's own biggest corner holds 20
 
         // Real intersections from the road graph. A node joining 3+ edges is a
         // corner a child can actually be told to wait at; the camp's own
@@ -2449,7 +2456,7 @@ window.CampistryGoNeighborhoods = (function () {
                         // The homes behind the stop travel with it, so the
                         // pipeline's consolidation can measure walks from the
                         // homes (not the snapped corner) and re-snap a merged stop.
-                        const homesOut = grp.map(h => ({ lat: h.lat, lng: h.lng, street: h._segName || '' }));
+                        const homesOut = grp.map(h => ({ lat: h.lat, lng: h.lng, street: h._segName || '', houseNum: h.houseNum || '', addr: h.address || '' }));
                         if (corner) {
                             const node = snapper.nearestCorner(cLat, cLng, streetName, grp);
                             if (node) { lat = node.lat; lng = node.lng; }
