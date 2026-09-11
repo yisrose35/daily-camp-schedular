@@ -54,6 +54,12 @@
         onChange: function () {}
     };
 
+    // Bumped with campistry_me.html's ?v= on every deposits change, and shown
+    // in the Bank layouts footer. Twice now a fix has been live on the server
+    // while the browser ran an older copy, and there was no way to tell from
+    // the screen which one was which -- so the screen says.
+    D.BUILD = '20260911-03';
+
     var state = {
         loaded: false,
         loading: false,
@@ -1145,6 +1151,10 @@
                  'Layouts several camps taught independently and that all agreed on. Used only where you have not taught your own.</p>';
             h += shared.map(templateRow).join('');
         }
+        h += '<div style="margin-top:16px;padding-top:10px;border-top:1px solid var(--s100);' +
+             'font-size:.7rem;color:var(--s400)">Campistry deposits build ' + host.esc(D.BUILD) +
+             (Pdf() ? '' : ' · PDF upload unavailable — this page is running an older copy, reload it') +
+             '</div>';
         h += '</div>';
         host.showModal('Bank layouts', h, null);
     };

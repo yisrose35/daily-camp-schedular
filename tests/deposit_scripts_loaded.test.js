@@ -73,6 +73,18 @@ test('the UI loads after the modules it reads off window', () => {
     });
 });
 
+test('the UI build stamp matches the page cache-bust', () => {
+    // The stamp is shown in the Bank layouts footer so a stale browser can be
+    // identified from the screen instead of guessed at. It is only useful if it
+    // moves with the ?v= it is meant to describe.
+    const found = tags(fs.readFileSync(PAGE, 'utf8'));
+    const ui = fs.readFileSync(path.join(ROOT, 'campistry_deposits_ui.js'), 'utf8');
+    const m = ui.match(/D\.BUILD\s*=\s*'([^']+)'/);
+    assert.ok(m, 'campistry_deposits_ui.js must declare D.BUILD');
+    assert.strictEqual(m[1], found['campistry_deposits_ui.js'],
+        'D.BUILD and the page\'s ?v= must be bumped together');
+});
+
 test('a module changed today is not still served on an older cache-bust', () => {
     // ?v= is the only thing standing between a deploy and a browser that keeps
     // running the previous version. It does not have to be a date — it just has
