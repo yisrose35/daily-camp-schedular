@@ -23,6 +23,12 @@ global.window = global.window || {};
 eval(fs.readFileSync(path.join(__dirname, '..', 'campistry_go_route_post.js'), 'utf8'));
 eval(fs.readFileSync(path.join(__dirname, '..', 'campistry_go_neighborhoods.js'), 'utf8'));
 const NH = global.window.CampistryGoNeighborhoods;
+// The district polish stops at a wall-clock budget (a safety valve for huge
+// rosters). Six test files running in parallel starved it once, and it
+// returned a different split of the far township — give it room here so the
+// result depends on the layout, not on the machine.
+global.window.CampistryGoRoutePost.DEFAULTS.polishTimeBudgetMs = 30000;
+global.window.CampistryGoRoutePost.DEFAULTS.polishMsPerAtom = 200;
 
 const CAMP = { lat: 40.0933, lng: -74.2110 };
 const MI_LAT = 1 / 69, MI_LNG = 1 / 53; // approx at this latitude

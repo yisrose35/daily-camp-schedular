@@ -66,6 +66,7 @@ window.CampistryGoRoutePost = (function () {
         polishMaxPasses: 12,
         polishTimeBudgetMs: 1500,
         polishRideBudgetMin: 60,   // soft riding budget per bus (0 = off)
+        polishOverBudgetX: 2,      // bus-minute equivalents per minute a bus runs past its budget
         polishMinGainMin: 0.05,
         polishLnsIters: 0,         // ruin-and-recreate attempts after local search converges.
                                    // Measured on camp-shaped layouts: no gain over relocate/swap,
@@ -91,9 +92,14 @@ window.CampistryGoRoutePost = (function () {
         isArrival: false,          // arrival: a bus's minutes run until it is back at camp, a child's from pickup
         returnToDepot: false,      // dismissal, last shift of the day: the bus drives back to camp after its
                                    // last drop, so that leg is real bus time — priced by the stop ordering and
-                                   // the district polish alike. The ride cap still applies to the last drop.
+                                   // the district polish alike, and counted against the route budget, since
+                                   // the route total the app caps and shows includes it.
         // Stop ordering
-        tspUnfairWeight: 2,        // weight on minutes a child rides beyond their allowance
+        tspUnfairWeight: 10,       // weight on minutes a child rides beyond their allowance (2 x direct + slack).
+                                   // A tour minute weighs 60, so at 10 one bus minute buys six unfair
+                                   // child-minutes. At 2 the return-aware ordering kept two children
+                                   // who live 15 min from camp aboard for 91 minutes — dropped last, on
+                                   // the way home from a rural loop — to save the bus an 8-minute return.
         tspNeighborK: 10,          // candidate moves only among each stop's K nearest (LKH-style neighbour lists)
         tspKicks: null,            // iterated-local-search kicks around the best tour (null = 4 + n/8, max 12)
     };
@@ -211,7 +217,7 @@ window.CampistryGoRoutePost = (function () {
             C[i] = legOf(depot, movable[i]);
             R[i] = CLOSED ? legOf(movable[i], depot) : 0;
             cnt[i] = riders(movable[i]) || 1;
-            allow[i] = C[i] * o.maxRideRatio + 25;
+            allow[i] = C[i] * o.maxRideRatio + o.rideRatioSlackMin;
             dwell[i] = stopDwellMin(movable[i], o);
         }
         // Road legs can be asymmetric (one-way streets): fill both directions.
@@ -568,7 +574,7 @@ window.CampistryGoRoutePost = (function () {
         movable.forEach((s, i) => {
             const k = riders(s) || 1, ride = isArrival ? (time - arr[i]) : arr[i];
             head += k; total += k * ride;
-            const allow = legOf(depot, s) * o.maxRideRatio + 25;
+            const allow = legOf(depot, s) * o.maxRideRatio + o.rideRatioSlackMin;
             if (ride > allow) unfair += k * (ride - allow);
         });
         return total + unfair * o.tspUnfairWeight + (tour * 60) * Math.max(1, head / 40);
@@ -1204,11 +1210,13 @@ window.CampistryGoRoutePost = (function () {
         o = opts(o);
         const t0 = Date.now();
         const speed = Math.max(1, o.avgSpeedMph), budget = o.polishRideBudgetMin, OVERHEAD = o.busOverheadMin;
+        const OVERX = Number.isFinite(o.polishOverBudgetX) ? Math.max(0, o.polishOverBudgetX) : 2;
         const LAMBDA = Math.max(0, o.polishChildMinuteWeight || 0);
         const SPLIT = Math.max(0, o.polishStreetSplitMin || 0);
         const ARR = !!o.isArrival;
         // Dismissal with a return: the tour ends back at camp. Bus minutes
-        // include the ride home; the riding budget is judged on the last drop.
+        // include the ride home, and so does the route budget — it is the
+        // same total the app's cap check and Route summary show.
         const RET = !ARR && !!o.returnToDepot;
         const MERGE_SAME = Math.max(0, o.polishMergeSameStreetMi || 0), MERGE_ANY = Math.max(0, o.polishMergeAnyMi || 0);
         // Street travel times when the caller has the road network (legMinutes),
@@ -1237,7 +1245,7 @@ window.CampistryGoRoutePost = (function () {
         };
         const B = (buckets || []).map((atoms, i) => ({
             atoms: atoms.slice(), cap: Number.isFinite(caps && caps[i]) ? caps[i] : Infinity,
-            count: atoms.reduce((a, x) => a + cnt(x), 0), tour: [], len: 0, bt: 0, childMin: 0, wedge: 0,
+            count: atoms.reduce((a, x) => a + cnt(x), 0), tour: [], len: 0, childMin: 0, wedge: 0,
             arr: [], dep: [], suf: [], pre: [], dw: [], streets: new Map(),
         }));
         const N = B.length;
@@ -1277,12 +1285,11 @@ window.CampistryGoRoutePost = (function () {
 
         // ── tour pricing ──
         // Walk a tour once: bus minutes (dismissal: to the last drop, plus the
-        // ride home when the shift returns; arrival: back to camp), the time
-        // the riding budget is judged on (`bt`: last drop, or camp arrival),
-        // and child-minutes (each rider x their time aboard). Also fills the
+        // ride home when the shift returns; arrival: back to camp) and
+        // child-minutes (each rider x their time aboard). Also fills the
         // per-position arrays used for O(1) move pricing.
         function evalTour(atoms, tour, out) {
-            let t = 0, prev = depot, cm = 0, wsum = 0, lastArr = 0;
+            let t = 0, prev = depot, cm = 0, wsum = 0;
             const arr = out ? out.arr : null, dep = out ? out.dep : null, dwv = out ? out.dw : null;
             if (arr) { arr.length = 0; dep.length = 0; dwv.length = 0; }
             // Shared stops: atoms linked by mergeable pairs (transitively, as the
@@ -1303,7 +1310,6 @@ window.CampistryGoRoutePost = (function () {
             for (const i of tour) {
                 const a = atoms[i];
                 t += leg(prev, a);
-                lastArr = t;
                 if (arr) arr.push(t);
                 const k = cnt(a); tot += k;
                 if (ARR) wsum += k * t; else cm += k * t;
@@ -1315,19 +1321,18 @@ window.CampistryGoRoutePost = (function () {
             }
             if ((ARR || RET) && tour.length) t += leg(prev, depot);
             if (ARR) cm = t * tot - wsum; // each child: camp arrival minus pickup
-            const bt = ARR ? t : lastArr;
             if (out) {
                 const n = tour.length, suf = out.suf, pre = out.pre;
                 suf.length = n + 1; pre.length = n + 1;
                 suf[n] = 0; for (let i = n - 1; i >= 0; i--) suf[i] = suf[i + 1] + cnt(atoms[tour[i]]);
                 pre[0] = 0; for (let i = 0; i < n; i++) pre[i + 1] = pre[i] + cnt(atoms[tour[i]]);
-                out.len = t; out.bt = bt; out.childMin = cm;
+                out.len = t; out.childMin = cm;
             }
-            return { len: t, bt, childMin: cm };
+            return { len: t, childMin: cm };
         }
         function buildTour(b) {
             const n = b.atoms.length;
-            if (!n) { b.tour = []; b.len = 0; b.bt = 0; b.childMin = 0; b.wedge = 0; b.arr = []; b.dep = []; b.dw = []; b.suf = [0]; b.pre = [0]; return; }
+            if (!n) { b.tour = []; b.len = 0; b.childMin = 0; b.wedge = 0; b.arr = []; b.dep = []; b.dw = []; b.suf = [0]; b.pre = [0]; return; }
             const rem = []; for (let i = 0; i < n; i++) rem.push(i);
             const t = []; let cur = depot;
             while (rem.length) {
@@ -1356,14 +1361,13 @@ window.CampistryGoRoutePost = (function () {
         }
         function refresh(b) { evalTour(b.atoms, b.tour, b); b.wedge = arcDeg(b.atoms, depot, o); }
         // Cost of one bus: its minutes, the cost of running it at all, a
-        // penalty for exceeding the riding budget (judged on `bt`: the last
-        // drop, or camp arrival), and the children's minutes.
-        const busCost = (len, bt, cm) => len <= 0 ? 0 : len + OVERHEAD + (budget > 0 ? 2 * Math.max(0, bt - budget) : 0) + LAMBDA * cm;
-        const objective = () => B.reduce((a, b) => a + busCost(b.len, b.bt, b.childMin), 0) + streetPenalty();
+        // penalty for running past the route budget, and the children's minutes.
+        const busCost = (len, cm) => len <= 0 ? 0 : len + OVERHEAD + (budget > 0 ? OVERX * Math.max(0, len - budget) : 0) + LAMBDA * cm;
+        const objective = () => B.reduce((a, b) => a + busCost(b.len, b.childMin), 0) + streetPenalty();
         const fleetMin = () => B.reduce((a, b) => a + b.len, 0);
         const childMin = () => B.reduce((a, b) => a + b.childMin, 0);
 
-        // Removing tour position `pos` from bus b: { dLen, dBt, dCm } (all ≤ 0).
+        // Removing tour position `pos` from bus b: { dLen, dCm } (both ≤ 0).
         function removalDelta(b, pos) {
             const t = b.tour, cur = b.atoms[t[pos]], k = cnt(cur);
             const prev = pos > 0 ? b.atoms[t[pos - 1]] : depot;
@@ -1372,28 +1376,22 @@ window.CampistryGoRoutePost = (function () {
             const S = next ? leg(prev, cur) + leg(cur, next) - leg(prev, next) + dw : leg(prev, cur) + dw;
             const dCm = ARR ? -(S * b.pre[pos] + k * (b.len - b.arr[pos]))
                             : -(S * b.suf[pos + 1] + k * b.arr[pos]);
-            // Budget time: arrival = the whole tour; dismissal = the last drop,
-            // which becomes the previous stop's arrival when the last one goes.
-            const dBt = ARR ? -S : (pos + 1 < t.length ? -S : (pos > 0 ? b.arr[pos - 1] : 0) - b.arr[pos]);
-            return { dLen: -S, dBt, dCm };
+            return { dLen: -S, dCm };
         }
         // Best insertion of `atom` into bus b's tour under the full bus cost,
         // optionally treating tour position `excludePos` as already removed
         // (child-minutes are then approximate; callers re-price on apply).
-        // Returns { at, dLen, dBt, dCm, delta } with `at` the position in the
-        // tour WITHOUT the excluded stop.
+        // Returns { at, dLen, dCm, delta } with `at` the position in the tour
+        // WITHOUT the excluded stop.
         function bestInsert(b, atom, excludePos) {
             const t = b.tour, k = cnt(atom);
-            // Budget time the deltas are measured from: with the last stop
-            // excluded the tour already ends one stop earlier.
-            const btRef = ARR ? b.bt : (excludePos >= 0 && excludePos === t.length - 1 ? (t.length >= 2 ? b.arr[t.length - 2] : 0) : b.bt);
             // Joining a stop the bus already makes costs only the per-child time.
             let dw = dwellOf(atom);
             if (MERGE_SAME || MERGE_ANY) {
                 const ex = excludePos >= 0 ? t[excludePos] : -1;
                 for (let i = 0; i < b.atoms.length; i++) if (i !== ex && mergeable(atom, b.atoms[i])) { dw = perRider(atom); break; }
             }
-            const base = busCost(b.len, b.bt, b.childMin);
+            const base = busCost(b.len, b.childMin);
             let best = null, j = 0, prev = depot;
             for (let i = 0; i <= t.length; i++) {
                 if (i === excludePos) continue; // the gap: prev stays the stop before it
@@ -1404,11 +1402,8 @@ window.CampistryGoRoutePost = (function () {
                 const arrX = (pi >= 0 ? b.dep[pi] : 0) + lp;
                 const dCm = ARR ? D * b.pre[i] + k * (b.len + D - arrX)
                                 : D * b.suf[i] + k * arrX;
-                // Budget time after the move: appended, the new stop IS the
-                // last drop; inserted earlier, the last drop shifts by D.
-                const btNew = ARR ? b.bt + D : (i >= t.length ? arrX : btRef + D);
-                const delta = busCost(b.len + D, btNew, b.childMin + dCm) - base;
-                if (!best || delta < best.delta) best = { at: j, dLen: D, dBt: btNew - btRef, dCm, delta };
+                const delta = busCost(b.len + D, b.childMin + dCm) - base;
+                if (!best || delta < best.delta) best = { at: j, dLen: D, dCm, delta };
                 if (!next || i >= t.length) break;
                 prev = next; j++;
             }
@@ -1472,7 +1467,7 @@ window.CampistryGoRoutePost = (function () {
                     if ((pos & 15) === 0 && outOfTime()) { stop = true; break; }
                     const atom = A.atoms[A.tour[pos]];
                     const rem = removalDelta(A, pos);
-                    const dA = busCost(A.len + rem.dLen, A.bt + rem.dBt, A.childMin + rem.dCm) - busCost(A.len, A.bt, A.childMin);
+                    const dA = busCost(A.len + rem.dLen, A.childMin + rem.dCm) - busCost(A.len, A.childMin);
                     let best = null;
                     for (let bi = 0; bi < N; bi++) {
                         if (bi === ai) continue;
@@ -1510,7 +1505,7 @@ window.CampistryGoRoutePost = (function () {
                 const bNear = Bb.tour.map(i => reachMi(A, Bb.atoms[i]) <= o.polishReachMi);
                 if (!bNear.some(Boolean)) continue;
                 let best = null;
-                const baseA = busCost(A.len, A.bt, A.childMin), baseB = busCost(Bb.len, Bb.bt, Bb.childMin);
+                const baseA = busCost(A.len, A.childMin), baseB = busCost(Bb.len, Bb.childMin);
                 for (let pa = 0; pa < A.tour.length; pa++) {
                     if (!aNear[pa]) continue;
                     const a = A.atoms[A.tour[pa]];
@@ -1522,8 +1517,8 @@ window.CampistryGoRoutePost = (function () {
                         if (Bb.count - cnt(b) + cnt(a) > Bb.cap) continue;
                         const rB = removalDelta(Bb, pb);
                         const iA = bestInsert(A, b, pa), iB = bestInsert(Bb, a, pb);
-                        const dA = busCost(A.len + rA.dLen + iA.dLen, A.bt + rA.dBt + iA.dBt, A.childMin + rA.dCm + iA.dCm) - baseA;
-                        const dB = busCost(Bb.len + rB.dLen + iB.dLen, Bb.bt + rB.dBt + iB.dBt, Bb.childMin + rB.dCm + iB.dCm) - baseB;
+                        const dA = busCost(A.len + rA.dLen + iA.dLen, A.childMin + rA.dCm + iA.dCm) - baseA;
+                        const dB = busCost(Bb.len + rB.dLen + iB.dLen, Bb.childMin + rB.dCm + iB.dCm) - baseB;
                         const dS = streetOf(a) === streetOf(b) ? 0 : streetDelta(A, Bb, a) + streetDelta(Bb, A, b);
                         const delta = dA + dB + dS;
                         if (delta < -EPS && (!best || delta < best.delta)) {

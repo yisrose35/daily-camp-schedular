@@ -3618,9 +3618,10 @@ function _roadPolishRoutes(routes, shiftVehicles, campLat, campLng, isArrival, m
     let res;
     try {
         // The last dismissal shift drives back to camp: that leg is real bus
-        // time, so the polish prices it (the ride cap still applies to the
-        // last drop). Ruin-and-recreate lets stops move in chains when the
-        // seats are tight — a single relocate can't free a seat first.
+        // time, so the polish prices it and counts it against Max Route
+        // Duration, the same total the cap check and Route summary show.
+        // Ruin-and-recreate lets stops move in chains when the seats are
+        // tight — a single relocate can't free a seat first.
         res = P.polishDistricts(buckets, caps, depot, _routePostOpts({
             legMinutes: legs, isArrival: !!isArrival, returnToDepot: !!needsReturn,
             polishRideBudgetMin: maxRouteMin || 90, polishReachMi: 5, polishTimeBudgetMs: 3000,

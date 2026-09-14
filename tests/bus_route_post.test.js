@@ -537,17 +537,19 @@ test('stop ordering with a return to camp ends the run nearer camp when that sav
     assert.deepStrictEqual(a1.map(s => s.address), a2.map(s => s.address));
 });
 
-test('with a return to camp the ride cap is judged on the last drop, not on the empty ride home', () => {
+test('with a return to camp the route budget is the whole route including the ride home — the total the app caps', () => {
     const A = [at(2, 0, 3), at(4, 0, 3), at(6, 0, 3), at(8, 0, 3)];
     const solo = o => P.polishDistricts([A, []], [48, 48], CAMP, Object.assign({ polishMaxPasses: 0, busOverheadMin: 0 }, o));
-    const lastDrop = solo({ polishRideBudgetMin: 0 }).fleetBefore - P.stopDwellMin(A[3], {});
+    const noRet = solo({ polishRideBudgetMin: 0 }).fleetBefore;
     const withRet = solo({ polishRideBudgetMin: 0, returnToDepot: true }).fleetBefore;
-    assert.ok(withRet > lastDrop + 15, 'the ride home from 8mi out is counted: ' + lastDrop.toFixed(1) + ' -> ' + withRet.toFixed(1));
-    const mid = (lastDrop + withRet) / 2;
-    const unpenalised = solo({ polishRideBudgetMin: mid, returnToDepot: true }).before;
-    assert.ok(Math.abs(unpenalised - withRet) < 1e-6, 'a cap between the last drop and the return is not breached');
-    const tight = solo({ polishRideBudgetMin: lastDrop - 5, returnToDepot: true }).before;
-    assert.ok(Math.abs(tight - (withRet + 10)) < 1e-6, 'breaching the cap by 5 min at the last drop costs 10: ' + (tight - withRet).toFixed(2));
+    assert.ok(withRet > noRet + 15, 'the ride home from 8mi out is counted: ' + noRet.toFixed(1) + ' -> ' + withRet.toFixed(1));
+    const mid = (noRet + withRet) / 2;
+    const penalised = solo({ polishRideBudgetMin: mid, returnToDepot: true }).before;
+    assert.ok(Math.abs(penalised - (withRet + 2 * (withRet - mid))) < 1e-6, 'a cap the total breaches costs 2x the excess');
+    const easy = solo({ polishRideBudgetMin: withRet + 1, returnToDepot: true }).before;
+    assert.ok(Math.abs(easy - withRet) < 1e-6, 'under the cap, no penalty');
+    const steep = solo({ polishRideBudgetMin: mid, returnToDepot: true, polishOverBudgetX: 5 }).before;
+    assert.ok(Math.abs(steep - (withRet + 5 * (withRet - mid))) < 1e-6, 'the over-budget weight is a setting');
 });
 
 test('polish with a return keeps every invariant on a scattered instance and never worsens the objective', () => {
@@ -638,4 +640,24 @@ test('foldSameCornerStops: two stops at one corner become one, in order, under t
     const r2 = P.foldSameCornerStops([at(1, 0, 3), at(1, 0, 22)], 24);
     assert.strictEqual(r2.folded, 0, 'over the cap they stay apart');
     assert.strictEqual(P.foldSameCornerStops([{ isMonitor: true, address: 'x' }, at(2, 0, 1)], 24).stops.length, 2);
+});
+
+test('a child who lives near camp is not kept aboard for a rural loop to save the bus a few minutes on the ride home', () => {
+    // A big group 8mi out to the north-east, a loop back through the
+    // north-west, and two children 4mi out on the way home. Minimum latency
+    // drops them last: the nine ride less, the bus saves ~6 minutes, and the
+    // two sit aboard ~95 minutes for a 15-minute trip — far past their
+    // allowance (2 x direct + slack). That is the Skylark Drive case.
+    const loop = [at(8, 5, 9), at(10, 4, 1), at(12, 1, 2), at(11, -2, 1), at(9, -3, 2)];
+    const near = at(4, -1, 2);
+    const stops = loop.concat([near]);
+    const cheap = P.localTspOrder(stops, CAMP, false, { returnToDepot: true, tspUnfairWeight: 2 });
+    assert.strictEqual(cheap[cheap.length - 1].address, near.address, 'at weight 2 the near children ride the whole loop');
+    const fair = P.localTspOrder(stops, CAMP, false, { returnToDepot: true });
+    assert.notStrictEqual(fair[fair.length - 1].address, near.address, 'by default they are dropped before the loop');
+    const o = P.DEFAULTS;
+    let t = 0, prev = CAMP, ride = 0;
+    for (const s of fair) { t += P.driveMin(prev, s, o) + P.stopDwellMin(s, o); if (s === near) ride = t; prev = s; }
+    const allow = P.driveMin(CAMP, near, o) * o.maxRideRatio + o.rideRatioSlackMin;
+    assert.ok(ride <= allow, 'their ride ' + ride.toFixed(0) + ' is within the allowance ' + allow.toFixed(0));
 });
