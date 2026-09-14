@@ -1125,6 +1125,39 @@ function _lkGoToCheckout(url){
     }catch(_){}
     window.location.href=url;
 }
+// ── Banquest redirect-to-hosted-page ────────────────────────────────────────
+// Banquest doesn't embed a card field on our page — the parent is sent to
+// Banquest's own hosted Payment Page. payments-hosted-link mints a one-time
+// link (+ tracking key); we stash the key→camp/purpose locally so the return
+// leg (which only carries ?key=) can be completed, then redirect.
+async function _lkStartHostedRedirect(cid,purpose,extra,navPage){
+    var base=(window.__CAMPISTRY_PARENT_URL__||location.origin).replace(/\/+$/,'');
+    var ret=base+'/campistry_link_parent.html'; // Banquest appends ?key=<key>
+    var body=Object.assign({campId:cid,purpose:purpose,returnUrl:ret},extra||{});
+    var data=await _lkCallEdge('payments-hosted-link',body);
+    if(!data||!data.payment_link) throw new Error('Could not open the secure payment page.');
+    try{ localStorage.setItem('bqPending:'+data.key,JSON.stringify({campId:cid,purpose:purpose,navPage:navPage||null,ts:Date.now()})); }catch(_){}
+    _lkGoToCheckout(data.payment_link);
+}
+async function _handleBanquestReturn(){
+    var params=new URLSearchParams(location.search);
+    var key=params.get('key'); if(!key) return;
+    history.replaceState(null,'',location.pathname);
+    var meta={}; try{ meta=JSON.parse(localStorage.getItem('bqPending:'+key)||'{}'); }catch(_){}
+    try{ localStorage.removeItem('bqPending:'+key); }catch(_){}
+    toast('Confirming with the bank…');
+    try{
+        var data=await _lkCallEdge('payments-hosted-complete',{key:key,campId:meta.campId||undefined});
+        var msgs={save_card:'Card saved!',pay_now:'Payment received — thank you!',canteen:'Funds are on their way to the canteen account.'};
+        toast(msgs[data.purpose]||'Done!');
+        if(meta.campId){ delete _balByCamp[meta.campId]; }
+        var page=meta.navPage||({save_card:'payments',pay_now:'payments',canteen:'canteen'})[data.purpose];
+        if(page) nav(page);
+    }catch(err){
+        console.error('[Parent] Banquest return error:',err);
+        toast(err&&err.message||'We could not confirm that payment — check with the camp office.');
+    }
+}
 // Photos live in a private Storage bucket as of migration 080 — the only way
 // to actually see one is a short-lived signed URL minted by get-photo-urls,
 // which re-derives authorization server-side rather than trusting these ids.
@@ -1263,10 +1296,11 @@ async function _addSavedCard(cid){
     var status=await _getCampProcessorInfo(cid);
     var processorKey=(status&&status.processorKey)||'stripe';
     if(processorKey==='banquest'){
-        // Banquest has no hosted-checkout page — save the card through the
-        // embedded tokenizer page (campistry_card_setup.html → Banquest Hosted
-        // Tokenization → payments-save-method).
-        _lkGoToCheckout(location.origin+'/campistry_card_setup.html?campId='+encodeURIComponent(cid)+'&familyKey='+encodeURIComponent(d.familyKey)+'&familyName='+encodeURIComponent(d.familyName||'')+'&return='+encodeURIComponent(location.href));
+        // Banquest: redirect to its own hosted Payment Page — no card field
+        // renders on our page. payments-hosted-complete stores the card on
+        // return (see _lkStartHostedRedirect / _handleBanquestReturn).
+        try{ toast('Opening secure payment page…'); await _lkStartHostedRedirect(cid,'save_card',{familyKey:d.familyKey}); }
+        catch(err){ console.error('[Parent] Banquest save card error:',err); toast('Could not start setup: '+(err&&err.message||'error')); }
         return;
     }
     if(processorKey!=='cardknox'){ toast("Online card saving isn't set up for this camp yet — contact the office."); return; }
@@ -1438,9 +1472,10 @@ async function startAutopaySetup(cid){
         return;
     }
     if(processorKey==='banquest'){
-        // Banquest: save the card via the embedded tokenizer page (no hosted
-        // checkout), same as _addSavedCard.
-        _lkGoToCheckout(location.origin+'/campistry_card_setup.html?campId='+encodeURIComponent(cid)+'&familyKey='+encodeURIComponent(d.familyKey)+'&familyName='+encodeURIComponent(d.familyName||'')+'&return='+encodeURIComponent(location.href));
+        // Banquest: redirect to its own hosted Payment Page (no card field on
+        // our page), same as _addSavedCard.
+        try{ toast('Opening secure payment page…'); await _lkStartHostedRedirect(cid,'save_card',{familyKey:d.familyKey}); }
+        catch(err){ console.error('[Parent] autopay setup (banquest) error:',err); toast('Could not start setup: '+(err&&err.message||'error')); }
         return;
     }
     try{
@@ -1632,21 +1667,16 @@ async function _lkPayConfirm(){
             _lkGoToCheckout(ckRes.url);
             return;
         }
-        // Any other non-Stripe processor with no hosted-checkout support yet
-        // (e.g. Banquest) falls back to the embedded tokenizer page instead.
-        if(processorKey&&processorKey!=='stripe'){
+        // Banquest: redirect to its own hosted Payment Page (no card field on
+        // our page); payments-hosted-complete records the payment on return.
+        if(processorKey==='banquest'){
             if(!d.familyKey){toast('Could not start payment: family record not found — contact the camp office','error');return;}
-            // window.location.origin is dead inside Capacitor (capacitor://localhost)
-            // — this opens in an external browser sheet, which can't resolve
-            // that scheme at all, so it must be the real public URL.
-            var _byopBase=(window.__CAMPISTRY_PARENT_URL__||'https://link.campistry.org').replace(/\/+$/,'');
-            var byopUrl=_byopBase+'/campistry_card_setup.html?campId='+encodeURIComponent(cid)+
-                '&familyKey='+encodeURIComponent(d.familyKey)+
-                '&familyName='+encodeURIComponent(d.familyName||'')+
-                '&amount='+encodeURIComponent(amt)+
-                '&desc='+encodeURIComponent('Camp payment'+(d.familyName?' — '+d.familyName:''))+
-                '&return='+encodeURIComponent(_lkReturnUrl('success','pay'));
-            _lkGoToCheckout(byopUrl);
+            toast('Opening secure payment page…');
+            await _lkStartHostedRedirect(cid,'pay_now',{familyKey:d.familyKey,amount:amt,description:'Camp payment'+(d.familyName?' — '+d.familyName:'')});
+            return;
+        }
+        if(processorKey&&processorKey!=='stripe'){
+            toast("Online payment isn't set up for this camp yet — contact the office.",'error');
             return;
         }
         toast('Opening secure checkout…');
@@ -2137,18 +2167,18 @@ async function addFunds(){
         }catch(err){ toast('Could not start checkout: '+(err&&err.message||'error')); if(addBtn){addBtn.disabled=false;addBtn.textContent='Add Funds';} }
         return;
     }
-    // Any other non-Stripe processor with no hosted-checkout support yet
-    // (e.g. Banquest) falls back to the embedded tokenizer page instead.
+    // Banquest: redirect to its own hosted Payment Page (no card field on our
+    // page); payments-hosted-complete credits the canteen balance on return.
+    if(processorKey==='banquest'){
+        var abtn=document.getElementById('canteenAddBtn');
+        if(abtn){abtn.disabled=true;abtn.textContent='Opening secure payment page…';}
+        try{
+            await _lkStartHostedRedirect(c.campId,'canteen',{camperName:c.name,amount:amt,description:'Canteen funds — '+c.name});
+        }catch(err){ toast('Could not start payment: '+(err&&err.message||'error')); if(abtn){abtn.disabled=false;abtn.textContent='Add Funds';} }
+        return;
+    }
     if(processorKey&&processorKey!=='stripe'){
-        // window.location.origin is dead inside Capacitor (capacitor://localhost)
-        // — same reasoning as the tuition Pay Now branch above.
-        var _byopBase2=(window.__CAMPISTRY_PARENT_URL__||'https://link.campistry.org').replace(/\/+$/,'');
-        var byopUrl=_byopBase2+'/campistry_card_setup.html?campId='+encodeURIComponent(c.campId)+
-            '&camperName='+encodeURIComponent(c.name)+
-            '&amount='+encodeURIComponent(amt)+
-            '&desc='+encodeURIComponent('Canteen funds — '+c.name)+
-            '&return='+encodeURIComponent(_lkReturnUrl('success','canteen'));
-        _lkGoToCheckout(byopUrl);
+        toast("Online payment isn't set up for this camp yet — contact the office.",'error');
         return;
     }
     var btn=document.getElementById('canteenAddBtn');
@@ -2732,6 +2762,13 @@ async function _startCanteenAutoReloadCheckout(c){
             var ckRes=await _lkCallEdge('cardknox-checkout-start',{campId:c.campId,kind:'canteen_autoreload_setup',camperName:c.name,description:'Save a card for auto-reload — '+c.name});
             _lkGoToCheckout(ckRes.url);
         }catch(err){ console.error('[Parent] canteen auto-reload cardknox setup error:',err); toast('Could not start setup: '+(err&&err.message||'error')); }
+        return;
+    }
+    if(processorKey==='banquest'){
+        // Banquest: redirect to its hosted Payment Page to save the card; the
+        // camper-scoped token lands on autoReload via payments-hosted-complete.
+        try{ toast('Opening secure payment page…'); await _lkStartHostedRedirect(c.campId,'save_card',{camperName:c.name,description:'Save a card for auto-reload — '+c.name},'canteen'); }
+        catch(err){ console.error('[Parent] canteen auto-reload banquest setup error:',err); toast('Could not start setup: '+(err&&err.message||'error')); }
         return;
     }
     try{
@@ -4798,6 +4835,7 @@ function _onLateDateChange(){
 
 init();
 _handleStripeReturn();
+_handleBanquestReturn();
 initPickupTabs();
 hydratePickupRequests();
 applyParentPrefs();

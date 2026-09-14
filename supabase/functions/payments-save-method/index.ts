@@ -88,7 +88,7 @@ async function banquestSaveMethod(creds: Record<string, string>, nonce: string):
                 || String(data?.status || "").toLowerCase() === "approved"
                 || !!cardRef; // some verify responses omit status but return card_ref
   if (resp.status < 200 || resp.status >= 300 || !cardRef || !approved) {
-    const errMsg = (Array.isArray(data?.error_messages) && data.error_messages[0]) || data?.error || data?.message || data?.status || `Could not save payment method (HTTP ${resp.status})`;
+    const errMsg = data?.error_message || (Array.isArray(data?.error_messages) && data.error_messages[0]) || data?.error_details || data?.error || data?.message || data?.status || `Could not save payment method (HTTP ${resp.status})`;
     return { success: false, error: errMsg };
   }
   const last4 = data?.last_4 || data?.transaction?.last_4 || data?.card?.last_4;

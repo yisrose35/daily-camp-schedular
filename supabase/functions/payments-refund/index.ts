@@ -93,7 +93,7 @@ async function banquestRefund(
     const ok = code === "A" || /approv|void|refund/.test(st);
     const newRef = data?.reference_number != null ? String(data.reference_number) : (data?.transaction?.id ? String(data.transaction.id) : "");
     if (resp.status < 200 || resp.status >= 300 || !ok || !newRef) {
-      const errMsg = (Array.isArray(data?.error_messages) && data.error_messages[0]) || data?.error || data?.message || data?.status || `Refund failed (HTTP ${resp.status})`;
+      const errMsg = data?.error_message || (Array.isArray(data?.error_messages) && data.error_messages[0]) || data?.error_details || data?.error || data?.message || data?.status || `Refund failed (HTTP ${resp.status})`;
       return { success: false, status: data?.status, error: errMsg, raw: data };
     }
     return { success: true, externalTransactionId: newRef, status: data?.status, raw: data };
