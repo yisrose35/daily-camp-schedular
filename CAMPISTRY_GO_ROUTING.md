@@ -86,8 +86,9 @@ addresses ─ geocode ─┬─ road graph (OpenStreetMap) ─ neighbourhoods �
   first road-graph run left one Jackson bus at 137 minutes while another
   carried 13 children. Ruin-and-recreate is on here (40 attempts inside the
   time budget) so stops can move in chains when every bus is near its seat
-  count. The soft budget is judged on the **last drop** (dismissal) or camp
-  arrival (arrival), never on an empty ride home.
+  count. The soft budget is the route total the app caps and the Route
+  summary shows — including the ride home on the last dismissal shift — at
+  `polishOverBudgetX` (2) bus-minute equivalents per minute over.
 
 * **The ride home** (`returnToDepot`): the last dismissal shift drives back
   to camp after its final drop. That leg is real bus time, so the districting
@@ -109,8 +110,16 @@ receiver's wedge past the limit.
 
 ### Ordering (`localTspOrder`)
 
-Objective is **children-minutes** (minimum latency), plus twice the minutes a
-child rides beyond `2 × direct trip + 25`, plus the tour length as a tie-break.
+Objective is **children-minutes** (minimum latency), plus `tspUnfairWeight`
+(10) times the minutes a child rides beyond their allowance (`2 × direct trip
++ 10`, the same allowance the ride-ratio audit uses), plus the tour length.
+A tour minute weighs 60, so one bus minute buys six unfair child-minutes. At
+the old weight of 2 the return-aware ordering kept two children who live 15
+minutes from camp aboard for 91 minutes — dropped last, on the way home from
+the rural Jackson loop, because the nine children at the loop's first stop
+rode less that way. Minimum latency is right for the many; the allowance is
+the guard for the few, and it has to cost more than a handful of bus minutes
+to do that job.
 Arrival mode charges the drive from the last pickup back to camp; a dismissal
 shift that returns to camp charges the empty ride home as bus time only, so
 a run ends nearer camp when that saves more than it costs the children.
