@@ -150,6 +150,18 @@ serve(async (req) => {
 
     await service.rpc("_admin_mark_processor_verified", { p_camp_id: campId, p_ok: true });
 
+    // A camp switching processors leaves every family's/camper's old saved
+    // card dead — a token tokenized on one gateway can't be charged on
+    // another. Scrub anything that doesn't match the processor just connected,
+    // so Link and Me only ever show a card that actually works. Best-effort:
+    // never fail the connect over cleanup (migration 147).
+    try {
+      const { data: cleared } = await service.rpc("_admin_clear_stale_byop_cards", { p_camp_id: campId, p_processor_key: processorKey });
+      if (cleared?.cleared) console.log(`[admin-connect-processor] cleared ${cleared.cleared} stale saved card(s) not matching ${processorKey}`);
+    } catch (e) {
+      console.error("[admin-connect-processor] stale-card cleanup failed (non-fatal):", (e as Error).message);
+    }
+
     console.log(`[admin-connect-processor] Connected ${processorKey} for camp "${camp.name}" (${campId})`);
 
     return json({ success: true, campName: camp.name, processorKey });
