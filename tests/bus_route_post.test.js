@@ -830,3 +830,37 @@ test('a corner stop moves to the corner on the bus\'s way when one is inside the
     assert.strictEqual(res3.moved, 1, 'joins the next stop\'s corner');
     assert.strictEqual(S4.lat, N1.lat);
 });
+
+test('a bus whose run ends far out hands that tail to the bus already serving the pocket, cap or no cap', () => {
+    // A: a core run plus three far-west stops. W: a bus that is out west
+    // anyway with seats to spare. No cap is set, and A is nowhere near one;
+    // the fleet still gains when one bus makes the haul instead of two.
+    const A = [at(0.5, -0.3, 8), at(0.9, -0.6, 6), at(1.2, -0.2, 7), at(2, -7, 2), at(2.4, -7.6, 1), at(2.8, -8.1, 2)];
+    const W = [at(1, -5, 6), at(1.5, -6.5, 8), at(2.2, -8.4, 10), at(2.6, -9, 6)];
+    const solo = b => b.length ? P.polishDistricts([b, []], [46, 46], CAMP, { returnToDepot: false, polishMaxPasses: 0, polishRideBudgetMin: 0 }).fleetBefore : 0;
+    const before = solo(A) + solo(W);
+    const res = P.polishDistricts([A, W], [46, 46], CAMP, { returnToDepot: false, polishRideBudgetMin: 0, polishTailMinMi: 4 });
+    assert.ok(res.blockMoves >= 1, 'the tail moved as a block: ' + JSON.stringify({ moves: res.moves, blockMoves: res.blockMoves }));
+    const farOn = res.buckets.map(b => b.filter(a => P.haversineMi(CAMP.lat, CAMP.lng, a.lat, a.lng) > 4).length);
+    assert.strictEqual(farOn[0], 0, 'A no longer goes west: ' + JSON.stringify(farOn));
+    assert.strictEqual(farOn[1], 7, 'W serves the whole pocket');
+    const after = res.buckets.map(solo).reduce((a, x) => a + x, 0);
+    assert.ok(after < before - 10, 'the fleet gained a haul: ' + before.toFixed(0) + ' -> ' + after.toFixed(0));
+    for (const b of res.buckets) assert.ok(b.reduce((a, x) => a + x.campers.length, 0) <= 46, 'seats');
+    // with the move switched off the two runs are left as they were
+    const off = P.polishDistricts([A, W], [46, 46], CAMP, { returnToDepot: false, polishRideBudgetMin: 0, polishTailMinMi: 0, polishLnsIters: 0 });
+    assert.strictEqual(off.blockMoves, 0, 'no block move without the tail rule');
+});
+
+test('a far tail still moves when the receiver is full: it sheds core stops first', () => {
+    const A = [at(0.5, -0.3, 8), at(0.9, -0.6, 6), at(1.2, -0.2, 7), at(2, -7, 2), at(2.4, -7.6, 1), at(2.8, -8.1, 2)];
+    // W: 46 children, no seats — two small core stops it passes on the way out
+    const W = [at(0.6, -0.4, 4), at(0.8, -0.9, 3), at(1, -5, 9), at(1.5, -6.5, 12), at(2.2, -8.4, 12), at(2.6, -9, 6)];
+    assert.strictEqual(kids({ stops: W }), 46);
+    const res = P.polishDistricts([A, W], [46, 46], CAMP, { returnToDepot: false, polishRideBudgetMin: 0, polishTailMinMi: 4, polishLnsIters: 0 });
+    assert.ok(res.blockMoves >= 1, 'the tail moved: ' + JSON.stringify({ moves: res.moves, blockMoves: res.blockMoves, roomMoves: res.roomMoves }));
+    const farOn = res.buckets.map(b => b.filter(a => P.haversineMi(CAMP.lat, CAMP.lng, a.lat, a.lng) > 4).length);
+    assert.strictEqual(farOn[0], 0, 'A no longer goes west: ' + JSON.stringify(farOn));
+    for (const b of res.buckets) assert.ok(b.reduce((a, x) => a + x.campers.length, 0) <= 46, 'seats');
+    assert.strictEqual(res.buckets.flat().length, 12);
+});
