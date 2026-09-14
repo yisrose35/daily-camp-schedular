@@ -98,8 +98,15 @@ addresses ─ geocode ─┬─ road graph (OpenStreetMap) ─ neighbourhoods �
   out-and-back). So the polish also tries whole blocks (the far end of the
   run, and radial clusters around the farthest stop, up to `polishBlockMax`
   stops) handed to one of the `polishBlockTargets` buses furthest under their
-  budget, priced exactly. On the camp's run Bus 8 was a 9-minute run with 24
-  empty seats while Bus 2 ran 102 minutes.
+  budget, an empty bus included, priced exactly. Block moves run FIRST in
+  each pass: on the camp's run the single-stop moves emptied Bus 8 (a
+  9-minute run with 24 empty seats) into the core buses before any block
+  move ran, and with every core bus full there was no receiver left for a
+  branch of the 90-minute buses. Single-stop moves stay local
+  (`polishReachOverBudgetX` 1): a far hand-off is a whole branch, never one
+  stop sent ten miles to a core bus for two children. The console's "Road
+  polish" line counts branch hand-offs and says when the polish ran out of
+  its time budget.
 
 * **The ride home** (`returnToDepot`): the last dismissal shift drives back
   to camp after its final drop. That leg is real bus time, so the districting

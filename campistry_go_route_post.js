@@ -78,7 +78,8 @@ window.CampistryGoRoutePost = (function () {
         polishLnsRuinMin: 4,       // atoms removed per attempt (radial cluster)
         polishLnsRuinMax: 12,
         polishReachMi: 5.0,        // only consider a bus whose nearest atom is within this of the moving atom
-        polishReachOverBudgetX: 2.5, // ...unless the source bus is over its ride budget: reach this much further
+        polishReachOverBudgetX: 1, // ...even when the source bus is over its budget: a far hand-off is a whole
+                                   // branch (block relocate), never one stop sent 10 miles to a core bus
         polishChildMinuteWeight: 0, // bus-minute equivalents per child-minute aboard (0 = bus minutes only).
                                    // 0.03 would mean a stop that keeps 33 children a minute longer costs one
                                    // bus minute. Off by default: on camp-shaped maps every weight tried
@@ -1476,7 +1477,7 @@ window.CampistryGoRoutePost = (function () {
 
         for (const b of B) buildTour(b);
         const before = objective(), fleetBefore = fleetMin(), childMinBefore = childMin();
-        let moves = 0;
+        let moves = 0, blockMoves = 0;
         const EPS = o.polishMinGainMin;
 
         let stop = false;
@@ -1537,7 +1538,7 @@ window.CampistryGoRoutePost = (function () {
                         if (obj < objBefore - EPS && (!best || obj < best.obj)) best = { obj, bi, blk: blk.slice() };
                     }
                 }
-                if (best) { tryMove(best.blk, B[best.bi], true); moved++; moves++; }
+                if (best) { tryMove(best.blk, B[best.bi], true); moved++; moves++; blockMoves++; }
             }
             return moved;
         }
@@ -1545,6 +1546,12 @@ window.CampistryGoRoutePost = (function () {
         for (let pass = 0; pass < o.polishMaxPasses && !stop; pass++) {
             if (outOfTime()) break;
             let improved = false;
+            // ── block relocate first (over-budget buses only) ──
+            // Before single-stop moves get a chance to empty a short bus into
+            // its neighbours: the camp's Bus 8 (9 minutes, 24 empty seats) was
+            // absorbed by the core buses, and with every one of them full there
+            // was no receiver left for a branch of the 90-minute buses.
+            if (budget > 0 && blockRelocate()) { improved = true; for (const b of B) buildTour(b); }
             // ── relocate ──
             for (let ai = 0; ai < N && !stop; ai++) {
                 const A = B[ai];
@@ -1626,8 +1633,6 @@ window.CampistryGoRoutePost = (function () {
                     else { restore(A, sA); restore(Bb, sB); }
                 }
             }
-            // ── block relocate (over-budget buses only) ──
-            if (budget > 0 && !stop && blockRelocate()) improved = true;
             // keep the tour proxy honest after a round of edits
             for (const b of B) buildTour(b);
             if (!improved) break;
@@ -1694,7 +1699,7 @@ window.CampistryGoRoutePost = (function () {
             localSearch();
         }
         const after = objective();
-        return { buckets: B.map(b => b.tour.map(i => b.atoms[i])), moves, before, after,
+        return { buckets: B.map(b => b.tour.map(i => b.atoms[i])), moves, blockMoves, timedOut: outOfTime(), before, after,
                  fleetBefore, fleetAfter: fleetMin(), childMinBefore, childMinAfter: childMin() };
     }
 
