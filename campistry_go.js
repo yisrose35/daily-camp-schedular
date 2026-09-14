@@ -3722,6 +3722,40 @@ function _cornersOnPath(routes, campLat, campLng, isArrival, needsReturn) {
     return { moved, savedMin, buses, choices, cornerStops, noCorner, walkFt: Math.round(walkMi * 5280) };
 }
 
+// The scoreboard: last year's routes (historical_route_stops.json beside the
+// page — stop names as corners, children per stop, stamped times) priced on
+// today's road network with the camp's dwell model, against this plan. The
+// stamped times also say how long the camp's stops really took, as minutes
+// per stop plus seconds per child, next to the settings in use.
+let _historyCache;
+async function _benchmarkLastYear(allShiftResults, campLat, campLng) {
+    const NH = window.CampistryGoNeighborhoods;
+    if (!_activeRoadNet || !_lastNhResult || !NH || !NH.benchmarkHistory) return;
+    if (_historyCache === undefined) {
+        _historyCache = null;
+        try {
+            const r = await fetch('historical_route_stops.json', { cache: 'force-cache' });
+            if (r && r.ok) _historyCache = await r.json();
+        } catch (_) { _historyCache = null; }
+    }
+    if (!_historyCache) return;
+    const b = NH.benchmarkHistory({ history: _historyCache, result: _lastNhResult, roadNet: _activeRoadNet, depot: { lat: campLat, lng: campLng },
+                                    avgStopMin: D.setup.avgStopTime || 1, secPerRider: Math.max(0, parseFloat(D.setup.secPerRider) || 0) });
+    if (!b || !b.total || !b.matched) return;
+    const plan = (allShiftResults || []).reduce((a, sr) => a + (sr.routes || []).reduce((x, r) => x + ((r.stops || []).length ? (r.totalDuration || 0) : 0), 0), 0);
+    const planBuses = (allShiftResults || []).reduce((a, sr) => a + (sr.routes || []).filter(r => (r.stops || []).length).length, 0);
+    const planKids = (allShiftResults || []).reduce((a, sr) => a + (sr.routes || []).reduce((x, r) => x + (r.camperCount || 0), 0), 0);
+    const priced = b.buses.filter(x => x.minutes != null);
+    console.log('[Go] Last year on today\'s roads: ' + priced.length + ' buses, ' + b.fleetMin + ' bus-minutes for ' + b.kidsTotal + ' children (' + b.matched + ' of ' + b.total +
+        ' stops matched to a corner; morning pickups, first pickup to camp) — this plan: ' + planBuses + ' buses, ' + plan + ' bus-minutes for ' + planKids + ' children (' +
+        (D.activeMode === 'arrival' ? 'morning' : 'afternoon, camp to last drop') + ')' +
+        (b.kidsTotal && planKids ? '; per child: ' + (b.fleetMin / b.kidsTotal).toFixed(2) + ' vs ' + (plan / planKids).toFixed(2) + ' bus-minutes' : ''));
+    if (b.dwellFit) console.log('[Go] Last year\'s stops took about ' + b.dwellFit.minutesPerStop.toFixed(1) + ' min + ' + Math.round(b.dwellFit.secondsPerChild) + ' s per child (' + b.dwellFit.n +
+        ' stops with stamped times); Route Settings price a stop at ' + (D.setup.avgStopTime || 1) + ' min + ' + Math.max(0, parseFloat(D.setup.secPerRider) || 0) + ' s per child' +
+        (Math.abs(b.dwellFit.secondsPerChild - (parseFloat(D.setup.secPerRider) || 0)) >= 3 || Math.abs(b.dwellFit.minutesPerStop - (D.setup.avgStopTime || 1)) >= 0.5
+            ? ' — consider Stop Time ' + b.dwellFit.minutesPerStop.toFixed(1) + ' and Extra Seconds Per Child ' + Math.round(b.dwellFit.secondsPerChild) : ''));
+}
+
 function _splitOverlongRoutes(routes, shiftVehicles, campLat, campLng, maxRouteMin, isArrival) {
     return window.CampistryGoRoutePost.splitOverlongRoutes(
         routes, _capByIdOf(shiftVehicles), { lat: campLat, lng: campLng },
@@ -4337,6 +4371,8 @@ async function generateRoutes() {
         });
     });
     if (geomCached) console.log('[Go v5] Road geometry cached: ' + geomCached + ' routes');
+    // Last year's routes on today's roads, for the scoreboard (async; never blocks the run).
+    _benchmarkLastYear(allShiftResults, campLat, campLng).catch(() => {});
     // Bare geometry for reproducing the run offline: one short line per bus,
     // [lat, lng, children, minute] per stop — no names, no addresses.
     try {

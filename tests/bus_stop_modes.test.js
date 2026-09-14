@@ -275,3 +275,54 @@ test('fitLegModel recovers a fixed-per-leg plus per-mile road model from sampled
     assert.ok(Math.abs((fitted - plain) - fit.fixedMin) < 1e-9, 'fixed minutes added once per leg');
     assert.strictEqual(P.driveMin(a, a, { legFixedMin: 0.7 }), 0, 'no leg, no fixed cost');
 });
+
+test('benchmarkHistory matches corner names to intersections, prices the run on road legs, and fits the dwell', () => {
+    const P = window.CampistryGoRoutePost;
+    // a main street with three cross streets, all real 3-way corners; camp south of it
+    const CAMP = { lat: 40.0933, lng: -74.2110 };
+    const MI_LAT = 1 / 69, MI_LNG = 1 / (69 * Math.cos(CAMP.lat * Math.PI / 180));
+    const nodes = {}, edges = [];
+    const cross = ['Dartmouth Drive', 'Drexel Drive', 'Villanova Drive'];
+    cross.forEach((c, i) => {
+        nodes['x' + i] = { lat: CAMP.lat + 1.0 * MI_LAT, lng: CAMP.lng + (i - 1) * 0.5 * MI_LNG, degree: 3, streets: ['Lehigh Boulevard', c] };
+        nodes['s' + i] = { lat: CAMP.lat + 0.5 * MI_LAT, lng: CAMP.lng + (i - 1) * 0.5 * MI_LNG, degree: 3, streets: [c, 'Side Street'] };
+        edges.push({ id: 'v' + i, fromNodeId: 'x' + i, toNodeId: 's' + i, lenMi: 0.5, hwClass: 'residential', oneway: false });
+        if (i) { edges.push({ id: 'm' + i, fromNodeId: 'x' + (i - 1), toNodeId: 'x' + i, lenMi: 0.5, hwClass: 'secondary', oneway: false });
+                 edges.push({ id: 'b' + i, fromNodeId: 's' + (i - 1), toNodeId: 's' + i, lenMi: 0.5, hwClass: 'residential', oneway: false }); }
+    });
+    nodes.camp = { lat: CAMP.lat, lng: CAMP.lng, degree: 1, streets: ['Camp Road'] };
+    edges.push({ id: 'c', fromNodeId: 'camp', toNodeId: 's1', lenMi: 0.5, hwClass: 'residential', oneway: false });
+    const net = P.buildRoadNet({ nodes, edges }, { avgSpeedMph: 25 });
+    const history = {
+        BEIGE: [{ time: '9:05 AM', stop: 'Lehigh Blvd@Dartmouth Dr', names: ['a', 'b'] }, { time: '9:08 AM', stop: 'Lehigh Blvd@Drexel Dr', names: ['c', 'd', 'e', 'f'] },
+                { time: '9:12 AM', stop: 'Lehigh Blvd@Villanova Dr', names: ['g'] }, { time: '9:15 AM', stop: 'Nowhere Rd@Unknown Ct', names: ['h'] }],
+        BLUE:  [{ time: '9:00 AM', stop: 'Villanova Dr@Side St', names: ['i', 'j', 'k'] }, { time: '9:04 AM', stop: 'Drexel Dr@Side St', names: ['l'] },
+                { time: '9:07 AM', stop: 'Dartmouth Dr@Side St', names: ['m', 'n'] }],
+    };
+    const b = NH.benchmarkHistory({ history, result: { nodes }, roadNet: net, depot: CAMP, avgStopMin: 1, secPerRider: 0 });
+    assert.ok(b, 'a benchmark');
+    assert.strictEqual(b.total, 7); assert.strictEqual(b.matched, 6, 'six corners matched, the unknown one not: ' + JSON.stringify(b.buses));
+    assert.strictEqual(b.kidsTotal, 14);
+    const beige = b.buses.find(x => x.bus === 'BEIGE'), blue = b.buses.find(x => x.bus === 'BLUE');
+    assert.strictEqual(beige.matched, 3); assert.strictEqual(blue.matched, 3);
+    assert.ok(beige.minutes > 3 && beige.minutes < 20, 'priced on road legs: ' + beige.minutes);
+    assert.strictEqual(b.fleetMin, beige.minutes + blue.minutes);
+    assert.strictEqual(beige.spanMin, 7, 'stamped span first to last matched stop');
+    // too few stamped legs for a dwell fit here (needs 12)
+    assert.strictEqual(b.dwellFit, null);
+    // with enough stamped legs the fit recovers minutes per stop plus seconds per child
+    const many = {};
+    for (let r = 0; r < 6; r++) {
+        const base = 8 * 60 + r * 20;
+        // road legs along Lehigh are ~1.3 min apart; stamp 2 min + 15 s per child of dwell on top
+        const k1 = 1 + r, k2 = 3 + r;
+        const leg = Math.round(net.legMinutesFor([nodes.x0, nodes.x1])(nodes.x0, nodes.x1));
+        many['R' + r] = [{ time: '8:' + String(r * 5).padStart(2, '0') + ' AM', stop: 'Lehigh Blvd@Dartmouth Dr', names: Array(k1).fill('x') },
+                         { time: '8:' + String(r * 5 + leg + 2 + Math.round(k1 * 0.25)).padStart(2, '0') + ' AM', stop: 'Lehigh Blvd@Drexel Dr', names: Array(k2).fill('y') },
+                         { time: '8:' + String(r * 5 + 2 * leg + 4 + Math.round((k1 + k2) * 0.25)).padStart(2, '0') + ' AM', stop: 'Lehigh Blvd@Villanova Dr', names: ['z'] }];
+    }
+    const b2 = NH.benchmarkHistory({ history: many, result: { nodes }, roadNet: net, depot: CAMP, avgStopMin: 1, secPerRider: 0 });
+    assert.ok(b2.dwellFit && b2.dwellFit.n === 12, 'twelve stamped legs: ' + JSON.stringify(b2.dwellFit));
+    assert.ok(b2.dwellFit.minutesPerStop > 0.5 && b2.dwellFit.minutesPerStop < 3.5, 'minutes per stop about 2: ' + b2.dwellFit.minutesPerStop.toFixed(2));
+    assert.ok(b2.dwellFit.secondsPerChild > 5 && b2.dwellFit.secondsPerChild < 30, 'seconds per child about 15: ' + b2.dwellFit.secondsPerChild.toFixed(1));
+});

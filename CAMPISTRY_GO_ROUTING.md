@@ -244,6 +244,22 @@ addresses ─ geocode ─┬─ road graph (OpenStreetMap) ─ neighbourhoods �
   road-time polish only; on 400+ districting segments it cost that stage
   its whole time budget (the camp's run hit the 20-second guard).
 
+* **Last year on today's roads** (`benchmarkHistory`, `[Go] Last year …`):
+  the camp's own routes from last season (`historical_route_stops.json`
+  beside the page: each stop as "Main St@Cross Ave", the children at it,
+  the stamped time) are matched to road-graph intersections by their two
+  street names (`normStreet` on both sides, the crossing nearest the
+  previous stop when two streets cross twice), priced on today's street
+  legs with the camp's dwell model, and printed next to this plan: buses,
+  bus-minutes, children, and bus-minutes per child — the honest scoreboard
+  for every change above. The stamped times also say what the camp's
+  stops really took: the gap between consecutive stops minus the road leg,
+  fitted as minutes per stop plus seconds per child, printed beside the
+  Stop Time and Extra Seconds Per Child in use, with a suggestion when
+  they differ. Last year's runs were morning pickups (first pickup to
+  camp); the plan's afternoon runs are camp to last drop, so read the
+  per-child figure, not the totals, across modes.
+
 * **The efficiency line** (`[Go] Fleet: …`, plain text after the Route
   summary, since a pasted console.table is unreadable): total bus-minutes
   and bus-hours, buses used, average and longest run, how many are over
