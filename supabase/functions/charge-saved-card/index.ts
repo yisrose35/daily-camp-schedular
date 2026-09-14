@@ -97,11 +97,18 @@ async function cardknoxCharge(apiKey: string, amountCents: number, cardToken: st
 // Banquest (AffiniPay/8am) sale against a saved card_ref. Inlined per this
 // project's deploy convention; keep in sync with
 // _shared/adapters/banquest_adapter.ts. Auth is HTTP Basic base64(sourceKey:
-// pin); API base is per-camp; amounts are DOLLARS; a saved card is charged as
-// source "tkn-<card_ref>".
-const BANQUEST_DEFAULT_BASE = "https://api.banquestgateway.com";
+// pin); API base is per-camp and lives under /api/v2; amounts are DOLLARS; a
+// saved card is charged as source "tkn-<card_ref>". Approval is reported by
+// status_code "A" (status "Approved"); the transaction's integer
+// `reference_number` is what we store to later refund/reverse it.
+const BANQUEST_DEFAULT_BASE = "https://api.banquestgateway.com/api/v2";
 function bqBase(c: Record<string, string>): string {
-  return (c.gatewayUrl || BANQUEST_DEFAULT_BASE).replace(/\/+$/, "");
+  // Tolerate a stored gatewayUrl that omits the API path (a bare host like
+  // "https://api.sandbox.banquestgateway.com"): the v2 API always lives under
+  // /api/v2, so append it when it isn't already there.
+  let b = (c.gatewayUrl || BANQUEST_DEFAULT_BASE).replace(/\/+$/, "");
+  if (!/\/api\/v\d+$/i.test(b)) b += "/api/v2";
+  return b;
 }
 async function banquestCharge(creds: Record<string, string>, amountCents: number, cardRef: string) {
   const resp = await fetch(`${bqBase(creds)}/transactions/charge`, {
@@ -111,12 +118,14 @@ async function banquestCharge(creds: Record<string, string>, amountCents: number
   });
   let data: Record<string, any> = {};
   try { data = await resp.json(); } catch { /* non-JSON error body */ }
-  const id = data?.id || data?.transaction_id;
-  const st = String(data?.status || "").toLowerCase();
-  if (resp.status < 200 || resp.status >= 300 || !id || /declin|fail|error|denied|reject|void/.test(st)) {
-    return { success: false, error: data?.error || data?.message || data?.status || `Declined (HTTP ${resp.status})` };
+  const approved = String(data?.status_code || "").toUpperCase() === "A"
+                || String(data?.status || "").toLowerCase() === "approved";
+  const ref = data?.reference_number != null ? String(data.reference_number) : "";
+  if (resp.status < 200 || resp.status >= 300 || !approved || !ref) {
+    const errMsg = (Array.isArray(data?.error_messages) && data.error_messages[0]) || data?.error || data?.message || data?.status || `Declined (HTTP ${resp.status})`;
+    return { success: false, error: errMsg };
   }
-  return { success: true, externalTransactionId: id };
+  return { success: true, externalTransactionId: ref };
 }
 
 serve(async (req) => {

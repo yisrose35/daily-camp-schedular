@@ -57,11 +57,18 @@ async function cardknoxRefund(
 // endpoint that auto-picks refund (settled) vs void (unsettled). Inlined for
 // the same Dashboard-deploy reason; keep in sync with
 // _shared/adapters/banquest_adapter.ts. Auth is HTTP Basic base64(sourceKey:
-// pin); API base is per-camp; amounts are DOLLARS; the prior transaction is
-// referenced as source "ref-<transactionId>".
-const BANQUEST_DEFAULT_BASE = "https://api.banquestgateway.com";
+// pin); API base is per-camp and lives under /api/v2; amounts are DOLLARS;
+// the prior transaction is referenced by its integer `reference_number`
+// (NOT a "ref-" source string — that prefix is only for charging a stored
+// transaction's card again, not for reversing it).
+const BANQUEST_DEFAULT_BASE = "https://api.banquestgateway.com/api/v2";
 function bqBase(credentials: Record<string, string>): string {
-  return (credentials.gatewayUrl || BANQUEST_DEFAULT_BASE).replace(/\/+$/, "");
+  // Tolerate a stored gatewayUrl that omits the API path (a bare host like
+  // "https://api.sandbox.banquestgateway.com"): the v2 API always lives under
+  // /api/v2, so append it when it isn't already there.
+  let b = (credentials.gatewayUrl || BANQUEST_DEFAULT_BASE).replace(/\/+$/, "");
+  if (!/\/api\/v\d+$/i.test(b)) b += "/api/v2";
+  return b;
 }
 async function banquestRefund(
   credentials: Record<string, string>,
@@ -69,21 +76,27 @@ async function banquestRefund(
   amountCents: number,
 ): Promise<{ success: boolean; externalTransactionId?: string; status?: string; error?: string; raw?: unknown }> {
   if (!credentials.sourceKey || !credentials.pin) return { success: false, error: "Missing sourceKey/pin" };
+  const refNum = Number(externalTransactionId);
+  if (!Number.isFinite(refNum)) return { success: false, error: "Original transaction reference is not a valid Banquest reference_number." };
   try {
     const resp = await fetch(`${bqBase(credentials)}/transactions/reversal`, {
       method: "POST",
       headers: { "Content-Type": "application/json", "Authorization": "Basic " + btoa(`${credentials.sourceKey}:${credentials.pin}`) },
-      body: JSON.stringify({ source: "ref-" + externalTransactionId, amount: Number((amountCents / 100).toFixed(2)) }),
+      body: JSON.stringify({ reference_number: refNum, amount: Number((amountCents / 100).toFixed(2)) }),
     });
     let data: Record<string, any> = {};
     try { data = await resp.json(); } catch { /* non-JSON error body */ }
-    const id = data?.id || data?.transaction_id;
+    // Success = an "A" status_code (or "Approved"/"Voided" status word); the
+    // new reversal transaction's own reference_number is what we record.
+    const code = String(data?.status_code || "").toUpperCase();
     const st = String(data?.status || "").toLowerCase();
-    // A void/refund status is the SUCCESS here, so it's not in the decline set.
-    if (resp.status < 200 || resp.status >= 300 || !id || /declin|fail|error|denied|reject/.test(st)) {
-      return { success: false, status: data?.status, error: data?.error || data?.message || data?.status || `Refund failed (HTTP ${resp.status})`, raw: data };
+    const ok = code === "A" || /approv|void|refund/.test(st);
+    const newRef = data?.reference_number != null ? String(data.reference_number) : (data?.transaction?.id ? String(data.transaction.id) : "");
+    if (resp.status < 200 || resp.status >= 300 || !ok || !newRef) {
+      const errMsg = (Array.isArray(data?.error_messages) && data.error_messages[0]) || data?.error || data?.message || data?.status || `Refund failed (HTTP ${resp.status})`;
+      return { success: false, status: data?.status, error: errMsg, raw: data };
     }
-    return { success: true, externalTransactionId: id, status: data?.status, raw: data };
+    return { success: true, externalTransactionId: newRef, status: data?.status, raw: data };
   } catch (err) {
     return { success: false, error: (err as Error).message };
   }

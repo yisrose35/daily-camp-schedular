@@ -62,13 +62,20 @@ async function cardknoxSaveMethod(apiKey: string, token: string) {
 // durable saved card — a $0 verify with save_card:true returns a card_ref that
 // later charges reference as source "tkn-<card_ref>". Same
 // inline-for-Dashboard-deploy reason; auth is HTTP Basic base64(sourceKey:pin),
-// API base is per-camp. The client's getNonceToken() returns the bare nonce;
-// the "nonce-" source prefix is added here.
-const BANQUEST_DEFAULT_BASE = "https://api.banquestgateway.com";
+// API base is per-camp and lives under /api/v2. The client's getNonceToken()
+// returns the bare nonce; the "nonce-" source prefix is added here. The verify
+// response also carries last_4 / card_type — captured so Link and Me can show
+// the actual card (•••• 4242) instead of a bare "card on file".
+const BANQUEST_DEFAULT_BASE = "https://api.banquestgateway.com/api/v2";
 function bqBase(c: Record<string, string>): string {
-  return (c.gatewayUrl || BANQUEST_DEFAULT_BASE).replace(/\/+$/, "");
+  // Tolerate a stored gatewayUrl that omits the API path (a bare host like
+  // "https://api.sandbox.banquestgateway.com"): the v2 API always lives under
+  // /api/v2, so append it when it isn't already there.
+  let b = (c.gatewayUrl || BANQUEST_DEFAULT_BASE).replace(/\/+$/, "");
+  if (!/\/api\/v\d+$/i.test(b)) b += "/api/v2";
+  return b;
 }
-async function banquestSaveMethod(creds: Record<string, string>, nonce: string): Promise<{ success: boolean; customerRef?: string; error?: string }> {
+async function banquestSaveMethod(creds: Record<string, string>, nonce: string): Promise<{ success: boolean; customerRef?: string; last4?: string; brand?: string; error?: string }> {
   const resp = await fetch(`${bqBase(creds)}/transactions/verify`, {
     method: "POST",
     headers: { "Content-Type": "application/json", "Authorization": "Basic " + btoa(`${creds.sourceKey}:${creds.pin}`) },
@@ -77,10 +84,16 @@ async function banquestSaveMethod(creds: Record<string, string>, nonce: string):
   let data: Record<string, any> = {};
   try { data = await resp.json(); } catch { /* non-JSON error body */ }
   const cardRef = data?.card_ref;
-  if (resp.status < 200 || resp.status >= 300 || !cardRef) {
-    return { success: false, error: data?.error || data?.message || `Could not save payment method (HTTP ${resp.status})` };
+  const approved = String(data?.status_code || "").toUpperCase() === "A"
+                || String(data?.status || "").toLowerCase() === "approved"
+                || !!cardRef; // some verify responses omit status but return card_ref
+  if (resp.status < 200 || resp.status >= 300 || !cardRef || !approved) {
+    const errMsg = (Array.isArray(data?.error_messages) && data.error_messages[0]) || data?.error || data?.message || data?.status || `Could not save payment method (HTTP ${resp.status})`;
+    return { success: false, error: errMsg };
   }
-  return { success: true, customerRef: cardRef };
+  const last4 = data?.last_4 || data?.transaction?.last_4 || data?.card?.last_4;
+  const brand = data?.card_type || data?.transaction?.card_type || data?.card?.card_type;
+  return { success: true, customerRef: cardRef, last4: last4 ? String(last4) : undefined, brand: brand ? String(brand) : undefined };
 }
 
 const SUPABASE_URL = Deno.env.get("SUPABASE_URL") || "";
@@ -172,6 +185,12 @@ serve(async (req) => {
       f.byopCustomerRef = saveResult.customerRef;
       f.cardOnFile = true;
       f.cardSavedDate = new Date().toISOString();
+      // Show the real card (•••• 4242) rather than a bare "card on file" when
+      // the processor handed back the last 4 / brand on the save.
+      if (saveResult.last4) {
+        f.paymentMethodLabel = "•••• " + saveResult.last4;
+        f.paymentMethodType = saveResult.brand || "card";
+      }
 
       const up = await service.from("camp_state_kv").upsert(
         { camp_id: campId, key: "campistryMe", value: me, updated_at: new Date().toISOString() },

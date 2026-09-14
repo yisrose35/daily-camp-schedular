@@ -16,18 +16,23 @@
 // copies are kept in sync with (and what the _shared dispatchers would use if
 // they were ever CLI-deployed).
 //
-// API shape:
-//   Base URL:  https://sandbox.banquestgateway.com (sandbox) /
-//              https://api.banquestgateway.com (prod) — stored per-camp as
-//              `gatewayUrl` since it differs by environment.
+// API shape (confirmed against the Banquest API v2 documentation, Sep 2026):
+//   Base URL:  https://api.sandbox.banquestgateway.com/api/v2 (sandbox) /
+//              https://api.banquestgateway.com/api/v2 (prod) — stored per-camp
+//              as `gatewayUrl` since it differs by environment. The v2 API
+//              always lives under /api/v2; baseUrl() appends it when the stored
+//              value is a bare host.
 //   Auth:      HTTP Basic, base64(sourceKey:pin).
 //   Amounts:   DOLLARS (decimal), e.g. 5.00 — NOT cents.
 //   Charge:    POST /transactions/charge { amount, source }
-//   Verify:    POST /transactions/verify { source, save_card? } → card_ref
-//   Reversal:  POST /transactions/reversal { source: "ref-<txnId>", amount? }
+//   Verify:    POST /transactions/verify { source, save_card? } → card_ref, last_4
+//   Reversal:  POST /transactions/reversal { reference_number, amount? }
 //              (auto-picks refund for settled / void for unsettled)
+//   Approval:  status_code === "A" (status === "Approved"). The transaction's
+//              integer `reference_number` is the id to store and to later
+//              refund/reverse by (NOT a "ref-" source string).
 //   `source` prefixes: nonce-<hosted-tokenizer nonce>, tkn-<saved card_ref>,
-//              pm-<payment method>, ref-<previous transaction>.
+//              pm-<payment method>, ref-<previous transaction's card>.
 //
 // Credential shape (payment_processor_catalog.credential_fields, migration 146):
 //   { sourceKey, pin, tokenizationKey, gatewayUrl?, tokenizationUrl? }
@@ -37,10 +42,12 @@
 // =============================================================================
 import type { ProcessorAdapter, ChargeResult, RefundResult, TestConnectionResult, SaveMethodResult } from "../processor_adapter.ts";
 
-const DEFAULT_BASE_URL = "https://api.banquestgateway.com";
+const DEFAULT_BASE_URL = "https://api.banquestgateway.com/api/v2";
 
 function baseUrl(credentials: Record<string, string>): string {
-  return (credentials.gatewayUrl || DEFAULT_BASE_URL).replace(/\/+$/, "");
+  let b = (credentials.gatewayUrl || DEFAULT_BASE_URL).replace(/\/+$/, "");
+  if (!/\/api\/v\d+$/i.test(b)) b += "/api/v2";
+  return b;
 }
 
 function authHeader(credentials: Record<string, string>): string {
@@ -62,19 +69,24 @@ async function postJson(
   return { status: resp.status, data };
 }
 
-function txnId(data: Record<string, any>): string | undefined {
-  return data?.id || data?.transaction_id;
+// The transaction's integer reference_number, as a string (falls back to a
+// nested transaction.id if a response ever omits it).
+function refNumber(data: Record<string, any>): string | undefined {
+  if (data?.reference_number != null) return String(data.reference_number);
+  if (data?.transaction?.id != null) return String(data.transaction.id);
+  return undefined;
 }
 
-// Charges/verifies: a decline or gateway error carries one of these status
-// words. A reversal's own success statuses (void/refund) are handled by the
-// caller not treating them as declines.
-function isDeclineStatus(data: Record<string, any>): boolean {
-  return /declin|fail|error|denied|reject/.test(String(data?.status || "").toLowerCase());
+// Approval is status_code "A" (or the "Approved" status word). A reversal's own
+// success words (void/refund) are accepted by the caller too.
+function isApproved(data: Record<string, any>): boolean {
+  return String(data?.status_code || "").toUpperCase() === "A"
+      || String(data?.status || "").toLowerCase() === "approved";
 }
 
 function gwError(status: number, data: Record<string, any>): string {
-  return data?.error || data?.message || data?.status || `Banquest error (HTTP ${status})`;
+  return (Array.isArray(data?.error_messages) && data.error_messages[0])
+      || data?.error || data?.message || data?.status || `Banquest error (HTTP ${status})`;
 }
 
 export const banquestAdapter: ProcessorAdapter = {
@@ -105,7 +117,9 @@ export const banquestAdapter: ProcessorAdapter = {
         save_card: true,
       });
       const cardRef = data?.card_ref;
-      if (status < 200 || status >= 300 || !cardRef) {
+      // A verify may return card_ref without a status word; treat card_ref
+      // presence as approval in that case.
+      if (status < 200 || status >= 300 || !cardRef || !(isApproved(data) || cardRef)) {
         return { success: false, error: gwError(status, data), raw: data };
       }
       return { success: true, customerRef: cardRef, raw: data };
@@ -125,10 +139,10 @@ export const banquestAdapter: ProcessorAdapter = {
         amount: Number((amountCents / 100).toFixed(2)),
         source: "tkn-" + customerRef,
       });
-      if (status < 200 || status >= 300 || !txnId(data) || isDeclineStatus(data)) {
+      if (status < 200 || status >= 300 || !isApproved(data) || !refNumber(data)) {
         return { success: false, status: data?.status, error: gwError(status, data), raw: data };
       }
-      return { success: true, externalTransactionId: txnId(data), status: data?.status, raw: data };
+      return { success: true, externalTransactionId: refNumber(data), status: data?.status, raw: data };
     } catch (err) {
       return { success: false, error: (err as Error).message };
     }
@@ -141,14 +155,20 @@ export const banquestAdapter: ProcessorAdapter = {
   ): Promise<RefundResult> {
     try {
       // /transactions/reversal auto-picks refund (settled) vs void (unsettled).
+      // It's keyed on the original transaction's integer reference_number.
+      const refNum = Number(externalTransactionId);
+      if (!Number.isFinite(refNum)) {
+        return { success: false, error: "Original transaction reference is not a valid Banquest reference_number." };
+      }
       const { status, data } = await postJson(credentials, "/transactions/reversal", {
-        source: "ref-" + externalTransactionId,
+        reference_number: refNum,
         amount: Number((amountCents / 100).toFixed(2)),
       });
-      if (status < 200 || status >= 300 || !txnId(data) || isDeclineStatus(data)) {
+      const ok = isApproved(data) || /void|refund/.test(String(data?.status || "").toLowerCase());
+      if (status < 200 || status >= 300 || !ok || !refNumber(data)) {
         return { success: false, status: data?.status, error: gwError(status, data), raw: data };
       }
-      return { success: true, externalTransactionId: txnId(data), status: data?.status, raw: data };
+      return { success: true, externalTransactionId: refNumber(data), status: data?.status, raw: data };
     } catch (err) {
       return { success: false, error: (err as Error).message };
     }
