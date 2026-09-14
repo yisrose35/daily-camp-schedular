@@ -70,7 +70,7 @@ window.CampistryGoRoutePost = (function () {
         polishOverBudgetQuad: 0,   // ...plus this x the SQUARE of those minutes: a bus far over the cap costs
                                    // far more than two buses a little over, so overage is never piled onto one
         polishBlockMax: 8,         // block relocate: up to this many stops of an over-budget bus move together
-        polishBlockTargets: 6,     // ...to one of the this-many buses furthest under their budget
+        polishBlockTargets: 8,     // ...to one of the this-many buses furthest under their budget
         polishMinGainMin: 0.05,
         polishLnsIters: 0,         // ruin-and-recreate attempts after local search converges.
                                    // Measured on camp-shaped layouts: no gain over relocate/swap,
@@ -1477,7 +1477,7 @@ window.CampistryGoRoutePost = (function () {
 
         for (const b of B) buildTour(b);
         const before = objective(), fleetBefore = fleetMin(), childMinBefore = childMin();
-        let moves = 0, blockMoves = 0;
+        let moves = 0, blockMoves = 0, blockTried = 0, blockBestDelta = Infinity;
         const EPS = o.polishMinGainMin;
 
         let stop = false;
@@ -1498,7 +1498,7 @@ window.CampistryGoRoutePost = (function () {
             const over = B.map((b, i) => i).filter(i => B[i].len > budget && B[i].tour.length >= 3)
                 .sort((i, j) => B[j].len - B[i].len);
             if (!over.length) return 0;
-            const under = B.map((b, i) => i).filter(i => B[i].len <= budget)
+            const under = B.map((b, i) => i).filter(i => B[i].len <= budget && B[i].count + 2 <= B[i].cap)
                 .sort((i, j) => (B[i].len - B[j].len)).slice(0, o.polishBlockTargets);
             if (!under.length) return 0;
             for (const ai of over) {
@@ -1535,6 +1535,8 @@ window.CampistryGoRoutePost = (function () {
                         if (Bb.count + cntSum > Bb.cap) continue;
                         if (!wedgeOk(Bb, atoms, -1)) continue;
                         const obj = tryMove(blk, Bb, false);
+                        blockTried++;
+                        if (obj - objBefore < blockBestDelta) blockBestDelta = obj - objBefore;
                         if (obj < objBefore - EPS && (!best || obj < best.obj)) best = { obj, bi, blk: blk.slice() };
                     }
                 }
@@ -1699,7 +1701,8 @@ window.CampistryGoRoutePost = (function () {
             localSearch();
         }
         const after = objective();
-        return { buckets: B.map(b => b.tour.map(i => b.atoms[i])), moves, blockMoves, timedOut: outOfTime(), before, after,
+        return { buckets: B.map(b => b.tour.map(i => b.atoms[i])), moves, blockMoves, blockTried,
+                 blockBestDelta: Number.isFinite(blockBestDelta) ? blockBestDelta : null, timedOut: outOfTime(), before, after,
                  fleetBefore, fleetAfter: fleetMin(), childMinBefore, childMinAfter: childMin() };
     }
 
