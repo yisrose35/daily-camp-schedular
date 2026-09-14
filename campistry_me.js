@@ -13257,6 +13257,25 @@ async function callEdgeFunction(fnName,body){
     return data;
 }
 
+// Banquest hosted-page return: when an owner-initiated card setup / pay link
+// (requestCardSetup / sendPayLink) redirects back here, the URL carries the
+// one-time ?key=<key>. Complete it (idempotent — safe on refresh) so the card
+// or payment is recorded, then strip the param.
+window.addEventListener('load',function(){
+    try{
+        var key=new URLSearchParams(location.search).get('key');
+        if(!key) return;
+        history.replaceState(null,'',location.pathname);
+        callEdgeFunction('payments-hosted-complete',{key:key}).then(function(data){
+            var msgs={save_card:'Card saved.',pay_now:'Payment received.',canteen:'Canteen funds added.'};
+            if(typeof toast==='function') toast(msgs[data.purpose]||'Done.');
+        }).catch(function(err){
+            console.error('[Me] Banquest return error:',err);
+            if(typeof toast==='function') toast('Could not confirm that card/payment: '+(err&&err.message||'error'),'error');
+        });
+    }catch(_){}
+});
+
 // For edge functions that re-verify the CALLER's own role server-side
 // (send-broadcast, send-sms) — those need the signed-in user's own session
 // token, not the anon key callEdgeFunction sends. .functions.invoke()
@@ -13342,17 +13361,27 @@ async function requestCardSetup(famKey){
         return;
     }
 
-    // Other BYOP processors (Banquest) have no hosted-checkout equivalent —
-    // they get a Campistry-hosted page embedding that processor's own
-    // client-side tokenizer instead (campistry_card_setup.html; NMI
-    // Collect.js, see BYOP_SETUP.md for what's still not built).
-    if(processorKey&&processorKey!=='stripe'){
+    // Banquest: redirect to its OWN hosted Payment Page (no card field renders
+    // on a Campistry page). payments-hosted-complete stores the card on return.
+    if(processorKey==='banquest'){
         toast('Opening secure card setup for '+f.name+'…');
-        var url='campistry_card_setup.html?campId='+encodeURIComponent(getCampId())+
-            '&familyKey='+encodeURIComponent(famKey)+
-            '&familyName='+encodeURIComponent(f.name||'');
-        window.open(url,'_blank');
-        toast('Opened in a new tab — once '+f.name+' completes it there, this page will show it on file.');
+        try{
+            var ret=window.location.origin+window.location.pathname;
+            var hl=await callEdgeFunction('payments-hosted-link',{
+                campId:getCampId(), purpose:'save_card',
+                familyKey:famKey, returnUrl:ret,
+                description:'Save a card'+(f.name?' — '+f.name:'')
+            });
+            if(!hl||!hl.payment_link) throw new Error(hl&&hl.error||'No card-setup link returned');
+            window.open(hl.payment_link,'_blank');
+            toast('Opened in a new tab — once '+f.name+' saves a card there, it shows up here.');
+        }catch(e){
+            toast('Could not open card setup: '+e.message,'error');
+        }
+        return;
+    }
+    if(processorKey&&processorKey!=='stripe'){
+        toast("Online card setup isn't available for this processor yet.",'error');
         return;
     }
 
@@ -13542,17 +13571,19 @@ async function sendPayLink(famKey){
                 if(btn){btn.disabled=false;btn.textContent='Save';}
                 return;
             }
-            // Any other non-Stripe processor with no hosted-checkout support
-            // yet (e.g. Banquest) falls back to the embedded tokenizer page —
-            // no hosted-checkout API to call ahead of time there, the link
-            // IS the page, nothing to create, just build the URL.
+            // Banquest: mint a one-time link to its OWN hosted Payment Page —
+            // the parent enters the card there, never on a Campistry page.
+            // payments-hosted-complete records the payment when they return.
+            if(processorKey==='banquest'){
+                var bqRet=(window.__CAMPISTRY_PARENT_URL__||'https://link.campistry.org').replace(/\/+$/,'')+'/campistry_link_parent.html';
+                var hl=await callEdgeFunction('payments-hosted-link',{campId:getCampId(),purpose:'pay_now',familyKey:famKey,amount:amt,returnUrl:bqRet,description:desc||('Camp payment — '+f.name)});
+                if(!hl||!hl.payment_link) throw new Error(hl&&hl.error||'No link returned');
+                _showPayLinkResult(f,hl.payment_link,true);
+                if(btn){btn.disabled=false;btn.textContent='Save';}
+                return;
+            }
             if(isBYOP){
-                var byopUrl=window.location.origin+'/campistry_card_setup.html?campId='+encodeURIComponent(getCampId())+
-                    '&familyKey='+encodeURIComponent(famKey)+
-                    '&familyName='+encodeURIComponent(f.name||'')+
-                    '&amount='+encodeURIComponent(amt)+
-                    '&desc='+encodeURIComponent(desc||('Camp payment — '+f.name));
-                _showPayLinkResult(f,byopUrl,true);
+                toast("Online pay links aren't available for this processor yet.",'error');
                 if(btn){btn.disabled=false;btn.textContent='Save';}
                 return;
             }

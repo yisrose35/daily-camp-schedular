@@ -114,7 +114,10 @@ async function banquestCharge(creds: Record<string, string>, amountCents: number
   const resp = await fetch(`${bqBase(creds)}/transactions/charge`, {
     method: "POST",
     headers: { "Content-Type": "application/json", "Authorization": "Basic " + btoa(`${creds.sourceKey}:${creds.pin}`) },
-    body: JSON.stringify({ amount: Number((amountCents / 100).toFixed(2)), source: "tkn-" + cardRef }),
+    // A saved card is either a verify card_ref (charged "tkn-<ref>") or a
+    // Customer payment-method saved on the hosted page (already stored WITH its
+    // "pm-<id>" prefix). Pass an already-prefixed ref through untouched.
+    body: JSON.stringify({ amount: Number((amountCents / 100).toFixed(2)), source: /^(tkn-|pm-|ref-|nonce-)/.test(cardRef) ? cardRef : "tkn-" + cardRef }),
   });
   let data: Record<string, any> = {};
   try { data = await resp.json(); } catch { /* non-JSON error body */ }
@@ -122,7 +125,7 @@ async function banquestCharge(creds: Record<string, string>, amountCents: number
                 || String(data?.status || "").toLowerCase() === "approved";
   const ref = data?.reference_number != null ? String(data.reference_number) : "";
   if (resp.status < 200 || resp.status >= 300 || !approved || !ref) {
-    const errMsg = (Array.isArray(data?.error_messages) && data.error_messages[0]) || data?.error || data?.message || data?.status || `Declined (HTTP ${resp.status})`;
+    const errMsg = data?.error_message || (Array.isArray(data?.error_messages) && data.error_messages[0]) || data?.error_details || data?.error || data?.message || data?.status || `Declined (HTTP ${resp.status})`;
     return { success: false, error: errMsg };
   }
   return { success: true, externalTransactionId: ref };
