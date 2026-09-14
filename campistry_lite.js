@@ -50,6 +50,9 @@
     const HEAD_ROLES = ['owner', 'admin', 'scheduler'];
     const KV_KEYS = ['app1', 'campStructure', 'leaguesByName', 'specialtyLeagues',
                      'liteStaffAssignments', 'liteSmsSettings', 'camp_name', 'fields',
+                     // Reach (send-from-your-own-number staff texting): its
+                     // camp footer/last template, and a small recent-blast log.
+                     'liteReachSettings', 'liteReachHistory',
                      // Me owns the staff directory and the counselor visibility
                      // policy; Lite reads both rather than keeping its own copy.
                      'campistryMe',
@@ -95,6 +98,8 @@
         visibility: null,     // campistryMe.counselorVisibility (null = defaults)
         productAccess: null,  // camp_users.product_access — null = unrestricted
         sms: { enabled: false, audience: 'counselors', footer: '' },
+        reach: { footer: '', lastTemplate: '' }, // liteReachSettings
+        reachHistory: [],                          // liteReachHistory (recent blasts, newest first)
         stateLoaded: false,
         stateError: null
     };
@@ -426,6 +431,9 @@
                           : (byKey.camp_name && byKey.camp_name.value) || '';
             camp.sms = Object.assign({ enabled: false, audience: 'counselors', footer: '' },
                                      byKey.liteSmsSettings || {});
+            camp.reach = Object.assign({ footer: '', lastTemplate: '' },
+                                       byKey.liteReachSettings || {});
+            camp.reachHistory = Array.isArray(byKey.liteReachHistory) ? byKey.liteReachHistory : [];
             camp.stateLoaded = true;
             camp.stateError = null;
 
@@ -1092,6 +1100,8 @@
         league: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M6 9H4.5a2.5 2.5 0 0 1 0-5H6"/><path d="M18 9h1.5a2.5 2.5 0 0 0 0-5H18"/><path d="M4 22h16"/><path d="M10 14.66V17c0 .55-.47.98-.97 1.21C7.85 18.75 7 20.24 7 22"/><path d="M14 14.66V17c0 .55.47.98.97 1.21C16.15 18.75 17 20.24 17 22"/><path d="M18 2H6v7a6 6 0 0 0 12 0V2Z"/></svg>',
         staff: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="8" r="4"/><path d="M4 21v-1a7 7 0 0 1 14 0v1"/><path d="M19 8h4"/><path d="M21 6v4"/></svg>',
         messaging: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/></svg>',
+        reachCompose: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 11l18-7-7 18-2.5-7.5L3 11z"/></svg>',
+        reachHistory: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="9"/><polyline points="12 7 12 12 15 14"/></svg>',
         tips: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="9"/><path d="M12 7v10"/><path d="M15 9.5c0-1.4-1.34-2.5-3-2.5s-3 1.1-3 2.5S10.34 12 12 12s3 1.1 3 2.5-1.34 2.5-3 2.5-3-1.1-3-2.5"/></svg>',
         announcements: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="m3 11 18-5v12L3 14v-3z"/><path d="M11.6 16.8a3 3 0 1 1-5.8-1.6"/></svg>',
         // Same bus glyph Link's pickup-request icons use (_PICKUP_ICONS.bus in
@@ -1128,6 +1138,17 @@
         { id: 'notes',  name: 'Notes',  title: 'Notes Lite', logo: 'Notes_clean.png', color: '#C4891A',
           theme: { accent: '#C4891A', dark: '#9A6A12', tint: '#FBF0D8' }, roles: HEAD, status: 'available',
           tabs: [{ id: 'notesList', label: 'Notes' }] },
+        // Reach — text the staff directory from the sender's OWN phone number
+        // (device-native SMS), so replies land in their normal Messages app.
+        // A parallel channel to Link/Twilio, not a replacement: no carrier
+        // number, no 10DLC, no per-message fee — but Android sends silently
+        // while iOS/web require a tap per message (Apple's rule). Head staff
+        // only (the send roles), so it's HEAD_ROLES not HEAD (no viewer).
+        { id: 'reach', name: 'Reach', title: 'Reach', tag: 'Text staff from your own number',
+          icon: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><path d="M3 11l18-7-7 18-2.5-7.5L3 11z"/><path d="M11.5 12.5 21 4"/></svg>',
+          color: '#DB4B32', theme: { accent: '#DB4B32', dark: '#B23A25', tint: '#FEECE7' },
+          roles: HEAD_ROLES, status: 'available',
+          tabs: [{ id: 'reachCompose', label: 'Compose' }, { id: 'reachHistory', label: 'History' }] },
         { id: 'guard',  name: 'Guard',
           icon: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3l7 3v5.5c0 4.3-2.9 8.2-7 9.5-4.1-1.3-7-5.2-7-9.5V6z"/><polyline points="9.2 12 11.2 14 15 10.2"/></svg>',
           color: '#4338CA',
@@ -1552,6 +1573,8 @@
         else if (id === 'league') renderLeague();
         else if (id === 'staff') renderStaff();
         else if (id === 'messaging') renderMessaging();
+        else if (id === 'reachCompose') renderReachCompose();
+        else if (id === 'reachHistory') renderReachHistory();
         else if (id === 'tips') renderTips();
         else if (id === 'announcements') renderAnnouncements();
         else if (id === 'transport') renderTransportAlerts();
@@ -5862,6 +5885,323 @@
             console.error('[Lite] SMS send failed:', e);
             return { ok: false, error: e.message || String(e) };
         }
+    }
+
+    // ════════════════════════════════════════════════════════════════════
+    // REACH — text the staff directory from the sender's OWN phone number.
+    //
+    // Unlike the Twilio "Daily schedule texts" above, Reach never calls a
+    // server to send: the DEVICE sends, from the signed-in director's own SIM,
+    // so replies land in their normal Messages app (nothing to capture here).
+    //   • Android native shell (a `Sms` Capacitor plugin present) → silent
+    //     batch send, one personalized text per recipient.
+    //   • iOS / web / native-without-plugin → "assisted" tap-queue: each tap
+    //     opens the OS Messages composer prefilled to the next recipient; the
+    //     user taps Send (Apple forbids programmatic SMS).
+    // Recipients are opted-in staff (smsOptIn) from liteStaffAssignments.
+    // ════════════════════════════════════════════════════════════════════
+
+    // In-flight compose state (kept in module scope so the assisted tap-queue
+    // survives the re-renders that happen as the user advances through it).
+    let reachSel = null;        // Set of selected staff emails (null = not built yet)
+    let reachBunkFilter = 'all';
+    let reachQueue = null;      // { items:[{to,body,label}], idx, sent, done } during assisted send
+
+    function reachHasNative() {
+        try {
+            return !!(window.Capacitor && window.Capacitor.isNativePlatform &&
+                      window.Capacitor.isNativePlatform() &&
+                      window.Capacitor.Plugins && window.Capacitor.Plugins.Sms &&
+                      typeof window.Capacitor.Plugins.Sms.sendBatch === 'function');
+        } catch (_) { return false; }
+    }
+
+    // iOS wants sms:NUMBER&body=…, everything else sms:NUMBER?body=… — the one
+    // portability wart in the sms: URI scheme.
+    function reachIsIOS() {
+        try {
+            if (window.Capacitor && window.Capacitor.getPlatform) return window.Capacitor.getPlatform() === 'ios';
+        } catch (_) {}
+        return /iphone|ipad|ipod/i.test(navigator.userAgent || '');
+    }
+    function reachSmsUrl(to, body) {
+        const num = String(to || '').replace(/[^\d+]/g, '');
+        const sep = reachIsIOS() ? '&' : '?';
+        return `sms:${num}${sep}body=${encodeURIComponent(body || '')}`;
+    }
+
+    // Every staffer eligible for Reach: has a phone, opted in, isn't opted out.
+    function reachEligibleStaff() {
+        return Object.entries(camp.staff || {})
+            .map(([email, rec]) => ({ email, ...(rec || {}) }))
+            .filter(r => r.smsOptIn && normPhone(r.phone))
+            .sort((a, b) => (a.name || a.email).localeCompare(b.name || b.email));
+    }
+
+    // Light normalize for dedupe/last-10 comparison and the sms: href.
+    function normPhone(raw) {
+        const d = String(raw || '').replace(/\D/g, '');
+        return d.length >= 10 ? d : null;
+    }
+
+    // Fill {name}/{firstName}/{bunk} and append the camp footer.
+    function reachPersonalize(template, rec) {
+        const name = rec.name || rec.email || '';
+        const first = name.split(/\s+/)[0] || name;
+        let body = String(template || '')
+            .replace(/\{firstName\}/gi, first)
+            .replace(/\{name\}/gi, name)
+            .replace(/\{bunk\}/gi, (rec.bunks || []).join(', '));
+        if (camp.reach.footer) body += '\n' + camp.reach.footer;
+        return body.slice(0, 1500);
+    }
+
+    function reachBunkOptions(staff) {
+        const set = new Set();
+        staff.forEach(r => (r.bunks || []).forEach(b => set.add(b)));
+        return [...set].sort();
+    }
+
+    async function renderReachCompose() {
+        const view = document.getElementById('view-reachCompose');
+        if (!isHeadStaff()) { view.innerHTML = emptyHTML('🔒', 'Head staff only.'); return; }
+
+        // An assisted tap-queue in progress owns the screen until it's done.
+        if (reachQueue && !reachQueue.done) { renderReachQueue(view); return; }
+
+        const eligible = reachEligibleStaff();
+        if (reachSel === null) reachSel = new Set(eligible.map(r => r.email)); // default: everyone
+
+        const bunks = reachBunkOptions(eligible);
+        const filtered = reachBunkFilter === 'all'
+            ? eligible
+            : eligible.filter(r => (r.bunks || []).includes(reachBunkFilter));
+
+        const nativeMode = reachHasNative();
+        const template = camp.reach.lastTemplate || '';
+
+        const bunkChips = ['all', ...bunks].map(b =>
+            `<button class="lite-chip ${reachBunkFilter === b ? 'active' : ''}" data-bunk="${esc(b)}">${b === 'all' ? 'All bunks' : esc(b)}</button>`
+        ).join('');
+
+        const rows = filtered.map(r => `
+            <label class="lite-row reach-pick">
+                <input type="checkbox" class="reach-cb" data-email="${esc(r.email)}" ${reachSel.has(r.email) ? 'checked' : ''}>
+                <div>
+                    <div class="lite-row-title">${esc(r.name || r.email)}</div>
+                    <div class="lite-row-sub">${esc((r.bunks || []).join(', ') || '—')} · ${esc(r.phone)}</div>
+                </div>
+            </label>`).join('');
+
+        view.innerHTML = `
+            <div class="lite-card">
+                <div class="lite-card-title">Message</div>
+                <div class="lite-field">
+                    <textarea class="lite-input" id="reachBody" rows="5"
+                        placeholder="Type your message… e.g. Hi {firstName}, staff meeting at 4pm by the flagpole.">${esc(template)}</textarea>
+                </div>
+                <div class="lite-note">Tokens: <code>{firstName}</code>, <code>{name}</code>, <code>{bunk}</code> are filled per person.</div>
+                <div class="lite-field"><label>Footer (optional, added to every text)</label>
+                    <input class="lite-input" id="reachFooter" value="${esc(camp.reach.footer || '')}" placeholder="e.g. — ${esc(camp.campName || 'Camp')}"></div>
+            </div>
+
+            <div class="lite-card">
+                <div class="lite-card-title">Recipients <span class="lite-pill">${reachSel.size} selected</span></div>
+                ${bunks.length ? `<div class="lite-chiprow">${bunkChips}</div>` : ''}
+                <div class="reach-selbar">
+                    <button class="lite-link-btn" id="reachAll">Select all</button>
+                    <button class="lite-link-btn" id="reachNone">Select none</button>
+                </div>
+                <div class="reach-list">${rows || emptyHTML('👥', 'No opted-in staff with a phone. Add phones and flip the SMS toggle in the Staff tab.')}</div>
+            </div>
+
+            <div class="lite-card">
+                <div class="lite-note">
+                    ${nativeMode
+                        ? 'Texts send silently from <b>your phone number</b> — replies come back to your Messages app.'
+                        : 'On this device each text opens your Messages app prefilled — you tap <b>Send</b> for each (Apple doesn’t allow apps to send texts for you). They still go from <b>your own number</b>.'}
+                </div>
+                <button class="lite-btn block" id="reachSend">
+                    ${nativeMode ? 'Send' : 'Start sending'} to ${reachSel.size} staff
+                </button>
+                <button class="lite-btn block secondary" id="reachCsv">Export selected as CSV</button>
+            </div>`;
+
+        // Bunk filter
+        view.querySelectorAll('[data-bunk]').forEach(b => b.addEventListener('click', () => {
+            reachBunkFilter = b.dataset.bunk; renderReachCompose();
+        }));
+        // Per-row checkbox: update reachSel + the count/button in place, so
+        // selecting many staff doesn't rebuild the list or lose scroll.
+        const syncCounts = () => {
+            const pill = view.querySelector('.lite-card-title .lite-pill');
+            if (pill) pill.textContent = `${reachSel.size} selected`;
+            const send = view.querySelector('#reachSend');
+            if (send) send.textContent = `${reachHasNative() ? 'Send' : 'Start sending'} to ${reachSel.size} staff`;
+        };
+        view.querySelectorAll('.reach-cb').forEach(cb => cb.addEventListener('change', () => {
+            if (cb.checked) reachSel.add(cb.dataset.email); else reachSel.delete(cb.dataset.email);
+            syncCounts();
+        }));
+        view.querySelector('#reachAll')?.addEventListener('click', () => {
+            filtered.forEach(r => reachSel.add(r.email)); renderReachCompose();
+        });
+        view.querySelector('#reachNone')?.addEventListener('click', () => {
+            filtered.forEach(r => reachSel.delete(r.email)); renderReachCompose();
+        });
+
+        // Persist the composed text as the user leaves the field so a re-render
+        // (from toggling a recipient) never loses it.
+        const bodyEl = view.querySelector('#reachBody');
+        const footerEl = view.querySelector('#reachFooter');
+        const stash = () => {
+            if (bodyEl) camp.reach.lastTemplate = bodyEl.value;
+            if (footerEl) camp.reach.footer = footerEl.value.trim();
+        };
+        bodyEl?.addEventListener('input', stash);
+        footerEl?.addEventListener('input', stash);
+
+        view.querySelector('#reachCsv')?.addEventListener('click', () => { stash(); reachExportCsv(); });
+        view.querySelector('#reachSend')?.addEventListener('click', () => { stash(); reachStartSend(); });
+    }
+
+    // Resolve the current selection into personalized, deduped messages.
+    function reachBuildMessages() {
+        const template = (camp.reach.lastTemplate || '').trim();
+        const out = [];
+        const seen = new Set();
+        reachEligibleStaff().forEach(r => {
+            if (!reachSel.has(r.email)) return;
+            const key = normPhone(r.phone);
+            if (!key || seen.has(key)) return;   // one text per number
+            seen.add(key);
+            out.push({ to: r.phone, body: reachPersonalize(template, r), label: r.name || r.email });
+        });
+        return { template, items: out };
+    }
+
+    async function reachStartSend() {
+        const { template, items } = reachBuildMessages();
+        if (!template) { toast('Type a message first'); return; }
+        if (!items.length) { toast('Select at least one recipient'); return; }
+        if (!confirm(`Send this message to ${items.length} staff member${items.length === 1 ? '' : 's'}?`)) return;
+
+        // Save the footer/template so it persists (best-effort — a failed cloud
+        // write must never block the actual send).
+        saveKV('liteReachSettings', { footer: camp.reach.footer, lastTemplate: template }).catch(() => {});
+
+        if (reachHasNative()) {
+            const btn = document.querySelector('#reachSend');
+            if (btn) { btn.disabled = true; btn.textContent = 'Sending…'; }
+            try {
+                const res = await window.Capacitor.Plugins.Sms.sendBatch({
+                    messages: items.map(m => ({ to: m.to, body: m.body }))
+                });
+                const results = (res && res.results) || [];
+                const sent = results.filter(r => r.ok).length || (results.length ? 0 : items.length);
+                const failed = results.length ? results.length - sent : 0;
+                reachLog(template, items.length, sent, failed);
+                toast(`Sent ${sent}${failed ? ` · failed ${failed}` : ''}`);
+            } catch (e) {
+                toast('Send failed: ' + (e.message || e));
+            }
+            if (btn) { btn.disabled = false; }
+            renderReachCompose();
+            return;
+        }
+
+        // Assisted: hand off to the OS composer one recipient at a time.
+        reachQueue = { items, idx: 0, sent: 0, done: false, template };
+        renderReachCompose();
+    }
+
+    // The assisted tap-queue screen (iOS / web / native without the plugin).
+    function renderReachQueue(view) {
+        const q = reachQueue;
+        const cur = q.items[q.idx];
+        const progress = `${q.idx} of ${q.items.length} sent`;
+
+        if (!cur) {  // finished
+            q.done = true;
+            reachLog(q.template, q.items.length, q.sent, q.items.length - q.sent);
+            view.innerHTML = `
+                <div class="lite-card">
+                    <div class="lite-card-title">All done 🎉</div>
+                    <div class="lite-note">${q.sent} of ${q.items.length} handed to Messages.</div>
+                    <button class="lite-btn block" id="reachDone">Back to compose</button>
+                </div>`;
+            view.querySelector('#reachDone').addEventListener('click', () => { reachQueue = null; renderReachCompose(); });
+            return;
+        }
+
+        view.innerHTML = `
+            <div class="lite-card">
+                <div class="lite-card-title">Sending — ${esc(progress)}</div>
+                <div class="lite-note">Tap <b>Text next</b> to open Messages prefilled to this person, tap Send there, then come back for the next.</div>
+                <div class="lite-preview-msg"><b>${esc(cur.label)}</b> · ${esc(cur.to)}\n${esc(cur.body)}</div>
+                <a class="lite-btn block" id="reachNext" href="${reachSmsUrl(cur.to, cur.body)}">Text next (${q.idx + 1}/${q.items.length})</a>
+                <button class="lite-btn block secondary" id="reachSkip">Skip this person</button>
+                <button class="lite-btn block ghost" id="reachStop">Stop</button>
+            </div>`;
+
+        // Opening the sms: URL navigates away to Messages; count it as handed
+        // off and advance so the next tap targets the following recipient.
+        view.querySelector('#reachNext').addEventListener('click', () => {
+            q.sent++; q.idx++;
+            setTimeout(() => { if (activeTab === 'reachCompose') renderReachCompose(); }, 400);
+        });
+        view.querySelector('#reachSkip').addEventListener('click', () => { q.idx++; renderReachCompose(); });
+        view.querySelector('#reachStop').addEventListener('click', () => {
+            reachLog(q.template, q.items.length, q.sent, 0);
+            reachQueue = null; renderReachCompose();
+        });
+    }
+
+    // Append a blast to the recent-history log (kept small; no message bodies).
+    function reachLog(template, total, sent, failed) {
+        const entry = {
+            at: Date.now(),
+            preview: String(template || '').slice(0, 80),
+            total, sent: sent || 0, failed: failed || 0,
+            by: userEmail || ''
+        };
+        camp.reachHistory = [entry, ...(camp.reachHistory || [])].slice(0, 50);
+        saveKV('liteReachHistory', camp.reachHistory).catch(() => {});
+    }
+
+    // CSV of the selected staff — for the "hand off to Reach / another app"
+    // workflow, or just a record. Uses the same download path as other exports.
+    function reachExportCsv() {
+        const { items } = reachBuildMessages();
+        if (!items.length) { toast('Select at least one recipient'); return; }
+        const esc2 = v => `"${String(v == null ? '' : v).replace(/"/g, '""')}"`;
+        const lines = ['Name,Phone,Message'];
+        items.forEach(m => lines.push([esc2(m.label), esc2(m.to), esc2(m.body)].join(',')));
+        const blob = new Blob([lines.join('\r\n')], { type: 'text/csv' });
+        const url = URL.createObjectURL(blob);
+        const a = document.createElement('a');
+        a.href = url; a.download = `reach-${currentDate}.csv`;
+        document.body.appendChild(a); a.click(); a.remove();
+        setTimeout(() => URL.revokeObjectURL(url), 1000);
+        toast(`Exported ${items.length} recipients`);
+    }
+
+    function renderReachHistory() {
+        const view = document.getElementById('view-reachHistory');
+        if (!isHeadStaff()) { view.innerHTML = emptyHTML('🔒', 'Head staff only.'); return; }
+        const hist = camp.reachHistory || [];
+        if (!hist.length) { view.innerHTML = emptyHTML('📭', 'No Reach blasts yet.'); return; }
+        const rows = hist.map(h => {
+            const when = new Date(h.at);
+            const stamp = isNaN(when) ? '' : when.toLocaleString([], { month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' });
+            return `<div class="lite-row">
+                <div>
+                    <div class="lite-row-title">${esc(h.preview || '(no preview)')}</div>
+                    <div class="lite-row-sub">${esc(stamp)} · ${h.sent}/${h.total} sent${h.failed ? ` · ${h.failed} failed` : ''}${h.by ? ' · ' + esc(h.by) : ''}</div>
+                </div>
+            </div>`;
+        }).join('');
+        view.innerHTML = `<div class="lite-card"><div class="lite-card-title">Recent blasts</div>${rows}</div>`;
     }
 
     // ════════════════════════════════════════════════════════════════════

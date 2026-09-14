@@ -88,6 +88,27 @@
         });
     }
 
+    // ── Reach: send SMS from the device's own number ─────────────────────────
+    // Campistry Lite's Reach feature (campistry_lite.js) sends staff texts from
+    // the signed-in director's OWN phone number. On Android this can be silent;
+    // the web layer looks for a Capacitor plugin registered as `Sms` exposing:
+    //
+    //     Sms.sendBatch({ messages: [{ to, body }, ...] })
+    //        → Promise<{ results: [{ to, ok: boolean, error?: string }, ...] }>
+    //
+    // The Android implementation should request the SEND_SMS runtime permission
+    // on first use and loop SmsManager.sendTextMessage() (one personalized text
+    // per recipient). If `Sms.sendBatch` is absent — iOS (Apple forbids
+    // programmatic SMS), or a build without the plugin — the web layer falls
+    // back on its own to the "assisted" sms: composer tap-queue, so nothing is
+    // required here for that path. This native plugin is provided by the native
+    // shell project, not this repo; the contract above is the only coupling.
+    if (Capacitor.getPlatform && Capacitor.getPlatform() === 'ios') {
+        // Belt-and-suspenders: make the absence explicit so reachHasNative()
+        // in the web layer never mistakes a partial bridge for a silent sender.
+        if (Plugins.Sms) { try { delete Plugins.Sms.sendBatch; } catch (_) {} }
+    }
+
     // Biometrics on native lives in campistry_bio_native.js now, shared with
     // Campistry Link so both apps get the same bridge from one implementation.
 })();

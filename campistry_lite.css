@@ -703,6 +703,17 @@ button { cursor: pointer; border: none; background: none; }
 .lite-note { font-size: 0.78rem; color: var(--muted); margin: 9px 2px; line-height: 1.5; }
 .lite-warn { background: #FFFAEB; border: 1px solid #FEDF89; color: #9A6700; border-radius: 13px; padding: 11px 13px; font-size: 0.8rem; line-height: 1.5; margin-bottom: 12px; }
 
+/* ─── Reach (staff texting from your own number) ──────────────────────── */
+.lite-row { display: flex; align-items: center; gap: 12px; padding: 11px 2px; border-bottom: 1px solid var(--line); }
+.lite-row:last-child { border-bottom: 0; }
+.lite-row-title { font-size: 0.9rem; font-weight: 600; color: var(--ink); }
+.lite-row-sub { font-size: 0.76rem; color: var(--muted); margin-top: 2px; }
+.reach-list { margin-top: 6px; }
+.reach-pick { cursor: pointer; }
+.reach-pick input[type="checkbox"] { width: 20px; height: 20px; flex: none; accent-color: var(--accent); }
+.reach-selbar { display: flex; gap: 16px; padding: 6px 2px 2px; }
+.lite-btn.ghost { background: transparent; color: var(--muted); box-shadow: none; border: 0; }
+
 /* ─── Toast ───────────────────────────────────────────────────────────── */
 .lite-toast { position: fixed; left: 50%; transform: translateX(-50%); bottom: calc(var(--tabbar-h) + 20px + env(safe-area-inset-bottom)); z-index: 200; background: #1A2231; color: #fff; padding: 12px 20px; border-radius: 999px; font-size: 0.85rem; font-weight: 500; box-shadow: var(--shadow-lg); max-width: 88vw; text-align: center; animation: liteIn 0.2s ease; }
 

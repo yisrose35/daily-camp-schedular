@@ -61,6 +61,7 @@ blurred header/tab bar, safe-area-aware. Tokens live at the top of
 | **Head staff** — **Health Lite** | Meds · Roster · Trip | Medications on the go. **Meds:** today's dispensing board — every camper on meds with allergy banners and a **live Given / Not-given** status; head staff tap **Give** to log it (writes to the cloud, everyone sees it live). **Roster:** allergy + medication reference, searchable. **Trip:** pick the group going out → the consolidated meds to pack, with give-status. The **first Lite app that writes** (gated to head staff for now). |
 | **Head staff** — **Live Lite** | Roll Call · Changes | Attendance on the go. **Roll Call:** who's here today — Present / Absent / Left-early tallies, then every camper by bunk with a status pill (Here · Absent · Sick · Late · Left early), division-filterable, tap for full camper info. **Changes:** today's dismissal changes & late arrivals (early pickups with time + who, late arrivals with notes), searchable. Read-only; reads the office roll call synced to the cloud. |
 | **Head staff** — **Me Lite** | Roster · Medical · Staff | Camp *people* on the go. **Roster:** searchable camp-wide roster with a headcount strip + birthdays, grouped by bunk with medical flags; tap a camper for **all their info** (medical, personal, school, placement, parents with tap-to-call/email, address, emergency, teams, notes). **Medical:** a camp-wide allergy/meds/dietary safety list, filterable, facts shown inline. **Staff:** a bunk→counselor contact directory with tap-to-call. Read-only. |
+| **Head staff** — **Reach** | Compose · History | Mass-text the staff directory **from the director's own phone number** (device-native SMS), so replies land in their normal Messages app — a parallel channel to Link/Twilio with no carrier number, no 10DLC, no per-message fee. **Compose:** free-text message with `{firstName}`/`{name}`/`{bunk}` tokens, a footer, and a checkbox recipient picker over opted-in staff (bunk-filterable, select all/none). **Android** sends silently via a native `Sms` plugin (`SmsManager`); **iOS/web** fall back to an *assisted* tap-queue — each tap opens Messages prefilled to the next person (Apple forbids programmatic SMS). Also exports the selection as CSV. **History:** a small recent-blast log (preview, count, sender). Send-role staff only. |
 | **Counselor** (`counselor` role) | My Day · My Bunk · League · Tips | See their assigned bunk's daily schedule, bunk roster (contacts, allergies, dietary), their league team + standings + today's matchup, and their own Campistry Link tips balance/Stripe Connect setup |
 | **Viewer** | Schedule · Now · Locate · Reports | Same read-only Flow Lite view as head staff |
 
@@ -343,6 +344,10 @@ main app uses the same coral).
     Counselors are matched to their record by their login email.
   - `liteSmsSettings` — `{ enabled, audience: 'counselors'|'parents'|'both', footer }`
     The camp-level SMS opt-in.
+  - `liteReachSettings` — `{ footer, lastTemplate }` — Reach's camp footer and
+    remembered message draft.
+  - `liteReachHistory` — `[{ at, preview, total, sent, failed, by }]` — a small
+    (≤50) recent-blast log for the Reach History tab. No message bodies stored.
 - **League team per counselor** is derived, not stored: team membership lives
   on camper records (`camperRoster[name].teams[leagueName]`), so a bunk's team
   is the majority vote across its campers, and a counselor inherits their
@@ -459,12 +464,49 @@ for this account" screen is what actually gates entry from there.
 Note: there is no scheduled/automatic send in v1 — a head-staff member taps
 Send. (A pg_cron → Edge Function pipeline is the natural v2 if wanted.)
 
+### Reach blast (text staff from your own number)
+
+**Reach** is the "send-from-my-own-phone" channel (the Reach-app concept),
+distinct from the Twilio "Daily schedule texts" above. **No server is called to
+send** — the *device* sends from the signed-in director's own SIM, so replies
+land in their normal Messages app (Campistry does not try to capture them).
+
+1. **Reach tile → Compose.** Type a message (tokens `{firstName}`, `{name}`,
+   `{bunk}` fill per person), optionally a footer.
+2. Pick recipients — opted-in staff (`smsOptIn` + a phone) from
+   `liteStaffAssignments`, bunk-filterable, select all/none. Defaults to all.
+3. **Send:**
+   - **Android** (native shell exposes the `Sms` Capacitor plugin) — silent
+     batch, one personalized text per recipient.
+   - **iOS / web / native without the plugin** — an *assisted* tap-queue: each
+     tap opens the OS Messages composer prefilled to the next person; the user
+     taps Send there (Apple forbids programmatic SMS). Both paths send from the
+     user's own number.
+4. **Export as CSV** hands the selected name/phone/message list to a spreadsheet
+   or another app.
+5. **History** shows a small recent-blast log (preview, sent count, sender).
+
+**Native contract (Android).** The native shell must register a Capacitor
+plugin `Sms` with `sendBatch({ messages:[{to,body}] }) →
+{ results:[{to,ok,error?}] }`, requesting the `SEND_SMS` runtime permission and
+looping `SmsManager.sendTextMessage()`. See the comment block in
+`campistry_lite_capacitor.js`. `SEND_SMS` is a Google Play restricted
+permission — a camp-staff outreach tool is a defensible core use case, but
+expect a Play Console declaration; if disallowed, Android falls back to the
+same assisted tap-queue as iOS.
+
+**Consent & compliance.** Reach only texts staff who have `smsOptIn` on (the
+same double opt-in the Twilio path uses). Because texts are peer-to-peer from a
+personal number, 10DLC/A2P registration doesn't apply. (Cross-checking the
+carrier `sms_opt_outs` table here is a natural follow-up but not wired in v1.)
+
 ## Files
 
 | File | Role |
 |---|---|
 | `campistry_lite.html` | App shell, PWA meta, script loader chain |
-| `campistry_lite.js` | All Lite logic (views, data, SMS composition) |
+| `campistry_lite.js` | All Lite logic (views, data, SMS composition, **Reach** compose/send/history) |
+| `campistry_lite_capacitor.js` | Native-shell glue; documents the `Sms.sendBatch` plugin contract Reach uses on Android |
 | `campistry_lite.css` | Mobile-first styles on `campistry-unified.css` tokens |
 | `manifest_lite.webmanifest` | PWA manifest |
 | `supabase/functions/send-sms/index.ts` | Twilio send Edge Function |
