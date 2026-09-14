@@ -518,7 +518,7 @@
         if (!top || top.score < s.suggestAt) return out('unmatched', top ? 'No confident match' : 'No candidate families');
         if (top.score < s.autoPostAt) return out('review', '');
 
-        if (s.dryRun) return out('review', 'Dry run — auto-posting is off');
+        if (s.dryRun) return out('review', 'Manual mode is on \u2014 you credit each deposit yourself. Switch to Automatic in Settings to let confident matches post themselves.');
 
         if (runnerUp && (top.score - runnerUp.score) < s.ambiguousGap) {
             return out('review', 'Two families match about equally (' + top.familyName + ' / ' + runnerUp.familyName + ')');

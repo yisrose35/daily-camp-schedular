@@ -139,7 +139,7 @@ test('dry run posts nothing but still ranks and explains', () => {
     const code = M.memoCode('fam_klein', 'Klein Family');
     const r = M.decide({ amount: 850, payerName: 'Shimon Klein', memoCode: code }, ctx(), { dryRun: true });
     assert.strictEqual(r.decision, 'review');
-    assert.match(r.guardrail, /Dry run/);
+    assert.match(r.guardrail, /Manual mode/);
     assert.strictEqual(r.candidates[0].familyKey, 'fam_klein');   // still shows the answer
 });
 
@@ -310,4 +310,31 @@ test('camper numbers are not confused by leading zeros', () => {
     const ctx = { families, roster, campNumber: '3734', aliases: [], balances: {} };
     assert.strictEqual(M.familyForReference('3734-0042', ctx), 'fam_y');
     assert.strictEqual(M.familyForReference('3734-42', ctx), 'fam_y');
+});
+
+// ── a held-back match is still a match ──────────────────────────────────────
+//
+// decide() returns familyKey only for 'auto', because that is what makes it
+// safe to act on without a person. Anything that reads familyKey as "did we
+// match" reports every held-back deposit as unmatched — which sends the office
+// hunting for a parsing fault when the real answer is Manual mode, a near-tie,
+// or the overpayment guard. candidates[0] is the answer to "did we match".
+test('a deposit held back by Manual mode still names the family', () => {
+    const families = { fam_z: { name: 'Klein Family', camperIds: ['Leah Klein'] } };
+    const roster = { 'Leah Klein': { camperId: 1387 } };
+    const ctx = { families, roster, campNumber: '3734', aliases: [], balances: {} };
+    const dep = { amount: 3.14, memo: '3734-1387', rawExcerpt: 'Memo 3734-1387' };
+
+    const manual = M.decide(dep, ctx, { dryRun: true });
+    assert.strictEqual(manual.decision, 'review');
+    assert.strictEqual(manual.familyKey, null, 'nothing is posted in Manual mode');
+    // ...but the match itself is intact and reportable.
+    assert.strictEqual(manual.candidates[0].familyKey, 'fam_z');
+    assert.strictEqual(manual.candidates[0].score, 100);
+    assert.match(manual.guardrail, /Manual mode/);
+
+    // The same deposit with Automatic on posts itself.
+    const auto = M.decide(dep, ctx, { dryRun: false });
+    assert.strictEqual(auto.decision, 'auto');
+    assert.strictEqual(auto.familyKey, 'fam_z');
 });

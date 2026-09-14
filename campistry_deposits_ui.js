@@ -71,7 +71,7 @@
     // in the Bank layouts footer. Twice now a fix has been live on the server
     // while the browser ran an older copy, and there was no way to tell from
     // the screen which one was which -- so the screen says.
-    D.BUILD = '20260914-10';
+    D.BUILD = '20260914-11';
 
     var state = {
         loaded: false,
@@ -1974,15 +1974,28 @@
                 aliases: state.aliases,
                 balances: {}
             }, state.settings || {});
-            var famNm = decision.familyKey ? famName(decision.familyKey) : '';
-            step(!!decision.familyKey,
-                decision.familyKey ? 'Matched ' + famNm + ' (' + decision.confidence + '%)' : 'No family matched',
-                decision.familyKey
-                    // Dry run explains why it would not POST, never why it did
-                    // not match — reporting it under "no family matched" sends
-                    // somebody to change the wrong setting.
-                    ? (decision.guardrail || '')
-                    : 'Nothing in the message points at a family: no payment reference, no payer we have seen before, and the name does not resemble a household on file.');
+            // decide() returns familyKey ONLY for 'auto' -- that is what makes
+            // it safe to act on. Reading it as "did we match" therefore reports
+            // every held-back deposit as "No family matched", directly under a
+            // step that just named the family the reference points at, and with
+            // a detail insisting nothing in the message points anywhere. That
+            // is not a small wording problem: it sends the office looking for a
+            // parsing fault when the real answer is Manual mode, or a
+            // near-tie, or the overpayment guard. The candidate says whether we
+            // matched; the decision says whether we may act.
+            var top = (decision.candidates || [])[0] || null;
+            var famNm = top ? (top.familyName || famName(top.familyKey)) : '';
+            if (!top) {
+                step(false, 'No family matched',
+                    'Nothing in the message points at a family: no payment reference, no payer we have seen before, and the name does not resemble a household on file.');
+            } else if (decision.decision === 'auto') {
+                step(true, 'Matched ' + famNm + ' (' + top.score + '%)',
+                    (top.reasons || []).join(' \u00b7 '));
+            } else {
+                step(false, 'Matched ' + famNm + ' (' + top.score + '%) \u2014 held back',
+                    (decision.guardrail || 'Below the confidence needed to post by itself') +
+                    ((top.reasons || []).length ? ' \u00b7 Matched on: ' + top.reasons.join(', ') : ''));
+            }
         }
 
         // Show the trace, then let them apply it.
