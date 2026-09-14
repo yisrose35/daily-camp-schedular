@@ -199,6 +199,7 @@ let _toastTimer = null;
     // road graph is unavailable). Ordering and ETAs use real street travel
     // times when it is present.
     let _activeRoadNet = null;
+    let _lastNhResult = null; // the districting's road graph + homes, for passes that run after it
     function _roadLegsFor(stops, campLat, campLng) {
         if (!_activeRoadNet) return null;
         try { return _activeRoadNet.legMinutesFor([{ lat: campLat, lng: campLng }].concat(stops || [])); }
@@ -3676,6 +3677,48 @@ function _roadPolishRoutes(routes, shiftVehicles, campLat, campLng, isArrival, m
     return res;
 }
 
+// Corner stops on the bus's way. Each corner stop was stood at the
+// intersection nearest its homes; among the corners inside the walk limit,
+// stand it at the one that adds the least driving between its neighbours in
+// the final order (the U-turn down a side road for one child). Buses whose
+// corners moved are re-ordered on street times and re-stamped.
+function _cornersOnPath(routes, campLat, campLng, isArrival, needsReturn) {
+    const NH = window.CampistryGoNeighborhoods, P = window.CampistryGoRoutePost;
+    const skip = !_activeRoadNet ? 'no road network' : !_lastNhResult ? 'no districting result' : !NH.cornerSnapper || !P.chooseCornersOnPath ? 'module out of date' : null;
+    if (skip) { console.warn('[Go] Corner stops: on-the-way pass skipped (' + skip + ')'); return { moved: 0, savedMin: 0, buses: 0, choices: 0 }; }
+    const walkMi = ((D.setup && D.setup.maxWalkDistance) || 500) / 5280;
+    const snapper = NH.cornerSnapper(_lastNhResult, walkMi);
+    if (!snapper.candidates) return { moved: 0, savedMin: 0, buses: 0, choices: 0 };
+    const depot = { lat: campLat, lng: campLng };
+    let moved = 0, savedMin = 0, buses = 0, choices = 0, cornerStops = 0, noCorner = 0;
+    for (const r of routes) {
+        const stops = r.stops;
+        if (!Array.isArray(stops) || !stops.length) continue;
+        const cands = stops.map(s => (s._homes && s._homes.length && !s.isMonitor && !s.isCounselor) ? snapper.candidates(s, 4) : []);
+        cornerStops += stops.filter(s => s._homes && s._homes.length).length;
+        noCorner += cands.filter((c, i) => stops[i]._homes && stops[i]._homes.length && !c.length).length;
+        choices += cands.filter(c => c.length > 1).length;
+        if (!cands.some(c => c.length > 1)) continue;
+        const pts = [], seen = new Set();
+        cands.forEach(list => list.forEach(c => { const k = c.lat.toFixed(6) + ',' + c.lng.toFixed(6); if (!seen.has(k)) { seen.add(k); pts.push(c); } }));
+        let legs;
+        try { legs = _activeRoadNet.legMinutesFor([depot].concat(stops, pts)); } catch (e) { continue; }
+        const res = P.chooseCornersOnPath(stops, cands, legs, depot, !!(isArrival || needsReturn), _routePostOpts());
+        if (!res.moved) continue;
+        moved += res.moved; savedMin += res.savedMin; buses++;
+        // two stops now at one corner are one stop; then the final order on street times
+        const fold = P.foldSameCornerStops(stops, 24);
+        r.stops = fold.stops;
+        const rl = _roadLegsFor(r.stops, campLat, campLng);
+        r.stops = P.localTspOrder(r.stops, depot, !!isArrival, _routePostOpts(rl ? { legMinutes: rl } : {}));
+        r.stops.forEach((st, k) => st.stopNum = k + 1);
+        r.camperCount = r.stops.reduce((a, st) => a + ((st.campers || []).length), 0);
+        if (rl) { P.stampLegTimes(r, depot, rl); P.stampRoadPath(r, depot, rl, !!isArrival, false); }
+        else { delete r._tspLegTimes; delete r._roadPts; }
+    }
+    return { moved, savedMin, buses, choices, cornerStops, noCorner, walkFt: Math.round(walkMi * 5280) };
+}
+
 function _splitOverlongRoutes(routes, shiftVehicles, campLat, campLng, maxRouteMin, isArrival) {
     return window.CampistryGoRoutePost.splitOverlongRoutes(
         routes, _capByIdOf(shiftVehicles), { lat: campLat, lng: campLng },
@@ -4092,6 +4135,14 @@ async function generateRoutes() {
         const _rebalanced = _rebalanceBusLoads(routes, shiftVehicles, campLat, campLng, isArrival);
         if (_rebalanced) console.log('[Go] Load balancing (opt-in): moved ' + _rebalanced + ' stop(s)');
 
+        // Corner stops on the bus's way, now that the order and the buses are settled.
+        if (_activeRoadNet && mode === 'corner-stops') {
+            const _cp = _cornersOnPath(routes, campLat, campLng, isArrival, _shiftReturns(si, shifts.length, isArrival));
+            console.log('[Go] Corner stops: of ' + (_cp.cornerStops || 0) + ' corner stop(s) (walk limit ' + (_cp.walkFt || 0) + ' ft), ' + _cp.choices +
+                ' had more than one corner inside it' + (_cp.noCorner ? ', ' + _cp.noCorner + ' had none' : '') + '; ' +
+                _cp.moved + ' moved to the corner on the bus\'s way' + (_cp.moved ? ' (est. ' + _cp.savedMin.toFixed(0) + ' min of side-road detours saved across ' + _cp.buses + ' bus(es))' : ''));
+        }
+
         _applyETAsAndAudits(routes, {
             shift, isArrival, campLat, campLng,
             avgStopMin,
@@ -4184,6 +4235,9 @@ async function generateRoutes() {
     // -------------------------------------------------------------------------
     // FINALIZE
     // -------------------------------------------------------------------------
+    // The homes behind each corner stop served their purpose (corner choice);
+    // they are already in the address book, so keep the saved routes lean.
+    for (const sr of allShiftResults) for (const r of (sr.routes || [])) for (const st of (r.stops || [])) delete st._homes;
     _generatedRoutes = allShiftResults;
     _routeGeomCache = {}; window._routeGeomCache = _routeGeomCache;
 
@@ -4269,6 +4323,18 @@ async function generateRoutes() {
         });
     });
     if (geomCached) console.log('[Go v5] Road geometry cached: ' + geomCached + ' routes');
+    // Bare geometry for reproducing the run offline: one short line per bus,
+    // [lat, lng, children, minute] per stop — no names, no addresses.
+    try {
+        const cLat = campLat || (_campCoordsCache && _campCoordsCache.lat), cLng = campLng || (_campCoordsCache && _campCoordsCache.lng);
+        console.log('[Go] Geometry camp: ' + JSON.stringify({ camp: [cLat, cLng], mode: D.activeMode, reserve: D.setup.reserveSeats || 0, maxRouteMin: _routeCapMin(),
+            avgSpeed: D.setup.avgSpeed || 25, stopMin: D.setup.avgStopTime || 1, secPerRider: D.setup.secPerRider || 0, roundTrip: D.setup.returnToCamp === true, dropoffMode: D.setup.dropoffMode }));
+        for (const sr of allShiftResults) for (const r of (sr.routes || [])) {
+            if (!r.stops || !r.stops.length) continue;
+            console.log('[Go] Geometry ' + (r.busName || r.busId) + ' (' + (r.camperCount || 0) + ' kids, ' + (r.totalDuration || 0) + ' min, cap ' + (r._cap || '?') + '): ' +
+                JSON.stringify(r.stops.map(st => [Number((+st.lat).toFixed(5)), Number((+st.lng).toFixed(5)), (st.campers || []).length, Number.isFinite(st.estimatedMin) ? Math.round(st.estimatedMin) : null])));
+        }
+    } catch (_) {}
 
     D.savedRoutes = allShiftResults;
     save();
@@ -4339,6 +4405,7 @@ async function _tryNeighborhoodPipeline({
     }
 
     // ── Run neighborhood detection ──
+    _lastNhResult = null;
     const nhResult = await window.CampistryGoNeighborhoods.buildNeighborhoods({
         campers: nhCampers,
         // camp anchors the map: every home within the service radius is on it
@@ -4412,6 +4479,7 @@ async function _tryNeighborhoodPipeline({
     // This is the heart of the "stops per zone, not globally" fix.
     // expandToPhysicalStops creates stops for each bus using ONLY that bus's
     // assigned segments/homes, so stops can never land on zone seams.
+    _lastNhResult = nhResult; // the corner pass after the road polish needs its intersections
     const nhPhysical = window.CampistryGoNeighborhoods.expandToPhysicalStops({
         assignment: nhAssignment,
         result: nhResult,
@@ -4587,7 +4655,10 @@ async function _tryNeighborhoodPipeline({
                 stopNum: i + 1,
                 campers: s.campers,
                 address: s.address,
-                lat: s.lat, lng: s.lng
+                lat: s.lat, lng: s.lng,
+                // the homes behind a corner stop, so passes after the road
+                // polish can re-choose its corner; stripped before the save
+                ...(s._homes && s._homes.length ? { _homes: s._homes, _cLat: s._cLat, _cLng: s._cLng } : {})
             })),
             camperCount:    bus.camperCount,
             _cap:           vehicle.capacity,

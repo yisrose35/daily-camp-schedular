@@ -794,3 +794,29 @@ test('a short bus full of near-camp children is emptied into the buses that pass
     }
     assert.ok(res.after < res.before, 'the objective fell');
 });
+
+test('a corner stop moves to the corner on the bus\'s way when one is inside the walk limit', () => {
+    // S1's homes are mid-block: corner A (the nearest by a few feet) is a
+    // block down a side road, corner B is on the road the bus is driving
+    // anyway. Reaching A costs the bus a 3-minute out-and-back each way.
+    const depot = { lat: 40.0, lng: -74.0 };
+    const A = { lat: 40.02, lng: -74.0, walkMi: 0.020, name: 'Side Rd @ Hope Ter', node: { id: 'a' } };
+    const Bc = { lat: 40.021, lng: -74.0, walkMi: 0.028, name: 'Side Rd @ County Line Rd', node: { id: 'b' } };
+    const S1 = { lat: A.lat, lng: A.lng, address: 'Side Rd @ Hope Ter', campers: [{ name: 'k1' }], _homes: [{ lat: 40.0205, lng: -74.0 }] };
+    const S2 = { lat: 40.04, lng: -74.0, address: 'Next', campers: [{ name: 'k2' }] };
+    const isA = p => Math.abs(p.lat - A.lat) < 1e-9 && Math.abs(p.lng - A.lng) < 1e-9;
+    const legs = (p, q) => P.driveMin(p, q, P.DEFAULTS) + (isA(p) || isA(q) ? 3 : 0);
+    const res = P.chooseCornersOnPath([S1, S2], [[A, Bc], []], legs, depot, false, {});
+    assert.strictEqual(res.moved, 1, 'the stop moved');
+    assert.ok(res.savedMin > 5, 'two side-road legs saved: ' + res.savedMin.toFixed(1));
+    assert.strictEqual(S1.lat, Bc.lat); assert.strictEqual(S1.address, 'Side Rd @ County Line Rd'); assert.strictEqual(S1._cornerNode, 'b');
+    assert.strictEqual(S2.address, 'Next', 'a stop with no choice is untouched');
+    // extra walking is charged: a corner that saves the bus a minute but costs
+    // the children half a mile of walking stays where it is
+    const S3 = { lat: A.lat, lng: A.lng, address: 'Side Rd @ Hope Ter', campers: [{ name: 'k3' }], _homes: [{ lat: 40.0205, lng: -74.0 }] };
+    const far = { lat: 40.021, lng: -74.0, walkMi: 0.55, name: 'Far corner', node: { id: 'f' } };
+    const legs2 = (p, q) => P.driveMin(p, q, P.DEFAULTS) + (isA(p) || isA(q) ? 0.5 : 0);
+    const res2 = P.chooseCornersOnPath([S3, S2], [[A, far], []], legs2, depot, false, {});
+    assert.strictEqual(res2.moved, 0, 'not worth half a mile of walking');
+    assert.strictEqual(S3.lat, A.lat);
+});

@@ -240,3 +240,20 @@ test('a road the map names two ways is one road: never "Albert Ave @ Albert Aven
     assert.strictEqual(x.length, 1);
     assert.deepStrictEqual(x[0].streets.map(NH.normStreet).sort(), ['albert ave', 'salem st']);
 });
+
+test('a corner stop lists every corner inside the walk limit, nearest walk first, including the one it stands at', () => {
+    const corner = run('corner-stops', 0.05);
+    const snapper = NH.cornerSnapper(result, 0.30);
+    const st = corner.stops.find(s => s._homes && s._homes.length);
+    assert.ok(st, 'a corner stop with homes');
+    snapper.snap(st);
+    const list = snapper.candidates(st, 4);
+    assert.ok(list.length >= 1 && list.length <= 4, 'up to four candidates: ' + list.length);
+    for (let i = 1; i < list.length; i++) assert.ok(list[i - 1].walkMi <= list[i].walkMi + 1e-9, 'nearest walk first');
+    for (const c of list) {
+        assert.ok(Number.isFinite(c.lat) && Number.isFinite(c.lng) && c.node && typeof c.name === 'string' && c.name.length, 'a real corner with a name');
+        assert.ok(window.CampistryGoRoutePost.haversineMi(st._cLat, st._cLng, c.lat, c.lng) <= 0.30 + 1e-9, 'inside the walk limit');
+    }
+    assert.ok(list.some(c => c.lat.toFixed(5) === st.lat.toFixed(5) && c.lng.toFixed(5) === st.lng.toFixed(5)), 'the corner it stands at is one of them');
+    assert.deepStrictEqual(snapper.candidates({ campers: [] }, 4), [], 'no homes, no candidates');
+});

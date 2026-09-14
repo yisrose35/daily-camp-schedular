@@ -169,6 +169,25 @@ addresses ─ geocode ─┬─ road graph (OpenStreetMap) ─ neighbourhoods �
   neighbourhoods (the sweep usually wins anyway), and the road-graph
   download is cached per tile.
 
+* **Corner stops on the bus's way** (`chooseCornersOnPath`, after the road
+  polish): a corner stop was stood at the intersection nearest its homes, and
+  that corner can be a block down a side road — the camp's Hope Terrace child
+  had the bus leave County Line Road, drop her at the side-road corner and
+  U-turn back. Now, once the buses and the order are settled, every corner
+  stop looks at the corners inside the walk limit (`cornerSnapper.candidates`,
+  nearest total walk first) and stands at the one that adds the least
+  driving between its neighbours in the order, with a small charge per mile
+  of extra walking (6 min/mi of total walk, so a corner that costs the
+  children half a mile stays put). Buses whose corners moved are folded (two
+  stops on one corner are one), re-ordered on street times and re-stamped.
+  The console says how many stops moved and the detour minutes saved.
+
+* **Geometry in the console** (`[Go] Geometry …`): after the Route summary,
+  one short line per bus with the stops as [lat, lng, children, minute] and
+  one line of camp settings — no names, no addresses — so a run can be
+  replayed offline from a console paste. `_GoDebug.exportGeometry()` returns
+  the same as one JSON string.
+
 * **Max Route Duration** (Route Settings, default 60): the one cap every
   reader uses — the stop ordering, the road polish, the split pass, the ETA
   audit, the scorecard and the Route summary — through `_routeCapMin()`.
