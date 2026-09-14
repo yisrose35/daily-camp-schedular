@@ -71,7 +71,7 @@
     // in the Bank layouts footer. Twice now a fix has been live on the server
     // while the browser ran an older copy, and there was no way to tell from
     // the screen which one was which -- so the screen says.
-    D.BUILD = '20260914-04';
+    D.BUILD = '20260914-06';
 
     var state = {
         loaded: false,
@@ -460,6 +460,7 @@
             // there is: it is already on screen and it is the exact layout that
             // needs handling.
             '<button class="me-btn me-btn--pri me-btn--sm" onclick="CampistryDeposits.teachFromDeposit(\'' + host.jesc(d.id) + '\')">Show Campistry how to read this</button>' +
+            '<button class="me-btn me-btn--sec me-btn--sm" onclick="CampistryDeposits.reread(\'' + host.jesc(d.id) + '\')">Read again</button>' +
             '<button class="me-btn me-btn--ghost me-btn--sm" onclick="CampistryDeposits.ignore(\'' + host.jesc(d.id) + '\')">Dismiss</button>' +
             '</div>' +
             '</div>';
@@ -529,6 +530,8 @@
                 candidateButtons(d) +
                 '<div style="margin-top:10px;display:flex;gap:8px;align-items:center;flex-wrap:wrap">' +
                 familyPicker(d) +
+                '<button class="me-btn me-btn--ghost me-btn--sm" onclick="CampistryDeposits.reread(\'' +
+                host.jesc(d.id) + '\')" title="Read this message again with the current settings and layouts">Read again</button>' +
                 '<button class="me-btn me-btn--ghost me-btn--sm" onclick="CampistryDeposits.ignore(\'' +
                 host.jesc(d.id) + '\')">Not tuition</button>' +
                 '</div>';
@@ -1806,6 +1809,165 @@
              '</div>';
         return h;
     }
+
+
+    // ── read it again ────────────────────────────────────────────────────────
+    //
+    // Every deposit keeps the message it arrived in, so there is no reason to
+    // forward mail again to find out whether teaching a layout helped. This
+    // re-runs the whole pipeline — parser, the camp's template, the matcher —
+    // over the stored text, and SHOWS ITS WORKING before writing anything.
+    //
+    // The showing is the point. "It didn't work" was unanswerable: a template
+    // could be missing, keyed to a different bank, matching no fields, or
+    // matching fine while the matcher found no family. Those need four
+    // different fixes and looked identical from outside.
+
+    D.reread = async function (depositId) {
+        var d = null;
+        for (var i = 0; i < state.deposits.length; i++) {
+            if (String(state.deposits[i].id) === String(depositId)) { d = state.deposits[i]; break; }
+        }
+        if (!d) return;
+        if (!d.raw_excerpt) {
+            if (host.toast) host.toast('This deposit was recorded before the message text was kept, so there is nothing to re-read.', 'error');
+            return;
+        }
+
+        var P = W.CampistryDepositParser, T = Tpl(), M = Match();
+        var body = d.raw_excerpt;
+        var steps = [];
+
+        function step(ok, label, detail) {
+            steps.push({ ok: ok, label: label, detail: detail || '' });
+        }
+
+        // 1. the generic parser
+        var parsed = P ? P.parseEmail({ subject: d.raw_subject || '', text: body, receivedAt: d.created_at }) : null;
+        if (!P) step(false, 'Parser did not load', 'Reload the page.');
+        else if (!parsed.ok) step(false, 'Read as: ' + parsed.reason,
+            'The generic reader did not see this as an incoming deposit.');
+        else step(true, 'Read by the generic reader',
+            host.fm(parsed.deposit.amount) + (parsed.deposit.payerName ? ' from ' + parsed.deposit.payerName : ' — payer not readable'));
+
+        // 2. the learned template
+        var sig = (T && d.from_address) ? T.signature(d.from_address) : '';
+        var row = null;
+        if (!d.from_address) {
+            step(false, 'No sender recorded', 'Recorded before the sending address was stored, so no layout can be looked up.');
+        } else if (!state.templates.length) {
+            step(false, 'No layouts taught yet', 'Bank layouts → Upload a printed email.');
+        } else {
+            var mine = state.templates.filter(function (t) { return T.signature(t.bank_signature) === sig; });
+            row = mine.filter(function (t) { return t.scope === 'camp'; })[0] || mine[0];
+            if (!row) {
+                step(false, 'No layout for ' + sig,
+                    'Taught layouts: ' + state.templates.map(function (t) { return T.signature(t.bank_signature); }).join(', ') +
+                    '. Teach one for ' + sig + ', or re-teach with this bank\'s address.');
+            } else {
+                var read = T.read(row.template, body);
+                var got = Object.keys(read).filter(function (f) { return read[f].value; });
+                if (!got.length) step(false, 'Layout for ' + sig + ' matched nothing',
+                    'The bank may have changed how it writes these. Re-teach it from this email.');
+                else step(true, 'Layout for ' + sig + ' read ' + got.length + ' field' + (got.length !== 1 ? 's' : ''),
+                    got.map(function (f) { return f + ': ' + read[f].value + (read[f].agree ? '' : ' (rules disagreed)'); }).join(' · '));
+
+                // The template's values win where they are plausible — same
+                // precedence the edge function applies on arrival.
+                if (parsed && parsed.ok) {
+                    got.forEach(function (f) {
+                        var v = read[f].value;
+                        if (!T.plausible(f, v)) return;
+                        if (f === 'payerName') parsed.deposit.payerName = v;
+                        if (f === 'memo') {
+                            parsed.deposit.memo = v;
+                            parsed.deposit.memoCode = P.parseMemoCode(v) || parsed.deposit.memoCode || '';
+                        }
+                    });
+                }
+            }
+        }
+
+        // 3. the matcher
+        var decision = null;
+        if (parsed && parsed.ok && M) {
+            parsed.deposit.rawExcerpt = body;
+            decision = M.decide(parsed.deposit, {
+                families: host.families() || {},
+                roster: (host.roster && host.roster()) || {},
+                campNumber: D.campNumber(),
+                aliases: state.aliases,
+                balances: {}
+            }, state.settings || {});
+            var famNm = decision.familyKey ? famName(decision.familyKey) : '';
+            step(!!decision.familyKey,
+                decision.familyKey ? 'Matched ' + famNm + ' (' + decision.confidence + '%)' : 'No family matched',
+                decision.guardrail || (decision.familyKey ? '' : 'Nothing in the message points at a family — a payment reference in the memo is the surest fix.'));
+        }
+
+        // Show the trace, then let them apply it.
+        var h = '<div class="me-modal-form">';
+        h += '<div style="font-size:.88rem;color:var(--s600);margin-bottom:14px;line-height:1.6">' +
+             'Re-read from the message already stored on this deposit — no email needed.</div>';
+        steps.forEach(function (st) {
+            h += '<div style="display:flex;gap:10px;padding:10px 0;border-top:1px solid var(--s100)">' +
+                 '<span style="flex-shrink:0;width:18px;height:18px;border-radius:999px;display:inline-flex;align-items:center;' +
+                 'justify-content:center;font-size:.68rem;font-weight:700;color:#fff;background:' +
+                 (st.ok ? '#10B981' : '#EF4444') + '">' + (st.ok ? '\u2713' : '!') + '</span>' +
+                 '<div style="min-width:0"><div style="font-size:.9rem;font-weight:600">' + host.esc(st.label) + '</div>' +
+                 (st.detail ? '<div style="font-size:.8rem;color:var(--s500);margin-top:2px;word-break:break-word">' + host.esc(st.detail) + '</div>' : '') +
+                 '</div></div>';
+        });
+        h += '<details style="margin-top:12px"><summary style="cursor:pointer;font-size:.8rem;color:var(--s500)">The message it read</summary>' +
+             '<pre style="white-space:pre-wrap;word-break:break-word;background:var(--s50);border-radius:var(--r);padding:10px 12px;' +
+             'margin:8px 0 0;font-size:.76rem;max-height:240px;overflow:auto">' + host.esc(body.slice(0, 4000)) + '</pre></details>';
+        h += '</div>';
+
+        var canApply = !!(parsed && parsed.ok && decision);
+        host.showModal('Re-read this deposit', h, canApply ? function () {
+            D.applyReread(depositId, parsed.deposit, decision);
+        } : null, { maxWidth: 760 });
+    };
+
+    D.applyReread = async function (depositId, deposit, decision) {
+        var client = db(), cid = campId();
+        var r = await client.rpc('reparse_bank_deposit', {
+            p_camp_id: cid,
+            p_deposit_id: depositId,
+            p_deposit: {
+                amountCents: Math.round((Number(deposit.amount) || 0) * 100),
+                isReversal: !!deposit.isReversal,
+                date: deposit.date || '',
+                payerName: deposit.payerName || '',
+                payerHandle: deposit.payerHandle || '',
+                memo: deposit.memo || '',
+                memoCode: deposit.memoCode || '',
+                kind: deposit.kind || '',
+                traceId: deposit.traceId || '',
+                bank: deposit.bank || ''
+            },
+            p_decision: {
+                decision: decision.decision,
+                familyKey: decision.familyKey,
+                confidence: decision.confidence,
+                guardrail: decision.guardrail,
+                candidates: decision.candidates,
+                reasons: decision.candidates && decision.candidates[0] ? decision.candidates[0].reasons : []
+            }
+        });
+        if (r.error) { if (host.toast) host.toast(D.explainError(r.error.message), 'error'); return; }
+        if (r.data && r.data.success === false) {
+            if (host.toast) host.toast(r.data.error === 'already_posted'
+                ? 'This deposit is already posted to a family. Undo it first if you want it read again.'
+                : D.explainError(r.data.error), 'error');
+            return;
+        }
+        if (host.closeModal) host.closeModal('dynModal');
+        if (host.toast) host.toast('Re-read and updated');
+        await D.refresh();
+        renderInbox();
+        host.onChange();
+    };
 
     D.openTemplates = function () {
         host.showModal('Bank layouts', templatesHtml(), null, { maxWidth: 900 });

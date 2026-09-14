@@ -112,8 +112,12 @@ test('line wrapping does not break a template', () => {
 });
 
 test('a bank is identified by its sending domain, not a typed name', () => {
-    // "Chase", "chase bank" and "JPM Chase" are one bank and three strings.
-    assert.strictEqual(T.signature('no.reply.alerts@email.capitalone.com'), 'email.capitalone.com');
+    // "Chase", "chase bank" and "JPM Chase" are one bank and three strings, so
+    // the domain decides. This originally asserted the three-label form
+    // ('email.capitalone.com') — which was the bug: it made every sending
+    // subdomain a separate bank, so a template taught against one was never
+    // found for mail from another.
+    assert.strictEqual(T.signature('no.reply.alerts@email.capitalone.com'), 'capitalone.com');
     assert.strictEqual(T.signature('alerts@chase.com'), 'chase.com');
 });
 
@@ -364,4 +368,47 @@ test('two correct corrections converge on one hash; a bad one does not', () => {
         assert.notStrictEqual(T.hash(sloppy.template), T.hash(a.template),
             'a mis-scoped correction must not be counted as corroboration');
     }
+});
+
+// ── which bank a template belongs to ─────────────────────────────────────────
+
+test('a bank is one bank however it subdomains its sender', () => {
+    // THE BUG THIS FIXES. Capital One sends from notification.capitalone.com;
+    // a camp teaching the layout types alerts@capitalone.com, because that is
+    // what a person writes. Keying on three labels made those two different
+    // banks, so the template was stored, shown as saved, and never once found
+    // again — with nothing anywhere saying why.
+    //
+    // The previous code even carried a comment claiming it handled this
+    // ("alerts.notify.chase.com and email.chase.com are one bank") while
+    // producing notify.chase.com and email.chase.com.
+    const pairs = [
+        ['capitalone@notification.capitalone.com', 'alerts@capitalone.com'],
+        ['alerts@email.chase.com',                 'no.reply.alerts@chase.com'],
+        ['x@alerts.notify.chase.com',              'y@chase.com'],
+        ['a@alerts.barclays.co.uk',                'b@barclays.co.uk']
+    ];
+    for (const [a, b] of pairs) {
+        assert.strictEqual(T.signature(a), T.signature(b), a + ' vs ' + b);
+    }
+});
+
+test('two different banks never collapse into one', () => {
+    assert.notStrictEqual(T.signature('a@chase.com'), T.signature('b@capitalone.com'));
+    assert.notStrictEqual(T.signature('a@wellsfargo.com'), T.signature('b@citi.com'));
+});
+
+test('a signature already stored normalises through the same function', () => {
+    // Rows written before this fix hold a three-label key. Both sides of the
+    // lookup go through signature(), so those templates start working instead
+    // of needing to be taught again.
+    assert.strictEqual(T.signature('notification.capitalone.com'), T.signature('a@capitalone.com'));
+    assert.strictEqual(T.signature('capitalone.com'), 'capitalone.com');
+});
+
+test('a two-part country suffix keeps its registrable domain', () => {
+    // barclays.co.uk must not truncate to co.uk, which would make every UK
+    // bank the same bank.
+    assert.strictEqual(T.signature('x@barclays.co.uk'), 'barclays.co.uk');
+    assert.notStrictEqual(T.signature('x@barclays.co.uk'), T.signature('y@hsbc.co.uk'));
 });

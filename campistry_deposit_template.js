@@ -715,12 +715,43 @@
      * same bank and three different strings. The sending domain is what the
      * bank actually controls and is stable across every alert it sends.
      */
+    // Second-level suffixes where the registrable domain needs three labels.
+    // Deliberately short: this exists so "barclays.co.uk" is not truncated to
+    // "co.uk", not to be a public-suffix list.
+    var TWO_PART_TLDS = [
+        'co.uk', 'org.uk', 'me.uk', 'ltd.uk', 'plc.uk',
+        'co.il', 'org.il', 'co.za', 'co.nz', 'co.in', 'co.jp',
+        'com.au', 'net.au', 'org.au', 'com.br', 'com.mx', 'com.ar'
+    ];
+
+    /**
+     * The bank a template belongs to, as its REGISTRABLE domain.
+     *
+     * Banks send alerts from whatever subdomain they like — Capital One uses
+     * notification.capitalone.com, Chase uses several — and a camp typing the
+     * address by hand will write alerts@capitalone.com. Those have to be the
+     * same bank or a taught template is never found again.
+     *
+     * The previous version kept three labels and carried a comment claiming
+     * "alerts.notify.chase.com and email.chase.com are one bank" — which that
+     * code did not do: it produced notify.chase.com and email.chase.com, two
+     * different keys. A template taught against one subdomain simply never
+     * matched mail from another, silently, with no way to see why.
+     *
+     * Two labels is what a person means by "this bank". Passing a bare domain
+     * works too, so an already-stored signature normalises through the same
+     * function and old rows keep matching.
+     */
     T.signature = function (fromAddress) {
         var m = String(fromAddress || '').toLowerCase().match(/@([^>\s]+)$/);
-        var domain = m ? m[1] : String(fromAddress || '').toLowerCase().trim();
-        // alerts.notify.chase.com and email.chase.com are one bank.
+        var domain = (m ? m[1] : String(fromAddress || '').toLowerCase())
+            .trim().replace(/[>\s.]+$/, '');
         var parts = domain.split('.').filter(Boolean);
-        return parts.length > 2 ? parts.slice(-3).join('.') : domain;
+        if (parts.length <= 2) return parts.join('.');
+        var lastTwo = parts.slice(-2).join('.');
+        return TWO_PART_TLDS.indexOf(lastTwo) >= 0
+            ? parts.slice(-3).join('.')
+            : lastTwo;
     };
 
     /**

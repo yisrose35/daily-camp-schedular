@@ -202,7 +202,13 @@ async function applyLearnedTemplate(
     return null;
   }
 
-  const rows = (data.templates || []).filter((t: any) => t.bank_signature === signature);
+  // Both sides go through signature(): a row stored before the registrable
+  // -domain fix holds a three-label key like "notification.capitalone.com",
+  // and normalising it here means those templates start working rather than
+  // needing to be taught again.
+  const rows = (data.templates || []).filter(
+    (t: any) => Template.signature(t.bank_signature) === signature,
+  );
   // Own template first; shared only as a fallback.
   const row = rows.find((t: any) => t.scope === "camp") || rows.find((t: any) => t.scope === "shared");
   if (!row?.template) return null;
