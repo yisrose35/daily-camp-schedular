@@ -2185,6 +2185,10 @@ window.CampistryGoNeighborhoods = (function () {
                         avgSpeedMph: rideSpeedMph, avgStopMin: rideStopMin, secPerRider, busOverheadMin, isArrival, returnToDepot,
                         polishRideBudgetMin: maxChildRideMin > 0 ? maxChildRideMin : 0,
                         polishMergeSameStreetMi: mergeSameStreetMi, polishMergeAnyMi: mergeAnyMi,
+                        // Far-tail hand-offs belong to the road-time polish, which prices
+                        // them on real legs; on 400+ segments they cost this stage its
+                        // whole time budget (the camp's run hit the 20s guard).
+                        polishTailMinMi: 0,
                     });
                 } catch (e) { console.warn('[Go-NH] Polish skipped: ' + e.message); }
                 if (res && res.moves) {
