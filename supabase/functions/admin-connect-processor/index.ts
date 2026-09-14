@@ -65,9 +65,14 @@ async function cardknoxTestConnection(creds: Record<string, string>): Promise<{ 
 // the API base is per-camp (sandbox vs prod). testConnection POSTs an empty
 // body to /transactions/verify — a valid key returns a validation error
 // (auth OK, nothing charged), a bad key returns 401/403.
-const BANQUEST_DEFAULT_BASE = "https://api.banquestgateway.com";
+const BANQUEST_DEFAULT_BASE = "https://api.banquestgateway.com/api/v2";
 function bqBase(c: Record<string, string>): string {
-  return (c.gatewayUrl || BANQUEST_DEFAULT_BASE).replace(/\/+$/, "");
+  // Tolerate a stored gatewayUrl that omits the API path (a bare host like
+  // "https://api.sandbox.banquestgateway.com"): the v2 API always lives under
+  // /api/v2, so append it when it isn't already there.
+  let b = (c.gatewayUrl || BANQUEST_DEFAULT_BASE).replace(/\/+$/, "");
+  if (!/\/api\/v\d+$/i.test(b)) b += "/api/v2";
+  return b;
 }
 function bqAuth(c: Record<string, string>): string {
   return "Basic " + btoa(`${c.sourceKey}:${c.pin}`);
