@@ -71,7 +71,7 @@
     // in the Bank layouts footer. Twice now a fix has been live on the server
     // while the browser ran an older copy, and there was no way to tell from
     // the screen which one was which -- so the screen says.
-    D.BUILD = '20260914-07';
+    D.BUILD = '20260914-08';
 
     var state = {
         loaded: false,
@@ -1914,12 +1914,36 @@
                 if (idx[kid] || idx[refM[2]]) {
                     step(true, 'Payment reference ' + refM[0] + ' points at ' + famName(idx[kid] || idx[refM[2]]), '');
                 } else {
-                    var known = Object.keys(idx).map(Number).filter(function (n) { return !isNaN(n); }).sort(function (a, b) { return a - b; });
-                    step(false, 'Camp number matches, but no camper is numbered ' + refM[2],
-                        known.length
-                            ? 'Your camper numbers run ' + known[0] + '\u2013' + known[known.length - 1] +
-                              '. Each camper\'s number is on their family in Billing.'
-                            : 'No campers have numbers yet.');
+                    // idx only holds campers who sit in a household, because a
+                    // deposit is credited to a family and nothing else. So a
+                    // miss here has two very different causes, and telling them
+                    // apart is the whole point: the number belongs to nobody,
+                    // or it belongs to a camper who was never attached to a
+                    // family. The second one is a two-click fix in Billing;
+                    // reporting it as "no such camper" sends them hunting for a
+                    // typo that isn't there.
+                    var rost = (host.roster && host.roster()) || {};
+                    var orphan = '';
+                    var all = [];
+                    Object.keys(rost).forEach(function (nm) {
+                        var n = Number(String((rost[nm] || {}).camperId || '').replace(/\D/g, ''));
+                        if (!n) return;
+                        all.push(n);
+                        if (String(n) === kid) orphan = nm;
+                    });
+                    all.sort(function (a, b) { return a - b; });
+                    if (orphan) {
+                        step(false, 'Camper #' + refM[2] + ' is ' + orphan + ', but they are not in a household',
+                            'A deposit is credited to a family, so this reference has nowhere to land. Add ' +
+                            orphan + ' to a household in Billing and re-read this.');
+                    } else {
+                        step(false, 'Camp number matches, but no camper is numbered ' + refM[2],
+                            all.length
+                                ? 'Camper numbers are given out in order and yours run ' + all[0] + '\u2013' + all[all.length - 1] +
+                                  ' (shown padded to four digits, so #' + String(all[all.length - 1]).padStart(4, '0') +
+                                  ' is number ' + all[all.length - 1] + '). Each camper\'s number is on their profile.'
+                                : 'No campers have numbers yet.');
+                    }
                 }
             }
         }
