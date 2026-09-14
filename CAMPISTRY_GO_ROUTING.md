@@ -180,7 +180,21 @@ addresses ─ geocode ─┬─ road graph (OpenStreetMap) ─ neighbourhoods �
   of extra walking (6 min/mi of total walk, so a corner that costs the
   children half a mile stays put). Buses whose corners moved are folded (two
   stops on one corner are one), re-ordered on street times and re-stamped.
-  The console says how many stops moved and the detour minutes saved.
+  A corner a neighbouring stop already stands at is worth a whole stop's
+  dwell (two stops on one corner are one), so a child is stood with the
+  next stop's group when the driving is equal. The console says how many
+  stops had a choice, how many moved and the detour minutes saved.
+
+* **The efficiency line** (`[Go] Fleet: …`, plain text after the Route
+  summary, since a pasted console.table is unreadable): total bus-minutes
+  and bus-hours, buses used, average and longest run, how many are over
+  Max Route Duration, the stop count, and the children's average ride. Bus
+  minutes are the cost; the rest is what they bought. Measured on the
+  751-child harness: the ordering already yields the shortest tours (stop
+  order priced for children's ride time costs under 0.1% in bus minutes),
+  and ruin-and-recreate at districting size buys 0.3% for ten seconds, so
+  neither is where minutes are left — the districting's shape and the cap
+  are.
 
 * **Geometry in the console** (`[Go] Geometry …`): after the Route summary,
   one short line per bus with the stops as [lat, lng, children, minute] and

@@ -4300,6 +4300,17 @@ async function generateRoutes() {
         }));
         console.log('[Go] Route summary (' + rows.length + ' buses):');
         if (console.table) console.table(rows);
+        // The efficiency line, as plain text (a pasted console.table is unreadable):
+        // fleet minutes are the cost; the rest is what they bought.
+        {
+            const busMin = rows.reduce((a, r) => a + (r.minutes || 0), 0), kids = rows.reduce((a, r) => a + (r.kids || 0), 0);
+            const rideMin = rows.reduce((a, r) => a + (r.avgKidMin || 0) * (r.kids || 0), 0);
+            const longest = rows.reduce((a, r) => Math.max(a, r.minutes || 0), 0);
+            const over = rows.filter(r => (r.minutes || 0) > _routeCapMin()).length;
+            console.log('[Go] Fleet: ' + busMin + ' bus-minutes (' + (busMin / 60).toFixed(1) + ' bus-hours) over ' + rows.length + ' buses, avg ' +
+                Math.round(busMin / Math.max(1, rows.length)) + ' min/bus, longest ' + longest + ' min, ' + over + ' over the ' + _routeCapMin() + 'min cap; ' +
+                rows.reduce((a, r) => a + (r.stops || 0), 0) + ' stops; ' + kids + ' children, avg ride ' + (kids ? Math.round(rideMin / kids) : 0) + ' min');
+        }
     } catch (_) { /* diagnostics only */ }
 
     // Cache road geometry (unchanged from v4)
