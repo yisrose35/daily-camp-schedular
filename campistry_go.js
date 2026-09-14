@@ -4075,7 +4075,17 @@ async function generateRoutes() {
                 (_rp.blockMoves ? _rp.blockMoves + ' taken (the best gained ' + Math.abs(Math.min(0, _rp.blockBestDelta || 0)).toFixed(0) + ' on the objective)' +
                                   (_rp.refills ? ', ' + _rp.refills + ' of them by emptying a short bus into the buses that pass its stops first' : '')
                                 : 'none taken' + (_rp.blockBestDelta != null ? '; the closest would have cost ' + Math.max(0, _rp.blockBestDelta).toFixed(0) +
-                                  ' on the objective (fleet minutes plus the cap penalty)' : '')));
+                                  ' on the objective (fleet minutes plus the cap penalty)' : '')) +
+                (_rp.roomTried ? ' | ' + _rp.roomTried + ' of the hand-offs priced had the receiver shed stops first to make room — ' + (_rp.roomMoves || 0) + ' taken' : ''));
+            // A bus over the cap and nothing priced at all is the failure the
+            // camp hit: say which buses, and what rejected every pairing.
+            if (_rp && _rp.overStart && _rp.overStart.length) {
+                const name = i => (_rp.busNames && _rp.busNames[i]) || ('#' + i);
+                console.log('[Go] Road polish: over the ' + (D.setup.maxRouteDuration || 90) + 'min cap when the polish began: ' +
+                    _rp.overStart.map(e => name(e.bus) + ' ' + Math.round(e.len) + 'min (' + e.kids + '/' + e.cap + ' seats, ' + e.stops + ' stops)').join(', ') +
+                    (_rp.blockTried ? '' : ' — no branch hand-off could be priced: ' + (_rp.blockSeatNo || 0) + ' branch/receiver pairing(s) failed on seats, ' +
+                        (_rp.blockWedgeNo || 0) + ' on containment' + (_rp.timedOut ? ', and the polish ran out of time' : '')));
+            }
         }
 
         // Equalising head-counts is opt-in. It was the single biggest source of
@@ -8939,5 +8949,23 @@ async function renderDispatcherDashboard(allShifts) {
         getD:          () => D,
         getRoadNet:    () => _activeRoadNet,
         routePostOpts: (extra) => _routePostOpts(extra),
+        // The saved routes as bare geometry — camp, settings, and per bus the
+        // stops as [lat, lng, children, minute] — no names, no addresses. For
+        // reproducing a run offline: copy(_GoDebug.exportGeometry()) in the
+        // console puts it on the clipboard.
+        exportGeometry: () => JSON.stringify({
+            camp: [D.setup.campLat || (_campCoordsCache && _campCoordsCache.lat) || null, D.setup.campLng || (_campCoordsCache && _campCoordsCache.lng) || null],
+            mode: D.activeMode, reserve: D.setup.reserveSeats || 0, maxRouteMin: D.setup.maxRouteDuration || 90,
+            avgSpeed: D.setup.avgSpeed || 25, stopMin: D.setup.avgStopTime || 1, secPerRider: D.setup.secPerRider || 0,
+            roundTrip: D.setup.returnToCamp === true, dropoffMode: D.setup.dropoffMode,
+            shifts: (D.savedRoutes || []).map(sr => ({
+                label: (sr.shift && sr.shift.label) || '',
+                buses: (sr.routes || []).map(r => ({
+                    bus: r.busName || r.busId, cap: r._cap || null, min: r.totalDuration || 0,
+                    stops: (r.stops || []).map(st => [Number((+st.lat).toFixed(5)), Number((+st.lng).toFixed(5)), (st.campers || []).length,
+                        Number.isFinite(st.estimatedMin) ? Math.round(st.estimatedMin) : null]),
+                })),
+            })),
+        }),
     };
 })();

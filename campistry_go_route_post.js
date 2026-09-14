@@ -70,7 +70,8 @@ window.CampistryGoRoutePost = (function () {
         polishOverBudgetQuad: 0,   // ...plus this x the SQUARE of those minutes: a bus far over the cap costs
                                    // far more than two buses a little over, so overage is never piled onto one
         polishBlockMax: 8,         // block relocate: up to this many stops of an over-budget bus move together
-        polishBlockTargets: 8,     // ...to one of the this-many buses furthest under their budget
+        polishBlockTargets: 12,    // ...to one of the this-many buses furthest under their budget
+        polishRoomMaxShed: 6,      // make-room: a receiver sheds at most this many stops to fit a branch
         polishRefillMaxFrac: 0.7,  // empty-and-refill: a bus under this fraction of its budget may be emptied into
                                    // the buses that pass its stops and refilled with a far branch of an over-budget bus
         polishNearCampMi: 3,       // a stop this close to camp may join ANY bus — every bus drives out through the
@@ -1475,7 +1476,7 @@ window.CampistryGoRoutePost = (function () {
             b.count += cnt(atom);
             addStreet(b, atom);
         }
-        const snap = b => ({ atoms: b.atoms.slice(), tour: b.tour.slice(), count: b.count, streets: new Map(b.streets) });
+        const snap = b => ({ atoms: b.atoms.slice(), tour: b.tour.slice(), count: b.count, streets: new Map(b.streets), len: b.len });
         function restore(b, s) {
             for (const [k, c] of b.streets) if (c > 0 && !(s.streets.get(k) > 0)) streetBuses.set(k, (streetBuses.get(k) || 0) - 1);
             for (const [k, c] of s.streets) if (c > 0 && !(b.streets.get(k) > 0)) streetBuses.set(k, (streetBuses.get(k) || 0) + 1);
@@ -1485,6 +1486,10 @@ window.CampistryGoRoutePost = (function () {
         for (const b of B) buildTour(b);
         const before = objective(), fleetBefore = fleetMin(), childMinBefore = childMin();
         let moves = 0, blockMoves = 0, blockTried = 0, blockBestDelta = Infinity, refills = 0;
+        // Why a hand-off was never priced: the receiver lacked the seats, or
+        // taking the branch would have it straddle camp. For the console.
+        let blockSeatNo = 0, blockWedgeNo = 0, roomTried = 0, roomMoves = 0;
+        const overStart = B.map((b, i) => i).filter(i => budget > 0 && B[i].len > budget).map(i => ({ bus: i, len: B[i].len, stops: B[i].tour.length, kids: B[i].count, cap: B[i].cap }));
         // The best hand-offs priced, taken or not, for the console: what the
         // polish believed each would do. `id` is the caller's bus label.
         const blockLog = [];
@@ -1546,8 +1551,8 @@ window.CampistryGoRoutePost = (function () {
                 for (const bi of receivers) {
                     if (bi === ai) continue;
                     const Bb = B[bi];
-                    if (Bb.count + cntSum > Bb.cap) continue;
-                    if (!wedgeOk(Bb, atoms, -1)) continue;
+                    if (Bb.count + cntSum > Bb.cap) { blockSeatNo++; continue; }
+                    if (!wedgeOk(Bb, atoms, -1)) { blockWedgeNo++; continue; }
                     const sA = snap(A), sB = snap(Bb);
                     const positions = blk.map(i => A.tour.indexOf(i)).sort((x, y) => y - x);
                     const moving = positions.map(p => removeAt(A, p));
@@ -1644,6 +1649,91 @@ window.CampistryGoRoutePost = (function () {
             }
             return done;
         }
+        // ── make room ──
+        // The camp's Bus 8 once more: 43 children on an 18-minute core run
+        // with three seats. It cannot take a branch (no seats) and it cannot
+        // be emptied (its 20-child corner fits no other bus). What it CAN do
+        // is what a dispatcher does: shed a few of its stops to the buses
+        // that pass them on the way out — the over-budget bus itself
+        // included, it drives through the core — and take the branch with
+        // the seats that frees. Block out, stops shed, block in: priced as
+        // one move on the exact objective and kept only if it falls.
+        function makeRoom() {
+            let done = 0;
+            const over = B.map((b, i) => i).filter(i => B[i].len > budget && B[i].tour.length >= 3)
+                .sort((i, j) => B[j].len - B[i].len);
+            for (const ai of over) {
+                if (outOfTime()) { stop = true; break; }
+                const A = B[ai];
+                if (!(A.len > budget)) continue; // an earlier hand-off already fixed it
+                const receivers = B.map((b, i) => i).filter(i => i !== ai && B[i].len <= budget && B[i].tour.length >= 1)
+                    .sort((i, j) => B[i].len - B[j].len).slice(0, o.polishBlockTargets);
+                let best = null;
+                for (const blk of candidateBlocks(A)) {
+                    if (stop) break;
+                    const atoms = blk.map(i => A.atoms[i]);
+                    const kidsBlk = atoms.reduce((a, x) => a + cnt(x), 0);
+                    for (const ri of receivers) {
+                        const R = B[ri];
+                        const need = R.count + kidsBlk - R.cap;
+                        if (need <= 0) continue;               // fits as it is: blockRelocate's case
+                        if (need > R.count) continue;          // could not fit even empty
+                        if (!wedgeOk(R, atoms, -1)) continue;
+                        if (outOfTime()) { stop = true; break; }
+                        const snapshot = B.map(snap), objBefore = objective();
+                        // 1. the branch leaves A
+                        const positions = blk.map(i => A.tour.indexOf(i)).sort((x, y) => y - x);
+                        const moving = positions.map(p => removeAt(A, p));
+                        refresh(A);
+                        // 2. R sheds stops until the branch fits: cheapest exact
+                        //    insertion elsewhere per seat freed, seats + reach-or-
+                        //    near-camp + containment on the bus that takes each
+                        const touched = new Set([ai]);
+                        let freed = 0, shed = 0, ok = true;
+                        while (freed < need) {
+                            if (shed >= o.polishRoomMaxShed) { ok = false; break; }
+                            let pick = null;
+                            for (let pos = 0; pos < R.tour.length; pos++) {
+                                const a = R.atoms[R.tour[pos]], k = cnt(a);
+                                const credit = Math.min(k, need - freed);
+                                for (let bi = 0; bi < N; bi++) {
+                                    if (bi === ri) continue;
+                                    const Bb = B[bi];
+                                    if (Bb.count + k > Bb.cap) continue;
+                                    if (Bb.atoms.length && !nearCamp(a) && reachMi(Bb, a) > o.polishReachMi) continue;
+                                    const ins = bestInsert(Bb, a, -1);
+                                    const score = ins.delta / credit;
+                                    if (!pick || score < pick.score) {
+                                        if (!wedgeOk(Bb, [a], -1)) continue;
+                                        pick = { score, pos, bi, at: ins.at, a };
+                                    }
+                                }
+                            }
+                            if (!pick) { ok = false; break; }
+                            removeAt(R, pick.pos);
+                            insertAt(B[pick.bi], pick.a, pick.at);
+                            refresh(R); refresh(B[pick.bi]); touched.add(pick.bi);
+                            freed += cnt(pick.a); shed++;
+                        }
+                        if (ok) {
+                            // 3. the branch joins R
+                            for (const a of moving) insertAt(R, a, R.tour.length);
+                            for (const bi of touched) buildTour(B[bi]);
+                            buildTour(R);
+                            roomTried++; blockTried++;
+                            const obj = objective();
+                            if (obj - objBefore < blockBestDelta) blockBestDelta = obj - objBefore;
+                            logBlock({ giver: ai, receiver: ri, stops: blk.length, kids: kidsBlk, shed, giverBefore: snapshot[ai].len, giverAfter: A.len,
+                                       receiverBefore: snapshot[ri].len, receiverAfter: R.len, delta: obj - objBefore });
+                            if (obj < objBefore - EPS && (!best || obj < best.obj)) best = { obj, state: B.map(snap) };
+                        }
+                        B.forEach((b, i) => restore(b, snapshot[i]));
+                    }
+                }
+                if (best) { B.forEach((b, i) => restore(b, best.state[i])); done++; moves++; blockMoves++; roomMoves++; }
+            }
+            return done;
+        }
         function localSearch() {
         for (let pass = 0; pass < o.polishMaxPasses && !stop; pass++) {
             if (outOfTime()) break;
@@ -1653,8 +1743,12 @@ window.CampistryGoRoutePost = (function () {
             // its neighbours: the camp's Bus 8 (9 minutes, 24 empty seats) was
             // absorbed by the core buses, and with every one of them full there
             // was no receiver left for a branch of the 90-minute buses.
+            // Make-room is the fallback: only when neither a plain hand-off nor
+            // an empty-and-refill could be taken this pass (both leave cleaner
+            // routes: one bus, one branch).
             if (budget > 0 && blockRelocate()) { improved = true; for (const b of B) buildTour(b); }
             if (budget > 0 && !stop && emptyAndRefill()) { improved = true; for (const b of B) buildTour(b); }
+            if (budget > 0 && !stop && !improved && makeRoom()) { improved = true; for (const b of B) buildTour(b); }
             // ── relocate ──
             for (let ai = 0; ai < N && !stop; ai++) {
                 const A = B[ai];
@@ -1698,9 +1792,9 @@ window.CampistryGoRoutePost = (function () {
                 if (!A.tour.length || !Bb.tour.length) continue;
                 if (outOfTime()) { stop = true; break; }
                 // Only atoms that could plausibly ride the other bus.
-                const aNear = A.tour.map(i => reachMi(Bb, A.atoms[i]) <= o.polishReachMi);
+                const aNear = A.tour.map(i => nearCamp(A.atoms[i]) || reachMi(Bb, A.atoms[i]) <= o.polishReachMi);
                 if (!aNear.some(Boolean)) continue;
-                const bNear = Bb.tour.map(i => reachMi(A, Bb.atoms[i]) <= o.polishReachMi);
+                const bNear = Bb.tour.map(i => nearCamp(Bb.atoms[i]) || reachMi(A, Bb.atoms[i]) <= o.polishReachMi);
                 if (!bNear.some(Boolean)) continue;
                 let best = null;
                 const baseA = busCost(A.len, A.childMin), baseB = busCost(Bb.len, Bb.childMin);
@@ -1804,6 +1898,7 @@ window.CampistryGoRoutePost = (function () {
         const after = objective();
         blockLog.sort((x, y) => x.delta - y.delta);
         return { buckets: B.map(b => b.tour.map(i => b.atoms[i])), moves, blockMoves, blockTried, refills,
+                 roomTried, roomMoves, blockSeatNo, blockWedgeNo, overStart,
                  blockLog: blockLog.slice(0, 12), lens: B.map(b => b.len),
                  blockBestDelta: Number.isFinite(blockBestDelta) ? blockBestDelta : null, timedOut: outOfTime(), before, after,
                  fleetBefore, fleetAfter: fleetMin(), childMinBefore, childMinAfter: childMin() };

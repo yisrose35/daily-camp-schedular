@@ -729,6 +729,41 @@ test('an idle bus takes the far loop of an over-cap bus instead of being emptied
     for (const b of res.buckets) assert.ok(b.reduce((a, x) => a + x.campers.length, 0) <= 46, 'seats');
 });
 
+test('a full short bus sheds a few core stops to make room for a far branch when it cannot be emptied', () => {
+    // R: 43 children on a 6-stop core run with three seats; its biggest
+    // corner has 20 children, so no other bus can take it and R cannot be
+    // emptied. A: an over-cap bus with a far loop. C1/C2: outer buses with a
+    // dozen seats each whose runs pass R's stops on the way out. Handing A's
+    // loop to R needs seats R does not have — until R sheds a couple of small
+    // corners to C1/C2 (or to A, which drives through the core). The camp's
+    // Bus 8 (43 children, 18 minutes) beside its Bus 2 (46 children, 91).
+    const R = [at(-0.5, 0.2, 2), at(-0.7, 0.4, 20), at(-0.9, 0.5, 1), at(-1.0, 0.1, 7), at(-1.2, 0.3, 7), at(-1.4, 0, 6)];
+    const A = [at(2, -2, 3), at(3, -3, 2), at(4, -4, 2), at(5, -5, 3), at(6, -6, 2), at(7, -7, 4), at(8, -8, 2),
+               at(8.5, -9.5, 5), at(7.5, -10.5, 2), at(6.5, -9.5, 2), at(5.5, -8.5, 3), at(4.5, -7.5, 8), at(3.5, -6.5, 1), at(2.5, -5.5, 1)];
+    const C1 = [at(-4, 2, 8), at(-6, 3, 10), at(-8, 4, 6), at(-9, 5, 5)];
+    const C2 = [at(-4, -2, 8), at(-6, -3, 10), at(-8, -4, 8), at(-9, -5, 6)];
+    const o = { returnToDepot: false, polishRideBudgetMin: 60, polishOverBudgetX: 4, polishOverBudgetQuad: 0.5, busOverheadMin: 0, polishTimeBudgetMs: 20000 };
+    const solo = b => b.length ? P.polishDistricts([b, []], [46, 46], CAMP, { returnToDepot: false, polishMaxPasses: 0, polishRideBudgetMin: 0 }).fleetBefore : 0;
+    const aBefore = solo(A);
+    assert.ok(aBefore > 75 && solo(R) < 20, 'A far over, R short and full: ' + aBefore.toFixed(0) + ', ' + solo(R).toFixed(0));
+    assert.strictEqual(kids({ stops: R }), 43);
+    const res = P.polishDistricts([R, A, C1, C2], [46, 46, 46, 46], CAMP, o);
+    const lens = res.buckets.map(solo);
+    assert.ok(res.roomTried >= 1, 'make-room hand-offs were priced: ' + JSON.stringify({ roomTried: res.roomTried, blockTried: res.blockTried }));
+    assert.ok(res.blockMoves >= 1, 'a branch moved: ' + JSON.stringify({ moves: res.moves, blockMoves: res.blockMoves, roomMoves: res.roomMoves, refills: res.refills }));
+    assert.ok(Math.max(...lens) < aBefore - 15, 'the long run came down: ' + lens.map(x => x.toFixed(0)).join(', '));
+    assert.ok(res.buckets[0].some(a => P.haversineMi(CAMP.lat, CAMP.lng, a.lat, a.lng) > 4), 'the full short bus now goes out: ' + res.buckets[0].map(a => a.address).join(' | '));
+    // the 20-child corner may ride any bus that passes it (A drives out through the core), never split
+    assert.strictEqual(res.buckets.flat().filter(a => a.campers.length === 20).length, 1, 'the 20-child corner is one stop on one bus');
+    assert.strictEqual(res.buckets.flat().length, 28);
+    for (const b of res.buckets) {
+        assert.ok(b.reduce((a, x) => a + x.campers.length, 0) <= 46, 'seats');
+        assert.ok(P.arcDeg(b, CAMP) <= 110, 'contained');
+    }
+    assert.ok(res.after < res.before, 'the objective fell');
+    assert.ok(Array.isArray(res.overStart) && res.overStart.length === 1 && res.overStart[0].bus === 1, 'the over-cap bus is reported: ' + JSON.stringify(res.overStart));
+});
+
 test('a short bus full of near-camp children is emptied into the buses that pass them and refilled with a far branch', () => {
     // E: four core stops, 40 children, a 12-minute run, six seats — no room
     // for a branch. A: an over-cap bus with a far loop. C1, C2: buses whose
