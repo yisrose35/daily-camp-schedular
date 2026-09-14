@@ -628,3 +628,14 @@ test('consolidateStops: door-to-door merges only stops at the same house; corner
     // an empty walk setting still behaves
     assert.strictEqual(P.consolidateStops(stops(), { dropoffMode: 'door-to-door' }).length, 3);
 });
+
+test('foldSameCornerStops: two stops at one corner become one, in order, under the cap', () => {
+    const a = at(1, 0, 3), b = at(1, 0.5, 2), c = Object.assign(at(1, 0, 4), { address: 'Same corner, other name' });
+    const r = P.foldSameCornerStops([a, b, c], 24);
+    assert.strictEqual(r.folded, 1);
+    assert.deepStrictEqual(r.stops.map(s => s.campers.length), [7, 2], 'folded into the first, order kept');
+    assert.strictEqual(r.stops[0].address, a.address, 'keeps the first name');
+    const r2 = P.foldSameCornerStops([at(1, 0, 3), at(1, 0, 22)], 24);
+    assert.strictEqual(r2.folded, 0, 'over the cap they stay apart');
+    assert.strictEqual(P.foldSameCornerStops([{ isMonitor: true, address: 'x' }, at(2, 0, 1)], 24).stops.length, 2);
+});

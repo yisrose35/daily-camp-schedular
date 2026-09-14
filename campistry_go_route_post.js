@@ -531,6 +531,26 @@ window.CampistryGoRoutePost = (function () {
         return stops;
     }
 
+    // Two stops at the same point are one stop: a corner two groups snapped
+    // to, or the same house twice. Keeps order and the first stop's name,
+    // merges children and home records, caps the merged stop at `cap`.
+    function foldSameCornerStops(stops, cap) {
+        cap = Number.isFinite(cap) ? cap : 24;
+        const byKey = new Map(), out = []; let folded = 0;
+        for (const s of (stops || [])) {
+            const k = hasPos(s) && !s.isMonitor && !s.isCounselor ? (s.lat.toFixed(6) + ',' + s.lng.toFixed(6)) : null;
+            const prev = k && byKey.get(k);
+            if (prev && (prev.campers || []).length + (s.campers || []).length <= cap) {
+                prev.campers = (prev.campers || []).concat(s.campers || []);
+                if (prev._homes || s._homes) prev._homes = (prev._homes || []).concat(s._homes || []);
+                folded++; continue;
+            }
+            if (k) byKey.set(k, s);
+            out.push(s);
+        }
+        return { stops: out, folded };
+    }
+
     // The ordering objective of a given order (children-minutes + fairness +
     // tour tie-break), for tests and diagnostics.
     function routeObjective(stops, depot, isArrival, o) {
@@ -1668,6 +1688,6 @@ window.CampistryGoRoutePost = (function () {
         relieveLongRoutes, splitOverlongRoutes, rebalanceBusLoads, enforceCapacity,
         sweepPartition, polishDistricts, containmentReport,
         stopDwellMin, rideRatioViolations, passBys, buildRoadNet, stampLegTimes, stampRoadPath, routeObjective,
-        consolidateStops, distinctColors, assignRouteColors,
+        consolidateStops, foldSameCornerStops, distinctColors, assignRouteColors,
     };
 })();

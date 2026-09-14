@@ -228,6 +228,20 @@ model; jsprit and VROOM documentation on ruin/recreate and regret insertion.
   joins a shared stop within walking distance on any bus with seats before
   falling back to a door-drop on the nearest bus (the door-drop carries a
   home record too, so it is snapped and named like every other corner).
+* **The map covers every home the buses serve.** The road-graph download
+  used an IQR "outlier" trim on the roster's coordinates, which cut the far
+  end of Jackson and the Toms River area off the map: those homes got no road
+  segment (8 "could not be snapped"), and their travel times were made up
+  from the distance to the map's edge — two stops a mile apart on Leesville
+  Road read 7 minutes apart, and two buses drove to the far end of it. The
+  map now spans every camper within 35 mi of camp (`serviceBbox`), so only a
+  geocode in another state is left off, and the console says how many. The
+  camp's own MAROON bus ran that whole rural loop as one 48-child bus.
+* **Corner names.** "Albert Ave @ Albert Avenue" was one road named two
+  ways in the map; street names are normalised (`normStreet`) for corner
+  detection, corner naming and the preferred-street match. A stop the road
+  polish moves onto a bus already standing at its corner is folded into that
+  stop (`foldSameCornerStops`) rather than listed twice a minute apart.
 * **Routing Engine** is now a Route Settings control. A camp was found on the
   older spatial-sort engine with no way to see or change it; the console's
   Route summary `source` column says which engine produced a run
