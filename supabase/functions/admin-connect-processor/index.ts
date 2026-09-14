@@ -27,7 +27,76 @@
 // =============================================================================
 import { serve } from "https://deno.land/std@0.168.0/http/server.ts";
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
-import { getAdapter } from "./_shared/processor_adapter.ts";
+
+// Credential test-connection, inlined per processor rather than imported from
+// _shared/adapters/*.ts: this project deploys edge functions by pasting ONE
+// file into the Supabase Dashboard (no CLI — see CLAUDE.md), so ANY relative
+// import fails to bundle (that broken "./_shared" import is exactly why this
+// function could never boot before). Keep in sync with each adapter's
+// testConnection().
+
+// Cardknox/Sola: cc:sale with Sola's published always-decline sandbox card +
+// trigger amount ($9.91) — a clean decline still proves the key authenticates;
+// only xResult 'E' is a real failure. No real card, no money moved.
+const CARDKNOX_GATEWAY = "https://x1.cardknox.com/gateway";
+async function cardknoxTestConnection(creds: Record<string, string>): Promise<{ success: boolean; error?: string }> {
+  const apiKey = creds.apiKey;
+  if (!apiKey) return { success: false, error: "Missing apiKey" };
+  try {
+    const resp = await fetch(CARDKNOX_GATEWAY, {
+      method: "POST",
+      headers: { "Content-Type": "application/x-www-form-urlencoded" },
+      body: new URLSearchParams({
+        xKey: apiKey, xVersion: "4.5.9", xSoftwareName: "Campistry", xSoftwareVersion: "1.0",
+        xCommand: "cc:sale", xCardNum: "4444333322221111", xExp: "1230", xAmount: "9.91",
+        xInvoice: "TEST-" + Date.now().toString(36) + Math.random().toString(36).slice(2, 6),
+      }).toString(),
+    });
+    const r: Record<string, string> = {};
+    new URLSearchParams(await resp.text()).forEach((v, k) => { r[k] = v; });
+    if (r.xResult === "E") return { success: false, error: r.xError || "Gateway returned an error" };
+    return { success: true };
+  } catch (err) {
+    return { success: false, error: (err as Error).message };
+  }
+}
+
+// Banquest (white-label NMI Direct Post): a $0 `validate` on transact.php
+// authenticates the security key without moving money and returns parseable
+// url-encoded key=value (query.php returns XML, which is far less reliable to
+// parse). A bad key comes back with responsetext "Authentication Failed";
+// anything else (validated / declined) proves the key works. The gateway host
+// is part of the credential — Banquest resellers often issue a branded host
+// (defaults to NMI's shared host).
+const NMI_DEFAULT_GATEWAY = "https://secure.nmi.com";
+function nmiBase(creds: Record<string, string>): string {
+  return (creds.gatewayUrl || NMI_DEFAULT_GATEWAY).replace(/\/+$/, "");
+}
+async function nmiTestConnection(creds: Record<string, string>): Promise<{ success: boolean; error?: string }> {
+  const securityKey = creds.securityKey;
+  if (!securityKey) return { success: false, error: "Missing securityKey" };
+  try {
+    const resp = await fetch(`${nmiBase(creds)}/api/transact.php`, {
+      method: "POST",
+      headers: { "Content-Type": "application/x-www-form-urlencoded" },
+      body: new URLSearchParams({
+        security_key: securityKey, type: "validate",
+        ccnumber: "4111111111111111", ccexp: "1030",
+      }).toString(),
+    });
+    const r: Record<string, string> = {};
+    new URLSearchParams(await resp.text()).forEach((v, k) => { r[k] = v; });
+    const txt = (r.responsetext || "").toLowerCase();
+    // Only an explicit auth failure is a connectivity failure — err toward not
+    // blocking a valid key whose account happens to disallow `validate`.
+    if (/authentication failed|invalid security key|access denied|invalid username/.test(txt)) {
+      return { success: false, error: r.responsetext || "Authentication failed" };
+    }
+    return { success: true };
+  } catch (err) {
+    return { success: false, error: (err as Error).message };
+  }
+}
 
 const SUPABASE_URL = Deno.env.get("SUPABASE_URL") || "";
 const SUPABASE_SERVICE_KEY = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY") || "";
@@ -56,16 +125,21 @@ serve(async (req) => {
       return json({ success: false, error: "campId, processorKey, and credentials (object) are required" }, 400);
     }
 
-    const adapter = getAdapter(processorKey);
-    if (!adapter) return json({ success: false, error: `No adapter implemented for processor '${processorKey}' yet.` }, 400);
-
     const service = createClient(SUPABASE_URL, SUPABASE_SERVICE_KEY);
 
     const { data: camp } = await service.from("camps").select("id, name").eq("id", campId).maybeSingle();
     if (!camp) return json({ success: false, error: "No camp with that id." }, 404);
 
     // Test BEFORE storing — an unverified credential is never persisted.
-    const test = await adapter.testConnection(credentials);
+    // Inlined per processor (see the header block re: Dashboard deploy).
+    let test: { success: boolean; error?: string };
+    if (processorKey === "cardknox") {
+      test = await cardknoxTestConnection(credentials);
+    } else if (processorKey === "banquest") {
+      test = await nmiTestConnection(credentials);
+    } else {
+      return json({ success: false, error: `No adapter implemented for processor '${processorKey}' yet.` }, 400);
+    }
     if (!test.success) {
       return json({ success: false, error: `Credential test failed: ${test.error || "unknown error"}` }, 400);
     }

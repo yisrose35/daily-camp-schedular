@@ -126,6 +126,29 @@ async function cardknoxCharge(apiKey: string, amountCents: number, cardToken: st
   return { success: true, externalTransactionId: parsed.xRefNum, raw: parsed };
 }
 
+// Banquest (white-label NMI) sale against a saved Customer Vault id — inlined
+// for the same Dashboard-deploy reason as the Cardknox call above; keep in
+// sync with _shared/adapters/banquest_adapter.ts. Gateway host is part of the
+// stored credential (defaults to NMI's shared host); orderid unique per charge.
+const NMI_DEFAULT_GATEWAY = "https://secure.nmi.com";
+function nmiBase(creds: Record<string, string>): string {
+  return (creds.gatewayUrl || NMI_DEFAULT_GATEWAY).replace(/\/+$/, "");
+}
+async function nmiCharge(creds: Record<string, string>, amountCents: number, customerVaultId: string, orderid: string) {
+  const resp = await fetch(`${nmiBase(creds)}/api/transact.php`, {
+    method: "POST",
+    headers: { "Content-Type": "application/x-www-form-urlencoded" },
+    body: new URLSearchParams({
+      security_key: creds.securityKey, type: "sale",
+      amount: (amountCents / 100).toFixed(2), customer_vault_id: customerVaultId, orderid,
+    }).toString(),
+  });
+  const r: Record<string, string> = {};
+  new URLSearchParams(await resp.text()).forEach((v, k) => { r[k] = v; });
+  if (r.response !== "1") return { success: false, error: r.responsetext || "Declined", raw: r };
+  return { success: true, externalTransactionId: r.transactionid, raw: r };
+}
+
 function todayISO() { return new Date().toISOString().split("T")[0]; }
 
 // Optional parent-set [startDate,stopDate] window (migration 135) — either
@@ -330,7 +353,7 @@ serve(async (req) => {
         // this function credits the balance itself instead of waiting on a
         // webhook (there isn't one for cc:sale calls made directly like this).
         const processorKey = campProcessors.get(String(row.camp_id));
-        if (processorKey !== "cardknox") {
+        if (processorKey !== "cardknox" && processorKey !== "banquest") {
           // Card was saved on a processor auto-reload doesn't know how to
           // charge yet (or the camp switched processors since saving it) —
           // leave enabled, don't burn a failure on the family for something
@@ -339,12 +362,14 @@ serve(async (req) => {
           continue;
         }
         const creds = await byopCredentials(String(row.camp_id));
-        const apiKey = creds?.apiKey || null;
-        if (!apiKey) {
-          details.push({ camp: row.camp_id, camper: camperName, amount: due.amount, kind: due.kind, result: "skipped_no_processor", processor: "cardknox" });
+        const hasCred = processorKey === "cardknox" ? !!creds?.apiKey : !!creds?.securityKey;
+        if (!creds || !hasCred) {
+          details.push({ camp: row.camp_id, camper: camperName, amount: due.amount, kind: due.kind, result: "skipped_no_processor", processor: processorKey });
           continue;
         }
-        const res = await cardknoxCharge(apiKey, Math.round(due.amount * 100), String(ar.byopCustomerRef));
+        const res = processorKey === "cardknox"
+          ? await cardknoxCharge(String(creds.apiKey), Math.round(due.amount * 100), String(ar.byopCustomerRef))
+          : await nmiCharge(creds, Math.round(due.amount * 100), String(ar.byopCustomerRef), "CR-" + Date.now().toString(36) + Math.random().toString(36).slice(2, 6));
         if (!res.success || !res.externalTransactionId) {
           markFailure(ar, today, res.error || "Declined");
           failed++;
@@ -356,7 +381,7 @@ serve(async (req) => {
           p_camp_id: row.camp_id,
           p_camper_name: camperName,
           p_amount: due.amount,
-          p_processor_key: "cardknox",
+          p_processor_key: processorKey,
           p_external_transaction_id: res.externalTransactionId,
           // Marks the ledger row kind:'autoreload' so the parent portal shows
           // an "Auto-Pay" tag on it (migration 145). Harmless before 145 is
@@ -369,11 +394,11 @@ serve(async (req) => {
           // deposit; still record the charge as successful (it was) so
           // lastChargedDate/consecutiveFailures reflect reality and the
           // cron doesn't try to charge the card again today.
-          console.error(`[canteen-auto-reload] cardknox charge ${res.externalTransactionId} succeeded but credit failed for camp ${row.camp_id}/${camperName}:`, creditRes.error?.message || creditRes.data?.error);
+          console.error(`[canteen-auto-reload] ${processorKey} charge ${res.externalTransactionId} succeeded but credit failed for camp ${row.camp_id}/${camperName}:`, creditRes.error?.message || creditRes.data?.error);
         }
         markSuccess(ar, today, due.amount);
         charged++;
-        details.push({ camp: row.camp_id, camper: camperName, amount: due.amount, kind: due.kind, result: "charged", processor: "cardknox" });
+        details.push({ camp: row.camp_id, camper: camperName, amount: due.amount, kind: due.kind, result: "charged", processor: processorKey });
         // persist autoReload bookkeeping ONLY — the balance/deposit was
         // already committed by credit_canteen_balance_from_processor above.
         await persistAr(String(row.camp_id), camperName, ar);

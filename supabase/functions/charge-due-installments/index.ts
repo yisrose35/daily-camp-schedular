@@ -108,6 +108,32 @@ async function cardknoxCharge(apiKey: string, amountCents: number, cardToken: st
   return { success: true, externalTransactionId: parsed.xRefNum, status: parsed.xStatus, raw: parsed };
 }
 
+// Banquest (white-label NMI) sale against a saved Customer Vault id — inlined
+// for the same Dashboard-deploy reason as the Cardknox call above; keep in
+// sync with _shared/adapters/banquest_adapter.ts. Gateway host is part of the
+// stored credential (defaults to NMI's shared host); orderid is unique per
+// charge (same duplicate-block reasoning as the Cardknox xInvoice).
+const NMI_DEFAULT_GATEWAY = "https://secure.nmi.com";
+function nmiBase(creds: Record<string, string>): string {
+  return (creds.gatewayUrl || NMI_DEFAULT_GATEWAY).replace(/\/+$/, "");
+}
+async function nmiCharge(creds: Record<string, string>, amountCents: number, customerVaultId: string, orderid: string) {
+  const resp = await fetch(`${nmiBase(creds)}/api/transact.php`, {
+    method: "POST",
+    headers: { "Content-Type": "application/x-www-form-urlencoded" },
+    body: new URLSearchParams({
+      security_key: creds.securityKey, type: "sale",
+      amount: (amountCents / 100).toFixed(2), customer_vault_id: customerVaultId, orderid,
+    }).toString(),
+  });
+  const r: Record<string, string> = {};
+  new URLSearchParams(await resp.text()).forEach((v, k) => { r[k] = v; });
+  if (r.response !== "1") {
+    return { success: false, error: r.responsetext || "Declined", status: r.response_code, raw: r };
+  }
+  return { success: true, externalTransactionId: r.transactionid, status: r.response_code, raw: r };
+}
+
 function todayISO() { return new Date().toISOString().split("T")[0]; }
 
 // A family's REAL outstanding balance right now — billed minus paid minus
@@ -307,21 +333,26 @@ serve(async (req) => {
           // recorded differ. Kept as its own branch that returns early so
           // the Stripe path below stays byte-for-byte what it always was.
           if (processorKey) {
-            // Only Cardknox/Sola is wired for autopay so far. Banquest camps
-            // fall through to the same "leave it pending" path below rather
-            // than being silently charged wrong or silently skipped forever —
+            // Cardknox/Sola and Banquest/NMI are both wired for autopay. Any
+            // other BYOP processor falls through to the "leave it pending"
+            // path rather than being charged wrong or silently skipped —
             // flagged in BYOP_SETUP.md, not quietly dropped.
-            const creds = processorKey === "cardknox" ? await byopCredentials(String(row.camp_id)) : null;
-            const apiKey = creds?.apiKey || null;
-            if (!apiKey) {
+            const creds = (processorKey === "cardknox" || processorKey === "banquest")
+              ? await byopCredentials(String(row.camp_id)) : null;
+            const hasCred = processorKey === "cardknox" ? !!creds?.apiKey
+              : processorKey === "banquest" ? !!creds?.securityKey : false;
+            if (!creds || !hasCred) {
               // Not a decline and not the family's fault — leave the
               // installment 'pending' so it retries on the next run once the
-              // camp's processor is connected properly, rather than burning
-              // it as 'failed' and making the office re-create it by hand.
+              // camp's processor is connected properly (or a branch for it is
+              // wired), rather than burning it as 'failed' and making the
+              // office re-create it by hand.
               details.push({ camp: row.camp_id, family: f.name, amount, result: "skipped_no_processor", processor: processorKey });
               continue;
             }
-            const res = await cardknoxCharge(apiKey, Math.round(amount * 100), String(f.byopCustomerRef));
+            const res = processorKey === "cardknox"
+              ? await cardknoxCharge(String(creds.apiKey), Math.round(amount * 100), String(f.byopCustomerRef))
+              : await nmiCharge(creds, Math.round(amount * 100), String(f.byopCustomerRef), "CI-" + Date.now().toString(36) + Math.random().toString(36).slice(2, 6));
             if (!res.success || !res.externalTransactionId) {
               inst.status = "failed";
               inst.failReason = res.error || "Declined";

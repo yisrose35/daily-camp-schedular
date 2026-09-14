@@ -58,6 +58,31 @@ async function cardknoxSaveMethod(apiKey: string, token: string) {
   return { success: true, customerRef: parsed.xToken, raw: parsed };
 }
 
+// Banquest (white-label NMI): exchange the Collect.js single-use payment_token
+// for a permanent Customer Vault id — the same "durable reference" step, same
+// inline-for-Dashboard-deploy reason. Keep in sync with
+// _shared/adapters/banquest_adapter.ts's saveMethod(). Gateway host is part of
+// the stored credential (defaults to NMI's shared host).
+const NMI_DEFAULT_GATEWAY = "https://secure.nmi.com";
+function nmiBase(creds: Record<string, string>): string {
+  return (creds.gatewayUrl || NMI_DEFAULT_GATEWAY).replace(/\/+$/, "");
+}
+async function nmiSaveMethod(creds: Record<string, string>, token: string): Promise<{ success: boolean; customerRef?: string; error?: string }> {
+  const resp = await fetch(`${nmiBase(creds)}/api/transact.php`, {
+    method: "POST",
+    headers: { "Content-Type": "application/x-www-form-urlencoded" },
+    body: new URLSearchParams({
+      security_key: creds.securityKey, type: "add_customer", payment_token: token,
+    }).toString(),
+  });
+  const r: Record<string, string> = {};
+  new URLSearchParams(await resp.text()).forEach((v, k) => { r[k] = v; });
+  if (r.response !== "1" || !r.customer_vault_id) {
+    return { success: false, error: r.responsetext || "Could not save payment method" };
+  }
+  return { success: true, customerRef: r.customer_vault_id };
+}
+
 const SUPABASE_URL = Deno.env.get("SUPABASE_URL") || "";
 const SUPABASE_SERVICE_KEY = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY") || "";
 
@@ -103,9 +128,9 @@ serve(async (req) => {
       return json({ success: false, error: "This camp is on Stripe — use the Stripe card-setup flow instead." }, 400);
     }
 
-    // Only Cardknox/Sola is inlined here. A Banquest camp gets a clear error
-    // rather than a silent no-op — flagged in BYOP_SETUP.md, not pretended.
-    if (processorKey !== "cardknox") {
+    // Cardknox/Sola and Banquest/NMI are both inlined here. Any other
+    // processor gets a clear error rather than a silent no-op.
+    if (processorKey !== "cardknox" && processorKey !== "banquest") {
       return json({ success: false, error: `Saving a card isn't wired for processor '${processorKey}' yet.` }, 400);
     }
 
@@ -113,12 +138,21 @@ serve(async (req) => {
     if (!credResult?.success) {
       return json({ success: false, error: credResult?.error || "This camp's processor isn't connected/verified yet." }, 400);
     }
-    const apiKey = credResult.credentials?.apiKey;
-    if (!apiKey) {
-      return json({ success: false, error: "This camp's processor credential is missing its API key." }, 400);
-    }
 
-    const saveResult = await cardknoxSaveMethod(String(apiKey), String(token));
+    let saveResult: { success: boolean; customerRef?: string; error?: string };
+    if (processorKey === "cardknox") {
+      const apiKey = credResult.credentials?.apiKey;
+      if (!apiKey) {
+        return json({ success: false, error: "This camp's processor credential is missing its API key." }, 400);
+      }
+      saveResult = await cardknoxSaveMethod(String(apiKey), String(token));
+    } else {
+      const securityKey = credResult.credentials?.securityKey;
+      if (!securityKey) {
+        return json({ success: false, error: "This camp's processor credential is missing its security key." }, 400);
+      }
+      saveResult = await nmiSaveMethod(credResult.credentials, String(token));
+    }
     if (!saveResult.success || !saveResult.customerRef) {
       return json({ success: false, error: saveResult.error || "Could not save payment method" }, 200);
     }

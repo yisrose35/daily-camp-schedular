@@ -53,6 +53,39 @@ async function cardknoxRefund(
   }
 }
 
+// Banquest (white-label NMI) refund of a prior transaction, inlined for the
+// same Dashboard-deploy reason. Keep in sync with
+// _shared/adapters/banquest_adapter.ts's refund(). Gateway host is part of the
+// stored credential (defaults to NMI's shared host).
+const NMI_DEFAULT_GATEWAY = "https://secure.nmi.com";
+function nmiBase(credentials: Record<string, string>): string {
+  return (credentials.gatewayUrl || NMI_DEFAULT_GATEWAY).replace(/\/+$/, "");
+}
+async function nmiRefund(
+  credentials: Record<string, string>,
+  externalTransactionId: string,
+  amountCents: number,
+): Promise<{ success: boolean; externalTransactionId?: string; status?: string; error?: string; raw?: unknown }> {
+  const securityKey = credentials.securityKey;
+  if (!securityKey) return { success: false, error: "Missing securityKey" };
+  try {
+    const resp = await fetch(`${nmiBase(credentials)}/api/transact.php`, {
+      method: "POST",
+      headers: { "Content-Type": "application/x-www-form-urlencoded" },
+      body: new URLSearchParams({
+        security_key: securityKey, type: "refund",
+        transactionid: externalTransactionId, amount: (amountCents / 100).toFixed(2),
+      }).toString(),
+    });
+    const r: Record<string, string> = {};
+    new URLSearchParams(await resp.text()).forEach((v, k) => { r[k] = v; });
+    if (r.response !== "1") return { success: false, status: r.response_code, error: r.responsetext || "Refund failed", raw: r };
+    return { success: true, externalTransactionId: r.transactionid, status: r.response_code, raw: r };
+  } catch (err) {
+    return { success: false, error: (err as Error).message };
+  }
+}
+
 const SUPABASE_URL = Deno.env.get("SUPABASE_URL") || "";
 const SUPABASE_ANON_KEY = Deno.env.get("SUPABASE_ANON_KEY") || "";
 const SUPABASE_SERVICE_KEY = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY") || "";
@@ -115,13 +148,15 @@ serve(async (req) => {
       return json({ error: "This camp is on Stripe — use stripe-refund instead." }, 400);
     }
 
-    if (processorKey !== "cardknox") return json({ error: `Refunds aren't supported yet for processor '${processorKey}'.` }, 400);
+    if (processorKey !== "cardknox" && processorKey !== "banquest") return json({ error: `Refunds aren't supported yet for processor '${processorKey}'.` }, 400);
 
     const { data: credResult } = await service.rpc("_admin_get_processor_credential", { p_camp_id: campId });
     if (!credResult?.success) return json({ error: credResult?.error || "This camp's processor isn't connected/verified yet." }, 400);
 
     const amountCents = Math.round(Number(amount) * 100);
-    const result = await cardknoxRefund(credResult.credentials, String(externalTransactionId), amountCents);
+    const result = processorKey === "cardknox"
+      ? await cardknoxRefund(credResult.credentials, String(externalTransactionId), amountCents)
+      : await nmiRefund(credResult.credentials, String(externalTransactionId), amountCents);
 
     if (!result.success) {
       return json({ error: result.error || "Refund failed", status: result.status }, 200);

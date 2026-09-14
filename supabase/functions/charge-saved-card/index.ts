@@ -94,6 +94,30 @@ async function cardknoxCharge(apiKey: string, amountCents: number, cardToken: st
   return { success: true, externalTransactionId: parsed.xRefNum };
 }
 
+// Banquest (white-label NMI) sale against a saved Customer Vault id. Inlined
+// per this project's deploy convention; keep in sync with
+// _shared/adapters/banquest_adapter.ts. Gateway host is part of the stored
+// credential (defaults to NMI's shared host). orderid is unique per charge —
+// same duplicate-block reasoning as the Cardknox xInvoice above.
+const NMI_DEFAULT_GATEWAY = "https://secure.nmi.com";
+function nmiBase(creds: Record<string, string>): string {
+  return (creds.gatewayUrl || NMI_DEFAULT_GATEWAY).replace(/\/+$/, "");
+}
+async function nmiCharge(creds: Record<string, string>, amountCents: number, customerVaultId: string, orderid: string) {
+  const resp = await fetch(`${nmiBase(creds)}/api/transact.php`, {
+    method: "POST",
+    headers: { "Content-Type": "application/x-www-form-urlencoded" },
+    body: new URLSearchParams({
+      security_key: creds.securityKey, type: "sale",
+      amount: (amountCents / 100).toFixed(2), customer_vault_id: customerVaultId, orderid,
+    }).toString(),
+  });
+  const r: Record<string, string> = {};
+  new URLSearchParams(await resp.text()).forEach((v, k) => { r[k] = v; });
+  if (r.response !== "1") return { success: false, error: r.responsetext || "Declined" };
+  return { success: true, externalTransactionId: r.transactionid };
+}
+
 serve(async (req) => {
   if (req.method === "OPTIONS") return new Response("ok", { headers: corsHeaders });
 
@@ -199,7 +223,7 @@ serve(async (req) => {
     // the legacy single-slot fields exactly as before, which get_my_balance's
     // processorKey/chargeable already describe.
     let chargeProcessorKey = processorKey;
-    let chargeToken: string | undefined = processorKey === "cardknox" ? fam.byopCustomerRef : fam.stripePaymentMethodId;
+    let chargeToken: string | undefined = (processorKey === "cardknox" || processorKey === "banquest") ? fam.byopCustomerRef : fam.stripePaymentMethodId;
     let chargeStripeCustomerId: string | undefined = fam.stripeCustomerId;
     if (paymentMethodId) {
       const methods: any[] = Array.isArray(fam.savedPaymentMethods) ? fam.savedPaymentMethods : [];
@@ -224,6 +248,21 @@ serve(async (req) => {
         return json(result, 400);
       }
       const res = await cardknoxCharge(apiKey, amountCents, String(chargeToken), "CSC-" + idempotencyKey);
+      if (!res.success || !res.externalTransactionId) {
+        const result = { success: false, error: res.error || "Card declined." };
+        await finishLock("failed", result);
+        return json(result, 402);
+      }
+      externalTransactionId = res.externalTransactionId;
+    } else if (chargeProcessorKey === "banquest") {
+      const { data: credResult } = await service.rpc("_admin_get_processor_credential", { p_camp_id: campId });
+      const creds = credResult?.success ? credResult.credentials : null;
+      if (!creds?.securityKey || !chargeToken) {
+        const result = { success: false, error: "This camp's processor isn't connected right now." };
+        await finishLock("failed", result);
+        return json(result, 400);
+      }
+      const res = await nmiCharge(creds, amountCents, String(chargeToken), "CSC-" + idempotencyKey);
       if (!res.success || !res.externalTransactionId) {
         const result = { success: false, error: res.error || "Card declined." };
         await finishLock("failed", result);
@@ -282,15 +321,16 @@ serve(async (req) => {
         if (!Array.isArray(cur_me.finance.payments)) cur_me.finance.payments = [];
         const pays: Record<string, any>[] = cur_me.finance.payments;
         if (!pays.find((p) => p.byopTransactionId === externalTransactionId || p.stripePaymentIntentId === externalTransactionId)) {
+          const isByop = chargeProcessorKey === "cardknox" || chargeProcessorKey === "banquest";
           pays.push({
-            id: (chargeProcessorKey === "cardknox" ? "byop_" : "stripe_") + externalTransactionId,
+            id: (isByop ? "byop_" : "stripe_") + externalTransactionId,
             family: fam.name || familyKey, familyKey,
             amount: amountCents / 100,
             date: new Date().toISOString().split("T")[0],
-            method: chargeProcessorKey === "cardknox" ? "Card on file (Sola)" : "Card on file (Stripe)",
+            method: isByop ? ("Card on file (" + (chargeProcessorKey === "cardknox" ? "Sola" : "Banquest") + ")") : "Card on file (Stripe)",
             reference: externalTransactionId,
             notes: "Charged card on file",
-            ...(chargeProcessorKey === "cardknox" ? { byopTransactionId: externalTransactionId, byopProcessor: "cardknox" } : { stripePaymentIntentId: externalTransactionId }),
+            ...(isByop ? { byopTransactionId: externalTransactionId, byopProcessor: chargeProcessorKey } : { stripePaymentIntentId: externalTransactionId }),
             status: "succeeded", timestamp: Date.now(),
           });
         }
