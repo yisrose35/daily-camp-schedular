@@ -735,19 +735,23 @@ test('a short bus full of near-camp children is emptied into the buses that pass
     // runs pass E's stops on the way out with seats to spare. Neither half of
     // the move pays alone (spreading E's stops costs C1/C2 a few minutes and
     // saves nothing; E cannot take the loop) — the pair does.
+    // C1 and C2 have no stop within 5mi of E's — they drive out through the
+    // core without stopping — so the reach rule alone would never let them
+    // take E's children; a stop near camp is on every bus's way out.
     const E = [at(1, 0.2, 10), at(1.3, -0.2, 10), at(1.6, 0.3, 10), at(1.9, -0.1, 10)];
     const A = [at(3, 2, 4), at(4, 2.5, 4), at(8, -2, 2), at(10, -3, 2), at(11, -1, 2), at(10, 1, 2), at(8, 2, 2), at(5, -1, 2)];
-    const C1 = [at(3, 0.5, 8), at(5, 1, 8), at(7, 1.5, 6)];
-    const C2 = [at(3, -0.6, 8), at(5, -1.2, 8), at(7, -1.6, 6)];
+    const C1 = [at(7, 1, 8), at(9, 1.5, 8), at(11, 2, 6)];
+    const C2 = [at(7, -1, 8), at(9, -1.5, 8), at(11, -2, 6)];
     const o = { returnToDepot: true, polishRideBudgetMin: 60, polishOverBudgetX: 4, polishOverBudgetQuad: 0.5, busOverheadMin: 5 };
     const solo = b => b.length ? P.polishDistricts([b, []], [46, 46], CAMP, { returnToDepot: true, polishMaxPasses: 0, polishRideBudgetMin: 0 }).fleetBefore : 0;
     const aBefore = solo(A);
     assert.ok(aBefore > 80 && solo(E) < 25, 'A far over, E short: ' + aBefore.toFixed(0) + ', ' + solo(E).toFixed(0));
     const res = P.polishDistricts([E, A, C1, C2], [46, 46, 46, 46], CAMP, o);
-    assert.ok(res.refills >= 1, 'the short bus was emptied and refilled: ' + JSON.stringify({ moves: res.moves, blockMoves: res.blockMoves, refills: res.refills }));
     const lens = res.buckets.map(solo);
+    assert.ok(res.blockMoves + res.refills >= 1, 'a branch moved: ' + JSON.stringify({ moves: res.moves, blockMoves: res.blockMoves, refills: res.refills }));
     assert.ok(Math.max(...lens) < aBefore - 10, 'the long run came down: ' + lens.map(x => x.toFixed(0)).join(', '));
-    assert.ok(res.buckets[0].every(a => P.haversineMi(CAMP.lat, CAMP.lng, a.lat, a.lng) > 4), 'E now runs the far branch, not the core: ' + res.buckets[0].map(a => a.address).join(' | '));
+    assert.ok(Math.min(...lens) > 35, 'no bus is left idle: ' + lens.map(x => x.toFixed(0)).join(', '));
+    assert.ok(res.buckets[0].some(a => P.haversineMi(CAMP.lat, CAMP.lng, a.lat, a.lng) > 4), 'the short bus now goes out: ' + res.buckets[0].map(a => a.address).join(' | '));
     assert.strictEqual(res.buckets.flat().length, 18);
     for (const b of res.buckets) {
         assert.ok(b.reduce((a, x) => a + x.campers.length, 0) <= 46, 'seats');

@@ -71,8 +71,11 @@ window.CampistryGoRoutePost = (function () {
                                    // far more than two buses a little over, so overage is never piled onto one
         polishBlockMax: 8,         // block relocate: up to this many stops of an over-budget bus move together
         polishBlockTargets: 8,     // ...to one of the this-many buses furthest under their budget
-        polishRefillMaxFrac: 0.5,  // empty-and-refill: a bus under this fraction of its budget may be emptied into
+        polishRefillMaxFrac: 0.7,  // empty-and-refill: a bus under this fraction of its budget may be emptied into
                                    // the buses that pass its stops and refilled with a far branch of an over-budget bus
+        polishNearCampMi: 3,       // a stop this close to camp may join ANY bus — every bus drives out through the
+                                   // core, so the reach rule (a stop of the receiver within polishReachMi) is wrong
+                                   // for it; the insertion is priced exactly either way
         polishMinGainMin: 0.05,
         polishLnsIters: 0,         // ruin-and-recreate attempts after local search converges.
                                    // Measured on camp-shaped layouts: no gain over relocate/swap,
@@ -1447,6 +1450,8 @@ window.CampistryGoRoutePost = (function () {
             return d;
         }
         const outOfTime = () => Date.now() - t0 > timeBudgetMs;
+        // Near-camp stops are on every bus's way out: never pruned by reach.
+        const nearCamp = a => haversineMi(depot.lat, depot.lng, a.lat, a.lng) <= o.polishNearCampMi;
         function wedgeOk(b, adding, removingIdx) {
             const pts = [];
             for (let i = 0; i < b.atoms.length; i++) if (i !== removingIdx) pts.push(b.atoms[i]);
@@ -1615,7 +1620,7 @@ window.CampistryGoRoutePost = (function () {
                         if (bi === ei) continue;
                         const Bb = B[bi];
                         if (Bb.count + cnt(a) > Bb.cap) continue;
-                        if (Bb.atoms.length && reachMi(Bb, a) > o.polishReachMi) continue;
+                        if (Bb.atoms.length && !nearCamp(a) && reachMi(Bb, a) > o.polishReachMi) continue;
                         if (!wedgeOk(Bb, [a], -1)) continue;
                         const ins = bestInsert(Bb, a, -1);
                         if (!best || ins.delta < best.delta) best = { delta: ins.delta, bi, at: ins.at };
@@ -1666,7 +1671,7 @@ window.CampistryGoRoutePost = (function () {
                         if (bi === ai) continue;
                         const Bb = B[bi];
                         if (Bb.count + cnt(atom) > Bb.cap) continue;
-                        if (Bb.atoms.length && reachMi(Bb, atom) > reach) continue;
+                        if (Bb.atoms.length && !nearCamp(atom) && reachMi(Bb, atom) > reach) continue;
                         const ins = bestInsert(Bb, atom, -1);
                         const delta = dA + ins.delta + streetDelta(A, Bb, atom);
                         if (delta < -EPS && (!best || delta < best.delta)) {
@@ -1775,7 +1780,7 @@ window.CampistryGoRoutePost = (function () {
                     for (let bi = 0; bi < N; bi++) {
                         const Bb = B[bi];
                         if (Bb.count + cnt(a) > Bb.cap) continue;
-                        if (Bb.atoms.length && reachMi(Bb, a) > o.polishReachMi) continue;
+                        if (Bb.atoms.length && !nearCamp(a) && reachMi(Bb, a) > o.polishReachMi) continue;
                         const ins = bestInsert(Bb, a, -1);
                         const c = ins.delta + (SPLIT && streetOf(a) && !Bb.streets.has(streetOf(a)) && (streetBuses.get(streetOf(a)) || 0) >= 1 ? SPLIT : 0);
                         if (!best || c < best.c) { if (!wedgeOk(Bb, [a], -1)) continue; best = { c, bi, at: ins.at }; }
