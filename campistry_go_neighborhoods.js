@@ -1179,10 +1179,33 @@ window.CampistryGoNeighborhoods = (function () {
     //   5. Overflow: if no bus fits, place on least-full (+warn) rather than
     //      silently dropping the neighborhood's campers.
     // -------------------------------------------------------------------------
+    // Straight-line leg model fitted from road legs: minutes = fixedMin + minPerMi x miles,
+    // least squares over a deterministic sample of point pairs. Returns null when
+    // there is too little to fit. `factor` is the road factor at `speedMph`.
+    function fitLegModel(pts, legs, speedMph) {
+        const P = (typeof window !== 'undefined') && window.CampistryGoRoutePost;
+        if (!P || !pts || pts.length < 8 || typeof legs !== 'function') return null;
+        const n = pts.length, want = 3000, stride = Math.max(1, Math.floor((n * (n - 1) / 2) / want));
+        let k = 0, cnt = 0, sx = 0, sy = 0, sxx = 0, sxy = 0;
+        for (let i = 0; i < n; i++) for (let j = i + 1; j < n; j++) {
+            if ((k++ % stride) !== 0) continue;
+            const mi = P.haversineMi(pts[i].lat, pts[i].lng, pts[j].lat, pts[j].lng);
+            if (!(mi > 0.05) || mi > 12) continue;
+            const m = legs(pts[i], pts[j]);
+            if (!Number.isFinite(m) || m <= 0 || m > 90) continue;
+            cnt++; sx += mi; sy += m; sxx += mi * mi; sxy += mi * m;
+        }
+        if (cnt < 30) return null;
+        const den = cnt * sxx - sx * sx; if (Math.abs(den) < 1e-9) return null;
+        const b = (cnt * sxy - sx * sy) / den, a = (sy - b * sx) / cnt;
+        const minPerMi = Math.max(1, b), fixedMin = Math.min(3, Math.max(0, a));
+        return { fixedMin, minPerMi, factor: Math.min(3, Math.max(1, minPerMi * Math.max(1, speedMph) / 60)), pairs: cnt };
+    }
+
     function packIntoBuses({ result, buses, priorAssignments = {}, siblingGroups = {}, depot = null, maxRideMin = 45, avgStopMin = 2, paceMinPerMi = 6,
                              rideSpeedMph = 25, rideStopMin = 1, maxChildRideMin = 0,
                              busOverheadMin = 5, secPerRider = 0, isArrival = false, returnToDepot = false,
-                             mergeSameStreetMi = 0, mergeAnyMi = 0 }) {
+                             mergeSameStreetMi = 0, mergeAnyMi = 0, roadNet = null }) {
         if (!result || !result.neighborhoods.length) return [];
 
         // Input audit: any duplicate nhIds in result.neighborhoods, or duplicate
@@ -1275,9 +1298,27 @@ window.CampistryGoNeighborhoods = (function () {
                 if (Number.isFinite(h.lat) && Number.isFinite(h.lng)) { la += h.lat; lo += h.lng; n++; }
             }
             // `street`: the way's name, so the polish can keep one street on one bus.
-            _segPt[s.id] = n ? { lat: la / n, lng: lo / n, count: (s.homes || []).length,
-                                 street: String(s.name || '').toLowerCase().trim() } : null;
+            const street = String(s.name || '').toLowerCase().trim();
+            _segPt[s.id] = n ? { sid: s.id, lat: la / n, lng: lo / n, count: (s.homes || []).length, street, streetKey: street } : null;
         }
+        // Street times between every segment point and camp, when the road
+        // network is loaded: the districting's polish is then priced on real
+        // legs and the two candidates are judged on them, and a straight-line
+        // leg model is fitted from the same legs for the passes that have no
+        // legs (the sweep's arc costs, the fallbacks). The camp's roads ran 1.5-
+        // 1.7x straight line with ~0.7 min per leg; the old flat 1.35 priced
+        // core hops at half their cost.
+        let segLegs = null, legFit = null;
+        if (roadNet && depot && typeof roadNet.legMinutesFor === 'function') {
+            try {
+                const pts = Object.values(_segPt).filter(Boolean);
+                segLegs = roadNet.legMinutesFor([depot].concat(pts));
+                legFit = fitLegModel(pts, segLegs, rideSpeedMph);
+                console.log('[Go-NH] Road legs: ' + pts.length + ' segment points priced on street times' +
+                    (legFit ? ' — fitted leg model: ' + legFit.fixedMin.toFixed(1) + ' min per leg + ' + legFit.factor.toFixed(2) + 'x straight line at ' + rideSpeedMph + 'mph (' + legFit.pairs + ' pairs)' : ''));
+            } catch (e) { console.warn('[Go-NH] Road legs unavailable for districting: ' + e.message); segLegs = null; legFit = null; }
+        }
+        const legOpts = legFit ? { roadFactor: legFit.factor, legFixedMin: legFit.fixedMin } : {};
 
         // Split `items` into exactly `k` geographically-compact groups of roughly
         // equal camper load. Splitting by "halve until it fits" instead overshoots
@@ -2027,6 +2068,55 @@ window.CampistryGoNeighborhoods = (function () {
         // Neither wins everywhere, so build both and keep whichever districts
         // better. This is what makes the result independent of how many buses
         // the camp happens to own — no tuning required.
+        let polishedOnRoads = null;
+        // Polish a candidate districting (a fresh copy): trade segments between
+        // buses to cut fleet minutes, priced on street times when known.
+        // Returns { cands, res } or null.
+        function polishAssignments(cands, label) {
+            const post = (typeof window !== 'undefined') && window.CampistryGoRoutePost;
+            if (!post || !post.polishDistricts || !depot) return null;
+            const copy = cands.map(b => Object.assign({}, b, { segmentIds: b.segmentIds.slice(), neighborhoodIds: (b.neighborhoodIds || []).slice(),
+                                                                _centroidSum: Object.assign({}, b._centroidSum || { lat: 0, lng: 0, w: 0 }) }));
+            const segPiece = {};
+            for (const nh of workNhs) for (const sid of nh.segmentIds) segPiece[sid] = nh.id;
+            const homeless = copy.map(b => b.segmentIds.filter(sid => !_segPt[sid]));
+            // the segment point objects themselves: the road legs answer them by identity
+            const buckets = copy.map(b => b.segmentIds.map(sid => _segPt[sid]).filter(Boolean));
+            let res = null;
+            try {
+                res = post.polishDistricts(buckets, copy.map(b => b.capacity), depot, Object.assign({
+                    avgSpeedMph: rideSpeedMph, avgStopMin: rideStopMin, secPerRider, busOverheadMin, isArrival, returnToDepot,
+                    polishRideBudgetMin: maxChildRideMin > 0 ? maxChildRideMin : 0,
+                    polishMergeSameStreetMi: mergeSameStreetMi, polishMergeAnyMi: mergeAnyMi,
+                    // Far-tail hand-offs belong to the road-time polish on the
+                    // finished stops; on 400+ segments they cost this stage its
+                    // whole time budget (the camp's run hit the 20s guard).
+                    polishTailMinMi: 0,
+                    legMinutes: segLegs || undefined,
+                }, legOpts));
+            } catch (e) { console.warn('[Go-NH] Polish skipped (' + label + '): ' + e.message); return null; }
+            if (!res) return null;
+            copy.forEach((bus, i) => {
+                const atoms = res.buckets[i];
+                bus.segmentIds = atoms.map(a => a.sid).concat(homeless[i]);
+                bus.camperCount = atoms.reduce((a, x) => a + x.count, 0);
+                const ids = [];
+                for (const sid of bus.segmentIds) {
+                    const id = segPiece[sid] || (_segIndex[sid] && _segIndex[sid].neighborhoodId);
+                    if (id && !ids.includes(id)) ids.push(id);
+                }
+                bus.neighborhoodIds = ids;
+                bus._centroidSum = { lat: 0, lng: 0, w: 0 };
+                for (const a of atoms) { bus._centroidSum.lat += a.lat * a.count; bus._centroidSum.lng += a.lng * a.count; bus._centroidSum.w += a.count; }
+            });
+            console.log('[Go-NH] Polish (' + label + (segLegs ? ', street times' : '') + '): ' + res.moves + ' segment move(s), est. fleet ' +
+                Math.round(res.fleetBefore) + ' → ' + Math.round(res.fleetAfter) + ' min, child-minutes ' +
+                Math.round(res.childMinBefore) + ' → ' + Math.round(res.childMinAfter) +
+                (res.stoppedBy === 'work' ? ' — stopped at its work limit' :
+                 res.stoppedBy === 'time' ? ' — ran out of time (machine busy); this run may differ from the next' :
+                 ' — converged') + (res.elapsedMs != null ? ' in ' + (res.elapsedMs / 1000).toFixed(1) + 's' : ''));
+            return { cands: copy, res };
+        }
         function districtScore(cands) {
             let worstArc = 0, worstSpread = 0;
             for (const bus of cands) {
@@ -2094,10 +2184,10 @@ window.CampistryGoNeighborhoods = (function () {
             if (ring.length < 2) return null;
 
             const byCapDesc = vehicles.slice().sort((a, b) => b.capacity - a.capacity);
-            const best = post.sweepPartition(ring, byCapDesc.map(v => v.capacity), depot, {
+            const best = post.sweepPartition(ring, byCapDesc.map(v => v.capacity), depot, Object.assign({
                 avgSpeedMph: rideSpeedMph, avgStopMin: rideStopMin, secPerRider, busOverheadMin,
                 sweepMaxRideMin: maxChildRideMin > 0 ? maxChildRideMin : 0,
-            });
+            }, legOpts));
             if (!best) return null;
 
             const cand = byCapDesc.map(v => ({
@@ -2126,7 +2216,28 @@ window.CampistryGoNeighborhoods = (function () {
             let sweep = null;
             try { sweep = buildSweepCandidate(); }
             catch (e) { console.warn('[Go-NH] Sweep candidate failed: ' + e.message); }
-            if (sweep) {
+            if (sweep && segLegs) {
+                // Street times are known: polish BOTH candidates on real legs and
+                // keep the lower objective (fleet minutes plus the cap penalty).
+                // A shape score guessed this before; the noise test showed a
+                // straight-line model cannot be trusted to rank districtings.
+                // A candidate with a bus on both sides of camp never beats one
+                // without; otherwise the greedy (prior-year) mapping is kept
+                // unless the sweep is a clear 2% better.
+                const sweepStraddles = anyStraddle(sweep.cand);
+                const pg = greedyStraddles && !sweepStraddles ? null : polishAssignments(assignments, 'greedy');
+                const ps = sweepStraddles && !greedyStraddles ? null : polishAssignments(sweep.cand, 'sweep');
+                const objOf = x => x && x.res ? x.res.after : Infinity;
+                let pick;
+                if (!pg) pick = 'sweep';
+                else if (!ps) pick = 'greedy';
+                else pick = objOf(ps) < objOf(pg) * 0.98 ? 'sweep' : 'greedy';
+                const chosen = pick === 'sweep' ? ps : pg;
+                console.log('[Go-NH] Districting on street times: ' + (pg ? 'greedy ' + Math.round(pg.res.fleetAfter) + ' min' : 'greedy has a bus on both sides of camp') +
+                    ' vs ' + (ps ? 'sweep ' + Math.round(ps.res.fleetAfter) + ' min' : 'sweep has a bus on both sides of camp') + ' — ' + pick.toUpperCase() + ' wins');
+                assignments = chosen.cands;
+                polishedOnRoads = chosen.res;
+            } else if (sweep) {
                 const sweepStraddles = anyStraddle(sweep.cand);
                 // A greedy result that puts a bus on both sides of camp loses
                 // outright to a sweep that doesn't — or, when the fleet is so
@@ -2169,50 +2280,12 @@ window.CampistryGoNeighborhoods = (function () {
 
         // --- 2e. Polish: trade segments between buses to cut fleet minutes ---
         // Districting decided the areas; this decides the edges. Priced on
-        // each bus's own tour, under seats + containment, never a straddle.
-        {
-            const post = (typeof window !== 'undefined') && window.CampistryGoRoutePost;
-            if (post && post.polishDistricts && depot) {
-                const segPiece = {};
-                for (const nh of workNhs) for (const sid of nh.segmentIds) segPiece[sid] = nh.id;
-                const homeless = assignments.map(b => b.segmentIds.filter(sid => !_segPt[sid]));
-                const buckets = assignments.map(b => b.segmentIds
-                    .map(sid => { const p = _segPt[sid]; return p ? { sid, count: p.count, lat: p.lat, lng: p.lng, streetKey: p.street } : null; })
-                    .filter(Boolean));
-                let res = null;
-                try {
-                    res = post.polishDistricts(buckets, assignments.map(b => b.capacity), depot, {
-                        avgSpeedMph: rideSpeedMph, avgStopMin: rideStopMin, secPerRider, busOverheadMin, isArrival, returnToDepot,
-                        polishRideBudgetMin: maxChildRideMin > 0 ? maxChildRideMin : 0,
-                        polishMergeSameStreetMi: mergeSameStreetMi, polishMergeAnyMi: mergeAnyMi,
-                        // Far-tail hand-offs belong to the road-time polish, which prices
-                        // them on real legs; on 400+ segments they cost this stage its
-                        // whole time budget (the camp's run hit the 20s guard).
-                        polishTailMinMi: 0,
-                    });
-                } catch (e) { console.warn('[Go-NH] Polish skipped: ' + e.message); }
-                if (res && res.moves) {
-                    assignments.forEach((bus, i) => {
-                        const atoms = res.buckets[i];
-                        bus.segmentIds = atoms.map(a => a.sid).concat(homeless[i]);
-                        bus.camperCount = atoms.reduce((a, x) => a + x.count, 0);
-                        const ids = [];
-                        for (const sid of bus.segmentIds) {
-                            const id = segPiece[sid] || (_segIndex[sid] && _segIndex[sid].neighborhoodId);
-                            if (id && !ids.includes(id)) ids.push(id);
-                        }
-                        bus.neighborhoodIds = ids;
-                        bus._centroidSum = { lat: 0, lng: 0, w: 0 };
-                        for (const a of atoms) { bus._centroidSum.lat += a.lat * a.count; bus._centroidSum.lng += a.lng * a.count; bus._centroidSum.w += a.count; }
-                    });
-                    console.log('[Go-NH] Polish: ' + res.moves + ' segment move(s), est. fleet ' +
-                        Math.round(res.fleetBefore) + ' → ' + Math.round(res.fleetAfter) + ' min, child-minutes ' +
-                        Math.round(res.childMinBefore) + ' → ' + Math.round(res.childMinAfter) +
-                        (res.stoppedBy === 'work' ? ' — stopped at its work limit' :
-                         res.stoppedBy === 'time' ? ' — ran out of time (machine busy); this run may differ from the next' :
-                         ' — converged') + (res.elapsedMs != null ? ' in ' + (res.elapsedMs / 1000).toFixed(1) + 's' : ''));
-                }
-            }
+        // each bus's own tour (street times when the road network is loaded),
+        // under seats + containment, never a straddle. When the candidates were
+        // judged on street times the winner is already polished.
+        if (!polishedOnRoads) {
+            const p = polishAssignments(assignments, 'districting');
+            if (p) assignments = p.cands;
         }
 
         // --- 3. Within-bus ordering: group segments by NH, order NHs via NN from depot ---
@@ -2297,6 +2370,7 @@ window.CampistryGoNeighborhoods = (function () {
         }
 
         // --- 5. Strip bookkeeping fields before returning ---
+        assignments._legFit = legFit;
         return assignments
             .filter(a => a.neighborhoodIds.length > 0)
             .map(a => {
@@ -2577,7 +2651,7 @@ window.CampistryGoNeighborhoods = (function () {
         buildNeighborhoods,
         packIntoBuses,
         expandToPhysicalStops,
-        cornerSnapper,
+        cornerSnapper, fitLegModel,
         parseStreetName,
         normStreet,
         loadRoadGraph: fetchRoadGraph,

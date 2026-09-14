@@ -185,6 +185,31 @@ addresses ─ geocode ─┬─ road graph (OpenStreetMap) ─ neighbourhoods �
   next stop's group when the driving is equal. The console says how many
   stops had a choice, how many moved and the detour minutes saved.
 
+* **Districting on street times** (`packIntoBuses({ roadNet })`): once the
+  road network is loaded, every segment point is priced against every other
+  on real legs (one bounded Dijkstra per point, ~2 s for 500 points), the
+  districting polish runs on those legs, and the sweep and greedy
+  candidates are each polished and judged on the resulting objective —
+  fleet minutes plus the cap penalty — instead of a shape score. A candidate
+  with a bus on both sides of camp never beats one without; otherwise the
+  greedy (prior-year) mapping is kept unless the sweep is 2% better. The
+  same legs fit a straight-line leg model (`fitLegModel`: fixed minutes per
+  leg + a road factor, least squares over ~3000 sampled pairs) that the
+  sweep's arc costs and every pass without street times use through
+  `legFixedMin` / `roadFactor` (the camp's roads: ~0.7 min per leg and
+  1.5-1.7x; the old flat 1.35 with no per-leg cost priced core hops at half
+  their cost). The districting now aims at the same Max Route Duration as
+  the road polish and the audit. Segment points are the very objects the
+  legs answer by identity: resolving them by coordinate strings made the
+  polish three times slower and pushed it into the wall-clock guard.
+
+* **Real-map regression** (`tests/bus_camp_geometry.test.js`): two of the
+  camp's generated route sets, as bare geometry (no names, no addresses),
+  replayed through the pure passes on every test run — every child exactly
+  once, seats, containment, fleet minutes never rising, no bus pushed over
+  the cap by a fleet-only hand-off, the same input giving the same routes
+  twice, and the ordering never longer than the stamped order.
+
 * **Far-tail hand-off** (`polishTailMinMi` 4): the costliest habit a fleet
   has is four buses each hauling a few children to the same far pocket, and
   no cap catches it when every run is under the cap. Once the single-stop

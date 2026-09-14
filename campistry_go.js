@@ -200,6 +200,7 @@ let _toastTimer = null;
     // times when it is present.
     let _activeRoadNet = null;
     let _lastNhResult = null; // the districting's road graph + homes, for passes that run after it
+    let _legFit = null;       // straight-line leg model fitted from the road network on the last run
     function _roadLegsFor(stops, campLat, campLng) {
         if (!_activeRoadNet) return null;
         try { return _activeRoadNet.legMinutesFor([{ lat: campLat, lng: campLng }].concat(stops || [])); }
@@ -223,7 +224,9 @@ let _toastTimer = null;
             avgSpeedMph: D.setup.avgSpeed || 25,
             avgStopMin: D.setup.avgStopTime || 1,
             secPerRider: Math.max(0, parseFloat(D.setup.secPerRider) || 0),
-            roadFactor: ROAD_FACTOR,
+            // the leg model for passes without street times: fitted from the road network when it was loaded
+            roadFactor: _legFit ? _legFit.factor : ROAD_FACTOR,
+            legFixedMin: _legFit ? _legFit.fixedMin : 0,
             busOverheadMin: _busOverheadMin(),
             equalizeLoads: D.setup.equalizeBusLoads === true,
             returnToDepot: _shiftReturnsToCamp,
@@ -4416,7 +4419,7 @@ async function _tryNeighborhoodPipeline({
     }
 
     // ── Run neighborhood detection ──
-    _lastNhResult = null;
+    _lastNhResult = null; _legFit = null;
     const nhResult = await window.CampistryGoNeighborhoods.buildNeighborhoods({
         campers: nhCampers,
         // camp anchors the map: every home within the service radius is on it
@@ -4473,7 +4476,10 @@ async function _tryNeighborhoodPipeline({
         // than the rest of the camp.
         rideSpeedMph: D.setup.avgSpeed || 25,
         rideStopMin: D.setup.avgStopTime || 1,
-        maxChildRideMin: 60,
+        // the same cap the road polish and the audit use
+        maxChildRideMin: _routeCapMin(),
+        // street times for the districting's polish and its choice of candidate
+        roadNet: _activeRoadNet,
         secPerRider: Math.max(0, parseFloat(D.setup.secPerRider) || 0),
         busOverheadMin: _busOverheadMin(),
         isArrival: !!isArrival,
@@ -4484,6 +4490,7 @@ async function _tryNeighborhoodPipeline({
         mergeAnyMi: Math.max(0.05, (D.setup.maxWalkDistance || 500) / 5280)
     });
 
+    _legFit = (nhAssignment && nhAssignment._legFit) || null;
     showProgress(shiftLabel + ': generating per-zone stops...', pctBase + 40);
 
     // ── Expand each zone into physical stops ──

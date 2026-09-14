@@ -40,6 +40,7 @@ window.CampistryGoRoutePost = (function () {
         secPerRider: 0,            // extra dwell per child boarding/alighting (seconds); school-bus studies
                                    // measure ~19s + 2.6s/student, camps set their own
         roadFactor: 1.35,
+        legFixedMin: 0,             // minutes every leg costs on top of distance (turns, lights); fitted from road legs when known
         busOverheadMin: 5,         // cost of running a bus at all (min-equivalent); raise to prefer fewer buses
         maxRideRatio: 2.0,         // a child should not ride more than this x their direct trip (+ slack)
         rideRatioSlackMin: 10,
@@ -68,7 +69,7 @@ window.CampistryGoRoutePost = (function () {
         // two runs of the same input give the same routes on any machine; the
         // wall clock is only a guard against a pathological input.
         polishMaxWork: 100e6,      // ~11s on a 2024 laptop; a 400-atom districting converges at ~90e6
-        polishTimeBudgetMs: 20000,
+        polishTimeBudgetMs: 40000,   // guard only; the work budget above is what normally stops the polish
         polishRideBudgetMin: 60,   // soft riding budget per bus (0 = off)
         polishOverBudgetX: 2,      // bus-minute equivalents per minute a bus runs past its budget
         polishOverBudgetQuad: 0,   // ...plus this x the SQUARE of those minutes: a bus far over the cap costs
@@ -153,7 +154,7 @@ window.CampistryGoRoutePost = (function () {
         if (!o || !Number.isFinite(o.roadFactor)) o = opts(o);
         if (!hasPos(a) || !hasPos(b)) return 3;
         if (Math.abs(a.lat - b.lat) < 1e-5 && Math.abs(a.lng - b.lng) < 1e-5) return 0;
-        return (haversineMi(a.lat, a.lng, b.lat, b.lng) * o.roadFactor / Math.max(1, o.avgSpeedMph)) * 60;
+        return (o.legFixedMin > 0 ? o.legFixedMin : 0) + (haversineMi(a.lat, a.lng, b.lat, b.lng) * o.roadFactor / Math.max(1, o.avgSpeedMph)) * 60;
     }
     function bearing(depot, p) { return Math.atan2(p.lng - depot.lng, p.lat - depot.lat); }
     function angDiff(a, b) { let d = Math.abs(a - b) % (2 * Math.PI); return d > Math.PI ? 2 * Math.PI - d : d; }
@@ -1180,7 +1181,7 @@ window.CampistryGoRoutePost = (function () {
             const diag = haversineMi(agg.mnLa, agg.mnLo, agg.mxLa, agg.mxLo);
             const miles = agg.far + 0.5 * Math.sqrt(stops) * diag;
             const ride = (miles * o.roadFactor / Math.max(1, o.avgSpeedMph)) * 60 +
-                stops * o.avgStopMin + (o.secPerRider > 0 ? agg.count * o.secPerRider / 60 : 0);
+                stops * (o.avgStopMin + (o.legFixedMin > 0 ? o.legFixedMin : 0)) + (o.secPerRider > 0 ? agg.count * o.secPerRider / 60 : 0);
             const over = o.sweepMaxRideMin > 0 ? Math.max(0, ride - o.sweepMaxRideMin) : 0;
             return ride + over * 2 + OVERHEAD + (cutInsideGroup ? CUT : 0);
         }
