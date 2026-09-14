@@ -214,47 +214,45 @@
      hands camps an address that silently receives nothing. If you're piloting
      on a Resend managed address, use its <id>.resend.app host. -->
 <script>
-  // ── PILOT: Resend managed address ──────────────────────────────────────
-  // Currently the Resend MANAGED inbound host, not our own domain.
+  // The Resend Inbound domain that actually receives mail.
   //
-  // Resend gates inbound on a custom domain behind that domain being Verified
-  // for sending (its Inbound page sends you to Domains, where
-  // inbound.campistry.org sits at Pending). The managed <id>.resend.app host
-  // needs no DNS at all and accepts any local part, so it receives today.
+  // Back on our own domain. It piloted on the Resend managed host
+  // (<id>.resend.app) while inbound.campistry.org sat at Pending, because
+  // Resend gates inbound on a custom domain being verified and the managed
+  // host needs no DNS at all.
   //
-  // The switch back is these two lines and nothing else -- the edge function
-  // reads the token from either address shape (tokenFromAddresses), so no
-  // already-minted token or stored deposit is affected. Do it once
-  // inbound.campistry.org shows Verified:
+  // Nothing in the database cares which of the two is in use: the edge
+  // function reads the routing token from either address shape
+  // (tokenFromAddresses), so every already-minted token and stored deposit
+  // stays valid, and mail sent to the old managed address still routes while
+  // it remains active in Resend. Only the address a camp is TOLD to use
+  // changes, so anyone already forwarding to the old one needs the new one.
   //
-  //     window.CAMPISTRY_INBOUND_DOMAIN = 'inbound.campistry.org';
-  //     window.CAMPISTRY_INBOUND_PREFIX = 'deposits+';
-  //
-  // Get this wrong and every camp is handed an address that silently
-  // receives nothing, so it must match what Resend is really receiving on.
-  window.CAMPISTRY_INBOUND_DOMAIN = 'saeesteupi.resend.app';
-  // Empty, deliberately. Plus-addressing is accepted by most providers but is
-  // not guaranteed on a managed host, and a silently-dropped '+' means a
-  // camp's bank alerts vanish with no error anywhere. The bare token as the
-  // whole local part always routes. The readable 'deposits+' prefix comes
-  // back with the custom domain.
-  window.CAMPISTRY_INBOUND_PREFIX = '';
+  // Get this wrong and every camp is handed an address that silently receives
+  // nothing -- it must match what Resend is really receiving on.
+  window.CAMPISTRY_INBOUND_DOMAIN = 'inbound.campistry.org';
+  // On our own domain the readable prefix is worth having: the address is read
+  // out to camps and pasted into bank alert settings, and 'deposits+' says
+  // what it is. It also leaves room to route other purposes (replies, forms)
+  // on the same domain later. The edge function accepts this and the bare
+  // token form.
+  window.CAMPISTRY_INBOUND_PREFIX = 'deposits+';
 </script>
-<script src="campistry_deposit_parser.js?v=20260911-05"></script>
-<script src="campistry_deposit_match.js?v=20260911-05"></script>
+<script src="campistry_deposit_parser.js?v=20260914-01"></script>
+<script src="campistry_deposit_match.js?v=20260914-01"></script>
 <!-- Learned per-bank layouts. Must load BEFORE the UI, which offers to teach
      one. tests/deposit_scripts_loaded.test.js fails the build if a deposit
      module ever ships without a tag here. -->
-<script src="campistry_deposit_template.js?v=20260911-05"></script>
+<script src="campistry_deposit_template.js?v=20260914-01"></script>
 <!-- Teaching a layout from a printed email. PDF.js is already vendored here
      (campistry_link_parent.html uses it too), so nothing is fetched from a CDN
      and the worker path must be set before any document is opened. -->
-<script src="pdfjs-dist@3.11.174.min.js?v=20260911-05"></script>
+<script src="pdfjs-dist@3.11.174.min.js?v=20260914-01"></script>
 <script>
-if (window.pdfjsLib) { window.pdfjsLib.GlobalWorkerOptions.workerSrc = 'pdfjs-dist@3.11.174.worker.min.js?v=20260911-05'; }
+if (window.pdfjsLib) { window.pdfjsLib.GlobalWorkerOptions.workerSrc = 'pdfjs-dist@3.11.174.worker.min.js?v=20260914-01'; }
 </script>
-<script src="campistry_deposit_teach_pdf.js?v=20260911-05"></script>
-<script src="campistry_deposits_ui.js?v=20260911-05"></script>
+<script src="campistry_deposit_teach_pdf.js?v=20260914-01"></script>
+<script src="campistry_deposits_ui.js?v=20260914-01"></script>
 <script src="campistry_payroll_core.js?v=20260907-01"></script>
 <!-- Shared catalogue of what counselors may see. Loaded by Me (where the
      policy is set) and by Lite (where it's enforced) — one list, so a field

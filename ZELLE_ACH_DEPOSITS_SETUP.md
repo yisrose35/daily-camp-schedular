@@ -220,23 +220,20 @@ Two constants near the top of `campistry_me.html`:
 
 ```html
 <script>
-  window.CAMPISTRY_INBOUND_DOMAIN = 'saeesteupi.resend.app';
-  window.CAMPISTRY_INBOUND_PREFIX = '';
+  window.CAMPISTRY_INBOUND_DOMAIN = 'inbound.campistry.org';
+  window.CAMPISTRY_INBOUND_PREFIX = 'deposits+';
 </script>
 ```
 
-> **Currently on the Resend managed host, not `inbound.campistry.org`.**
-> Resend gates inbound on a custom domain behind that domain being Verified
-> for sending: its Inbound page offers `<anything>@<id>.resend.app` and
-> otherwise sends you to Domains, where `inbound.campistry.org` sits at
-> Pending. Adding the MX record alone does not open receiving.
+> Piloted on the Resend managed host (`<id>.resend.app`) while
+> `inbound.campistry.org` was pending, because Resend gates inbound on a custom
+> domain being verified and the managed host needs no DNS at all. Now back on
+> our own domain.
 >
-> The managed host needs no DNS and accepts any local part, so it receives
-> today. Switch back to `'inbound.campistry.org'` / `'deposits+'` once the
-> domain shows Verified -- these two lines are the entire change. The edge
-> function reads the routing token from either address shape, so no
-> already-minted token or stored deposit is affected; camps onboarded before
-> the switch just need to be given the new address for their bank alerts.
+> Nothing in the database cares which is in use: the edge function reads the
+> routing token from either address shape, so every already-minted token and
+> stored deposit stays valid. Only the address a camp is TOLD to use changes,
+> so anyone already forwarding to the managed address needs the new one.
 
 `CAMPISTRY_INBOUND_DOMAIN` is the domain half of every camp's deposit address,
 from step 3.

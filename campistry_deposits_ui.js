@@ -58,7 +58,7 @@
     // in the Bank layouts footer. Twice now a fix has been live on the server
     // while the browser ran an older copy, and there was no way to tell from
     // the screen which one was which -- so the screen says.
-    D.BUILD = '20260911-05';
+    D.BUILD = '20260914-01';
 
     var state = {
         loaded: false,
