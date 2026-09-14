@@ -71,7 +71,7 @@
     // in the Bank layouts footer. Twice now a fix has been live on the server
     // while the browser ran an older copy, and there was no way to tell from
     // the screen which one was which -- so the screen says.
-    D.BUILD = '20260914-11';
+    D.BUILD = '20260914-12';
 
     var state = {
         loaded: false,
@@ -1825,6 +1825,57 @@
     // matching fine while the matcher found no family. Those need four
     // different fixes and looked identical from outside.
 
+    /**
+     * Which taught layout belongs to this deposit.
+     *
+     * Four ways to reach the same bank, in falling order of certainty,
+     * because a camp that has taught Chase and is looking at a Chase alert
+     * must never be told there is no layout:
+     *   1. the From: inside a recognised forward block
+     *   2. any From: in the message that is not a personal mailbox -- forward
+     *      markers vary by client and do not survive HTML conversion
+     *   3. the envelope sender, when it is not a personal mailbox
+     *   4. the bank the reader already identified, matched against the label
+     *      on a taught layout -- the last resort, and the one that saves a
+     *      camp whose forwarding strips the headers entirely
+     */
+    function layoutFor(d, body) {
+        var P = W.CampistryDepositParser, T = Tpl();
+        if (!T) return { sig: '', row: null, via: '', envelope: '' };
+
+        var envelope = d.from_address || '';
+        var addr = (P && P.originalSender ? P.originalSender(body) : '') ||
+                   (P && P.bankSender ? P.bankSender(body) : '');
+        var via = addr ? 'forwarded' : '';
+        if (!addr && envelope && P && P.isPersonalMail && !P.isPersonalMail(envelope)) addr = envelope;
+
+        var sig = addr ? T.signature(addr) : '';
+        function pick(list) {
+            return list.filter(function (t) { return t.scope === 'camp'; })[0] || list[0] || null;
+        }
+        var row = sig ? pick(state.templates.filter(function (t) {
+            return T.signature(t.bank_signature) === sig;
+        })) : null;
+
+        if (!row) {
+            var bank = String(d.bank || (P && P.detectBank ? P.detectBank(body) : '') || '').toLowerCase();
+            if (bank) {
+                var byBank = pick(state.templates.filter(function (t) {
+                    var label = String(t.bank_label || '').toLowerCase();
+                    var domain = String(T.signature(t.bank_signature) || '').split('.')[0].toLowerCase();
+                    return domain === bank || (label && label.indexOf(bank) >= 0);
+                }));
+                if (byBank) {
+                    row = byBank;
+                    sig = T.signature(byBank.bank_signature);
+                    via = 'bank-name';
+                }
+            }
+        }
+        if (!sig && envelope) sig = T.signature(envelope);
+        return { sig: sig, row: row, via: via, envelope: envelope };
+    }
+
     D.reread = async function (depositId) {
         var d = null;
         for (var i = 0; i < state.deposits.length; i++) {
@@ -1861,20 +1912,19 @@
         // alert, and is told there is no layout for gmail.com -- while the
         // layout they just taught sits right there. The original sender inside
         // the forward is the bank, and that is what a layout is about.
-        var fromAddr = (P && P.originalSender ? P.originalSender(body) : '') || d.from_address || '';
-        var forwarded = !!(fromAddr && d.from_address &&
-                           T && T.signature(fromAddr) !== T.signature(d.from_address));
-        var sig = (T && fromAddr) ? T.signature(fromAddr) : '';
-        var row = null;
-        if (forwarded) step(true, 'Forwarded \u2014 the bank is ' + sig,
-            'Sent on from ' + d.from_address + ', so the layout is looked up under ' + sig + ' rather than the forwarder.');
-        if (!fromAddr) {
-            step(false, 'No sender recorded', 'Recorded before the sending address was stored, and the message carries no forwarded From: line, so no layout can be looked up.');
+        var found = layoutFor(d, body);
+        var sig = found.sig, row = found.row;
+        if (found.via && sig && found.envelope && T && T.signature(found.envelope) !== sig) {
+            step(true, 'Forwarded \u2014 the bank is ' + sig,
+                found.via === 'bank-name'
+                    ? 'The forwarded headers were stripped, so the layout was found by the bank name in the message rather than by address.'
+                    : 'Sent on from ' + found.envelope + ', so the layout is looked up under ' + sig + ' rather than the forwarder.');
+        }
+        if (!sig) {
+            step(false, 'No sender recorded', 'Recorded before the sending address was stored, and the message carries no From: line, so no layout can be looked up.');
         } else if (!state.templates.length) {
-            step(false, 'No layouts taught yet', 'Bank layouts → Upload a printed email.');
+            step(false, 'No layouts taught yet', 'Bank layouts \u2192 Upload a printed email.');
         } else {
-            var mine = state.templates.filter(function (t) { return T.signature(t.bank_signature) === sig; });
-            row = mine.filter(function (t) { return t.scope === 'camp'; })[0] || mine[0];
             if (!row) {
                 step(false, 'No layout for ' + sig,
                     'Taught layouts: ' + state.templates.map(function (t) { return T.signature(t.bank_signature); }).join(', ') +
@@ -2123,10 +2173,7 @@
             // Same template lookup as the single re-read, forwarded senders
             // included -- the two must not be able to disagree.
             if (T && state.templates.length) {
-                var fromAddr = (P.originalSender ? P.originalSender(body) : '') || d.from_address || '';
-                var sig = fromAddr ? T.signature(fromAddr) : '';
-                var mine = state.templates.filter(function (t) { return T.signature(t.bank_signature) === sig; });
-                var row = mine.filter(function (t) { return t.scope === 'camp'; })[0] || mine[0];
+                var row = layoutFor(d, body).row;
                 if (row) {
                     var read = T.read(row.template, body);
                     Object.keys(read).forEach(function (f) {

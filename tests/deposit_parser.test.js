@@ -402,3 +402,29 @@ test('a bank’s own alert has no forwarded sender to read', () => {
     ].join('\n');
     assert.strictEqual(P.originalSender(direct), '');
 });
+
+test('the bank is found even when no forward marker survived', () => {
+    // Mail clients disagree about the marker line, and HTML-to-text conversion
+    // loses it outright. A camp whose forward arrives without one must still
+    // reach the Chase layout they taught — the From: line is the durable part.
+    const noMarker = [
+        'From: yisrose35@gmail.com',
+        'Subject: Fwd: You received $3.14',
+        '',
+        'From: Chase <no.reply.alerts@chase.com>',
+        '',
+        'Yisrael Rosenfeld sent you money',
+        '$3.14'
+    ].join('\n');
+    assert.strictEqual(P.originalSender(noMarker), '', 'no marker, so not a recognised forward');
+    assert.strictEqual(P.bankSender(noMarker), 'no.reply.alerts@chase.com');
+});
+
+test('the camp’s own mailbox is never mistaken for the bank', () => {
+    // The forwarder's address is a From: line too, and it comes first.
+    // Reading it would key the layout to gmail.com on every forwarded alert.
+    assert.strictEqual(P.bankSender('From: office@gmail.com\nFrom: alerts@chase.com'), 'alerts@chase.com');
+    assert.strictEqual(P.bankSender('From: office@gmail.com\nFrom: someone@yahoo.com'), '');
+    assert.ok(P.isPersonalMail('a@icloud.com') && P.isPersonalMail('b@Outlook.com'));
+    assert.ok(!P.isPersonalMail('alerts@chase.com') && !P.isPersonalMail('x@capitalone.com'));
+});

@@ -361,6 +361,42 @@ import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
         return '';
     };
 
+    // Consumer mailbox providers. An alert that appears to come from one of
+    // these was forwarded by a person: banks do not send from Gmail.
+    var PERSONAL_MAIL = /^(?:gmail|googlemail|outlook|hotmail|live|msn|yahoo|ymail|rocketmail|aol|icloud|me|mac|proton|protonmail|pm|gmx|zoho|fastmail|hey|mail|yandex|comcast|verizon|att|sbcglobal|bellsouth|cox|charter|optonline|earthlink|juno|aim)\./i;
+
+    /** True when this address belongs to a person's mailbox, not an institution. */
+    P.isPersonalMail = function (address) {
+        var at = String(address || '').split('@')[1] || '';
+        return PERSONAL_MAIL.test(at.toLowerCase() + '.');
+    };
+
+    /**
+     * The bank's own address, read from ANY "From:" line in the message.
+     *
+     * originalSender only trusts a From: inside a recognised forward block,
+     * which is right for deciding "was this forwarded" but too strict for
+     * "which bank is this". Forward markers vary by client, survive HTML
+     * conversion badly, and are missing entirely when somebody pastes an alert
+     * into a new mail. The From: line itself is far more robust, so this reads
+     * every one of them and takes the first that is not a personal mailbox --
+     * the camp's own Gmail is skipped, the bank is not.
+     *
+     * Deliberately only From: lines. Scanning the body for any address at all
+     * would pick up the camp's own address out of a To: line, or a support
+     * address out of a footer, and key the layout to the wrong domain.
+     */
+    P.bankSender = function (text) {
+        var lines = String(text || '').split('\n');
+        for (var i = 0; i < lines.length && i < 120; i++) {
+            var m = lines[i].match(/^\s*from\s*:\s*(?:[^<\n]*<)?([^>\s@]+@[^>\s]+?)>?\s*$/i);
+            if (!m) continue;
+            var addr = m[1].toLowerCase().replace(/[>.,;]+$/, '');
+            if (!P.isPersonalMail(addr)) return addr;
+        }
+        return '';
+    };
+
     P.stripForwardHeaders = function (text) {
         var lines = String(text || '').split('\n');
         var out = [];
@@ -2426,6 +2462,26 @@ function domainOf(addr: string): string {
  * signal a bank has changed its layout, and it is far better to fall back to
  * the generic parser for one email than to post a confidently wrong payer.
  */
+/**
+ * The bank's address for a message that may have been forwarded.
+ *
+ * originalSender only trusts a From: inside a recognised forward block. That
+ * is right for "was this forwarded" and too strict for "which bank is this":
+ * forward markers differ by mail client and do not survive HTML conversion, so
+ * bankSender reads every From: line and takes the first that is not a personal
+ * mailbox. The envelope sender is the fallback, and is itself discarded when
+ * it is a personal mailbox -- keying a layout to gmail.com helps nobody, and
+ * an empty fromAddress at least reads honestly as "no bank identified".
+ */
+function bankAddressOf(body: string, envelope: string): string {
+  const P: any = Parser;
+  const found = (P.originalSender ? P.originalSender(body) : "") ||
+                (P.bankSender ? P.bankSender(body) : "");
+  if (found) return found;
+  if (envelope && P.isPersonalMail && P.isPersonalMail(envelope)) return "";
+  return envelope;
+}
+
 async function applyLearnedTemplate(
   service: any,
   campId: string,
@@ -2665,7 +2721,7 @@ serve(async (req) => {
   const templateOutcome = parsed.ok
     ? await applyLearnedTemplate(
         service, campId,
-        Parser.originalSender(bodyForTemplate) || fromAddrs[0] || "",
+        bankAddressOf(bodyForTemplate, fromAddrs[0] || ""),
         bodyForTemplate, parsed.deposit)
     : null;
 
@@ -2736,7 +2792,7 @@ serve(async (req) => {
   // sender is a Gmail address and every bank-keyed lookup — the learned
   // layout, the sender allowlist — misses. The bank's own address is still in
   // the forwarded header block; prefer it.
-  deposit.fromAddress = Parser.originalSender(bodyForTemplate) || fromAddrs[0] || "";
+  deposit.fromAddress = bankAddressOf(bodyForTemplate, fromAddrs[0] || "");
   // Identifies the MESSAGE, and is what keeps two genuine same-amount,
   // same-day payments apart when the bank sends no confirmation number. A
   // Resend retry of this same email carries the same id and still dedupes.

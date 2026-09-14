@@ -181,6 +181,26 @@ function domainOf(addr: string): string {
  * signal a bank has changed its layout, and it is far better to fall back to
  * the generic parser for one email than to post a confidently wrong payer.
  */
+/**
+ * The bank's address for a message that may have been forwarded.
+ *
+ * originalSender only trusts a From: inside a recognised forward block. That
+ * is right for "was this forwarded" and too strict for "which bank is this":
+ * forward markers differ by mail client and do not survive HTML conversion, so
+ * bankSender reads every From: line and takes the first that is not a personal
+ * mailbox. The envelope sender is the fallback, and is itself discarded when
+ * it is a personal mailbox -- keying a layout to gmail.com helps nobody, and
+ * an empty fromAddress at least reads honestly as "no bank identified".
+ */
+function bankAddressOf(body: string, envelope: string): string {
+  const P: any = Parser;
+  const found = (P.originalSender ? P.originalSender(body) : "") ||
+                (P.bankSender ? P.bankSender(body) : "");
+  if (found) return found;
+  if (envelope && P.isPersonalMail && P.isPersonalMail(envelope)) return "";
+  return envelope;
+}
+
 async function applyLearnedTemplate(
   service: any,
   campId: string,
@@ -420,7 +440,7 @@ serve(async (req) => {
   const templateOutcome = parsed.ok
     ? await applyLearnedTemplate(
         service, campId,
-        Parser.originalSender(bodyForTemplate) || fromAddrs[0] || "",
+        bankAddressOf(bodyForTemplate, fromAddrs[0] || ""),
         bodyForTemplate, parsed.deposit)
     : null;
 
@@ -491,7 +511,7 @@ serve(async (req) => {
   // sender is a Gmail address and every bank-keyed lookup — the learned
   // layout, the sender allowlist — misses. The bank's own address is still in
   // the forwarded header block; prefer it.
-  deposit.fromAddress = Parser.originalSender(bodyForTemplate) || fromAddrs[0] || "";
+  deposit.fromAddress = bankAddressOf(bodyForTemplate, fromAddrs[0] || "");
   // Identifies the MESSAGE, and is what keeps two genuine same-amount,
   // same-day payments apart when the bank sends no confirmation number. A
   // Resend retry of this same email carries the same id and still dedupes.
