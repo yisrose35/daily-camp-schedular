@@ -185,7 +185,10 @@ let _toastTimer = null;
     }
 
     // Settings handed to the pure post-routing module (campistry_go_route_post.js).
-    function _busOverheadMin() { return D.setup.fleetUse === 'fewer' ? 40 : 5; }
+    // "Use the buses I listed" means exactly that: no reward for emptying one.
+    // At 5 the road polish quietly emptied a short core bus into its
+    // neighbours and left it with nothing while other buses ran 90 minutes.
+    function _busOverheadMin() { return D.setup.fleetUse === 'fewer' ? 40 : 0; }
     // Road network from the last neighbourhood run (null in sandbox / when the
     // road graph is unavailable). Ordering and ETAs use real street travel
     // times when it is present.
@@ -3640,6 +3643,7 @@ function _roadPolishRoutes(routes, shiftVehicles, campLat, campLng, isArrival, m
             // a stop moved onto a bus already standing at that corner shares its dwell
             polishLnsIters: 40, polishMergeSameStreetMi: 0, polishMergeAnyMi: 0.01 }));
     } catch (e) { console.warn('[Go] Road polish skipped: ' + e.message); return { moves: 0 }; }
+    if (res) res.busNames = live.map(r => r.busName || r.busId);
     if (!res || !res.moves) return res || { moves: 0 };
     let changed = 0, folded = 0;
     live.forEach((r, i) => {
@@ -4047,6 +4051,13 @@ async function generateRoutes() {
                 ', est. fleet ' + Math.round(_rp.fleetBefore) + ' → ' + Math.round(_rp.fleetAfter) + ' min' +
                 (_rp.folded ? ' (' + _rp.folded + ' stop(s) folded into the corner their new bus already served)' : '') +
                 (_rp.timedOut ? ' — ran out of time; the polish may have more to give' : ''));
+            if (_rp && _rp.blockLog && _rp.blockLog.length) {
+                const name = i => (_rp.busNames && _rp.busNames[i]) || ('#' + i);
+                console.log('[Go] Road polish: the best branch hand-offs it priced (gain < 0 was worth taking):\n' + _rp.blockLog.map(e =>
+                    '    ' + name(e.giver) + ' ' + Math.round(e.giverBefore) + '→' + Math.round(e.giverAfter) + ' min hands ' + e.stops + ' stop(s), ' + e.kids +
+                    ' kid(s) to ' + name(e.receiver) + ' ' + Math.round(e.receiverBefore) + '→' + Math.round(e.receiverAfter) + ' min: ' +
+                    (e.delta < 0 ? 'gain ' : 'cost ') + Math.abs(e.delta).toFixed(0)).join('\n'));
+            }
             if (_rp && _rp.blockTried) console.log('[Go] Road polish: priced ' + _rp.blockTried + ' branch hand-off(s) from buses over the ' +
                 (D.setup.maxRouteDuration || 90) + 'min cap to buses with idle seats — ' +
                 (_rp.blockMoves ? _rp.blockMoves + ' taken (the best gained ' + Math.abs(Math.min(0, _rp.blockBestDelta || 0)).toFixed(0) + ' on the objective)' +

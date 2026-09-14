@@ -1480,6 +1480,13 @@ window.CampistryGoRoutePost = (function () {
         for (const b of B) buildTour(b);
         const before = objective(), fleetBefore = fleetMin(), childMinBefore = childMin();
         let moves = 0, blockMoves = 0, blockTried = 0, blockBestDelta = Infinity, refills = 0;
+        // The best hand-offs priced, taken or not, for the console: what the
+        // polish believed each would do. `id` is the caller's bus label.
+        const blockLog = [];
+        const logBlock = e => {
+            blockLog.push(e);
+            if (blockLog.length > 400) { blockLog.sort((x, y) => x.delta - y.delta); blockLog.length = 40; }
+        };
         const EPS = o.polishMinGainMin;
 
         let stop = false;
@@ -1536,9 +1543,16 @@ window.CampistryGoRoutePost = (function () {
                     const Bb = B[bi];
                     if (Bb.count + cntSum > Bb.cap) continue;
                     if (!wedgeOk(Bb, atoms, -1)) continue;
-                    const obj = moveBlock(A, Bb, blk, false);
+                    const sA = snap(A), sB = snap(Bb);
+                    const positions = blk.map(i => A.tour.indexOf(i)).sort((x, y) => y - x);
+                    const moving = positions.map(p => removeAt(A, p));
+                    for (const a of moving) insertAt(Bb, a, Bb.tour.length);
+                    refresh(A); buildTour(Bb);
+                    const obj = objective(), giverAfter = A.len, recvAfter = Bb.len;
+                    restore(A, sA); restore(Bb, sB);
                     blockTried++;
                     if (obj - objBefore < blockBestDelta) blockBestDelta = obj - objBefore;
+                    logBlock({ giver: ai, receiver: bi, stops: blk.length, kids: cntSum, giverBefore: A.len, giverAfter, receiverBefore: Bb.len, receiverAfter: recvAfter, delta: obj - objBefore });
                     if (obj < objBefore - EPS && (!best || obj < best.obj)) best = { obj, bi, blk: blk.slice() };
                 }
             }
@@ -1783,7 +1797,9 @@ window.CampistryGoRoutePost = (function () {
             localSearch();
         }
         const after = objective();
+        blockLog.sort((x, y) => x.delta - y.delta);
         return { buckets: B.map(b => b.tour.map(i => b.atoms[i])), moves, blockMoves, blockTried, refills,
+                 blockLog: blockLog.slice(0, 12), lens: B.map(b => b.len),
                  blockBestDelta: Number.isFinite(blockBestDelta) ? blockBestDelta : null, timedOut: outOfTime(), before, after,
                  fleetBefore, fleetAfter: fleetMin(), childMinBefore, childMinAfter: childMin() };
     }
