@@ -669,7 +669,28 @@ import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
             d.date || '',
             (P.parseAmount(d.amount) || 0).toFixed(2),
             P.normalizeForKey(d.payerName),
-            P.normalizeForKey(d.traceId),
+            // The trace number is the ideal discriminator: it identifies the
+            // MONEY, so the same deposit seen by an alert email and by a bank
+            // feed collapses onto one row.
+            //
+            // But plenty of banks do not send one -- Capital One's Zelle alert
+            // has no confirmation number at all -- and without it two genuine
+            // payments of the same amount, from the same payer, on the same
+            // day were IDENTICAL. A family paying two $500 installments in one
+            // afternoon got credited once, and the second email vanished into
+            // ON CONFLICT DO NOTHING with nothing to show it had arrived.
+            //
+            // So when there is no trace, the MESSAGE identifies the deposit
+            // instead. A Resend retry of the same email carries the same
+            // email_id and still collapses, which is the case this dedupe
+            // exists for; two separate emails are two separate deposits.
+            //
+            // The cost is real and worth naming: for a trace-less deposit,
+            // cross-source dedupe is gone -- if a bank feed later reports the
+            // same payment it will land as a second row. That is a duplicate a
+            // human can dismiss in one click, against money that disappears
+            // silently. Not a close call.
+            P.normalizeForKey(d.traceId) || P.normalizeForKey(d.messageId),
             // Without this a same-day return of a deposit that carries no trace
             // number is identical to the deposit itself, and ON CONFLICT DO
             // NOTHING silently swallows it -- the family keeps a credit for
@@ -2606,6 +2627,10 @@ serve(async (req) => {
   // browser derives layout rules from the correction and has to say which
   // bank's layout they belong to.
   deposit.fromAddress = fromAddrs[0] || "";
+  // Identifies the MESSAGE, and is what keeps two genuine same-amount,
+  // same-day payments apart when the bank sends no confirmation number. A
+  // Resend retry of this same email carries the same id and still dedupes.
+  deposit.messageId = emailId || "";
   const ctx = await loadContext(service, campId);
   // The first half of a payment reference must equal this camp's own number
   // before the second half is read as a camper at all — it is what keeps a

@@ -479,6 +479,10 @@ serve(async (req) => {
   // browser derives layout rules from the correction and has to say which
   // bank's layout they belong to.
   deposit.fromAddress = fromAddrs[0] || "";
+  // Identifies the MESSAGE, and is what keeps two genuine same-amount,
+  // same-day payments apart when the bank sends no confirmation number. A
+  // Resend retry of this same email carries the same id and still dedupes.
+  deposit.messageId = emailId || "";
   const ctx = await loadContext(service, campId);
   // The first half of a payment reference must equal this camp's own number
   // before the second half is read as a camper at all — it is what keeps a

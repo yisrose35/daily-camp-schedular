@@ -316,3 +316,52 @@ test("'money well sent' in the footer does not trip the outbound gate", () => {
     assert.ok(r.ok, r.reason);
     assert.strictEqual(r.deposit.amount, 250);
 });
+
+// ── two payments that look identical ─────────────────────────────────────────
+//
+// A family paying two $500 installments in one afternoon produced two emails
+// with the same date, amount and payer. Capital One's Zelle alert carries no
+// confirmation number, so those two deposits fingerprinted IDENTICALLY, and
+// ON CONFLICT DO NOTHING swallowed the second — the family was credited once
+// and nothing anywhere showed the second email had ever arrived.
+//
+// The fix is to let the MESSAGE identify the deposit when the money cannot.
+// These four cases are the whole contract, and they pull against each other.
+
+test('two separate emails are two deposits, even when every field matches', () => {
+    const same = { date: '2026-09-14', amount: 500, payerName: 'SHIMON MILLER', traceId: '' };
+    assert.notStrictEqual(
+        P.fingerprint({ ...same, messageId: 'email_aaa' }),
+        P.fingerprint({ ...same, messageId: 'email_bbb' })
+    );
+});
+
+test('a retried delivery of the SAME email still collapses', () => {
+    // This is the case the dedupe exists for: Resend retries, and a retry must
+    // not credit a family twice. The message id is stable across retries.
+    const dep = { date: '2026-09-14', amount: 500, payerName: 'SHIMON MILLER', traceId: '', messageId: 'email_aaa' };
+    assert.strictEqual(P.fingerprint(dep), P.fingerprint({ ...dep }));
+});
+
+test('a trace number still collapses the same money across two sources', () => {
+    // When the bank DOES give a confirmation number it identifies the money
+    // rather than the message, so an alert email and a bank feed reporting the
+    // same payment remain one row. The message id must not break that.
+    const a = { date: '2026-09-14', amount: 500, payerName: 'SHIMON MILLER', traceId: 'CONF111', messageId: 'email_x' };
+    const b = { date: '2026-09-14', amount: 500, payerName: 'SHIMON MILLER', traceId: 'CONF111', messageId: 'email_y' };
+    assert.strictEqual(P.fingerprint(a), P.fingerprint(b));
+});
+
+test('rows with neither trace nor message still dedupe on their values', () => {
+    // A CSV re-import has no message identity, and there collapsing identical
+    // rows is the correct behaviour — re-importing an overlapping export must
+    // not double every payment in it.
+    const row = { date: '2026-09-14', amount: 500, payerName: 'SHIMON MILLER', traceId: '' };
+    assert.strictEqual(P.fingerprint(row), P.fingerprint({ ...row }));
+});
+
+test('a same-day return is still distinct from the deposit it reverses', () => {
+    // The reversal flag has to keep working alongside the message id.
+    const dep = { date: '2026-09-14', amount: 500, payerName: 'SHIMON MILLER', traceId: '', messageId: 'email_aaa' };
+    assert.notStrictEqual(P.fingerprint(dep), P.fingerprint({ ...dep, isReversal: true }));
+});
