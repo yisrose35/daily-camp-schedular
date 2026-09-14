@@ -1262,6 +1262,13 @@ async function _addSavedCard(cid){
     if(!d||!d.familyKey){ toast('Could not find your family record — contact the camp office.'); return; }
     var status=await _getCampProcessorInfo(cid);
     var processorKey=(status&&status.processorKey)||'stripe';
+    if(processorKey==='banquest'){
+        // Banquest has no hosted-checkout page — save the card through the
+        // embedded tokenizer page (campistry_card_setup.html → Banquest Hosted
+        // Tokenization → payments-save-method).
+        _lkGoToCheckout(location.origin+'/campistry_card_setup.html?campId='+encodeURIComponent(cid)+'&familyKey='+encodeURIComponent(d.familyKey)+'&familyName='+encodeURIComponent(d.familyName||'')+'&return='+encodeURIComponent(location.href));
+        return;
+    }
     if(processorKey!=='cardknox'){ toast("Online card saving isn't set up for this camp yet — contact the office."); return; }
     try{
         toast('Opening secure checkout…');
@@ -1428,6 +1435,12 @@ async function startAutopaySetup(cid){
             var ckRes=await _lkCallEdge('cardknox-checkout-start',{campId:cid,kind:'card_save',familyKey:d.familyKey,familyName:d.familyName||'',description:'Save a card'+(d.familyName?' — '+d.familyName:'')});
             _lkGoToCheckout(ckRes.url);
         }catch(err){ console.error('[Parent] autopay setup (cardknox) error:',err); toast('Could not start setup: '+(err&&err.message||'error')); }
+        return;
+    }
+    if(processorKey==='banquest'){
+        // Banquest: save the card via the embedded tokenizer page (no hosted
+        // checkout), same as _addSavedCard.
+        _lkGoToCheckout(location.origin+'/campistry_card_setup.html?campId='+encodeURIComponent(cid)+'&familyKey='+encodeURIComponent(d.familyKey)+'&familyName='+encodeURIComponent(d.familyName||'')+'&return='+encodeURIComponent(location.href));
         return;
     }
     try{
