@@ -62,7 +62,7 @@
         setup: {
             campAddress: '', campName: '', avgSpeed: 25,
             reserveSeats: 2, dropoffMode: 'door-to-door',
-            avgStopTime: 1, maxWalkDistance: 375, maxRouteDuration: 90, maxRideTime: 45, returnToCamp: false,
+            avgStopTime: 1, maxWalkDistance: 375, maxRouteDuration: 60, maxRideTime: 45, returnToCamp: false,
             googleMapsKey: '', googleProjectId: '',
             geoapifyKey: '',
             campLat: null, campLng: null,
@@ -189,6 +189,12 @@ let _toastTimer = null;
     // At 5 the road polish quietly emptied a short core bus into its
     // neighbours and left it with nothing while other buses ran 90 minutes.
     function _busOverheadMin() { return D.setup.fleetUse === 'fewer' ? 40 : 0; }
+    // Max Route Duration, the one cap every reader uses: the ordering, the
+    // road polish, the split pass, the ETA audit, the scorecard and the
+    // Route summary. Before this the audit fell back to 60 and the polish to
+    // 90 when the setting was unset, so the polish worked to a cap the
+    // audit then flagged every run as 31 minutes over.
+    function _routeCapMin() { const v = Number(D.setup.maxRouteDuration); return v > 0 ? v : 60; }
     // Road network from the last neighbourhood run (null in sandbox / when the
     // road graph is unavailable). Ordering and ETAs use real street travel
     // times when it is present.
@@ -221,7 +227,7 @@ let _toastTimer = null;
             equalizeLoads: D.setup.equalizeBusLoads === true,
             returnToDepot: _shiftReturnsToCamp,
             // the stop ordering leans to the shortest order on a bus over Max Route Duration
-            routeCapMin: D.setup.maxRouteDuration || 90
+            routeCapMin: _routeCapMin()
         }, extra || {});
     }
 
@@ -1020,20 +1026,9 @@ let _toastTimer = null;
                 D.setup._pipelineMigrated_v2 = true;
                 console.log('[Go] Routing engine set to road-graph neighbourhoods; pick "Spatial sort" in Route Settings to go back.');
             }
-            // One-time migration: maxRouteDuration 60 → 90. The 60-min cap was
-            // too tight for hard geographic clusters (camp's MAROON runs 71min
-            // with 24mi distance), causing the solver to drop stops via
-            // cheapest-insert and produce 100+min routes. Bumping to 90 lets
-            // the solver finish naturally; tight clusters still come in well
-            // under 90 (camp's typical is 30-50min).
-            if (D.setup && D.setup.maxRouteDuration === 60 &&
-                !D.setup._maxRouteDurationMigrated_v1) {
-                D.setup.maxRouteDuration = 90;
-                D.setup._maxRouteDurationMigrated_v1 = true;
-                console.log('[Go] Upgraded maxRouteDuration: 60 → 90 min ' +
-                    '(prevents solver from dropping stops on hard clusters). ' +
-                    'Set back to 60 in settings to revert.');
-            }
+            // (The one-time 60 → 90 Max Route Duration migration is retired: the
+            // cap is a visible Route Setting now and the post passes treat it
+            // as a priced budget, not a hard limit the solver drops stops for.)
 
             // Recover geocoding checkpoint: if the tab was closed mid-geocode,
             // the checkpoint key has more geocodes than the main store.
@@ -1535,6 +1530,7 @@ let _toastTimer = null;
         if (document.getElementById('secPerRider')) document.getElementById('secPerRider').value = s.secPerRider ?? 0;
         if (document.getElementById('fleetUse')) document.getElementById('fleetUse').value = s.fleetUse === 'fewer' ? 'fewer' : 'as-needed';
         if (document.getElementById('roundTrip')) document.getElementById('roundTrip').value = s.returnToCamp === true ? 'round-trip' : 'one-way';
+        if (document.getElementById('maxRouteDuration')) document.getElementById('maxRouteDuration').value = Number(s.maxRouteDuration) > 0 ? Number(s.maxRouteDuration) : 60;
         if (document.getElementById('routingPipeline')) document.getElementById('routingPipeline').value = s.routingPipeline === 'spatial-sort' ? 'spatial-sort' : 'neighborhood';
         window._GoSetup = () => D.setup;
         if (document.getElementById('standaloneToggle')) document.getElementById('standaloneToggle').checked = !!s.standaloneMode;
@@ -1571,6 +1567,7 @@ let _toastTimer = null;
         D.setup.secPerRider = Math.max(0, parseFloat(el('secPerRider')?.value) || 0);
         D.setup.fleetUse = el('fleetUse')?.value === 'fewer' ? 'fewer' : 'as-needed';
         if (el('roundTrip')) D.setup.returnToCamp = el('roundTrip').value === 'round-trip';
+        if (el('maxRouteDuration')) D.setup.maxRouteDuration = Math.min(240, Math.max(15, parseInt(el('maxRouteDuration').value) || 60));
         if (el('routingPipeline')) {
             D.setup.routingPipeline = el('routingPipeline').value === 'spatial-sort' ? 'spatial-sort' : 'neighborhood';
             D.setup._pipelineUserChosen = true; // an explicit choice; migrations leave it alone
@@ -4056,7 +4053,7 @@ async function generateRoutes() {
 
         // With the street network, re-trade stops on real driving minutes.
         if (_activeRoadNet) {
-            const _rp = _roadPolishRoutes(routes, shiftVehicles, campLat, campLng, isArrival, D.setup.maxRouteDuration || 90,
+            const _rp = _roadPolishRoutes(routes, shiftVehicles, campLat, campLng, isArrival, _routeCapMin(),
                 _shiftReturns(si, shifts.length, isArrival));
             if (_rp && _rp.moves) console.log('[Go] Road polish: ' + _rp.moves + ' stop move(s) on street times across ' + _rp.changedBuses +
                 ' bus(es)' + (_rp.blockMoves ? ', ' + _rp.blockMoves + ' of them whole branches handed to a bus with idle seats' : '') +
@@ -4071,7 +4068,7 @@ async function generateRoutes() {
                     (e.delta < 0 ? 'gain ' : 'cost ') + Math.abs(e.delta).toFixed(0)).join('\n'));
             }
             if (_rp && _rp.blockTried) console.log('[Go] Road polish: priced ' + _rp.blockTried + ' branch hand-off(s) from buses over the ' +
-                (D.setup.maxRouteDuration || 90) + 'min cap to buses with idle seats — ' +
+                _routeCapMin() + 'min cap to buses with idle seats — ' +
                 (_rp.blockMoves ? _rp.blockMoves + ' taken (the best gained ' + Math.abs(Math.min(0, _rp.blockBestDelta || 0)).toFixed(0) + ' on the objective)' +
                                   (_rp.refills ? ', ' + _rp.refills + ' of them by emptying a short bus into the buses that pass its stops first' : '')
                                 : 'none taken' + (_rp.blockBestDelta != null ? '; the closest would have cost ' + Math.max(0, _rp.blockBestDelta).toFixed(0) +
@@ -4081,7 +4078,7 @@ async function generateRoutes() {
             // camp hit: say which buses, and what rejected every pairing.
             if (_rp && _rp.overStart && _rp.overStart.length) {
                 const name = i => (_rp.busNames && _rp.busNames[i]) || ('#' + i);
-                console.log('[Go] Road polish: over the ' + (D.setup.maxRouteDuration || 90) + 'min cap when the polish began: ' +
+                console.log('[Go] Road polish: over the ' + _routeCapMin() + 'min cap when the polish began: ' +
                     _rp.overStart.map(e => name(e.bus) + ' ' + Math.round(e.len) + 'min (' + e.kids + '/' + e.cap + ' seats, ' + e.stops + ' stops)').join(', ') +
                     (_rp.blockTried ? '' : ' — no branch hand-off could be priced: ' + (_rp.blockSeatNo || 0) + ' branch/receiver pairing(s) failed on seats, ' +
                         (_rp.blockWedgeNo || 0) + ' on containment' + (_rp.timedOut ? ', and the polish ran out of time' : '')));
@@ -4103,7 +4100,7 @@ async function generateRoutes() {
         // setup.maxRouteDuration as the target — same value the solver got
         // as a soft cap, but enforced after the fact. The receiver must
         // already be on the stop's ground, and both buses are re-ordered.
-        const _maxRouteMin = D.setup.maxRouteDuration || 60;
+        const _maxRouteMin = _routeCapMin();
         const _hadOverlong = routes.some(r => (r.totalDuration || 0) > _maxRouteMin);
         if (_hadOverlong) {
             const _splitMoves = _splitOverlongRoutes(routes, shiftVehicles, campLat, campLng, _maxRouteMin, isArrival);
@@ -5951,7 +5948,7 @@ async function _perBusGoogleTSP({
         serviceTime:   serviceTimeSec,
         departureTime: shiftTarget,
         maxRideTimeSec: (D.setup.maxRideTime || 45) * 60,
-        maxRouteDurationSec: (D.setup.maxRouteDuration || 60) * 60,
+        maxRouteDurationSec: _routeCapMin() * 60,
         vehicleTimeWindows,
         pinnedAnchorIndex: pinnedIdx,  // NEW PHASE 3
         googleKey, googleProjId,
@@ -6048,7 +6045,7 @@ async function _fallbackGoogleGlobal({
         serviceTime: serviceTimeSec,
         departureTime: shift.departureTime || (isArrival ? '07:30' : '16:00'),
         maxRideTimeSec: (D.setup.maxRideTime || 45) * 60,
-        maxRouteDurationSec: (D.setup.maxRouteDuration || 60) * 60,
+        maxRouteDurationSec: _routeCapMin() * 60,
         vehicleTimeWindows,
         googleKey, googleProjId,
         supabaseUrl: _supabaseUrl,
@@ -6281,7 +6278,7 @@ function _applyETAsAndAudits(routes, {
         // still exceeds the cap, surface it loudly so we can investigate
         // (most likely cause: too few buses for the load, or one of the
         // post-solver TSP / time-window passes blew the budget).
-        const _maxRouteMin = D.setup.maxRouteDuration || 60;
+        const _maxRouteMin = _routeCapMin();
         if (r.totalDuration > _maxRouteMin) {
             r._overRouteCap = true;
             const overBy = r.totalDuration - _maxRouteMin;
@@ -7354,7 +7351,7 @@ function findAnchorStop(campers, intersections, walkMi = 0.2) {
 
         const maxWalkMi = (maxWalkFt || 500) * 0.000189394;
         const maxRouteMi = 15; // reasonable max for a single bus route
-        const maxRouteMin = D.setup.maxRouteDuration || 60;
+        const maxRouteMin = _routeCapMin();
 
         const routeScores = activeRoutes.map(r => {
             const stops = r.stops.filter(s => s.lat && s.lng && !s.isMonitor && !s.isCounselor);
@@ -8710,7 +8707,7 @@ async function renderDispatcherDashboard(allShifts) {
     const campLat = D.setup.campLat || _campCoordsCache?.lat || 0;
     const campLng = D.setup.campLng || _campCoordsCache?.lng || 0;
     const maxRideMin = D.setup.maxRideTime || 45;
-    const maxRouteMin = D.setup.maxRouteDuration || 60;
+    const maxRouteMin = _routeCapMin();
     const isArrival = D.activeMode === 'arrival';
 
     // Count buckets across all shifts
@@ -8955,7 +8952,7 @@ async function renderDispatcherDashboard(allShifts) {
         // console puts it on the clipboard.
         exportGeometry: () => JSON.stringify({
             camp: [D.setup.campLat || (_campCoordsCache && _campCoordsCache.lat) || null, D.setup.campLng || (_campCoordsCache && _campCoordsCache.lng) || null],
-            mode: D.activeMode, reserve: D.setup.reserveSeats || 0, maxRouteMin: D.setup.maxRouteDuration || 90,
+            mode: D.activeMode, reserve: D.setup.reserveSeats || 0, maxRouteMin: _routeCapMin(),
             avgSpeed: D.setup.avgSpeed || 25, stopMin: D.setup.avgStopTime || 1, secPerRider: D.setup.secPerRider || 0,
             roundTrip: D.setup.returnToCamp === true, dropoffMode: D.setup.dropoffMode,
             shifts: (D.savedRoutes || []).map(sr => ({
