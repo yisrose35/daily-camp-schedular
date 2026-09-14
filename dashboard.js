@@ -1563,12 +1563,14 @@
                 box.innerHTML = '<p style="margin:0;color:#dc2626;">Could not load payment processor status.</p>';
                 return;
             }
-            // The card-form settings only apply to camps collecting cards on
-            // Campistry's own page — a Stripe camp uses Stripe's hosted
-            // checkout, whose fields we don't control.
+            // Banquest ONLY. These settings describe Campistry's own card page,
+            // and Banquest is the only processor that uses it: Stripe camps use
+            // Stripe Checkout and Sola camps use Sola's own hosted page, both of
+            // which own their own forms. Showing these toggles for either would
+            // promise control we don't have.
             const cffWrap = document.getElementById('campCardFormFieldsWrap');
             if (cffWrap) {
-                const showCff = data.processorKey && data.processorKey !== 'stripe';
+                const showCff = data.processorKey === 'banquest';
                 cffWrap.style.display = showCff ? '' : 'none';
                 if (showCff && window.renderCampCardFormFields) window.renderCampCardFormFields();
             }
