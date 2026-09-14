@@ -550,6 +550,9 @@ test('with a return to camp the route budget is the whole route including the ri
     assert.ok(Math.abs(easy - withRet) < 1e-6, 'under the cap, no penalty');
     const steep = solo({ polishRideBudgetMin: mid, returnToDepot: true, polishOverBudgetX: 5 }).before;
     assert.ok(Math.abs(steep - (withRet + 5 * (withRet - mid))) < 1e-6, 'the over-budget weight is a setting');
+    const sq = solo({ polishRideBudgetMin: mid, returnToDepot: true, polishOverBudgetX: 2, polishOverBudgetQuad: 0.5 }).before;
+    const e = withRet - mid;
+    assert.ok(Math.abs(sq - (withRet + 2 * e + 0.5 * e * e)) < 1e-6, 'and so is the square: a bus far over costs far more');
 });
 
 test('polish with a return keeps every invariant on a scattered instance and never worsens the objective', () => {
@@ -651,8 +654,8 @@ test('a child who lives near camp is not kept aboard for a rural loop to save th
     const loop = [at(8, 5, 9), at(10, 4, 1), at(12, 1, 2), at(11, -2, 1), at(9, -3, 2)];
     const near = at(4, -1, 2);
     const stops = loop.concat([near]);
-    const cheap = P.localTspOrder(stops, CAMP, false, { returnToDepot: true, tspUnfairWeight: 2 });
-    assert.strictEqual(cheap[cheap.length - 1].address, near.address, 'at weight 2 the near children ride the whole loop');
+    const cheap = P.localTspOrder(stops, CAMP, false, { returnToDepot: true, tspUnfairWeight: 2, tspUnfairQuad: 0 });
+    assert.strictEqual(cheap[cheap.length - 1].address, near.address, 'with a flat weight of 2 the near children ride the whole loop');
     const fair = P.localTspOrder(stops, CAMP, false, { returnToDepot: true });
     assert.notStrictEqual(fair[fair.length - 1].address, near.address, 'by default they are dropped before the loop');
     const o = P.DEFAULTS;
@@ -660,4 +663,48 @@ test('a child who lives near camp is not kept aboard for a rural loop to save th
     for (const s of fair) { t += P.driveMin(prev, s, o) + P.stopDwellMin(s, o); if (s === near) ride = t; prev = s; }
     const allow = P.driveMin(CAMP, near, o) * o.maxRideRatio + o.rideRatioSlackMin;
     assert.ok(ride <= allow, 'their ride ' + ride.toFixed(0) + ' is within the allowance ' + allow.toFixed(0));
+});
+
+test('an over-cap bus serving two branches hands one branch to a near-camp bus with idle seats', () => {
+    // Bus A runs a north branch and an east branch — well over 90 minutes with
+    // the ride home. Bus B is a 6-minute core run with 26 empty seats. No single
+    // stop can move (each costs B an out-and-back), but a branch as a block
+    // brings both runs near the cap for a few fleet minutes. The camp's Bus 8.
+    const A = [at(4, -1, 2), at(6, -1, 2), at(8, -1, 2), at(10, -1, 2), at(4, 3, 2), at(5, 4, 2), at(6, 5, 2), at(7, 6, 2)];
+    const Bb = [at(1, 0.5, 10), at(1, -0.5, 10)];
+    const o = { returnToDepot: true, polishRideBudgetMin: 60, polishOverBudgetX: 2, polishOverBudgetQuad: 0.5 };
+    const before = P.polishDistricts([A, Bb], [46, 46], CAMP, Object.assign({ polishMaxPasses: 0 }, o));
+    const solo = b => P.polishDistricts([b, []], [46, 46], CAMP, { returnToDepot: true, polishMaxPasses: 0, polishRideBudgetMin: 0 }).fleetBefore;
+    const aBefore = solo(A);
+    assert.ok(aBefore > 85, 'A is far over the cap: ' + aBefore.toFixed(0));
+    const res = P.polishDistricts([A, Bb], [46, 46], CAMP, o);
+    assert.ok(res.moves >= 1, 'the block moves');
+    const lens = res.buckets.map(solo);
+    assert.ok(Math.max(...lens) < aBefore - 25, 'the long run came down by a branch: ' + lens.map(x => x.toFixed(0)).join(', '));
+    assert.ok(res.buckets[1].length >= 5, 'B took a whole branch, not a stop: ' + res.buckets[1].length);
+    assert.strictEqual(res.buckets.flat().length, 10);
+    for (const b of res.buckets) {
+        assert.ok(b.reduce((a, x) => a + x.campers.length, 0) <= 46, 'seats');
+        assert.ok(P.arcDeg(b, CAMP) <= 110, 'contained');
+    }
+    assert.ok(res.after < before.before, 'the objective fell');
+    // with no cap the fleet-minute objective leaves the two runs alone
+    const flat = P.polishDistricts([A, Bb], [46, 46], CAMP, { returnToDepot: true, polishRideBudgetMin: 0 });
+    assert.ok(flat.buckets[1].length <= 3, 'without a cap B stays a core run');
+});
+
+test('a bus over Max Route Duration is ordered for the shortest run rather than minimum latency', () => {
+    // A big group near camp and singles beyond it: minimum latency drops the
+    // group first and zigzags; with the route over the cap the ordering takes
+    // the shortest order the polish priced it at.
+    const stops = [at(2, 0, 12), at(5, 1.2, 1), at(6, -1.2, 1), at(7, 1.2, 1), at(8, -1.2, 1), at(9, 1.2, 1), at(10, -1.2, 1)];
+    const free = P.localTspOrder(stops, CAMP, false, { returnToDepot: true });
+    const tourOf = ord => { let t = 0, prev = CAMP; for (const s of ord) { t += P.driveMin(prev, s, P.DEFAULTS) + P.stopDwellMin(s, P.DEFAULTS); prev = s; } return t + P.driveMin(prev, CAMP, P.DEFAULTS); };
+    const capped = P.localTspOrder(stops, CAMP, false, { returnToDepot: true, routeCapMin: Math.round(tourOf(free)) - 8 });
+    assert.ok(tourOf(capped) <= tourOf(free) + 1e-9, 'the capped order is no longer: ' + tourOf(free).toFixed(1) + ' -> ' + tourOf(capped).toFixed(1));
+    assert.ok(P.routeObjective(capped, CAMP, false, { returnToDepot: true, routeCapMin: Math.round(tourOf(free)) - 8 }) <=
+              P.routeObjective(free, CAMP, false, { returnToDepot: true, routeCapMin: Math.round(tourOf(free)) - 8 }) + 1e-6);
+    // no cap or a generous one: unchanged behaviour
+    const loose = P.localTspOrder(stops, CAMP, false, { returnToDepot: true, routeCapMin: 500 });
+    assert.deepStrictEqual(loose.map(s => s.address), free.map(s => s.address));
 });

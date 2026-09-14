@@ -206,7 +206,9 @@ let _toastTimer = null;
             roadFactor: ROAD_FACTOR,
             busOverheadMin: _busOverheadMin(),
             equalizeLoads: D.setup.equalizeBusLoads === true,
-            returnToDepot: _shiftReturnsToCamp
+            returnToDepot: _shiftReturnsToCamp,
+            // the stop ordering leans to the shortest order on a bus over Max Route Duration
+            routeCapMin: D.setup.maxRouteDuration || 90
         }, extra || {});
     }
 
@@ -3624,7 +3626,13 @@ function _roadPolishRoutes(routes, shiftVehicles, campLat, campLng, isArrival, m
         // tight — a single relocate can't free a seat first.
         res = P.polishDistricts(buckets, caps, depot, _routePostOpts({
             legMinutes: legs, isArrival: !!isArrival, returnToDepot: !!needsReturn,
-            polishRideBudgetMin: maxRouteMin || 90, polishReachMi: 5, polishTimeBudgetMs: 3000,
+            // Max Route Duration is a real limit here: a minute over costs two
+            // bus-minute equivalents plus a quarter of the square, so a bus 40
+            // over costs 480 and one 10 over 45 — a far branch of an over-cap bus
+            // moves to a bus with idle seats even when that adds to the fleet's
+            // total, and overage is never piled onto one bus.
+            polishRideBudgetMin: maxRouteMin || 90, polishOverBudgetX: 2, polishOverBudgetQuad: 0.25,
+            polishReachMi: 5, polishTimeBudgetMs: 3000,
             // a stop moved onto a bus already standing at that corner shares its dwell
             polishLnsIters: 40, polishMergeSameStreetMi: 0, polishMergeAnyMi: 0.01 }));
     } catch (e) { console.warn('[Go] Road polish skipped: ' + e.message); return { moves: 0 }; }
