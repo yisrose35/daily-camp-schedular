@@ -2393,6 +2393,90 @@ window.CampistryGoNeighborhoods = (function () {
     // (`_homes`), stand it at the real intersection that minimises the
     // children's total walk, preferring a corner on the street most of them
     // live on. Returns { snap(stop) }.
+    // Last year's routes on today's roads. `history` is { BUS: [{ time, stop:
+    // 'Main St@Cross Ave', names: [...] }, ...] } in the order the bus drove
+    // (morning pickups). Every stop named as a corner is matched to a road-
+    // graph intersection by its two street names, the run is priced on street
+    // legs with the camp's dwell model, and the stamped times give an observed
+    // dwell per stop (gap between stops minus the road leg) fitted as
+    // a + b x children. Returns { buses, matched, total, kidsTotal, fleetMin,
+    // dwellFit } or null.
+    function benchmarkHistory({ history, result, roadNet, depot, avgStopMin = 1, secPerRider = 0 }) {
+        const P = (typeof window !== 'undefined') && window.CampistryGoRoutePost;
+        if (!history || !result || !result.nodes || !roadNet || typeof roadNet.legMinutesFor !== 'function' || !depot || !P) return null;
+        const byPair = new Map();
+        for (const id in result.nodes) {
+            const nd = result.nodes[id];
+            if (!nd || !(nd.degree >= 3) || !Array.isArray(nd.streets) || nd.streets.length < 2 || !Number.isFinite(nd.lat)) continue;
+            const ss = Array.from(new Set(nd.streets.map(normStreet).filter(Boolean)));
+            for (let i = 0; i < ss.length; i++) for (let j = i + 1; j < ss.length; j++) {
+                const k = [ss[i], ss[j]].sort().join('|');
+                if (!byPair.has(k)) byPair.set(k, []);
+                byPair.get(k).push(nd);
+            }
+        }
+        const find = (a, b, near) => {
+            const list = byPair.get([normStreet(a), normStreet(b)].sort().join('|'));
+            if (!list || !list.length) return null;
+            if (!near || list.length === 1) return list[0];
+            let best = list[0], bd = Infinity; // two streets can cross twice: take the one nearest the previous stop
+            for (const nd of list) { const d = haversineMi(near.lat, near.lng, nd.lat, nd.lng); if (d < bd) { bd = d; best = nd; } }
+            return best;
+        };
+        const parseTime = t => {
+            const m = String(t || '').match(/(\d+):(\d+)\s*(AM|PM)?/i); if (!m) return null;
+            let h = +m[1]; const mi = +m[2], ap = (m[3] || '').toUpperCase();
+            if (ap === 'PM' && h < 12) h += 12; if (ap === 'AM' && h === 12) h = 0;
+            return h * 60 + mi;
+        };
+        const dwellOf = s => avgStopMin + (secPerRider > 0 ? s.count * secPerRider / 60 : 0);
+        const buses = [], dwellObs = [];
+        let matched = 0, total = 0, kidsTotal = 0, fleetMin = 0;
+        for (const [bus, stops] of Object.entries(history)) {
+            if (!Array.isArray(stops)) continue;
+            const seq = [];
+            let kids = 0;
+            for (const st of stops) {
+                total++;
+                const k = Array.isArray(st.names) ? st.names.length : 0;
+                kids += k; kidsTotal += k;
+                const parts = String(st.stop || '').split('@');
+                const nd = parts.length === 2 ? find(parts[0], parts[1], seq.length ? seq[seq.length - 1] : null) : null;
+                if (!nd) continue;
+                matched++;
+                seq.push({ lat: nd.lat, lng: nd.lng, count: k, t: parseTime(st.time), name: st.stop });
+            }
+            if (!seq.length) { buses.push({ bus, kids, stops: stops.length, matched: 0, minutes: null }); continue; }
+            let L;
+            try { L = roadNet.legMinutesFor([depot].concat(seq)); } catch (_) { buses.push({ bus, kids, stops: stops.length, matched: seq.length, minutes: null }); continue; }
+            // morning run: first pickup to the last, then the ride to camp
+            let min = 0;
+            for (let i = 1; i < seq.length; i++) min += L(seq[i - 1], seq[i]) + dwellOf(seq[i - 1]);
+            min += dwellOf(seq[seq.length - 1]) + L(seq[seq.length - 1], depot);
+            for (let i = 1; i < seq.length; i++) {
+                if (seq[i].t == null || seq[i - 1].t == null) continue;
+                const gap = seq[i].t - seq[i - 1].t, road = L(seq[i - 1], seq[i]);
+                if (!(gap >= 0) || gap > 25 || !Number.isFinite(road) || road > gap + 3) continue;
+                dwellObs.push({ kids: seq[i - 1].count, dwell: Math.max(0, gap - road) });
+            }
+            const t0 = seq[0].t, t1 = seq[seq.length - 1].t;
+            buses.push({ bus, kids, stops: stops.length, matched: seq.length, minutes: Math.round(min), spanMin: t0 != null && t1 != null ? t1 - t0 : null });
+            fleetMin += min;
+        }
+        let dwellFit = null;
+        if (dwellObs.length >= 12) {
+            const n = dwellObs.length;
+            const sx = dwellObs.reduce((a, o) => a + o.kids, 0), sy = dwellObs.reduce((a, o) => a + o.dwell, 0);
+            const sxx = dwellObs.reduce((a, o) => a + o.kids * o.kids, 0), sxy = dwellObs.reduce((a, o) => a + o.kids * o.dwell, 0);
+            const den = n * sxx - sx * sx;
+            if (Math.abs(den) > 1e-9) {
+                const b = (n * sxy - sx * sy) / den, a = (sy - b * sx) / n;
+                dwellFit = { minutesPerStop: Math.max(0, a), secondsPerChild: Math.max(0, b * 60), n, meanDwell: sy / n };
+            } else dwellFit = { minutesPerStop: sy / n, secondsPerChild: 0, n, meanDwell: sy / n };
+        }
+        return { buses, matched, total, kidsTotal, fleetMin: Math.round(fleetMin), dwellFit };
+    }
+
     function cornerSnapper(result, maxWalkMi) {
         const WALK = Math.max(0.03, maxWalkMi);
         const interNodes = [];
@@ -2651,7 +2735,7 @@ window.CampistryGoNeighborhoods = (function () {
         buildNeighborhoods,
         packIntoBuses,
         expandToPhysicalStops,
-        cornerSnapper, fitLegModel,
+        cornerSnapper, fitLegModel, benchmarkHistory,
         parseStreetName,
         normStreet,
         loadRoadGraph: fetchRoadGraph,
