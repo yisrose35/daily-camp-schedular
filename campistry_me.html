@@ -126,7 +126,9 @@
 </div></div>
 
 <!-- DIVISION EDIT -->
-<div id="divModal" class="me-overlay" style="display:none"><div class="me-modal">
+<!-- Editing a division means editing every grade and bunk inside it — seven
+     grades of chips do not fit a 560px column. -->
+<div id="divModal" class="me-overlay" style="display:none"><div class="me-modal me-modal--2xl">
     <div class="me-modal-header"><h3 id="dmTitle">Add Division</h3><button class="me-modal-x" onclick="CampistryMe.closeModal('divModal')">&times;</button></div>
     <div class="me-modal-body" id="dmBody"></div>
     <div class="me-modal-footer"><button class="me-btn me-btn--sec" onclick="CampistryMe.closeModal('divModal')">Cancel</button><button class="me-btn me-btn--pri" id="dmSave">Save</button></div>

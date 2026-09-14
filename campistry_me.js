@@ -3366,6 +3366,8 @@ function renderStructure(){
                 ?' onclick="CampistryMe.openDivisionHeadModal(\''+je(dn)+'\')" style="cursor:pointer"'
                 :' style="cursor:default"';
             var bodyId='structBody'+ix;
+            var divBunksId='structDivBunks'+ix;
+            var divBunksOpen=!!_accOpenState['structdb_'+dn];
             var openKey='struct_'+dn;
             var isOpen=Object.prototype.hasOwnProperty.call(_accOpenState,openKey)?_accOpenState[openKey]:false;
             h+='<div class="me-card me-div-card" data-div="'+je(dn)+'" style="margin-bottom:10px">'
@@ -3373,7 +3375,12 @@ function renderStructure(){
                 +'<span class="me-grip me-div-grip" title="Drag to reorder division" onclick="event.stopPropagation()" style="cursor:grab;color:var(--s400);font-size:1rem;line-height:1;padding:0 4px;user-select:none">⋮⋮</span>'
                 +'<span id="'+bodyId+'Chev" style="color:var(--s400);font-size:.7rem;flex-shrink:0">'+(isOpen?'▾':'▸')+'</span>'
                 +'<div style="width:10px;height:10px;border-radius:3px;background:'+col+';flex-shrink:0"></div><h3 style="margin:0;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">'+esc(dn)+'</h3>'
-                +'<span style="display:flex;gap:4px;flex-shrink:0">'+bdg(grades.length+' grade'+(grades.length!==1?'s':''),'gray')+bdg(bCt+' bunk'+(bCt!==1?'s':''),'gray')+'</span>'
+                +'<span style="display:flex;gap:4px;flex-shrink:0">'+bdg(grades.length+' grade'+(grades.length!==1?'s':''),'gray')
+                // The bunk count was a dead number. It is the fastest way to
+                // answer "what is actually in this division" without opening it
+                // and reading seven grades, so it opens a flat list of them.
+                +'<span onclick="event.stopPropagation();CampistryMe._toggleAcc(\''+divBunksId+'\',\''+je('structdb_'+dn)+'\')" title="Show every bunk in this division" style="cursor:pointer">'
+                +bdg(bCt+' bunk'+(bCt!==1?'s':'')+' \u25be','gray')+'</span></span>'
                 +'</div><div style="display:flex;gap:4px;align-items:center;flex-shrink:0">'
                 +'<button class="me-btn me-btn--ghost me-btn--sm" onclick="CampistryMe.editDiv(\''+je(dn)+'\')">Edit</button>'
                 +'<button class="me-btn me-btn--danger me-btn--sm" onclick="CampistryMe.deleteDiv(\''+je(dn)+'\')">Delete</button>'
@@ -3382,17 +3389,46 @@ function renderStructure(){
                 +'<span style="font-size:.7rem;color:var(--s400);font-weight:600">Division Head:</span>'
                 +'<span style="font-size:.72rem;'+(rollup.heads.length?'color:var(--s600);font-weight:600':(rollup.editable?'color:var(--me);font-weight:600':'color:var(--s400);font-weight:600'))+'">'+dHeadChip+'</span>'
                 +'</div>'
+                +'<div id="'+divBunksId+'" style="display:'+(divBunksOpen?'block':'none')+';padding:10px 18px 2px">'
+                +(bCt
+                    ?'<div style="display:flex;flex-wrap:wrap;gap:5px">'
+                     +grades.reduce(function(acc,e){return acc.concat(e[1].bunks||[])},[]).map(function(b){
+                         var n=Object.values(roster).filter(function(c){return c.bunk===b}).length;
+                         var mc=bunkManualCounts[b];
+                         return '<span style="display:inline-flex;align-items:center;gap:5px;padding:3px 8px;border-radius:6px;'
+                             +'border:1px solid var(--s200);background:#fff;font-size:.7rem;font-weight:600;color:var(--s600)">'
+                             +esc(bunkLabel(b))
+                             +'<span style="font-size:.64rem;color:var(--s400);font-weight:700">'+(mc!=null?mc:n)+'</span></span>';
+                     }).join('')
+                     +'</div>'
+                    :'<div style="font-size:.74rem;color:var(--s400)">No bunks in this division yet.</div>')
+                +'</div>'
                 +'<div id="'+bodyId+'" style="display:'+(isOpen?'block':'none')+'">';
             h+='<div class="me-grade-list" data-div="'+je(dn)+'" style="padding:14px 18px">';
-            grades.forEach(function([gn,gd]){
+            grades.forEach(function([gn,gd],gix){
+                var gBunks=gd.bunks||[];
+                var gBunksId='structGB'+ix+'_'+gix;
+                var gOpenKey='structgb_'+dn+'_'+gn;
+                // Remembered per grade; a small grade opens by default because
+                // hiding four chips behind a click helps nobody.
+                var gOpen=Object.prototype.hasOwnProperty.call(_accOpenState,gOpenKey)
+                    ?_accOpenState[gOpenKey]
+                    :(gBunks.length<=8);
                 var gHeads=divisionHeads[gn]||[];
                 var gHeadChip=gHeads.length?gHeads.map(function(s){return esc(s.name);}).join(', '):'+ Assign head';
                 h+='<div class="me-grade-block" data-grade="'+je(gn)+'" style="margin-bottom:8px;padding:8px 10px;background:var(--s50);border:1px solid var(--s100);border-radius:8px">'
                     +'<div style="display:flex;align-items:center;gap:6px;margin-bottom:6px">'
                         +'<span class="me-grip me-grade-grip" title="Drag to reorder grade" style="cursor:grab;color:var(--s400);font-size:.85rem;line-height:1;padding:0 2px;user-select:none">⋮⋮</span>'
                         +'<div style="font-size:.8rem;font-weight:700;color:var(--s700)">'+esc(gn)+'</div>'
+                        // The grade's own bunks, behind a count that says how
+                        // many. A division with seven grades and thirty-five
+                        // bunks is a wall of chips otherwise, and the grade
+                        // names — the thing being scanned — get lost in it.
+                        +'<span onclick="event.stopPropagation();CampistryMe._toggleAcc(\''+gBunksId+'\',\''+je(gOpenKey)+'\')" title="'+(gOpen?'Hide':'Show')+' this grade\'s bunks" style="font-size:.66rem;font-weight:700;color:var(--s500);cursor:pointer;margin-left:8px;flex-shrink:0">'
+                        +gBunks.length+' bunk'+(gBunks.length!==1?'s':'')+' <span id="'+gBunksId+'Chev">'+(gOpen?'\u25be':'\u25b8')+'</span></span>'
                         +'<span style="font-size:.66rem;cursor:pointer;margin-left:auto;flex-shrink:0;'+(gHeads.length?'color:var(--s500);font-weight:600':'color:var(--me);font-weight:600')+'" onclick="event.stopPropagation();CampistryMe.openDivisionHeadModal(\''+je(gn)+'\')" title="Manage this grade\'s head — can be different from the division head, and notified alongside them for this grade\'s pickups">Head: '+gHeadChip+'</span>'
                     +'</div>'
+                    +'<div id="'+gBunksId+'" style="display:'+(gOpen?'block':'none')+'">'
                     +'<div class="me-card-bunks" data-grade="'+je(gn)+'" style="display:flex;flex-wrap:wrap;gap:5px;padding-left:18px">';
                 (gd.bunks||[]).forEach(function(b){
                     var rCt=Object.values(roster).filter(function(c){return c.bunk===b}).length;
@@ -3413,7 +3449,7 @@ function renderStructure(){
                         +'<span class="bunk-ct-pill" title="'+esc(badgeTip)+'" onclick="event.stopPropagation();CampistryMe.openBunkCountModal(\''+je(b)+'\')" style="'+badgeStyle+'min-width:18px;height:16px;border-radius:8px;font-size:.65rem;font-weight:700;padding:0 5px;cursor:pointer;display:inline-flex;align-items:center;justify-content:center;">'+dispCt+'</span>'
                         +'</span>';
                 });
-                h+='</div></div>';
+                h+='</div></div></div>';
             });
             h+='</div></div></div>';
         });
@@ -3648,17 +3684,49 @@ function openDivForm(name){
     editingDiv=name;
     var d=name?structure[name]:{color:COLORS[Object.keys(structure).length%COLORS.length],grades:{}};
     document.getElementById('dmTitle').textContent=name?'Edit Division':'Add Division';
-    var h=ff('Division Name','dmName',name||'');
-    h+='<div class="fg"><label class="fl">Color</label><div class="swatch-row">';
+    // Two columns: what the division IS on the left, what is INSIDE it on the
+    // right. They are different jobs -- a name and a colour are set once, while
+    // grades and bunks are the reason anybody opens this -- and stacking them
+    // meant scrolling past the settled part every time to reach the work.
+    var _gradeRows=_sortedGrades(d);
+    var _gradeCount=_gradeRows.length;
+    var _bunkCount=_gradeRows.reduce(function(n,e){return n+((e[1].bunks||[]).length)},0);
+
+    var h='<div style="display:grid;grid-template-columns:260px minmax(0,1fr);gap:24px;align-items:start" id="dmGrid">';
+
+    h+='<div>'
+        +'<div style="font-size:.72rem;font-weight:700;letter-spacing:.04em;text-transform:uppercase;color:var(--s500);margin-bottom:10px">The division</div>'
+        +ff('Division Name','dmName',name||'')
+        +'<div class="fg"><label class="fl">Colour</label><div class="swatch-row">';
     COLORS.forEach(function(c){h+='<button class="swatch'+(d.color===c?' sel':'')+'" style="background:'+c+'" data-color="'+c+'" onclick="CampistryMe._pickColor(this)"></button>'});
-    h+='</div><input type="hidden" id="dmColor" value="'+(d.color||COLORS[0])+'"></div>';
-    // Grades + Bunks
-    h+='<div class="fsec">Grades & Bunks <span style="font-weight:400;color:var(--s400);font-size:.75rem">(drag the ⋮⋮ handle to reorder — youngest to oldest)</span></div><div id="dmGrades">';
-    _sortedGrades(d).forEach(function([gn,gd]){
-        h+=_renderGradeRowHTML(gn,gd.bunks||[],gd.daysPresent,gd.schoolGrades);
+    h+='</div><input type="hidden" id="dmColor" value="'+(d.color||COLORS[0])+'">'
+        +'<div style="font-size:.72rem;color:var(--s400);margin-top:6px">Used on schedules, print sheets and the grid.</div></div>'
+        +(name
+            ?'<div style="margin-top:16px;padding-top:14px;border-top:1px solid var(--s100);font-size:.78rem;color:var(--s500);line-height:1.7">'
+             +'<strong style="color:var(--s600)">'+_gradeCount+'</strong> grade'+(_gradeCount!==1?'s':'')+'<br>'
+             +'<strong style="color:var(--s600)">'+_bunkCount+'</strong> bunk'+(_bunkCount!==1?'s':'')+'</div>'
+            :'')
+        +'</div>';
+
+    h+='<div style="min-width:0">'
+        +'<div style="display:flex;align-items:baseline;gap:10px;flex-wrap:wrap;margin-bottom:10px">'
+        +'<div style="font-size:.72rem;font-weight:700;letter-spacing:.04em;text-transform:uppercase;color:var(--s500)">Grades and bunks</div>'
+        +'<div style="font-size:.74rem;color:var(--s400)">Drag the handle to reorder — youngest to oldest</div></div>'
+        +'<div id="dmGrades">';
+    _gradeRows.forEach(function(e){
+        h+=_renderGradeRowHTML(e[0],e[1].bunks||[],e[1].daysPresent,e[1].schoolGrades);
     });
-    h+='</div><button class="me-btn me-btn--sec me-btn--sm" style="margin-top:6px" onclick="CampistryMe._addGradeRow()">+ Add Grade</button>';
+    h+='</div>'
+        +(_gradeCount?'':'<div style="padding:22px;text-align:center;border:1px dashed var(--s200);border-radius:var(--r);color:var(--s400);font-size:.84rem">No grades yet. Add the first one below.</div>')
+        +'<button class="me-btn me-btn--sec me-btn--sm" style="margin-top:8px" onclick="CampistryMe._addGradeRow()">+ Add Grade</button>'
+        +'</div>';
+
+    h+='</div>';
     document.getElementById('dmBody').innerHTML=h;
+    // One column on a narrow window: a 260px sidebar beside grade chips is
+    // worse than stacking once there is no room for both.
+    var _dmGrid=document.getElementById('dmGrid');
+    if(_dmGrid&&_dmGrid.clientWidth<720)_dmGrid.style.gridTemplateColumns='minmax(0,1fr)';
     var dmGrades=document.getElementById('dmGrades');
     _meReorderInit(dmGrades,'.dm-grade-row');
     dmGrades.querySelectorAll('.dm-grade-row').forEach(_wireGradeRow);
@@ -9712,7 +9780,7 @@ function _autoProvisionParentInvites(){
             var _w=_linkCamperWindow(cn);
             camperData[cn]={
                 name:cn,dob:r.dob||'',gender:r.gender||'',
-                division:r.division||'',grade:r.grade||'',bunk:r.bunk||'',
+                division:r.division||'',grade:r.grade||'',bunk:r.bunk||'',bunkAlias:bunkAlias(r.bunk),
                 session:_w.sessionName,
                 sessionStart:_w.sessionStart,sessionEnd:_w.sessionEnd,
                 accessStart:_w.accessStart,accessEnd:_w.accessEnd,
@@ -9823,7 +9891,7 @@ function _syncParentInviteSnapshot(enrollId,silent){
             var _w=_linkCamperWindow(en.camperName);
             camperData[en.camperName]={
                 name:en.camperName,dob:en.dob||r.dob||'',gender:en.gender||r.gender||'',
-                division:r.division||'',grade:r.grade||'',bunk:r.bunk||'',
+                division:r.division||'',grade:r.grade||'',bunk:r.bunk||'',bunkAlias:bunkAlias(r.bunk),
                 session:en.session||'',
                 sessionStart:_w.sessionStart,sessionEnd:_w.sessionEnd,
                 accessStart:_w.accessStart,accessEnd:_w.accessEnd,
@@ -14341,7 +14409,7 @@ function _reportSources(){
             fields:[
                 {key:'name',label:'Name',group:'Basic Info'},{key:'firstName',label:'First Name',group:'Basic Info'},{key:'lastName',label:'Last Name',group:'Basic Info'},
                 {key:'camperId',label:'Camper ID',group:'Basic Info'},{key:'age',label:'Age',group:'Basic Info'},{key:'dob',label:'DOB',group:'Basic Info'},{key:'gender',label:'Gender',group:'Basic Info'},
-                {key:'division',label:'Division',group:'Camp Assignment'},{key:'grade',label:'Grade',group:'Camp Assignment'},{key:'bunk',label:'Bunk',group:'Camp Assignment'},
+                {key:'division',label:'Division',group:'Camp Assignment'},{key:'grade',label:'Grade',group:'Camp Assignment'},{key:'bunk',label:'Bunk',group:'Camp Assignment'},{key:'bunkAlias',label:'Bunk — Second Name',group:'Camp Assignment'},
                 {key:'schoolGrade',label:'School Grade',group:'Camp Assignment'},{key:'teacher',label:'Teacher',group:'Camp Assignment'},{key:'school',label:'School',group:'Camp Assignment'},
                 {key:'camperType',label:'Camper Type',group:'Camp Assignment'},{key:'swimLevel',label:'Swim Level',group:'Camp Assignment'},{key:'shirtSize',label:'Shirt Size',group:'Camp Assignment'},
                 {key:'bunkmateRequest',label:'Bunkmate Request',group:'Camp Assignment'},{key:'separateFrom',label:'Do Not Bunk With',group:'Camp Assignment'},
@@ -14356,7 +14424,7 @@ function _reportSources(){
             rows:function(){
                 return Object.keys(roster).filter(function(n){return !roster[n].unenrolled;}).map(function(n){
                     var c=roster[n]||{}; var nm=_rbSplitName(n);
-                    var row={name:n,firstName:nm.first,lastName:nm.last,camperId:c.camperId||'',division:c.division||'',grade:c.grade||'',bunk:c.bunk||'',
+                    var row={name:n,firstName:nm.first,lastName:nm.last,camperId:c.camperId||'',division:c.division||'',grade:c.grade||'',bunk:c.bunk||'',bunkAlias:bunkAlias(c.bunk),
                         schoolGrade:c.schoolGrade||'',teacher:c.teacher||'',school:c.school||'',
                         age:c.dob?age(c.dob):'',dob:c.dob||'',gender:c.gender||'',
                         allergies:c.allergies||'',medications:c.medications||'',dietary:c.dietary||'',medicalNotes:c.medicalNotes||'',
@@ -14405,7 +14473,7 @@ function _reportSources(){
             } },
         staff:{ key:'staff', label:'Staff (Finance Tab)',
             fields:[{key:'name',label:'Name',group:'Basic Info'},{key:'firstName',label:'First Name',group:'Basic Info'},{key:'lastName',label:'Last Name',group:'Basic Info'},{key:'role',label:'Role',group:'Basic Info'},{key:'type',label:'Type',group:'Basic Info'},
-                {key:'bunk',label:'Bunk',group:'Camp Assignment'},{key:'salary',label:'Salary',group:'Pay'}],
+                {key:'bunk',label:'Bunk',group:'Camp Assignment'},{key:'bunkAlias',label:'Bunk — Second Name',group:'Camp Assignment'},{key:'salary',label:'Salary',group:'Pay'}],
             rows:function(){ return (finStaff||[]).map(function(s){ var nm=_rbSplitName(s.name); return {name:s.name||'',firstName:nm.first,lastName:nm.last,role:s.role||'',type:s.type||'',salary:s.salary||0,bunk:s.bunk||''}; }); } },
         // Normalizes the 3 heterogeneous finance stores (payments/expenses/
         // finStaff) into one common shape — same logic exportFinancialReport()
@@ -14425,7 +14493,7 @@ function _reportSources(){
         // reports built off `staff` (finStaff) keep working unchanged.
         payroll:{ key:'payroll', label:'Payroll (Staff Records)',
             fields:[{key:'name',label:'Name',group:'Basic Info'},{key:'firstName',label:'First Name',group:'Basic Info'},{key:'lastName',label:'Last Name',group:'Basic Info'},
-                {key:'role',label:'Role',group:'Basic Info'},{key:'department',label:'Department',group:'Basic Info'},{key:'bunk',label:'Bunk',group:'Camp Assignment'},
+                {key:'role',label:'Role',group:'Basic Info'},{key:'department',label:'Department',group:'Basic Info'},{key:'bunk',label:'Bunk',group:'Camp Assignment'},{key:'bunkAlias',label:'Bunk — Second Name',group:'Camp Assignment'},
                 {key:'employmentType',label:'Employment Type',group:'Employment'},{key:'startDate',label:'Start Date',group:'Employment'},{key:'endDate',label:'End Date',group:'Employment'},
                 {key:'payType',label:'Pay Type',group:'Pay'},{key:'payRate',label:'Pay Rate',group:'Pay'},{key:'expectedWeeklyHours',label:'Expected Weekly Hours',group:'Pay'},
                 {key:'i9OnFile',label:'I-9 On File',group:'Compliance'},{key:'w4OnFile',label:'W-4 On File',group:'Compliance'},{key:'backgroundCheck',label:'Background Check',group:'Compliance'}],
@@ -14446,14 +14514,14 @@ function _reportSources(){
         // simply blank on the other type's rows, same as CampMinder's.
         people:{ key:'people', label:'People (Campers + Staff)',
             fields:[{key:'personType',label:'Type',group:'Basic Info'},{key:'name',label:'Name',group:'Basic Info'},{key:'firstName',label:'First Name',group:'Basic Info'},{key:'lastName',label:'Last Name',group:'Basic Info'},{key:'dob',label:'DOB',group:'Basic Info'},
-                {key:'division',label:'Division',group:'Camp Assignment'},{key:'bunk',label:'Bunk',group:'Camp Assignment'},{key:'role',label:'Role / Position',group:'Camp Assignment'},
+                {key:'division',label:'Division',group:'Camp Assignment'},{key:'bunk',label:'Bunk',group:'Camp Assignment'},{key:'bunkAlias',label:'Bunk — Second Name',group:'Camp Assignment'},{key:'role',label:'Role / Position',group:'Camp Assignment'},
                 {key:'phone',label:'Phone',group:'Contact'},{key:'email',label:'Email',group:'Contact'},{key:'parent1Name',label:'Parent / Guardian',group:'Contact'},{key:'parent1Phone',label:'Parent Phone',group:'Contact'},{key:'address',label:'Address',group:'Contact'},
                 {key:'allergies',label:'Allergies',group:'Medical'}],
             rows:function(){
                 var rows=[];
                 Object.keys(roster).filter(function(n){return !roster[n].unenrolled;}).forEach(function(n){
                     var c=roster[n]||{}; var nm=_rbSplitName(n);
-                    rows.push({personType:'Camper',name:n,firstName:nm.first,lastName:nm.last,division:c.division||'',bunk:c.bunk||'',role:'',dob:c.dob||'',
+                    rows.push({personType:'Camper',name:n,firstName:nm.first,lastName:nm.last,division:c.division||'',bunk:c.bunk||'',bunkAlias:bunkAlias(c.bunk),role:'',dob:c.dob||'',
                         phone:'',email:'',allergies:c.allergies||'',parent1Name:c.parent1Name||'',parent1Phone:c.parent1Phone||'',
                         address:[c.street,c.city,c.state,c.zip].filter(Boolean).join(', ')});
                 });
@@ -15790,7 +15858,7 @@ function importRows(rows,mode){
             teacher:r.teacher||'',
             division:r.division||'',
             grade:r.grade||'',
-            bunk:r.bunk||'',
+            bunk:r.bunk||'',bunkAlias:bunkAlias(r.bunk),
             street:r.street||'',
             city:r.city||'',
             state:r.state||'',
@@ -15991,7 +16059,7 @@ function psFields(){
         {key:'camperId',label:'Camper ID'},
         {key:'division',label:'Division'},
         {key:'grade',label:'Grade'},
-        {key:'bunk',label:'Bunk'},
+        {key:'bunk',label:'Bunk'},{key:'bunkAlias',label:'Bunk — Second Name'},
         {key:'team',label:'League Team'},
         {key:'role',label:'Role / Position (Staff)'},
         {key:'department',label:'Department (Staff)'},
