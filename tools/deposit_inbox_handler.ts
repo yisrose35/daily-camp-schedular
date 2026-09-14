@@ -279,7 +279,12 @@ async function loadContext(service: ReturnType<typeof createClient>, campId: str
       .select("family_key, balance_cents").eq("camp_id", campId),
   ]);
 
-  const families = (kv.data?.value as Record<string, unknown>)?.families ?? {};
+  const blob = (kv.data?.value as Record<string, unknown>) ?? {};
+  const families = blob.families ?? {};
+  // The roster carries each camper's number; families carry camper NAMES.
+  // Neither alone can answer "whose payment is 1234-5678", so both are loaded
+  // and joined into an index once.
+  const roster = blob.roster ?? {};
 
   const aliases = (aliasRes.data ?? []).map((a: Record<string, unknown>) => ({
     familyKey: a.family_key,
@@ -296,7 +301,13 @@ async function loadContext(service: ReturnType<typeof createClient>, campId: str
     };
   }
 
-  return { families, aliases, ledgers };
+  return {
+    families,
+    roster,
+    camperIndex: Matcher.camperIndex(families, roster),
+    aliases,
+    ledgers,
+  };
 }
 
 // ── handler ──────────────────────────────────────────────────────────────────
@@ -458,6 +469,10 @@ serve(async (req) => {
   // bank's layout they belong to.
   deposit.fromAddress = fromAddrs[0] || "";
   const ctx = await loadContext(service, campId);
+  // The first half of a payment reference must equal this camp's own number
+  // before the second half is read as a camper at all — it is what keeps a
+  // date or a confirmation number from being mistaken for one.
+  (ctx as Record<string, unknown>).campNumber = camp.campNumber || "";
   const decision = Matcher.decide(deposit, ctx, {
     autoPostAt: camp.autoPostAt,
     suggestAt: camp.suggestAt,

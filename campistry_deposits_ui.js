@@ -62,6 +62,8 @@
         fm: function (n) { return '$' + (Number(n) || 0).toFixed(2); },
         client: null, campId: null,
         families: function () { return {}; },
+        // roster[camperName].camperId — the number half of a payment reference.
+        roster: function () { return {}; },
         onChange: function () {}
     };
 
@@ -69,7 +71,7 @@
     // in the Bank layouts footer. Twice now a fix has been live on the server
     // while the browser ran an older copy, and there was no way to tell from
     // the screen which one was which -- so the screen says.
-    D.BUILD = '20260914-03';
+    D.BUILD = '20260914-04';
 
     var state = {
         loaded: false,
@@ -238,6 +240,41 @@
             : '';
     };
 
+    // ── the payment reference ────────────────────────────────────────────────
+    //
+    // <camp number>-<camper number>. The lettered memo code above still
+    // resolves for camps that handed it out, but this is the one to give out
+    // now: a parent knows their child's number, and nobody can be told their
+    // family's hash over the phone.
+
+    D.campNumber = function () {
+        return (state.settings && state.settings.campNumber) || '';
+    };
+
+    /** Every camper in a family, with the reference a parent would type. */
+    D.referencesFor = function (famKey) {
+        var M = Match();
+        var camp = D.campNumber();
+        if (!M || !camp || !M.reference) return [];
+        var roster = (host.roster && host.roster()) || {};
+        return campersOf(famKey).map(function (name) {
+            var c = roster[name] || {};
+            var ref = M.reference(camp, c.camperId);
+            return ref ? { camper: name, camperId: c.camperId, reference: ref } : null;
+        }).filter(Boolean);
+    };
+
+    /** One line a camp can read down the phone or paste onto a form. */
+    D.referenceInstruction = function (famKey) {
+        var refs = D.referencesFor(famKey);
+        if (!refs.length) return '';
+        if (refs.length === 1) {
+            return 'Put ' + refs[0].reference + ' in the Zelle or bank memo so the payment is credited automatically.';
+        }
+        return 'Put the camper\'s reference in the Zelle or bank memo — ' +
+               refs.map(function (r) { return r.camper + ': ' + r.reference; }).join(' · ');
+    };
+
     /**
      * Turn an RPC failure into something the person reading it can act on.
      *
@@ -332,6 +369,29 @@
         return (f && f.name) || fk || '—';
     }
 
+    /** The campers in a family, which is how a human tells two households apart. */
+    function campersOf(fk) {
+        var f = (host.families() || {})[fk] || {};
+        return (f.camperIds || []).filter(Boolean);
+    }
+
+    function campersLine(fk) {
+        var kids = campersOf(fk);
+        if (!kids.length) return '<div style="font-size:.74rem;color:var(--s400);margin-top:3px">No campers listed</div>';
+        var shown = kids.slice(0, 3).join(', ');
+        if (kids.length > 3) shown += ' +' + (kids.length - 3) + ' more';
+        return '<div style="font-size:.78rem;color:var(--s600);margin-top:3px;line-height:1.4">' +
+               host.esc(shown) + '</div>';
+    }
+
+    /** "Rosenfeld Family — Shayna, Moshe" for a <select>, where markup cannot go. */
+    function familyOptionLabel(fams, k) {
+        var kids = ((fams[k] || {}).camperIds || []).filter(Boolean);
+        return (fams[k].name || k) + (kids.length
+            ? ' \u2014 ' + kids.slice(0, 2).join(', ') + (kids.length > 2 ? ' +' + (kids.length - 2) : '')
+            : '');
+    }
+
     function candidateButtons(d) {
         var cands = (d.candidates || []).slice(0, 4);
         if (!cands.length) {
@@ -354,6 +414,11 @@
                 '<strong style="font-size:.94rem">' + host.esc(c.familyName || famName(c.familyKey)) + '</strong>' +
                 '<span style="font-size:.76rem;font-weight:700;color:' +
                 (strong ? '#065F46' : 'var(--s500)') + '">' + score + '%</span></div>' +
+                // The campers are what actually tell two households apart. Camps
+                // routinely have three families called "Rosenfeld Family", and a
+                // list of identical names with different percentages beside them
+                // is not a choice anyone can make.
+                campersLine(c.familyKey) +
                 (reasons ? '<div style="font-size:.74rem;color:var(--s500);margin-top:4px;line-height:1.4">' +
                            host.esc(reasons) + '</div>' : '') +
                 '</button>';
@@ -366,7 +431,7 @@
             Object.keys(fams)
                 .sort(function (a, b) { return (fams[a].name || '').localeCompare(fams[b].name || ''); })
                 .map(function (k) {
-                    return '<option value="' + host.esc(k) + '">' + host.esc(fams[k].name || k) + '</option>';
+                    return '<option value="' + host.esc(k) + '">' + host.esc(familyOptionLabel(fams, k)) + '</option>';
                 })
         ).join('');
         return '<select class="me-input" style="max-width:280px;display:inline-block"' +
@@ -603,7 +668,21 @@
                   copyBtn(addr, 'Copy address') + '</div>'
                 : '');
 
-        h += stepRow(2, st.mailArrived, 'Tell your bank to send alerts there',
+        var campNo = D.campNumber();
+        h += stepRow(2, !!campNo, 'Tell parents how to label their payment',
+            campNo
+                ? 'Your camp\'s number is <strong>' + host.esc(campNo) + '</strong>. A parent puts ' +
+                  '<strong>' + host.esc(campNo) + '&#8209;their camper\'s number</strong> in the Zelle or bank memo, ' +
+                  'and the payment is credited to that family on its own — whatever name the money arrives under. ' +
+                  'Each camper\'s number is on their family in Billing.' +
+                  '<div style="font-size:.82rem;color:var(--s500);margin-top:8px">' +
+                  'Worth putting on the registration form: “Paying by Zelle? Put ' + host.esc(campNo) +
+                  '-[your camper\'s number] in the memo.” It is the only thing that identifies a payer we have ' +
+                  'never seen — a business account, a maiden name, a grandparent.</div>'
+                : 'A number is assigned to your camp the first time this is opened. Reopen this in a moment.',
+            campNo ? copyBtn(campNo, 'Copy camp number') : '');
+
+        h += stepRow(3, st.mailArrived, 'Tell your bank to send alerts there',
             'In your camp\'s online banking, add that address as an alert recipient for <strong>incoming ' +
             'deposits</strong> and <strong>Zelle payments received</strong>. If alerts already go to an ' +
             'existing mailbox, a forwarding rule from there works just as well.' +
@@ -615,15 +694,16 @@
                 : '<span style="font-size:.85rem;color:var(--s500)">Nothing has arrived yet. ' +
                   'Send yourself a $1 Zelle to test — it shows up here within a minute.</span>');
 
-        h += stepRow(3, st.mailArrived && !st.dryRun, 'Check the matches, then let it post',
+        h += stepRow(4, st.mailArrived && !st.dryRun, 'Choose how deposits get credited',
             st.dryRun
-                ? 'Dry run is <strong>on</strong>, so deposits are matched and explained but nothing is credited ' +
-                  'automatically. Leave it on for a week of real payments, then turn it off once the matches look right.'
-                : 'Dry run is off — confident matches post to a family\'s balance on their own. ' +
+                ? 'You are on <strong>Manual</strong>: every deposit is matched and explained, but nothing is ' +
+                  'credited until you say so. Good for the first week of real payments — switch to Automatic once ' +
+                  'the matches look right.'
+                : 'You are on <strong>Automatic</strong>: confident matches are credited to a family on their own. ' +
                   'Anything less certain still waits for you in <strong>Needs you</strong>.',
-            '<button class="me-btn me-btn--sec me-btn--sm" onclick="CampistryDeposits.openSettings()">Open settings</button>');
+            '<button class="me-btn me-btn--sec me-btn--sm" onclick="CampistryDeposits.openSettings()">Change this</button>');
 
-        h += stepRow(4, st.allowlisted, 'Lock it to your bank',
+        h += stepRow(5, st.allowlisted, 'Lock it to your bank',
             'Once you have seen a real alert arrive, restrict the address to that bank\'s sending domain. ' +
             'Until then, anything reaching the address is trusted — fine while testing, not once camps rely on it.',
             st.allowlisted
@@ -671,8 +751,10 @@
         h += stat(String(state.aliases.length), 'payers learned');
 
         h += '<div style="margin-left:auto;display:flex;gap:8px;align-items:center;flex-wrap:wrap">' +
-             (dry ? '<span style="background:#EFF6FF;border:1px solid #BFDBFE;color:#1E40AF;padding:5px 11px;' +
-                    'border-radius:999px;font-size:.76rem;font-weight:600">Dry run — nothing posts by itself</span>' : '') +
+             '<span style="background:' + (dry ? '#EFF6FF' : '#ECFDF5') + ';border:1px solid ' +
+             (dry ? '#BFDBFE' : '#A7F3D0') + ';color:' + (dry ? '#1E40AF' : '#065F46') + ';padding:5px 11px;' +
+             'border-radius:999px;font-size:.76rem;font-weight:600">' +
+             (dry ? 'Manual — you credit each deposit' : 'Automatic — confident matches post themselves') + '</span>' +
              '<button class="me-btn me-btn--sec me-btn--sm" onclick="CampistryDeposits.openSettings()">Settings</button>' +
              '</div>';
         h += '</div>';
@@ -893,7 +975,7 @@
             Object.keys(fams)
                 .sort(function (a, b) { return (fams[a].name || '').localeCompare(fams[b].name || ''); })
                 .map(function (k) {
-                    return '<option value="' + host.esc(k) + '">' + host.esc(fams[k].name || k) + '</option>';
+                    return '<option value="' + host.esc(k) + '">' + host.esc(familyOptionLabel(fams, k)) + '</option>';
                 })
         ).join('');
 
@@ -1009,11 +1091,29 @@
              'In the camp\'s online banking, add this as an alert recipient for incoming deposits and Zelle payments — ' +
              'or set up a forwarding rule from whichever mailbox already gets them.</div></div>';
 
-        h += '<div class="me-field"><label><input type="checkbox" id="depDryRun"' + (s.dryRun ? ' checked' : '') + '> ' +
-             'Dry run — match and explain, but never post automatically</label>' +
-             '<div style="font-size:.75rem;color:var(--s500);margin-top:4px">' +
-             'Leave this on for the first week or two. Every deposit still appears in the inbox with its match and ' +
-             'confidence, so the office can check the matches are right before trusting them.</div></div>';
+        // Two named modes rather than a checkbox called "dry run". Nobody
+        // outside software reads "dry run" and knows what their money will do;
+        // Automatic and Manual say it in the words a camp would use.
+        function modeCard(val, title, body, on) {
+            return '<label class="dep-card" style="display:block;cursor:pointer;border:1px solid ' +
+                (on ? '#86EFAC' : 'var(--s100)') + ';background:' + (on ? '#F0FDF4' : '#fff') +
+                ';border-radius:var(--r);padding:13px 15px;flex:1 1 240px">' +
+                '<div style="display:flex;gap:9px;align-items:flex-start">' +
+                '<input type="radio" name="depMode" value="' + val + '"' + (on ? ' checked' : '') +
+                ' style="margin-top:3px">' +
+                '<div><div style="font-weight:700;font-size:.95rem">' + title + '</div>' +
+                '<div style="font-size:.82rem;color:var(--s600);margin-top:3px;line-height:1.5">' + body + '</div>' +
+                '</div></div></label>';
+        }
+        h += '<div class="me-field"><label>How should deposits be credited?</label>' +
+             '<div style="display:flex;gap:10px;flex-wrap:wrap;margin-top:6px">' +
+             modeCard('auto', 'Automatic',
+                'A deposit we are confident about is credited to the family on its own. Anything less certain still ' +
+                'waits for you.', !s.dryRun) +
+             modeCard('manual', 'Manual',
+                'Every deposit is matched and explained, but nothing is credited until you choose the family. ' +
+                'Best for your first week.', !!s.dryRun) +
+             '</div></div>';
 
         h += '<div class="me-field"><label>Only accept alerts from these sender domains</label>' +
              '<input type="text" id="depAllow" class="me-input" placeholder="chase.com, alerts.wellsfargo.com" value="' +
@@ -1034,7 +1134,12 @@
                 .split(',').map(function (x) { return x.trim().toLowerCase(); }).filter(Boolean);
             client.rpc('set_camp_deposit_settings', {
                 p_camp_id: cid,
-                p_dry_run: DOC.getElementById('depDryRun').checked,
+                p_dry_run: (function () {
+                    var picked = DOC.querySelector && DOC.querySelector('input[name="depMode"]:checked');
+                    // Manual is the safe reading of a missing control: it posts
+                    // nothing by itself.
+                    return !picked || picked.value === 'manual';
+                })(),
                 p_sender_allowlist: allow,
                 p_auto_post_at: parseInt(DOC.getElementById('depAuto').value, 10) || 90,
                 p_suggest_at: parseInt(DOC.getElementById('depSuggest').value, 10) || 40

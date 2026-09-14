@@ -12053,6 +12053,9 @@ function _wireDeposits(){
             client:function(){return window.CampistryDB&&window.CampistryDB.getClient?window.CampistryDB.getClient():window.supabase},
             campId:getCampId,
             families:function(){return families},
+            // Carries each camper's number, which is the second half of the
+            // payment reference a parent types into the Zelle memo.
+            roster:function(){return roster},
             // A resolved deposit changes a family balance, so the page behind
             // the modal has to catch up.
             onChange:function(){ if(curPage==='familydetail')renderFamilyDetailPage(); else if(curPage==='billing')renderBilling(); }
@@ -12253,11 +12256,24 @@ function renderFamilyDetailPage(){
     // family directly. Shown here so the office can read it to a parent on the
     // phone. Pending/synthesized ledgers have no stable family key, so no code.
     if(window.CampistryDeposits&&!l.pendingEnrollment){
-        var _memo=window.CampistryDeposits.memoCode(l.famKey,l.family.name);
-        if(_memo){
-            h+='<p style="font-size:.78rem;color:var(--s500);margin:6px 0 0">Zelle / bank memo code: '
-                +'<code style="background:var(--s50);padding:2px 7px;border-radius:4px;font-weight:700;color:var(--s700)">'+esc(_memo)+'</code>'
-                +' <span style="opacity:.8">— a payment carrying this in the memo is credited here automatically.</span></p>';
+        // The reference a parent types: <camp number>-<camper number>. One per
+        // camper, because that is what a parent knows — the older lettered code
+        // is kept below only for camps that already handed it out.
+        var _refs=window.CampistryDeposits.referencesFor?window.CampistryDeposits.referencesFor(l.famKey):[];
+        if(_refs.length){
+            h+='<p style="font-size:.78rem;color:var(--s500);margin:6px 0 0">Zelle / bank memo: '
+                +_refs.map(function(r){
+                    return '<code style="background:var(--s50);padding:2px 7px;border-radius:4px;font-weight:700;color:var(--s700)">'
+                        +esc(r.reference)+'</code> <span style="opacity:.85">'+esc(r.camper)+'</span>';
+                }).join(' &nbsp; ')
+                +'<br><span style="opacity:.8">— a payment carrying this in the memo is credited here automatically.</span></p>';
+        } else {
+            var _memo=window.CampistryDeposits.memoCode(l.famKey,l.family.name);
+            if(_memo){
+                h+='<p style="font-size:.78rem;color:var(--s500);margin:6px 0 0">Zelle / bank memo code: '
+                    +'<code style="background:var(--s50);padding:2px 7px;border-radius:4px;font-weight:700;color:var(--s700)">'+esc(_memo)+'</code>'
+                    +' <span style="opacity:.8">— a payment carrying this in the memo is credited here automatically.</span></p>';
+            }
         }
     }
     h+='</div>';

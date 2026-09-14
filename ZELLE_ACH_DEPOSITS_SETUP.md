@@ -168,6 +168,26 @@ Nothing here lets money move more easily: a payer name still scores 88, below
 the 90 auto-post line, and the amount is only ever confirmed against the generic
 parser, never overridden. This widens coverage, not permission.
 
+### 2e. Apply migration 149 — the payment reference
+
+Gives each camp a four-digit number, so a parent types
+**`<camp number>-<camper number>`** in the Zelle memo — e.g. `1234-5678`.
+
+This is the form to hand out. A code derived from the family name works and
+cannot be said out loud: no parent knows their family's hash, so the camp has
+to look it up and send it to each family individually. A parent knows their
+child, so one sentence on a registration form covers everybody:
+
+> Paying by Zelle? Put `1234-[your camper's number]` in the memo.
+
+The camp number is also the **guard**. Bank messages are full of digit pairs
+that look like a reference — dates (`2026-09`), confirmation numbers, account
+fragments — so the first half must equal this camp's own number before the
+second half is read as a camper at all. Two independent things have to line up.
+A camper this camp does not have resolves to nothing rather than to a guess.
+
+Codes already handed out in the older `KLE-1234` form keep working.
+
 ### 3. Turn on inbound email in Resend
 
 Resend Dashboard → **Inbound**. Pick one:

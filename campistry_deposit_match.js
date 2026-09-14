@@ -218,6 +218,90 @@
         return checkDigit(m[1], m[2]) === m[3];
     };
 
+    // ── the payment reference a parent actually types ────────────────────────
+    //
+    // <camp number>-<camper number>, e.g. 1234-5678.
+    //
+    // This replaces a code derived from the family name (KLE-1234) as the form
+    // camps hand out, and it is better for one reason that outweighs the rest:
+    // a parent knows their child. "Put 1234-5678 in the memo" is a sentence a
+    // camp can say on a form, in an email and over the phone, and a parent can
+    // act on it without looking anything up. Nobody can be told their family's
+    // hash.
+    //
+    // The camp number is the guard. A bank message is full of digit pairs that
+    // look like this -- dates ("2026-09"), confirmation numbers, account
+    // fragments -- so the first half MUST equal this camp's own number before
+    // the second half is treated as a camper at all. Two independent things
+    // have to line up, and the camp number is not in the message by accident.
+    //
+    // The old lettered codes still resolve, because camps that already gave
+    // them out cannot un-give them.
+
+    M.REFERENCE_RE = /\b([0-9]{3,6})\s*[-–—]\s*([0-9]{1,6})\b/;
+
+    /** "1234-5678" for a camper, or '' when the camp has no number yet. */
+    M.reference = function (campNumber, camperId) {
+        var camp = String(campNumber == null ? '' : campNumber).replace(/\D/g, '');
+        var kid = String(camperId == null ? '' : camperId).replace(/\D/g, '');
+        if (!camp || !kid) return '';
+        return camp + '-' + kid;
+    };
+
+    M.referenceInstruction = function (campNumber, camperId, camperName) {
+        var ref = M.reference(campNumber, camperId);
+        if (!ref) return '';
+        return 'Put ' + ref + ' in the Zelle or bank memo' +
+               (camperName ? ' for ' + camperName : '') + ' so the payment is credited automatically.';
+    };
+
+    /**
+     * camperId -> familyKey, built from the roster and the family rosters.
+     *
+     * families[fk].camperIds holds camper NAMES; roster[name].camperId holds
+     * the number. Neither alone can answer "whose payment is 1234-5678", so
+     * the index joins them once rather than at every lookup.
+     */
+    M.camperIndex = function (families, roster) {
+        var idx = {};
+        var fams = families || {};
+        var r = roster || {};
+        Object.keys(fams).forEach(function (fk) {
+            ((fams[fk] || {}).camperIds || []).forEach(function (name) {
+                var c = r[name];
+                if (c && c.camperId != null && c.camperId !== '') {
+                    idx[String(c.camperId).replace(/\D/g, '')] = fk;
+                }
+            });
+        });
+        return idx;
+    };
+
+    /**
+     * Which family a "<camp>-<camper>" reference belongs to.
+     *
+     * Returns null unless the camp number matches AND the camper number is one
+     * this camp actually has. A near miss is not a near answer -- crediting the
+     * wrong family is the failure this whole feature exists to avoid -- so it
+     * declines and the deposit waits for a person.
+     */
+    M.familyForReference = function (text, ctx) {
+        var c = ctx || {};
+        var campNumber = String(c.campNumber == null ? '' : c.campNumber).replace(/\D/g, '');
+        if (!campNumber) return null;
+
+        var index = c.camperIndex || M.camperIndex(c.families, c.roster);
+        var s = String(text || '');
+        var re = new RegExp(M.REFERENCE_RE.source, 'g');
+        var m;
+        while ((m = re.exec(s)) !== null) {
+            if (m[1].replace(/^0+/, '') !== campNumber.replace(/^0+/, '')) continue;
+            var fk = index[String(m[2]).replace(/^0+/, '')] || index[m[2]];
+            if (fk && (!c.families || c.families[fk])) return fk;
+        }
+        return null;
+    };
+
     /** Reverse lookup: which family does this code belong to? */
     M.familyForMemoCode = function (code, families) {
         var want = String(code || '').toUpperCase().replace(/[^A-Z0-9]/g, '');
@@ -298,7 +382,18 @@
             if (scores[fk].reasons.indexOf(reason) < 0) scores[fk].reasons.push(reason);
         }
 
-        // 1. Memo code — decisive, and immune to the payer-name problem.
+        // 1. The payment reference — decisive, and immune to the payer-name
+        // problem entirely. Checked against the memo AND the whole message,
+        // because banks drop the memo label often enough that a reference sat
+        // in plain text would otherwise be missed.
+        var refText = [d.memo || '', d.memoCode || '', d.rawExcerpt || ''].join('\n');
+        var byRef = M.familyForReference(refText, ctx);
+        if (byRef) {
+            bump(byRef, M.SCORE.MEMO_CODE,
+                 'Payment reference for ' + ((families[byRef] || {}).name || 'this family'));
+        }
+
+        // Camps that already handed out the older lettered code keep working.
         var code = d.memoCode || '';
         if (code) {
             var byCode = M.familyForMemoCode(code, families);

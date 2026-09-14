@@ -198,3 +198,84 @@ test('with no known balance the overpay guardrail simply does not fire', () => {
                        { families: fams, ledgers: {}, aliases: [] });
     assert.strictEqual(r.decision, 'auto');
 });
+
+// ── the payment reference ────────────────────────────────────────────────────
+//
+// <camp number>-<camper number>, e.g. 1234-5678.
+//
+// This is the form camps hand out, and it beats a code derived from the family
+// name for one reason that outweighs the rest: a parent knows their child. A
+// camp can print one sentence on a registration form and every family can act
+// on it. Nobody can be told their family's hash.
+
+const REF_FAMILIES = {
+    f1: { name: 'Rosenfeld Family', camperIds: ['Shayna Rosenfeld', 'Moshe Rosenfeld'] },
+    f2: { name: 'Rosenfeld Family', camperIds: ['Dovid Rosenfeld'] }
+};
+const REF_ROSTER = {
+    'Shayna Rosenfeld': { camperId: 5678 },
+    'Moshe Rosenfeld':  { camperId: 5679 },
+    'Dovid Rosenfeld':  { camperId: 9012 }
+};
+const REF_CTX = { families: REF_FAMILIES, roster: REF_ROSTER, campNumber: '1234', aliases: [], balances: {} };
+
+test('a reference resolves to the camper’s family', () => {
+    assert.strictEqual(M.reference(1234, 5678), '1234-5678');
+    assert.strictEqual(M.familyForReference('paid 1234-5678 thanks', REF_CTX), 'f1');
+    assert.strictEqual(M.familyForReference('1234-9012', REF_CTX), 'f2');
+});
+
+test('it tells apart two families with the identical name', () => {
+    // The exact case that makes the payer name useless: a camp with three
+    // households all called "Rosenfeld Family". The reference names a CAMPER,
+    // so there is nothing to disambiguate.
+    assert.notStrictEqual(
+        M.familyForReference('1234-5678', REF_CTX),
+        M.familyForReference('1234-9012', REF_CTX)
+    );
+});
+
+test('the camp number is the guard, not decoration', () => {
+    // Bank messages are full of digit pairs shaped like a reference. Each of
+    // these must resolve to nothing, or a date silently credits a stranger.
+    const noise = [
+        'Posted 2026-09 to your account',
+        'Confirmation 021000-0298765',
+        'Account ending 4321-0001',
+        '9999-5678'                      // right camper, wrong camp
+    ];
+    for (const text of noise) {
+        assert.strictEqual(M.familyForReference(text, REF_CTX), null, text);
+    }
+});
+
+test('a camper this camp does not have resolves to nothing', () => {
+    // A near miss is not a near answer: crediting the wrong family is the
+    // failure this whole feature exists to avoid, so it declines and waits.
+    assert.strictEqual(M.familyForReference('1234-4444', REF_CTX), null);
+});
+
+test('with no camp number assigned, no reference can match', () => {
+    assert.strictEqual(M.familyForReference('1234-5678', { families: REF_FAMILIES, roster: REF_ROSTER }), null);
+    assert.strictEqual(M.reference('', 5678), '');
+    assert.strictEqual(M.reference(1234, null), '');
+});
+
+test('a reference in the message body posts the deposit by itself', () => {
+    // The whole point: a payment from a business nobody has ever seen, carrying
+    // a reference, still reaches the right family without a human.
+    const decision = M.decide(
+        { amount: 900, payerName: "SHIMON'S HARDWARE LLC", memo: '1234-9012', date: '2026-07-08' },
+        REF_CTX, { dryRun: false });
+    assert.strictEqual(decision.familyKey, 'f2');
+    assert.strictEqual(decision.confidence, M.SCORE.MEMO_CODE);
+    assert.strictEqual(decision.decision, 'auto');
+});
+
+test('the camper index joins family rosters to camper numbers', () => {
+    const idx = M.camperIndex(REF_FAMILIES, REF_ROSTER);
+    assert.strictEqual(idx['5678'], 'f1');
+    assert.strictEqual(idx['9012'], 'f2');
+    // A camper on the roster but in no family has no family to credit.
+    assert.strictEqual(idx['1111'], undefined);
+});
