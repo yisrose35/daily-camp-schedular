@@ -185,6 +185,21 @@ addresses ─ geocode ─┬─ road graph (OpenStreetMap) ─ neighbourhoods �
   next stop's group when the driving is equal. The console says how many
   stops had a choice, how many moved and the detour minutes saved.
 
+* **Far-tail hand-off** (`polishTailMinMi` 4): the costliest habit a fleet
+  has is four buses each hauling a few children to the same far pocket, and
+  no cap catches it when every run is under the cap. Once the single-stop
+  moves are exhausted in a pass, any bus whose run ends out past the radius
+  offers that far tail (its suffixes and the radial clusters around its
+  farthest stop, never the near part of the run) as a block to a bus already
+  serving the pocket — one with a stop within reach of the tail's far end.
+  The receiver takes it as it is when the seats allow, else after shedding a
+  few stops of its own (make-room), priced exactly and kept only if the
+  fleet gains; a hand-off made for fleet minutes alone may not push the
+  receiver over Max Route Duration. Replaying the camp's own map offline
+  (legs priced as the run's ETAs say: 0.7 min per leg plus 2.9 min per
+  mile), the far west's 35 children went from four buses to two or three
+  and the fleet from 672 to 626-634 model minutes at the 70-minute cap.
+
 * **The efficiency line** (`[Go] Fleet: …`, plain text after the Route
   summary, since a pasted console.table is unreadable): total bus-minutes
   and bus-hours, buses used, average and longest run, how many are over
