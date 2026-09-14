@@ -17,6 +17,12 @@
         .field-group{margin-bottom:14px}
         .cc-field{border:1px solid #CBD5E1;border-radius:10px;padding:11px 12px;background:#fff;min-height:42px}
         .cc-field.focused{border-color:#147D91}
+        /* The tokenizer injects its own card iframe in here. Without an explicit
+           size it can mount at height:0 — the box still LOOKS like an input
+           (the border is ours) but there's nothing to click into. */
+        #bq-card{display:flex;align-items:center}
+        #bq-card iframe{width:100%;min-height:22px;border:none;display:block;flex:1}
+        #bq-card input{width:100%;border:none;outline:none;background:transparent;font:inherit;color:#1E293B}
         .row{display:flex;gap:10px}
         .row .field-group{flex:1}
         button#saveBtn{width:100%;background:#147D91;color:#fff;border:none;border-radius:10px;padding:13px;font-size:.95rem;font-weight:600;cursor:pointer;margin-top:6px}
