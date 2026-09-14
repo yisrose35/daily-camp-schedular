@@ -204,3 +204,67 @@ test('a return is never swallowed as a duplicate of the deposit it reverses', ()
         P.fingerprint(Object.assign({}, base, { isReversal: true }))
     );
 });
+
+// ── the real Chase Zelle alert ───────────────────────────────────────────────
+//
+// Transcribed from an actual forwarded Chase alert. It defeated FOUR
+// extractors at once, and every one of them failed silently — the deposit was
+// recorded with an amount and nothing else.
+
+const CHASE_REAL = [
+    '---------- Forwarded message ---------',
+    'From: Chase <no.reply.alerts@chase.com>',
+    'Date: Mon, Sep 14, 2026, 1:59 PM',
+    'Subject: You received money with Zelle®',
+    'To: <office@thecamp.org>',
+    '',
+    'Zelle® payment',
+    'Yisrael Rosenfeld sent you money',
+    'Here are the details:',
+    '',
+    'Amount *$5.00*',
+    'Sent on *Sep 14, 2026*',
+    'Transaction number *30814550096*',
+    'Memo *3734-0012*',
+    '',
+    'Yisrael Rosenfeld is registered with a Zelle® member bank that supports',
+    'payments in real time, so your money will usually be available in a few moments.'
+].join('\n');
+
+test('the real Chase alert yields payer, amount, memo and trace', () => {
+    const r = P.parseEmail({ subject: 'Fwd: You received money with Zelle', text: CHASE_REAL });
+    assert.ok(r.ok, r.reason);
+    assert.strictEqual(r.deposit.amount, 5);
+    // Chase puts the amount three lines BELOW the name, so a payer rule that
+    // required a '$' on the same line read nothing at all.
+    assert.strictEqual(r.deposit.payerName, 'Yisrael Rosenfeld');
+    // A label/value table with no colon: "Memo *3734-0012*".
+    assert.strictEqual(r.deposit.memo, '3734-0012');
+    // The trace used to be read only from a statement descriptor, so an
+    // ordinary alert carrying one plainly was treated as having none — and the
+    // best dedupe key available was thrown away.
+    assert.strictEqual(r.deposit.traceId, '30814550096');
+});
+
+test('a forwarded alert is attributed to the bank, not the forwarder', () => {
+    // The webhook sees the forwarding mailbox as the sender, so every
+    // bank-keyed lookup — the learned layout, the sender allowlist — was
+    // looking up gmail.com for an email that plainly came from Chase.
+    assert.strictEqual(P.originalSender(CHASE_REAL), 'no.reply.alerts@chase.com');
+    const T = require('../campistry_deposit_template.js');
+    assert.strictEqual(T.signature(P.originalSender(CHASE_REAL)), 'chase.com');
+    // A message that was not forwarded has no original sender to prefer.
+    assert.strictEqual(P.originalSender('You received $5.00 from SARA LEVI'), '');
+});
+
+test('a payer rejected on one line does not abandon the rest of the message', () => {
+    // Capital One opens with "Good news: Someone sent you money with Zelle",
+    // which matches the same loose rule as the real line below it. Taking only
+    // the first match meant the rejected placeholder threw the real name away.
+    const r = P.parseEmail({
+        subject: 'Zelle',
+        text: 'Good news: Someone sent you money with Zelle.\n\nSARA LEVI sent you money\n\nAmount *$250.00*'
+    });
+    assert.ok(r.ok, r.reason);
+    assert.strictEqual(r.deposit.payerName, 'SARA LEVI');
+});

@@ -71,7 +71,7 @@
     // in the Bank layouts footer. Twice now a fix has been live on the server
     // while the browser ran an older copy, and there was no way to tell from
     // the screen which one was which -- so the screen says.
-    D.BUILD = '20260914-06';
+    D.BUILD = '20260914-07';
 
     var state = {
         loaded: false,
@@ -1888,7 +1888,43 @@
             }
         }
 
-        // 3. the matcher
+        // 3. the payment reference, explained on its own.
+        //
+        // "No family matched" is true and useless when the memo plainly
+        // contains 3734-1387. Both halves have to line up and each fails
+        // differently, so say which one did: a wrong camp number is a typo on
+        // a form, a missing camper is a reference for somebody who is not
+        // enrolled. Different problems, different fixes.
+        if (M && M.REFERENCE_RE) {
+            var refM = String(body).match(new RegExp(M.REFERENCE_RE.source));
+            var campNo = String(D.campNumber() || '');
+            if (!refM) {
+                step(false, 'No payment reference in the message',
+                    campNo ? 'A parent putting ' + campNo + '-[their camper\'s number] in the memo is the surest match there is.'
+                           : 'Your camp has no number yet — it is assigned the first time Bank Deposits is opened.');
+            } else if (!campNo) {
+                step(false, 'Found ' + refM[0] + ', but your camp has no number yet',
+                    'It is assigned the first time Bank Deposits is opened — reopen this and try again.');
+            } else if (refM[1].replace(/^0+/, '') !== campNo.replace(/^0+/, '')) {
+                step(false, 'Found ' + refM[0] + ', but ' + refM[1] + ' is not your camp number',
+                    'Your camp number is ' + campNo + '. The reference should read ' + campNo + '-[camper number].');
+            } else {
+                var idx = M.camperIndex(host.families() || {}, (host.roster && host.roster()) || {});
+                var kid = refM[2].replace(/^0+/, '');
+                if (idx[kid] || idx[refM[2]]) {
+                    step(true, 'Payment reference ' + refM[0] + ' points at ' + famName(idx[kid] || idx[refM[2]]), '');
+                } else {
+                    var known = Object.keys(idx).map(Number).filter(function (n) { return !isNaN(n); }).sort(function (a, b) { return a - b; });
+                    step(false, 'Camp number matches, but no camper is numbered ' + refM[2],
+                        known.length
+                            ? 'Your camper numbers run ' + known[0] + '\u2013' + known[known.length - 1] +
+                              '. Each camper\'s number is on their family in Billing.'
+                            : 'No campers have numbers yet.');
+                }
+            }
+        }
+
+        // 4. the matcher
         var decision = null;
         if (parsed && parsed.ok && M) {
             parsed.deposit.rawExcerpt = body;
@@ -1902,7 +1938,12 @@
             var famNm = decision.familyKey ? famName(decision.familyKey) : '';
             step(!!decision.familyKey,
                 decision.familyKey ? 'Matched ' + famNm + ' (' + decision.confidence + '%)' : 'No family matched',
-                decision.guardrail || (decision.familyKey ? '' : 'Nothing in the message points at a family — a payment reference in the memo is the surest fix.'));
+                decision.familyKey
+                    // Dry run explains why it would not POST, never why it did
+                    // not match — reporting it under "no family matched" sends
+                    // somebody to change the wrong setting.
+                    ? (decision.guardrail || '')
+                    : 'Nothing in the message points at a family: no payment reference, no payer we have seen before, and the name does not resemble a household on file.');
         }
 
         // Show the trace, then let them apply it.

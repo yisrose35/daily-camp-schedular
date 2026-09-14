@@ -255,6 +255,10 @@
     // ROSENFELD: tst 1234" -- where the colon follows the PAYER, not the word
     // "message", so the generic `message:` rule never fires on it.
     var MEMO_RES = [
+        // Chase's Zelle alert is a label/value table with no punctuation
+        // between them: "Memo *3734-1387*", "Amount *$5.00*". A colon-only
+        // rule reads none of it.
+        /\bmemo\b\s*[*"'\u201c]?\s*([^\n*"'\u201d<]{1,120})/i,
         /\b(?:memo|note|message|comment|description|for)\s*[:\-]\s*["']?([^\n"'<]{1,120})/i,
         /here'?s\s+the\s+message\s+from\s+[^\n:]{2,80}\s*:\s*([^\n]{1,120})/i,
         /\bmessage\s+from\s+[^\n:]{2,80}\s*:\s*([^\n]{1,120})/i
@@ -309,6 +313,36 @@
     // one. Only the addressing headers go.
     var FWD_MARKER_RE = /^\s*(?:-{2,}\s*forwarded message\s*-{2,}|begin forwarded message:|-{2,}\s*original message\s*-{2,}|_{5,})\s*$/i;
     var FWD_HEADER_RE = /^\s*(?:from|to|cc|bcc|sent|date|reply-to|return-path|envelope-to)\s*:/i;
+
+    /**
+     * The address the message ORIGINALLY came from, when it was forwarded.
+     *
+     * A camp forwarding alerts from an existing mailbox is a first-class setup
+     * path, and the webhook then sees the forwarder as the sender -- a Gmail
+     * address, not the bank. Everything keyed on the bank (the learned layout,
+     * the sender allowlist) looks up the wrong domain and finds nothing, which
+     * reads on screen as "No layout for gmail.com" on an email that plainly
+     * came from Chase.
+     *
+     * stripForwardHeaders removes that header block before parsing, so this
+     * reads it off the RAW text first. Returns '' when the message was not
+     * forwarded, and the caller keeps the envelope sender.
+     */
+    P.originalSender = function (text) {
+        var s = String(text || '');
+        // Only inside a forwarded block: a "From:" line in a bank's own body
+        // copy is not an envelope header.
+        var lines = s.split('\n');
+        var inBlock = false;
+        for (var i = 0; i < lines.length && i < 60; i++) {
+            if (FWD_MARKER_RE.test(lines[i])) { inBlock = true; continue; }
+            if (!inBlock) continue;
+            var m = lines[i].match(/^\s*from\s*:\s*(?:[^<\n]*<)?([^>\s@]+@[^>\s]+)>?/i);
+            if (m) return m[1].toLowerCase().replace(/[>.,;]+$/, '');
+            if (!lines[i].trim()) break;   // header block ended
+        }
+        return '';
+    };
 
     P.stripForwardHeaders = function (text) {
         var lines = String(text || '').split('\n');
@@ -438,6 +472,18 @@
         /^\s*([^\n]{2,80}?)\s+(?:has\s+|had\s+)?(?:just\s+)?sent\s+you\s+\$/im,
         /^\s*([^\n]{2,80}?)\s+(?:has\s+|had\s+)?(?:just\s+)?paid\s+you\b[^\n]*\$/im,
 
+        // The same sentence with NO amount on its line. Chase writes
+        // "Yisrael Rosenfeld sent you money" and puts the amount three lines
+        // below in a label/value table, so requiring a '$' here read nothing.
+        //
+        // This is looser than the patterns above on purpose and sits after
+        // them, so a bank that DOES put the amount on the line still matches
+        // the precise rule first. Capital One's headline ("Good news: Someone
+        // sent you money with Zelle") reaches this one and is caught by
+        // cleanName's placeholder list, and parsePayer keeps scanning further
+        // matches of the same pattern rather than giving up on it.
+        /^\s*([^\n]{2,80}?)\s+(?:has\s+|had\s+)?(?:just\s+)?sent\s+you\s+money\b/im,
+
         // Labelled fields, as used by statement-style and business alerts.
         /(?:sender|payer|originator|received\s+from|paid\s+by|remitter)\s*[:\-]\s*((?:[^\n.]|\.(?=\S)){2,80})/i,
 
@@ -497,10 +543,20 @@
     P.parsePayer = function (text) {
         var s = String(text || '');
         for (var i = 0; i < PAYER_RES.length; i++) {
-            var hit = s.match(PAYER_RES[i]);
-            if (!hit || !hit[1]) continue;
-            var nm = P.cleanName(hit[1]);
-            if (nm && P.looksLikeName(nm)) return nm;
+            // EVERY match of each pattern, not just the first. A bank that
+            // opens with a headline ("Good news: Someone sent you money")
+            // matches the same rule twice; taking only the first hit meant a
+            // rejected placeholder threw away the real line further down.
+            var re = new RegExp(PAYER_RES[i].source, PAYER_RES[i].flags.indexOf('g') >= 0
+                ? PAYER_RES[i].flags : PAYER_RES[i].flags + 'g');
+            var hit, guard = 0;
+            while ((hit = re.exec(s)) !== null) {
+                if (++guard > 50) break;
+                if (re.lastIndex === hit.index) re.lastIndex++;   // zero-width safety
+                if (!hit[1]) continue;
+                var nm = P.cleanName(hit[1]);
+                if (nm && P.looksLikeName(nm)) return nm;
+            }
         }
         return '';
     };
@@ -562,6 +618,9 @@
     // fallback only runs after ORIG ID has been cut out of the string.
     var TRACE_RES = [
         /TRACE\s*#?\s*[:\-]?\s*([A-Z0-9]{6,25})\b/i,
+        // Chase labels it this way, and it is the only thing that lets an
+        // alert and a bank feed collapse onto one row for this bank.
+        /TRANSACTION\s*(?:NUMBER|NO\.?|#|ID)?\s*[:\-*]?\s*([A-Z0-9]{6,25})\b/i,
         /CONF(?:IRMATION)?\s*(?:#|NO\.?|NUM(?:BER)?)?\s*[:\-]?\s*([A-Z0-9]{6,25})\b/i,
         /\bREF(?:ERENCE)?\s*#?\s*[:\-]?\s*([A-Z0-9]{6,25})\b/i
     ];
@@ -750,7 +809,14 @@
                 memoCode: P.parseMemoCode(memo) || P.parseMemoCode(full),
                 date: P.parseDate(full) || String(m.receivedAt || '').slice(0, 10) || '',
                 kind: desc.kind || P.detectKind(full),
-                traceId: desc.traceId || '',
+                // findTrace on the WHOLE message, not just on a statement
+                // descriptor if one happened to be pasted in. Chase prints
+                // "Transaction number *30814550096*" in its ordinary alert,
+                // and that number is the best dedupe key there is — it
+                // identifies the money, so an alert and a bank feed reporting
+                // the same payment collapse onto one row instead of relying on
+                // the message-id fallback.
+                traceId: desc.traceId || findTrace(full),
                 bank: bank,
                 source: 'email',
                 rawSubject: subject.slice(0, 200)

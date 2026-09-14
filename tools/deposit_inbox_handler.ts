@@ -418,7 +418,10 @@ serve(async (req) => {
   // pipeline.
   const bodyForTemplate = text || Parser.htmlToText(html || "");
   const templateOutcome = parsed.ok
-    ? await applyLearnedTemplate(service, campId, fromAddrs[0] || "", bodyForTemplate, parsed.deposit)
+    ? await applyLearnedTemplate(
+        service, campId,
+        Parser.originalSender(bodyForTemplate) || fromAddrs[0] || "",
+        bodyForTemplate, parsed.deposit)
     : null;
 
   if (!parsed.ok) {
@@ -484,7 +487,11 @@ serve(async (req) => {
   // Which bank sent it. Needed later: when staff correct this deposit, the
   // browser derives layout rules from the correction and has to say which
   // bank's layout they belong to.
-  deposit.fromAddress = fromAddrs[0] || "";
+  // A forwarded alert arrives FROM the forwarding mailbox, so the envelope
+  // sender is a Gmail address and every bank-keyed lookup — the learned
+  // layout, the sender allowlist — misses. The bank's own address is still in
+  // the forwarded header block; prefer it.
+  deposit.fromAddress = Parser.originalSender(bodyForTemplate) || fromAddrs[0] || "";
   // Identifies the MESSAGE, and is what keeps two genuine same-amount,
   // same-day payments apart when the bank sends no confirmation number. A
   // Resend retry of this same email carries the same id and still dedupes.
