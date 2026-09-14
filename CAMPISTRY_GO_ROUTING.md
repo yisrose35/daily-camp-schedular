@@ -105,7 +105,16 @@ addresses ─ geocode ─┬─ road graph (OpenStreetMap) ─ neighbourhoods �
   camp's run was a near tie and all were declined while an 11-minute bus
   sat with 15 empty seats. The console says how many hand-offs were priced,
   how many taken, and what the closest declined one would have cost — so a
-  bus left idle is a priced decision, not a blind spot. Block moves run FIRST in
+  bus left idle is a priced decision, not a blind spot. **Empty and refill**:
+  a short bus near camp is full of near-camp children, so it has no seats
+  for a branch, and the branch is far, so a single hand-off never pays. What
+  a dispatcher does: the buses that pass those near-camp stops on their way
+  out take them (a minute or two each), and the emptied bus takes a far
+  branch of a bus over the budget. Neither half pays alone; the pair does,
+  so the polish tries the pair as one move (`polishRefillMaxFrac`: a bus
+  under half its budget is a candidate), priced exactly and kept only if the
+  objective falls. The camp had 42 children on an 18-minute bus while three
+  buses ran 84-93 minutes. Block moves run FIRST in
   each pass: on the camp's run the single-stop moves emptied Bus 8 (a
   9-minute run with 24 empty seats) into the core buses before any block
   move ran, and with every core bus full there was no receiver left for a
