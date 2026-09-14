@@ -116,3 +116,64 @@ test('an RPC failure names the actual cause and its fix', () => {
     // Anything unrecognised is passed through rather than swallowed.
     assert.strictEqual(D.explainError('some novel failure'), 'some novel failure');
 });
+
+// ── the console layout ───────────────────────────────────────────────────────
+//
+// The old surface was a 920px modal with six buttons that each opened ANOTHER
+// modal on top of it, so doing two related things meant closing and reopening
+// your way back. These pin the structure that replaced it — they are cheap, and
+// layout is the one part of this feature no other test looks at.
+
+test('the console uses the screen instead of a narrow modal', () => {
+    let opts = null;
+    D.init({
+        showModal: (_t, _h, _s, o) => { opts = o || {}; },
+        families: () => ({})
+    });
+    D.openInbox();
+    assert.ok(opts.maxWidth >= 1200, 'the inbox should be wide: got ' + opts.maxWidth);
+    assert.ok(opts.maxHeight, 'and should use the viewport height');
+});
+
+test('lists are tabs on one surface, not modals over modals', () => {
+    assert.strictEqual(typeof D.tab, 'function', 'the console needs tab switching');
+    // Known Payers stays independently reachable — Billing links straight to it.
+    assert.strictEqual(typeof D.openAliases, 'function');
+    assert.strictEqual(typeof D.openTemplates, 'function');
+});
+
+test('a tab switch re-renders without another round trip to the server', () => {
+    // Switching tabs must not refetch: the data is already loaded, and a
+    // network hop between "Needs you" and "Posted" makes the console feel
+    // broken on a slow connection.
+    let body = '';
+    D.init({
+        showModal: (_t, h) => { body = h; },
+        esc: (s) => String(s == null ? '' : s),
+        jesc: (s) => String(s == null ? '' : s),
+        fm: (n) => '$' + Number(n || 0).toFixed(2),
+        families: () => ({ fam_klein: { name: 'Klein Family' } })
+    });
+    const state = D.state();
+    state.deposits = [{ id: '1', status: 'review', amount_cents: 50000, payer_name: 'SHIMON MILLER', candidates: [] }];
+    state.aliases = [];
+    state.templates = [];
+    // No DOM here, so this only has to not throw — the render target is absent.
+    assert.doesNotThrow(() => D.tab('posted'));
+    assert.doesNotThrow(() => D.tab('payers'));
+    assert.doesNotThrow(() => D.tab('layouts'));
+    assert.doesNotThrow(() => D.tab('needs'));
+});
+
+test('an unparsed deposit is counted as pending but not as a known amount', () => {
+    // It belongs at the top of "Needs you" — it is the item most likely to be
+    // real money nobody knows about. Its amount is unknown and stored as 0, so
+    // adding it to the waiting total would imply a figure we do not have.
+    const state = D.state();
+    state.deposits = [
+        { id: '1', status: 'review',   amount_cents: 50000 },
+        { id: '2', status: 'unparsed', amount_cents: 0 }
+    ];
+    assert.strictEqual(D.totalPending(), 2);
+    assert.strictEqual(D.pendingAmount(), 500);
+});

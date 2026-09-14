@@ -37,6 +37,17 @@
     var W = (typeof window !== 'undefined') ? window
           : (typeof globalThis !== 'undefined') ? globalThis : {};
 
+    // Same reasoning for `document`, and the same trap: a bare reference is a
+    // ReferenceError in Node rather than undefined. The render functions are
+    // the ones that reach for it, and they are exercised by the tests. Every
+    // caller already handles a missing element, so a stub that finds nothing is
+    // the correct behaviour outside a browser -- not an error.
+    var DOC = (typeof document !== 'undefined') ? document : {
+        getElementById: function () { return null; },
+        querySelector: function () { return null; },
+        createElement: function () { return null; }
+    };
+
     // Host-supplied UI kit + data accessors, wired in campistry_me.js.
     var host = {
         showModal: null, closeModal: null, toast: null,
@@ -58,7 +69,7 @@
     // in the Bank layouts footer. Twice now a fix has been live on the server
     // while the browser ran an older copy, and there was no way to tell from
     // the screen which one was which -- so the screen says.
-    D.BUILD = '20260914-01';
+    D.BUILD = '20260914-02';
 
     var state = {
         loaded: false,
@@ -253,11 +264,20 @@
 
     var BODY_ID = 'depInboxBody';
 
-    D.openInbox = function () {
+    // Which tab the console is showing. Kept on the module rather than in the
+    // DOM so a refresh after an action lands the office back where they were
+    // instead of bouncing them to the top.
+    var tab = 'needs';
+
+    D.openInbox = function (startTab) {
         if (!host.showModal) return;
-        host.showModal('Bank Deposits', '<div id="' + BODY_ID + '">Loading…</div>', null, { maxWidth: 920 });
+        tab = startTab || 'needs';
+        host.showModal('Bank Deposits', '<div id="' + BODY_ID + '">Loading…</div>', null,
+                       { maxWidth: 1400, maxHeight: '94vh', minHeight: '86vh' });
         D.refresh().then(renderInbox);
     };
+
+    D.tab = function (name) { tab = name; renderInbox(); };
 
     function statusPill(d) {
         var map = {
@@ -278,19 +298,31 @@
     }
 
     function candidateButtons(d) {
-        var cands = d.candidates || [];
+        var cands = (d.candidates || []).slice(0, 4);
         if (!cands.length) {
-            return '<div style="font-size:.78rem;color:var(--s500)">No candidate families — pick one below.</div>';
+            return '<div style="font-size:.85rem;color:var(--s500)">' +
+                   'No family looks like a match — pick one below.</div>';
         }
-        return cands.map(function (c) {
+        // Laid out as cards rather than a row of wrapping buttons: each one is
+        // a decision about somebody's money, and the score and the reason for
+        // it are what the office is actually weighing.
+        return '<div style="display:flex;gap:8px;flex-wrap:wrap">' + cands.map(function (c, i) {
+            var score = c.score || 0;
+            var strong = score >= 90;
             var reasons = (c.reasons || []).join(' · ');
-            return '<button class="me-btn me-btn--sec me-btn--sm" style="margin:0 6px 6px 0;text-align:left"' +
-                   ' onclick="CampistryDeposits.resolve(\'' + host.jesc(d.id) + '\',\'' + host.jesc(c.familyKey) + '\')">' +
-                   '<strong>' + host.esc(c.familyName || famName(c.familyKey)) + '</strong>' +
-                   ' <span style="opacity:.7">' + (c.score || 0) + '%</span>' +
-                   (reasons ? '<div style="font-weight:400;font-size:.7rem;opacity:.75">' + host.esc(reasons) + '</div>' : '') +
-                   '</button>';
-        }).join('');
+            return '<button onclick="CampistryDeposits.resolve(\'' + host.jesc(d.id) + '\',\'' +
+                host.jesc(c.familyKey) + '\')" ' +
+                'style="text-align:left;cursor:pointer;border-radius:var(--r);padding:10px 13px;min-width:200px;' +
+                'flex:1 1 200px;background:' + (i === 0 ? '#F0FDF4' : '#fff') + ';border:1px solid ' +
+                (i === 0 ? '#86EFAC' : 'var(--s100)') + '">' +
+                '<div style="display:flex;justify-content:space-between;gap:10px;align-items:baseline">' +
+                '<strong style="font-size:.94rem">' + host.esc(c.familyName || famName(c.familyKey)) + '</strong>' +
+                '<span style="font-size:.76rem;font-weight:700;color:' +
+                (strong ? '#065F46' : 'var(--s500)') + '">' + score + '%</span></div>' +
+                (reasons ? '<div style="font-size:.74rem;color:var(--s500);margin-top:4px;line-height:1.4">' +
+                           host.esc(reasons) + '</div>' : '') +
+                '</button>';
+        }).join('') + '</div>';
     }
 
     function familyPicker(d) {
@@ -302,7 +334,7 @@
                     return '<option value="' + host.esc(k) + '">' + host.esc(fams[k].name || k) + '</option>';
                 })
         ).join('');
-        return '<select class="me-input" style="max-width:260px;display:inline-block"' +
+        return '<select class="me-input" style="max-width:280px;display:inline-block"' +
                ' onchange="if(this.value)CampistryDeposits.resolve(\'' + host.jesc(d.id) + '\',this.value)">' +
                opts + '</select>';
     }
@@ -316,13 +348,13 @@
         var body = (d.raw_excerpt || '').slice(0, 1200);
         return '<div style="border:1px solid #DDD6FE;background:#FAF5FF;border-radius:var(--r);padding:12px 14px;margin-bottom:10px">' +
             '<div style="display:flex;justify-content:space-between;gap:12px;align-items:baseline;flex-wrap:wrap">' +
-            '<strong style="font-size:.95rem">An email we could not read</strong>' +
+            '<strong style="font-size:1.05rem">An email we could not read</strong>' +
             '<div style="font-size:.75rem;color:var(--s500)">' + host.esc(when) + ' ' + statusPill(d) + '</div></div>' +
-            '<div style="font-size:.8rem;color:var(--s600);margin-top:6px">' +
+            '<div style="font-size:.86rem;color:var(--s600);margin-top:8px;max-width:760px;line-height:1.6">' +
             'It mentions money, so it is kept here rather than discarded — but nothing about it has been counted anywhere. ' +
             'If it is a real payment, add it to the family by hand; if it is not, dismiss it.</div>' +
             (d.raw_subject ? '<div style="font-size:.78rem;color:var(--s500);margin-top:6px">Subject: ' + host.esc(d.raw_subject) + '</div>' : '') +
-            (body ? '<pre style="white-space:pre-wrap;word-break:break-word;background:#fff;border:1px solid var(--s100);border-radius:var(--r);padding:8px 10px;margin:8px 0 0;font-size:.74rem;max-height:190px;overflow:auto">' + host.esc(body) + '</pre>' : '') +
+            (body ? '<pre style="white-space:pre-wrap;word-break:break-word;background:#fff;border:1px solid var(--s100);border-radius:var(--r);padding:12px 14px;margin:12px 0 0;font-size:.78rem;line-height:1.55;max-height:260px;overflow:auto">' + host.esc(body) + '</pre>' : '') +
             '<div style="margin-top:8px;display:flex;gap:8px;flex-wrap:wrap">' +
             // Teaching from the email that just failed is the shortest path
             // there is: it is already on screen and it is the exact layout that
@@ -337,7 +369,7 @@
         if (d.status === 'unparsed') return unparsedRow(d);
         var amt = (d.amount_cents || 0) / 100;
         var when = d.deposit_date || (d.created_at || '').slice(0, 10) || '—';
-        var payer = d.payer_name || '(payer not readable)';
+        var payer = d.payer_name || '';
 
         // A return reads as a payment unless it is labelled loudly. The ledger
         // gets the sign right on its own (get_camp_deposit_credits applies it
@@ -345,89 +377,168 @@
         // from DAVID KLEIN" invites someone to match it as income when it is
         // money the bank has already taken back.
         var rev = !!d.is_reversal;
-        var head = '<div style="display:flex;justify-content:space-between;gap:12px;align-items:baseline;flex-wrap:wrap">' +
-            '<div><strong style="font-size:1.02rem' + (rev ? ';color:#991B1B' : '') + '">' +
-            (rev ? '\u2212' : '') + host.fm(amt) + '</strong>' +
-            ' <span style="color:var(--s600)">' + (rev ? 'returned by ' : 'from ') + host.esc(payer) + '</span>' +
-            (d.memo_code ? ' <code style="background:var(--s50);padding:1px 5px;border-radius:4px;font-size:.72rem">' + host.esc(d.memo_code) + '</code>' : '') +
-            '</div>' +
-            '<div style="font-size:.75rem;color:var(--s500)">' + host.esc(when) + ' · ' +
-            host.esc((d.kind || '').toUpperCase()) + (d.bank ? ' · ' + host.esc(d.bank) : '') + ' ' + statusPill(d) + '</div>' +
+        var done = d.status === 'posted';
+
+        // Money first and large. Scanning a list of deposits is scanning
+        // amounts; everything else is detail you read once you have stopped.
+        var left = '<div style="min-width:190px">' +
+            '<div style="font-size:1.45rem;font-weight:700;line-height:1.15;color:' +
+            (rev ? '#991B1B' : 'inherit') + '">' + (rev ? '−' : '') + host.fm(amt) + '</div>' +
+            '<div style="font-size:.95rem;color:var(--s600);margin-top:3px;word-break:break-word">' +
+            (payer ? (rev ? 'returned by ' : 'from ') + host.esc(payer)
+                   : '<em style="color:var(--s400)">payer not readable</em>') + '</div>' +
+            '<div style="font-size:.75rem;color:var(--s500);margin-top:6px">' +
+            host.esc(when) + ' · ' + host.esc((d.kind || '').toUpperCase()) +
+            (d.bank ? ' · ' + host.esc(d.bank) : '') + '</div>' +
+            (d.memo_code
+                ? '<div style="margin-top:6px"><code style="background:#EEF2FF;color:#3730A3;padding:2px 7px;' +
+                  'border-radius:4px;font-size:.76rem;font-weight:600">' + host.esc(d.memo_code) + '</code></div>'
+                : '') +
+            ((d.memo && d.memo !== d.memo_code)
+                ? '<div style="font-size:.76rem;color:var(--s500);margin-top:5px;word-break:break-word">“' +
+                  host.esc(d.memo) + '”</div>' : '') +
             '</div>';
 
-        var revBanner = rev
-            ? '<div style="background:#FEF2F2;border:1px solid #FECACA;color:#991B1B;padding:7px 11px;border-radius:var(--r);font-size:.78rem;margin:8px 0">' +
-              '<strong>This payment was returned.</strong> The money is not in the account. ' +
-              'Matching it to a family <strong>subtracts</strong> it from their balance — do that for the family whose ' +
-              'original payment bounced, then chase them for it.</div>'
-            : '';
-
-        var why = d.guardrail
-            ? '<div style="background:#FFFBEB;border:1px solid #FDE68A;color:#92400E;padding:6px 10px;border-radius:var(--r);font-size:.76rem;margin:8px 0">' +
-              host.esc(d.guardrail) + '</div>'
-            : '';
-
-        var memoLine = (d.memo && d.memo !== d.memo_code)
-            ? '<div style="font-size:.75rem;color:var(--s500);margin-top:4px">Memo: ' + host.esc(d.memo) + '</div>' : '';
-
-        var actions;
-        if (d.status === 'posted') {
-            actions = '<div style="margin-top:8px;font-size:.8rem">Posted to <strong>' + host.esc(famName(d.family_key)) + '</strong>' +
-                ' <span style="color:var(--s500)">(' + host.esc(d.matched_by === 'auto' ? 'automatic, ' + (d.match_confidence || 0) + '%' : 'by staff') + ')</span>' +
-                ' <button class="me-btn me-btn--ghost me-btn--sm" style="margin-left:8px"' +
-                ' onclick="CampistryDeposits.unmatch(\'' + host.jesc(d.id) + '\')">Undo</button></div>';
-        } else {
-            actions = '<div style="margin-top:8px">' + candidateButtons(d) +
-                '<div style="margin-top:6px;display:flex;gap:8px;align-items:center;flex-wrap:wrap">' +
-                familyPicker(d) +
-                '<button class="me-btn me-btn--ghost me-btn--sm" onclick="CampistryDeposits.ignore(\'' + host.jesc(d.id) + '\')">Not tuition</button>' +
-                '</div></div>';
+        var notes = '';
+        if (rev) {
+            notes += '<div style="background:#FEF2F2;border:1px solid #FECACA;color:#991B1B;padding:9px 12px;' +
+                'border-radius:var(--r);font-size:.82rem;margin-bottom:10px;line-height:1.5">' +
+                '<strong>This payment was returned.</strong> The money is not in the account. Matching it to a ' +
+                'family <strong>subtracts</strong> it from their balance — do that for the family whose original ' +
+                'payment bounced, then chase them for it.</div>';
+        }
+        if (d.guardrail) {
+            notes += '<div style="background:#FFFBEB;border:1px solid #FDE68A;color:#92400E;padding:8px 12px;' +
+                'border-radius:var(--r);font-size:.82rem;margin-bottom:10px">' + host.esc(d.guardrail) + '</div>';
         }
 
-        return '<div style="border:1px solid ' + (rev ? '#FECACA' : 'var(--s100)') +
-               ';border-radius:var(--r);padding:12px 14px;margin-bottom:10px' +
-               (rev ? ';background:#FFFBFB' : '') + '">' +
-               head + memoLine + revBanner + why + actions + '</div>';
+        var right;
+        if (done) {
+            right = '<div style="font-size:.9rem">Posted to <strong>' + host.esc(famName(d.family_key)) + '</strong>' +
+                '<div style="font-size:.78rem;color:var(--s500);margin-top:3px">' +
+                host.esc(d.matched_by === 'auto' ? 'matched automatically · ' + (d.match_confidence || 0) + '% confident'
+                                                 : 'matched by staff') + '</div>' +
+                '<button class="me-btn me-btn--ghost me-btn--sm" style="margin-top:8px" ' +
+                'onclick="CampistryDeposits.unmatch(\'' + host.jesc(d.id) + '\')">Undo</button></div>';
+        } else {
+            right = notes +
+                '<div style="font-size:.76rem;font-weight:700;letter-spacing:.04em;text-transform:uppercase;' +
+                'color:var(--s500);margin-bottom:7px">Credit this to</div>' +
+                candidateButtons(d) +
+                '<div style="margin-top:10px;display:flex;gap:8px;align-items:center;flex-wrap:wrap">' +
+                familyPicker(d) +
+                '<button class="me-btn me-btn--ghost me-btn--sm" onclick="CampistryDeposits.ignore(\'' +
+                host.jesc(d.id) + '\')">Not tuition</button>' +
+                '</div>';
+        }
+
+        return '<div style="border:1px solid ' + (rev ? '#FECACA' : 'var(--s100)') + ';border-radius:var(--r);' +
+            'padding:16px 18px;margin-bottom:12px' + (rev ? ';background:#FFFBFB' : '') + '">' +
+            '<div style="display:flex;justify-content:flex-end;margin-bottom:-6px">' + statusPill(d) + '</div>' +
+            '<div style="display:flex;gap:28px;flex-wrap:wrap;align-items:flex-start">' +
+            left + '<div style="flex:1;min-width:280px">' + right + '</div></div></div>';
+    }
+
+    // ── the console ──────────────────────────────────────────────────────────
+    //
+    // One surface, not six. The old layout put the inbox in a 920px modal with
+    // a row of buttons that each opened ANOTHER modal on top of it -- payers,
+    // layouts, settings, add-a-payer -- so doing two related things meant
+    // closing and reopening your way back. Everything that is a list now lives
+    // in a tab here; only genuine forms still open over it.
+
+    function summaryStrip() {
+        var pending = state.deposits.filter(D.isPending);
+        var amount = D.pendingAmount();
+        var unparsed = state.deposits.filter(function (d) { return d.status === 'unparsed'; }).length;
+        var dry = state.settings && state.settings.dryRun;
+
+        function stat(value, label, tone) {
+            return '<div style="min-width:150px">' +
+                '<div style="font-size:1.6rem;font-weight:700;line-height:1.1;color:' + (tone || 'var(--s900,#111)') + '">' +
+                value + '</div>' +
+                '<div style="font-size:.76rem;color:var(--s500);margin-top:2px">' + label + '</div></div>';
+        }
+
+        var h = '<div style="display:flex;gap:28px;flex-wrap:wrap;align-items:flex-start;' +
+                'padding:4px 0 18px;border-bottom:1px solid var(--s100);margin-bottom:16px">';
+        h += stat(host.fm(amount), 'waiting to be matched', pending.length ? '#92400E' : undefined);
+        h += stat(String(pending.length), pending.length === 1 ? 'deposit needs you' : 'deposits need you');
+        if (unparsed) h += stat(String(unparsed), unparsed === 1 ? 'email we could not read' : 'emails we could not read', '#5B21B6');
+        h += stat(String(state.aliases.length), 'payers learned');
+
+        h += '<div style="margin-left:auto;display:flex;gap:8px;align-items:center;flex-wrap:wrap">' +
+             (dry ? '<span style="background:#EFF6FF;border:1px solid #BFDBFE;color:#1E40AF;padding:5px 11px;' +
+                    'border-radius:999px;font-size:.76rem;font-weight:600">Dry run — nothing posts by itself</span>' : '') +
+             '<button class="me-btn me-btn--sec me-btn--sm" onclick="CampistryDeposits.openSettings()">Settings</button>' +
+             '</div>';
+        h += '</div>';
+        return h;
+    }
+
+    function tabBar() {
+        var pending = state.deposits.filter(D.isPending).length;
+        var posted = state.deposits.filter(function (d) { return d.status === 'posted'; }).length;
+        var mine = state.templates.filter(function (x) { return x.scope === 'camp'; }).length;
+
+        var tabs = [
+            ['needs',   'Needs you',    pending],
+            ['posted',  'Posted',       posted],
+            ['payers',  'Known payers', state.aliases.length],
+            ['layouts', 'Bank layouts', mine]
+        ];
+        return '<div style="display:flex;gap:4px;flex-wrap:wrap;border-bottom:1px solid var(--s100);margin-bottom:18px">' +
+            tabs.map(function (t) {
+                var on = tab === t[0];
+                return '<button onclick="CampistryDeposits.tab(\'' + t[0] + '\')" ' +
+                    'style="background:none;border:none;border-bottom:2px solid ' +
+                    (on ? 'var(--acc,#D97706)' : 'transparent') + ';padding:9px 14px;cursor:pointer;' +
+                    'font-size:.9rem;font-weight:' + (on ? '700' : '500') + ';color:' +
+                    (on ? 'var(--s900,#111)' : 'var(--s500)') + '">' +
+                    t[1] + (t[2] ? ' <span style="opacity:.6;font-weight:500">' + t[2] + '</span>' : '') +
+                    '</button>';
+            }).join('') + '</div>';
+    }
+
+    function emptyState(title, body, action) {
+        return '<div style="text-align:center;padding:48px 20px;color:var(--s500)">' +
+            '<div style="font-size:1.05rem;font-weight:600;color:var(--s600);margin-bottom:6px">' + title + '</div>' +
+            '<div style="font-size:.88rem;max-width:520px;margin:0 auto;line-height:1.6">' + body + '</div>' +
+            (action ? '<div style="margin-top:18px">' + action + '</div>' : '') +
+            '</div>';
     }
 
     function renderInbox() {
-        var el = document.getElementById(BODY_ID);
+        var el = DOC.getElementById(BODY_ID);
         if (!el) return;
 
         if (state.error && !state.deposits.length) {
-            el.innerHTML = '<p style="color:var(--s600);font-size:.88rem;margin:0 0 10px"><strong>Bank deposits aren\'t available yet.</strong></p>' +
-                '<p style="color:var(--s500);font-size:.85rem;margin:0 0 12px">' + host.esc(D.explainError(state.error)) + '</p>' +
-                '<p style="color:var(--s400);font-size:.76rem;margin:0">Details: <code>' + host.esc(state.error) + '</code></p>';
+            el.innerHTML = emptyState(
+                'Bank deposits aren\'t available yet',
+                host.esc(D.explainError(state.error)) +
+                '<div style="font-size:.76rem;color:var(--s400);margin-top:12px">Details: <code>' +
+                host.esc(state.error) + '</code></div>');
             return;
         }
 
-        var pending = state.deposits.filter(D.isPending);
-        var posted = state.deposits.filter(function (d) { return d.status === 'posted'; }).slice(0, 25);
+        var h = summaryStrip() + tabBar();
 
-        var dry = state.settings && state.settings.dryRun;
-        var h = '';
-
-        if (dry) {
-            h += '<div style="background:#EFF6FF;border:1px solid #BFDBFE;color:#1E40AF;padding:9px 12px;border-radius:var(--r);font-size:.8rem;margin-bottom:12px">' +
-                 '<strong>Dry run is on.</strong> Deposits are being matched and explained, but nothing posts to a ledger automatically. ' +
-                 'Turn it off in Deposit Settings once the matches look right.</div>';
-        }
-
-        h += '<div style="display:flex;gap:8px;margin-bottom:14px;flex-wrap:wrap">' +
-             '<button class="me-btn me-btn--sec me-btn--sm" onclick="CampistryDeposits.openSettings()">Deposit Settings</button>' +
-             '<button class="me-btn me-btn--sec me-btn--sm" onclick="CampistryDeposits.openAliases()">Known Payers (' + state.aliases.length + ')</button>' +
-             '<button class="me-btn me-btn--sec me-btn--sm" onclick="CampistryDeposits.openAddAlias()">+ Add a payer</button>' +
-             '<button class="me-btn me-btn--sec me-btn--sm" onclick="CampistryDeposits.openTemplates()">Bank layouts (' +
-             state.templates.filter(function (x) { return x.scope === 'camp'; }).length + ')</button>' +
-             '</div>';
-
-        h += '<h4 style="margin:0 0 8px;font-size:.9rem">Needs you (' + pending.length + ')</h4>';
-        h += pending.length
-            ? pending.map(depositRow).join('')
-            : '<p style="color:var(--s500);font-size:.85rem;margin:0 0 18px">Nothing waiting — every deposit has been matched.</p>';
-
-        if (posted.length) {
-            h += '<h4 style="margin:18px 0 8px;font-size:.9rem">Recently posted</h4>' + posted.map(depositRow).join('');
+        if (tab === 'needs') {
+            var pending = state.deposits.filter(D.isPending);
+            h += pending.length
+                ? pending.map(depositRow).join('')
+                : emptyState('Nothing waiting',
+                    'Every deposit that has arrived is matched to a family. New ones appear here the moment the bank emails about them.');
+        } else if (tab === 'posted') {
+            var posted = state.deposits.filter(function (d) { return d.status === 'posted'; }).slice(0, 60);
+            h += posted.length
+                ? posted.map(depositRow).join('')
+                : emptyState('Nothing posted yet',
+                    'Deposits credited to a family show up here, newest first.');
+        } else if (tab === 'payers') {
+            h += aliasesHtml();
+        } else if (tab === 'layouts') {
+            h += templatesHtml();
         }
 
         el.innerHTML = h;
@@ -578,9 +689,9 @@
 
         host.showModal('Add a Known Payer', h, function () {
             var client = db(), cid = campId();
-            var fk = (document.getElementById('alFam') || {}).value;
-            var name = ((document.getElementById('alName') || {}).value || '').trim();
-            var handle = ((document.getElementById('alHandle') || {}).value || '').trim();
+            var fk = (DOC.getElementById('alFam') || {}).value;
+            var name = ((DOC.getElementById('alName') || {}).value || '').trim();
+            var handle = ((DOC.getElementById('alHandle') || {}).value || '').trim();
             if (!fk) { if (host.toast) host.toast('Pick a family', 'error'); return; }
             if (!name && !handle) { if (host.toast) host.toast('Enter a name or a handle', 'error'); return; }
 
@@ -595,7 +706,7 @@
                 p_handle: (handle && M) ? M.normalizeHandle(handle) : handle,
                 p_kind: 'zelle',
                 p_source: 'confirmed',
-                p_note: ((document.getElementById('alNote') || {}).value || '').trim()
+                p_note: ((DOC.getElementById('alNote') || {}).value || '').trim()
             }).then(function (r) {
                 if (r.error) { if (host.toast) host.toast('Failed: ' + r.error.message, 'error'); return; }
                 if (r.data && r.data.duplicate) { if (host.toast) host.toast('Already known — nothing to add'); }
@@ -606,7 +717,7 @@
         });
     };
 
-    D.openAliases = function () {
+    function aliasesHtml() {
         var rows = state.aliases.map(function (a) {
             return '<tr>' +
                 '<td style="padding:6px 8px 6px 0">' + host.esc(a.displayName || a.handle || '—') + '</td>' +
@@ -630,8 +741,14 @@
                   '</tr></thead><tbody>' + rows + '</tbody></table>'
                 : '<p style="color:var(--s400)">Nothing known yet. Add the payers the camp already knows about, or resolve a deposit in the inbox and it is remembered from then on.</p>') +
             '<div style="margin-top:18px"><button class="me-btn me-btn--pri me-btn--sm" onclick="CampistryDeposits.openAddAlias()">+ Add a payer</button></div>';
+        return body;
+    }
 
-        host.showModal('Known Payers', body, null, { maxWidth: 760 });
+    // Still reachable on its own (Billing links straight to it), but inside the
+    // console it is a tab -- six buttons each opening a modal over a modal was
+    // the worst thing about the old layout.
+    D.openAliases = function () {
+        host.showModal('Known Payers', aliasesHtml(), null, { maxWidth: 860 });
     };
 
     // ── settings ─────────────────────────────────────────────────────────────
@@ -688,14 +805,14 @@
         h += '</div>';
 
         host.showModal('Deposit Settings', h, function () {
-            var allow = (document.getElementById('depAllow').value || '')
+            var allow = (DOC.getElementById('depAllow').value || '')
                 .split(',').map(function (x) { return x.trim().toLowerCase(); }).filter(Boolean);
             client.rpc('set_camp_deposit_settings', {
                 p_camp_id: cid,
-                p_dry_run: document.getElementById('depDryRun').checked,
+                p_dry_run: DOC.getElementById('depDryRun').checked,
                 p_sender_allowlist: allow,
-                p_auto_post_at: parseInt(document.getElementById('depAuto').value, 10) || 90,
-                p_suggest_at: parseInt(document.getElementById('depSuggest').value, 10) || 40
+                p_auto_post_at: parseInt(DOC.getElementById('depAuto').value, 10) || 90,
+                p_suggest_at: parseInt(DOC.getElementById('depSuggest').value, 10) || 40
             }).then(function (r) {
                 if (r.error) { if (host.toast) host.toast('Save failed: ' + r.error.message, 'error'); return; }
                 state.settings = r.data;
@@ -787,19 +904,19 @@
 
         // Restore the textarea contents after the modal re-renders.
         setTimeout(function () {
-            var ta = document.getElementById('tchText');
+            var ta = DOC.getElementById('tchText');
             if (ta && ta.value !== t.text) ta.value = t.text;
         }, 0);
     }
 
     /** Re-render only the preview, so typing in the textarea is never interrupted. */
     function refreshPreview() {
-        var el = document.getElementById('tchPreview');
+        var el = DOC.getElementById('tchPreview');
         if (el) el.innerHTML = teachPreview();
         // Keep the mark buttons' ticks honest without rebuilding the textarea.
         var t = state.teach;
         Object.keys(TEACH_LABELS).forEach(function (f) {
-            var btn = document.querySelector('[onclick*="teachMark(\'' + f + '\')"]');
+            var btn = DOC.querySelector('[onclick*="teachMark(\'' + f + '\')"]');
             if (!btn) return;
             var got = !!t.marks[f];
             btn.className = 'me-btn ' + (got ? 'me-btn--pri' : 'me-btn--sec') + ' me-btn--sm';
@@ -864,7 +981,7 @@
 
     D.teachMark = function (field) {
         var t = state.teach; if (!t) return;
-        var ta = document.getElementById('tchText');
+        var ta = DOC.getElementById('tchText');
         if (!ta) return;
         var start = ta.selectionStart, end = ta.selectionEnd;
         if (start == null || end == null || end <= start) {
@@ -984,7 +1101,7 @@
         host.showModal('Teach Campistry your bank\'s emails', h, null,
                        { maxWidth: 1240, maxHeight: '94vh', minHeight: '90vh' });
         setTimeout(function () {
-            var g = document.getElementById('tpGrid');
+            var g = DOC.getElementById('tpGrid');
             if (g && g.clientWidth < 820) g.style.gridTemplateColumns = 'minmax(0,1fr)';
             paintPdfPage();
         }, 0);
@@ -1133,7 +1250,7 @@
     /** Redraw the saved highlights over the rendered page. */
     function paintMarks() {
         var t = state.teachPdf;
-        var layer = document.getElementById('tpMarks');
+        var layer = DOC.getElementById('tpMarks');
         if (!t || !layer || !t.viewport) return;
         layer.innerHTML = '';
         var pageNo = t.pageNo || 1;
@@ -1144,7 +1261,7 @@
             t.items.forEach(function (it) {
                 if (it.page !== pageNo) return;
                 if (it.end <= m.start || it.start >= m.end) return;
-                var box = document.createElement('div');
+                var box = DOC.createElement('div');
                 box.style.cssText = 'position:absolute;border-radius:3px;background:' +
                     (MARK_COLORS[f] || 'rgba(0,0,0,.2)') + ';' +
                     'left:' + (it.x * vp.scale) + 'px;' +
@@ -1158,8 +1275,8 @@
 
     /** Repaint the question and the panel without touching the rendered page. */
     function refreshTeachPdf() {
-        var a = document.getElementById('tpPrompt');
-        var b = document.getElementById('tpPanel');
+        var a = DOC.getElementById('tpPrompt');
+        var b = DOC.getElementById('tpPanel');
         if (a) a.innerHTML = teachPdfPrompt();
         if (b) b.innerHTML = teachPdfPanel();
         paintMarks();
@@ -1168,7 +1285,7 @@
 
     async function paintPdfPage() {
         var t = state.teachPdf;
-        var host_el = document.getElementById('tpPage');
+        var host_el = DOC.getElementById('tpPage');
         if (!host_el || !t.doc) return;
 
         var pageNo = t.pageNo || 1;
@@ -1177,16 +1294,16 @@
         var base = page.getViewport({ scale: 1 });
         var viewport = page.getViewport({ scale: wrapW / base.width });
 
-        var canvas = document.createElement('canvas');
+        var canvas = DOC.createElement('canvas');
         canvas.width = viewport.width; canvas.height = viewport.height;
         canvas.style.display = 'block';
-        var layer = document.createElement('div');
+        var layer = DOC.createElement('div');
         layer.id = 'tpLayer';
         layer.style.cssText = 'position:absolute;inset:0;color:transparent;' +
             'line-height:1;transform-origin:0 0;user-select:text;-webkit-user-select:text';
 
         host_el.innerHTML = '';
-        var frame = document.createElement('div');
+        var frame = DOC.createElement('div');
         frame.style.cssText = 'position:relative;width:' + viewport.width + 'px';
         frame.appendChild(canvas);
         frame.appendChild(layer);
@@ -1198,7 +1315,7 @@
         // Persisted highlights, drawn back onto the page. A camp has no reason
         // to trust that a selection was kept unless it can still see it -- and
         // seeing all three at once is what makes the last step obviously right.
-        var marksLayer = document.createElement('div');
+        var marksLayer = DOC.createElement('div');
         marksLayer.id = 'tpMarks';
         marksLayer.style.cssText = 'position:absolute;inset:0;pointer-events:none';
         frame.insertBefore(marksLayer, layer);
@@ -1206,7 +1323,7 @@
         paintMarks();
 
         t.items.filter(function (it) { return it.page === pageNo; }).forEach(function (it) {
-            var sp = document.createElement('span');
+            var sp = DOC.createElement('span');
             sp.textContent = it.str;
             sp.setAttribute('data-start', String(it.start));
             var left = it.x * viewport.scale;
@@ -1218,7 +1335,7 @@
         });
 
         if (t.doc.numPages > 1) {
-            var nav = document.createElement('div');
+            var nav = DOC.createElement('div');
             nav.style.cssText = 'position:sticky;bottom:0;background:var(--s50);padding:6px;text-align:center;font-size:.76rem';
             nav.innerHTML = 'Page ' + pageNo + ' of ' + t.doc.numPages + ' ' +
                 '<button class="me-btn me-btn--ghost me-btn--sm" onclick="CampistryDeposits.teachPdfPage(' + (pageNo - 1) + ')">Prev</button> ' +
@@ -1239,7 +1356,7 @@
     D.teachPdfLoad = async function (file) {
         var t = state.teachPdf, P = Pdf();
         if (!file || !t || !P) return;
-        var el = document.getElementById('tpStatus');
+        var el = DOC.getElementById('tpStatus');
         if (el) el.textContent = 'Reading the PDF…';
         try {
             var buf = await file.arrayBuffer();
@@ -1270,7 +1387,7 @@
         var t = state.teachPdf, P = Pdf();
         var field = P_FIELD(t.step);
         if (!field) return;
-        var layer = document.getElementById('tpLayer');
+        var layer = DOC.getElementById('tpLayer');
         var off = layer && P.offsetsFromSelection(layer);
         if (!off) {
             if (host.toast) host.toast('Drag across the words on the page first.', 'error');
@@ -1328,14 +1445,15 @@
         D.openTeach(d.raw_excerpt || '', '');
     };
 
-    D.openTemplates = function () {
+    function templatesHtml() {
         var mine = state.templates.filter(function (x) { return x.scope === 'camp'; });
         var shared = state.templates.filter(function (x) { return x.scope === 'shared'; });
 
-        var h = '<div class="me-modal-form">';
-        h += '<p style="font-size:.84rem;color:var(--s600);margin:0 0 12px">' +
+        var h = '<div>';
+        h += '<p style="font-size:.88rem;color:var(--s600);margin:0 0 14px;max-width:720px;line-height:1.6">' +
              'Campistry reads every bank\'s alerts on its own. Teaching it yours makes that exact, ' +
-             'and is worth doing if anything is coming through wrong.</p>';
+             'and is worth doing if anything is coming through wrong. It also learns quietly from ' +
+             'corrections you make in <strong>Needs you</strong>, so this is optional.</p>';
         h += '<div style="display:flex;gap:8px;flex-wrap:wrap;margin-bottom:14px">' +
              '<button class="me-btn me-btn--pri me-btn--sm" onclick="CampistryDeposits.openTeachPdf()">' +
              'Upload a printed email</button>' +
@@ -1356,8 +1474,11 @@
              'font-size:.7rem;color:var(--s400)">Campistry deposits build ' + host.esc(D.BUILD) +
              (Pdf() ? '' : ' · PDF upload unavailable — this page is running an older copy, reload it') +
              '</div>';
-        h += '</div>';
-        host.showModal('Bank layouts', h, null);
+        return h;
+    }
+
+    D.openTemplates = function () {
+        host.showModal('Bank layouts', templatesHtml(), null, { maxWidth: 900 });
     };
 
     function templateRow(t) {
