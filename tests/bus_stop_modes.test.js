@@ -257,3 +257,21 @@ test('a corner stop lists every corner inside the walk limit, nearest walk first
     assert.ok(list.some(c => c.lat.toFixed(5) === st.lat.toFixed(5) && c.lng.toFixed(5) === st.lng.toFixed(5)), 'the corner it stands at is one of them');
     assert.deepStrictEqual(snapper.candidates({ campers: [] }, 4), [], 'no homes, no candidates');
 });
+
+test('fitLegModel recovers a fixed-per-leg plus per-mile road model from sampled legs', () => {
+    const pts = []; for (let i = 0; i < 30; i++) pts.push({ lat: 40.09 + (i % 6) * 0.01, lng: -74.21 - Math.floor(i / 6) * 0.012 });
+    const legs = (p, q) => 0.7 + 3.0 * window.CampistryGoRoutePost.haversineMi(p.lat, p.lng, q.lat, q.lng);
+    const fit = NH.fitLegModel(pts, legs, 25);
+    assert.ok(fit && fit.pairs >= 30, 'enough pairs: ' + JSON.stringify(fit));
+    assert.ok(Math.abs(fit.fixedMin - 0.7) < 0.05, 'fixed minutes per leg: ' + fit.fixedMin.toFixed(2));
+    assert.ok(Math.abs(fit.minPerMi - 3.0) < 0.05, 'minutes per mile: ' + fit.minPerMi.toFixed(2));
+    assert.ok(Math.abs(fit.factor - 1.25) < 0.03, 'road factor at 25mph: ' + fit.factor.toFixed(2));
+    assert.strictEqual(NH.fitLegModel(pts.slice(0, 4), legs, 25), null, 'too few points: no fit');
+    // the fitted model feeds driveMin: a leg now costs its fixed minutes on top of distance
+    const P = window.CampistryGoRoutePost;
+    const a = pts[0], b = pts[1];
+    const plain = P.driveMin(a, b, { roadFactor: fit.factor, avgSpeedMph: 25 });
+    const fitted = P.driveMin(a, b, { roadFactor: fit.factor, avgSpeedMph: 25, legFixedMin: fit.fixedMin });
+    assert.ok(Math.abs((fitted - plain) - fit.fixedMin) < 1e-9, 'fixed minutes added once per leg');
+    assert.strictEqual(P.driveMin(a, a, { legFixedMin: 0.7 }), 0, 'no leg, no fixed cost');
+});
