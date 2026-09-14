@@ -198,7 +198,15 @@ addresses ─ geocode ─┬─ road graph (OpenStreetMap) ─ neighbourhoods �
   receiver over Max Route Duration. Replaying the camp's own map offline
   (legs priced as the run's ETAs say: 0.7 min per leg plus 2.9 min per
   mile), the far west's 35 children went from four buses to two or three
-  and the fleet from 672 to 626-634 model minutes at the 70-minute cap.
+  and the fleet from 672 to 626-634 model minutes at the 70-minute cap. On
+  the camp's next real run the far west went from four buses to three and
+  the fleet from 697 to 685 road minutes — and that is the number to trust:
+  optimising the same routes under one noisy leg model and judging them
+  under an independent one (same 0.8-minute noise per leg) turned a 50-
+  minute "gain" into +1, +15 and −39, so a smooth offline model overstates
+  what is left, and only the road-leg run counts. The move runs in the
+  road-time polish only; on 400+ districting segments it cost that stage
+  its whole time budget (the camp's run hit the 20-second guard).
 
 * **The efficiency line** (`[Go] Fleet: …`, plain text after the Route
   summary, since a pasted console.table is unreadable): total bus-minutes
