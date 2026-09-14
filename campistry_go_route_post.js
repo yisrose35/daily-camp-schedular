@@ -1931,6 +1931,7 @@ window.CampistryGoRoutePost = (function () {
         o = opts(o);
         const WALKW = Number.isFinite(o.cornerWalkWeightMinPerMi) ? o.cornerWalkWeightMinPerMi : 6;
         const EPS = Number.isFinite(o.cornerMinGainMin) ? o.cornerMinGainMin : 0.3;
+        const DWELL = Math.max(0, o.avgStopMin || 0); // a corner shared with a neighbour is one stop, not two
         const same = (a, b) => Math.abs(a.lat - b.lat) < 1e-7 && Math.abs(a.lng - b.lng) < 1e-7;
         // The point each stop currently stands at, as a point `legs` knows.
         const pos = stops.map((s, i) => ((candidatesByStop[i] || []).find(c => same(c, s))) || s);
@@ -1943,7 +1944,8 @@ window.CampistryGoRoutePost = (function () {
                 if (!list || list.length < 2) continue;
                 const prev = i > 0 ? pos[i - 1] : depot;
                 const next = i + 1 < stops.length ? pos[i + 1] : (closed ? depot : null);
-                const drive = p => legs(prev, p) + (next ? legs(p, next) : 0);
+                const shared = p => ((i > 0 && same(p, pos[i - 1])) || (i + 1 < stops.length && same(p, pos[i + 1]))) ? DWELL : 0;
+                const drive = p => legs(prev, p) + (next ? legs(p, next) : 0) - shared(p);
                 const curCost = drive(pos[i]) + WALKW * walkAt(i);
                 let best = null;
                 for (const c of list) {

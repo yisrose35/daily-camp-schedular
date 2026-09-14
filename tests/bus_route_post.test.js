@@ -819,4 +819,14 @@ test('a corner stop moves to the corner on the bus\'s way when one is inside the
     const res2 = P.chooseCornersOnPath([S3, S2], [[A, far], []], legs2, depot, false, {});
     assert.strictEqual(res2.moved, 0, 'not worth half a mile of walking');
     assert.strictEqual(S3.lat, A.lat);
+    // a corner the next stop already stands at saves a whole stop's dwell, so
+    // it wins over an equally-driven corner a few feet nearer the homes
+    const N1 = { lat: 40.03, lng: -74.0, address: 'Next corner', campers: [{ name: 'k4' }] };
+    const S4 = { lat: 40.0295, lng: -74.0, address: 'Own corner', campers: [{ name: 'k5' }], _homes: [{ lat: 40.0297, lng: -74.0 }] };
+    const own = { lat: 40.0295, lng: -74.0, walkMi: 0.010, name: 'Own corner', node: { id: 'o' } };
+    const nextC = { lat: 40.03, lng: -74.0, walkMi: 0.020, name: 'Next corner', node: { id: 'n' } };
+    const flat = () => 5; // every leg the same: only the shared dwell and the walk differ
+    const res3 = P.chooseCornersOnPath([S4, N1], [[own, nextC], []], flat, depot, false, { avgStopMin: 1 });
+    assert.strictEqual(res3.moved, 1, 'joins the next stop\'s corner');
+    assert.strictEqual(S4.lat, N1.lat);
 });
