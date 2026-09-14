@@ -365,3 +365,40 @@ test('a same-day return is still distinct from the deposit it reverses', () => {
     const dep = { date: '2026-09-14', amount: 500, payerName: 'SHIMON MILLER', traceId: '', messageId: 'email_aaa' };
     assert.notStrictEqual(P.fingerprint(dep), P.fingerprint({ ...dep, isReversal: true }));
 });
+
+// ── who actually sent it ────────────────────────────────────────────────────
+//
+// Almost every camp reaches this feature by forwarding the bank's alert out of
+// their own mailbox, so the envelope sender is their Gmail and the bank's
+// address is three lines into the body. A layout keyed to the envelope means a
+// camp teaches Chase, forwards a Chase alert, and is told there is no layout
+// for gmail.com — with the layout they just taught sitting right there.
+test('a forwarded alert reports the bank as the sender, not the forwarder', () => {
+    const fwd = [
+        'Hi, see below',
+        '',
+        '---------- Forwarded message ----------',
+        'From: Chase <no.reply.alerts@chase.com>',
+        'Date: Tue, Sep 9, 2026 at 9:14 AM',
+        'Subject: You received $3.14',
+        'To: Camp Office <office@example.org>',
+        '',
+        'Yisrael Rosenfeld sent you money',
+        '$3.14',
+        'Memo 3734-1387'
+    ].join('\n');
+    assert.strictEqual(P.originalSender(fwd), 'no.reply.alerts@chase.com');
+});
+
+test('a bank’s own alert has no forwarded sender to read', () => {
+    // Nothing to unwrap, so the caller keeps the envelope sender. Returning a
+    // "From:" out of the bank's own body copy here would key the layout to
+    // whatever address the bank prints in its footer.
+    const direct = [
+        'You received $3.14',
+        '',
+        'Yisrael Rosenfeld sent you money.',
+        'Questions? From: our team at support@chase.com'
+    ].join('\n');
+    assert.strictEqual(P.originalSender(direct), '');
+});

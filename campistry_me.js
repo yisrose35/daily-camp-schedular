@@ -1068,6 +1068,10 @@ function showModal(title,bodyHtml,onSave,opts){
     if(existing)existing.remove();
     var overlay=document.createElement('div');overlay.id='dynModal';
     overlay.className='me-overlay';overlay.style.cssText='position:fixed;inset:0;z-index:10000;background:rgba(0,0,0,.5);display:flex;align-items:center;justify-content:center;';
+    // opts.saveLabel renames the confirm button. A generic "Save" is fine for
+    // an edit form, but wrong for a modal whose button POSTS MONEY — a caller
+    // that is about to do something consequential should be able to say so on
+    // the button itself.
     // opts.onDelete puts a Delete button on the left of the same footer —
     // lets a caller's edit modal carry its own delete action instead of
     // that action living as a separate standalone button elsewhere in the
@@ -1078,7 +1082,7 @@ function showModal(title,bodyHtml,onSave,opts){
     if(onSave||opts.onDelete){
         footer='<div style="display:flex;justify-content:space-between;align-items:center;gap:8px;padding:12px 20px;border-top:1px solid var(--s100)">'
             +(opts.onDelete?'<button class="me-btn me-btn--ghost me-btn--sm" id="dynModalDelete" style="color:var(--err)">'+esc(opts.deleteLabel||'Delete')+'</button>':'<span></span>')
-            +'<div style="display:flex;gap:8px">'+(onSave?'<button class="me-btn me-btn--sec" onclick="CampistryMe.closeModal(\'dynModal\')">Cancel</button><button class="me-btn me-btn--pri" id="dynModalSave">Save</button>':'<button class="me-btn me-btn--sec" onclick="CampistryMe.closeModal(\'dynModal\')">Close</button>')+'</div>'
+            +'<div style="display:flex;gap:8px">'+(onSave?'<button class="me-btn me-btn--sec" onclick="CampistryMe.closeModal(\'dynModal\')">Cancel</button><button class="me-btn me-btn--pri" id="dynModalSave">'+esc(opts.saveLabel||'Save')+'</button>':'<button class="me-btn me-btn--sec" onclick="CampistryMe.closeModal(\'dynModal\')">Close</button>')+'</div>'
             +'</div>';
     }
     // opts.maxHeight lets a content-heavy modal (the payment plan editor —

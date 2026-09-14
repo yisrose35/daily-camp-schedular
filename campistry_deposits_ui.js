@@ -71,7 +71,7 @@
     // in the Bank layouts footer. Twice now a fix has been live on the server
     // while the browser ran an older copy, and there was no way to tell from
     // the screen which one was which -- so the screen says.
-    D.BUILD = '20260914-09';
+    D.BUILD = '20260914-10';
 
     var state = {
         loaded: false,
@@ -758,6 +758,8 @@
              (dry ? '#BFDBFE' : '#A7F3D0') + ';color:' + (dry ? '#1E40AF' : '#065F46') + ';padding:5px 11px;' +
              'border-radius:999px;font-size:.76rem;font-weight:600">' +
              (dry ? 'Manual — you credit each deposit' : 'Automatic — confident matches post themselves') + '</span>' +
+             (pending.length ? '<button class="me-btn me-btn--sec me-btn--sm" onclick="CampistryDeposits.rereadAll()">' +
+                  'Read all ' + pending.length + ' again</button>' : '') +
              '<button class="me-btn me-btn--sec me-btn--sm" onclick="CampistryDeposits.openSettings()">Settings</button>' +
              '</div>';
         h += '</div>';
@@ -1851,10 +1853,23 @@
             host.fm(parsed.deposit.amount) + (parsed.deposit.payerName ? ' from ' + parsed.deposit.payerName : ' — payer not readable'));
 
         // 2. the learned template
-        var sig = (T && d.from_address) ? T.signature(d.from_address) : '';
+        //
+        // Almost every camp reaches this feature by forwarding the bank's
+        // alert from their own mailbox, so the envelope sender is gmail.com
+        // and the bank's address is three lines into the body. Keying the
+        // layout to the envelope means a camp teaches Chase, forwards a Chase
+        // alert, and is told there is no layout for gmail.com -- while the
+        // layout they just taught sits right there. The original sender inside
+        // the forward is the bank, and that is what a layout is about.
+        var fromAddr = (P && P.originalSender ? P.originalSender(body) : '') || d.from_address || '';
+        var forwarded = !!(fromAddr && d.from_address &&
+                           T && T.signature(fromAddr) !== T.signature(d.from_address));
+        var sig = (T && fromAddr) ? T.signature(fromAddr) : '';
         var row = null;
-        if (!d.from_address) {
-            step(false, 'No sender recorded', 'Recorded before the sending address was stored, so no layout can be looked up.');
+        if (forwarded) step(true, 'Forwarded \u2014 the bank is ' + sig,
+            'Sent on from ' + d.from_address + ', so the layout is looked up under ' + sig + ' rather than the forwarder.');
+        if (!fromAddr) {
+            step(false, 'No sender recorded', 'Recorded before the sending address was stored, and the message carries no forwarded From: line, so no layout can be looked up.');
         } else if (!state.templates.length) {
             step(false, 'No layouts taught yet', 'Bank layouts → Upload a printed email.');
         } else {
@@ -1988,13 +2003,29 @@
              'margin:8px 0 0;font-size:.76rem;max-height:240px;overflow:auto">' + host.esc(body.slice(0, 4000)) + '</pre></details>';
         h += '</div>';
 
+        // "Save" gave no hint that this is the click that moves the money, so
+        // a camp could read "Matched Rosenfeld Family (100%)", close the box,
+        // and reasonably report that auto-posting is broken. The button says
+        // what pressing it does.
         var canApply = !!(parsed && parsed.ok && decision);
+        var willPost = !!(decision && decision.decision === 'auto' && decision.familyKey);
+        var applyLabel = willPost
+            ? 'Post ' + host.fm(parsed.deposit.amount) + ' to ' + famName(decision.familyKey)
+            : 'Save what it read';
+        if (willPost) {
+            h = h.replace('<div class="me-modal-form">',
+                '<div class="me-modal-form"><div style="background:#ECFDF5;border:1px solid #A7F3D0;border-radius:var(--r);' +
+                'padding:10px 14px;margin-bottom:14px;font-size:.85rem;color:#065F46">' +
+                '<strong>Ready to post.</strong> ' + host.esc(applyLabel) +
+                ' \u2014 press the green button below. Nothing has moved yet.</div>');
+        }
         host.showModal('Re-read this deposit', h, canApply ? function () {
             D.applyReread(depositId, parsed.deposit, decision);
-        } : null, { maxWidth: 760 });
+        } : null, { maxWidth: 760, saveLabel: applyLabel });
     };
 
-    D.applyReread = async function (depositId, deposit, decision) {
+    D.applyReread = async function (depositId, deposit, decision, opts) {
+        var quiet = !!(opts && opts.quiet);
         var client = db(), cid = campId();
         var r = await client.rpc('reparse_bank_deposit', {
             p_camp_id: cid,
@@ -2020,18 +2051,110 @@
                 reasons: decision.candidates && decision.candidates[0] ? decision.candidates[0].reasons : []
             }
         });
-        if (r.error) { if (host.toast) host.toast(D.explainError(r.error.message), 'error'); return; }
+        if (r.error) { if (quiet) throw r.error; if (host.toast) host.toast(D.explainError(r.error.message), 'error'); return; }
         if (r.data && r.data.success === false) {
+            if (quiet) throw new Error(r.data.error || 'reparse failed');
             if (host.toast) host.toast(r.data.error === 'already_posted'
                 ? 'This deposit is already posted to a family. Undo it first if you want it read again.'
                 : D.explainError(r.data.error), 'error');
             return;
         }
+        if (quiet) return;
         if (host.closeModal) host.closeModal('dynModal');
         if (host.toast) host.toast('Re-read and updated');
         await D.refresh();
         renderInbox();
         host.onChange();
+    };
+
+    /**
+     * Re-read every pending deposit at once.
+     *
+     * A deposit is read on arrival and then never again. So the fixes that
+     * matter most -- teaching the bank's layout, giving a camper the number
+     * their parents actually write in the memo -- change nothing about the
+     * deposits already sitting in the inbox, and the camp is left opening
+     * rows one at a time to collect a backlog that the software could clear
+     * itself. This re-runs the same pipeline over every pending row and posts
+     * the ones that now come back confident.
+     *
+     * Only ever posts what a fresh decision calls 'auto', which already
+     * respects Manual mode, the ambiguity gap and the overpayment guard. A
+     * bulk action must not be a way around a guardrail.
+     */
+    D.rereadAll = async function () {
+        var P = W.CampistryDepositParser, T = Tpl(), M = Match();
+        if (!P || !M) { if (host.toast) host.toast('Deposit reader did not load. Reload the page.', 'error'); return; }
+
+        var pending = state.deposits.filter(D.isPending).filter(function (d) { return d.raw_excerpt; });
+        if (!pending.length) {
+            if (host.toast) host.toast('Nothing to re-read \u2014 every pending deposit predates the message text being kept.');
+            return;
+        }
+
+        var ctx = {
+            families: host.families() || {},
+            roster: (host.roster && host.roster()) || {},
+            campNumber: D.campNumber(),
+            aliases: state.aliases,
+            balances: {}
+        };
+        var posted = [], changed = 0, stillStuck = 0;
+
+        for (var i = 0; i < pending.length; i++) {
+            var d = pending[i];
+            var body = d.raw_excerpt;
+            var parsed = P.parseEmail({ subject: d.raw_subject || '', text: body, receivedAt: d.created_at });
+            if (!parsed || !parsed.ok) { stillStuck++; continue; }
+
+            // Same template lookup as the single re-read, forwarded senders
+            // included -- the two must not be able to disagree.
+            if (T && state.templates.length) {
+                var fromAddr = (P.originalSender ? P.originalSender(body) : '') || d.from_address || '';
+                var sig = fromAddr ? T.signature(fromAddr) : '';
+                var mine = state.templates.filter(function (t) { return T.signature(t.bank_signature) === sig; });
+                var row = mine.filter(function (t) { return t.scope === 'camp'; })[0] || mine[0];
+                if (row) {
+                    var read = T.read(row.template, body);
+                    Object.keys(read).forEach(function (f) {
+                        var v = read[f].value;
+                        if (!v || !T.plausible(f, v)) return;
+                        if (f === 'payerName') parsed.deposit.payerName = v;
+                        if (f === 'memo') {
+                            parsed.deposit.memo = v;
+                            parsed.deposit.memoCode = P.parseMemoCode(v) || parsed.deposit.memoCode || '';
+                        }
+                    });
+                }
+            }
+
+            parsed.deposit.rawExcerpt = body;
+            var decision = M.decide(parsed.deposit, ctx, state.settings || {});
+            if (decision.decision === 'auto' && decision.familyKey) {
+                try {
+                    await D.applyReread(d.id, parsed.deposit, decision, { quiet: true });
+                    posted.push(famName(decision.familyKey) + ' ' + host.fm(parsed.deposit.amount));
+                    changed++;
+                } catch (e) { stillStuck++; }
+            } else {
+                stillStuck++;
+            }
+        }
+
+        await D.refresh();
+        renderInbox();
+        host.onChange();
+
+        if (!changed) {
+            if (host.toast) host.toast('Read all ' + pending.length + ' again \u2014 none of them resolved. Open one and press Read again to see where it stops.');
+        } else if (host.showModal) {
+            host.showModal('Posted ' + changed + ' deposit' + (changed === 1 ? '' : 's'),
+                '<div class="me-modal-form"><div style="font-size:.88rem;color:var(--s600);line-height:1.7">' +
+                posted.map(function (x) { return '\u2713 ' + host.esc(x); }).join('<br>') +
+                (stillStuck ? '<div style="margin-top:12px;color:var(--s500)">' + stillStuck +
+                    ' still need a person.</div>' : '') +
+                '</div></div>', null, { maxWidth: 520 });
+        }
     };
 
     D.openTemplates = function () {
