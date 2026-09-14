@@ -88,9 +88,9 @@
         });
     }
 
-    // ── Reach: send SMS from the device's own number ─────────────────────────
-    // Campistry Lite's Reach feature (campistry_lite.js) sends staff texts from
-    // the signed-in director's OWN phone number. On Android this can be silent;
+    // ── Staff text: send SMS from the device's own number ────────────────────
+    // Link Lite's Compose "Staff" audience (campistry_lite.js) sends staff texts
+    // from the signed-in director's OWN phone number. On Android this can be silent;
     // the web layer looks for a Capacitor plugin registered as `Sms` exposing:
     //
     //     Sms.sendBatch({ messages: [{ to, body }, ...] })

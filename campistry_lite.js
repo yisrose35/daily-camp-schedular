@@ -132,6 +132,7 @@
     let linkLists = null;             // link_lists from camp_state_kv
     let linkThreadQuery = '';         // Link Lite messages search
     let linkMsgFilter = 'all';        // all | unread | important | archived
+    let linkComposeAudience = 'parents'; // parents (email/portal) | staff (own-number text)
     let linkComposeMode = 'camper';   // division | grade | camper
     let linkComposeRecipients = [];   // [{ type:'division'|'grade'|'camper', name }]
     let linkComposeQuery = '';        // Link Lite compose camper search
@@ -1100,8 +1101,6 @@
         league: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M6 9H4.5a2.5 2.5 0 0 1 0-5H6"/><path d="M18 9h1.5a2.5 2.5 0 0 0 0-5H18"/><path d="M4 22h16"/><path d="M10 14.66V17c0 .55-.47.98-.97 1.21C7.85 18.75 7 20.24 7 22"/><path d="M14 14.66V17c0 .55.47.98.97 1.21C16.15 18.75 17 20.24 17 22"/><path d="M18 2H6v7a6 6 0 0 0 12 0V2Z"/></svg>',
         staff: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="8" r="4"/><path d="M4 21v-1a7 7 0 0 1 14 0v1"/><path d="M19 8h4"/><path d="M21 6v4"/></svg>',
         messaging: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/></svg>',
-        reachCompose: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 11l18-7-7 18-2.5-7.5L3 11z"/></svg>',
-        reachHistory: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="9"/><polyline points="12 7 12 12 15 14"/></svg>',
         tips: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="9"/><path d="M12 7v10"/><path d="M15 9.5c0-1.4-1.34-2.5-3-2.5s-3 1.1-3 2.5S10.34 12 12 12s3 1.1 3 2.5-1.34 2.5-3 2.5-3-1.1-3-2.5"/></svg>',
         announcements: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="m3 11 18-5v12L3 14v-3z"/><path d="M11.6 16.8a3 3 0 1 1-5.8-1.6"/></svg>',
         // Same bus glyph Link's pickup-request icons use (_PICKUP_ICONS.bus in
@@ -1138,17 +1137,6 @@
         { id: 'notes',  name: 'Notes',  title: 'Notes Lite', logo: 'Notes_clean.png', color: '#C4891A',
           theme: { accent: '#C4891A', dark: '#9A6A12', tint: '#FBF0D8' }, roles: HEAD, status: 'available',
           tabs: [{ id: 'notesList', label: 'Notes' }] },
-        // Reach — text the staff directory from the sender's OWN phone number
-        // (device-native SMS), so replies land in their normal Messages app.
-        // A parallel channel to Link/Twilio, not a replacement: no carrier
-        // number, no 10DLC, no per-message fee — but Android sends silently
-        // while iOS/web require a tap per message (Apple's rule). Head staff
-        // only (the send roles), so it's HEAD_ROLES not HEAD (no viewer).
-        { id: 'reach', name: 'Reach', title: 'Reach', tag: 'Text staff from your own number',
-          icon: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><path d="M3 11l18-7-7 18-2.5-7.5L3 11z"/><path d="M11.5 12.5 21 4"/></svg>',
-          color: '#DB4B32', theme: { accent: '#DB4B32', dark: '#B23A25', tint: '#FEECE7' },
-          roles: HEAD_ROLES, status: 'available',
-          tabs: [{ id: 'reachCompose', label: 'Compose' }, { id: 'reachHistory', label: 'History' }] },
         { id: 'guard',  name: 'Guard',
           icon: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3l7 3v5.5c0 4.3-2.9 8.2-7 9.5-4.1-1.3-7-5.2-7-9.5V6z"/><polyline points="9.2 12 11.2 14 15 10.2"/></svg>',
           color: '#4338CA',
@@ -1573,8 +1561,6 @@
         else if (id === 'league') renderLeague();
         else if (id === 'staff') renderStaff();
         else if (id === 'messaging') renderMessaging();
-        else if (id === 'reachCompose') renderReachCompose();
-        else if (id === 'reachHistory') renderReachHistory();
         else if (id === 'tips') renderTips();
         else if (id === 'announcements') renderAnnouncements();
         else if (id === 'transport') renderTransportAlerts();
@@ -4871,7 +4857,27 @@
         return out;
     }
 
+    // Compose has two audiences: Parents (email/portal message, the original)
+    // and Staff (text each counselor from your OWN number — silent on Android,
+    // tap-assisted on iPhone). The Staff path is head-staff only and lives in
+    // renderStaffText(); the toggle below switches between them.
+    function audienceToggleHTML() {
+        if (!isHeadStaff()) return '';   // viewers only ever message parents
+        return `<div class="lite-seg" id="liteComposeAud">
+            <button type="button" class="lite-seg-btn${linkComposeAudience === 'parents' ? ' active' : ''}" data-aud="parents">Parents</button>
+            <button type="button" class="lite-seg-btn${linkComposeAudience === 'staff' ? ' active' : ''}" data-aud="staff">Staff</button>
+        </div>`;
+    }
+    function wireAudienceToggle(view) {
+        view.querySelectorAll('#liteComposeAud .lite-seg-btn').forEach(b => b.addEventListener('click', () => {
+            if (b.dataset.aud === linkComposeAudience) return;
+            linkComposeAudience = b.dataset.aud;
+            if (linkComposeAudience === 'staff') renderStaffText(); else paintLinkCompose();
+        }));
+    }
+
     function paintLinkCompose() {
+        if (linkComposeAudience === 'staff' && isHeadStaff()) { renderStaffText(); return; }
         const view = document.getElementById('view-linkCompose');
         const attach = linkComposeAttach;
         const attachChips = [
@@ -4887,6 +4893,7 @@
 
         view.innerHTML = `
             <div class="lite-compose">
+                ${audienceToggleHTML()}
                 <label class="lite-lbl">To</label>
                 ${recipChips ? `<div class="lite-recip-chips">${recipChips}</div>
                     <div class="lite-note" style="margin:2px 2px 8px;">${targets.length} parent${targets.length === 1 ? '' : 's'}</div>` : ''}
@@ -4904,6 +4911,7 @@
                 </div>
             </div>`;
 
+        wireAudienceToggle(view);
         paintRecPicker(view.querySelector('#liteRecPicker'));
         view.querySelectorAll('#liteRecMode .lite-seg-btn').forEach(b =>
             b.addEventListener('click', () => { linkComposeMode = b.dataset.val; paintRecPicker(view.querySelector('#liteRecPicker')); }));
@@ -5891,10 +5899,11 @@
     }
 
     // ════════════════════════════════════════════════════════════════════
-    // REACH — text the staff directory from the sender's OWN phone number.
+    // STAFF TEXT — the "Staff" audience of Link Lite's Compose tab: text the
+    // staff directory from the sender's OWN phone number (no standalone app).
     //
-    // Unlike the Twilio "Daily schedule texts" above, Reach never calls a
-    // server to send: the DEVICE sends, from the signed-in director's own SIM,
+    // Unlike the Twilio "Daily schedule texts", this never calls a server to
+    // send: the DEVICE sends, from the signed-in director's own SIM,
     // so replies land in their normal Messages app (nothing to capture here).
     //   • Android native shell (a `Sms` Capacitor plugin present) → silent
     //     batch send, one personalized text per recipient.
@@ -5967,8 +5976,8 @@
         return [...set].sort();
     }
 
-    async function renderReachCompose() {
-        const view = document.getElementById('view-reachCompose');
+    async function renderStaffText() {
+        const view = document.getElementById('view-linkCompose');
         if (!isHeadStaff()) { view.innerHTML = emptyHTML('🔒', 'Head staff only.'); return; }
 
         // An assisted tap-queue in progress owns the screen until it's done.
@@ -5989,7 +5998,7 @@
         // schedule. Load it once here so the builder + preview share it.
         if (reachMode === 'schedule') {
             reachSched = await getSchedule(currentDate);
-            if (activeTab !== 'reachCompose') return;   // user navigated away mid-load
+            if (activeTab !== 'linkCompose') return;   // user navigated away mid-load
         }
         // A sample of what one counselor will receive, for the schedule preview.
         let schedPreview = '';
@@ -6042,7 +6051,23 @@
                 </div>
             </label>`).join('');
 
+        // Recent-blast log, folded in (no separate tab) as a compact card.
+        const hist = (camp.reachHistory || []).slice(0, 5);
+        const histCard = hist.length ? `
+            <div class="lite-card">
+                <div class="lite-card-title">Recent</div>
+                ${hist.map(h => {
+                    const when = new Date(h.at);
+                    const stamp = isNaN(when) ? '' : when.toLocaleString([], { month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' });
+                    return `<div class="lite-row"><div>
+                        <div class="lite-row-title">${esc(h.preview || '(no preview)')}</div>
+                        <div class="lite-row-sub">${esc(stamp)} · ${h.sent}/${h.total} sent${h.failed ? ` · ${h.failed} failed` : ''}</div>
+                    </div></div>`;
+                }).join('')}
+            </div>` : '';
+
         view.innerHTML = `
+            <div class="lite-compose" style="padding-bottom:4px;">${audienceToggleHTML()}</div>
             ${messageCard}
 
             <div class="lite-card">
@@ -6065,19 +6090,22 @@
                     ${nativeMode ? 'Send' : 'Start sending'} to ${reachSel.size} staff
                 </button>
                 <button class="lite-btn block secondary" id="reachCsv">Export selected as CSV</button>
-            </div>`;
+            </div>
+            ${histCard}`;
+
+        wireAudienceToggle(view);
 
         // Mode toggle (custom message vs today's schedule). Stash the draft
         // first so switching to schedule mode and back doesn't lose it.
         view.querySelectorAll('[data-mode]').forEach(m => m.addEventListener('click', () => {
             const bodyNow = view.querySelector('#reachBody');
             if (bodyNow) camp.reach.lastTemplate = bodyNow.value;
-            reachMode = m.dataset.mode; renderReachCompose();
+            reachMode = m.dataset.mode; renderStaffText();
         }));
 
         // Bunk filter
         view.querySelectorAll('[data-bunk]').forEach(b => b.addEventListener('click', () => {
-            reachBunkFilter = b.dataset.bunk; renderReachCompose();
+            reachBunkFilter = b.dataset.bunk; renderStaffText();
         }));
         // Per-row checkbox: update reachSel + the count/button in place, so
         // selecting many staff doesn't rebuild the list or lose scroll.
@@ -6092,10 +6120,10 @@
             syncCounts();
         }));
         view.querySelector('#reachAll')?.addEventListener('click', () => {
-            filtered.forEach(r => reachSel.add(r.email)); renderReachCompose();
+            filtered.forEach(r => reachSel.add(r.email)); renderStaffText();
         });
         view.querySelector('#reachNone')?.addEventListener('click', () => {
-            filtered.forEach(r => reachSel.delete(r.email)); renderReachCompose();
+            filtered.forEach(r => reachSel.delete(r.email)); renderStaffText();
         });
 
         // Persist the composed text as the user leaves the field so a re-render
@@ -6176,13 +6204,13 @@
                 toast('Send failed: ' + (e.message || e));
             }
             if (btn) { btn.disabled = false; }
-            renderReachCompose();
+            renderStaffText();
             return;
         }
 
         // Assisted: hand off to the OS composer one recipient at a time.
         reachQueue = { items, idx: 0, sent: 0, done: false, template: logLabel };
-        renderReachCompose();
+        renderStaffText();
     }
 
     // The assisted tap-queue screen (iOS / web / native without the plugin).
@@ -6200,7 +6228,7 @@
                     <div class="lite-note">${q.sent} of ${q.items.length} handed to Messages.</div>
                     <button class="lite-btn block" id="reachDone">Back to compose</button>
                 </div>`;
-            view.querySelector('#reachDone').addEventListener('click', () => { reachQueue = null; renderReachCompose(); });
+            view.querySelector('#reachDone').addEventListener('click', () => { reachQueue = null; renderStaffText(); });
             return;
         }
 
@@ -6218,12 +6246,12 @@
         // off and advance so the next tap targets the following recipient.
         view.querySelector('#reachNext').addEventListener('click', () => {
             q.sent++; q.idx++;
-            setTimeout(() => { if (activeTab === 'reachCompose') renderReachCompose(); }, 400);
+            setTimeout(() => { if (activeTab === 'linkCompose') renderStaffText(); }, 400);
         });
-        view.querySelector('#reachSkip').addEventListener('click', () => { q.idx++; renderReachCompose(); });
+        view.querySelector('#reachSkip').addEventListener('click', () => { q.idx++; renderStaffText(); });
         view.querySelector('#reachStop').addEventListener('click', () => {
             reachLog(q.template, q.items.length, q.sent, 0);
-            reachQueue = null; renderReachCompose();
+            reachQueue = null; renderStaffText();
         });
     }
 
@@ -6254,24 +6282,6 @@
         document.body.appendChild(a); a.click(); a.remove();
         setTimeout(() => URL.revokeObjectURL(url), 1000);
         toast(`Exported ${items.length} recipients`);
-    }
-
-    function renderReachHistory() {
-        const view = document.getElementById('view-reachHistory');
-        if (!isHeadStaff()) { view.innerHTML = emptyHTML('🔒', 'Head staff only.'); return; }
-        const hist = camp.reachHistory || [];
-        if (!hist.length) { view.innerHTML = emptyHTML('📭', 'No Reach blasts yet.'); return; }
-        const rows = hist.map(h => {
-            const when = new Date(h.at);
-            const stamp = isNaN(when) ? '' : when.toLocaleString([], { month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' });
-            return `<div class="lite-row">
-                <div>
-                    <div class="lite-row-title">${esc(h.preview || '(no preview)')}</div>
-                    <div class="lite-row-sub">${esc(stamp)} · ${h.sent}/${h.total} sent${h.failed ? ` · ${h.failed} failed` : ''}${h.by ? ' · ' + esc(h.by) : ''}</div>
-                </div>
-            </div>`;
-        }).join('');
-        view.innerHTML = `<div class="lite-card"><div class="lite-card-title">Recent blasts</div>${rows}</div>`;
     }
 
     // ════════════════════════════════════════════════════════════════════

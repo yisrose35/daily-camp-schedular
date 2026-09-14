@@ -57,11 +57,10 @@ blurred header/tab bar, safe-area-aware. Tokens live at the top of
 |---|---|---|
 | **Head staff** (owner / admin / scheduler) — **Flow Lite** | Schedule · Now · Locate · Reports | A comprehensive, **read-only** window into all of Flow: the full schedule for any division/bunk/date, a live **whole-camp "Now" board** (what every bunk is doing right now, grouped by division or by field), a **camper locator** (where's this kid right now / at any time), and **Bunk Rotation & Usage** reports. No generating, no printing, no setup. |
 | **Head staff** — **Notes Lite** | Notes | Notes, same as the desktop Notes app, mobile-friendly: a colored masonry card grid (pinned first) with All / Pinned / Reminders / Shared / Trash filters and search; a **+** FAB creates a note; tapping one opens a full-screen editor (title, autosaving body, 7 colors, pin, trash/restore/delete-forever, **reminder**, and **share by email**). **Per-user & private unless shared** (own `campistry_notes` table with RLS) — the same notes appear on the desktop and every device; a note shared with you opens read-only. |
-| **Head staff** — **Link Lite** | Messages · Compose · Tips | Parent communication on the go, plus the same **Tips** self-service tab as counselors (for a head-staff tip recipient). **Messages:** the inbox as parent-threaded conversations (received + sent), tap a thread to read it and fire off a quick reply. **Compose:** search a camper → message their parent, and **attach an existing form or list** (created on the desktop) via a picker — Lite can attach them, never create them. Sends a real `link_messages` row the parent portal reads. Photos: next phase (needs a cloud photo store). |
+| **Head staff** — **Link Lite** | Messages · Compose · Tips | Parent communication on the go, plus the same **Tips** self-service tab as counselors (for a head-staff tip recipient). **Messages:** the inbox as parent-threaded conversations (received + sent), tap a thread to read it and fire off a quick reply. **Compose:** a **Parents / Staff** audience switch. **Parents** — search a camper → message their parent, and **attach an existing form or list** (created on the desktop) via a picker (Lite attaches, never creates); sends a real `link_messages` row the parent portal reads. **Staff** (head-staff only) — text counselors **from the director's own phone number** (device-native SMS, so replies land in their normal Messages app — no carrier number, no 10DLC, no per-message fee): pick **Custom message** (`{firstName}`/`{name}`/`{bunk}` tokens) or **Today's schedule** (each counselor gets their own bunk's schedule for the day), choose recipients from opted-in staff, and send. **Android** sends silently via a native `Sms` plugin; **iOS/web** fall back to an *assisted* tap-queue (each tap opens Messages prefilled — Apple forbids programmatic SMS). Also exports the selection as CSV, with a compact recent-sends list. Photos: next phase (needs a cloud photo store). |
 | **Head staff** — **Health Lite** | Meds · Roster · Trip | Medications on the go. **Meds:** today's dispensing board — every camper on meds with allergy banners and a **live Given / Not-given** status; head staff tap **Give** to log it (writes to the cloud, everyone sees it live). **Roster:** allergy + medication reference, searchable. **Trip:** pick the group going out → the consolidated meds to pack, with give-status. The **first Lite app that writes** (gated to head staff for now). |
 | **Head staff** — **Live Lite** | Roll Call · Changes | Attendance on the go. **Roll Call:** who's here today — Present / Absent / Left-early tallies, then every camper by bunk with a status pill (Here · Absent · Sick · Late · Left early), division-filterable, tap for full camper info. **Changes:** today's dismissal changes & late arrivals (early pickups with time + who, late arrivals with notes), searchable. Read-only; reads the office roll call synced to the cloud. |
 | **Head staff** — **Me Lite** | Roster · Medical · Staff | Camp *people* on the go. **Roster:** searchable camp-wide roster with a headcount strip + birthdays, grouped by bunk with medical flags; tap a camper for **all their info** (medical, personal, school, placement, parents with tap-to-call/email, address, emergency, teams, notes). **Medical:** a camp-wide allergy/meds/dietary safety list, filterable, facts shown inline. **Staff:** a bunk→counselor contact directory with tap-to-call. Read-only. |
-| **Head staff** — **Reach** | Compose · History | Mass-text the staff directory **from the director's own phone number** (device-native SMS), so replies land in their normal Messages app — a parallel channel to Link/Twilio with no carrier number, no 10DLC, no per-message fee. **Compose:** two modes — **Custom message** (free text with `{firstName}`/`{name}`/`{bunk}` tokens) or **Today's schedule** (each counselor's message is *their own bunk's* schedule for the day, reusing the daily-schedule composer). Both take a footer and a checkbox recipient picker over opted-in staff (bunk-filterable, select all/none). **Android** sends silently via a native `Sms` plugin (`SmsManager`); **iOS/web** fall back to an *assisted* tap-queue — each tap opens Messages prefilled to the next person (Apple forbids programmatic SMS). Also exports the selection as CSV. **History:** a small recent-blast log (preview, count, sender). Send-role staff only. |
 | **Counselor** (`counselor` role) | My Day · My Bunk · League · Tips | See their assigned bunk's daily schedule, bunk roster (contacts, allergies, dietary), their league team + standings + today's matchup, and their own Campistry Link tips balance/Stripe Connect setup |
 | **Viewer** | Schedule · Now · Locate · Reports | Same read-only Flow Lite view as head staff |
 
@@ -344,10 +343,11 @@ main app uses the same coral).
     Counselors are matched to their record by their login email.
   - `liteSmsSettings` — `{ enabled, audience: 'counselors'|'parents'|'both', footer }`
     The camp-level SMS opt-in.
-  - `liteReachSettings` — `{ footer, lastTemplate }` — Reach's camp footer and
-    remembered message draft.
+  - `liteReachSettings` — `{ footer, lastTemplate }` — the staff-text (Compose →
+    Staff) camp footer and remembered message draft.
   - `liteReachHistory` — `[{ at, preview, total, sent, failed, by }]` — a small
-    (≤50) recent-blast log for the Reach History tab. No message bodies stored.
+    (≤50) recent staff-text log, shown as the "Recent" card under Compose →
+    Staff. No message bodies stored.
 - **League team per counselor** is derived, not stored: team membership lives
   on camper records (`camperRoster[name].teams[leagueName]`), so a bunk's team
   is the majority vote across its campers, and a counselor inherits their
@@ -464,14 +464,14 @@ for this account" screen is what actually gates entry from there.
 Note: there is no scheduled/automatic send in v1 — a head-staff member taps
 Send. (A pg_cron → Edge Function pipeline is the natural v2 if wanted.)
 
-### Reach blast (text staff from your own number)
+### Staff text (Link Lite → Compose → Staff) — from your own number
 
 **Reach** is the "send-from-my-own-phone" channel (the Reach-app concept),
 distinct from the Twilio "Daily schedule texts" above. **No server is called to
 send** — the *device* sends from the signed-in director's own SIM, so replies
 land in their normal Messages app (Campistry does not try to capture them).
 
-1. **Reach tile → Compose.** Pick a mode: **Custom message** (tokens
+1. **Link Lite → Compose → Staff.** Pick a mode: **Custom message** (tokens
    `{firstName}`, `{name}`, `{bunk}` fill per person) or **Today's schedule**
    (each counselor gets their own bunk's schedule for `currentDate`, built by
    the same `composeMessage()` the Twilio path uses — counselors whose bunk has
@@ -508,8 +508,8 @@ carrier `sms_opt_outs` table here is a natural follow-up but not wired in v1.)
 | File | Role |
 |---|---|
 | `campistry_lite.html` | App shell, PWA meta, script loader chain |
-| `campistry_lite.js` | All Lite logic (views, data, SMS composition, **Reach** compose/send/history) |
-| `campistry_lite_capacitor.js` | Native-shell glue; documents the `Sms.sendBatch` plugin contract Reach uses on Android |
+| `campistry_lite.js` | All Lite logic (views, data, SMS composition, Compose → **Staff** own-number texting) |
+| `campistry_lite_capacitor.js` | Native-shell glue; documents the `Sms.sendBatch` plugin contract the Staff text uses on Android |
 | `campistry_lite.css` | Mobile-first styles on `campistry-unified.css` tokens |
 | `manifest_lite.webmanifest` | PWA manifest |
 | `supabase/functions/send-sms/index.ts` | Twilio send Edge Function |
