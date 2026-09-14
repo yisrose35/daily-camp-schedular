@@ -62,7 +62,7 @@
         setup: {
             campAddress: '', campName: '', avgSpeed: 25,
             reserveSeats: 2, dropoffMode: 'door-to-door',
-            avgStopTime: 1, maxWalkDistance: 375, maxRouteDuration: 90, maxRideTime: 45,
+            avgStopTime: 1, maxWalkDistance: 375, maxRouteDuration: 90, maxRideTime: 45, returnToCamp: false,
             googleMapsKey: '', googleProjectId: '',
             geoapifyKey: '',
             campLat: null, campLng: null,
@@ -198,8 +198,18 @@ let _toastTimer = null;
         try { return _activeRoadNet.legMinutesFor([{ lat: campLat, lng: campLng }].concat(stops || [])); }
         catch (e) { console.warn('[Go] Road-network legs unavailable: ' + e.message); return null; }
     }
-    // Set per shift by the generator (and re-optimize): the last dismissal
-    // shift drives back to camp, so its ordering and polish price that leg.
+    // Does dismissal run `si` of `count` drive back to camp? An earlier run
+    // always does — the bus comes back for the next shift. The last run only
+    // when Round Trip is on; one way (the default) ends at the last drop.
+    // Arrival runs end at camp by definition and price that leg themselves.
+    // Route minutes, Max Route Duration, the ordering, the polish and the
+    // map all go through here, so they agree.
+    function _shiftReturns(si, count, isArrival) {
+        if (isArrival) return false;
+        if (si < count - 1) return true;
+        return D.setup.returnToCamp === true;
+    }
+    // Set per shift by the generator (and re-optimize) for the ordering and polish.
     let _shiftReturnsToCamp = false;
     function _routePostOpts(extra) {
         return Object.assign({
@@ -1524,6 +1534,7 @@ let _toastTimer = null;
         if (document.getElementById('equalizeBusLoads')) document.getElementById('equalizeBusLoads').value = s.equalizeBusLoads === true ? 'on' : 'off';
         if (document.getElementById('secPerRider')) document.getElementById('secPerRider').value = s.secPerRider ?? 0;
         if (document.getElementById('fleetUse')) document.getElementById('fleetUse').value = s.fleetUse === 'fewer' ? 'fewer' : 'as-needed';
+        if (document.getElementById('roundTrip')) document.getElementById('roundTrip').value = s.returnToCamp === true ? 'round-trip' : 'one-way';
         if (document.getElementById('routingPipeline')) document.getElementById('routingPipeline').value = s.routingPipeline === 'spatial-sort' ? 'spatial-sort' : 'neighborhood';
         window._GoSetup = () => D.setup;
         if (document.getElementById('standaloneToggle')) document.getElementById('standaloneToggle').checked = !!s.standaloneMode;
@@ -1559,6 +1570,7 @@ let _toastTimer = null;
         D.setup.equalizeBusLoads = el('equalizeBusLoads')?.value === 'on';
         D.setup.secPerRider = Math.max(0, parseFloat(el('secPerRider')?.value) || 0);
         D.setup.fleetUse = el('fleetUse')?.value === 'fewer' ? 'fewer' : 'as-needed';
+        if (el('roundTrip')) D.setup.returnToCamp = el('roundTrip').value === 'round-trip';
         if (el('routingPipeline')) {
             D.setup.routingPipeline = el('routingPipeline').value === 'spatial-sort' ? 'spatial-sort' : 'neighborhood';
             D.setup._pipelineUserChosen = true; // an explicit choice; migrations leave it alone
@@ -3838,7 +3850,7 @@ async function generateRoutes() {
         const shiftLabel = shift.label || 'Shift ' + (si + 1);
         // The last dismissal shift drives back to camp: ordering and polish
         // price that leg (see _routePostOpts).
-        _shiftReturnsToCamp = si === shifts.length - 1 && !isArrival;
+        _shiftReturnsToCamp = _shiftReturns(si, shifts.length, isArrival);
 
         // ── Bus set for this shift ──
         let shiftBusIds = shift.assignedBuses?.length
@@ -4045,7 +4057,7 @@ async function generateRoutes() {
         // With the street network, re-trade stops on real driving minutes.
         if (_activeRoadNet) {
             const _rp = _roadPolishRoutes(routes, shiftVehicles, campLat, campLng, isArrival, D.setup.maxRouteDuration || 90,
-                si === shifts.length - 1 && !isArrival);
+                _shiftReturns(si, shifts.length, isArrival));
             if (_rp && _rp.moves) console.log('[Go] Road polish: ' + _rp.moves + ' stop move(s) on street times across ' + _rp.changedBuses +
                 ' bus(es)' + (_rp.blockMoves ? ', ' + _rp.blockMoves + ' of them whole branches handed to a bus with idle seats' : '') +
                 ', est. fleet ' + Math.round(_rp.fleetBefore) + ' → ' + Math.round(_rp.fleetAfter) + ' min' +
@@ -4074,7 +4086,7 @@ async function generateRoutes() {
         _applyETAsAndAudits(routes, {
             shift, isArrival, campLat, campLng,
             avgStopMin,
-            shiftNeedsReturn: si === shifts.length - 1 && !isArrival
+            shiftNeedsReturn: _shiftReturns(si, shifts.length, isArrival)
         });
 
         // Hard-split any route that's still over the duration cap. Use
@@ -4090,7 +4102,7 @@ async function generateRoutes() {
             _applyETAsAndAudits(routes, {
                 shift, isArrival, campLat, campLng,
                 avgStopMin,
-                shiftNeedsReturn: si === shifts.length - 1 && !isArrival
+                shiftNeedsReturn: _shiftReturns(si, shifts.length, isArrival)
             });
         }
 
@@ -4123,7 +4135,7 @@ async function generateRoutes() {
             _applyETAsAndAudits(routes, {
                 shift, isArrival, campLat, campLng,
                 avgStopMin,
-                shiftNeedsReturn: si === shifts.length - 1 && !isArrival
+                shiftNeedsReturn: _shiftReturns(si, shifts.length, isArrival)
             });
             console.log('[Go] Street travel times: ETAs on road legs; ' + roadOrdered + ' bus(es) re-sequenced');
         }
@@ -6210,6 +6222,7 @@ function _applyETAsAndAudits(routes, {
                 r.stops[i].estimatedMin = cum;
             }
             r.totalDuration = Math.round(cum - shiftTargetMin);
+            r.returnTocamp = 0; // one way: the run ends at its last drop
             if (shiftNeedsReturn && r.stops.length > 0) {
                 const returnLeg = legMinAt(r.stops.length);
                 r.returnTocamp = Math.round(returnLeg != null
@@ -6532,7 +6545,7 @@ function findAnchorStop(campers, intersections, walkMi = 0.2) {
         const campLat = D.setup.campLat || _campCoordsCache?.lat;
         const campLng = D.setup.campLng || _campCoordsCache?.lng;
         if (!campLat || !campLng) { toast('No camp coordinates', 'error'); return; }
-        _shiftReturnsToCamp = si === (D.savedRoutes.length - 1) && !isArrival;
+        _shiftReturnsToCamp = _shiftReturns(si, D.savedRoutes.length, isArrival);
 
         toast('Re-optimizing ' + route.busName + '...');
         // Same ordering the generator uses (children-minutes objective, local
@@ -6558,7 +6571,7 @@ function findAnchorStop(campers, intersections, walkMi = 0.2) {
         _applyETAsAndAudits([route], {
             shift: sr.shift, isArrival, campLat, campLng,
             avgStopMin: D.setup.avgStopTime || 1,
-            shiftNeedsReturn: si === (D.savedRoutes.length - 1) && !isArrival
+            shiftNeedsReturn: _shiftReturns(si, D.savedRoutes.length, isArrival)
         });
 
         // ★★★ CB-119: evict this route's cached road polyline — the stop order just
@@ -7596,7 +7609,7 @@ function findAnchorStop(campers, intersections, walkMi = 0.2) {
             const stopsWithCoords = route.stops.filter(s => s.lat && s.lng);
             if (!stopsWithCoords.length) continue;
             const isArrival = D.activeMode === 'arrival';
-            const mapNeedsReturn = !isArrival && D.shifts.length > 1 && route.shiftIdx < _generatedRoutes.length - 1;
+            const mapNeedsReturn = _shiftReturns(route.shiftIdx, _generatedRoutes.length, isArrival);
             const straightCoords = [];
             if (!isArrival && _campCoordsCache) straightCoords.push([_campCoordsCache.lat, _campCoordsCache.lng]);
             stopsWithCoords.forEach(s => straightCoords.push([s.lat, s.lng]));

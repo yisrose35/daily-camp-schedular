@@ -133,15 +133,21 @@ addresses ─ geocode ─┬─ road graph (OpenStreetMap) ─ neighbourhoods �
   polish" line counts branch hand-offs and says when the polish ran out of
   its time budget.
 
-* **The ride home** (`returnToDepot`): the last dismissal shift drives back
-  to camp after its final drop. That leg is real bus time, so the districting
-  polish, the road-time polish and the stop ordering all price it for that
-  shift (arrival already rides back to camp with everyone aboard). Before
-  this the polish reported a 40-minute fleet gain that the finished routes
-  did not show: it was ending routes wherever the last drop fell and leaving
-  the drive home out of the sum. On the 751-child camp-shaped harness the
-  change cut fleet minutes including returns from 1455 to 1423 and the
-  longest bus from 122 to 115 minutes, with the average ride unchanged.
+* **The ride home** (`returnToDepot`, from the **Round Trip** setting): a
+  dismissal run drives back to camp when it is not the last shift (the bus
+  comes back for the next one) or when Round Trip is on. One way is the
+  default: a run ends at its last drop, and route minutes, Max Route
+  Duration, the ordering, the polish and the map all stop there — one
+  helper (`_shiftReturns`) decides, so they agree. Before this the ETA pass
+  silently added a return leg to every route of the last shift (with no
+  shifts configured, every route) while the map drew none: a far bus's
+  reported minutes included its empty drive home, the 60-minute cap was
+  being judged against that sum, and the polish was steering runs to end
+  near camp to shorten a leg nobody had asked for. When the
+  leg IS real, the districting polish, the road-time polish and the stop
+  ordering all price it (arrival already rides back with everyone aboard);
+  leaving it out had the polish reporting gains the finished routes did not
+  show.
 
 ### Containment
 
