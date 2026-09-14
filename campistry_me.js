@@ -13361,23 +13361,17 @@ async function requestCardSetup(famKey){
         return;
     }
 
-    // Banquest: redirect to its OWN hosted Payment Page (no card field renders
-    // on a Campistry page). payments-hosted-complete stores the card on return.
+    // Banquest: Campistry's own card page — the card is typed into Banquest's
+    // tokenizer iframe, and payments-save-method turns the nonce into a saved
+    // card. Which billing fields it asks for is the camp's own setting
+    // (dashboard Payment tab, migration 150).
     if(processorKey==='banquest'){
         toast('Opening secure card setup for '+f.name+'…');
-        try{
-            var ret=window.location.origin+window.location.pathname;
-            var hl=await callEdgeFunction('payments-hosted-link',{
-                campId:getCampId(), purpose:'save_card',
-                familyKey:famKey, returnUrl:ret,
-                description:'Save a card'+(f.name?' — '+f.name:'')
-            });
-            if(!hl||!hl.payment_link) throw new Error(hl&&hl.error||'No card-setup link returned');
-            window.open(hl.payment_link,'_blank');
-            toast('Opened in a new tab — once '+f.name+' saves a card there, it shows up here.');
-        }catch(e){
-            toast('Could not open card setup: '+e.message,'error');
-        }
+        var url='campistry_card_setup.html?campId='+encodeURIComponent(getCampId())+
+            '&familyKey='+encodeURIComponent(famKey)+
+            '&familyName='+encodeURIComponent(f.name||'');
+        window.open(url,'_blank');
+        toast('Opened in a new tab — once '+f.name+' completes it there, this page will show it on file.');
         return;
     }
     if(processorKey&&processorKey!=='stripe'){
@@ -13571,14 +13565,17 @@ async function sendPayLink(famKey){
                 if(btn){btn.disabled=false;btn.textContent='Save';}
                 return;
             }
-            // Banquest: mint a one-time link to its OWN hosted Payment Page —
-            // the parent enters the card there, never on a Campistry page.
-            // payments-hosted-complete records the payment when they return.
+            // Banquest: the pay link IS our own card page in pay-now mode —
+            // nothing to create ahead of time, just build the URL. The parent
+            // tokenizes the card in Banquest's iframe and payments-charge-nonce
+            // charges it.
             if(processorKey==='banquest'){
-                var bqRet=(window.__CAMPISTRY_PARENT_URL__||'https://link.campistry.org').replace(/\/+$/,'')+'/campistry_link_parent.html';
-                var hl=await callEdgeFunction('payments-hosted-link',{campId:getCampId(),purpose:'pay_now',familyKey:famKey,amount:amt,returnUrl:bqRet,description:desc||('Camp payment — '+f.name)});
-                if(!hl||!hl.payment_link) throw new Error(hl&&hl.error||'No link returned');
-                _showPayLinkResult(f,hl.payment_link,true);
+                var byopUrl=window.location.origin+'/campistry_card_setup.html?campId='+encodeURIComponent(getCampId())+
+                    '&familyKey='+encodeURIComponent(famKey)+
+                    '&familyName='+encodeURIComponent(f.name||'')+
+                    '&amount='+encodeURIComponent(amt)+
+                    '&desc='+encodeURIComponent(desc||('Camp payment — '+f.name));
+                _showPayLinkResult(f,byopUrl,true);
                 if(btn){btn.disabled=false;btn.textContent='Save';}
                 return;
             }

@@ -1563,6 +1563,15 @@
                 box.innerHTML = '<p style="margin:0;color:#dc2626;">Could not load payment processor status.</p>';
                 return;
             }
+            // The card-form settings only apply to camps collecting cards on
+            // Campistry's own page — a Stripe camp uses Stripe's hosted
+            // checkout, whose fields we don't control.
+            const cffWrap = document.getElementById('campCardFormFieldsWrap');
+            if (cffWrap) {
+                const showCff = data.processorKey && data.processorKey !== 'stripe';
+                cffWrap.style.display = showCff ? '' : 'none';
+                if (showCff && window.renderCampCardFormFields) window.renderCampCardFormFields();
+            }
             if (data.processorKey === 'stripe') {
                 box.innerHTML = '<p style="margin:0 0 8px;">On <strong>Stripe</strong> (the default) — the "Where tuition money lands" card above covers this.</p>' +
                     '<p style="margin:0;font-size:0.78rem;color:var(--slate-400);">Want to use your own processor (Banquest, Sola/Cardknox, etc.) instead? Contact the office — connecting a different processor needs a quick verification call.</p>';
@@ -1578,6 +1587,98 @@
             console.error('[Dashboard] loadCampPaymentProcessorStatus threw:', e);
             box.innerHTML = '<p style="margin:0;color:#dc2626;">Could not load payment processor status: ' + escTelnyx(e && e.message ? e.message : String(e)) + '</p>';
         }
+    };
+
+    // ── Card form fields (BYOP camps only) ──────────────────────────────────
+    // A camp on its own processor (Banquest/Sola) collects cards on Campistry's
+    // OWN card page (campistry_card_setup.html) — the card number itself still
+    // goes straight into the processor's iframe, but the surrounding form is
+    // ours, so the camp decides which billing details it asks for.
+    //
+    // Not cosmetic: the gateway runs AVS on billing street + ZIP, and populating
+    // them is what qualifies an e-commerce card for the better rate. Defaults
+    // here MUST match migration 150's v_default, so the UI shows what's actually
+    // in effect for a camp that has never touched this.
+    var CARD_FORM_FIELD_DEFS = [
+        { key: 'name',    label: 'Cardholder name' },
+        { key: 'email',   label: 'Email' },
+        { key: 'phone',   label: 'Phone' },
+        { key: 'street',  label: 'Billing address' },
+        { key: 'street2', label: 'Apt / Suite' },
+        { key: 'city',    label: 'City' },
+        { key: 'state',   label: 'State' },
+        { key: 'zip',     label: 'ZIP code' },
+        { key: 'country', label: 'Country' }
+    ];
+    var CARD_FORM_FIELD_DEFAULTS = {
+        name:    { enabled: true,  required: true },
+        email:   { enabled: true,  required: false },
+        phone:   { enabled: false, required: false },
+        street:  { enabled: true,  required: true },
+        street2: { enabled: false, required: false },
+        city:    { enabled: true,  required: true },
+        state:   { enabled: true,  required: true },
+        zip:     { enabled: true,  required: true },
+        country: { enabled: false, required: false }
+    };
+
+    function _cardFormConfig() {
+        var gs = window.loadGlobalSettings ? (window.loadGlobalSettings() || {}) : {};
+        var saved = (gs.campistryMe && gs.campistryMe.cardFormFields) || {};
+        var out = {};
+        CARD_FORM_FIELD_DEFS.forEach(function(f) {
+            var d = CARD_FORM_FIELD_DEFAULTS[f.key] || { enabled: false, required: false };
+            var s = saved[f.key];
+            out[f.key] = (s && typeof s === 'object')
+                ? { enabled: !!s.enabled, required: !!s.required }
+                : { enabled: d.enabled, required: d.required };
+        });
+        return out;
+    }
+
+    window.renderCampCardFormFields = function() {
+        var box = document.getElementById('campCardFormFieldsBox');
+        if (!box) return;
+        var cfg = _cardFormConfig();
+        box.innerHTML =
+            '<div style="display:grid;grid-template-columns:1fr auto auto;gap:8px 14px;align-items:center;">' +
+            '<span></span>' +
+            '<span style="font-size:0.72rem;font-weight:600;color:var(--slate-400);text-align:center;">Collect</span>' +
+            '<span style="font-size:0.72rem;font-weight:600;color:var(--slate-400);text-align:center;">Required</span>' +
+            CARD_FORM_FIELD_DEFS.map(function(f) {
+                var c = cfg[f.key];
+                return '<span>' + escTelnyx(f.label) + '</span>' +
+                    '<input type="checkbox" data-cff="' + f.key + '" data-cff-part="enabled"' +
+                        (c.enabled ? ' checked' : '') + ' onchange="saveCampCardFormFields()" style="justify-self:center;">' +
+                    '<input type="checkbox" data-cff="' + f.key + '" data-cff-part="required"' +
+                        (c.required ? ' checked' : '') + (c.enabled ? '' : ' disabled') +
+                        ' onchange="saveCampCardFormFields()" style="justify-self:center;">';
+            }).join('') +
+            '</div>' +
+            '<p style="font-size:0.72rem;color:var(--slate-400);margin:10px 0 0;">The card number, expiry and CVV are always collected by the processor itself and never reach Campistry.</p>';
+    };
+
+    window.saveCampCardFormFields = function() {
+        var cfg = {};
+        CARD_FORM_FIELD_DEFS.forEach(function(f) {
+            var en = document.querySelector('[data-cff="' + f.key + '"][data-cff-part="enabled"]');
+            var rq = document.querySelector('[data-cff="' + f.key + '"][data-cff-part="required"]');
+            var enabled = !!(en && en.checked);
+            cfg[f.key] = { enabled: enabled, required: enabled && !!(rq && rq.checked) };
+            // "Required" is meaningless on a field we don't collect — keep the
+            // checkbox in step with the toggle instead of silently saving a
+            // required-but-hidden field.
+            if (rq) { rq.disabled = !enabled; if (!enabled) rq.checked = false; }
+        });
+        var gs = window.loadGlobalSettings ? (window.loadGlobalSettings() || {}) : {};
+        if (!gs.campistryMe) gs.campistryMe = {};
+        gs.campistryMe.cardFormFields = cfg;
+        if (window.saveGlobalSettings) window.saveGlobalSettings('campistryMe', gs.campistryMe);
+        // Flush now rather than waiting on the 500ms debounce — an owner flips
+        // these then immediately reloads the card page to check (the same race
+        // that dropped saves in saveAllowParentPaymentPlans).
+        if (window.flushPendingSettingsSync) window.flushPendingSettingsSync();
+        if (window.dashToast) window.dashToast('Card form updated');
     };
 
     // Self-serve disconnect (back to Stripe) — the one BYOP action a camp

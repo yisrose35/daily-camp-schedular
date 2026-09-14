@@ -75,11 +75,41 @@ function bqBase(c: Record<string, string>): string {
   if (!/\/api\/v\d+$/i.test(b)) b += "/api/v2";
   return b;
 }
-async function banquestSaveMethod(creds: Record<string, string>, nonce: string): Promise<{ success: boolean; customerRef?: string; last4?: string; brand?: string; error?: string }> {
+// Maps the card page's collected fields (campistryMe.cardFormFields, migration
+// 150) onto Banquest's own shapes. billing_info is an Address; the cardholder
+// name arrives as one string and Banquest wants it split. Only non-empty values
+// are included — a blank AVS field is treated worse by the gateway than an
+// absent one. Returns the pieces to merge into a transaction body.
+function bqBillingParts(billing: Record<string, string> | null | undefined): Record<string, unknown> {
+  const b = (billing && typeof billing === "object") ? billing : {};
+  const out: Record<string, unknown> = {};
+  const addr: Record<string, string> = {};
+  const put = (k: string, v: unknown) => { const s = String(v ?? "").trim(); if (s) addr[k] = s; };
+
+  if (b.name) {
+    const parts = String(b.name).trim().split(/\s+/);
+    put("first_name", parts.shift());
+    put("last_name", parts.join(" "));
+  }
+  put("street", b.street);
+  put("street2", b.street2);
+  put("city", b.city);
+  put("state", b.state);
+  put("zip", b.zip);
+  put("country", b.country);
+  put("phone", b.phone);
+  if (Object.keys(addr).length) out.billing_info = addr;
+
+  const email = String(b.email ?? "").trim();
+  if (email) out.customer = { email };
+  return out;
+}
+
+async function banquestSaveMethod(creds: Record<string, string>, nonce: string, billing?: Record<string, string> | null): Promise<{ success: boolean; customerRef?: string; last4?: string; brand?: string; error?: string }> {
   const resp = await fetch(`${bqBase(creds)}/transactions/verify`, {
     method: "POST",
     headers: { "Content-Type": "application/json", "Authorization": "Basic " + btoa(`${creds.sourceKey}:${creds.pin}`) },
-    body: JSON.stringify({ source: "nonce-" + nonce, save_card: true }),
+    body: JSON.stringify({ source: "nonce-" + nonce, save_card: true, ...bqBillingParts(billing) }),
   });
   let data: Record<string, any> = {};
   try { data = await resp.json(); } catch { /* non-JSON error body */ }
@@ -113,6 +143,13 @@ function json(body: unknown, status = 200) {
 // or money-moving action never proceeds off campId alone; this only
 // confirms the family actually exists under that camp before writing
 // anything onto its record.
+async function campHasCamper(service: ReturnType<typeof createClient>, campId: string, camperName: string): Promise<boolean> {
+  const { data } = await service.from("camp_state_kv").select("value")
+    .eq("camp_id", campId).eq("key", "campistrySnacks").maybeSingle();
+  const accts = data?.value && typeof data.value === "object" ? (data.value as Record<string, any>).accounts : null;
+  return !!(accts && typeof accts === "object" && Object.prototype.hasOwnProperty.call(accts, camperName));
+}
+
 async function campOwnsFamily(service: ReturnType<typeof createClient>, campId: string, familyKey: string): Promise<boolean> {
   const { data } = await service.from("camp_state_kv").select("value")
     .eq("camp_id", campId).eq("key", "campistryMe").maybeSingle();
@@ -124,14 +161,21 @@ serve(async (req) => {
   if (req.method === "OPTIONS") return new Response("ok", { headers: corsHeaders });
 
   try {
-    const { campId, familyKey, token } = await req.json();
-    if (!campId || !familyKey || !token) {
-      return json({ success: false, error: "campId, familyKey, and token are required" }, 400);
+    const { campId, familyKey, camperName, token, billing } = await req.json();
+    if (!campId || !token || !(familyKey || camperName)) {
+      return json({ success: false, error: "campId, token, and one of familyKey / camperName are required" }, 400);
     }
+    // camperName (without familyKey) is the canteen AUTO-RELOAD card save: the
+    // token belongs to that camper's autoReload block, not to a family record.
+    const isCamperScoped = !familyKey && !!camperName;
 
     const service = createClient(SUPABASE_URL, SUPABASE_SERVICE_KEY);
 
-    if (!(await campOwnsFamily(service, campId, familyKey))) {
+    if (isCamperScoped) {
+      if (!(await campHasCamper(service, campId, String(camperName)))) {
+        return json({ success: false, error: "Camper not found for this camp" }, 400);
+      }
+    } else if (!(await campOwnsFamily(service, campId, familyKey))) {
       return json({ success: false, error: "Family not found for this camp" }, 400);
     }
 
@@ -152,7 +196,7 @@ serve(async (req) => {
       return json({ success: false, error: credResult?.error || "This camp's processor isn't connected/verified yet." }, 400);
     }
 
-    let saveResult: { success: boolean; customerRef?: string; error?: string };
+    let saveResult: { success: boolean; customerRef?: string; last4?: string; brand?: string; error?: string };
     if (processorKey === "cardknox") {
       const apiKey = credResult.credentials?.apiKey;
       if (!apiKey) {
@@ -164,7 +208,7 @@ serve(async (req) => {
       if (!creds?.sourceKey || !creds?.pin) {
         return json({ success: false, error: "This camp's processor credential is missing its source key or PIN." }, 400);
       }
-      saveResult = await banquestSaveMethod(creds, String(token));
+      saveResult = await banquestSaveMethod(creds, String(token), billing);
     }
     if (!saveResult.success || !saveResult.customerRef) {
       return json({ success: false, error: saveResult.error || "Could not save payment method" }, 200);
@@ -173,34 +217,65 @@ serve(async (req) => {
     // Same retry-loop read-modify-write convention already used by
     // stripe-webhook's handleAutopaySetup for this exact JSON blob.
     let saved = false;
-    for (let attempt = 0; attempt < 4 && !saved; attempt++) {
-      const cur = await service.from("camp_state_kv").select("value")
-        .eq("camp_id", campId).eq("key", "campistryMe").maybeSingle();
-      const me: Record<string, any> = (cur.data && cur.data.value && typeof cur.data.value === "object") ? cur.data.value : {};
-      if (!me.families || typeof me.families !== "object") me.families = {};
-      const f = me.families[familyKey];
-      if (!f) return json({ success: false, error: "Family no longer exists" }, 400);
-
-      f.byopProcessor = processorKey;
-      f.byopCustomerRef = saveResult.customerRef;
-      f.cardOnFile = true;
-      f.cardSavedDate = new Date().toISOString();
-      // Show the real card (•••• 4242) rather than a bare "card on file" when
-      // the processor handed back the last 4 / brand on the save.
-      if (saveResult.last4) {
-        f.paymentMethodLabel = "•••• " + saveResult.last4;
-        f.paymentMethodType = saveResult.brand || "card";
+    if (isCamperScoped) {
+      // Canteen auto-reload: the token belongs on this camper's autoReload
+      // block (campistrySnacks), which is what canteen-auto-reload charges.
+      for (let attempt = 0; attempt < 4 && !saved; attempt++) {
+        const cur = await service.from("camp_state_kv").select("value")
+          .eq("camp_id", campId).eq("key", "campistrySnacks").maybeSingle();
+        const snacks: Record<string, any> = (cur.data && cur.data.value && typeof cur.data.value === "object") ? cur.data.value : {};
+        if (!snacks.accounts || typeof snacks.accounts !== "object") snacks.accounts = {};
+        const acct = snacks.accounts[String(camperName)];
+        if (!acct) return json({ success: false, error: "Camper no longer exists" }, 400);
+        const ar = (acct.autoReload && typeof acct.autoReload === "object") ? acct.autoReload : {};
+        ar.byopProcessor = processorKey;
+        ar.byopCustomerRef = saveResult.customerRef;
+        ar.cardOnFile = true;
+        // A fresh card clears the decline streak that may have paused
+        // auto-reload (3 consecutive failures disables it).
+        ar.consecutiveFailures = 0;
+        if (saveResult.last4) {
+          ar.paymentMethodLabel = "•••• " + saveResult.last4;
+          ar.paymentMethodType = saveResult.brand || "card";
+        }
+        acct.autoReload = ar;
+        snacks.accounts[String(camperName)] = acct;
+        const up = await service.from("camp_state_kv").upsert(
+          { camp_id: campId, key: "campistrySnacks", value: snacks, updated_at: new Date().toISOString() },
+          { onConflict: "camp_id,key" },
+        );
+        if (!up.error) saved = true;
       }
+    } else {
+      for (let attempt = 0; attempt < 4 && !saved; attempt++) {
+        const cur = await service.from("camp_state_kv").select("value")
+          .eq("camp_id", campId).eq("key", "campistryMe").maybeSingle();
+        const me: Record<string, any> = (cur.data && cur.data.value && typeof cur.data.value === "object") ? cur.data.value : {};
+        if (!me.families || typeof me.families !== "object") me.families = {};
+        const f = me.families[familyKey];
+        if (!f) return json({ success: false, error: "Family no longer exists" }, 400);
 
-      const up = await service.from("camp_state_kv").upsert(
-        { camp_id: campId, key: "campistryMe", value: me, updated_at: new Date().toISOString() },
-        { onConflict: "camp_id,key" },
-      );
-      if (!up.error) saved = true;
+        f.byopProcessor = processorKey;
+        f.byopCustomerRef = saveResult.customerRef;
+        f.cardOnFile = true;
+        f.cardSavedDate = new Date().toISOString();
+        // Show the real card (•••• 4242) rather than a bare "card on file" when
+        // the processor handed back the last 4 / brand on the save.
+        if (saveResult.last4) {
+          f.paymentMethodLabel = "•••• " + saveResult.last4;
+          f.paymentMethodType = saveResult.brand || "card";
+        }
+
+        const up = await service.from("camp_state_kv").upsert(
+          { camp_id: campId, key: "campistryMe", value: me, updated_at: new Date().toISOString() },
+          { onConflict: "camp_id,key" },
+        );
+        if (!up.error) saved = true;
+      }
     }
     if (!saved) return json({ success: false, error: "Payment method saved with the processor but could not be recorded — contact support." }, 500);
 
-    console.log(`[payments-save-method] Saved ${processorKey} method for family ${familyKey}, camp ${campId}`);
+    console.log(`[payments-save-method] Saved ${processorKey} method for ${isCamperScoped ? `camper ${camperName}` : `family ${familyKey}`}, camp ${campId}`);
     return json({ success: true });
   } catch (err) {
     console.error("[payments-save-method] Error:", (err as Error).message);

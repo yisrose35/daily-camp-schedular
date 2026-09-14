@@ -21,6 +21,10 @@
         .row .field-group{flex:1}
         button#saveBtn{width:100%;background:#147D91;color:#fff;border:none;border-radius:10px;padding:13px;font-size:.95rem;font-weight:600;cursor:pointer;margin-top:6px}
         button#saveBtn:disabled{opacity:.6;cursor:default}
+        input.txt{width:100%;border:1px solid #CBD5E1;border-radius:10px;padding:11px 12px;background:#fff;font:inherit;color:#1E293B;outline:none}
+        input.txt:focus{border-color:#147D91}
+        input.txt.bad{border-color:#DC2626}
+        .req{color:#DC2626}
         .msg{font-size:.85rem;text-align:center;margin-top:14px;min-height:1.2em}
         .msg.err{color:#DC2626}
         .msg.ok{color:#0E7C4A}
@@ -63,6 +67,11 @@
         // link (sendPayLink() in campistry_me.js).
         var camperName = params.get('camperName') || '';
         var isCanteen = !!camperName && !familyKey;
+        // mode=save forces "save a card for later" even in camper (canteen)
+        // mode, which is how canteen AUTO-RELOAD saves a camper's card: there's
+        // no amount to charge, the token just has to land on that camper's
+        // autoReload block so the reload cron can charge it later.
+        var saveMode = params.get('mode') === 'save';
         // Presence of `amount` is what flips tuition mode from "save a card
         // for later" into "pay this specific balance now" — the BYOP
         // equivalent of a Stripe Checkout payment link. `amount` is
@@ -70,7 +79,7 @@
         // a client-supplied amount for anything security-relevant beyond
         // "how much to charge this specific token."
         var amount = parseFloat(params.get('amount') || '');
-        var isPayNow = isCanteen || amount > 0;
+        var isPayNow = !saveMode && (isCanteen || amount > 0);
         var payDesc = params.get('desc') || (isCanteen ? ('Canteen funds — ' + camperName) : ('Camp payment — ' + familyName));
         var returnUrl = params.get('return') || '';
         var cardEl = document.getElementById('card');
@@ -92,7 +101,7 @@
                 ? 'Your payment of $' + Number(paidAmount || amount).toFixed(2) + ' was added to ' + escapeHtml(camperName) + '\'s canteen balance. ' + closeNote
                 : isPayNow
                 ? 'Your payment of $' + Number(paidAmount || amount).toFixed(2) + ' for ' + escapeHtml(familyName) + ' was received. ' + closeNote
-                : 'A payment method is now on file for ' + escapeHtml(familyName) + '. You can close this window.';
+                : ('A payment method is now on file for ' + escapeHtml(isCanteen ? camperName : familyName) + '. ' + closeNote);
             cardEl.innerHTML =
                 '<div class="icon"><svg width="26" height="26" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><polyline points="20 6 9 17 4 12"/></svg></div>' +
                 '<h1 style="text-align:center">' + (isPayNow ? 'Payment received!' : 'Saved!') + '</h1>' +
@@ -128,7 +137,7 @@
                 return;
             }
             if (data.processorKey === 'banquest') {
-                renderBanquestForm(data.tokenizationKey, data.tokenizationUrl);
+                renderBanquestForm(data.tokenizationKey, data.tokenizationUrl, data.cardFormFields);
             } else if (data.processorKey === 'cardknox') {
                 renderCardknoxForm(data.tokenizationKey);
             } else {
@@ -139,6 +148,100 @@
             renderError('Could not reach Campistry\'s servers. Check your connection and reload.');
         });
 
+        // ─── Admin-configured billing fields ────────────────────────────────
+        // Which of these the parent sees is the camp's call
+        // (campistryMe.cardFormFields, edited in the dashboard Payment tab and
+        // returned by get_camp_public_tokenization_key — migration 150).
+        // They're not cosmetic: Banquest runs AVS on billing street + ZIP, and
+        // populating them is what earns the better e-commerce rate, so the
+        // collected values are sent on as billing_info.
+        // Order here is the order they render in.
+        var BILLING_FIELDS = [
+            { key: 'name',    label: 'Cardholder name', autocomplete: 'cc-name',            type: 'text'  },
+            { key: 'email',   label: 'Email',           autocomplete: 'email',              type: 'email' },
+            { key: 'phone',   label: 'Phone',           autocomplete: 'tel',                type: 'tel'   },
+            { key: 'street',  label: 'Billing address', autocomplete: 'billing address-line1', type: 'text' },
+            { key: 'street2', label: 'Apt / Suite',     autocomplete: 'billing address-line2', type: 'text' },
+            { key: 'city',    label: 'City',            autocomplete: 'billing address-level2', type: 'text', group: 'cityState' },
+            { key: 'state',   label: 'State',           autocomplete: 'billing address-level1', type: 'text', group: 'cityState' },
+            { key: 'zip',     label: 'ZIP code',        autocomplete: 'billing postal-code',    type: 'text', group: 'cityState' },
+            { key: 'country', label: 'Country',         autocomplete: 'billing country-name',   type: 'text' }
+        ];
+
+        // Fields the camp actually turned on, in render order.
+        function activeBillingFields(config) {
+            var cfg = (config && typeof config === 'object') ? config : {};
+            return BILLING_FIELDS.filter(function(f) {
+                var c = cfg[f.key];
+                return !!(c && c.enabled);
+            }).map(function(f) {
+                var c = cfg[f.key] || {};
+                // Copy so `required` never mutates the shared descriptor.
+                return {
+                    key: f.key, label: f.label, autocomplete: f.autocomplete,
+                    type: f.type, group: f.group, required: !!c.required
+                };
+            });
+        }
+
+        function billingFieldsHtml(fields) {
+            var html = '';
+            var i = 0;
+            while (i < fields.length) {
+                var f = fields[i];
+                // City/State/ZIP sit on one row when more than one is enabled,
+                // so a full address doesn't turn into a tall column of boxes.
+                if (f.group === 'cityState') {
+                    var run = [];
+                    while (i < fields.length && fields[i].group === 'cityState') { run.push(fields[i]); i++; }
+                    html += run.length > 1
+                        ? '<div class="row">' + run.map(oneBillingField).join('') + '</div>'
+                        : oneBillingField(run[0]);
+                    continue;
+                }
+                html += oneBillingField(f);
+                i++;
+            }
+            return html;
+        }
+
+        function oneBillingField(f) {
+            return '<div class="field-group">' +
+                '<span class="field-label">' + escapeHtml(f.label) +
+                    (f.required ? ' <span class="req">*</span>' : '') + '</span>' +
+                '<input class="txt" type="' + f.type + '" id="bf-' + f.key + '"' +
+                    ' autocomplete="' + f.autocomplete + '"' +
+                    ' data-bf="' + f.key + '"' + (f.required ? ' data-req="1"' : '') + '>' +
+                '</div>';
+        }
+
+        // Returns the billing object, or null when a required field is empty
+        // (and marks the offenders red). Empty optional fields are omitted
+        // entirely rather than sent as "" — the gateway treats a blank AVS
+        // field worse than an absent one.
+        function collectBilling(fields) {
+            var out = {};
+            var missing = null;
+            fields.forEach(function(f) {
+                var el = document.getElementById('bf-' + f.key);
+                var val = el ? String(el.value || '').trim() : '';
+                if (el) el.classList.remove('bad');
+                if (!val) {
+                    if (f.required) {
+                        if (el) el.classList.add('bad');
+                        if (!missing) missing = f.label;
+                    }
+                    return;
+                }
+                out[f.key] = val;
+            });
+            if (missing) {
+                setMsg('Please fill in ' + missing + '.', true);
+                return null;
+            }
+            return out;
+        }
+
         // ─── Banquest Hosted Tokenization (AffiniPay/8am) ────────────────────
         // *** Written from Banquest's tokenization/v0.3 docs; verify the
         // getNonceToken() result shape against a live sandbox. *** The script
@@ -147,16 +250,22 @@
         // tokenizer renders its own card iframe into #bq-card; getNonceToken()
         // returns a nonce we send to payments-save-method (or the pay-now
         // path), where the server prefixes it as source "nonce-<nonce>".
-        function renderBanquestForm(tokenizationKey, tokenizationUrl) {
+        function renderBanquestForm(tokenizationKey, tokenizationUrl, cardFormFields) {
             var title = isPayNow ? ('Pay $' + amount.toFixed(2)) : 'Save a payment method';
+            var privacyNote = 'Your card details go directly to the payment processor and never touch Campistry\'s servers.';
+            var whoFor = isCanteen
+                ? ('For ' + escapeHtml(camperName) + '\'s canteen account')
+                : ('For ' + escapeHtml(familyName));
             var sub = isPayNow
-                ? ('For ' + escapeHtml(familyName) + ' — ' + escapeHtml(payDesc) + '. Your card details go directly to the payment processor and never touch Campistry\'s servers.')
-                : ('For ' + escapeHtml(familyName) + ' — used for future camp charges. Your card details go directly to the payment processor and never touch Campistry\'s servers.');
+                ? (whoFor + ' — ' + escapeHtml(payDesc) + '. ' + privacyNote)
+                : (whoFor + ' — ' + (isCanteen ? 'used to top up the balance automatically.' : 'used for future camp charges.') + ' ' + privacyNote);
             var btnLabel = isPayNow ? ('Pay $' + amount.toFixed(2)) : 'Save Payment Method';
+            var fields = activeBillingFields(cardFormFields);
             cardEl.innerHTML =
                 '<h1>' + title + '</h1>' +
                 '<p class="sub">' + sub + '</p>' +
-                '<div class="field-group"><span class="field-label">Card</span><div class="cc-field" id="bq-card" style="min-height:44px"></div></div>' +
+                '<div class="field-group"><span class="field-label">Card <span class="req">*</span></span><div class="cc-field" id="bq-card" style="min-height:44px"></div></div>' +
+                billingFieldsHtml(fields) +
                 '<button id="saveBtn" type="button">' + btnLabel + '</button>' +
                 '<div class="msg" id="msg"></div>';
 
@@ -180,8 +289,13 @@
                     return;
                 }
                 document.getElementById('saveBtn').addEventListener('click', function() {
-                    setSaving(true);
                     setMsg('');
+                    // Validate our own fields BEFORE asking the tokenizer for a
+                    // nonce — a nonce is single-use, so burning one on a form
+                    // the parent has to fix would force them to re-enter the card.
+                    var billing = collectBilling(fields);
+                    if (!billing) return;
+                    setSaving(true);
                     var p;
                     try { p = ht.getNonceToken(); } catch (e) {
                         setMsg('Could not process the card — check the details and try again.', true);
@@ -200,7 +314,7 @@
                             setSaving(false);
                             return;
                         }
-                        submitToken(nonce);
+                        submitToken(nonce, billing);
                     }).catch(function(err) {
                         setMsg((err && err.message) || 'Could not process the card — check the details and try again.', true);
                         setSaving(false);
@@ -328,18 +442,24 @@
             el.className = 'msg' + (text ? (isErr ? ' err' : ' ok') : '');
         }
 
-        // Pay-now mode charges the card immediately — payments-canteen-checkout
-        // for a canteen deposit, payments-checkout for a tuition pay link
-        // (both: save + charge in one call, since this parent has no session
-        // for a separate authenticated charge step); save-for-later mode
-        // only tokenizes+saves it (payments-save-method), same as before.
-        function submitToken(token) {
-            var fnName = isCanteen ? 'payments-canteen-checkout' : isPayNow ? 'payments-checkout' : 'payments-save-method';
-            var body = isCanteen
-                ? { campId: campId, camperName: camperName, token: token, amount: amount, description: payDesc }
-                : isPayNow
-                ? { campId: campId, familyKey: familyKey, familyName: familyName, token: token, amount: amount, description: payDesc }
-                : { campId: campId, familyKey: familyKey, token: token };
+        // Pay-now mode charges the card immediately via payments-charge-nonce
+        // (one self-contained function for both tuition and canteen — it
+        // replaces payments-checkout/payments-canteen-checkout, which import
+        // ../_shared and therefore can't bundle on a Dashboard deploy).
+        // Save-for-later mode only tokenizes+saves (payments-save-method).
+        // `billing` carries whatever the camp configured us to collect; the
+        // server forwards it as Banquest billing_info so AVS runs.
+        function submitToken(token, billing) {
+            var fnName = isPayNow ? 'payments-charge-nonce' : 'payments-save-method';
+            var body = isPayNow
+                ? (isCanteen
+                    ? { campId: campId, kind: 'canteen_deposit', camperName: camperName, token: token, amount: amount, description: payDesc, billing: billing }
+                    : { campId: campId, kind: 'tuition_charge', familyKey: familyKey, familyName: familyName, token: token, amount: amount, description: payDesc, billing: billing })
+                // Save mode: camperName saves onto that camper's canteen
+                // auto-reload block, familyKey onto the family record.
+                : (isCanteen
+                    ? { campId: campId, camperName: camperName, token: token, billing: billing }
+                    : { campId: campId, familyKey: familyKey, token: token, billing: billing });
             client.functions.invoke(fnName, { body: body }).then(function(res) {
                 setSaving(false);
                 var data = res.data;

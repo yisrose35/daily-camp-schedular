@@ -600,6 +600,15 @@
                         <h3 style="font-size:0.9rem; margin:0 0 8px; font-weight:600;">Payment processor</h3>
                         <div id="campPaymentProcessorBox" style="font-size:0.85rem; color:var(--slate-600);">Loading…</div>
                     </div>
+                    <!-- Only shown for camps on their own processor (Banquest/
+                         Sola) — those use Campistry's own card page, so the camp
+                         chooses what it asks for. Stripe camps use Stripe's
+                         hosted checkout, which we don't control. -->
+                    <div id="campCardFormFieldsWrap" style="display:none;">
+                        <h3 style="font-size:0.9rem; margin:0 0 4px; font-weight:600;">Card form fields</h3>
+                        <p style="font-size:0.78rem; color:var(--slate-400); margin:0 0 10px;">What parents fill in on your card page, alongside the card itself. Collecting billing address and ZIP lets your processor run address verification — that cuts fraud and can earn you a better processing rate.</p>
+                        <div id="campCardFormFieldsBox" style="font-size:0.85rem; color:var(--slate-600);">Loading…</div>
+                    </div>
                 </div>
             </div>
         </div>
