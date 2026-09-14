@@ -3648,7 +3648,7 @@ function _roadPolishRoutes(routes, shiftVehicles, campLat, campLng, isArrival, m
             // hand-off on the camp's run was a near tie and the polish declined
             // them all while an 11-minute bus sat with 15 empty seats.
             polishRideBudgetMin: maxRouteMin || 90, polishOverBudgetX: 4, polishOverBudgetQuad: 0.5,
-            polishReachMi: 5, polishTimeBudgetMs: 5000,
+            polishReachMi: 5,
             // a stop moved onto a bus already standing at that corner shares its dwell
             polishLnsIters: 40, polishMergeSameStreetMi: 0, polishMergeAnyMi: 0.01 }));
     } catch (e) { console.warn('[Go] Road polish skipped: ' + e.message); return { moves: 0 }; }
@@ -4059,7 +4059,9 @@ async function generateRoutes() {
                 ' bus(es)' + (_rp.blockMoves ? ', ' + _rp.blockMoves + ' of them whole branches handed to a bus with idle seats' : '') +
                 ', est. fleet ' + Math.round(_rp.fleetBefore) + ' → ' + Math.round(_rp.fleetAfter) + ' min' +
                 (_rp.folded ? ' (' + _rp.folded + ' stop(s) folded into the corner their new bus already served)' : '') +
-                (_rp.timedOut ? ' — ran out of time; the polish may have more to give' : ''));
+                (_rp.stoppedBy === 'work' ? ' — stopped at its work limit; the polish may have more to give' :
+                 _rp.stoppedBy === 'time' ? ' — ran out of time (machine busy); this run may differ from the next' :
+                 ' — converged') + (_rp.elapsedMs != null ? ' in ' + (_rp.elapsedMs / 1000).toFixed(1) + 's' : ''));
             if (_rp && _rp.blockLog && _rp.blockLog.length) {
                 const name = i => (_rp.busNames && _rp.busNames[i]) || ('#' + i);
                 console.log('[Go] Road polish: the best branch hand-offs it priced (gain < 0 was worth taking):\n' + _rp.blockLog.map(e =>
@@ -4081,7 +4083,7 @@ async function generateRoutes() {
                 console.log('[Go] Road polish: over the ' + _routeCapMin() + 'min cap when the polish began: ' +
                     _rp.overStart.map(e => name(e.bus) + ' ' + Math.round(e.len) + 'min (' + e.kids + '/' + e.cap + ' seats, ' + e.stops + ' stops)').join(', ') +
                     (_rp.blockTried ? '' : ' — no branch hand-off could be priced: ' + (_rp.blockSeatNo || 0) + ' branch/receiver pairing(s) failed on seats, ' +
-                        (_rp.blockWedgeNo || 0) + ' on containment' + (_rp.timedOut ? ', and the polish ran out of time' : '')));
+                        (_rp.blockWedgeNo || 0) + ' on containment' + (_rp.stoppedBy && _rp.stoppedBy !== 'converged' ? ', and the polish did not converge' : '')));
             }
         }
 

@@ -2203,7 +2203,10 @@ window.CampistryGoNeighborhoods = (function () {
                     });
                     console.log('[Go-NH] Polish: ' + res.moves + ' segment move(s), est. fleet ' +
                         Math.round(res.fleetBefore) + ' → ' + Math.round(res.fleetAfter) + ' min, child-minutes ' +
-                        Math.round(res.childMinBefore) + ' → ' + Math.round(res.childMinAfter));
+                        Math.round(res.childMinBefore) + ' → ' + Math.round(res.childMinAfter) +
+                        (res.stoppedBy === 'work' ? ' — stopped at its work limit' :
+                         res.stoppedBy === 'time' ? ' — ran out of time (machine busy); this run may differ from the next' :
+                         ' — converged') + (res.elapsedMs != null ? ' in ' + (res.elapsedMs / 1000).toFixed(1) + 's' : ''));
                 }
             }
         }

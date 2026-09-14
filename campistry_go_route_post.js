@@ -64,7 +64,11 @@ window.CampistryGoRoutePost = (function () {
         sweepMaxRideMin: 60,       // soft riding budget per bus (0 = off)
         // District polish (relocate / swap atoms between buses)
         polishMaxPasses: 12,
-        polishTimeBudgetMs: 1500,
+        // Effort is a WORK budget (leg evaluations), not a wall-clock one, so
+        // two runs of the same input give the same routes on any machine; the
+        // wall clock is only a guard against a pathological input.
+        polishMaxWork: 100e6,      // ~11s on a 2024 laptop; a 400-atom districting converges at ~90e6
+        polishTimeBudgetMs: 20000,
         polishRideBudgetMin: 60,   // soft riding budget per bus (0 = off)
         polishOverBudgetX: 2,      // bus-minute equivalents per minute a bus runs past its budget
         polishOverBudgetQuad: 0,   // ...plus this x the SQUARE of those minutes: a bus far over the cap costs
@@ -1252,7 +1256,8 @@ window.CampistryGoRoutePost = (function () {
         // Street travel times when the caller has the road network (legMinutes),
         // else straight-line x road factor.
         const L = typeof o.legMinutes === 'function' ? o.legMinutes : null;
-        const leg = (a, b) => L ? L(a, b) : (haversineMi(a.lat, a.lng, b.lat, b.lng) * o.roadFactor / speed) * 60;
+        let work = 0; // leg evaluations so far: the polish's unit of effort
+        const leg = (a, b) => { work++; return L ? L(a, b) : (haversineMi(a.lat, a.lng, b.lat, b.lng) * o.roadFactor / speed) * 60; };
         // Riders per atom: an explicit count, else the campers list, else one.
         const cnt = x => Number.isFinite(x.count) ? x.count : (riders(x) || 1);
         const perRider = x => o.secPerRider > 0 ? cnt(x) * o.secPerRider / 60 : 0;
@@ -1450,7 +1455,13 @@ window.CampistryGoRoutePost = (function () {
             for (const x of b.atoms) { const m = haversineMi(atom.lat, atom.lng, x.lat, x.lng); if (m < d) d = m; }
             return d;
         }
-        const outOfTime = () => Date.now() - t0 > timeBudgetMs;
+        const MAXWORK = o.polishMaxWork > 0 ? o.polishMaxWork : Infinity;
+        let stoppedBy = 'converged';
+        const outOfTime = () => {
+            if (work > MAXWORK) { stoppedBy = 'work'; return true; }
+            if (Date.now() - t0 > timeBudgetMs) { stoppedBy = 'time'; return true; }
+            return false;
+        };
         // Near-camp stops are on every bus's way out: never pruned by reach.
         const nearCamp = a => haversineMi(depot.lat, depot.lng, a.lat, a.lng) <= o.polishNearCampMi;
         function wedgeOk(b, adding, removingIdx) {
@@ -1900,7 +1911,8 @@ window.CampistryGoRoutePost = (function () {
         return { buckets: B.map(b => b.tour.map(i => b.atoms[i])), moves, blockMoves, blockTried, refills,
                  roomTried, roomMoves, blockSeatNo, blockWedgeNo, overStart,
                  blockLog: blockLog.slice(0, 12), lens: B.map(b => b.len),
-                 blockBestDelta: Number.isFinite(blockBestDelta) ? blockBestDelta : null, timedOut: outOfTime(), before, after,
+                 blockBestDelta: Number.isFinite(blockBestDelta) ? blockBestDelta : null,
+                 timedOut: outOfTime(), stoppedBy, work, elapsedMs: Date.now() - t0, before, after,
                  fleetBefore, fleetAfter: fleetMin(), childMinBefore, childMinAfter: childMin() };
     }
 
