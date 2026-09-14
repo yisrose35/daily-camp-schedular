@@ -152,6 +152,23 @@ addresses ─ geocode ─┬─ road graph (OpenStreetMap) ─ neighbourhoods �
   [lat, lng, children, minute] — no names, no addresses);
   `copy(_GoDebug.exportGeometry())` puts it on the clipboard.
 
+* **Same input, same routes** (`polishMaxWork`): both polishes (districting
+  and road-time) used to stop on a wall-clock budget — 2 seconds and 5
+  seconds — so how far they got depended on the machine and on what else
+  the browser was doing, and two runs of the same camp produced different
+  routes (the camp saw 41 segment moves one run and 59 the next from the
+  same starting point, and a worst bus of 91 then 71). Effort is now a work
+  budget, counted in leg evaluations (100e6, about 11 seconds on a 2024
+  laptop; a 400-segment districting converges at ~90e6, the 186-stop road
+  polish at ~12e6), with the wall clock only a 20-second guard. The polish
+  is a deterministic local search — same input, same moves, same result —
+  and the console line now ends "converged in 3.2s", "stopped at its work
+  limit" or "ran out of time (machine busy); this run may differ from the
+  next". The remaining run-to-run input differences are real: the prior-
+  year pass seeds the greedy districting with the previous run's saved
+  neighbourhoods (the sweep usually wins anyway), and the road-graph
+  download is cached per tile.
+
 * **Max Route Duration** (Route Settings, default 60): the one cap every
   reader uses — the stop ordering, the road polish, the split pass, the ETA
   audit, the scorecard and the Route summary — through `_routeCapMin()`.
