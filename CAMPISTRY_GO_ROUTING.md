@@ -118,7 +118,12 @@ addresses ─ geocode ─┬─ road graph (OpenStreetMap) ─ neighbourhoods �
   so the polish tries the pair as one move (`polishRefillMaxFrac`: a bus
   under half its budget is a candidate), priced exactly and kept only if the
   objective falls. The camp had 42 children on an 18-minute bus while three
-  buses ran 84-93 minutes. Block moves run FIRST in
+  buses ran 84-93 minutes. A stop within `polishNearCampMi` (3 mi) of camp
+  may join ANY bus: every bus drives out through the core, so the reach
+  rule (the receiver already has a stop within 5 mi) is wrong for it — on
+  the camp's run it meant no far bus could ever take a core stop, so the
+  short core bus could never be emptied and the far pocket was smeared
+  across two 85-90 minute buses instead. Block moves run FIRST in
   each pass: on the camp's run the single-stop moves emptied Bus 8 (a
   9-minute run with 24 empty seats) into the core buses before any block
   move ran, and with every core bus full there was no receiver left for a
