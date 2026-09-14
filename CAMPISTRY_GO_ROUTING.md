@@ -104,8 +104,12 @@ addresses ─ geocode ─┬─ road graph (OpenStreetMap) ─ neighbourhoods �
   minutes of new driving, and at half that weight every hand-off on the
   camp's run was a near tie and all were declined while an 11-minute bus
   sat with 15 empty seats. The console says how many hand-offs were priced,
-  how many taken, and what the closest declined one would have cost — so a
-  bus left idle is a priced decision, not a blind spot. **Empty and refill**:
+  how many taken, and what the closest declined one would have cost, and
+  lists the best dozen it priced with both buses' minutes before and after —
+  so a bus left idle is a priced decision, not a blind spot. With Fleet Use
+  on "use the buses I listed" the polish gets no reward for emptying a bus
+  (`busOverheadMin` 0); at 5 it emptied a short core bus into its
+  neighbours and left it with nothing while other buses ran 90 minutes. **Empty and refill**:
   a short bus near camp is full of near-camp children, so it has no seats
   for a branch, and the branch is far, so a single hand-off never pays. What
   a dispatcher does: the buses that pass those near-camp stops on their way
