@@ -97,6 +97,18 @@ window.CampistryGoNeighborhoods = (function () {
         s = s.replace(/\s+(?:apt|apartment|unit|suite|ste|#)\.?\s*\S*$/i, '').trim();
         return s;
     }
+    // One street, one key: "Albert Avenue", "Albert Ave." and "ALBERT AVE" are
+    // the same road. The map names a road differently from one way to the
+    // next often enough that a stop was called "Albert Ave @ Albert Avenue".
+    const _STREET_WORDS = { avenue: 'ave', av: 'ave', road: 'rd', drive: 'dr', street: 'st', lane: 'ln', court: 'ct',
+        boulevard: 'blvd', place: 'pl', terrace: 'ter', terr: 'ter', circle: 'cir', parkway: 'pkwy', highway: 'hwy',
+        trail: 'trl', square: 'sq', plaza: 'plz', turnpike: 'tpke', extension: 'ext', crescent: 'cres', route: 'rt',
+        north: 'n', south: 's', east: 'e', west: 'w', northeast: 'ne', northwest: 'nw', southeast: 'se', southwest: 'sw',
+        saint: 'st', mount: 'mt', fort: 'ft' };
+    function normStreet(name) {
+        return String(name || '').toLowerCase().replace(/[.,']/g, ' ').replace(/\s+/g, ' ').trim()
+            .split(' ').map(w => _STREET_WORDS[w] || w).join(' ');
+    }
 
     // -------------------------------------------------------------------------
     // Road class tiers. Edges of class ≤ trunkTier are "trunks" and are the
@@ -252,6 +264,39 @@ window.CampistryGoNeighborhoods = (function () {
     }
 
     // -------------------------------------------------------------------------
+    // The map must cover every home the buses serve. A camper counts when
+    // within `maxServiceMi` of camp (35 by default; of the roster's median
+    // point when camp is unknown), so only a geocode far outside the service
+    // area — another state — is left off, and the caller is told how many.
+    // The old IQR "outlier" trim cut the far end of Jackson and Toms River
+    // off the map: their homes got no road segment, and their travel times
+    // were made up from the distance to the map's edge — which is why two
+    // buses drove to the far end of Leesville Road and the last drops out
+    // there read 20 minutes apart.
+    function serviceBbox(campers, options) {
+        options = options || {};
+        const pts = (campers || []).filter(c => c && Number.isFinite(c.lat) && Number.isFinite(c.lng));
+        if (pts.length < 2) return null;
+        const depot = options.depot && Number.isFinite(options.depot.lat) && Number.isFinite(options.depot.lng)
+            ? { lat: options.depot.lat, lng: options.depot.lng } : null;
+        let centre = depot;
+        if (!centre) {
+            const la = pts.map(p => p.lat).sort((a, b) => a - b), lo = pts.map(p => p.lng).sort((a, b) => a - b);
+            centre = { lat: la[la.length >> 1], lng: lo[lo.length >> 1] };
+        }
+        const radiusMi = Number.isFinite(options.maxServiceMi) && options.maxServiceMi > 0 ? options.maxServiceMi : 35;
+        const kept = pts.filter(p => haversineMi(centre.lat, centre.lng, p.lat, p.lng) <= radiusMi);
+        if (kept.length < 2) return null;
+        const buf = options.bboxBuffer ?? 0.012;
+        let minLat = Infinity, maxLat = -Infinity, minLng = Infinity, maxLng = -Infinity;
+        for (const p of kept.concat(depot ? [depot] : [])) {
+            if (p.lat < minLat) minLat = p.lat; if (p.lat > maxLat) maxLat = p.lat;
+            if (p.lng < minLng) minLng = p.lng; if (p.lng > maxLng) maxLng = p.lng;
+        }
+        return { minLat: minLat - buf, minLng: minLng - buf, maxLat: maxLat + buf, maxLng: maxLng + buf,
+                 kept: kept.length, excluded: pts.length - kept.length, radiusMi };
+    }
+
     // Overpass fetch — road graph for the bbox of all campers.
     // Reuses the same mirror + timeout strategy as campistry_go.js fetchIntersections().
     // -------------------------------------------------------------------------
@@ -369,23 +414,11 @@ window.CampistryGoNeighborhoods = (function () {
         // Tests that run with no network say so explicitly; sandbox mode does
         // NOT block this — OpenStreetMap data is free.
         if (window.CampistryGoSandbox && typeof window.CampistryGoSandbox.noNetwork === 'function' && window.CampistryGoSandbox.noNetwork()) return null;
-        const lats = campers.map(c => c.lat).filter(Number.isFinite).sort((a, b) => a - b);
-        const lngs = campers.map(c => c.lng).filter(Number.isFinite).sort((a, b) => a - b);
-        if (lats.length < 4 || lngs.length < 4) return null;
-
-        // IQR outlier trim
-        const q1Lat = lats[Math.floor(lats.length * 0.25)];
-        const q3Lat = lats[Math.floor(lats.length * 0.75)];
-        const q1Lng = lngs[Math.floor(lngs.length * 0.25)];
-        const q3Lng = lngs[Math.floor(lngs.length * 0.75)];
-        const iqrLat = q3Lat - q1Lat, iqrLng = q3Lng - q1Lng;
-        const cleanLats = lats.filter(v => v >= q1Lat - 1.5 * iqrLat && v <= q3Lat + 1.5 * iqrLat);
-        const cleanLngs = lngs.filter(v => v >= q1Lng - 1.5 * iqrLng && v <= q3Lng + 1.5 * iqrLng);
-        if (cleanLats.length < 2 || cleanLngs.length < 2) return null;
-
-        const buf = options.bboxBuffer ?? 0.008;
-        const minLat = cleanLats[0] - buf, maxLat = cleanLats[cleanLats.length - 1] + buf;
-        const minLng = cleanLngs[0] - buf, maxLng = cleanLngs[cleanLngs.length - 1] + buf;
+        const bb = serviceBbox(campers, options);
+        if (!bb) return null;
+        if (bb.excluded) console.warn('[Go-NH] ' + bb.excluded + ' camper(s) more than ' + bb.radiusMi +
+            ' mi from camp are off the map (check their geocode)');
+        const { minLat, minLng, maxLat, maxLng } = bb;
         const area = (maxLat - minLat) * (maxLng - minLng);
         if (area > 1.0) {
             console.warn('[Go-NH] bbox too large (' + area.toFixed(3) + ' deg²); aborting road-graph fetch');
@@ -428,7 +461,7 @@ window.CampistryGoNeighborhoods = (function () {
         for (const el of ((data && data.elements) || [])) {
             if (el.type !== 'way' || !el.nodes || el.nodes.length < 2) continue;
             const hw = el.tags && el.tags.highway, name = el.tags && el.tags.name;
-            if (name) for (const nid of el.nodes) (nodeStreets[nid] || (nodeStreets[nid] = new Set())).add(name);
+            if (name) { const key = normStreet(name); for (const nid of el.nodes) { const m = nodeStreets[nid] || (nodeStreets[nid] = new Map()); if (!m.has(key)) m.set(key, name); } }
             if (hw === 'primary' || hw === 'secondary' || hw === 'trunk') {
                 for (let i = 0; i < el.nodes.length - 1; i++) {
                     const a = nodes[el.nodes[i]], b = nodes[el.nodes[i + 1]];
@@ -441,7 +474,7 @@ window.CampistryGoNeighborhoods = (function () {
             const streets = nodeStreets[nid];
             if (streets.size < 2) continue;
             const node = nodes[nid]; if (!node) continue;
-            const arr = [...streets].sort();
+            const arr = [...streets.values()].sort();
             intersections.push({ lat: node.lat, lng: node.lng, name: arr[0] + ' & ' + arr[1], streets: arr });
         }
         return { intersections, majorSegments };
@@ -2288,14 +2321,14 @@ window.CampistryGoNeighborhoods = (function () {
         }
         function nearestCorner(cLat, cLng, streetName, homesArr) {
             let best = null, bestScore = Infinity, bestNamed = null, bestNamedScore = Infinity;
-            const want = String(streetName || '').toLowerCase().trim();
+            const want = normStreet(streetName);
             for (const n of interNodes) {
                 const d = haversineMi(cLat, cLng, n.lat, n.lng);
                 if (d > WALK) continue;
                 let tot = 0;
                 for (const h of homesArr) tot += haversineMi(h.lat, h.lng, n.lat, n.lng);
                 if (tot < bestScore) { bestScore = tot; best = n; }
-                if (want && (n.streets || []).some(x => String(x).toLowerCase().trim() === want)) {
+                if (want && (n.streets || []).some(x => normStreet(x) === want)) {
                     if (tot < bestNamedScore) { bestNamedScore = tot; bestNamed = n; }
                 }
             }
@@ -2304,8 +2337,7 @@ window.CampistryGoNeighborhoods = (function () {
         function cornerName(node, streetName) {
             const main = streetName || (node && (node.streets || [])[0]) || 'Stop';
             if (!node) return main + ' corner';
-            const cross = (node.streets || []).find(x =>
-                String(x).toLowerCase().trim() !== String(main).toLowerCase().trim());
+            const cross = (node.streets || []).find(x => normStreet(x) !== normStreet(main));
             return cross ? (main + ' @ ' + cross) : (main + ' corner');
         }
         // What a stop is called: "Main @ Cross" at an intersection; with none
@@ -2517,9 +2549,10 @@ window.CampistryGoNeighborhoods = (function () {
         expandToPhysicalStops,
         cornerSnapper,
         parseStreetName,
+        normStreet,
         loadRoadGraph: fetchRoadGraph,
         intersectionsFromGraph,
         // Exposed for testing / debug
-        _internal: { buildGraph, detectNeighborhoods, spineOrder, hash, fetchRoadGraph, tilesFor, mergeTiles },
+        _internal: { buildGraph, detectNeighborhoods, spineOrder, hash, fetchRoadGraph, tilesFor, mergeTiles, serviceBbox },
     };
 })();

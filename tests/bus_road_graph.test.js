@@ -62,3 +62,22 @@ test('a no-network run returns no graph without touching the network; sandbox al
     assert.strictEqual(r, null);
     assert.ok(fetched > 0, 'sandbox mode no longer prevents the free map download');
 });
+
+test('the map covers every home within the service radius of camp; only a stray geocode is left off', () => {
+    const camp = { lat: 40.09, lng: -74.21 };
+    const campers = [];
+    for (let i = 0; i < 100; i++) campers.push({ lat: 40.05 + (i % 10) * 0.01, lng: -74.25 + Math.floor(i / 10) * 0.01 }); // dense core
+    campers.push({ lat: 40.02, lng: -74.40 }); // far west Jackson, ~11 mi
+    campers.push({ lat: 39.94, lng: -74.19 }); // Toms River, ~10 mi south
+    campers.push({ lat: 40.70, lng: -74.00 }); // a geocode in New York City, ~45 mi
+    const bb = NH._internal.serviceBbox(campers, { depot: camp });
+    assert.ok(bb.minLng <= -74.40 && bb.minLat <= 39.94, 'west Jackson and Toms River are on the map: ' + JSON.stringify(bb));
+    assert.ok(bb.maxLat < 40.5, 'the New York geocode is not');
+    assert.strictEqual(bb.excluded, 1);
+    assert.ok(bb.minLat <= camp.lat && bb.maxLat >= camp.lat, 'camp itself is on the map');
+    assert.ok(tilesFor(bb.minLat, bb.minLng, bb.maxLat, bb.maxLng).length <= 12, 'a handful of tiles, not a state');
+    // the old IQR trim would have cut both far homes: 100 core homes span 0.09°, fences at ±1.5 IQR
+    const noDepot = NH._internal.serviceBbox(campers, {});
+    assert.ok(noDepot.minLng <= -74.40, 'without camp the roster median anchors the radius');
+    assert.strictEqual(NH._internal.serviceBbox([{ lat: 40, lng: -74 }], {}), null);
+});

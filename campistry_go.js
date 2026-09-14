@@ -3624,17 +3624,21 @@ function _roadPolishRoutes(routes, shiftVehicles, campLat, campLng, isArrival, m
         res = P.polishDistricts(buckets, caps, depot, _routePostOpts({
             legMinutes: legs, isArrival: !!isArrival, returnToDepot: !!needsReturn,
             polishRideBudgetMin: maxRouteMin || 90, polishReachMi: 5, polishTimeBudgetMs: 3000,
-            polishLnsIters: 40, polishMergeSameStreetMi: 0, polishMergeAnyMi: 0 }));
+            // a stop moved onto a bus already standing at that corner shares its dwell
+            polishLnsIters: 40, polishMergeSameStreetMi: 0, polishMergeAnyMi: 0.01 }));
     } catch (e) { console.warn('[Go] Road polish skipped: ' + e.message); return { moves: 0 }; }
     if (!res || !res.moves) return res || { moves: 0 };
-    let changed = 0;
+    let changed = 0, folded = 0;
     live.forEach((r, i) => {
         const before = buckets[i], after = res.buckets[i];
         const same = after.length === before.length && after.every(st => before.includes(st));
         if (same) return;
         changed++;
         const fixed = r.stops.filter(st => !movable.has(st));
-        r.stops = after.concat(fixed);
+        // A stop that joined a bus already standing at its corner is one stop
+        // now, not "Isabella Dr @ Swiss Mountain Dr" twice a minute apart.
+        const fold = P.foldSameCornerStops(after, 24); folded += fold.folded;
+        r.stops = fold.stops.concat(fixed);
         const rl = _roadLegsFor(r.stops, campLat, campLng);
         r.stops = P.localTspOrder(r.stops, depot, !!isArrival, _routePostOpts(rl ? { legMinutes: rl } : {}));
         r.stops.forEach((st, k) => st.stopNum = k + 1);
@@ -3642,7 +3646,7 @@ function _roadPolishRoutes(routes, shiftVehicles, campLat, campLng, isArrival, m
         if (rl) { P.stampLegTimes(r, depot, rl); P.stampRoadPath(r, depot, rl, !!isArrival, false); }
         else { delete r._tspLegTimes; delete r._roadPts; }
     });
-    res.changedBuses = changed;
+    res.changedBuses = changed; res.folded = folded;
     return res;
 }
 
@@ -4026,7 +4030,8 @@ async function generateRoutes() {
             const _rp = _roadPolishRoutes(routes, shiftVehicles, campLat, campLng, isArrival, D.setup.maxRouteDuration || 90,
                 si === shifts.length - 1 && !isArrival);
             if (_rp && _rp.moves) console.log('[Go] Road polish: ' + _rp.moves + ' stop move(s) on street times across ' + _rp.changedBuses +
-                ' bus(es), est. fleet ' + Math.round(_rp.fleetBefore) + ' → ' + Math.round(_rp.fleetAfter) + ' min');
+                ' bus(es), est. fleet ' + Math.round(_rp.fleetBefore) + ' → ' + Math.round(_rp.fleetAfter) + ' min' +
+                (_rp.folded ? ' (' + _rp.folded + ' stop(s) folded into the corner their new bus already served)' : ''));
         }
 
         // Equalising head-counts is opt-in. It was the single biggest source of
@@ -4283,7 +4288,8 @@ async function _tryNeighborhoodPipeline({
     // ── Run neighborhood detection ──
     const nhResult = await window.CampistryGoNeighborhoods.buildNeighborhoods({
         campers: nhCampers,
-        options: { verbose: true, siblingGroups,
+        // camp anchors the map: every home within the service radius is on it
+        options: { verbose: true, siblingGroups, depot: { lat: campLat, lng: campLng },
             onProgress: (done, total) => { if (total) showProgress(shiftLabel + ': downloading map data (' + done + '/' + total + ' tiles)...', pctBase + 5); } }
     });
 
@@ -4501,20 +4507,8 @@ async function _tryNeighborhoodPipeline({
         // a minute apart, is not two stops. Cap the merged corner at 24.
         let sameCorner = 0;
         for (const bus of nhPhysical) {
-            const byKey = new Map(), out = [];
-            for (const s of (bus.stops || [])) {
-                const k = s._homes ? (s.lat.toFixed(6) + ',' + s.lng.toFixed(6)) : null;
-                const prev = k && byKey.get(k);
-                if (prev && (prev.campers || []).length + (s.campers || []).length <= 24) {
-                    prev.campers = (prev.campers || []).concat(s.campers || []);
-                    prev._homes = (prev._homes || []).concat(s._homes || []);
-                    sameCorner++;
-                    continue;
-                }
-                if (k) byKey.set(k, s);
-                out.push(s);
-            }
-            bus.stops = out;
+            const f = window.CampistryGoRoutePost.foldSameCornerStops(bus.stops || [], 24);
+            bus.stops = f.stops; sameCorner += f.folded;
         }
         if (sameCorner) console.log('[Go v5] Corner stops: ' + sameCorner + ' group(s) folded into the stop already at their corner');
     }

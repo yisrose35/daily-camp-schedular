@@ -221,3 +221,22 @@ test('parseStreetName strips the house number and a unit, keeps the street', () 
     assert.strictEqual(NH.parseStreetName('Brewers Bridge Rd'), 'Brewers Bridge Rd');
     assert.strictEqual(NH.parseStreetName(''), '');
 });
+
+test('a road the map names two ways is one road: never "Albert Ave @ Albert Avenue"', () => {
+    assert.strictEqual(NH.normStreet('Albert Avenue'), NH.normStreet('ALBERT AVE.'));
+    assert.strictEqual(NH.normStreet('N. Maple Avenue'), NH.normStreet('North Maple Ave'));
+    assert.notStrictEqual(NH.normStreet('West Spruce Street'), NH.normStreet('East Spruce Street'));
+    const snapper = NH.cornerSnapper({ nodes: {} }, 0.05);
+    assert.strictEqual(snapper.cornerName({ streets: ['Albert Ave', 'Albert Avenue'] }, 'Albert Ave'), 'Albert Ave corner');
+    assert.strictEqual(snapper.cornerName({ streets: ['Albert Ave', 'Albert Avenue', 'Salem St'] }, 'Albert Avenue'), 'Albert Avenue @ Salem St');
+    const data = { elements: [
+        { type: 'node', id: 1, lat: 40.1, lon: -74.2 }, { type: 'node', id: 2, lat: 40.1, lon: -74.21 }, { type: 'node', id: 3, lat: 40.11, lon: -74.2 },
+        { type: 'way', id: 10, nodes: [2, 1], tags: { highway: 'residential', name: 'Albert Ave' } },
+        { type: 'way', id: 11, nodes: [1, 3], tags: { highway: 'residential', name: 'Albert Avenue' } },
+    ] };
+    assert.strictEqual(NH.intersectionsFromGraph(data).intersections.length, 0, 'a name change along one road is not a corner');
+    data.elements.push({ type: 'node', id: 4, lat: 40.1, lon: -74.19 }, { type: 'way', id: 12, nodes: [1, 4], tags: { highway: 'residential', name: 'Salem St' } });
+    const x = NH.intersectionsFromGraph(data).intersections;
+    assert.strictEqual(x.length, 1);
+    assert.deepStrictEqual(x[0].streets.map(NH.normStreet).sort(), ['albert ave', 'salem st']);
+});
