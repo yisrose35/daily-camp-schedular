@@ -152,6 +152,19 @@ addresses ─ geocode ─┬─ road graph (OpenStreetMap) ─ neighbourhoods �
   [lat, lng, children, minute] — no names, no addresses);
   `copy(_GoDebug.exportGeometry())` puts it on the clipboard.
 
+* **Max Route Duration** (Route Settings, default 60): the one cap every
+  reader uses — the stop ordering, the road polish, the split pass, the ETA
+  audit, the scorecard and the Route summary — through `_routeCapMin()`.
+  Until 2026-09-14 there was no field for it on the page and, with the
+  setting unset, the audit fell back to 60 while the polish and ordering
+  fell back to 90: the polish priced Bus 2 at 92 as two minutes over (a
+  penalty of ~10, so every hand-off was a near tie and none was taken),
+  then the audit flagged the same bus as 31 minutes over. The old one-time
+  60 → 90 migration is retired for the same reason. It is a priced budget,
+  not a hard wall: a minute over costs four bus-minute equivalents plus
+  half the square, so the polish hands far branches to buses with idle
+  seats to stay under, and the console flags whatever is still over.
+
 * **The ride home** (`returnToDepot`, from the **Round Trip** setting): a
   dismissal run drives back to camp when it is not the last shift (the bus
   comes back for the next one) or when Round Trip is on. One way is the
