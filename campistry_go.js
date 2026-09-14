@@ -3628,13 +3628,15 @@ function _roadPolishRoutes(routes, shiftVehicles, campLat, campLng, isArrival, m
         // tight — a single relocate can't free a seat first.
         res = P.polishDistricts(buckets, caps, depot, _routePostOpts({
             legMinutes: legs, isArrival: !!isArrival, returnToDepot: !!needsReturn,
-            // Max Route Duration is a real limit here: a minute over costs two
-            // bus-minute equivalents plus a quarter of the square, so a bus 40
-            // over costs 480 and one 10 over 45 — a far branch of an over-cap bus
-            // moves to a bus with idle seats even when that adds to the fleet's
-            // total, and overage is never piled onto one bus.
-            polishRideBudgetMin: maxRouteMin || 90, polishOverBudgetX: 2, polishOverBudgetQuad: 0.25,
-            polishReachMi: 5, polishTimeBudgetMs: 3000,
+            // Max Route Duration is a real limit here: a minute over costs four
+            // bus-minute equivalents plus half the square, so a bus 30 over costs
+            // 570 and one 10 over 90. Handing a far branch to a bus with idle
+            // seats costs the fleet 30-50 minutes of new driving (the idle bus
+            // is in the core, the branch is not); at half that weight every such
+            // hand-off on the camp's run was a near tie and the polish declined
+            // them all while an 11-minute bus sat with 15 empty seats.
+            polishRideBudgetMin: maxRouteMin || 90, polishOverBudgetX: 4, polishOverBudgetQuad: 0.5,
+            polishReachMi: 5, polishTimeBudgetMs: 5000,
             // a stop moved onto a bus already standing at that corner shares its dwell
             polishLnsIters: 40, polishMergeSameStreetMi: 0, polishMergeAnyMi: 0.01 }));
     } catch (e) { console.warn('[Go] Road polish skipped: ' + e.message); return { moves: 0 }; }
@@ -4045,6 +4047,11 @@ async function generateRoutes() {
                 ', est. fleet ' + Math.round(_rp.fleetBefore) + ' → ' + Math.round(_rp.fleetAfter) + ' min' +
                 (_rp.folded ? ' (' + _rp.folded + ' stop(s) folded into the corner their new bus already served)' : '') +
                 (_rp.timedOut ? ' — ran out of time; the polish may have more to give' : ''));
+            if (_rp && _rp.blockTried) console.log('[Go] Road polish: priced ' + _rp.blockTried + ' branch hand-off(s) from buses over the ' +
+                (D.setup.maxRouteDuration || 90) + 'min cap to buses with idle seats — ' +
+                (_rp.blockMoves ? _rp.blockMoves + ' taken (the best gained ' + Math.abs(Math.min(0, _rp.blockBestDelta || 0)).toFixed(0) + ' on the objective)'
+                                : 'none taken' + (_rp.blockBestDelta != null ? '; the closest would have cost ' + Math.max(0, _rp.blockBestDelta).toFixed(0) +
+                                  ' on the objective (fleet minutes plus the cap penalty)' : '')));
         }
 
         // Equalising head-counts is opt-in. It was the single biggest source of

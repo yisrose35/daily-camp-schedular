@@ -98,7 +98,14 @@ addresses ─ geocode ─┬─ road graph (OpenStreetMap) ─ neighbourhoods �
   out-and-back). So the polish also tries whole blocks (the far end of the
   run, and radial clusters around the farthest stop, up to `polishBlockMax`
   stops) handed to one of the `polishBlockTargets` buses furthest under their
-  budget, an empty bus included, priced exactly. Block moves run FIRST in
+  budget, an empty bus included, priced exactly. The road polish prices
+  overage at 4 per minute plus 0.5 times the square (a bus 30 over costs
+  570, one 10 over 90): a hand-off to an idle core bus costs the fleet 30-50
+  minutes of new driving, and at half that weight every hand-off on the
+  camp's run was a near tie and all were declined while an 11-minute bus
+  sat with 15 empty seats. The console says how many hand-offs were priced,
+  how many taken, and what the closest declined one would have cost — so a
+  bus left idle is a priced decision, not a blind spot. Block moves run FIRST in
   each pass: on the camp's run the single-stop moves emptied Bus 8 (a
   9-minute run with 24 empty seats) into the core buses before any block
   move ran, and with every core bus full there was no receiver left for a
