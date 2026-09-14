@@ -3602,8 +3602,10 @@ function _capByIdOf(shiftVehicles) {
 // thought was 70 minutes and the roads make 137.
 function _roadPolishRoutes(routes, shiftVehicles, campLat, campLng, isArrival, maxRouteMin, needsReturn) {
     const P = window.CampistryGoRoutePost;
-    const live = routes.filter(r => r.stops && r.stops.length);
-    if (!_activeRoadNet || live.length < 2) return { moves: 0 };
+    // Every bus with seats takes part, an empty one included: it is the
+    // natural receiver for a far branch of a bus over Max Route Duration.
+    const live = routes.filter(r => Array.isArray(r.stops));
+    if (!_activeRoadNet || live.filter(r => r.stops.length).length < 2) return { moves: 0 };
     const depot = { lat: campLat, lng: campLng };
     const movable = new Set();
     for (const r of live) for (const st of r.stops) {
@@ -4039,8 +4041,10 @@ async function generateRoutes() {
             const _rp = _roadPolishRoutes(routes, shiftVehicles, campLat, campLng, isArrival, D.setup.maxRouteDuration || 90,
                 si === shifts.length - 1 && !isArrival);
             if (_rp && _rp.moves) console.log('[Go] Road polish: ' + _rp.moves + ' stop move(s) on street times across ' + _rp.changedBuses +
-                ' bus(es), est. fleet ' + Math.round(_rp.fleetBefore) + ' → ' + Math.round(_rp.fleetAfter) + ' min' +
-                (_rp.folded ? ' (' + _rp.folded + ' stop(s) folded into the corner their new bus already served)' : ''));
+                ' bus(es)' + (_rp.blockMoves ? ', ' + _rp.blockMoves + ' of them whole branches handed to a bus with idle seats' : '') +
+                ', est. fleet ' + Math.round(_rp.fleetBefore) + ' → ' + Math.round(_rp.fleetAfter) + ' min' +
+                (_rp.folded ? ' (' + _rp.folded + ' stop(s) folded into the corner their new bus already served)' : '') +
+                (_rp.timedOut ? ' — ran out of time; the polish may have more to give' : ''));
         }
 
         // Equalising head-counts is opt-in. It was the single biggest source of

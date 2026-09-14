@@ -708,3 +708,23 @@ test('a bus over Max Route Duration is ordered for the shortest run rather than 
     const loose = P.localTspOrder(stops, CAMP, false, { returnToDepot: true, routeCapMin: 500 });
     assert.deepStrictEqual(loose.map(s => s.address), free.map(s => s.address));
 });
+
+test('an idle bus takes the far loop of an over-cap bus instead of being emptied into its neighbours', () => {
+    // Bus A: two stops near camp, a loop 9-12mi out, and a home on the way
+    // back. Bus E: a 9-minute core run with two stops and 24 empty seats,
+    // like the camp's Bus 8. The fleet objective alone would empty E into a
+    // neighbour; with the cap, E should take the loop and A becomes short.
+    const A = [at(2, 0.3, 4), at(3, 1, 4), at(7, -2, 2), at(9, -3, 2), at(10, -1, 2), at(9, 1, 2), at(7, 2, 2), at(4, -1, 2)];
+    const E = [at(1, 0.4, 12), at(1.2, -0.3, 10)];
+    const C = [at(1.5, 0.8, 20), at(2, 0.9, 12)]; // a core neighbour E could be emptied into
+    const o = { returnToDepot: true, polishRideBudgetMin: 60, polishOverBudgetX: 2, polishOverBudgetQuad: 0.25, busOverheadMin: 5 };
+    const solo = b => b.length ? P.polishDistricts([b, []], [46, 46], CAMP, { returnToDepot: true, polishMaxPasses: 0, polishRideBudgetMin: 0 }).fleetBefore : 0;
+    assert.ok(solo(A) > 80, 'A is far over the cap: ' + solo(A).toFixed(0));
+    const res = P.polishDistricts([A, E, C], [46, 46, 46], CAMP, o);
+    assert.ok(res.blockMoves >= 1, 'a whole branch moved: ' + JSON.stringify({ moves: res.moves, blockMoves: res.blockMoves }));
+    const lens = res.buckets.map(solo);
+    assert.ok(res.buckets[1].length >= 4, 'E took the loop: ' + res.buckets[1].map(a => a.address).join(' | '));
+    assert.ok(Math.max(...lens) < solo(A) - 15, 'the long run came down: ' + lens.map(x => x.toFixed(0)).join(', '));
+    assert.strictEqual(res.buckets.flat().length, 12);
+    for (const b of res.buckets) assert.ok(b.reduce((a, x) => a + x.campers.length, 0) <= 46, 'seats');
+});
