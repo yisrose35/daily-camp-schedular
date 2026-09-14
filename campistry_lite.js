@@ -5837,8 +5837,10 @@
         return out;
     }
 
-    // One person's daily text: bunk schedule as compact lines
-    function composeMessage(bunk, sched, firstName, extraBunks) {
+    // One person's daily text: bunk schedule as compact lines.
+    // footerOverride lets Reach (own-number send) append its own footer instead
+    // of the Twilio path's camp.sms.footer; omit it to keep the SMS default.
+    function composeMessage(bunk, sched, firstName, extraBunks, footerOverride) {
         const bunks = (extraBunks && extraBunks.length) ? extraBunks : [bunk];
         const parts = [];
         parts.push(`Campistry — ${friendlyDate(currentDate)}`);
@@ -5863,7 +5865,8 @@
             });
         });
         if (!any) return null;
-        if (camp.sms.footer) parts.push(camp.sms.footer);
+        const footer = (footerOverride !== undefined) ? footerOverride : camp.sms.footer;
+        if (footer) parts.push(footer);
         return parts.join('\n').slice(0, 1500);
     }
 
@@ -5906,6 +5909,8 @@
     let reachSel = null;        // Set of selected staff emails (null = not built yet)
     let reachBunkFilter = 'all';
     let reachQueue = null;      // { items:[{to,body,label}], idx, sent, done } during assisted send
+    let reachMode = 'custom';   // 'custom' free text | 'schedule' each counselor's bunk schedule
+    let reachSched = null;      // today's schedule, loaded for the 'schedule' mode
 
     function reachHasNative() {
         try {
@@ -5980,6 +5985,50 @@
         const nativeMode = reachHasNative();
         const template = camp.reach.lastTemplate || '';
 
+        // "Today's schedule" mode: each recipient's message is their own bunk's
+        // schedule. Load it once here so the builder + preview share it.
+        if (reachMode === 'schedule') {
+            reachSched = await getSchedule(currentDate);
+            if (activeTab !== 'reachCompose') return;   // user navigated away mid-load
+        }
+        // A sample of what one counselor will receive, for the schedule preview.
+        let schedPreview = '';
+        if (reachMode === 'schedule') {
+            const sample = filtered.find(r => reachSel.has(r.email) && (r.bunks || []).length);
+            schedPreview = sample
+                ? (composeMessage(sample.bunks[0], reachSched, (sample.name || '').split(/\s+/)[0], sample.bunks, camp.reach.footer)
+                   || 'No schedule published for this bunk yet.')
+                : 'Select a counselor with a bunk to preview.';
+        }
+
+        const modeToggle = `
+            <div class="lite-chiprow" style="padding-bottom:10px;">
+                <button class="lite-chip ${reachMode === 'custom' ? 'active' : ''}" data-mode="custom">Custom message</button>
+                <button class="lite-chip ${reachMode === 'schedule' ? 'active' : ''}" data-mode="schedule">Today's schedule</button>
+            </div>`;
+
+        const messageCard = reachMode === 'schedule'
+            ? `<div class="lite-card">
+                <div class="lite-card-title">Message</div>
+                ${modeToggle}
+                <div class="lite-note">Each counselor gets <b>their own bunk's schedule</b> for
+                    <b>${esc(friendlyDate(currentDate))}</b> — times, activities and their league matchup.</div>
+                <div class="lite-preview-msg">${esc(schedPreview)}</div>
+                <div class="lite-field"><label>Footer (optional, added to every text)</label>
+                    <input class="lite-input" id="reachFooter" value="${esc(camp.reach.footer || '')}" placeholder="e.g. — ${esc(camp.campName || 'Camp')}"></div>
+              </div>`
+            : `<div class="lite-card">
+                <div class="lite-card-title">Message</div>
+                ${modeToggle}
+                <div class="lite-field">
+                    <textarea class="lite-input" id="reachBody" rows="5"
+                        placeholder="Type your message… e.g. Hi {firstName}, staff meeting at 4pm by the flagpole.">${esc(template)}</textarea>
+                </div>
+                <div class="lite-note">Tokens: <code>{firstName}</code>, <code>{name}</code>, <code>{bunk}</code> are filled per person.</div>
+                <div class="lite-field"><label>Footer (optional, added to every text)</label>
+                    <input class="lite-input" id="reachFooter" value="${esc(camp.reach.footer || '')}" placeholder="e.g. — ${esc(camp.campName || 'Camp')}"></div>
+              </div>`;
+
         const bunkChips = ['all', ...bunks].map(b =>
             `<button class="lite-chip ${reachBunkFilter === b ? 'active' : ''}" data-bunk="${esc(b)}">${b === 'all' ? 'All bunks' : esc(b)}</button>`
         ).join('');
@@ -5994,16 +6043,7 @@
             </label>`).join('');
 
         view.innerHTML = `
-            <div class="lite-card">
-                <div class="lite-card-title">Message</div>
-                <div class="lite-field">
-                    <textarea class="lite-input" id="reachBody" rows="5"
-                        placeholder="Type your message… e.g. Hi {firstName}, staff meeting at 4pm by the flagpole.">${esc(template)}</textarea>
-                </div>
-                <div class="lite-note">Tokens: <code>{firstName}</code>, <code>{name}</code>, <code>{bunk}</code> are filled per person.</div>
-                <div class="lite-field"><label>Footer (optional, added to every text)</label>
-                    <input class="lite-input" id="reachFooter" value="${esc(camp.reach.footer || '')}" placeholder="e.g. — ${esc(camp.campName || 'Camp')}"></div>
-            </div>
+            ${messageCard}
 
             <div class="lite-card">
                 <div class="lite-card-title">Recipients <span class="lite-pill">${reachSel.size} selected</span></div>
@@ -6026,6 +6066,14 @@
                 </button>
                 <button class="lite-btn block secondary" id="reachCsv">Export selected as CSV</button>
             </div>`;
+
+        // Mode toggle (custom message vs today's schedule). Stash the draft
+        // first so switching to schedule mode and back doesn't lose it.
+        view.querySelectorAll('[data-mode]').forEach(m => m.addEventListener('click', () => {
+            const bodyNow = view.querySelector('#reachBody');
+            if (bodyNow) camp.reach.lastTemplate = bodyNow.value;
+            reachMode = m.dataset.mode; renderReachCompose();
+        }));
 
         // Bunk filter
         view.querySelectorAll('[data-bunk]').forEach(b => b.addEventListener('click', () => {
@@ -6066,6 +6114,9 @@
     }
 
     // Resolve the current selection into personalized, deduped messages.
+    // In 'schedule' mode each body is that person's own bunk schedule (built by
+    // composeMessage, reusing the Twilio path's composer); people whose bunk has
+    // no schedule for the day are skipped. In 'custom' mode it's the free text.
     function reachBuildMessages() {
         const template = (camp.reach.lastTemplate || '').trim();
         const out = [];
@@ -6074,21 +6125,40 @@
             if (!reachSel.has(r.email)) return;
             const key = normPhone(r.phone);
             if (!key || seen.has(key)) return;   // one text per number
+            let body;
+            if (reachMode === 'schedule') {
+                if (!(r.bunks || []).length) return;
+                body = composeMessage(r.bunks[0], reachSched, (r.name || '').split(/\s+/)[0], r.bunks, camp.reach.footer);
+                if (!body) return;               // no schedule for this bunk → skip
+            } else {
+                body = reachPersonalize(template, r);
+            }
             seen.add(key);
-            out.push({ to: r.phone, body: reachPersonalize(template, r), label: r.name || r.email });
+            out.push({ to: r.phone, body, label: r.name || r.email });
         });
         return { template, items: out };
     }
 
     async function reachStartSend() {
         const { template, items } = reachBuildMessages();
-        if (!template) { toast('Type a message first'); return; }
-        if (!items.length) { toast('Select at least one recipient'); return; }
-        if (!confirm(`Send this message to ${items.length} staff member${items.length === 1 ? '' : 's'}?`)) return;
+        if (reachMode === 'custom' && !template) { toast('Type a message first'); return; }
+        if (!items.length) {
+            toast(reachMode === 'schedule'
+                ? 'No selected counselor has a schedule for this day.'
+                : 'Select at least one recipient');
+            return;
+        }
+        const what = reachMode === 'schedule' ? 'today’s schedule' : 'this message';
+        if (!confirm(`Send ${what} to ${items.length} staff member${items.length === 1 ? '' : 's'}?`)) return;
 
         // Save the footer/template so it persists (best-effort — a failed cloud
         // write must never block the actual send).
         saveKV('liteReachSettings', { footer: camp.reach.footer, lastTemplate: template }).catch(() => {});
+
+        // What the History log shows as the blast's preview.
+        const logLabel = reachMode === 'schedule'
+            ? `Daily schedule · ${friendlyDate(currentDate)}`
+            : template;
 
         if (reachHasNative()) {
             const btn = document.querySelector('#reachSend');
@@ -6100,7 +6170,7 @@
                 const results = (res && res.results) || [];
                 const sent = results.filter(r => r.ok).length || (results.length ? 0 : items.length);
                 const failed = results.length ? results.length - sent : 0;
-                reachLog(template, items.length, sent, failed);
+                reachLog(logLabel, items.length, sent, failed);
                 toast(`Sent ${sent}${failed ? ` · failed ${failed}` : ''}`);
             } catch (e) {
                 toast('Send failed: ' + (e.message || e));
@@ -6111,7 +6181,7 @@
         }
 
         // Assisted: hand off to the OS composer one recipient at a time.
-        reachQueue = { items, idx: 0, sent: 0, done: false, template };
+        reachQueue = { items, idx: 0, sent: 0, done: false, template: logLabel };
         renderReachCompose();
     }
 

@@ -61,7 +61,7 @@ blurred header/tab bar, safe-area-aware. Tokens live at the top of
 | **Head staff** — **Health Lite** | Meds · Roster · Trip | Medications on the go. **Meds:** today's dispensing board — every camper on meds with allergy banners and a **live Given / Not-given** status; head staff tap **Give** to log it (writes to the cloud, everyone sees it live). **Roster:** allergy + medication reference, searchable. **Trip:** pick the group going out → the consolidated meds to pack, with give-status. The **first Lite app that writes** (gated to head staff for now). |
 | **Head staff** — **Live Lite** | Roll Call · Changes | Attendance on the go. **Roll Call:** who's here today — Present / Absent / Left-early tallies, then every camper by bunk with a status pill (Here · Absent · Sick · Late · Left early), division-filterable, tap for full camper info. **Changes:** today's dismissal changes & late arrivals (early pickups with time + who, late arrivals with notes), searchable. Read-only; reads the office roll call synced to the cloud. |
 | **Head staff** — **Me Lite** | Roster · Medical · Staff | Camp *people* on the go. **Roster:** searchable camp-wide roster with a headcount strip + birthdays, grouped by bunk with medical flags; tap a camper for **all their info** (medical, personal, school, placement, parents with tap-to-call/email, address, emergency, teams, notes). **Medical:** a camp-wide allergy/meds/dietary safety list, filterable, facts shown inline. **Staff:** a bunk→counselor contact directory with tap-to-call. Read-only. |
-| **Head staff** — **Reach** | Compose · History | Mass-text the staff directory **from the director's own phone number** (device-native SMS), so replies land in their normal Messages app — a parallel channel to Link/Twilio with no carrier number, no 10DLC, no per-message fee. **Compose:** free-text message with `{firstName}`/`{name}`/`{bunk}` tokens, a footer, and a checkbox recipient picker over opted-in staff (bunk-filterable, select all/none). **Android** sends silently via a native `Sms` plugin (`SmsManager`); **iOS/web** fall back to an *assisted* tap-queue — each tap opens Messages prefilled to the next person (Apple forbids programmatic SMS). Also exports the selection as CSV. **History:** a small recent-blast log (preview, count, sender). Send-role staff only. |
+| **Head staff** — **Reach** | Compose · History | Mass-text the staff directory **from the director's own phone number** (device-native SMS), so replies land in their normal Messages app — a parallel channel to Link/Twilio with no carrier number, no 10DLC, no per-message fee. **Compose:** two modes — **Custom message** (free text with `{firstName}`/`{name}`/`{bunk}` tokens) or **Today's schedule** (each counselor's message is *their own bunk's* schedule for the day, reusing the daily-schedule composer). Both take a footer and a checkbox recipient picker over opted-in staff (bunk-filterable, select all/none). **Android** sends silently via a native `Sms` plugin (`SmsManager`); **iOS/web** fall back to an *assisted* tap-queue — each tap opens Messages prefilled to the next person (Apple forbids programmatic SMS). Also exports the selection as CSV. **History:** a small recent-blast log (preview, count, sender). Send-role staff only. |
 | **Counselor** (`counselor` role) | My Day · My Bunk · League · Tips | See their assigned bunk's daily schedule, bunk roster (contacts, allergies, dietary), their league team + standings + today's matchup, and their own Campistry Link tips balance/Stripe Connect setup |
 | **Viewer** | Schedule · Now · Locate · Reports | Same read-only Flow Lite view as head staff |
 
@@ -471,8 +471,11 @@ distinct from the Twilio "Daily schedule texts" above. **No server is called to
 send** — the *device* sends from the signed-in director's own SIM, so replies
 land in their normal Messages app (Campistry does not try to capture them).
 
-1. **Reach tile → Compose.** Type a message (tokens `{firstName}`, `{name}`,
-   `{bunk}` fill per person), optionally a footer.
+1. **Reach tile → Compose.** Pick a mode: **Custom message** (tokens
+   `{firstName}`, `{name}`, `{bunk}` fill per person) or **Today's schedule**
+   (each counselor gets their own bunk's schedule for `currentDate`, built by
+   the same `composeMessage()` the Twilio path uses — counselors whose bunk has
+   no schedule that day are skipped). Optionally a footer.
 2. Pick recipients — opted-in staff (`smsOptIn` + a phone) from
    `liteStaffAssignments`, bunk-filterable, select all/none. Defaults to all.
 3. **Send:**
