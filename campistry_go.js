@@ -188,13 +188,16 @@ let _toastTimer = null;
     // "Use the buses I listed" means exactly that: no reward for emptying one.
     // At 5 the road polish quietly emptied a short core bus into its
     // neighbours and left it with nothing while other buses ran 90 minutes.
-    function _busOverheadMin() { return D.setup.fleetUse === 'fewer' ? 40 : 0; }
+    // A plan comparison runs the generator with these instead of the settings
+    // (cap in minutes, fleet use) and without saving: see comparePlans.
+    let _planOverride = null, _lastRunStats = null;
+    function _busOverheadMin() { const f = _planOverride && _planOverride.fleetUse ? _planOverride.fleetUse : D.setup.fleetUse; return f === 'fewer' ? 40 : 0; }
     // Max Route Duration, the one cap every reader uses: the ordering, the
     // road polish, the split pass, the ETA audit, the scorecard and the
     // Route summary. Before this the audit fell back to 60 and the polish to
     // 90 when the setting was unset, so the polish worked to a cap the
     // audit then flagged every run as 31 minutes over.
-    function _routeCapMin() { const v = Number(D.setup.maxRouteDuration); return v > 0 ? v : 60; }
+    function _routeCapMin() { if (_planOverride && _planOverride.capMin > 0) return _planOverride.capMin; const v = Number(D.setup.maxRouteDuration); return v > 0 ? v : 60; }
     // Road network from the last neighbourhood run (null in sandbox / when the
     // road graph is unavailable). Ordering and ETAs use real street travel
     // times when it is present.
@@ -4347,6 +4350,8 @@ async function generateRoutes() {
             console.log('[Go] Fleet: ' + busMin + ' bus-minutes (' + (busMin / 60).toFixed(1) + ' bus-hours) over ' + rows.length + ' buses, avg ' +
                 Math.round(busMin / Math.max(1, rows.length)) + ' min/bus, longest ' + longest + ' min, ' + over + ' over the ' + _routeCapMin() + 'min cap; ' +
                 rows.reduce((a, r) => a + (r.stops || 0), 0) + ' stops; ' + kids + ' children, avg ride ' + (kids ? Math.round(rideMin / kids) : 0) + ' min');
+            _lastRunStats = { busMin, buses: rows.length, longest, over, cap: _routeCapMin(), stops: rows.reduce((a, r) => a + (r.stops || 0), 0), kids,
+                              avgRide: kids ? Math.round(rideMin / kids) : 0, maxRide: rows.reduce((a, r) => Math.max(a, r.maxKidMin || 0), 0) };
         }
     } catch (_) { /* diagnostics only */ }
 
@@ -4386,6 +4391,11 @@ async function generateRoutes() {
         }
     } catch (_) {}
 
+    if (_planOverride && _planOverride.dryRun) {
+        // a plan comparison: priced, not kept
+        _generatedRoutes = D.savedRoutes;
+        return allShiftResults;
+    }
     D.savedRoutes = allShiftResults;
     save();
 
@@ -4399,6 +4409,69 @@ async function generateRoutes() {
     renderRouteResults(allShiftResults);
     renderStaff();
     setTimeout(hideProgress, 2000);
+    return allShiftResults;
+}
+
+// Three plans in one click: the routing at Max Route Duration 60, 70 and
+// none, plus the current cap with "prefer fewer buses", each priced but not
+// kept, side by side — bus-minutes, buses used, longest run, children over
+// the cap and average ride — so the cap and the fleet are chosen on numbers
+// rather than guessed. "Use this plan" applies its settings and generates
+// for real (the routing is deterministic, so the same plan comes back).
+async function comparePlans() {
+    if (_planOverride) return;
+    const current = _routeCapMin(), fewer = D.setup.fleetUse === 'fewer';
+    const plans = [];
+    const add = (label, capMin, fleetUse) => { if (!plans.some(p => p.capMin === capMin && p.fleetUse === fleetUse)) plans.push({ label, capMin, fleetUse }); };
+    add('Cap 60', 60, 'as-needed'); add('Cap 70', 70, 'as-needed'); add('Cap ' + current, current, 'as-needed'); add('No cap', 999, 'as-needed');
+    add('Cap ' + current + ', fewer buses', current, 'fewer');
+    if (fewer) add('Cap ' + current + ', all buses', current, 'as-needed');
+    const rows = [];
+    const t0 = Date.now();
+    try {
+        for (let i = 0; i < plans.length; i++) {
+            const p = plans[i];
+            _planOverride = { capMin: p.capMin, fleetUse: p.fleetUse, dryRun: true };
+            _lastRunStats = null;
+            console.log('[Go] Plan ' + (i + 1) + '/' + plans.length + ': ' + p.label);
+            try { await generateRoutes(); } catch (e) { console.warn('[Go] Plan ' + p.label + ' failed: ' + e.message); }
+            rows.push(Object.assign({ label: p.label, capMin: p.capMin, fleetUse: p.fleetUse }, _lastRunStats || { failed: true }));
+        }
+    } finally {
+        _planOverride = null;
+        _generatedRoutes = D.savedRoutes;
+        if (D.savedRoutes) { try { renderRouteResults(D.savedRoutes); } catch (_) {} }
+        setTimeout(hideProgress, 500);
+    }
+    window._GoDebug && (window._GoDebug.lastCompare = rows);
+    console.log('[Go] Plans compared in ' + Math.round((Date.now() - t0) / 1000) + 's:\n' + rows.map(r => '    ' + r.label.padEnd(24) +
+        (r.failed ? 'failed' : r.busMin + ' bus-minutes, ' + r.buses + ' buses, longest ' + r.longest + ' min, ' + r.over + ' over ' + (r.capMin >= 999 ? 'no cap' : r.capMin + ' cap') +
+        ', avg ride ' + r.avgRide + ' min, longest ride ' + r.maxRide + ' min')).join('\n'));
+    const body = document.getElementById('comparePlansBody');
+    if (body) {
+        const best = rows.filter(r => !r.failed).reduce((a, r) => (!a || r.busMin < a.busMin) ? r : a, null);
+        body.innerHTML = '<table style="width:100%;font-size:.8125rem;border-collapse:collapse;"><thead><tr style="text-align:left;color:var(--text-muted);">' +
+            '<th style="padding:.4rem .5rem;">Plan</th><th>Bus-min</th><th>Buses</th><th>Longest</th><th>Over cap</th><th>Avg ride</th><th>Longest ride</th><th></th></tr></thead><tbody>' +
+            rows.map((r, i) => r.failed
+                ? '<tr><td style="padding:.4rem .5rem;">' + esc(r.label) + '</td><td colspan="7" style="color:var(--text-muted)">could not be generated</td></tr>'
+                : '<tr' + (r === best ? ' style="font-weight:600;"' : '') + '><td style="padding:.4rem .5rem;">' + esc(r.label) + (r === best ? ' <span style="color:var(--text-muted);font-weight:400;">fewest bus-minutes</span>' : '') + '</td>' +
+                  '<td>' + r.busMin + '</td><td>' + r.buses + '</td><td>' + r.longest + ' min</td><td>' + r.over + '</td><td>' + r.avgRide + ' min</td><td>' + r.maxRide + ' min</td>' +
+                  '<td><button class="btn btn-secondary btn-sm" onclick="CampistryGo.usePlan(' + i + ')">Use this plan</button></td></tr>').join('') +
+            '</tbody></table><p class="form-hint" style="margin-top:.75rem;">Bus-minutes are the fleet\'s cost. "Use this plan" sets Max Route Duration and Fleet Use to the plan\'s and generates it for real.</p>';
+        openModal('comparePlansModal');
+    }
+    return rows;
+}
+async function usePlan(i) {
+    const rows = (window._GoDebug && window._GoDebug.lastCompare) || [];
+    const r = rows[i]; if (!r || r.failed) return;
+    D.setup.maxRouteDuration = r.capMin >= 999 ? 999 : r.capMin;
+    D.setup.fleetUse = r.fleetUse === 'fewer' ? 'fewer' : 'as-needed';
+    if (document.getElementById('maxRouteDuration')) document.getElementById('maxRouteDuration').value = D.setup.maxRouteDuration;
+    if (document.getElementById('fleetUse')) document.getElementById('fleetUse').value = D.setup.fleetUse;
+    save();
+    closeModal('comparePlansModal');
+    await generateRoutes();
 }
 
 
@@ -9027,7 +9100,7 @@ async function renderDispatcherDashboard(allShifts) {
     // PUBLIC API
     // =========================================================================
     window.CampistryGo = {
-        saveSetup, toggleStandalone,
+        saveSetup, toggleStandalone, comparePlans, usePlan,
         openBusModal, saveBus, editBus, deleteBus, deleteBusFromModal, _pickColor, quickCreateBuses,
         addShift, deleteShift, toggleShiftDiv, updateShiftTime, renameShift,
         toggleShiftGrade, setShiftGradeMode, toggleShiftBus, setAllShiftBuses,

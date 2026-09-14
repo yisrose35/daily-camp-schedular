@@ -244,6 +244,16 @@ addresses ─ geocode ─┬─ road graph (OpenStreetMap) ─ neighbourhoods �
   road-time polish only; on 400+ districting segments it cost that stage
   its whole time budget (the camp's run hit the 20-second guard).
 
+* **Plans side by side** (`comparePlans`, the "Compare plans" button): the
+  routing at Max Route Duration 60, 70 and none, plus the current cap with
+  "prefer fewer buses", each generated in full but not kept (a dry run
+  stops before the save), and shown in one table — bus-minutes, buses
+  used, longest run, buses over the cap, average and longest ride — with
+  the fewest bus-minutes marked. "Use this plan" sets the two settings and
+  generates for real; the routing is deterministic, so the same plan comes
+  back. Four to five full runs, so a couple of minutes; the console logs
+  each plan and the table.
+
 * **Last year on today's roads** (`benchmarkHistory`, `[Go] Last year …`):
   the camp's own routes from last season (`historical_route_stops.json`
   beside the page: each stop as "Main St@Cross Ave", the children at it,
