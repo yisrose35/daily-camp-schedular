@@ -67,6 +67,10 @@ window.CampistryGoRoutePost = (function () {
         polishTimeBudgetMs: 1500,
         polishRideBudgetMin: 60,   // soft riding budget per bus (0 = off)
         polishOverBudgetX: 2,      // bus-minute equivalents per minute a bus runs past its budget
+        polishOverBudgetQuad: 0,   // ...plus this x the SQUARE of those minutes: a bus far over the cap costs
+                                   // far more than two buses a little over, so overage is never piled onto one
+        polishBlockMax: 8,         // block relocate: up to this many stops of an over-budget bus move together
+        polishBlockTargets: 6,     // ...to one of the this-many buses furthest under their budget
         polishMinGainMin: 0.05,
         polishLnsIters: 0,         // ruin-and-recreate attempts after local search converges.
                                    // Measured on camp-shaped layouts: no gain over relocate/swap,
@@ -95,13 +99,23 @@ window.CampistryGoRoutePost = (function () {
                                    // the district polish alike, and counted against the route budget, since
                                    // the route total the app caps and shows includes it.
         // Stop ordering
-        tspUnfairWeight: 10,       // weight on minutes a child rides beyond their allowance (2 x direct + slack).
-                                   // A tour minute weighs 60, so at 10 one bus minute buys six unfair
-                                   // child-minutes. At 2 the return-aware ordering kept two children
-                                   // who live 15 min from camp aboard for 91 minutes — dropped last, on
-                                   // the way home from a rural loop — to save the bus an 8-minute return.
+        tspUnfairWeight: 2,        // weight on minutes a child rides beyond their allowance (2 x direct + slack)
+        routeCapMin: 0,            // Max Route Duration for the stop ordering (0 = off): a route over it is
+        tspOverCapQuad: 30,        // charged this x the SQUARE of the minutes over (30 = half a tour minute per
+                                   // minute²), so an over-cap bus leans to its shortest order rather than
+                                   // minimum latency — the order the district polish priced it at.
+        tspUnfairQuad: 0.3,        // ...plus this x the SQUARE of those minutes. A tour minute weighs 60. A
+                                   // child 8 min over costs 35 (cheap: a few minutes' shuffle is fine); 36 min
+                                   // over costs 460, 52 over 915. That is the shape a camp wants: a mild
+                                   // overrun is not worth bus minutes, an hour extra for a child who lives
+                                   // 15 min from camp is. A flat weight of 10 protected the same children
+                                   // but cost 4% more fleet minutes on the camp's run, paid on mild cases.
         tspNeighborK: 10,          // candidate moves only among each stop's K nearest (LKH-style neighbour lists)
-        tspKicks: null,            // iterated-local-search kicks around the best tour (null = 4 + n/8, max 12)
+        tspKicks: null,            // iterated-local-search kicks around the best tour (null = 32 up to 30
+                                   // stops, else 4 + n/8 capped at 12). The unfair-ride term makes the
+                                   // objective rugged on small routes: at 7 kicks a 25-stop route landed
+                                   // 4% apart depending on the order it was handed over in; 32 kicks
+                                   // land on one answer, ~110 ms per route.
     };
     function opts(o) { return Object.assign({}, DEFAULTS, o || {}); }
 
@@ -212,6 +226,8 @@ window.CampistryGoRoutePost = (function () {
         // Closed tour: arrival (everyone rides back to camp) or a dismissal
         // shift that returns to camp empty. Either way the last leg is bus time.
         const RET = !isArrival && !!o.returnToDepot, CLOSED = isArrival || RET;
+        const QUAD = Math.max(0, o.tspUnfairQuad || 0);
+        const CAPMIN = o.routeCapMin > 0 ? o.routeCapMin : 0, CAPQ = Math.max(0, o.tspOverCapQuad || 0);
         for (let i = 0; i < n; i++) {
             M[i] = new Float64Array(n);
             C[i] = legOf(depot, movable[i]);
@@ -250,15 +266,18 @@ window.CampistryGoRoutePost = (function () {
             // returns to camp pays the empty ride home as bus time only.
             if (isArrival) { time += R[prev]; tour += R[prev]; }
             else if (RET) tour += R[prev];
-            let total = 0, head = 0, unfair = 0;
+            // the route total the cap applies to: last drop, plus the ride home when the shift returns
+            const routeTotal = isArrival ? time : time + (RET ? R[prev] : 0);
+            const overCap = CAPMIN && CAPQ && routeTotal > CAPMIN ? CAPQ * (routeTotal - CAPMIN) * (routeTotal - CAPMIN) : 0;
+            let total = 0, head = 0, unfair = 0, unfair2 = 0;
             for (let p = 0; p < n; p++) {
                 const idx = at(p), k = cnt[idx];
                 const ride = isArrival ? (time - arr[p]) : arr[p];
                 head += k; total += k * ride;
-                if (ride > allow[idx]) unfair += k * (ride - allow[idx]);
+                if (ride > allow[idx]) { const e = ride - allow[idx]; unfair += k * e; unfair2 += k * e * e; }
             }
             // tour is kept in seconds to preserve the original weighting
-            return total + unfair * o.tspUnfairWeight + (tour * 60) * Math.max(1, head / 40);
+            return total + unfair * o.tspUnfairWeight + unfair2 * QUAD + overCap + (tour * 60) * Math.max(1, head / 40);
         }
         const identity = (t) => (p) => t[p];
 
@@ -412,7 +431,7 @@ window.CampistryGoRoutePost = (function () {
         // list moves settle in shallow optima; kicks make the result depend
         // on the stops, not on the order they were handed over in. The RNG is
         // seeded from the stop set, so re-runs reproduce themselves.
-        const kicks = Number.isFinite(o.tspKicks) ? o.tspKicks : (n < 8 ? 0 : Math.min(12, 4 + (n >> 3)));
+        const kicks = Number.isFinite(o.tspKicks) ? o.tspKicks : (n < 8 ? 0 : n <= 30 ? 32 : Math.min(12, 4 + (n >> 3)));
         if (kicks > 0 && n >= 8) {
             let seed = (n * 7919 + Math.round(C.reduce((a, b) => a + b, 0) * 100)) & 0x7fffffff;
             const rnd = () => { seed = (seed * 1103515245 + 12345) & 0x7fffffff; return seed / 0x7fffffff; };
@@ -568,16 +587,19 @@ window.CampistryGoRoutePost = (function () {
         const legOf = (a, b) => L ? L(a, b) : driveMin(a, b, o);
         let time = 0, tour = 0, prev = depot; const arr = [];
         for (const s of movable) { const l = legOf(prev, s); time += l + stopDwellMin(s, o); tour += l; arr.push(time); prev = s; }
-        if (isArrival) { const back = legOf(prev, depot); time += back; tour += back; }
-        else if (o.returnToDepot) tour += legOf(prev, depot);
-        let total = 0, head = 0, unfair = 0;
+        let routeTotal = time;
+        if (isArrival) { const back = legOf(prev, depot); time += back; tour += back; routeTotal = time; }
+        else if (o.returnToDepot) { const back = legOf(prev, depot); tour += back; routeTotal += back; }
+        const capMin = o.routeCapMin > 0 ? o.routeCapMin : 0, capQ = Math.max(0, o.tspOverCapQuad || 0);
+        const overCap = capMin && capQ && routeTotal > capMin ? capQ * (routeTotal - capMin) * (routeTotal - capMin) : 0;
+        let total = 0, head = 0, unfair = 0, unfair2 = 0;
         movable.forEach((s, i) => {
             const k = riders(s) || 1, ride = isArrival ? (time - arr[i]) : arr[i];
             head += k; total += k * ride;
             const allow = legOf(depot, s) * o.maxRideRatio + o.rideRatioSlackMin;
-            if (ride > allow) unfair += k * (ride - allow);
+            if (ride > allow) { const e = ride - allow; unfair += k * e; unfair2 += k * e * e; }
         });
-        return total + unfair * o.tspUnfairWeight + (tour * 60) * Math.max(1, head / 40);
+        return total + unfair * o.tspUnfairWeight + unfair2 * Math.max(0, o.tspUnfairQuad || 0) + overCap + (tour * 60) * Math.max(1, head / 40);
     }
 
     function routeLastDropMin(route, depot, o) {
@@ -1211,6 +1233,7 @@ window.CampistryGoRoutePost = (function () {
         const t0 = Date.now();
         const speed = Math.max(1, o.avgSpeedMph), budget = o.polishRideBudgetMin, OVERHEAD = o.busOverheadMin;
         const OVERX = Number.isFinite(o.polishOverBudgetX) ? Math.max(0, o.polishOverBudgetX) : 2;
+        const OVERQ = Math.max(0, o.polishOverBudgetQuad || 0);
         const LAMBDA = Math.max(0, o.polishChildMinuteWeight || 0);
         const SPLIT = Math.max(0, o.polishStreetSplitMin || 0);
         const ARR = !!o.isArrival;
@@ -1362,7 +1385,11 @@ window.CampistryGoRoutePost = (function () {
         function refresh(b) { evalTour(b.atoms, b.tour, b); b.wedge = arcDeg(b.atoms, depot, o); }
         // Cost of one bus: its minutes, the cost of running it at all, a
         // penalty for running past the route budget, and the children's minutes.
-        const busCost = (len, cm) => len <= 0 ? 0 : len + OVERHEAD + (budget > 0 ? OVERX * Math.max(0, len - budget) : 0) + LAMBDA * cm;
+        const busCost = (len, cm) => {
+            if (len <= 0) return 0;
+            const over = budget > 0 ? Math.max(0, len - budget) : 0;
+            return len + OVERHEAD + OVERX * over + OVERQ * over * over + LAMBDA * cm;
+        };
         const objective = () => B.reduce((a, b) => a + busCost(b.len, b.childMin), 0) + streetPenalty();
         const fleetMin = () => B.reduce((a, b) => a + b.len, 0);
         const childMin = () => B.reduce((a, b) => a + b.childMin, 0);
@@ -1453,6 +1480,67 @@ window.CampistryGoRoutePost = (function () {
         const EPS = o.polishMinGainMin;
 
         let stop = false;
+        // ── block relocate ──
+        // A bus past its budget rarely got there by one stop: it serves two
+        // branches, or a far township on top of its own ground. Single-atom
+        // moves cannot hand a branch to a bus sitting near camp with seats —
+        // each atom alone costs that bus an out-and-back, so none ever pays —
+        // and the reach rule never even prices it. So try whole blocks: the far
+        // end of the run (tour suffixes) and radial clusters around the
+        // farthest atom, handed to a bus UNDER its budget with the seats and
+        // containment, near or not. Priced exactly for the receiver (its tour
+        // rebuilt) and by splicing the block out of the giver's tour (a valid
+        // order, slightly pessimistic); the apply rebuilds both. The camp's
+        // Bus 8 was a 9-minute run with 24 empty seats while Bus 2 ran 102.
+        function blockRelocate() {
+            let moved = 0;
+            const over = B.map((b, i) => i).filter(i => B[i].len > budget && B[i].tour.length >= 3)
+                .sort((i, j) => B[j].len - B[i].len);
+            if (!over.length) return 0;
+            const under = B.map((b, i) => i).filter(i => B[i].len <= budget)
+                .sort((i, j) => (B[i].len - B[j].len)).slice(0, o.polishBlockTargets);
+            if (!under.length) return 0;
+            for (const ai of over) {
+                if (outOfTime()) { stop = true; break; }
+                const A = B[ai], n = A.tour.length, maxK = Math.min(o.polishBlockMax, n - 1);
+                const seen = new Set(), blocks = [];
+                const add = blk => { const k = blk.slice().sort((x, y) => x - y).join(','); if (!seen.has(k)) { seen.add(k); blocks.push(blk); } };
+                for (let k = 2; k <= maxK; k++) add(A.tour.slice(n - k));
+                let far = A.tour[0], fd = -1;
+                for (const i of A.tour) { const d = haversineMi(depot.lat, depot.lng, A.atoms[i].lat, A.atoms[i].lng); if (d > fd) { fd = d; far = i; } }
+                const fa = A.atoms[far];
+                const byDist = A.tour.slice().sort((x, y) =>
+                    haversineMi(fa.lat, fa.lng, A.atoms[x].lat, A.atoms[x].lng) - haversineMi(fa.lat, fa.lng, A.atoms[y].lat, A.atoms[y].lng));
+                for (let k = 3; k <= maxK; k++) add(byDist.slice(0, k));
+                const objBefore = objective();
+                let best = null;
+                const tryMove = (blk, Bb, keep) => {
+                    const sA = snap(A), sB = snap(Bb);
+                    const positions = blk.map(i => A.tour.indexOf(i)).sort((x, y) => y - x);
+                    const moving = positions.map(p => removeAt(A, p));
+                    for (const a of moving) insertAt(Bb, a, Bb.tour.length);
+                    if (keep) buildTour(A); else refresh(A);
+                    buildTour(Bb);
+                    const obj = objective();
+                    if (!keep) { restore(A, sA); restore(Bb, sB); }
+                    return obj;
+                };
+                for (const blk of blocks) {
+                    const atoms = blk.map(i => A.atoms[i]);
+                    const cntSum = atoms.reduce((a, x) => a + cnt(x), 0);
+                    for (const bi of under) {
+                        if (bi === ai) continue;
+                        const Bb = B[bi];
+                        if (Bb.count + cntSum > Bb.cap) continue;
+                        if (!wedgeOk(Bb, atoms, -1)) continue;
+                        const obj = tryMove(blk, Bb, false);
+                        if (obj < objBefore - EPS && (!best || obj < best.obj)) best = { obj, bi, blk: blk.slice() };
+                    }
+                }
+                if (best) { tryMove(best.blk, B[best.bi], true); moved++; moves++; }
+            }
+            return moved;
+        }
         function localSearch() {
         for (let pass = 0; pass < o.polishMaxPasses && !stop; pass++) {
             if (outOfTime()) break;
@@ -1538,6 +1626,8 @@ window.CampistryGoRoutePost = (function () {
                     else { restore(A, sA); restore(Bb, sB); }
                 }
             }
+            // ── block relocate (over-budget buses only) ──
+            if (budget > 0 && !stop && blockRelocate()) improved = true;
             // keep the tour proxy honest after a round of edits
             for (const b of B) buildTour(b);
             if (!improved) break;

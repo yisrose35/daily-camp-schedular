@@ -86,9 +86,20 @@ addresses ─ geocode ─┬─ road graph (OpenStreetMap) ─ neighbourhoods �
   first road-graph run left one Jackson bus at 137 minutes while another
   carried 13 children. Ruin-and-recreate is on here (40 attempts inside the
   time budget) so stops can move in chains when every bus is near its seat
-  count. The soft budget is the route total the app caps and the Route
-  summary shows — including the ride home on the last dismissal shift — at
-  `polishOverBudgetX` (2) bus-minute equivalents per minute over.
+  count. The budget is the route total the app caps and the Route summary
+  shows — including the ride home on the last dismissal shift — priced at
+  `polishOverBudgetX` (2) bus-minute equivalents per minute over plus
+  `polishOverBudgetQuad` (0.25 in the road polish) times the square, so a bus
+  40 over costs 480 and one 10 over 45: overage is worth real fleet minutes
+  to remove and is never piled onto one bus. **Block relocate**: a bus past
+  its budget rarely got there by one stop — it serves two branches, or a far
+  township on top of its own ground — and single-stop moves can never hand a
+  branch to a bus sitting near camp with seats (each stop alone costs it an
+  out-and-back). So the polish also tries whole blocks (the far end of the
+  run, and radial clusters around the farthest stop, up to `polishBlockMax`
+  stops) handed to one of the `polishBlockTargets` buses furthest under their
+  budget, priced exactly. On the camp's run Bus 8 was a 9-minute run with 24
+  empty seats while Bus 2 ran 102 minutes.
 
 * **The ride home** (`returnToDepot`): the last dismissal shift drives back
   to camp after its final drop. That leg is real bus time, so the districting
@@ -111,15 +122,22 @@ receiver's wedge past the limit.
 ### Ordering (`localTspOrder`)
 
 Objective is **children-minutes** (minimum latency), plus `tspUnfairWeight`
-(10) times the minutes a child rides beyond their allowance (`2 × direct trip
-+ 10`, the same allowance the ride-ratio audit uses), plus the tour length.
-A tour minute weighs 60, so one bus minute buys six unfair child-minutes. At
-the old weight of 2 the return-aware ordering kept two children who live 15
-minutes from camp aboard for 91 minutes — dropped last, on the way home from
-the rural Jackson loop, because the nine children at the loop's first stop
-rode less that way. Minimum latency is right for the many; the allowance is
-the guard for the few, and it has to cost more than a handful of bus minutes
-to do that job.
+(2) times the minutes a child rides beyond their allowance (`2 × direct trip
++ 10`, the same allowance the ride-ratio audit uses) plus `tspUnfairQuad`
+(0.3) times their square, plus the tour length. A tour minute weighs 60. A
+child 8 minutes over costs 35 — a few minutes' shuffle is not worth bus
+minutes — while 36 over costs 460 and 52 over 915. The return-aware ordering
+once kept two children who live 15 minutes from camp aboard for 91 minutes,
+dropped last on the way home from the rural Jackson loop because the nine
+children at the loop's first stop rode less that way; minimum latency is
+right for the many, the allowance guards the few, and a flat weight high
+enough to guard them cost 4% more fleet minutes paid on mild cases. A route
+over Max Route Duration (`routeCapMin`) is also charged `tspOverCapQuad` (30)
+times the square of the minutes over, so an over-cap bus leans to its
+shortest order — the one the district polish priced it at — rather than
+minimum latency. Small routes get 32 iterated-local-search kicks (the
+unfair term makes the objective rugged: at 7 kicks a 25-stop route landed 4%
+apart depending on the order it was handed over in).
 Arrival mode charges the drive from the last pickup back to camp; a dismissal
 shift that returns to camp charges the empty ride home as bus time only, so
 a run ends nearer camp when that saves more than it costs the children.
