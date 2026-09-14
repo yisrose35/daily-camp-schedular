@@ -73,6 +73,27 @@ test('the UI loads after the modules it reads off window', () => {
     });
 });
 
+test('the Me app itself is not served on a stale cache-bust', () => {
+    // campistry_me.js sat on a 20260910 version through four days of edits to
+    // it — the ledger fix, the unmatched-money modal, home phone, bunk
+    // aliases — all deployed and none of them reaching a browser. The deposit
+    // modules have had this guard since the same thing happened to them; the
+    // file they are wired into needs it more, because it changes constantly.
+    const html = fs.readFileSync(PAGE, 'utf8');
+    const found = tags(html);
+    const me = found['campistry_me.js'];
+    assert.ok(me, 'campistry_me.js needs a ?v= cache-bust');
+
+    const src = fs.readFileSync(path.join(ROOT, 'campistry_me.js'), 'utf8');
+    // The version is a date stamp; it only has to be >= the newest date stamp
+    // any deposit module carries, since they ship together from this page.
+    const depV = REQUIRED.map(f => found[f]).filter(Boolean).sort().pop();
+    assert.ok(me >= depV,
+        'campistry_me.js is on ' + me + ' while the deposit modules are on ' + depV +
+        ' — bump it, or the browser keeps running an older Me app');
+    assert.ok(src.length > 0);
+});
+
 test('the UI build stamp matches the page cache-bust', () => {
     // The stamp is shown in the Bank layouts footer so a stale browser can be
     // identified from the screen instead of guessed at. It is only useful if it

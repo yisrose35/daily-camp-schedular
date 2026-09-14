@@ -3358,95 +3358,110 @@ function renderStructure(){
             var grades=_sortedGrades(dd);
             var bCt=grades.reduce(function(s,e){return s+(e[1].bunks||[]).length},0);
             var col=dd.color||'#94A3B8';
+            var camperCt=Object.values(roster).filter(function(c){return c.division===dn}).length;
             var rollup=_divisionHeadRollup(dn,grades);
             var dHeadChip=rollup.heads.length
                 ?rollup.heads.map(function(s){return esc(s.name);}).join(', ')
-                :(rollup.editable?'+ Assign division head':(rollup.mixed?'Set per grade below':'+ Assign a head per grade below'));
+                :(rollup.editable?'+ Assign division head':(rollup.mixed?'Set per grade below':'+ Assign per grade'));
             var dHeadAttrs=rollup.editable
-                ?' onclick="CampistryMe.openDivisionHeadModal(\''+je(dn)+'\')" style="cursor:pointer"'
+                ?' onclick="event.stopPropagation();CampistryMe.openDivisionHeadModal(\''+je(dn)+'\')" style="cursor:pointer"'
                 :' style="cursor:default"';
             var bodyId='structBody'+ix;
-            var divBunksId='structDivBunks'+ix;
-            var divBunksOpen=!!_accOpenState['structdb_'+dn];
             var openKey='struct_'+dn;
             var isOpen=Object.prototype.hasOwnProperty.call(_accOpenState,openKey)?_accOpenState[openKey]:false;
-            h+='<div class="me-card me-div-card" data-div="'+je(dn)+'" style="margin-bottom:10px">'
-                +'<div class="me-card-head"><div style="display:flex;align-items:center;gap:8px;cursor:pointer;min-width:0" onclick="CampistryMe._toggleAcc(\''+bodyId+'\',\''+je(openKey)+'\')" title="'+(isOpen?'Collapse':'Expand')+' this division">'
-                +'<span class="me-grip me-div-grip" title="Drag to reorder division" onclick="event.stopPropagation()" style="cursor:grab;color:var(--s400);font-size:1rem;line-height:1;padding:0 4px;user-select:none">⋮⋮</span>'
-                +'<span id="'+bodyId+'Chev" style="color:var(--s400);font-size:.7rem;flex-shrink:0">'+(isOpen?'▾':'▸')+'</span>'
-                +'<div style="width:10px;height:10px;border-radius:3px;background:'+col+';flex-shrink:0"></div><h3 style="margin:0;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">'+esc(dn)+'</h3>'
-                +'<span style="display:flex;gap:4px;flex-shrink:0">'+bdg(grades.length+' grade'+(grades.length!==1?'s':''),'gray')
-                // The bunk count was a dead number. It is the fastest way to
-                // answer "what is actually in this division" without opening it
-                // and reading seven grades, so it opens a flat list of them.
-                +'<span onclick="event.stopPropagation();CampistryMe._toggleAcc(\''+divBunksId+'\',\''+je('structdb_'+dn)+'\')" title="Show every bunk in this division" style="cursor:pointer">'
-                +bdg(bCt+' bunk'+(bCt!==1?'s':'')+' \u25be','gray')+'</span></span>'
-                +'</div><div style="display:flex;gap:4px;align-items:center;flex-shrink:0">'
+
+            // ── DIVISION ──────────────────────────────────────────────────
+            // The division's colour runs down the left edge of everything
+            // inside it. With seven grades and thirty-five bunks on screen,
+            // that rail is what tells you at a glance where one division ends
+            // and the next begins — the old flat cards gave no such signal.
+            h+='<div class="me-card me-div-card" data-div="'+je(dn)+'" style="margin-bottom:14px;overflow:hidden;border-left:4px solid '+col+'">'
+                +'<div class="me-card-head" style="align-items:flex-start;gap:10px">'
+                +'<div style="display:flex;align-items:center;gap:9px;cursor:pointer;min-width:0;flex:1" onclick="CampistryMe._toggleAcc(\''+bodyId+'\',\''+je(openKey)+'\')" title="'+(isOpen?'Collapse':'Expand')+' this division">'
+                +'<span class="me-grip me-div-grip" title="Drag to reorder division" onclick="event.stopPropagation()" style="cursor:grab;color:var(--s300);font-size:1rem;line-height:1;padding:0 2px;user-select:none">⋮⋮</span>'
+                +'<span id="'+bodyId+'Chev" style="color:var(--s400);font-size:.72rem;flex-shrink:0;width:10px">'+(isOpen?'▾':'▸')+'</span>'
+                +'<div style="min-width:0">'
+                  +'<div style="font-size:.64rem;font-weight:700;letter-spacing:.09em;text-transform:uppercase;color:'+col+';line-height:1">Division</div>'
+                  +'<h3 style="margin:2px 0 0;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;font-size:1.06rem">'+esc(dn)+'</h3>'
+                +'</div>'
+                +'<div style="display:flex;gap:14px;align-items:baseline;margin-left:14px;flex-shrink:0;font-size:.76rem;color:var(--s500)">'
+                  +'<span><strong style="color:var(--s700);font-size:.9rem">'+grades.length+'</strong> grade'+(grades.length!==1?'s':'')+'</span>'
+                  +'<span><strong style="color:var(--s700);font-size:.9rem">'+bCt+'</strong> bunk'+(bCt!==1?'s':'')+'</span>'
+                  +'<span><strong style="color:var(--s700);font-size:.9rem">'+camperCt+'</strong> camper'+(camperCt!==1?'s':'')+'</span>'
+                +'</div>'
+                +'</div>'
+                +'<div style="display:flex;gap:10px;align-items:center;flex-shrink:0">'
+                +'<span'+dHeadAttrs+' title="'+(rollup.editable?'Who gets notified for this division':'Assigned per grade below')+' " style="font-size:.74rem;'+(rollup.heads.length?'color:var(--s600)':'color:var(--me)')+';font-weight:600;white-space:nowrap">'
+                +'<span style="color:var(--s400);font-weight:600">Head:</span> '+dHeadChip+'</span>'
                 +'<button class="me-btn me-btn--ghost me-btn--sm" onclick="CampistryMe.editDiv(\''+je(dn)+'\')">Edit</button>'
                 +'<button class="me-btn me-btn--danger me-btn--sm" onclick="CampistryMe.deleteDiv(\''+je(dn)+'\')">Delete</button>'
                 +'</div></div>'
-                +'<div style="padding:10px 18px 0;display:flex;align-items:center;gap:6px"'+dHeadAttrs+' title="'+(rollup.editable?'Manage this division\'s head(s) — who gets notified for this division':'Assigned per grade below — shows here only once every grade shares the same head')+'">'
-                +'<span style="font-size:.7rem;color:var(--s400);font-weight:600">Division Head:</span>'
-                +'<span style="font-size:.72rem;'+(rollup.heads.length?'color:var(--s600);font-weight:600':(rollup.editable?'color:var(--me);font-weight:600':'color:var(--s400);font-weight:600'))+'">'+dHeadChip+'</span>'
-                +'</div>'
-                +'<div id="'+divBunksId+'" style="display:'+(divBunksOpen?'block':'none')+';padding:10px 18px 2px">'
-                +(bCt
-                    ?'<div style="display:flex;flex-wrap:wrap;gap:5px">'
-                     +grades.reduce(function(acc,e){return acc.concat(e[1].bunks||[])},[]).map(function(b){
-                         var n=Object.values(roster).filter(function(c){return c.bunk===b}).length;
-                         var mc=bunkManualCounts[b];
-                         return '<span style="display:inline-flex;align-items:center;gap:5px;padding:3px 8px;border-radius:6px;'
-                             +'border:1px solid var(--s200);background:#fff;font-size:.7rem;font-weight:600;color:var(--s600)">'
-                             +esc(bunkLabel(b))
-                             +'<span style="font-size:.64rem;color:var(--s400);font-weight:700">'+(mc!=null?mc:n)+'</span></span>';
-                     }).join('')
-                     +'</div>'
-                    :'<div style="font-size:.74rem;color:var(--s400)">No bunks in this division yet.</div>')
-                +'</div>'
-                +'<div id="'+bodyId+'" style="display:'+(isOpen?'block':'none')+'">';
-            h+='<div class="me-grade-list" data-div="'+je(dn)+'" style="padding:14px 18px">';
-            grades.forEach(function([gn,gd],gix){
+                +'<div id="'+bodyId+'" style="display:'+(isOpen?'block':'none')+';background:var(--s50);border-top:1px solid var(--s100)">';
+
+            h+='<div class="me-grade-list" data-div="'+je(dn)+'" style="padding:12px 16px 14px">';
+
+            if(!grades.length){
+                h+='<div style="padding:18px;text-align:center;color:var(--s400);font-size:.84rem;border:1px dashed var(--s200);border-radius:var(--r);background:#fff">'
+                  +'No grades in this division yet. <a href="#" onclick="event.preventDefault();CampistryMe.editDiv(\''+je(dn)+'\')" style="color:var(--me);font-weight:600">Add one</a>.</div>';
+            }
+
+            // ── GRADE ─────────────────────────────────────────────────────
+            grades.forEach(function(ge,gix){
+                var gn=ge[0],gd=ge[1];
                 var gBunks=gd.bunks||[];
                 var gBunksId='structGB'+ix+'_'+gix;
                 var gOpenKey='structgb_'+dn+'_'+gn;
-                // Remembered per grade; a small grade opens by default because
-                // hiding four chips behind a click helps nobody.
                 var gOpen=Object.prototype.hasOwnProperty.call(_accOpenState,gOpenKey)
                     ?_accOpenState[gOpenKey]
                     :(gBunks.length<=8);
+                var gCampers=Object.values(roster).filter(function(c){return c.grade===gn&&c.division===dn}).length;
                 var gHeads=divisionHeads[gn]||[];
-                var gHeadChip=gHeads.length?gHeads.map(function(s){return esc(s.name);}).join(', '):'+ Assign head';
-                h+='<div class="me-grade-block" data-grade="'+je(gn)+'" style="margin-bottom:8px;padding:8px 10px;background:var(--s50);border:1px solid var(--s100);border-radius:8px">'
-                    +'<div style="display:flex;align-items:center;gap:6px;margin-bottom:6px">'
-                        +'<span class="me-grip me-grade-grip" title="Drag to reorder grade" style="cursor:grab;color:var(--s400);font-size:.85rem;line-height:1;padding:0 2px;user-select:none">⋮⋮</span>'
-                        +'<div style="font-size:.8rem;font-weight:700;color:var(--s700)">'+esc(gn)+'</div>'
-                        // The grade's own bunks, behind a count that says how
-                        // many. A division with seven grades and thirty-five
-                        // bunks is a wall of chips otherwise, and the grade
-                        // names — the thing being scanned — get lost in it.
-                        +'<span onclick="event.stopPropagation();CampistryMe._toggleAcc(\''+gBunksId+'\',\''+je(gOpenKey)+'\')" title="'+(gOpen?'Hide':'Show')+' this grade\'s bunks" style="font-size:.66rem;font-weight:700;color:var(--s500);cursor:pointer;margin-left:8px;flex-shrink:0">'
-                        +gBunks.length+' bunk'+(gBunks.length!==1?'s':'')+' <span id="'+gBunksId+'Chev">'+(gOpen?'\u25be':'\u25b8')+'</span></span>'
-                        +'<span style="font-size:.66rem;cursor:pointer;margin-left:auto;flex-shrink:0;'+(gHeads.length?'color:var(--s500);font-weight:600':'color:var(--me);font-weight:600')+'" onclick="event.stopPropagation();CampistryMe.openDivisionHeadModal(\''+je(gn)+'\')" title="Manage this grade\'s head — can be different from the division head, and notified alongside them for this grade\'s pickups">Head: '+gHeadChip+'</span>'
+                var gHeadChip=gHeads.length?gHeads.map(function(s){return esc(s.name);}).join(', '):'+ Assign';
+
+                h+='<div class="me-grade-block" data-grade="'+je(gn)+'" style="background:#fff;border:1px solid var(--s200);border-radius:10px;margin-bottom:8px;overflow:hidden">'
+                    +'<div style="display:flex;align-items:center;gap:8px;padding:9px 12px;cursor:pointer" onclick="CampistryMe._toggleAcc(\''+gBunksId+'\',\''+je(gOpenKey)+'\')">'
+                        +'<span class="me-grip me-grade-grip" title="Drag to reorder grade" onclick="event.stopPropagation()" style="cursor:grab;color:var(--s300);font-size:.85rem;line-height:1;padding:0 2px;user-select:none">⋮⋮</span>'
+                        +'<span id="'+gBunksId+'Chev" style="color:var(--s400);font-size:.66rem;width:9px;flex-shrink:0">'+(gOpen?'▾':'▸')+'</span>'
+                        +'<div style="min-width:0">'
+                          +'<div style="font-size:.6rem;font-weight:700;letter-spacing:.09em;text-transform:uppercase;color:var(--s400);line-height:1">Grade</div>'
+                          +'<div style="font-size:.9rem;font-weight:700;color:var(--s800,#1f2937);margin-top:1px">'+esc(gn)+'</div>'
+                        +'</div>'
+                        +'<div style="display:flex;gap:12px;align-items:baseline;margin-left:12px;font-size:.74rem;color:var(--s500);flex-shrink:0">'
+                          +'<span><strong style="color:var(--s700)">'+gBunks.length+'</strong> bunk'+(gBunks.length!==1?'s':'')+'</span>'
+                          +'<span><strong style="color:var(--s700)">'+gCampers+'</strong> camper'+(gCampers!==1?'s':'')+'</span>'
+                        +'</div>'
+                        +'<span style="font-size:.72rem;cursor:pointer;margin-left:auto;flex-shrink:0;'+(gHeads.length?'color:var(--s600);font-weight:600':'color:var(--me);font-weight:600')+'" onclick="event.stopPropagation();CampistryMe.openDivisionHeadModal(\''+je(gn)+'\')" title="This grade\'s head — can differ from the division head">'
+                        +'<span style="color:var(--s400)">Head:</span> '+gHeadChip+'</span>'
                     +'</div>'
-                    +'<div id="'+gBunksId+'" style="display:'+(gOpen?'block':'none')+'">'
-                    +'<div class="me-card-bunks" data-grade="'+je(gn)+'" style="display:flex;flex-wrap:wrap;gap:5px;padding-left:18px">';
-                (gd.bunks||[]).forEach(function(b){
+                    // ── BUNKS ─────────────────────────────────────────────
+                    +'<div id="'+gBunksId+'" style="display:'+(gOpen?'block':'none')+';border-top:1px solid var(--s100);background:var(--s50);padding:10px 12px 11px">'
+                    +'<div style="font-size:.6rem;font-weight:700;letter-spacing:.09em;text-transform:uppercase;color:var(--s400);margin-bottom:7px">Bunks</div>'
+                    +'<div class="me-card-bunks" data-grade="'+je(gn)+'" style="display:flex;flex-wrap:wrap;gap:6px">';
+
+                if(!gBunks.length){
+                    h+='<span style="font-size:.78rem;color:var(--s400)">None yet — add them in Edit.</span>';
+                }
+                gBunks.forEach(function(b){
                     var rCt=Object.values(roster).filter(function(c){return c.bunk===b}).length;
                     var mCt=bunkManualCounts[b];
                     var isOverride=(mCt!=null);
                     var dispCt=isOverride?mCt:rCt;
-                    var badgeTip=isOverride?'Manual count (click to edit)':'Roster count (click to set manual count)';
-                    var badgeStyle=isOverride
-                        ?'background:var(--me);color:#fff;'
-                        :(rCt?'background:#e2e8f0;color:#475569;':'background:#f1f5f9;color:#94a3b8;');
-                    h+='<span class="me-card-bunk" data-bunk="'+je(b)+'" draggable="true" style="display:inline-flex;align-items:center;gap:4px;padding:3px 6px 3px 8px;border-radius:6px;border:1px solid var(--s200);background:#fff;font-size:.7rem;font-weight:600;color:var(--s600);cursor:grab;user-select:none">'
-                        +esc(b)
-                        // The camp's own name for the bunk, if it has one. Click
-                        // either the name or the empty space after it to set one.
-                        +(bunkAlias(b)
-                            ?'<span title="Also called" onclick="event.stopPropagation();CampistryMe.openBunkAlias(\''+je(b)+'\')" style="font-weight:500;color:var(--s400);cursor:pointer">\u00b7 '+esc(bunkAlias(b))+'</span>'
-                            :'<span title="Give this bunk a second name" onclick="event.stopPropagation();CampistryMe.openBunkAlias(\''+je(b)+'\')" style="color:var(--s300);cursor:pointer;font-weight:400;padding:0 2px">+</span>')
-                        +'<span class="bunk-ct-pill" title="'+esc(badgeTip)+'" onclick="event.stopPropagation();CampistryMe.openBunkCountModal(\''+je(b)+'\')" style="'+badgeStyle+'min-width:18px;height:16px;border-radius:8px;font-size:.65rem;font-weight:700;padding:0 5px;cursor:pointer;display:inline-flex;align-items:center;justify-content:center;">'+dispCt+'</span>'
+                    var alias=bunkAlias(b);
+                    h+='<span class="me-card-bunk" data-bunk="'+je(b)+'" draggable="true" title="Drag to move between grades" style="display:inline-flex;align-items:center;gap:7px;padding:5px 7px 5px 10px;border-radius:8px;border:1px solid var(--s200);background:#fff;cursor:grab;user-select:none">'
+                        +'<span style="display:flex;flex-direction:column;line-height:1.25;min-width:0">'
+                          +'<span style="font-size:.78rem;font-weight:700;color:var(--s700)">'+esc(b)+'</span>'
+                          // The camp's own name for the bunk sits UNDER the
+                          // real one rather than beside it: 35 chips each
+                          // carrying two names on one line is unreadable, and
+                          // the canonical name has to stay the one you read
+                          // first, since that is what every other screen uses.
+                          +(alias
+                            ?'<span onclick="event.stopPropagation();CampistryMe.openBunkAlias(\''+je(b)+'\')" title="Edit second name" style="font-size:.68rem;color:var(--s400);cursor:pointer">'+esc(alias)+'</span>'
+                            :'<span onclick="event.stopPropagation();CampistryMe.openBunkAlias(\''+je(b)+'\')" title="Give this bunk a second name" style="font-size:.66rem;color:var(--s300);cursor:pointer">+ name</span>')
+                        +'</span>'
+                        +'<span class="bunk-ct-pill" title="'+(isOverride?'Manual count — click to edit':'Campers on the roster — click to set a manual count')+'" onclick="event.stopPropagation();CampistryMe.openBunkCountModal(\''+je(b)+'\')" style="'
+                        +(isOverride?'background:var(--me);color:#fff;':(rCt?'background:#e2e8f0;color:#475569;':'background:#f1f5f9;color:#cbd5e1;'))
+                        +'min-width:22px;height:20px;border-radius:6px;font-size:.7rem;font-weight:700;padding:0 6px;cursor:pointer;display:inline-flex;align-items:center;justify-content:center">'+dispCt+'</span>'
                         +'</span>';
                 });
                 h+='</div></div></div>';
@@ -10427,17 +10442,36 @@ function renderFinance(){
         if(overdueCount>0){
             h+='<div style="background:#FEF2F2;border:1px solid #FECACA;border-radius:var(--r);padding:10px 14px;margin-bottom:10px;display:flex;align-items:center;gap:8px"><span style="font-size:18px">⚠️</span><div><div style="font-size:.85rem;font-weight:700;color:var(--err)">'+overdueCount+' overdue account'+(overdueCount>1?'s':'')+'</div><div style="font-size:.75rem;color:#991B1B">'+fm(autoInvoices.filter(function(i){return i.isOverdue}).reduce(function(s,i){return s+i.balance},0))+' outstanding past '+overdueDays+' days</div></div></div>';
         }
-        h+='<div style="display:flex;gap:8px;flex-wrap:wrap;margin-bottom:10px">';
-        h+=stat('Projected Revenue',fm(projected),enrolledCount+' enrolled campers','var(--me)');
-        h+=stat('Collected',fm(totalCollected),projected>0?Math.round(totalCollected/projected*100)+'% of projected':'','var(--ok)');
-        h+=stat('Outstanding',fm(totalOutstanding),overdueCount+' overdue, '+pendingCount+' pending','var(--err)');
-        h+=stat('Net Income',fm(netIncome),netIncome>=0?'Positive':'Deficit',netIncome>=0?'var(--ok)':'var(--err)');
-        h+='</div><div style="display:flex;gap:8px;flex-wrap:wrap;margin-bottom:14px">';
-        h+=stat('Total Payroll',fm(totalPayroll),finStaff.length+' staff','#3B82F6');
-        h+=stat('Total Expenses',fm(totalExp),finExpenses.length+' items','#8B5CF6');
-        h+=stat('Total Costs',fm(totalPayroll+totalExp),'Payroll + Expenses','var(--s600)');
-        h+=stat('Profit Margin',projected>0?Math.round(netIncome/projected*100)+'%':'—','Net / Revenue','#0EA5E9');
-        h+='</div>';
+        // Eight tiles in two undifferentiated rows told you nothing about
+        // which were money IN, which were money OUT, and which was the answer.
+        // Grouped and labelled, with the result given its own weight — net
+        // income is the number somebody opens this page for, and it was the
+        // fourth tile in the first row, indistinguishable from the rest.
+        function _finGroup(title,tiles){
+            return '<div style="margin-bottom:12px">'
+                +'<div style="font-size:.68rem;font-weight:700;letter-spacing:.07em;text-transform:uppercase;color:var(--s400);margin-bottom:7px">'+title+'</div>'
+                +'<div style="display:flex;gap:8px;flex-wrap:wrap">'+tiles+'</div></div>';
+        }
+
+        h+='<div class="me-card" style="padding:16px 18px;margin-bottom:14px;display:flex;gap:26px;align-items:center;flex-wrap:wrap;border-left:4px solid '+(netIncome>=0?'var(--ok)':'var(--err)')+'">'
+            +'<div><div style="font-size:.7rem;font-weight:700;letter-spacing:.07em;text-transform:uppercase;color:var(--s400)">Net income</div>'
+            +'<div style="font-size:2rem;font-weight:800;line-height:1.1;margin-top:3px;color:'+(netIncome>=0?'var(--ok)':'var(--err)')+'">'+fm(netIncome)+'</div>'
+            +'<div style="font-size:.78rem;color:var(--s500);margin-top:2px">'+(netIncome>=0?'Collected less costs':'Costs exceed what has been collected')+'</div></div>'
+            +'<div style="display:flex;gap:22px;flex-wrap:wrap;font-size:.8rem;color:var(--s500);border-left:1px solid var(--s100);padding-left:24px">'
+            +'<div><div style="color:var(--s400);font-size:.72rem">Collected</div><strong style="font-size:1.05rem;color:var(--s700)">'+fm(totalCollected)+'</strong></div>'
+            +'<div><div style="color:var(--s400);font-size:.72rem">Costs</div><strong style="font-size:1.05rem;color:var(--s700)">'+fm(totalPayroll+totalExp)+'</strong></div>'
+            +'<div><div style="color:var(--s400);font-size:.72rem">Margin</div><strong style="font-size:1.05rem;color:var(--s700)">'+(projected>0?Math.round(netIncome/projected*100)+'%':'\u2014')+'</strong></div>'
+            +'</div></div>';
+
+        h+=_finGroup('Money in',
+            stat('Projected Revenue',fm(projected),enrolledCount+' enrolled campers','var(--me)')
+            +stat('Collected',fm(totalCollected),projected>0?Math.round(totalCollected/projected*100)+'% of projected':'','var(--ok)')
+            +stat('Outstanding',fm(totalOutstanding),overdueCount+' overdue, '+pendingCount+' pending','var(--err)'));
+
+        h+=_finGroup('Money out',
+            stat('Payroll',fm(totalPayroll),finStaff.length+' staff','#3B82F6')
+            +stat('Expenses',fm(totalExp),finExpenses.length+' items','#8B5CF6')
+            +stat('Total Costs',fm(totalPayroll+totalExp),'Payroll + expenses','var(--s600)'));
 
         // ═══ A/R AGING — outstanding balance bucketed by age of the invoice ═══
         var aging=[{l:'Current (0–30 days)',v:0},{l:'31–60 days',v:0},{l:'61–90 days',v:0},{l:'90+ days',v:0}];
@@ -10447,12 +10481,16 @@ function renderFinance(){
             if(days<=30)aging[0].v+=inv.balance; else if(days<=60)aging[1].v+=inv.balance; else if(days<=90)aging[2].v+=inv.balance; else aging[3].v+=inv.balance;
         });
         var agingTotal=aging.reduce(function(s,b){return s+b.v},0);
-        h+='<div class="me-card" style="margin-bottom:14px;padding:16px"><div style="display:flex;justify-content:space-between;align-items:baseline;margin-bottom:10px"><h4 style="font-size:.85rem;font-weight:700;color:var(--s700);margin:0">Accounts Receivable — Aging</h4><span style="font-size:.72rem;color:var(--s400)">Total outstanding '+fm(agingTotal)+'</span></div>';
+        // Two up where there is room: none of these charts needs 1400px, and
+        // stacking them full-width meant scrolling past each one to reach the
+        // next.
+        h+='<div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(360px,1fr));gap:14px;margin-bottom:14px">';
+        h+='<div class="me-card" style="padding:16px"><div style="display:flex;justify-content:space-between;align-items:baseline;margin-bottom:10px"><h4 style="font-size:.85rem;font-weight:700;color:var(--s700);margin:0">Accounts Receivable — Aging</h4><span style="font-size:.72rem;color:var(--s400)">Total outstanding '+fm(agingTotal)+'</span></div>';
         h+=chartBarH(aging.map(function(b){return{label:b.l,value:b.v}}),{money:true,emptyText:'Nothing outstanding'});
         h+='</div>';
 
         // Payment status
-        h+='<div class="me-card" style="margin-bottom:14px;padding:16px"><h4 style="font-size:.85rem;font-weight:700;color:var(--s700);margin:0 0 10px">Payment Status</h4>';
+        h+='<div class="me-card" style="padding:16px"><h4 style="font-size:.85rem;font-weight:700;color:var(--s700);margin:0 0 10px">Payment Status</h4>';
         h+=chartDonut([
             {label:'Paid',value:paidCount,color:'#008300'},
             {label:'Partial',value:partialCount,color:chartColor(3)},
@@ -10460,6 +10498,7 @@ function renderFinance(){
             {label:'Pending',value:pendingCount,color:'#94A3B8'}
         ],{centerLabel:String(autoInvoices.length),centerSub:'accounts'});
         h+='</div>';
+        h+='</div>';   // close the two-up grid
 
         // Expense breakdown
         var expByCat={};finExpenses.forEach(function(e){expByCat[e.cat]=(expByCat[e.cat]||0)+e.amount});
