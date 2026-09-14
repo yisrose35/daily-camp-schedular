@@ -10812,7 +10812,32 @@ var _billFilter='all'; // all, outstanding, paid, overdue
 var _billSearchTerm=''; // free-text filter over family/camper name, set by the search box in renderBilling()
 var _billUnmatchedPays=[]; // set by renderBilling(); read by openUnmatchedPaymentsModal()
 
+// Name-based fallback for payments with no usable familyKey: imports, legacy
+// rows, and anything recorded before the key was stored. Built once per render
+// rather than rescanned per payment, and normalized — an exact === against a
+// name a human typed loses to a trailing space or a capital letter.
+var _payNameIndex=null;
+function _payNameKey(v){return String(v==null?'':v).trim().toLowerCase().replace(/\s+/g,' ')}
+function _buildPayNameIndex(){
+    var idx={};
+    Object.keys(families).forEach(function(k){
+        var f=families[k]||{};
+        // First writer wins, so a camp with three households called
+        // "Rosenfeld Family" resolves the same way on every render instead of
+        // landing on whichever one Object.entries happened to visit last.
+        var add=function(n){var key=_payNameKey(n);if(key&&!(key in idx))idx[key]=k};
+        add(f.name);
+        (f.camperIds||[]).forEach(add);
+    });
+    return idx;
+}
+function _payFamilyByName(p){
+    if(!_payNameIndex) _payNameIndex=_buildPayNameIndex();
+    return _payNameIndex[_payNameKey(p.family)]||_payNameIndex[_payNameKey(p.camper)]||null;
+}
+
 function buildFamilyLedgers(){
+    _payNameIndex=null;   // families may have changed since the last build
     // Refresh `sessions` from the latest cloud-hydrated settings before
     // reading any session's tuition below. enrollCamper() already does this
     // before computing a NEW enrollment's tuition, but this function (which
@@ -10941,11 +10966,23 @@ function buildFamilyLedgers(){
 
     // 3. Payments
     finPayments.forEach(function(p){
-        // Match to family
-        var fk=null;
-        Object.entries(families).forEach(function([k,f]){
-            if(f.name===p.family||f.name===p.camper||(f.camperIds||[]).indexOf(p.family)>=0||(f.camperIds||[]).indexOf(p.camper)>=0) fk=k;
-        });
+        // Match to family.
+        //
+        // ★ The stored familyKey comes FIRST, and this is the whole fix.
+        //   Every payment and refund recorded through the app carries one
+        //   (finPayments.push at Record Payment and at both refund paths), but
+        //   this used to re-derive the family from a plain name string every
+        //   time. Rename a household, correct a typo, or record a payment
+        //   against a camper whose name later changes, and the link silently
+        //   breaks — the payment drops out of the family's ledger while still
+        //   counting toward Analytics revenue. That is exactly why Billing and
+        //   Finance disagreed, and why five real payments sat in "Unmatched"
+        //   with a valid familyKey sitting unused on every one of them.
+        //
+        //   Name matching stays as the fallback for imported and legacy rows
+        //   that never had a key — now case- and whitespace-insensitive,
+        //   because "Sara Rosenfeld " never equalled "Sara Rosenfeld".
+        var fk=(p.familyKey&&families[p.familyKey])?p.familyKey:_payFamilyByName(p);
         if(!fk) return;
         if(!ledgers[fk]) return;
         var amt=Number(p.amount)||0;
@@ -12139,7 +12176,9 @@ function renderBilling(){
     // problem though, so it stays visible as a single plain-text banner
     // instead of disappearing.
     if(_unmatchedTotal>0){
-        h+='<div style="background:#FFFBEB;border:1px solid #FDE68A;padding:9px 12px;border-radius:var(--r);margin-bottom:12px;font-size:.82rem;color:#92400E;cursor:pointer" onclick="CampistryMe.openUnmatchedPaymentsModal()">'+fm(_unmatchedTotal)+' in payments ('+_unmatchedPays.length+') isn\'t linked to any family — included in Analytics revenue. Click to review.</div>';
+        h+='<div style="background:#FFFBEB;border:1px solid #FDE68A;padding:10px 13px;border-radius:var(--r);margin-bottom:12px;font-size:.85rem;color:#92400E;cursor:pointer;display:flex;gap:10px;align-items:center;justify-content:space-between;flex-wrap:wrap" onclick="CampistryMe.openUnmatchedPaymentsModal()">'
+            +'<span><strong>'+fm(_unmatchedTotal)+'</strong> across '+_unmatchedPays.length+' record'+(_unmatchedPays.length!==1?'s':'')+' belongs to no family ledger — it still counts in Analytics revenue, which is why the two can disagree.</span>'
+            +'<span style="font-weight:700;white-space:nowrap">Review &rarr;</span></div>';
     }
 
     // Zelle/ACH money that arrived in the bank account but hasn't been tied to
@@ -12608,25 +12647,72 @@ function _crUpdateBalancePreview(){
 // actionable instead of a dead-end number.
 function openUnmatchedPaymentsModal(){
     var pays=(_billUnmatchedPays||[]).slice().sort(function(a,b){return(b.date||'').localeCompare(a.date||'')});
-    var total=pays.reduce(function(s,p){return s+(Number(p.amount)||0)},0);
-    var rows=pays.map(function(p){
-        return '<tr>'
-            +'<td>'+esc(p.date||'—')+'</td>'
-            +'<td>'+esc(p.family||p.camper||'—')+'</td>'
-            +'<td>'+esc(_payLabel(p.method)||'—')+'</td>'
-            +'<td style="text-align:right;font-weight:600">'+fm(p.amount)+'</td>'
-            +'<td>'+esc(p.notes||'')+'</td>'
-            +'</tr>';
-    }).join('');
-    var body='<p style="margin:0 0 14px;color:var(--s500);font-size:.88rem">'
-        +'These '+pays.length+' payment'+(pays.length!==1?'s':'')+' (totaling '+fm(total)+') are counted in Analytics revenue but couldn\'t be matched to a family or camper name on file — usually a typo in the name at the time the payment was recorded, or the family/camper was later renamed or deleted. Fix the family/camper name on the payment (Billing → the family\'s Record Payment history) or add the missing household, and it will move into that family\'s ledger on the next load.'
-        +'</p>'
-        +(pays.length?
-            '<table style="width:100%;border-collapse:collapse;font-size:.85rem">'
-            +'<thead><tr style="text-align:left;border-bottom:1px solid var(--s100)"><th style="padding:6px 8px 6px 0">Date</th><th style="padding:6px 8px">Family/Camper (as recorded)</th><th style="padding:6px 8px">Method</th><th style="padding:6px 8px;text-align:right">Amount</th><th style="padding:6px 0">Notes</th></tr></thead>'
-            +'<tbody>'+rows+'</tbody></table>'
-            :'<p style="margin:0;color:var(--s400)">No unmatched payments right now.</p>');
-    showModal('Unmatched Payments',body,null,{maxWidth:700});
+    // Refunds and payments are not the same problem and must not be summed
+    // into one number: a list showing "$566.67 unmatched" when it is really
+    // $2,666.67 in and $2,100 back out tells nobody anything. The old copy
+    // also called every row a "payment", which made a $-2,000 refund read as
+    // a payment of minus two thousand dollars.
+    var received=pays.filter(function(p){return(Number(p.amount)||0)>=0});
+    var refunded=pays.filter(function(p){return(Number(p.amount)||0)<0});
+    var sum=function(a){return a.reduce(function(s,p){return s+(Number(p.amount)||0)},0)};
+    var net=sum(pays);
+
+    var body='';
+    if(!pays.length){
+        body='<div style="text-align:center;padding:40px 20px">'
+            +'<div style="font-size:1.05rem;font-weight:600;color:var(--s600);margin-bottom:6px">Everything is accounted for</div>'
+            +'<div style="font-size:.9rem;color:var(--s500);max-width:460px;margin:0 auto;line-height:1.6">'
+            +'Every payment and refund on record belongs to a family ledger, so Billing and Analytics agree.</div></div>';
+        showModal('Unmatched money',body,null,{maxWidth:900});
+        return;
+    }
+
+    function stat(v,l,tone){
+        return '<div style="min-width:150px"><div style="font-size:1.5rem;font-weight:700;line-height:1.1'
+            +(tone?';color:'+tone:'')+'">'+fm(v)+'</div>'
+            +'<div style="font-size:.76rem;color:var(--s500);margin-top:2px">'+l+'</div></div>';
+    }
+
+    body+='<div style="display:flex;gap:28px;flex-wrap:wrap;padding-bottom:16px;border-bottom:1px solid var(--s100);margin-bottom:16px">'
+        +stat(sum(received),received.length+' payment'+(received.length!==1?'s':'')+' received','#92400E')
+        +(refunded.length?stat(sum(refunded),refunded.length+' refund'+(refunded.length!==1?'s':'')+' issued','#991B1B'):'')
+        +stat(net,'net effect on revenue')
+        +'</div>';
+
+    body+='<p style="margin:0 0 16px;color:var(--s600);font-size:.9rem;line-height:1.65;max-width:760px">'
+        +'These are counted in Analytics revenue but belong to no family ledger, which is why Billing and Analytics '
+        +'can disagree. It happens when the name on the record no longer matches any household — a typo when it was '
+        +'recorded, or a family renamed or deleted afterwards.'
+        +'<br><strong>To fix one:</strong> open that family in Billing and re-record it, or add the household if it is '
+        +'genuinely missing. It moves into the ledger on the next load.</p>';
+
+    function table(rows,title,tone){
+        if(!rows.length) return '';
+        return '<h4 style="margin:18px 0 8px;font-size:.92rem">'+title+'</h4>'
+            +'<table style="width:100%;border-collapse:collapse;font-size:.88rem">'
+            +'<thead><tr style="text-align:left;border-bottom:1px solid var(--s100);color:var(--s500);font-size:.78rem">'
+            +'<th style="padding:7px 10px 7px 0;white-space:nowrap">Date</th>'
+            +'<th style="padding:7px 10px">Recorded against</th>'
+            +'<th style="padding:7px 10px">Method</th>'
+            +'<th style="padding:7px 10px;text-align:right;white-space:nowrap">Amount</th>'
+            +'<th style="padding:7px 0">Notes</th></tr></thead><tbody>'
+            +rows.map(function(p){
+                var amt=Number(p.amount)||0;
+                return '<tr style="border-bottom:1px solid var(--s50)">'
+                    +'<td style="padding:9px 10px 9px 0;white-space:nowrap;color:var(--s500)">'+esc(p.date||'—')+'</td>'
+                    +'<td style="padding:9px 10px;font-weight:600">'+esc(p.family||p.camper||'—')+'</td>'
+                    +'<td style="padding:9px 10px;color:var(--s600)">'+esc(amt<0?'Refund':(_payLabel(p.method)||'—'))+'</td>'
+                    +'<td style="padding:9px 10px;text-align:right;font-weight:700;white-space:nowrap'
+                    +(tone?';color:'+tone:'')+'">'+fm(amt)+'</td>'
+                    +'<td style="padding:9px 0;color:var(--s500)">'+esc(p.notes||'')+'</td></tr>';
+            }).join('')
+            +'</tbody></table>';
+    }
+
+    body+=table(received,'Payments received ('+received.length+')')
+        +table(refunded,'Refunds issued ('+refunded.length+')','#991B1B');
+
+    showModal('Unmatched money',body,null,{maxWidth:900});
 }
 function issueCredit(){issueCreditForFamily(null)}
 function issueCreditForFamily(famKey){
