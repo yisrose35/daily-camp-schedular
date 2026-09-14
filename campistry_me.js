@@ -101,6 +101,55 @@ var leadFilter='all';       // Leads pipeline filter
 // timesheets/pay runs to payroll.staff records and is never shown to
 // anyone as an "ID number".
 var nextPersonId=1;
+// The sequence is the FALLBACK, not the rule. Plenty of camps already hand
+// out their own camper numbers (often four digits, printed on forms and
+// written on bank memos years before Campistry existed), and renumbering a
+// camp is not something software gets to ask for. So a camper id can be set
+// by hand or carried in on a CSV, and the sequence only fills in the ones
+// nobody chose. Everything downstream — invoices, reports, the deposit
+// reference <camp>-<camper> — reads roster[name].camperId and neither knows
+// nor cares which way it was set.
+
+/** Digits only, or '' — the one shape a camper id is allowed to take. */
+function normalizePersonId(v){
+    var d=String(v==null?'':v).trim().replace(/\D/g,'').replace(/^0+(?=\d)/,'');
+    return d&&Number(d)>0?d:'';
+}
+/** Roster key of the camper holding this id, or '' — ids are unique camp-wide. */
+function camperNameById(id,exceptName){
+    var want=normalizePersonId(id);
+    if(!want)return'';
+    var hit='';
+    Object.keys(roster).forEach(function(n){
+        if(hit||n===exceptName)return;
+        if(normalizePersonId((roster[n]||{}).camperId)===want)hit=n;
+    });
+    return hit;
+}
+/**
+ * Who already holds this id, as something you can put in front of a person:
+ * '' when it's free. Campers and staff share one sequence precisely so the
+ * same number is never on two badges, so both stores are checked.
+ */
+function personIdHolder(id,exceptCamper,exceptStaffId){
+    var want=normalizePersonId(id);
+    if(!want)return'';
+    var who=camperNameById(want,exceptCamper);
+    if(who)return who;
+    var staff='';
+    Object.keys(staffApplications).forEach(function(k){
+        var a=staffApplications[k];
+        if(staff||!a||k===exceptStaffId)return;
+        if(normalizePersonId(a.staffId)===want)staff=(a.name||a.fullName||'a staff member');
+    });
+    return staff;
+}
+/** Keep the auto sequence clear of an id that was just claimed by hand. */
+function reservePersonId(id){
+    var n=Number(normalizePersonId(id)||0);
+    if(n>=nextPersonId)nextPersonId=n+1;
+    return n;
+}
 // Bunk auto-generator settings — camp-wide policy for friend requests,
 // do-not-bunk-with requests, and bunk size, consumed by autoGenerateBunks()
 // and by the Post-Acceptance Form's friend-request inputs.
@@ -2673,8 +2722,12 @@ function editCamper(n){
     var d=n?roster[n]||{}:{};var parts=(n||'').split(' ');
     var titleEl=document.getElementById('ceTitle');
     if(titleEl)titleEl.textContent=n?'Edit Camper':'Add Camper';
-    var idStr=d.camperId?String(d.camperId).padStart(4,'0'):'Will be assigned on save';
-    var h='<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px"><div class="fsec" style="margin:0">Identity</div><span style="font-family:monospace;font-size:.8rem;color:var(--s400);background:var(--s100);padding:3px 10px;border-radius:var(--r)">Camper ID: #'+esc(idStr)+'</span></div>';
+    var h='<div class="fsec" style="margin-top:0">Identity</div>';
+    h+='<div class="fr"><div class="fg"><label class="fl">Camper ID</label>'+
+       '<input type="text" id="ceCamperId" class="fi" inputmode="numeric" style="font-family:monospace" value="'+
+       esc(d.camperId?String(d.camperId):'')+'" placeholder="'+
+       esc(d.camperId?'':'Blank \u2192 '+String(nextPersonId).padStart(4,'0'))+'"></div><div class="fg"></div></div>';
+    h+='<p style="font-size:.65rem;color:var(--s400);margin:-4px 0 8px;padding-left:2px">Your own number if you already give them out — parents put it in the bank memo. Leave blank and Campistry assigns the next one.</p>';
     h+='<div class="fr">'+ff('First Name','ceFirst',parts[0]||'')+ff('Last Name','ceLast',parts.slice(1).join(' ')||'')+'</div>';
     h+='<div class="fr">'+ff('Alternate First Name','ceAltFirst',d.altFirstName||'')+ff('Alternate Last Name','ceAltLast',d.altLastName||'')+'</div>';
     h+='<p style="font-size:.65rem;color:var(--s400);margin:-4px 0 8px;padding-left:2px">Hebrew, Spanish, Chinese, or any other name used at camp</p>';
@@ -2824,8 +2877,20 @@ function saveCamper(){
     if(!editingCamper&&roster[full]){toast('Already exists','error');return}
     // Gather teams
     var teams={};document.querySelectorAll('.ceTeamSel').forEach(function(sel){var lg=sel.dataset.league,v=sel.value;if(lg&&v)teams[lg]=v});
-    if(!existingId){existingId=nextPersonId;nextPersonId++}
     function _v(id){var el=document.getElementById(id);return el?(el.value||''):'';}
+    // A typed id wins over the one on file, but only if it's free. Silently
+    // moving a number off another camper would re-point their invoices and
+    // every bank memo a parent already wrote, so a clash is refused.
+    var _typedIdRaw=_v('ceCamperId').trim();
+    if(_typedIdRaw){
+        var _typedId=normalizePersonId(_typedIdRaw);
+        if(!_typedId){toast('Camper ID must be a number','error');return}
+        var _holder=personIdHolder(_typedId,editingCamper||full);
+        if(_holder){toast('ID '+_typedId+' already belongs to '+_holder,'error');return}
+        existingId=Number(_typedId);
+        reservePersonId(existingId);
+    }
+    if(!existingId){existingId=nextPersonId;nextPersonId++}
     var _summerSameEl=document.getElementById('ceSummerSame');
     var _summerSame=_summerSameEl?!!_summerSameEl.checked:true;
     var _core={
@@ -15624,7 +15689,7 @@ function addScholarship(camperName){
 // DUPLICATE DETECTION
 // ═══════════════════════════════════════════════════════════════
 // ── CSV ──────────────────────────────────────────────────────────
-var CSV_HEADERS=['First Name','Last Name','Date of Birth','Gender','School Name','School Grade','Teacher','Division','Grade','Bunk','Street Address','City','State','ZIP','Summer Street','Summer City','Summer State','Summer ZIP','Summer Phone','Parent 1 Name','Parent 1 Relationship','Parent 1 Phone','Parent 1 Email','Parent 2 Name','Parent 2 Relationship','Parent 2 Phone','Parent 2 Email','Emergency Name','Emergency Phone','Emergency Relation','Allergies','Medications','Dietary Restrictions'];
+var CSV_HEADERS=['Camper ID','First Name','Last Name','Date of Birth','Gender','School Name','School Grade','Teacher','Division','Grade','Bunk','Street Address','City','State','ZIP','Summer Street','Summer City','Summer State','Summer ZIP','Summer Phone','Parent 1 Name','Parent 1 Relationship','Parent 1 Phone','Parent 1 Email','Parent 2 Name','Parent 2 Relationship','Parent 2 Phone','Parent 2 Email','Emergency Name','Emergency Phone','Emergency Relation','Allergies','Medications','Dietary Restrictions'];
 
 function downloadTemplate(){
     // Build template with headers + league columns
@@ -15634,14 +15699,14 @@ function downloadTemplate(){
     var csv='\uFEFF'+headers.map(function(h){return'"'+h+'"'}).join(',')+'\n';
     // Add 2 example rows. Row 1 has no summer address (stays home all season)
     // and no second parent; row 2 shows both filled in.
-    csv+='"John","Smith","2015-03-15","Male","PS 123","3rd","Mrs. Johnson","Juniors","3rd Grade","Bunk 1","123 Main St","Brooklyn","NY","11230","","","","","","Jane Smith","Mother","555-123-4567","jane@email.com","","","","","Bob Smith","555-987-6543","Uncle","Peanuts","",""\n';
-    csv+='"Sarah","Cohen","2014-07-22","Female","Yeshiva Academy","4th","Rabbi Goldstein","Seniors","4th Grade","Bunk 7","456 Oak Ave","Woodmere","NY","11598","789 Lake Rd","Monticello","NY","12701","555-111-2222","Rachel Cohen","Mother","555-222-3333","rachel@email.com","David Cohen","Father","555-444-5555","david@email.com","Grandma Cohen","555-666-7777","Grandmother","","Inhaler","Dairy-free"\n';
-    csv+='"","","","","","","","","","","","","","","","","","","","","","","","","","","","","","","","",""\n';
+    csv+='"","John","Smith","2015-03-15","Male","PS 123","3rd","Mrs. Johnson","Juniors","3rd Grade","Bunk 1","123 Main St","Brooklyn","NY","11230","","","","","","Jane Smith","Mother","555-123-4567","jane@email.com","","","","","Bob Smith","555-987-6543","Uncle","Peanuts","",""\n';
+    csv+='"","Sarah","Cohen","2014-07-22","Female","Yeshiva Academy","4th","Rabbi Goldstein","Seniors","4th Grade","Bunk 7","456 Oak Ave","Woodmere","NY","11598","789 Lake Rd","Monticello","NY","12701","555-111-2222","Rachel Cohen","Mother","555-222-3333","rachel@email.com","David Cohen","Father","555-444-5555","david@email.com","Grandma Cohen","555-666-7777","Grandmother","","Inhaler","Dairy-free"\n';
+    csv+='"","","","","","","","","","","","","","","","","","","","","","","","","","","","","","","","","",""\n';
     var a=document.createElement('a');
     a.href=URL.createObjectURL(new Blob([csv],{type:'text/csv'}));
     a.download='campistry_camper_template.csv';
     a.click();
-    toast('Template downloaded — fill it out and import');
+    toast('Template downloaded — fill it out and import. Leave Camper ID blank to have it assigned.');
 }
 
 // A row identifies the SAME camper as another row of the same name only
@@ -15715,6 +15780,16 @@ function handleCsv(file){
             return-1;
         };
 
+        // 'id' on its own is deliberately last and fenced off: a roster export
+        // from another system can carry a Parent ID or a Family ID in the same
+        // file, and importing one of those as the camper's number would put a
+        // stranger's digits on the child's invoices.
+        var iCamperId=col(['camper id','camper number','camper #','camper no','student id','id number']);
+        // A bare 'id' is only trusted as an EXACT header. Substring-matching it
+        // the way every other column here does would happily read 'Guardian
+        // Name' or 'Parent ID', and putting a stranger's digits on a child's
+        // invoices is worse than not importing the column at all.
+        if(iCamperId<0)iCamperId=hdr.findIndex(function(h){return h==='id'||h==='#'||h==='camper id'});
         var iFirst=col(['first name','first']);
         var iLast=col(['last name','last']);
         var iName=col(['name','camper']);
@@ -15776,6 +15851,7 @@ function handleCsv(file){
 
             rows.push({
                 name:fullName,
+                camperId:iCamperId>=0?normalizePersonId(c[iCamperId]):'',
                 dob:iDob>=0?(c[iDob]||'').trim():'',
                 gender:iGender>=0?(c[iGender]||'').trim():'',
                 school:iSchool>=0?(c[iSchool]||'').trim():'',
@@ -16017,6 +16093,8 @@ function importRows(rows,mode){
     // overwrites the first in roster with zero warning. Give the second one
     // its own disambiguated key ("Name (2)") instead, and report it.
     var _importDupeNames=[];
+    var _importRenamedById=[];   // rows matched on camper id under a new name
+    var _importIdClashes=[];     // rows whose id was already taken, so renumbered
     // No summer address given in the CSV at all → same as home, resolved to
     // the real home values right here (same convention editCamper/saveCamper
     // already use) so nothing downstream needs to know about the flag.
@@ -16073,6 +16151,25 @@ function importRows(rows,mode){
     }
     rows.forEach(function(r){
         var targetName=r.name,camperId,oldBunk=null,isUpdate=false;
+        // An id the camp gave out is stronger identity than a name: it survives
+        // a marriage, a nickname and a spelling fix, which is the whole reason
+        // camps hand them out. So when a row carries one we already know, that
+        // camper IS this row -- even under a different name -- and the rename
+        // cascades rather than creating a second record.
+        var byId=(mode==='update'&&r.camperId)?camperNameById(r.camperId):'';
+        if(byId&&byId!==r.name&&roster[r.name]){
+            // The incoming name is already somebody ELSE's roster key. Renaming
+            // onto it would overwrite them; leave both alone and let the name
+            // path below handle it.
+            byId='';
+        }
+        if(byId){
+            isUpdate=true;
+            camperId=roster[byId].camperId;
+            oldBunk=roster[byId].bunk;
+            if(byId!==r.name){cascadeCamperRename(byId,r.name);delete roster[byId];_importRenamedById.push(byId+' \u2192 '+r.name);}
+            targetName=r.name;
+        }else{
         var existing=roster[r.name];
         if(mode==='update'&&existing&&_sameCamperSignal(existing,r)){
             // Same camper (name + same family) — update in place, keep
@@ -16091,7 +16188,20 @@ function importRows(rows,mode){
             targetName=_disambiguateRosterName(r.name);
             _importDupeNames.push(r.name);
         }
-        if(isUpdate){updated++;}else{added++;camperId=nextPersonId;nextPersonId++;}
+        }
+        if(isUpdate){updated++;}
+        else{
+            added++;
+            // Take the number from the file when it's free; otherwise the camp
+            // gets told which rows had to be renumbered rather than finding two
+            // campers sharing a badge in August.
+            var want=r.camperId?personIdHolder(r.camperId,targetName):'x';
+            if(r.camperId&&!want){camperId=Number(r.camperId);reservePersonId(camperId);}
+            else{
+                if(r.camperId)_importIdClashes.push(r.name+' (#'+r.camperId+')');
+                camperId=nextPersonId;nextPersonId++;
+            }
+        }
 
         roster[targetName]=_buildCamperRecord(r,camperId);
         if(oldBunk&&oldBunk!==r.bunk&&bunkAsgn[oldBunk]){
@@ -16208,6 +16318,16 @@ function importRows(rows,mode){
     if(newBunks>0)summary+=', '+newBunks+' bunk'+(newBunks>1?'s':'');
     if(newFamilies>0)summary+=', '+newFamilies+' famil'+(newFamilies>1?'ies':'y');
     summary+=mode==='update'?' — existing data preserved':' — previous data replaced';
+    if(_importRenamedById.length>0){
+        summary+=' \u2014 '+_importRenamedById.length+' matched by Camper ID and renamed ('+_importRenamedById.join(', ')+')';
+        console.log('[Me] CSV import: renamed by camper id \u2014',_importRenamedById);
+    }
+    if(_importIdClashes.length>0){
+        summary+=' \u2014 \u26a0 '+_importIdClashes.length+' Camper ID'+(_importIdClashes.length>1?'s were':' was')+
+                 ' already in use, so '+(_importIdClashes.length>1?'those campers':'that camper')+
+                 ' got the next free number instead ('+_importIdClashes.join(', ')+')';
+        console.warn('[Me] CSV import: camper id already in use \u2014',_importIdClashes);
+    }
     if(_importDupeNames.length>0){
         var uniqDupes=Array.from(new Set(_importDupeNames));
         summary+=' — ⚠ '+uniqDupes.length+' camper'+(uniqDupes.length>1?'s':'')+' shared a name with someone else in the roster but were from a different family, so '+(uniqDupes.length>1?'they were':'it was')+' kept separately and renamed with a "(2)" suffix to tell them apart ('+uniqDupes.join(', ')+')';

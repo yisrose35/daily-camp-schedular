@@ -9,7 +9,7 @@
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
     <link href="https://fonts.googleapis.com/css2?family=DM+Sans:opsz,wght@9..40,300;9..40,400;9..40,500;9..40,600;9..40,700;9..40,800&display=swap" rel="stylesheet">
     <link rel="stylesheet" href="campistry-unified.css?v=20260903-03">
-    <link rel="stylesheet" href="campistry_me.css?v=20260914-08">
+    <link rel="stylesheet" href="campistry_me.css?v=20260914-09">
     <!-- Loading overlay — inline styles so it appears instantly with zero
          FOUC, before any external CSS loads. Hidden by campistry_me.js
          only after cloud hydration completes and the UI has populated. -->
@@ -240,21 +240,21 @@
   // token form.
   window.CAMPISTRY_INBOUND_PREFIX = 'deposits+';
 </script>
-<script src="campistry_deposit_parser.js?v=20260914-08"></script>
-<script src="campistry_deposit_match.js?v=20260914-08"></script>
+<script src="campistry_deposit_parser.js?v=20260914-09"></script>
+<script src="campistry_deposit_match.js?v=20260914-09"></script>
 <!-- Learned per-bank layouts. Must load BEFORE the UI, which offers to teach
      one. tests/deposit_scripts_loaded.test.js fails the build if a deposit
      module ever ships without a tag here. -->
-<script src="campistry_deposit_template.js?v=20260914-08"></script>
+<script src="campistry_deposit_template.js?v=20260914-09"></script>
 <!-- Teaching a layout from a printed email. PDF.js is already vendored here
      (campistry_link_parent.html uses it too), so nothing is fetched from a CDN
      and the worker path must be set before any document is opened. -->
-<script src="pdfjs-dist@3.11.174.min.js?v=20260914-08"></script>
+<script src="pdfjs-dist@3.11.174.min.js?v=20260914-09"></script>
 <script>
-if (window.pdfjsLib) { window.pdfjsLib.GlobalWorkerOptions.workerSrc = 'pdfjs-dist@3.11.174.worker.min.js?v=20260914-08'; }
+if (window.pdfjsLib) { window.pdfjsLib.GlobalWorkerOptions.workerSrc = 'pdfjs-dist@3.11.174.worker.min.js?v=20260914-09'; }
 </script>
-<script src="campistry_deposit_teach_pdf.js?v=20260914-08"></script>
-<script src="campistry_deposits_ui.js?v=20260914-08"></script>
+<script src="campistry_deposit_teach_pdf.js?v=20260914-09"></script>
+<script src="campistry_deposits_ui.js?v=20260914-09"></script>
 <script src="campistry_payroll_core.js?v=20260907-01"></script>
 <!-- Shared catalogue of what counselors may see. Loaded by Me (where the
      policy is set) and by Lite (where it's enforced) — one list, so a field
@@ -273,7 +273,7 @@ if (window.pdfjsLib) { window.pdfjsLib.GlobalWorkerOptions.workerSrc = 'pdfjs-di
      footer/watermark) — reused here so the Broadcast composer's preview
      shows exactly what will be sent, off the camp's real branding config. -->
 <script src="campistry_link_branding.js?v=20260906-01"></script>
-<script src="campistry_me.js?v=20260914-08"></script>
+<script src="campistry_me.js?v=20260914-09"></script>
 <script src="plan_limits.js?v=20260903-03"></script>
 <script src="trial_guard.js?v=20260903-03"></script>
 <script src="campistry_notes_quick.js?v=20260903-03"></script>

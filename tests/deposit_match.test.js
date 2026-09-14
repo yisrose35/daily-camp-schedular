@@ -279,3 +279,35 @@ test('the camper index joins family rosters to camper numbers', () => {
     // A camper on the roster but in no family has no family to credit.
     assert.strictEqual(idx['1111'], undefined);
 });
+
+// ── camp-assigned camper numbers ────────────────────────────────────────────
+//
+// Campistry hands out camper numbers from a sequence starting at 1, but plenty
+// of camps arrived with their own — four digits, printed on forms, written on
+// bank memos years before any of this existed. Those numbers go in the roster
+// as-is, so two children of one family can be 1387 and 1002 with nothing
+// between them, and the reference has to resolve both to the same household.
+test('a camp’s own four-digit camper numbers resolve to one family', () => {
+    const families = { fam_x: { name: 'Family X', camperIds: ['Leah Klein', 'Yossi Klein'] } };
+    const roster = { 'Leah Klein': { camperId: 1387 }, 'Yossi Klein': { camperId: 1002 } };
+    const ctx = { families, roster, campNumber: '3734', aliases: [], balances: {} };
+
+    assert.strictEqual(M.familyForReference('3734-1387', ctx), 'fam_x');
+    assert.strictEqual(M.familyForReference('3734-1002', ctx), 'fam_x');
+    // A number the camp never gave out still resolves to nobody, so a typo in
+    // the memo waits for a person instead of crediting the nearest household.
+    assert.strictEqual(M.familyForReference('3734-1388', ctx), null);
+    // And the number belongs to the CAMP, not to Campistry's sequence: a
+    // reference carrying the camp's number for a different camp is not a match.
+    assert.strictEqual(M.familyForReference('9999-1387', ctx), null);
+});
+
+test('camper numbers are not confused by leading zeros', () => {
+    // Every screen pads to four digits, so a parent reading "0042" off an
+    // invoice writes 0042 in the memo while the roster holds 42.
+    const families = { fam_y: { name: 'Family Y', camperIds: ['Ari Stern'] } };
+    const roster = { 'Ari Stern': { camperId: 42 } };
+    const ctx = { families, roster, campNumber: '3734', aliases: [], balances: {} };
+    assert.strictEqual(M.familyForReference('3734-0042', ctx), 'fam_y');
+    assert.strictEqual(M.familyForReference('3734-42', ctx), 'fam_y');
+});
