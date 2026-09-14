@@ -61,36 +61,29 @@ async function cardknoxTestConnection(creds: Record<string, string>): Promise<{ 
   }
 }
 
-// Banquest (white-label NMI Direct Post): a $0 `validate` on transact.php
-// authenticates the security key without moving money and returns parseable
-// url-encoded key=value (query.php returns XML, which is far less reliable to
-// parse). A bad key comes back with responsetext "Authentication Failed";
-// anything else (validated / declined) proves the key works. The gateway host
-// is part of the credential — Banquest resellers often issue a branded host
-// (defaults to NMI's shared host).
-const NMI_DEFAULT_GATEWAY = "https://secure.nmi.com";
-function nmiBase(creds: Record<string, string>): string {
-  return (creds.gatewayUrl || NMI_DEFAULT_GATEWAY).replace(/\/+$/, "");
+// Banquest (AffiniPay/8am) JSON API. Auth is HTTP Basic base64(sourceKey:pin);
+// the API base is per-camp (sandbox vs prod). testConnection POSTs an empty
+// body to /transactions/verify — a valid key returns a validation error
+// (auth OK, nothing charged), a bad key returns 401/403.
+const BANQUEST_DEFAULT_BASE = "https://api.banquestgateway.com";
+function bqBase(c: Record<string, string>): string {
+  return (c.gatewayUrl || BANQUEST_DEFAULT_BASE).replace(/\/+$/, "");
 }
-async function nmiTestConnection(creds: Record<string, string>): Promise<{ success: boolean; error?: string }> {
-  const securityKey = creds.securityKey;
-  if (!securityKey) return { success: false, error: "Missing securityKey" };
+function bqAuth(c: Record<string, string>): string {
+  return "Basic " + btoa(`${c.sourceKey}:${c.pin}`);
+}
+async function banquestTestConnection(creds: Record<string, string>): Promise<{ success: boolean; error?: string }> {
+  if (!creds.sourceKey || !creds.pin) return { success: false, error: "Missing sourceKey/pin" };
   try {
-    const resp = await fetch(`${nmiBase(creds)}/api/transact.php`, {
+    const resp = await fetch(`${bqBase(creds)}/transactions/verify`, {
       method: "POST",
-      headers: { "Content-Type": "application/x-www-form-urlencoded" },
-      body: new URLSearchParams({
-        security_key: securityKey, type: "validate",
-        ccnumber: "4111111111111111", ccexp: "1030",
-      }).toString(),
+      headers: { "Content-Type": "application/json", "Authorization": bqAuth(creds) },
+      body: JSON.stringify({}),
     });
-    const r: Record<string, string> = {};
-    new URLSearchParams(await resp.text()).forEach((v, k) => { r[k] = v; });
-    const txt = (r.responsetext || "").toLowerCase();
-    // Only an explicit auth failure is a connectivity failure — err toward not
-    // blocking a valid key whose account happens to disallow `validate`.
-    if (/authentication failed|invalid security key|access denied|invalid username/.test(txt)) {
-      return { success: false, error: r.responsetext || "Authentication failed" };
+    if (resp.status === 401 || resp.status === 403) {
+      let msg = "Authentication failed";
+      try { const d = await resp.json(); msg = d?.error || d?.message || msg; } catch { /* ignore */ }
+      return { success: false, error: msg };
     }
     return { success: true };
   } catch (err) {
@@ -136,7 +129,7 @@ serve(async (req) => {
     if (processorKey === "cardknox") {
       test = await cardknoxTestConnection(credentials);
     } else if (processorKey === "banquest") {
-      test = await nmiTestConnection(credentials);
+      test = await banquestTestConnection(credentials);
     } else {
       return json({ success: false, error: `No adapter implemented for processor '${processorKey}' yet.` }, 400);
     }

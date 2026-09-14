@@ -60,34 +60,37 @@ async function cardknoxRefund(
   }
 }
 
-// Banquest (white-label NMI) refund of a prior transaction, inlined for the
-// same Dashboard-deploy reason. Keep in sync with
-// _shared/adapters/banquest_adapter.ts's refund(). Gateway host is part of the
-// stored credential (defaults to NMI's shared host).
-const NMI_DEFAULT_GATEWAY = "https://secure.nmi.com";
-function nmiBase(credentials: Record<string, string>): string {
-  return (credentials.gatewayUrl || NMI_DEFAULT_GATEWAY).replace(/\/+$/, "");
+// Banquest (AffiniPay/8am) reversal of a prior transaction — the convenience
+// endpoint that auto-picks refund (settled) vs void (unsettled). Inlined for
+// the same Dashboard-deploy reason; keep in sync with
+// _shared/adapters/banquest_adapter.ts. Auth is HTTP Basic base64(sourceKey:
+// pin); API base is per-camp; amounts are DOLLARS; the prior transaction is
+// referenced as source "ref-<transactionId>".
+const BANQUEST_DEFAULT_BASE = "https://api.banquestgateway.com";
+function bqBase(credentials: Record<string, string>): string {
+  return (credentials.gatewayUrl || BANQUEST_DEFAULT_BASE).replace(/\/+$/, "");
 }
-async function nmiRefund(
+async function banquestRefund(
   credentials: Record<string, string>,
   externalTransactionId: string,
   amountCents: number,
 ): Promise<{ success: boolean; externalTransactionId?: string; status?: string; error?: string; raw?: unknown }> {
-  const securityKey = credentials.securityKey;
-  if (!securityKey) return { success: false, error: "Missing securityKey" };
+  if (!credentials.sourceKey || !credentials.pin) return { success: false, error: "Missing sourceKey/pin" };
   try {
-    const resp = await fetch(`${nmiBase(credentials)}/api/transact.php`, {
+    const resp = await fetch(`${bqBase(credentials)}/transactions/reversal`, {
       method: "POST",
-      headers: { "Content-Type": "application/x-www-form-urlencoded" },
-      body: new URLSearchParams({
-        security_key: securityKey, type: "refund",
-        transactionid: externalTransactionId, amount: (amountCents / 100).toFixed(2),
-      }).toString(),
+      headers: { "Content-Type": "application/json", "Authorization": "Basic " + btoa(`${credentials.sourceKey}:${credentials.pin}`) },
+      body: JSON.stringify({ source: "ref-" + externalTransactionId, amount: Number((amountCents / 100).toFixed(2)) }),
     });
-    const r: Record<string, string> = {};
-    new URLSearchParams(await resp.text()).forEach((v, k) => { r[k] = v; });
-    if (r.response !== "1") return { success: false, status: r.response_code, error: r.responsetext || "Refund failed", raw: r };
-    return { success: true, externalTransactionId: r.transactionid, status: r.response_code, raw: r };
+    let data: Record<string, any> = {};
+    try { data = await resp.json(); } catch { /* non-JSON error body */ }
+    const id = data?.id || data?.transaction_id;
+    const st = String(data?.status || "").toLowerCase();
+    // A void/refund status is the SUCCESS here, so it's not in the decline set.
+    if (resp.status < 200 || resp.status >= 300 || !id || /declin|fail|error|denied|reject/.test(st)) {
+      return { success: false, status: data?.status, error: data?.error || data?.message || data?.status || `Refund failed (HTTP ${resp.status})`, raw: data };
+    }
+    return { success: true, externalTransactionId: id, status: data?.status, raw: data };
   } catch (err) {
     return { success: false, error: (err as Error).message };
   }
@@ -221,7 +224,7 @@ serve(async (req) => {
         const chunkCents = Math.round(chunk * 100);
         const refundResult = processorKey === "cardknox"
           ? await cardknoxRefund(credResult.credentials, dep.externalTransactionId, chunkCents)
-          : await nmiRefund(credResult.credentials, dep.externalTransactionId, chunkCents);
+          : await banquestRefund(credResult.credentials, dep.externalTransactionId, chunkCents);
         if (!refundResult.success) throw new Error(refundResult.error || "Refund failed");
 
         await service.rpc("record_processor_transaction", {

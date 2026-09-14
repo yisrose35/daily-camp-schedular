@@ -94,28 +94,29 @@ async function cardknoxCharge(apiKey: string, amountCents: number, cardToken: st
   return { success: true, externalTransactionId: parsed.xRefNum };
 }
 
-// Banquest (white-label NMI) sale against a saved Customer Vault id. Inlined
-// per this project's deploy convention; keep in sync with
-// _shared/adapters/banquest_adapter.ts. Gateway host is part of the stored
-// credential (defaults to NMI's shared host). orderid is unique per charge —
-// same duplicate-block reasoning as the Cardknox xInvoice above.
-const NMI_DEFAULT_GATEWAY = "https://secure.nmi.com";
-function nmiBase(creds: Record<string, string>): string {
-  return (creds.gatewayUrl || NMI_DEFAULT_GATEWAY).replace(/\/+$/, "");
+// Banquest (AffiniPay/8am) sale against a saved card_ref. Inlined per this
+// project's deploy convention; keep in sync with
+// _shared/adapters/banquest_adapter.ts. Auth is HTTP Basic base64(sourceKey:
+// pin); API base is per-camp; amounts are DOLLARS; a saved card is charged as
+// source "tkn-<card_ref>".
+const BANQUEST_DEFAULT_BASE = "https://api.banquestgateway.com";
+function bqBase(c: Record<string, string>): string {
+  return (c.gatewayUrl || BANQUEST_DEFAULT_BASE).replace(/\/+$/, "");
 }
-async function nmiCharge(creds: Record<string, string>, amountCents: number, customerVaultId: string, orderid: string) {
-  const resp = await fetch(`${nmiBase(creds)}/api/transact.php`, {
+async function banquestCharge(creds: Record<string, string>, amountCents: number, cardRef: string) {
+  const resp = await fetch(`${bqBase(creds)}/transactions/charge`, {
     method: "POST",
-    headers: { "Content-Type": "application/x-www-form-urlencoded" },
-    body: new URLSearchParams({
-      security_key: creds.securityKey, type: "sale",
-      amount: (amountCents / 100).toFixed(2), customer_vault_id: customerVaultId, orderid,
-    }).toString(),
+    headers: { "Content-Type": "application/json", "Authorization": "Basic " + btoa(`${creds.sourceKey}:${creds.pin}`) },
+    body: JSON.stringify({ amount: Number((amountCents / 100).toFixed(2)), source: "tkn-" + cardRef }),
   });
-  const r: Record<string, string> = {};
-  new URLSearchParams(await resp.text()).forEach((v, k) => { r[k] = v; });
-  if (r.response !== "1") return { success: false, error: r.responsetext || "Declined" };
-  return { success: true, externalTransactionId: r.transactionid };
+  let data: Record<string, any> = {};
+  try { data = await resp.json(); } catch { /* non-JSON error body */ }
+  const id = data?.id || data?.transaction_id;
+  const st = String(data?.status || "").toLowerCase();
+  if (resp.status < 200 || resp.status >= 300 || !id || /declin|fail|error|denied|reject|void/.test(st)) {
+    return { success: false, error: data?.error || data?.message || data?.status || `Declined (HTTP ${resp.status})` };
+  }
+  return { success: true, externalTransactionId: id };
 }
 
 serve(async (req) => {
@@ -257,12 +258,12 @@ serve(async (req) => {
     } else if (chargeProcessorKey === "banquest") {
       const { data: credResult } = await service.rpc("_admin_get_processor_credential", { p_camp_id: campId });
       const creds = credResult?.success ? credResult.credentials : null;
-      if (!creds?.securityKey || !chargeToken) {
+      if (!creds?.sourceKey || !creds?.pin || !chargeToken) {
         const result = { success: false, error: "This camp's processor isn't connected right now." };
         await finishLock("failed", result);
         return json(result, 400);
       }
-      const res = await nmiCharge(creds, amountCents, String(chargeToken), "CSC-" + idempotencyKey);
+      const res = await banquestCharge(creds, amountCents, String(chargeToken));
       if (!res.success || !res.externalTransactionId) {
         const result = { success: false, error: res.error || "Card declined." };
         await finishLock("failed", result);

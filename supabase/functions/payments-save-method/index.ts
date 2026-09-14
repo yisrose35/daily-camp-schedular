@@ -1,6 +1,6 @@
 // =============================================================================
 // payments-save-method — BYOP: turn a client-side tokenization result
-// (NMI Collect.js / Cardknox iFields — see campistry_card_setup.html) into
+// (Banquest Hosted Tokenization / Cardknox iFields — see campistry_card_setup.html) into
 // a durable saved payment method on a family's record, the missing piece
 // that makes payments-charge/payments-refund actually usable for a BYOP
 // camp.
@@ -58,29 +58,29 @@ async function cardknoxSaveMethod(apiKey: string, token: string) {
   return { success: true, customerRef: parsed.xToken, raw: parsed };
 }
 
-// Banquest (white-label NMI): exchange the Collect.js single-use payment_token
-// for a permanent Customer Vault id — the same "durable reference" step, same
-// inline-for-Dashboard-deploy reason. Keep in sync with
-// _shared/adapters/banquest_adapter.ts's saveMethod(). Gateway host is part of
-// the stored credential (defaults to NMI's shared host).
-const NMI_DEFAULT_GATEWAY = "https://secure.nmi.com";
-function nmiBase(creds: Record<string, string>): string {
-  return (creds.gatewayUrl || NMI_DEFAULT_GATEWAY).replace(/\/+$/, "");
+// Banquest (AffiniPay/8am): exchange the Hosted-Tokenization nonce for a
+// durable saved card — a $0 verify with save_card:true returns a card_ref that
+// later charges reference as source "tkn-<card_ref>". Same
+// inline-for-Dashboard-deploy reason; auth is HTTP Basic base64(sourceKey:pin),
+// API base is per-camp. The client's getNonceToken() returns the bare nonce;
+// the "nonce-" source prefix is added here.
+const BANQUEST_DEFAULT_BASE = "https://api.banquestgateway.com";
+function bqBase(c: Record<string, string>): string {
+  return (c.gatewayUrl || BANQUEST_DEFAULT_BASE).replace(/\/+$/, "");
 }
-async function nmiSaveMethod(creds: Record<string, string>, token: string): Promise<{ success: boolean; customerRef?: string; error?: string }> {
-  const resp = await fetch(`${nmiBase(creds)}/api/transact.php`, {
+async function banquestSaveMethod(creds: Record<string, string>, nonce: string): Promise<{ success: boolean; customerRef?: string; error?: string }> {
+  const resp = await fetch(`${bqBase(creds)}/transactions/verify`, {
     method: "POST",
-    headers: { "Content-Type": "application/x-www-form-urlencoded" },
-    body: new URLSearchParams({
-      security_key: creds.securityKey, type: "add_customer", payment_token: token,
-    }).toString(),
+    headers: { "Content-Type": "application/json", "Authorization": "Basic " + btoa(`${creds.sourceKey}:${creds.pin}`) },
+    body: JSON.stringify({ source: "nonce-" + nonce, save_card: true }),
   });
-  const r: Record<string, string> = {};
-  new URLSearchParams(await resp.text()).forEach((v, k) => { r[k] = v; });
-  if (r.response !== "1" || !r.customer_vault_id) {
-    return { success: false, error: r.responsetext || "Could not save payment method" };
+  let data: Record<string, any> = {};
+  try { data = await resp.json(); } catch { /* non-JSON error body */ }
+  const cardRef = data?.card_ref;
+  if (resp.status < 200 || resp.status >= 300 || !cardRef) {
+    return { success: false, error: data?.error || data?.message || `Could not save payment method (HTTP ${resp.status})` };
   }
-  return { success: true, customerRef: r.customer_vault_id };
+  return { success: true, customerRef: cardRef };
 }
 
 const SUPABASE_URL = Deno.env.get("SUPABASE_URL") || "";
@@ -128,7 +128,7 @@ serve(async (req) => {
       return json({ success: false, error: "This camp is on Stripe — use the Stripe card-setup flow instead." }, 400);
     }
 
-    // Cardknox/Sola and Banquest/NMI are both inlined here. Any other
+    // Cardknox/Sola and Banquest are both inlined here. Any other
     // processor gets a clear error rather than a silent no-op.
     if (processorKey !== "cardknox" && processorKey !== "banquest") {
       return json({ success: false, error: `Saving a card isn't wired for processor '${processorKey}' yet.` }, 400);
@@ -147,11 +147,11 @@ serve(async (req) => {
       }
       saveResult = await cardknoxSaveMethod(String(apiKey), String(token));
     } else {
-      const securityKey = credResult.credentials?.securityKey;
-      if (!securityKey) {
-        return json({ success: false, error: "This camp's processor credential is missing its security key." }, 400);
+      const creds = credResult.credentials;
+      if (!creds?.sourceKey || !creds?.pin) {
+        return json({ success: false, error: "This camp's processor credential is missing its source key or PIN." }, 400);
       }
-      saveResult = await nmiSaveMethod(credResult.credentials, String(token));
+      saveResult = await banquestSaveMethod(creds, String(token));
     }
     if (!saveResult.success || !saveResult.customerRef) {
       return json({ success: false, error: saveResult.error || "Could not save payment method" }, 200);
