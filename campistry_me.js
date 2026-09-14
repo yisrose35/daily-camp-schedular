@@ -30,6 +30,14 @@ function _schoolGradeOptions(current){
 var AV_BG=['#147D91','#6366F1','#0EA5E9','#10B981','#F43F5E','#8B5CF6','#D97706'];
 
 var structure={}, roster={}, families={}, payments=[], broadcasts=[], bunkAsgn={}, bunkManualCounts={}, bunkStaff={}, divisionHeads={};
+// A bunk's second name: "Bunk 6A" is also called "Moshe".
+//
+// Deliberately a map alongside the structure rather than a field inside it.
+// A bunk IS its name everywhere in this app — roster[camper].bunk, the
+// scheduler, print sheets, leagues, attendance all key off that string — so
+// making a bunk an object would ripple through every one of them for a purely
+// cosmetic gain. The canonical name never changes; this is what to ALSO show.
+var bunkAliases={};
 var bunkCapacity={}; // max campers per bunk (capacity), keyed by bunk name — distinct from bunkManualCounts (headcount override)
 var enrollments={}, sessions=[], enrollSettings={}, formConfig=null;
 var finStaff=[], finExpenses=[], finPayments=[], finBudget={revenue:0,payroll:0,expenses:0}, finIntegrations={};
@@ -243,6 +251,7 @@ function loadData(){
         broadcasts=me.broadcasts||[]; bunkAsgn=me.bunkAssignments||{}; bunkManualCounts=me.bunkManualCounts||{};
         bunkCapacity=me.bunkCapacity||{};
         bunkStaff=me.bunkStaff||{};
+        bunkAliases=me.bunkAliases||{};
         divisionHeads=me.divisionHeads||{};
         enrollments=me.enrollments||{}; sessions=me.sessions||[]; enrollSettings=me.enrollSettings||{};
         staffApplications=me.staffApplications||{};
@@ -401,6 +410,7 @@ function save(){
             bunkManualCounts:bunkManualCounts,
             bunkCapacity:bunkCapacity,
             bunkStaff:bunkStaff,
+            bunkAliases:bunkAliases,
             divisionHeads:divisionHeads,
             nextPersonId:nextPersonId,
             enrollments:_savedEnrollments,
@@ -817,6 +827,26 @@ var _ICO={
     checkSquare:'<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="9 11 12 14 22 4"/><path d="M21 12v7a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11"/></svg>'
 };
 function ico(name){return _ICO[name]||'';}
+// "Bunk 6A · Moshe" where a bunk is named to a human, or just "Bunk 6A".
+// Never use this as a key — it is display text only.
+function bunkLabel(b){
+    var n=String(b==null?'':b);
+    var a=bunkAliases[n];
+    return a?n+' \u00b7 '+a:n;
+}
+function bunkAlias(b){return bunkAliases[String(b==null?'':b)]||''}
+// True when a search string matches either the bunk's name or the name the
+// camp actually calls it — somebody looking for "Moshe" should find 6A.
+function bunkMatches(b,q){
+    var s=String(q||'').trim().toLowerCase();
+    // An empty query matches nothing HERE on purpose: this sits inside an OR
+    // chain of field tests, so returning true would make every camper match
+    // the moment the box is cleared.
+    if(!s) return false;
+    var n=String(b==null?'':b).toLowerCase();
+    return n.indexOf(s)>=0||String(bunkAliases[b]||'').toLowerCase().indexOf(s)>=0;
+}
+
 function dtag(d){var c=(structure[d]&&structure[d].color)||'#94A3B8';return'<span class="div-tag" style="background:'+c+'10;color:'+c+'"><span class="div-dot" style="background:'+c+'"></span>'+esc(d)+'</span>'}
 function fm(n){return'$'+Number(n||0).toLocaleString()}
 
@@ -2181,7 +2211,7 @@ function renderCampers(filter){
     var staffRows=showUnenrolled?[]:allStaffRows;
     if(filter){
         var q=filter.toLowerCase();
-        camperEntries=camperEntries.filter(function([n,d]){var altN=[d.altFirstName,d.altLastName].filter(Boolean).join(' ').toLowerCase();return n.toLowerCase().includes(q)||altN.includes(q)||(d.division||'').toLowerCase().includes(q)||(d.bunk||'').toLowerCase().includes(q)||(d.school||'').toLowerCase().includes(q)});
+        camperEntries=camperEntries.filter(function([n,d]){var altN=[d.altFirstName,d.altLastName].filter(Boolean).join(' ').toLowerCase();return n.toLowerCase().includes(q)||altN.includes(q)||(d.division||'').toLowerCase().includes(q)||bunkMatches(d.bunk,q)||(d.school||'').toLowerCase().includes(q)});
         staffRows=staffRows.filter(function(r){return String(r.name||'').toLowerCase().includes(q)||String(r.role||'').toLowerCase().includes(q)});
     }
     camperEntries.sort(function(a,b){return a[0].localeCompare(b[0])});
@@ -3375,6 +3405,11 @@ function renderStructure(){
                         :(rCt?'background:#e2e8f0;color:#475569;':'background:#f1f5f9;color:#94a3b8;');
                     h+='<span class="me-card-bunk" data-bunk="'+je(b)+'" draggable="true" style="display:inline-flex;align-items:center;gap:4px;padding:3px 6px 3px 8px;border-radius:6px;border:1px solid var(--s200);background:#fff;font-size:.7rem;font-weight:600;color:var(--s600);cursor:grab;user-select:none">'
                         +esc(b)
+                        // The camp's own name for the bunk, if it has one. Click
+                        // either the name or the empty space after it to set one.
+                        +(bunkAlias(b)
+                            ?'<span title="Also called" onclick="event.stopPropagation();CampistryMe.openBunkAlias(\''+je(b)+'\')" style="font-weight:500;color:var(--s400);cursor:pointer">\u00b7 '+esc(bunkAlias(b))+'</span>'
+                            :'<span title="Give this bunk a second name" onclick="event.stopPropagation();CampistryMe.openBunkAlias(\''+je(b)+'\')" style="color:var(--s300);cursor:pointer;font-weight:400;padding:0 2px">+</span>')
                         +'<span class="bunk-ct-pill" title="'+esc(badgeTip)+'" onclick="event.stopPropagation();CampistryMe.openBunkCountModal(\''+je(b)+'\')" style="'+badgeStyle+'min-width:18px;height:16px;border-radius:8px;font-size:.65rem;font-weight:700;padding:0 5px;cursor:pointer;display:inline-flex;align-items:center;justify-content:center;">'+dispCt+'</span>'
                         +'</span>';
                 });
@@ -4202,7 +4237,41 @@ function _purgeOrphanedBunks(removedBunks){
 // the old bunk's cloud schedule rows while the new name started empty. This
 // migrates the bunk key in memory + every cloud daily_schedules row
 // (scheduleAssignments + leagueAssignments) so the schedule survives the rename.
+// "Bunk 6A is also called Moshe." Stored beside the structure, never inside
+// it — see bunkAliases. Clearing the box removes the alias rather than storing
+// an empty string, so bunkLabel() has one thing to test.
+function openBunkAlias(bunkName){
+    var cur=bunkAliases[bunkName]||'';
+    var body='<div class="me-modal-form">'
+        +'<p style="font-size:.86rem;color:var(--s600);margin:0 0 14px;line-height:1.6">'
+        +'Camps often call a bunk by a name as well as a number. Add it here and Campistry will show '
+        +'both, and find the bunk whichever one somebody searches for. The bunk\'s real name stays '
+        +'<strong>'+esc(bunkName)+'</strong> everywhere it matters — schedules, rosters and print sheets are untouched.</p>'
+        +'<div class="me-field"><label>Also called</label>'
+        +'<input type="text" id="bkAliasVal" class="me-input" placeholder="Moshe" value="'+esc(cur)+'"></div>'
+        +'<div style="font-size:.78rem;color:var(--s500)">Leave it empty to remove the second name.</div>'
+        +'</div>';
+    showModal('Second name for '+bunkName,body,function(){
+        var el=document.getElementById('bkAliasVal');
+        var val=el?String(el.value||'').trim():'';
+        if(val)bunkAliases[bunkName]=val; else delete bunkAliases[bunkName];
+        closeModal('dynModal');
+        save();
+        renderStructure();
+        toast(val?bunkName+' is also called '+val:'Second name removed');
+    });
+}
+
 function _propagateBunkRename(oldB,newB){
+    // 0. the bunk's second name. Carried first and synchronously: everything
+    //    below is best-effort cloud work, and a bunk that keeps its alias is
+    //    the one thing a camp notices immediately if it breaks.
+    try{
+        if(bunkAliases[oldB]!==undefined){
+            if(bunkAliases[newB]===undefined)bunkAliases[newB]=bunkAliases[oldB];
+            delete bunkAliases[oldB];
+        }
+    }catch(_){}
     if(!oldB||!newB||oldB===newB)return;
     console.log('[Me] Propagating bunk rename in schedules:',oldB,'→',newB);
     // 1. in-memory maps
@@ -6285,7 +6354,8 @@ function viewStaffApp(id){
             }
             if(sFieldOn('first')||sFieldOn('last'))h+=row('Name',name);
             if(a.email&&sFieldOn('email'))h+=rowRaw(sLabel('email','Email'),'<a href="mailto:'+esc(a.email)+'" style="color:var(--me)">'+esc(a.email)+'</a>');
-            if(a.phone&&sFieldOn('phone'))h+=rowRaw(sLabel('phone','Phone'),'<a href="tel:'+esc(a.phone)+'" style="color:var(--me);font-weight:600">'+esc(a.phone)+'</a>');
+            if(a.phone&&sFieldOn('phone'))h+=rowRaw(sLabel('phone','Cell Phone'),'<a href="tel:'+esc(a.phone)+'" style="color:var(--me);font-weight:600">'+esc(a.phone)+'</a>');
+            if(a.homePhone&&sFieldOn('homePhone'))h+=rowRaw(sLabel('homePhone','Home Phone'),'<a href="tel:'+esc(a.homePhone)+'" style="color:var(--me);font-weight:600">'+esc(a.homePhone)+'</a>');
             if(sFieldOn('dob'))h+=row(sLabel('dob','Date of Birth'),a.dob);
             if(sFieldOn('street'))h+=row(sLabel('street','Street'),a.street);
             if(sFieldOn('city'))h+=row(sLabel('city','City'),a.city);
@@ -6300,7 +6370,8 @@ function viewStaffApp(id){
             var h='';
             if(a.parentName&&sFieldOn('parentName')){
                 h+=row('Parent',a.parentName+(a.parentRelation?' ('+a.parentRelation+')':''));
-                if(a.parentPhone&&sFieldOn('parentPhone'))h+=rowRaw('Phone','<a href="tel:'+esc(a.parentPhone)+'" style="color:var(--me);font-weight:600">'+esc(a.parentPhone)+'</a>');
+                if(a.parentPhone&&sFieldOn('parentPhone'))h+=rowRaw('Cell Phone','<a href="tel:'+esc(a.parentPhone)+'" style="color:var(--me);font-weight:600">'+esc(a.parentPhone)+'</a>');
+                if(a.parentHomePhone&&sFieldOn('parentHomePhone'))h+=rowRaw('Home Phone','<a href="tel:'+esc(a.parentHomePhone)+'" style="color:var(--me);font-weight:600">'+esc(a.parentHomePhone)+'</a>');
                 if(a.parentEmail&&sFieldOn('parentEmail'))h+=rowRaw('Email','<a href="mailto:'+esc(a.parentEmail)+'" style="color:var(--me)">'+esc(a.parentEmail)+'</a>');
             }
             if(a.parent2Name&&sFieldOn('parent2Name')){
@@ -7022,7 +7093,13 @@ var FC_FIELD_CATALOG={
         {id:'parentFirst',label:'Parent / Guardian First Name',required:true},
         {id:'parentLast',label:'Parent / Guardian Last Name',required:true},
         {id:'parentRelation',label:'Relationship'},
-        {id:'parentPhone',label:'Phone',required:true},
+        {id:'parentPhone',label:'Cell Phone',required:true},
+        // A landline reaches the household rather than one parent's pocket,
+        // which is what an office wants when a camper is sick and the parent
+        // on file is not picking up. Off by default: plenty of families no
+        // longer have one, and a required field nobody can fill blocks a
+        // registration.
+        {id:'homePhone',label:'Home Phone'},
         {id:'parentEmail',label:'Email',required:true},
         {id:'maritalStatus',label:'Marital Status'},
         {id:'parent2First',label:'Second Parent / Guardian First Name'},
@@ -8011,7 +8088,8 @@ var SFC_FIELD_CATALOG={
         {id:'first',label:'First Name',required:true},
         {id:'last',label:'Last Name',required:true},
         {id:'email',label:'Email',required:true},
-        {id:'phone',label:'Phone',required:true},
+        {id:'phone',label:'Cell Phone',required:true},
+        {id:'homePhone',label:'Home Phone'},
         {id:'dob',label:'Date of Birth'},
         {id:'street',label:'Street Address'},
         {id:'city',label:'City'},
@@ -8024,7 +8102,8 @@ var SFC_FIELD_CATALOG={
     parent:[
         {id:'parentName',label:'Parent / Guardian Name'},
         {id:'parentRelation',label:'Relationship'},
-        {id:'parentPhone',label:'Phone'},
+        {id:'parentPhone',label:'Cell Phone'},
+        {id:'parentHomePhone',label:'Home Phone'},
         {id:'parentEmail',label:'Email'},
         {id:'parent2Name',label:'Second Parent / Guardian Name'},
         {id:'parent2Relation',label:'Second Parent / Guardian Relationship'},
@@ -8521,7 +8600,8 @@ function viewApplication(id){
         parent:function(){
             b+=sec('Parent / Guardian');
             if(fFieldOn('parentName'))b+=row(fLabel('parentName','Name'),(e.parentName||'')+(e.parentRelation?' ('+e.parentRelation+')':''));
-            if(e.parentPhone&&fFieldOn('parentPhone'))b+=rowRaw(fLabel('parentPhone','Phone'),'<a href="tel:'+esc(e.parentPhone)+'" style="color:var(--me);font-weight:600">'+esc(e.parentPhone)+'</a>');
+            if(e.parentPhone&&fFieldOn('parentPhone'))b+=rowRaw(fLabel('parentPhone','Cell Phone'),'<a href="tel:'+esc(e.parentPhone)+'" style="color:var(--me);font-weight:600">'+esc(e.parentPhone)+'</a>');
+            if(e.homePhone&&fFieldOn('homePhone'))b+=rowRaw(fLabel('homePhone','Home Phone'),'<a href="tel:'+esc(e.homePhone)+'" style="color:var(--me);font-weight:600">'+esc(e.homePhone)+'</a>');
             if(e.parentEmail&&fFieldOn('parentEmail'))b+=rowRaw(fLabel('parentEmail','Email'),'<a href="mailto:'+esc(e.parentEmail)+'" style="color:var(--me)">'+esc(e.parentEmail)+'</a>');
             if(e.parent2Name&&fFieldOn('parent2Name'))b+=row(fLabel('parent2Name','Parent 2'),e.parent2Name+(e.parent2Relation?' ('+e.parent2Relation+')':''));
             if(e.parent2Phone&&fFieldOn('parent2Phone'))b+=rowRaw(fLabel('parent2Phone','Parent 2 Phone'),'<a href="tel:'+esc(e.parent2Phone)+'" style="color:var(--me);font-weight:600">'+esc(e.parent2Phone)+'</a>');
@@ -14268,7 +14348,7 @@ function _reportSources(){
                 {key:'allergies',label:'Allergies',group:'Medical'},{key:'medications',label:'Medications',group:'Medical'},{key:'dietary',label:'Dietary',group:'Medical'},{key:'medicalNotes',label:'Medical Notes',group:'Medical'},
                 {key:'physician',label:'Physician',group:'Medical'},{key:'insuranceProvider',label:'Insurance',group:'Medical'},
                 {key:'emergencyName',label:'Emergency Contact',group:'Contact'},{key:'emergencyPhone',label:'Emergency Phone',group:'Contact'},
-                {key:'parentName',label:'Parent — Full Name',group:'Parent / Guardian'},{key:'parentFirstName',label:'Parent — First Name',group:'Parent / Guardian'},{key:'parentLastName',label:'Parent — Last Name',group:'Parent / Guardian'},{key:'parentPhone',label:'Parent — Phone',group:'Parent / Guardian'},{key:'parentEmail',label:'Parent — Email',group:'Parent / Guardian'},
+                {key:'parentName',label:'Parent — Full Name',group:'Parent / Guardian'},{key:'parentFirstName',label:'Parent — First Name',group:'Parent / Guardian'},{key:'parentLastName',label:'Parent — Last Name',group:'Parent / Guardian'},{key:'parentPhone',label:'Parent — Cell Phone',group:'Parent / Guardian'},{key:'homePhone',label:'Home Phone',group:'Parent / Guardian'},{key:'parentEmail',label:'Parent — Email',group:'Parent / Guardian'},
                 {key:'parent2Name',label:'2nd Parent — Full Name',group:'Parent / Guardian'},{key:'parent2FirstName',label:'2nd Parent — First Name',group:'Parent / Guardian'},{key:'parent2LastName',label:'2nd Parent — Last Name',group:'Parent / Guardian'},{key:'parent2Phone',label:'2nd Parent — Phone',group:'Parent / Guardian'},{key:'parent2Email',label:'2nd Parent — Email',group:'Parent / Guardian'},
                 {key:'altFirstName',label:'Alt. First Name',group:'Contact'},{key:'altLastName',label:'Alt. Last Name',group:'Contact'},
                 {key:'street',label:'Street',group:'Address'},{key:'city',label:'City',group:'Address'},{key:'state',label:'State',group:'Address'},{key:'zip',label:'ZIP',group:'Address'}
@@ -14294,7 +14374,7 @@ function _reportSources(){
             } },
         families:{ key:'families', label:'Families',
             fields:[{key:'name',label:'Family',group:'Basic Info'},{key:'campers',label:'Campers',group:'Basic Info'},{key:'camperCount',label:'# Campers',group:'Basic Info'},{key:'status',label:'Status',group:'Basic Info'},
-                {key:'parent',label:'Primary Parent',group:'Contact'},{key:'phone',label:'Phone',group:'Contact'},{key:'email',label:'Email',group:'Contact'},{key:'address',label:'Address',group:'Contact'},
+                {key:'parent',label:'Primary Parent',group:'Contact'},{key:'phone',label:'Cell Phone',group:'Contact'},{key:'homePhone',label:'Home Phone',group:'Contact'},{key:'email',label:'Email',group:'Contact'},{key:'address',label:'Address',group:'Contact'},
                 {key:'totalPaid',label:'Total Paid',group:'Billing'},{key:'balance',label:'Balance',group:'Billing'}],
             rows:function(){
                 // Derived from buildFamilyLedgers(), not families[k].balance/
@@ -16456,6 +16536,7 @@ window.CampistryMe={
     setRosterPage:setRosterPage,setRosterSubTab:setRosterSubTab,setBillingPage:setBillingPage,setAnalyticsInvoicePage:setAnalyticsInvoicePage,setAnalyticsPaymentPage:setAnalyticsPaymentPage,
     _runSetupChecklistAction:_runSetupChecklistAction,dismissSetupChecklist:dismissSetupChecklist,
     bbDrop:bbDrop,autoAssign:autoAssign,autoGenerateBunks:autoGenerateBunks,openBunkGenSettings:openBunkGenSettings,showCamperBunkRequests:showCamperBunkRequests,clearBunks:clearBunks,setBunkCount:setBunkCount,openBunkCountModal:openBunkCountModal,_clearBunkCount:_clearBunkCount,
+    openBunkAlias:openBunkAlias,bunkLabel:bunkLabel,bunkAlias:bunkAlias,
     openBunkStaffModal:openBunkStaffModal,addBunkStaff:addBunkStaff,removeBunkStaff:removeBunkStaff,
     editBunkStaff:editBunkStaff,_resetBunkStaffForm:_resetBunkStaffForm,inviteBunkStaffToLite:inviteBunkStaffToLite,
     openDivisionHeadModal:openDivisionHeadModal,addDivisionHead:addDivisionHead,removeDivisionHead:removeDivisionHead,setAllStructDivsOpen:setAllStructDivsOpen,
