@@ -169,6 +169,17 @@ addresses ─ geocode ─┬─ road graph (OpenStreetMap) ─ neighbourhoods �
   neighbourhoods (the sweep usually wins anyway), and the road-graph
   download is cached per tile.
 
+* **Reversals cost time** (`legMinutes.hops`, `turnPenaltyMin` 1.5): the
+  road network now reports, for every leg, the node the bus arrives from
+  and the node it leaves towards. A stop where those are the same node is
+  a reversal — a U-turn or a three-point turn for a bus at a cul-de-sac —
+  and the ordering, the objective, the stamped ETAs (on the leg out of the
+  stop) and the corner choice all charge it. The Hope Terrace picture was
+  this: the shortest path in and out of a side-road corner is the same
+  road, and nothing priced the turn. One predecessor map per source
+  (cached) keeps the reversal table for a bus at n² lookups, not n²
+  searches.
+
 * **Corner stops on the bus's way** (`chooseCornersOnPath`, after the road
   polish): a corner stop was stood at the intersection nearest its homes, and
   that corner can be a block down a side road — the camp's Hope Terrace child

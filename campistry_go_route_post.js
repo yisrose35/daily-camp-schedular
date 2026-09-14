@@ -46,6 +46,7 @@ window.CampistryGoRoutePost = (function () {
         rideRatioSlackMin: 10,
         // Road network (when the OSM graph is available)
         roadEdgePenaltyMin: 0.05,  // ~3s per edge: intersections, turns, slowing for stops
+        turnPenaltyMin: 1.5,       // a reversal at a stop (in and out on the same road: a U-turn or three-point turn) costs this
         roadOffMph: 10,            // speed for the off-graph bit between a stop and its nearest node
         legMinutes: null,          // (a, b) -> minutes on the road network; null = straight-line x roadFactor
         // Containment
@@ -226,6 +227,23 @@ window.CampistryGoRoutePost = (function () {
     // tie-break. Implemented on a precomputed leg matrix with allocation-free
     // candidate evaluation so a 50-stop door-to-door bus orders in well under
     // a second instead of six.
+    // Reversal table for a set of points: IN[i][j] = node the leg i->j arrives
+    // from, OUT[i][j] = node the leg i->j leaves i towards (index n = depot).
+    // A reversal at j between i and k is IN[i][j] === OUT[j][k]. Only when the
+    // legs come from the road network (legMinutes.hops); else null.
+    function turnTable(pts, depot, L) {
+        if (!L || typeof L.hops !== 'function') return null;
+        const n = pts.length, all = pts.concat([depot]);
+        const IN = [], OUT = [];
+        for (let i = 0; i <= n; i++) { IN.push(new Int32Array(n + 1).fill(-1)); OUT.push(new Int32Array(n + 1).fill(-2)); }
+        for (let i = 0; i <= n; i++) for (let j = 0; j <= n; j++) {
+            if (i === j) continue;
+            const h = L.hops(all[i], all[j]);
+            if (h) { IN[i][j] = h.inNode; OUT[i][j] = h.outNode; }
+        }
+        return { IN, OUT, DEP: n, at: (i, j, k) => IN[i][j] >= 0 && IN[i][j] === OUT[j][k] };
+    }
+
     function localTspOrder(stops, depot, isArrival, o) {
         o = opts(o);
         const all = stops || [];
@@ -250,6 +268,7 @@ window.CampistryGoRoutePost = (function () {
             allow[i] = C[i] * o.maxRideRatio + o.rideRatioSlackMin;
             dwell[i] = stopDwellMin(movable[i], o);
         }
+        const TT = turnTable(movable, depot, L), TURN = TT ? Math.max(0, o.turnPenaltyMin || 0) : 0;
         // Road legs can be asymmetric (one-way streets): fill both directions.
         for (let i = 0; i < n; i++) for (let j = 0; j < n; j++) { if (i === j) continue; M[i][j] = L ? L(movable[i], movable[j]) : (j > i ? driveMin(movable[i], movable[j], o) : M[j][i]); }
 
@@ -268,18 +287,21 @@ window.CampistryGoRoutePost = (function () {
         const arr = new Float64Array(n);
         // cost of the tour given by pos -> stop index function
         function costOf(at) {
-            let time = 0, tour = 0, prev = -1;
+            let time = 0, tour = 0, prev = -1, pp = -1;
             for (let p = 0; p < n; p++) {
                 const idx = at(p);
-                const leg = prev < 0 ? C[idx] : M[prev][idx];
-                time += leg + dwell[idx]; tour += leg; arr[p] = time; prev = idx;
+                let leg = prev < 0 ? C[idx] : M[prev][idx];
+                // in and out of the previous stop on the same road: a reversal there
+                if (TURN && prev >= 0 && TT.at(pp < 0 ? TT.DEP : pp, prev, idx)) leg += TURN;
+                time += leg + dwell[idx]; tour += leg; arr[p] = time; pp = prev; prev = idx;
             }
             // Arrival: everyone aboard still rides from the last pickup back to
             // camp. Leaving that leg out let the search end a route five miles
             // out and hand every child the drive back. A dismissal shift that
             // returns to camp pays the empty ride home as bus time only.
-            if (isArrival) { time += R[prev]; tour += R[prev]; }
-            else if (RET) tour += R[prev];
+            const backTurn = TURN && CLOSED && n > 0 && TT.at(pp < 0 ? TT.DEP : pp, prev, TT.DEP) ? TURN : 0;
+            if (isArrival) { time += R[prev] + backTurn; tour += R[prev] + backTurn; }
+            else if (RET) tour += R[prev] + backTurn;
             // the route total the cap applies to: last drop, plus the ride home when the shift returns
             const routeTotal = isArrival ? time : time + (RET ? R[prev] : 0);
             const overCap = CAPMIN && CAPQ && routeTotal > CAPMIN ? CAPQ * (routeTotal - CAPMIN) * (routeTotal - CAPMIN) : 0;
@@ -599,8 +621,13 @@ window.CampistryGoRoutePost = (function () {
         if (n < 1) return 0;
         const L = typeof o.legMinutes === 'function' ? o.legMinutes : null;
         const legOf = (a, b) => L ? L(a, b) : driveMin(a, b, o);
+        const TT = turnTable(movable, depot, L), TURN = TT ? Math.max(0, o.turnPenaltyMin || 0) : 0;
         let time = 0, tour = 0, prev = depot; const arr = [];
-        for (const s of movable) { const l = legOf(prev, s); time += l + stopDwellMin(s, o); tour += l; arr.push(time); prev = s; }
+        movable.forEach((s, i) => {
+            let l = legOf(prev, s);
+            if (TURN && i >= 1 && TT.at(i >= 2 ? i - 2 : TT.DEP, i - 1, i)) l += TURN;
+            time += l + stopDwellMin(s, o); tour += l; arr.push(time); prev = s;
+        });
         let routeTotal = time;
         if (isArrival) { const back = legOf(prev, depot); time += back; tour += back; routeTotal = time; }
         else if (o.returnToDepot) { const back = legOf(prev, depot); tour += back; routeTotal += back; }
@@ -688,13 +715,21 @@ window.CampistryGoRoutePost = (function () {
 
     // Per-leg seconds along the route's current order (index i = leg INTO stop
     // i, last entry = leg back to camp), the shape the ETA pass consumes.
-    function stampLegTimes(route, depot, L) {
+    function stampLegTimes(route, depot, L, o) {
         const stops = ((route && route.stops) || []).filter(s => hasPos(s) && !isStaff(s));
         if (!stops.length || typeof L !== 'function') { if (route) delete route._tspLegTimes; return null; }
+        o = opts(o);
+        const TT = turnTable(stops, depot, L), TURN = TT ? Math.max(0, o.turnPenaltyMin || 0) : 0;
         const legs = [];
         let prev = depot;
-        for (const s of stops) { legs.push(Math.round(L(prev, s) * 60)); prev = s; }
-        legs.push(Math.round(L(prev, depot) * 60));
+        stops.forEach((s, i) => {
+            // the leg out of a stop the bus reversed at carries the turn
+            const turn = TURN && i >= 1 && TT.at(i >= 2 ? i - 2 : TT.DEP, i - 1, i) ? TURN : 0;
+            legs.push(Math.round((L(prev, s) + turn) * 60)); prev = s;
+        });
+        const n = stops.length;
+        const backTurn = TURN && n >= 1 && TT.at(n >= 2 ? n - 2 : TT.DEP, n - 1, TT.DEP) ? TURN : 0;
+        legs.push(Math.round((L(prev, depot) + backTurn) * 60));
         route._tspLegTimes = legs;
         return legs;
     }
@@ -1051,6 +1086,12 @@ window.CampistryGoRoutePost = (function () {
             }
             return dist;
         }
+        // Tail node of arc k: the node whose adjacency range holds k.
+        function tailOf(k) {
+            let lo = 0, hi = N - 1;
+            while (lo < hi) { const mid = (lo + hi + 1) >> 1; if (head[mid] <= k) lo = mid; else hi = mid - 1; }
+            return lo;
+        }
         // Street coordinates of the shortest path from node `src` to node `dst`
         // given the predecessor map of a Dijkstra run from `src`.
         function pathCoords(src, dst, pred) {
@@ -1061,12 +1102,7 @@ window.CampistryGoRoutePost = (function () {
                 const k = pred.get(cur);
                 if (k == null) return null;
                 arcsBack.push(k);
-                cur = to[k] === cur ? (function () { // arc k goes from ? -> cur; find its tail
-                    // tail is the node whose adjacency range contains k
-                    let lo = 0, hi = N - 1;
-                    while (lo < hi) { const mid = (lo + hi + 1) >> 1; if (head[mid] <= k) lo = mid; else hi = mid - 1; }
-                    return lo;
-                })() : cur;
+                cur = to[k] === cur ? tailOf(k) : cur;
             }
             if (cur !== src) return null;
             const out = [[lat[src], lng[src]]];
@@ -1139,11 +1175,39 @@ window.CampistryGoRoutePost = (function () {
             };
             // Street path between two known points: [[lat,lng],...] from a to b
             // through the network, or null when either is off the network.
+            // The road nodes either side of a leg: `inNode` is the node the path
+            // arrives at b FROM, `outNode` the first node it leaves a TOWARDS.
+            // A stop where the path in and the path out use the same node is a
+            // reversal (a U-turn or a three-point turn for a bus): the ordering,
+            // the corner choice and the ETAs charge turnPenaltyMin for it.
+            // Predecessor map from a source node over every point of this call
+            // (one Dijkstra per source, cached; a row served from the distance
+            // cache has none yet).
+            const predFor = src => {
+                let pred = predBySrc.get(src);
+                if (!pred) { pred = new Map(); dijkstra(src, targets, pred); predBySrc.set(src, pred); }
+                return pred;
+            };
+            legMinutes.hops = function (a, b) {
+                const sa = snap(a), sb = snap(b);
+                if (!sa || !sb || sa.i === sb.i) return null;
+                let pred = predFor(sa.i);
+                if (pred.get(sb.i) == null) { pred = new Map(); dijkstra(sa.i, new Set([sb.i]), pred); predBySrc.set(sa.i, pred); }
+                const kIn = pred.get(sb.i); if (kIn == null) return null;
+                const inNode = tailOf(kIn);
+                let cur = sb.i, guard = 0;
+                for (;;) {
+                    const k = pred.get(cur); if (k == null) return null;
+                    const t = tailOf(k); if (t === sa.i) break;
+                    cur = t; if (++guard > 200000) return null;
+                }
+                return { inNode, outNode: cur };
+            };
             legMinutes.pathFor = function (a, b) {
                 const sa = snap(a), sb = snap(b);
                 if (!sa || !sb) return null;
-                let pred = predBySrc.get(sa.i);
-                if (!pred) { pred = new Map(); dijkstra(sa.i, new Set([sb.i]), pred); predBySrc.set(sa.i, pred); }
+                let pred = predFor(sa.i);
+                if (pred.get(sb.i) == null && sa.i !== sb.i) { pred = new Map(); dijkstra(sa.i, new Set([sb.i]), pred); predBySrc.set(sa.i, pred); }
                 const p = pathCoords(sa.i, sb.i, pred);
                 if (!p) return null;
                 return [[a.lat, a.lng]].concat(p, [[b.lat, b.lng]]);
@@ -2003,6 +2067,9 @@ window.CampistryGoRoutePost = (function () {
         const WALKW = Number.isFinite(o.cornerWalkWeightMinPerMi) ? o.cornerWalkWeightMinPerMi : 6;
         const EPS = Number.isFinite(o.cornerMinGainMin) ? o.cornerMinGainMin : 0.3;
         const DWELL = Math.max(0, o.avgStopMin || 0); // a corner shared with a neighbour is one stop, not two
+        const TURN = typeof legs.hops === 'function' ? Math.max(0, o.turnPenaltyMin || 0) : 0;
+        // a corner the bus must reverse at (in and out on the same road) costs the turn
+        const reversal = (a, p, c) => { if (!TURN || !c) return 0; const h1 = legs.hops(a, p), h2 = legs.hops(p, c); return h1 && h2 && h1.inNode === h2.outNode ? TURN : 0; };
         const same = (a, b) => Math.abs(a.lat - b.lat) < 1e-7 && Math.abs(a.lng - b.lng) < 1e-7;
         // The point each stop currently stands at, as a point `legs` knows.
         const pos = stops.map((s, i) => ((candidatesByStop[i] || []).find(c => same(c, s))) || s);
@@ -2016,7 +2083,7 @@ window.CampistryGoRoutePost = (function () {
                 const prev = i > 0 ? pos[i - 1] : depot;
                 const next = i + 1 < stops.length ? pos[i + 1] : (closed ? depot : null);
                 const shared = p => ((i > 0 && same(p, pos[i - 1])) || (i + 1 < stops.length && same(p, pos[i + 1]))) ? DWELL : 0;
-                const drive = p => legs(prev, p) + (next ? legs(p, next) : 0) - shared(p);
+                const drive = p => legs(prev, p) + (next ? legs(p, next) : 0) - shared(p) + reversal(prev, p, next);
                 const curCost = drive(pos[i]) + WALKW * walkAt(i);
                 let best = null;
                 for (const c of list) {
