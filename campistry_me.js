@@ -10275,8 +10275,35 @@ function renderAnalytics(){
         statTile('Bunks',String(bunkCount))
     );
 
+    // Billing's own comment says its charged/collected breakdown "now lives on
+    // Analytics, which already owns camp-wide financial reporting" — and it was
+    // nowhere on this page. Built from buildFamilyLedgers, the same source
+    // Billing and Finance now read, so the three cannot quietly disagree.
+    var _anLedgers=buildFamilyLedgers();
+    var _anList=Object.values(_anLedgers);
+    var _charged=_anList.reduce(function(s,l){return s+(l.totalCharges||0)},0);
+    var _collected=_anList.reduce(function(s,l){return s+(l.totalPayments||0)},0);
+    var _outstanding=_anList.reduce(function(s,l){return s+Math.max(l.balance||0,0)},0);
+    var _rate=_charged>0?Math.round(_collected/_charged*100):0;
+    var _overdue=_anList.filter(function(l){return l.status==='overdue'}).length;
+
+    h+=statRow(
+        statTile('Charged',fm(_charged))+
+        statTile('Collected',fm(_collected),_charged>0?_rate+'% of charged':'')+
+        statTile('Outstanding',fm(_outstanding),_overdue?_overdue+' account'+(_overdue!==1?'s':'')+' overdue':'')+
+        statTile('Families',String(_anList.length))
+    );
+
+    h+='<div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(320px,1fr));gap:14px">';
     h+='<div class="me-card" style="padding:16px"><h4 style="font-size:.85rem;font-weight:700;color:var(--s700);margin:0 0 10px">Enrollment Funnel</h4>';
     h+=chartBarH(funnel.map(function(f){return{label:f.name,value:f.count}}),{emptyText:'No applications yet'});
+    h+='</div>';
+
+    h+='<div class="me-card" style="padding:16px"><h4 style="font-size:.85rem;font-weight:700;color:var(--s700);margin:0 0 10px">Campers by Division</h4>';
+    h+=chartBarH(divisions.map(function(dn){
+        return {label:dn,value:Object.values(roster).filter(function(c){return c.division===dn}).length};
+    }).sort(function(a,b){return b.value-a.value}),{emptyText:'No divisions yet'});
+    h+='</div>';
     h+='</div>';
 
     c.innerHTML=h;
@@ -10294,6 +10321,9 @@ function renderFinance(){
     // ═══ AUTO-GENERATE INVOICES FROM ENROLLMENTS ═══
     // Every enrolled camper = an invoice. No manual entry needed.
     var autoInvoices=[];
+    // Families already credited with their household-level payments this pass,
+    // so a second sibling does not collect the same money again.
+    var _finFamSeen={};
     var overdueDays=finBudget.overdueDays||30; // configurable threshold
     var todayStr=new Date().toISOString().split('T')[0];
     var todayMs=new Date().getTime();
@@ -10302,8 +10332,29 @@ function renderFinance(){
         if(e.status!=='enrolled'&&e.status!=='accepted')return;
         var tuition=e.sessionTuition||0;
         if(!tuition)return;
-        // Check if manual payment exists for this camper
-        var manualPay=finPayments.filter(function(p){return p.family===e.camperName||p.family===(e.camperLast||'')+' Family'||p.enrollmentId===id});
+        // Which payments belong to this camper.
+        //
+        // ★ The stored familyKey comes first, for the same reason it does in
+        //   buildFamilyLedgers. What was here instead GUESSED a household by
+        //   appending " Family" to a last name, never looked at the key on the
+        //   record, and never counted auto-posted bank deposits at all — three
+        //   ways for Finance to disagree with Billing about the same money.
+        //
+        //   The guess was also a double-count waiting to happen: two siblings
+        //   share a last name, so one family-level payment was credited once
+        //   per camper. Family-level money is therefore attributed to the FIRST
+        //   enrollment of that family only, and the per-family totals below are
+        //   taken from the ledgers rather than re-summed from these rows.
+        var _efk=(e.familyKey&&families[e.familyKey])?e.familyKey:_payFamilyByName({family:e.camperName,camper:e.camperName});
+        var _firstOfFamily=!_efk||!_finFamSeen[_efk];
+        if(_efk)_finFamSeen[_efk]=1;
+        var manualPay=finPayments.filter(function(p){
+            if(p.enrollmentId===id)return true;                       // recorded against this camper
+            if(p.family===e.camperName||p.camper===e.camperName)return true;
+            if(!_efk||!_firstOfFamily)return false;                   // don't pay a family twice
+            var pfk=(p.familyKey&&families[p.familyKey])?p.familyKey:_payFamilyByName(p);
+            return pfk===_efk&&!p.enrollmentId;
+        });
         // Pending (e.g. ACH still settling) and failed online payments are shown
         // in the log but do NOT count as collected until they succeed.
         var paidAmount=manualPay.reduce(function(s,p){return s+((p.status==='pending'||p.status==='failed')?0:(p.amount||0))},0);
@@ -10342,8 +10393,14 @@ function renderFinance(){
     var totalPayroll=finStaff.reduce(function(s,x){return s+(x.salary||0)},0);
     var totalExp=finExpenses.reduce(function(s,x){return s+(x.amount||0)},0);
     var projected=autoInvoices.reduce(function(s,inv){return s+inv.netTuition},0);
-    var totalCollected=autoInvoices.reduce(function(s,inv){return s+inv.paid},0);
-    var totalOutstanding=autoInvoices.reduce(function(s,inv){return s+inv.balance},0);
+    // ★ Collected and outstanding come from the SAME ledgers Billing renders.
+    //   Re-summing per-invoice numbers here is what let Finance and Billing
+    //   report different figures for the same camp — and it silently omitted
+    //   auto-posted bank deposits, which live in Postgres and only join a
+    //   family's money at buildFamilyLedgers().
+    var _finLedgers=buildFamilyLedgers();
+    var totalCollected=Object.values(_finLedgers).reduce(function(s,l){return s+(l.totalPayments||0)},0);
+    var totalOutstanding=Object.values(_finLedgers).reduce(function(s,l){return s+Math.max(l.balance||0,0)},0);
     var paidCount=autoInvoices.filter(function(inv){return inv.status==='paid'}).length;
     var partialCount=autoInvoices.filter(function(inv){return inv.status==='partial'}).length;
     var overdueCount=autoInvoices.filter(function(inv){return inv.status==='overdue'}).length;
