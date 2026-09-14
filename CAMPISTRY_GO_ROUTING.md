@@ -129,9 +129,28 @@ addresses ─ geocode ─┬─ road graph (OpenStreetMap) ─ neighbourhoods �
   move ran, and with every core bus full there was no receiver left for a
   branch of the 90-minute buses. Single-stop moves stay local
   (`polishReachOverBudgetX` 1): a far hand-off is a whole branch, never one
-  stop sent ten miles to a core bus for two children. The console's "Road
-  polish" line counts branch hand-offs and says when the polish ran out of
-  its time budget.
+  stop sent ten miles to a core bus for two children. **Make room**: the
+  camp's Bus 8 once more — 43 children on an 18-minute core run with three
+  seats. It cannot take a branch (no seats) and it cannot be emptied (its
+  20-child corner fits no other bus, so empty-and-refill fails). What it CAN
+  do is shed a few of its stops to the buses that pass them on the way out
+  — the over-budget bus itself included, it drives through the core — and
+  take the branch with the seats that frees. Block out, up to
+  `polishRoomMaxShed` stops shed (cheapest exact insertion per seat freed),
+  block in: priced as one move on the exact objective and kept only if it
+  falls. It is the fallback, tried in a pass only when neither a plain
+  hand-off nor an empty-and-refill could be taken, because those leave the
+  cleaner routes (one bus, one branch). Near-camp stops also count as
+  "within reach" for the swap move. The console's "Road polish" lines count
+  branch hand-offs (and how many had the receiver make room first), say
+  when the polish ran out of its time budget, and — the case the camp hit,
+  a bus 31 minutes over the cap with nothing priced at all — name the buses
+  over the cap when the polish began and how many branch/receiver pairings
+  were rejected on seats and how many on containment. For reproducing a
+  run offline, `_GoDebug.exportGeometry()` in the console returns the
+  saved routes as bare geometry (camp, settings, and per bus the stops as
+  [lat, lng, children, minute] — no names, no addresses);
+  `copy(_GoDebug.exportGeometry())` puts it on the clipboard.
 
 * **The ride home** (`returnToDepot`, from the **Round Trip** setting): a
   dismissal run drives back to camp when it is not the last shift (the bus
