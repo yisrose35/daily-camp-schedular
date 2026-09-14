@@ -864,3 +864,48 @@ test('a far tail still moves when the receiver is full: it sheds core stops firs
     for (const b of res.buckets) assert.ok(b.reduce((a, x) => a + x.campers.length, 0) <= 46, 'seats');
     assert.strictEqual(res.buckets.flat().length, 12);
 });
+
+// A main road with a cul-de-sac off it: reaching the spur's end and coming
+// back is a reversal at that stop.
+function spurGraph() {
+    const nodes = {}, edges = [];
+    const m = i => 'm' + i;
+    for (let i = 0; i < 5; i++) nodes[m(i)] = { lat: CAMP.lat + 1.0 * MI_LAT, lng: CAMP.lng + (i - 2) * 0.5 * MI_LNG };
+    nodes.spur = { lat: CAMP.lat + 1.5 * MI_LAT, lng: CAMP.lng };              // north of m2, dead end
+    nodes.camp = { lat: CAMP.lat, lng: CAMP.lng };
+    let k = 0;
+    for (let i = 0; i < 4; i++) edges.push({ id: 'e' + (k++), fromNodeId: m(i), toNodeId: m(i + 1), lenMi: 0.5, hwClass: 'secondary', oneway: false });
+    edges.push({ id: 'e' + (k++), fromNodeId: m(2), toNodeId: 'spur', lenMi: 0.5, hwClass: 'residential', oneway: false });
+    edges.push({ id: 'e' + (k++), fromNodeId: 'camp', toNodeId: m(0), lenMi: 1.0, hwClass: 'residential', oneway: false });
+    return { nodes, edges };
+}
+
+test('road legs know a reversal: in and out of a cul-de-sac stop on the same road', () => {
+    const net = P.buildRoadNet(spurGraph(), { avgSpeedMph: 25 });
+    const A = { lat: CAMP.lat + 1.0 * MI_LAT, lng: CAMP.lng - 0.5 * MI_LNG, address: 'A', campers: [{ name: 'a' }] };   // m1
+    const Bs = { lat: CAMP.lat + 1.5 * MI_LAT, lng: CAMP.lng, address: 'spur end', campers: [{ name: 'b' }] };            // spur
+    const Cc = { lat: CAMP.lat + 1.0 * MI_LAT, lng: CAMP.lng + 0.5 * MI_LNG, address: 'C', campers: [{ name: 'c' }] };   // m3
+    const L = net.legMinutesFor([CAMP, A, Bs, Cc]);
+    const hIn = L.hops(A, Bs), hOut = L.hops(Bs, Cc);
+    assert.ok(hIn && hOut, 'hops known');
+    assert.strictEqual(hIn.inNode, hOut.outNode, 'the bus enters and leaves the spur through the same node: a reversal');
+    assert.notStrictEqual(L.hops(A, Cc).inNode, L.hops(Cc, A).outNode === undefined ? -1 : L.hops(A, Cc).inNode + 1, 'sanity');
+    // the ordering charges the turn once, on the leg out of the spur stop
+    const order = [A, Bs, Cc];
+    const with_ = P.routeObjective(order, CAMP, false, { legMinutes: L, turnPenaltyMin: 1.5 });
+    const without = P.routeObjective(order, CAMP, false, { legMinutes: L, turnPenaltyMin: 0 });
+    assert.ok(with_ > without, 'the reversal costs something: ' + without.toFixed(1) + ' -> ' + with_.toFixed(1));
+    const r = { stops: order.map(s => Object.assign({}, s)) };
+    const legs = P.stampLegTimes(r, CAMP, L, { turnPenaltyMin: 1.5 });
+    const legs0 = P.stampLegTimes({ stops: order.map(s => Object.assign({}, s)) }, CAMP, L, { turnPenaltyMin: 0 });
+    assert.strictEqual(legs[2] - legs0[2], 90, 'the leg out of the spur stop carries 90 s of turn');
+    assert.strictEqual(legs[1], legs0[1], 'the leg into it does not');
+    // the corner choice avoids the spur when a corner on the main road is inside the walk limit
+    const spurCorner = { lat: Bs.lat, lng: Bs.lng, walkMi: 0.02, name: 'Spur end', node: { id: 'spur' } };
+    const mainCorner = { lat: CAMP.lat + 1.0 * MI_LAT, lng: CAMP.lng, walkMi: 0.03, name: 'Main @ Spur', node: { id: 'm2' } };
+    const S = Object.assign({}, Bs, { _homes: [{ lat: Bs.lat, lng: Bs.lng }] });
+    const L2 = net.legMinutesFor([CAMP, A, S, Cc, spurCorner, mainCorner]);
+    const res = P.chooseCornersOnPath([A, S, Cc], [[], [spurCorner, mainCorner], []], L2, CAMP, false, { turnPenaltyMin: 1.5, avgStopMin: 1 });
+    assert.strictEqual(res.moved, 1, 'moved to the main-road corner');
+    assert.strictEqual(S.address, 'Main @ Spur');
+});
