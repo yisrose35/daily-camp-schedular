@@ -191,8 +191,16 @@ async function applyLearnedTemplate(
   const signature = Template.signature(fromAddress);
   if (!signature || !body) return null;
 
-  const { data, error } = await service.rpc("get_bank_templates", { p_camp_id: campId });
-  if (error || !data?.success) return null;
+  // NOT get_bank_templates: that one is owner/admin gated and resolves
+  // auth.uid(), which is NULL for the service role — it answered
+  // "not_authorized" to every webhook, so a camp could teach a layout, see it
+  // saved, and have it never once be used, with nothing anywhere saying why.
+  // The camp is already proven by the routing token in the inbound address.
+  const { data, error } = await service.rpc("_deposit_templates_for_camp", { p_camp_id: campId });
+  if (error || !data?.success) {
+    if (error) console.warn("[deposit-inbox] template lookup failed:", error.message);
+    return null;
+  }
 
   const rows = (data.templates || []).filter((t: any) => t.bank_signature === signature);
   // Own template first; shared only as a fallback.
@@ -231,6 +239,9 @@ async function applyLearnedTemplate(
   }
 
   const outcome = conflicted ? "conflict" : (applied ? "hit" : "miss");
+  if (!applied) {
+    console.log(`[deposit-inbox] template ${signature}: matched no fields (${outcome})`);
+  }
   await service.rpc("_bank_template_result", {
     p_camp_id: campId,
     p_bank_signature: signature,

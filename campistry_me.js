@@ -13590,6 +13590,50 @@ function _mpAddRow(){
     body.insertAdjacentHTML('beforeend',_mpRowHtml(0,''));
     _mpUpdateTotal();
 }
+// The three "how much" choices all feed the one hidden total the generator
+// reads, so there is still exactly one number in play — the picker just spares
+// the office from working it out and retyping it.
+var _mpBasisAmounts={balance:0,plan:0};
+function _mpBasis(which){
+    var wrap=document.getElementById('mpCustomWrap');
+    var tot=document.getElementById('mpTotal');
+    document.querySelectorAll('.mp-basis').forEach(function(l){
+        var r=l.querySelector('input[type="radio"]');
+        var on=r&&r.checked;
+        l.style.borderColor=on?'#86EFAC':'var(--s200)';
+        l.style.background=on?'#F0FDF4':'#fff';
+    });
+    if(!tot)return;
+    if(which==='custom'){ if(wrap)wrap.style.display=''; tot.focus(); }
+    else{
+        if(wrap)wrap.style.display='none';
+        var v=_mpBasisAmounts[which]||0;
+        tot.value=v>0?v.toFixed(2):'';
+    }
+    _mpPreview();
+}
+// What the schedule will actually look like, before committing to it. A plan
+// is a promise to a family about money; seeing "3 payments of $1,858.56"
+// before pressing Generate is the difference between choosing it and
+// discovering it.
+function _mpPreview(){
+    var el=document.getElementById('mpPreview'); if(!el)return;
+    var total=parseFloat((document.getElementById('mpTotal')||{}).value)||0;
+    var count=parseInt((document.getElementById('mpCount')||{}).value,10)||0;
+    var cad=(document.getElementById('mpCadence')||{}).value||'monthly';
+    if(total<0.5||count<1){ el.innerHTML='<span style="color:var(--s400)">Choose an amount and how many payments.</span>'; return; }
+    var every={weekly:'week',biweekly:'2 weeks',monthly:'month',custom:''}[cad];
+    // Computed EXACTLY as _mpGenRows does — same rounding, and the remainder
+    // on the LAST payment, not the first. A preview that rounds differently
+    // from the generator promises a number the schedule then contradicts,
+    // which is worse than showing nothing.
+    var base=Math.round(total/count*100)/100;
+    var last=Math.round((total-base*(count-1))*100)/100;
+    el.innerHTML='<strong style="color:var(--s800)">'+count+' payment'+(count!==1?'s':'')+'</strong> of <strong style="color:var(--s800)">'+fm(base)+'</strong>'
+        +(Math.abs(last-base)>0.005?' <span style="color:var(--s500)">(last one '+fm(last)+' to cover the odd cents)</span>':'')
+        +(every?' <span style="color:var(--s500)">· one every '+every+'</span>':'')
+        +' <span style="color:var(--s500)">· '+fm(total)+' in total</span>';
+}
 function _mpGenerate(){
     var total=parseFloat(document.getElementById('mpTotal').value)||0;
     var count=parseInt(document.getElementById('mpCount').value,10)||1;
@@ -13634,7 +13678,10 @@ function monthlyPlan(famKey,planId){
     var existingPlan=planId?plans.filter(function(p){return p.id===planId})[0]:null;
     var hasCard=_famChargeable(f);
     var curBalance=(buildFamilyLedgers()[famKey]||{}).balance||0;
-    var targetTotal=existingPlan?existingPlan.total:curBalance;
+    // What the GENERATE tab starts from. Always the live balance now — an
+    // existing plan's original total is offered as an explicit choice instead
+    // of being the silent default (see the basis picker below).
+    var targetTotal=curBalance;
     var d=new Date(); var defStart=new Date(d.getFullYear(),d.getMonth()+1,1).toISOString().split('T')[0];
     // Starting rows: the existing plan's own installments when editing (so
     // the office sees exactly what's there and can tweak individual rows),
@@ -13661,13 +13708,52 @@ function monthlyPlan(famKey,planId){
         +'</div>';
 
     h+='<div id="mpTabGenerate">';
-    h+='<div style="display:grid;grid-template-columns:1fr 1fr;gap:10px">';
-    h+='<div class="me-field"><label>Cadence</label><select id="mpCadence" class="me-input"><option value="weekly">Weekly</option><option value="biweekly">Biweekly</option><option value="monthly" selected>Monthly</option><option value="custom">Custom (blank rows)</option></select></div>';
-    h+='<div class="me-field"><label># of payments</label><input type="number" id="mpCount" class="me-input" value="3" min="1" max="60"></div>';
-    h+='<div class="me-field"><label>Total to schedule ($)</label><input type="number" id="mpTotal" class="me-input" value="'+(targetTotal>0?targetTotal.toFixed(2):'')+'" step="0.01" min="0.50"></div>';
-    h+='<div class="me-field"><label>First payment date</label><input type="date" id="mpStart" class="me-input" value="'+defStart+'"></div>';
+
+    // ── Step 1: how much ─────────────────────────────────────────────────
+    //
+    // This used to be a bare "Total to schedule ($)" prefilled, when editing,
+    // with the plan's ORIGINAL total — so a plan set up for $14.96 against a
+    // balance that has since grown to $5,575.68 reopened showing $14.96, right
+    // under a banner saying the two had diverged. The office had to notice
+    // that, work out what was owed, and retype it.
+    //
+    // It is now a choice with the balance owed today selected by default,
+    // because that is what a payment plan is almost always for.
+    function _mpChoice(val,title,amount,sub,on){
+        return '<label class="mp-basis" style="display:flex;gap:10px;align-items:flex-start;cursor:pointer;'
+            +'border:1px solid '+(on?'#86EFAC':'var(--s200)')+';background:'+(on?'#F0FDF4':'#fff')+';'
+            +'border-radius:10px;padding:11px 13px;flex:1 1 200px">'
+            +'<input type="radio" name="mpBasis" value="'+val+'"'+(on?' checked':'')+' style="margin-top:3px" onchange="CampistryMe._mpBasis(\''+val+'\')">'
+            +'<span style="min-width:0"><span style="display:block;font-weight:700;font-size:.88rem">'+title+'</span>'
+            +(amount!=null?'<span style="display:block;font-size:1.05rem;font-weight:700;color:var(--s800);margin-top:1px">'+fm(amount)+'</span>':'')
+            +(sub?'<span style="display:block;font-size:.74rem;color:var(--s500);margin-top:2px">'+sub+'</span>':'')
+            +'</span></label>';
+    }
+
+    var _planTotal=existingPlan?Number(existingPlan.total||0):0;
+    var _sameAsBalance=existingPlan&&Math.abs(curBalance-_planTotal)<=0.05;
+
+    h+='<div style="font-size:.7rem;font-weight:700;letter-spacing:.06em;text-transform:uppercase;color:var(--s500);margin-bottom:8px">How much should this plan cover?</div>';
+    h+='<div style="display:flex;gap:9px;flex-wrap:wrap;margin-bottom:16px">';
+    h+=_mpChoice('balance','Balance owed today',curBalance,'What this family still owes',true);
+    if(existingPlan&&!_sameAsBalance) h+=_mpChoice('plan','Keep the plan\'s total',_planTotal,'What it was set up for',false);
+    h+=_mpChoice('custom','A different amount',null,'Type it yourself',false);
     h+='</div>';
-    h+='<button type="button" class="me-btn me-btn--pri" onclick="CampistryMe._mpGenerate()" style="margin-top:6px">Generate schedule →</button>';
+    h+='<div class="me-field" id="mpCustomWrap" style="display:none;max-width:260px"><label>Amount to schedule ($)</label>'
+        +'<input type="number" id="mpTotal" class="me-input" value="'+(curBalance>0?curBalance.toFixed(2):'')+'" step="0.01" min="0.50" oninput="CampistryMe._mpPreview()"></div>';
+
+    // ── Step 2: how it is split ──────────────────────────────────────────
+    h+='<div style="font-size:.7rem;font-weight:700;letter-spacing:.06em;text-transform:uppercase;color:var(--s500);margin:4px 0 8px">How should it be split?</div>';
+    h+='<div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(170px,1fr));gap:10px">';
+    h+='<div class="me-field"><label># of payments</label><input type="number" id="mpCount" class="me-input" value="3" min="1" max="60" oninput="CampistryMe._mpPreview()"></div>';
+    h+='<div class="me-field"><label>How often</label><select id="mpCadence" class="me-input" onchange="CampistryMe._mpPreview()"><option value="weekly">Weekly</option><option value="biweekly">Every 2 weeks</option><option value="monthly" selected>Monthly</option><option value="custom">Custom (blank rows)</option></select></div>';
+    h+='<div class="me-field"><label>First payment on</label><input type="date" id="mpStart" class="me-input" value="'+defStart+'"></div>';
+    h+='</div>';
+
+    // The answer, before they commit to it.
+    h+='<div id="mpPreview" style="background:var(--s50);border-radius:var(--r);padding:11px 14px;margin:4px 0 14px;font-size:.88rem;color:var(--s600)"></div>';
+
+    h+='<button type="button" class="me-btn me-btn--pri" onclick="CampistryMe._mpGenerate()">Generate schedule →</button>';
     h+='<p style="font-size:.75rem;color:var(--s400);margin:8px 0 0">This replaces whatever is currently in Edit Payments — you\'ll land there next to review before saving.</p>';
     h+='</div>';
 
@@ -13684,6 +13770,8 @@ function monthlyPlan(famKey,planId){
     if(hasCard) h+='<label style="display:flex;align-items:center;gap:8px;font-size:.85rem;margin-top:4px"><input type="checkbox" id="mpAuto" checked> Auto-charge the payment method on file on each due date</label>';
     else h+='<div style="font-size:.75rem;color:var(--me)">No payment method on file yet — the parent can set up autopay themselves from their Link portal (card or bank transfer), or use "Set Up in Stripe" above for this family. You can still create the schedule now; until then, the parent can pay each installment from their portal manually.</div>';
     h+='</div>';
+    _mpBasisAmounts={balance:curBalance,plan:_planTotal};
+    setTimeout(function(){ _mpPreview(); },0);
     showModal(existingPlan?'Edit Payment Plan':'Set Up Payment Plan',h,function(){
         var rowEls=document.querySelectorAll('.mp-row');
         var insts=[]; var n=0;
@@ -16756,7 +16844,7 @@ window.CampistryMe={
     finAddPayment:finAddPayment,finRemovePayment:finRemovePayment,
     sendPayLink:sendPayLink,copyPayLink:copyPayLink,toggleBillingAccess:toggleBillingAccess,
     monthlyPlan:monthlyPlan,toggleFamilyAutopay:toggleFamilyAutopay,cancelMonthlyPlan:cancelMonthlyPlan,
-    _mpGenerate:_mpGenerate,_mpAddRow:_mpAddRow,_mpUpdateTotal:_mpUpdateTotal,_mpSwitchTab:_mpSwitchTab,
+    _mpGenerate:_mpGenerate,_mpBasis:_mpBasis,_mpPreview:_mpPreview,_mpAddRow:_mpAddRow,_mpUpdateTotal:_mpUpdateTotal,_mpSwitchTab:_mpSwitchTab,
     viewStaffApp:viewStaffApp,setStaffStatus:setStaffStatus,saveStaffNotes:saveStaffNotes,openAssignPositionModal:openAssignPositionModal,
     openStaffContractModal:openStaffContractModal,saveStaffContract:saveStaffContract,scPayTypeHint:scPayTypeHint,scFillFromSession:scFillFromSession,copyStaffContractLink:copyStaffContractLink,
     toggleOnboard:toggleOnboard,cycleRef:cycleRef,deleteStaffApp:deleteStaffApp,addStaffApp:addStaffApp,
