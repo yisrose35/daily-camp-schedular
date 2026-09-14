@@ -4049,7 +4049,8 @@ async function generateRoutes() {
                 (_rp.timedOut ? ' — ran out of time; the polish may have more to give' : ''));
             if (_rp && _rp.blockTried) console.log('[Go] Road polish: priced ' + _rp.blockTried + ' branch hand-off(s) from buses over the ' +
                 (D.setup.maxRouteDuration || 90) + 'min cap to buses with idle seats — ' +
-                (_rp.blockMoves ? _rp.blockMoves + ' taken (the best gained ' + Math.abs(Math.min(0, _rp.blockBestDelta || 0)).toFixed(0) + ' on the objective)'
+                (_rp.blockMoves ? _rp.blockMoves + ' taken (the best gained ' + Math.abs(Math.min(0, _rp.blockBestDelta || 0)).toFixed(0) + ' on the objective)' +
+                                  (_rp.refills ? ', ' + _rp.refills + ' of them by emptying a short bus into the buses that pass its stops first' : '')
                                 : 'none taken' + (_rp.blockBestDelta != null ? '; the closest would have cost ' + Math.max(0, _rp.blockBestDelta).toFixed(0) +
                                   ' on the objective (fleet minutes plus the cap penalty)' : '')));
         }

@@ -71,6 +71,8 @@ window.CampistryGoRoutePost = (function () {
                                    // far more than two buses a little over, so overage is never piled onto one
         polishBlockMax: 8,         // block relocate: up to this many stops of an over-budget bus move together
         polishBlockTargets: 8,     // ...to one of the this-many buses furthest under their budget
+        polishRefillMaxFrac: 0.5,  // empty-and-refill: a bus under this fraction of its budget may be emptied into
+                                   // the buses that pass its stops and refilled with a far branch of an over-budget bus
         polishMinGainMin: 0.05,
         polishLnsIters: 0,         // ruin-and-recreate attempts after local search converges.
                                    // Measured on camp-shaped layouts: no gain over relocate/swap,
@@ -1477,7 +1479,7 @@ window.CampistryGoRoutePost = (function () {
 
         for (const b of B) buildTour(b);
         const before = objective(), fleetBefore = fleetMin(), childMinBefore = childMin();
-        let moves = 0, blockMoves = 0, blockTried = 0, blockBestDelta = Infinity;
+        let moves = 0, blockMoves = 0, blockTried = 0, blockBestDelta = Infinity, refills = 0;
         const EPS = o.polishMinGainMin;
 
         let stop = false;
@@ -1493,6 +1495,64 @@ window.CampistryGoRoutePost = (function () {
         // rebuilt) and by splicing the block out of the giver's tour (a valid
         // order, slightly pessimistic); the apply rebuilds both. The camp's
         // Bus 8 was a 9-minute run with 24 empty seats while Bus 2 ran 102.
+        // Candidate blocks of an over-budget bus: the far end of its run (tour
+        // suffixes) and radial clusters around its farthest stop.
+        function candidateBlocks(A) {
+            const n = A.tour.length, maxK = Math.min(o.polishBlockMax, n - 1);
+            const seen = new Set(), blocks = [];
+            const add = blk => { const k = blk.slice().sort((x, y) => x - y).join(','); if (!seen.has(k)) { seen.add(k); blocks.push(blk); } };
+            for (let k = 2; k <= maxK; k++) add(A.tour.slice(n - k));
+            let far = A.tour[0], fd = -1;
+            for (const i of A.tour) { const d = haversineMi(depot.lat, depot.lng, A.atoms[i].lat, A.atoms[i].lng); if (d > fd) { fd = d; far = i; } }
+            const fa = A.atoms[far];
+            const byDist = A.tour.slice().sort((x, y) =>
+                haversineMi(fa.lat, fa.lng, A.atoms[x].lat, A.atoms[x].lng) - haversineMi(fa.lat, fa.lng, A.atoms[y].lat, A.atoms[y].lng));
+            for (let k = 3; k <= maxK; k++) add(byDist.slice(0, k));
+            return blocks;
+        }
+        // Move block `blk` (atom indices of A) to Bb. keep=false prices it and
+        // puts everything back; the giver is priced by splicing (a valid order,
+        // slightly pessimistic), the receiver by rebuilding its tour.
+        function moveBlock(A, Bb, blk, keep) {
+            const sA = snap(A), sB = snap(Bb);
+            const positions = blk.map(i => A.tour.indexOf(i)).sort((x, y) => y - x);
+            const moving = positions.map(p => removeAt(A, p));
+            for (const a of moving) insertAt(Bb, a, Bb.tour.length);
+            if (keep) buildTour(A); else refresh(A);
+            buildTour(Bb);
+            const obj = objective();
+            if (!keep) { restore(A, sA); restore(Bb, sB); }
+            return obj;
+        }
+        // Best block of A to hand to one of `receivers`: { obj, bi, blk } or null.
+        function bestBlockMove(ai, receivers, objBefore) {
+            const A = B[ai];
+            let best = null;
+            for (const blk of candidateBlocks(A)) {
+                const atoms = blk.map(i => A.atoms[i]);
+                const cntSum = atoms.reduce((a, x) => a + cnt(x), 0);
+                for (const bi of receivers) {
+                    if (bi === ai) continue;
+                    const Bb = B[bi];
+                    if (Bb.count + cntSum > Bb.cap) continue;
+                    if (!wedgeOk(Bb, atoms, -1)) continue;
+                    const obj = moveBlock(A, Bb, blk, false);
+                    blockTried++;
+                    if (obj - objBefore < blockBestDelta) blockBestDelta = obj - objBefore;
+                    if (obj < objBefore - EPS && (!best || obj < best.obj)) best = { obj, bi, blk: blk.slice() };
+                }
+            }
+            return best;
+        }
+        // ── block relocate ──
+        // A bus past its budget rarely got there by one stop: it serves two
+        // branches, or a far township on top of its own ground. Single-atom
+        // moves cannot hand a branch to a bus sitting near camp with seats —
+        // each atom alone costs that bus an out-and-back, so none ever pays —
+        // and the reach rule never even prices it. So try whole blocks handed
+        // to a bus UNDER its budget with the seats and containment, near or
+        // not, priced exactly. The camp's Bus 8 was a 9-minute run with 24
+        // empty seats while Bus 2 ran 102.
         function blockRelocate() {
             let moved = 0;
             const over = B.map((b, i) => i).filter(i => B[i].len > budget && B[i].tour.length >= 3)
@@ -1503,46 +1563,67 @@ window.CampistryGoRoutePost = (function () {
             if (!under.length) return 0;
             for (const ai of over) {
                 if (outOfTime()) { stop = true; break; }
-                const A = B[ai], n = A.tour.length, maxK = Math.min(o.polishBlockMax, n - 1);
-                const seen = new Set(), blocks = [];
-                const add = blk => { const k = blk.slice().sort((x, y) => x - y).join(','); if (!seen.has(k)) { seen.add(k); blocks.push(blk); } };
-                for (let k = 2; k <= maxK; k++) add(A.tour.slice(n - k));
-                let far = A.tour[0], fd = -1;
-                for (const i of A.tour) { const d = haversineMi(depot.lat, depot.lng, A.atoms[i].lat, A.atoms[i].lng); if (d > fd) { fd = d; far = i; } }
-                const fa = A.atoms[far];
-                const byDist = A.tour.slice().sort((x, y) =>
-                    haversineMi(fa.lat, fa.lng, A.atoms[x].lat, A.atoms[x].lng) - haversineMi(fa.lat, fa.lng, A.atoms[y].lat, A.atoms[y].lng));
-                for (let k = 3; k <= maxK; k++) add(byDist.slice(0, k));
-                const objBefore = objective();
-                let best = null;
-                const tryMove = (blk, Bb, keep) => {
-                    const sA = snap(A), sB = snap(Bb);
-                    const positions = blk.map(i => A.tour.indexOf(i)).sort((x, y) => y - x);
-                    const moving = positions.map(p => removeAt(A, p));
-                    for (const a of moving) insertAt(Bb, a, Bb.tour.length);
-                    if (keep) buildTour(A); else refresh(A);
-                    buildTour(Bb);
-                    const obj = objective();
-                    if (!keep) { restore(A, sA); restore(Bb, sB); }
-                    return obj;
-                };
-                for (const blk of blocks) {
-                    const atoms = blk.map(i => A.atoms[i]);
-                    const cntSum = atoms.reduce((a, x) => a + cnt(x), 0);
-                    for (const bi of under) {
-                        if (bi === ai) continue;
-                        const Bb = B[bi];
-                        if (Bb.count + cntSum > Bb.cap) continue;
-                        if (!wedgeOk(Bb, atoms, -1)) continue;
-                        const obj = tryMove(blk, Bb, false);
-                        blockTried++;
-                        if (obj - objBefore < blockBestDelta) blockBestDelta = obj - objBefore;
-                        if (obj < objBefore - EPS && (!best || obj < best.obj)) best = { obj, bi, blk: blk.slice() };
-                    }
-                }
-                if (best) { tryMove(best.blk, B[best.bi], true); moved++; moves++; blockMoves++; }
+                const best = bestBlockMove(ai, under, objective());
+                if (best) { moveBlock(B[ai], B[best.bi], best.blk, true); moved++; moves++; blockMoves++; }
             }
             return moved;
+        }
+        // ── empty and refill ──
+        // A short bus near camp is full of near-camp children, so it has no
+        // seats for a far branch; and the branch is far, so a single hand-off
+        // to it never pays. What a dispatcher does: the buses that pass those
+        // near-camp stops on their way out take them (a minute or two each),
+        // and the emptied bus takes a far branch of a bus over the budget.
+        // Neither half pays alone; the pair does. Priced exactly, kept only if
+        // the objective falls. The camp had 42 children on an 18-minute bus
+        // while three buses ran 84-93 minutes.
+        function emptyAndRefill() {
+            if (!(o.polishRefillMaxFrac > 0)) return 0;
+            let done = 0;
+            const shortBuses = B.map((b, i) => i).filter(i => B[i].tour.length >= 1 && B[i].len < budget * o.polishRefillMaxFrac)
+                .sort((i, j) => B[i].len - B[j].len);
+            for (const ei of shortBuses) {
+                if (outOfTime()) { stop = true; break; }
+                const over = B.map((b, i) => i).filter(i => i !== ei && B[i].len > budget && B[i].tour.length >= 3)
+                    .sort((i, j) => B[j].len - B[i].len);
+                if (!over.length) break;
+                const E = B[ei];
+                const snapshot = B.map(snap), objBefore = objective();
+                // 1. spread E's stops to the buses that pass them (cheapest exact insertion, seats + containment)
+                const atoms = E.tour.map(i => E.atoms[i]).sort((x, y) => cnt(y) - cnt(x));
+                while (E.tour.length) removeAt(E, E.tour.length - 1);
+                refresh(E);
+                const touched = new Set();
+                let ok = true;
+                for (const a of atoms) {
+                    let best = null;
+                    for (let bi = 0; bi < N; bi++) {
+                        if (bi === ei) continue;
+                        const Bb = B[bi];
+                        if (Bb.count + cnt(a) > Bb.cap) continue;
+                        if (Bb.atoms.length && reachMi(Bb, a) > o.polishReachMi) continue;
+                        if (!wedgeOk(Bb, [a], -1)) continue;
+                        const ins = bestInsert(Bb, a, -1);
+                        if (!best || ins.delta < best.delta) best = { delta: ins.delta, bi, at: ins.at };
+                    }
+                    if (!best) { ok = false; break; }
+                    insertAt(B[best.bi], a, best.at); refresh(B[best.bi]); touched.add(best.bi);
+                }
+                if (ok) {
+                    for (const bi of touched) buildTour(B[bi]);
+                    // 2. the emptied bus takes the best far branch of any over-budget bus
+                    let bestMove = null;
+                    const objMid = objective();
+                    for (const ai of over) {
+                        const m = bestBlockMove(ai, [ei], objMid);
+                        if (m && (!bestMove || m.obj < bestMove.obj)) bestMove = { ai, bi: ei, blk: m.blk, obj: m.obj };
+                    }
+                    if (bestMove) moveBlock(B[bestMove.ai], E, bestMove.blk, true); else ok = false;
+                }
+                if (!ok || objective() >= objBefore - EPS) { B.forEach((b, i) => restore(b, snapshot[i])); }
+                else { done++; moves++; blockMoves++; refills++; }
+            }
+            return done;
         }
         function localSearch() {
         for (let pass = 0; pass < o.polishMaxPasses && !stop; pass++) {
@@ -1554,6 +1635,7 @@ window.CampistryGoRoutePost = (function () {
             // absorbed by the core buses, and with every one of them full there
             // was no receiver left for a branch of the 90-minute buses.
             if (budget > 0 && blockRelocate()) { improved = true; for (const b of B) buildTour(b); }
+            if (budget > 0 && !stop && emptyAndRefill()) { improved = true; for (const b of B) buildTour(b); }
             // ── relocate ──
             for (let ai = 0; ai < N && !stop; ai++) {
                 const A = B[ai];
@@ -1701,7 +1783,7 @@ window.CampistryGoRoutePost = (function () {
             localSearch();
         }
         const after = objective();
-        return { buckets: B.map(b => b.tour.map(i => b.atoms[i])), moves, blockMoves, blockTried,
+        return { buckets: B.map(b => b.tour.map(i => b.atoms[i])), moves, blockMoves, blockTried, refills,
                  blockBestDelta: Number.isFinite(blockBestDelta) ? blockBestDelta : null, timedOut: outOfTime(), before, after,
                  fleetBefore, fleetAfter: fleetMin(), childMinBefore, childMinAfter: childMin() };
     }
