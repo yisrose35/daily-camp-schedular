@@ -2354,21 +2354,44 @@ window.CampistryGoNeighborhoods = (function () {
             if (streetName) return streetName + (num ? ' near ' + num : ' corner');
             return (hs.find(h => h.addr) || {}).addr || 'Stop corner';
         }
-        function snap(stop) {
+        function homesOf(stop) {
             const hs = stop._homes || [];
-            if (!hs.length) return stop;
             const cLat = hs.reduce((a, h) => a + h.lat, 0) / hs.length;
             const cLng = hs.reduce((a, h) => a + h.lng, 0) / hs.length;
             const tally = {};
             for (const h of hs) { const k = h.street || parseStreetName(h.addr); if (k) tally[k] = (tally[k] || 0) + 1; }
             const streetName = Object.keys(tally).sort((a, b) => tally[b] - tally[a])[0] || '';
+            return { hs, cLat, cLng, streetName };
+        }
+        function snap(stop) {
+            if (!(stop._homes || []).length) return stop;
+            const { hs, cLat, cLng, streetName } = homesOf(stop);
             const node = nearestCorner(cLat, cLng, streetName, hs);
             stop._cLat = cLat; stop._cLng = cLng;
             stop.lat = node ? node.lat : cLat; stop.lng = node ? node.lng : cLng;
             stop.address = nameFor(node, streetName, hs);
             return stop;
         }
-        return { snap, nearestCorner, cornerName, nameFor, WALK };
+        // Every corner inside the walk limit of a stop's homes, nearest total
+        // walk first, each as its own point { lat, lng, walkMi, name, node } —
+        // the choices a route-aware pass may stand the stop at. A corner not
+        // on the homes' street is named by its own two streets.
+        function candidates(stop, K) {
+            if (!(stop._homes || []).length) return [];
+            const { hs, cLat, cLng, streetName } = homesOf(stop);
+            const want = normStreet(streetName), out = [];
+            for (const n of interNodes) {
+                if (haversineMi(cLat, cLng, n.lat, n.lng) > WALK) continue;
+                let tot = 0;
+                for (const h of hs) tot += haversineMi(h.lat, h.lng, n.lat, n.lng);
+                const onStreet = !!want && (n.streets || []).some(x => normStreet(x) === want);
+                out.push({ lat: n.lat, lng: n.lng, walkMi: tot, node: n,
+                           name: onStreet || !(n.streets || []).length ? cornerName(n, streetName) : cornerName(n, n.streets[0]) });
+            }
+            out.sort((a, b) => a.walkMi - b.walkMi);
+            return out.slice(0, K || 4);
+        }
+        return { snap, candidates, nearestCorner, cornerName, nameFor, WALK };
     }
 
     function expandToPhysicalStops({ assignment, result, isArrival = false, dropoffMode = 'door-to-door', maxWalkMi = 0.25 }) {

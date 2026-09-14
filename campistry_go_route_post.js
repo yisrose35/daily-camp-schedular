@@ -1916,6 +1916,54 @@ window.CampistryGoRoutePost = (function () {
                  fleetBefore, fleetAfter: fleetMin(), childMinBefore, childMinAfter: childMin() };
     }
 
+    // ---- route-aware corners ------------------------------------------------
+    // A corner stop stands at the intersection nearest its homes. The corner on
+    // the bus's way is better: the camp's Hope Terrace child was stood at the
+    // corner a block down a side road, so the bus left County Line Road,
+    // dropped her, and U-turned back. Given each stop's candidate corners (all
+    // inside the walk limit, nearest total walk first, as {lat, lng, walkMi,
+    // name, node}), pick per stop the one that adds the least driving between
+    // its neighbours in the current order, with a small charge per mile of
+    // extra walking. `legs(a, b)` must answer in minutes for the stops and for
+    // every candidate point. Rewrites lat/lng/address in place; the caller
+    // re-orders the bus afterwards. Returns { moved, savedMin }.
+    function chooseCornersOnPath(stops, candidatesByStop, legs, depot, closed, o) {
+        o = opts(o);
+        const WALKW = Number.isFinite(o.cornerWalkWeightMinPerMi) ? o.cornerWalkWeightMinPerMi : 6;
+        const EPS = Number.isFinite(o.cornerMinGainMin) ? o.cornerMinGainMin : 0.3;
+        const same = (a, b) => Math.abs(a.lat - b.lat) < 1e-7 && Math.abs(a.lng - b.lng) < 1e-7;
+        // The point each stop currently stands at, as a point `legs` knows.
+        const pos = stops.map((s, i) => ((candidatesByStop[i] || []).find(c => same(c, s))) || s);
+        const walkAt = i => { const c = (candidatesByStop[i] || []).find(x => same(x, pos[i])); return c ? c.walkMi : ((candidatesByStop[i] || [{ walkMi: 0 }])[0].walkMi); };
+        let moved = 0, saved = 0;
+        for (let pass = 0; pass < 3; pass++) {
+            let any = false;
+            for (let i = 0; i < stops.length; i++) {
+                const list = candidatesByStop[i];
+                if (!list || list.length < 2) continue;
+                const prev = i > 0 ? pos[i - 1] : depot;
+                const next = i + 1 < stops.length ? pos[i + 1] : (closed ? depot : null);
+                const drive = p => legs(prev, p) + (next ? legs(p, next) : 0);
+                const curCost = drive(pos[i]) + WALKW * walkAt(i);
+                let best = null;
+                for (const c of list) {
+                    if (same(c, pos[i])) continue;
+                    const cost = drive(c) + WALKW * c.walkMi;
+                    if (cost < curCost - EPS && (!best || cost < best.cost)) best = { c, cost };
+                }
+                if (!best) continue;
+                saved += curCost - best.cost;
+                const s = stops[i];
+                s.lat = best.c.lat; s.lng = best.c.lng;
+                if (best.c.name) s.address = best.c.name;
+                if (best.c.node && best.c.node.id != null) s._cornerNode = best.c.node.id;
+                pos[i] = best.c; moved++; any = true;
+            }
+            if (!any) break;
+        }
+        return { moved, savedMin: saved };
+    }
+
     // ---- audit --------------------------------------------------------------
     // Children whose ride is longer than maxRideRatio x their direct trip from
     // camp (+ slack). Uses the ETA pass's _rideTimeMin when present, else a
@@ -1988,7 +2036,7 @@ window.CampistryGoRoutePost = (function () {
     return {
         DEFAULTS, haversineMi, driveMin, arcDeg, spreadMi, nearestStopMi, stopFitsRoute,
         localTspOrder, routeLastDropMin, orderRoutes,
-        relieveLongRoutes, splitOverlongRoutes, rebalanceBusLoads, enforceCapacity,
+        relieveLongRoutes, splitOverlongRoutes, rebalanceBusLoads, enforceCapacity, chooseCornersOnPath,
         sweepPartition, polishDistricts, containmentReport,
         stopDwellMin, rideRatioViolations, passBys, buildRoadNet, stampLegTimes, stampRoadPath, routeObjective,
         consolidateStops, foldSameCornerStops, distinctColors, assignRouteColors,
