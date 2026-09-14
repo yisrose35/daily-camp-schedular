@@ -69,11 +69,12 @@
     // in the Bank layouts footer. Twice now a fix has been live on the server
     // while the browser ran an older copy, and there was no way to tell from
     // the screen which one was which -- so the screen says.
-    D.BUILD = '20260914-02';
+    D.BUILD = '20260914-03';
 
     var state = {
         loaded: false,
         loading: false,
+        busyId: null,       // the deposit an action is currently running on
         deposits: [],       // review + unmatched + recently posted
         aliases: [],
         credits: {},        // famKey -> [ledger entries]
@@ -124,15 +125,21 @@
                 // Tolerated separately: migration 147 may not be applied yet,
                 // and a missing template table must not blank the inbox.
                 client.rpc('get_bank_templates', { p_camp_id: cid })
+                      .then(function (r) { return r; }, function () { return { data: null }; }),
+                // Loaded up front, not only when Settings is opened: the camp's
+                // deposit address is the FIRST thing a new camp needs, and it
+                // cannot sit behind a button they have no reason to press.
+                client.rpc('get_camp_deposit_settings', { p_camp_id: cid })
                       .then(function (r) { return r; }, function () { return { data: null }; })
             ]);
-            var deps = res[0], als = res[1], crd = res[2], tpl = res[3];
+            var deps = res[0], als = res[1], crd = res[2], tpl = res[3], cfg = res[4];
 
             if (deps.error) throw deps.error;
             state.deposits = (deps.data && deps.data.deposits) || [];
             state.aliases = (als.data && als.data.aliases) || [];
             state.credits = (crd.data && crd.data.credits) || {};
             state.templates = (tpl && tpl.data && tpl.data.templates) || [];
+            if (cfg && cfg.data && cfg.data.success) state.settings = cfg.data;
             state.error = '';
             state.loaded = true;
         } catch (e) {
@@ -271,11 +278,39 @@
 
     D.openInbox = function (startTab) {
         if (!host.showModal) return;
-        tab = startTab || 'needs';
-        host.showModal('Bank Deposits', '<div id="' + BODY_ID + '">Loading…</div>', null,
+        tab = startTab || '';
+        host.showModal('Bank Deposits', '<div id="' + BODY_ID + '">' + skeleton() + '</div>', null,
                        { maxWidth: 1400, maxHeight: '94vh', minHeight: '86vh' });
-        D.refresh().then(renderInbox);
+        D.refresh().then(function () {
+            // A camp that has never received a deposit lands on Setup. Showing
+            // it an empty inbox instead is the moment it has to guess whether
+            // something is broken or simply quiet.
+            if (!tab) tab = state.deposits.length ? 'needs' : 'setup';
+            renderInbox();
+        });
     };
+
+    /**
+     * A shape of the page while it loads, rather than the word "Loading".
+     *
+     * The console opens instantly and the data takes a moment; without this the
+     * modal appears empty, then jumps as content lands. Matching the real
+     * layout means nothing moves when it arrives.
+     */
+    function skeleton() {
+        function bar(w, h, mt) {
+            return '<div style="height:' + h + 'px;width:' + w + ';border-radius:6px;background:var(--s100);' +
+                   'margin-top:' + (mt || 0) + 'px;opacity:.7"></div>';
+        }
+        var h = '<div style="display:flex;gap:28px;padding-bottom:18px;border-bottom:1px solid var(--s100)">';
+        for (var i = 0; i < 4; i++) h += '<div>' + bar('120px', 26) + bar('90px', 11, 8) + '</div>';
+        h += '</div>' + bar('320px', 18, 20);
+        for (var j = 0; j < 3; j++) {
+            h += '<div style="border:1px solid var(--s100);border-radius:var(--r);padding:16px 18px;margin-top:12px">' +
+                 bar('160px', 24) + bar('220px', 13, 9) + bar('60%', 13, 14) + '</div>';
+        }
+        return '<div aria-busy="true">' + h + '</div>';
+    }
 
     D.tab = function (name) { tab = name; renderInbox(); };
 
@@ -310,8 +345,8 @@
             var score = c.score || 0;
             var strong = score >= 90;
             var reasons = (c.reasons || []).join(' · ');
-            return '<button onclick="CampistryDeposits.resolve(\'' + host.jesc(d.id) + '\',\'' +
-                host.jesc(c.familyKey) + '\')" ' +
+            return '<button class="dep-card" data-dep-focus onclick="CampistryDeposits.resolve(\'' +
+                host.jesc(d.id) + '\',\'' + host.jesc(c.familyKey) + '\')" ' +
                 'style="text-align:left;cursor:pointer;border-radius:var(--r);padding:10px 13px;min-width:200px;' +
                 'flex:1 1 200px;background:' + (i === 0 ? '#F0FDF4' : '#fff') + ';border:1px solid ' +
                 (i === 0 ? '#86EFAC' : 'var(--s100)') + '">' +
@@ -413,7 +448,9 @@
         }
 
         var right;
-        if (done) {
+        if (state.busyId === d.id) {
+            right = '<div style="font-size:.9rem;color:var(--s600)">Saving…</div>';
+        } else if (done) {
             right = '<div style="font-size:.9rem">Posted to <strong>' + host.esc(famName(d.family_key)) + '</strong>' +
                 '<div style="font-size:.78rem;color:var(--s500);margin-top:3px">' +
                 host.esc(d.matched_by === 'auto' ? 'matched automatically · ' + (d.match_confidence || 0) + '% confident'
@@ -432,11 +469,177 @@
                 '</div>';
         }
 
-        return '<div style="border:1px solid ' + (rev ? '#FECACA' : 'var(--s100)') + ';border-radius:var(--r);' +
+        return '<div class="dep-row' + (state.busyId === d.id ? ' dep-busy' : '') + '" ' +
+            'style="border:1px solid ' + (rev ? '#FECACA' : 'var(--s100)') + ';border-radius:var(--r);' +
             'padding:16px 18px;margin-bottom:12px' + (rev ? ';background:#FFFBFB' : '') + '">' +
             '<div style="display:flex;justify-content:flex-end;margin-bottom:-6px">' + statusPill(d) + '</div>' +
             '<div style="display:flex;gap:28px;flex-wrap:wrap;align-items:flex-start">' +
             left + '<div style="flex:1;min-width:280px">' + right + '</div></div></div>';
+    }
+
+    /**
+     * One injected stylesheet, once.
+     *
+     * Everything here is inline-styled so the module carries its own look and
+     * cannot be broken by a page it is dropped into -- but inline styles cannot
+     * express :hover, :focus-visible or a transition, which is most of the
+     * difference between a screen that feels considered and one that feels
+     * like a form. So the few rules that need a selector live here.
+     */
+    var STYLE_ID = 'campistry-deposits-style';
+    function ensureStyle() {
+        if (!DOC.getElementById || DOC.getElementById(STYLE_ID)) return;
+        if (!DOC.createElement) return;
+        var el = DOC.createElement('style');
+        if (!el) return;
+        el.id = STYLE_ID;
+        el.textContent = [
+            '.dep-card{transition:border-color .12s ease,box-shadow .12s ease,transform .08s ease}',
+            '.dep-card:hover{border-color:#86EFAC;box-shadow:0 2px 10px rgba(16,185,129,.14)}',
+            '.dep-card:active{transform:translateY(1px)}',
+            '.dep-row{transition:box-shadow .15s ease}',
+            '.dep-row:hover{box-shadow:0 1px 8px rgba(0,0,0,.05)}',
+            '.dep-tab{transition:color .12s ease,border-color .12s ease}',
+            '.dep-tab:hover{color:var(--s900,#111)}',
+            '.dep-busy{opacity:.55;pointer-events:none}',
+            '[data-dep-focus]:focus-visible{outline:2px solid #2563EB;outline-offset:2px;border-radius:6px}',
+            '@media (prefers-reduced-motion:reduce){.dep-card,.dep-row,.dep-tab{transition:none}}'
+        ].join('\n');
+        if (DOC.head && DOC.head.appendChild) DOC.head.appendChild(el);
+    }
+
+    // ── the address, and knowing where you stand ─────────────────────────────
+
+    D.inboundAddress = function () {
+        var s = state.settings;
+        if (!s || !s.inboundToken) return '';
+        var domain = W.CAMPISTRY_INBOUND_DOMAIN || 'inbound.campistry.org';
+        var prefix = (typeof W.CAMPISTRY_INBOUND_PREFIX === 'string') ? W.CAMPISTRY_INBOUND_PREFIX : 'deposits+';
+        return prefix + s.inboundToken + '@' + domain;
+    };
+
+    /**
+     * Where this camp actually is, as facts rather than adjectives.
+     *
+     * "No deposits yet" is ambiguous in the one way that matters: it reads the
+     * same whether the camp has not finished setting up, or is set up and
+     * nobody has paid today. A head counselor should never have to poke at the
+     * screen to work out which -- so each step reports itself.
+     */
+    D.setupState = function () {
+        var anyMail = state.deposits.length > 0;
+        var s = state.settings || {};
+        return {
+            hasAddress:  !!D.inboundAddress(),
+            mailArrived: anyMail,
+            allowlisted: !!(s.senderAllowlist && s.senderAllowlist.length),
+            dryRun:      !!s.dryRun,
+            posted:      state.deposits.filter(function (d) { return d.status === 'posted'; }).length
+        };
+    };
+
+    function copyBtn(value, label) {
+        return '<button class="me-btn me-btn--sec me-btn--sm" ' +
+            'onclick="CampistryDeposits.copy(\'' + host.jesc(value) + '\', this)">' + (label || 'Copy') + '</button>';
+    }
+
+    D.copy = function (text, btn) {
+        var done = function () {
+            if (!btn) return;
+            var was = btn.textContent;
+            btn.textContent = 'Copied';
+            setTimeout(function () { btn.textContent = was; }, 1600);
+        };
+        try {
+            if (W.navigator && W.navigator.clipboard) {
+                W.navigator.clipboard.writeText(text).then(done, done);
+                return;
+            }
+        } catch (e) { /* fall through */ }
+        done();
+    };
+
+    function stepRow(n, done, title, body, action) {
+        return '<div style="display:flex;gap:14px;padding:16px 0;border-top:' +
+            (n === 1 ? 'none' : '1px solid var(--s100)') + '">' +
+            '<div style="width:28px;height:28px;border-radius:999px;flex-shrink:0;display:flex;' +
+            'align-items:center;justify-content:center;font-size:.82rem;font-weight:700;' +
+            (done ? 'background:#10B981;color:#fff' : 'background:var(--s100);color:var(--s500)') + '">' +
+            (done ? '✓' : n) + '</div>' +
+            '<div style="flex:1;min-width:0">' +
+            '<div style="font-size:.98rem;font-weight:600;margin-bottom:3px">' + title + '</div>' +
+            '<div style="font-size:.87rem;color:var(--s600);line-height:1.6;max-width:680px">' + body + '</div>' +
+            (action ? '<div style="margin-top:10px">' + action + '</div>' : '') +
+            '</div></div>';
+    }
+
+    /**
+     * The first screen a camp sees, until money is arriving on its own.
+     *
+     * Deliberately not a help article. Each step says what to do, shows whether
+     * it has happened, and carries the thing needed to do it -- the address is
+     * right there with a copy button rather than two clicks away in Settings.
+     */
+    function setupHtml() {
+        var st = D.setupState();
+        var addr = D.inboundAddress();
+        var h = '<div style="max-width:860px">';
+
+        h += '<div style="font-size:1.15rem;font-weight:700;margin-bottom:4px">Set up automatic deposits</div>' +
+             '<div style="font-size:.9rem;color:var(--s600);line-height:1.6;margin-bottom:8px">' +
+             'Once this is running, Zelle and ACH payments are credited to the right family as they land — ' +
+             'no one has to type them in. It takes about five minutes, once.</div>';
+
+        h += '<div style="border:1px solid var(--s100);border-radius:var(--r);padding:4px 20px 8px">';
+
+        h += stepRow(1, st.hasAddress, 'Your camp\'s deposit address',
+            addr
+                ? 'This is unique to your camp. Nothing else can use it.'
+                : 'Still being created — reopen this in a moment.',
+            addr
+                ? '<div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap">' +
+                  '<code style="background:var(--s50);border:1px solid var(--s100);border-radius:var(--r);' +
+                  'padding:9px 12px;font-size:.86rem;word-break:break-all">' + host.esc(addr) + '</code>' +
+                  copyBtn(addr, 'Copy address') + '</div>'
+                : '');
+
+        h += stepRow(2, st.mailArrived, 'Tell your bank to send alerts there',
+            'In your camp\'s online banking, add that address as an alert recipient for <strong>incoming ' +
+            'deposits</strong> and <strong>Zelle payments received</strong>. If alerts already go to an ' +
+            'existing mailbox, a forwarding rule from there works just as well.' +
+            '<div style="font-size:.82rem;color:var(--s500);margin-top:8px">' +
+            'Chase: Profile &amp; settings → Alerts → Accounts · Bank of America: Alerts → Deposits &amp; transfers · ' +
+            'Wells Fargo: Manage alerts → Deposits · Capital One: Settings → Alerts → Money received</div>',
+            st.mailArrived
+                ? '<span style="font-size:.85rem;color:#065F46;font-weight:600">Mail is arriving ✓</span>'
+                : '<span style="font-size:.85rem;color:var(--s500)">Nothing has arrived yet. ' +
+                  'Send yourself a $1 Zelle to test — it shows up here within a minute.</span>');
+
+        h += stepRow(3, st.mailArrived && !st.dryRun, 'Check the matches, then let it post',
+            st.dryRun
+                ? 'Dry run is <strong>on</strong>, so deposits are matched and explained but nothing is credited ' +
+                  'automatically. Leave it on for a week of real payments, then turn it off once the matches look right.'
+                : 'Dry run is off — confident matches post to a family\'s balance on their own. ' +
+                  'Anything less certain still waits for you in <strong>Needs you</strong>.',
+            '<button class="me-btn me-btn--sec me-btn--sm" onclick="CampistryDeposits.openSettings()">Open settings</button>');
+
+        h += stepRow(4, st.allowlisted, 'Lock it to your bank',
+            'Once you have seen a real alert arrive, restrict the address to that bank\'s sending domain. ' +
+            'Until then, anything reaching the address is trusted — fine while testing, not once camps rely on it.',
+            st.allowlisted
+                ? '<span style="font-size:.85rem;color:#065F46;font-weight:600">Restricted ✓</span>'
+                : '<button class="me-btn me-btn--sec me-btn--sm" onclick="CampistryDeposits.openSettings()">Set the allowed sender</button>');
+
+        h += '</div>';
+
+        h += '<div style="margin-top:20px;font-size:.87rem;color:var(--s600);line-height:1.6">' +
+             '<strong>What happens after that.</strong> Every payment is matched to a family by its memo code, ' +
+             'a payer we have already learned, or the name on the payment. Anything confident posts by itself; ' +
+             'anything else waits in <strong>Needs you</strong>, and each time you resolve one, Campistry ' +
+             'remembers that payer for good.</div>';
+
+        h += '</div>';
+        return h;
     }
 
     // ── the console ──────────────────────────────────────────────────────────
@@ -481,16 +684,18 @@
         var posted = state.deposits.filter(function (d) { return d.status === 'posted'; }).length;
         var mine = state.templates.filter(function (x) { return x.scope === 'camp'; }).length;
 
+        var st = D.setupState();
         var tabs = [
             ['needs',   'Needs you',    pending],
             ['posted',  'Posted',       posted],
             ['payers',  'Known payers', state.aliases.length],
-            ['layouts', 'Bank layouts', mine]
+            ['layouts', 'Bank layouts', mine],
+            ['setup',   st.mailArrived && st.allowlisted ? 'Setup' : 'Setup · finish', 0]
         ];
         return '<div style="display:flex;gap:4px;flex-wrap:wrap;border-bottom:1px solid var(--s100);margin-bottom:18px">' +
             tabs.map(function (t) {
                 var on = tab === t[0];
-                return '<button onclick="CampistryDeposits.tab(\'' + t[0] + '\')" ' +
+                return '<button class="dep-tab" data-dep-focus onclick="CampistryDeposits.tab(\'' + t[0] + '\')" ' +
                     'style="background:none;border:none;border-bottom:2px solid ' +
                     (on ? 'var(--acc,#D97706)' : 'transparent') + ';padding:9px 14px;cursor:pointer;' +
                     'font-size:.9rem;font-weight:' + (on ? '700' : '500') + ';color:' +
@@ -521,14 +726,19 @@
             return;
         }
 
+        ensureStyle();
         var h = summaryStrip() + tabBar();
 
         if (tab === 'needs') {
             var pending = state.deposits.filter(D.isPending);
             h += pending.length
                 ? pending.map(depositRow).join('')
-                : emptyState('Nothing waiting',
-                    'Every deposit that has arrived is matched to a family. New ones appear here the moment the bank emails about them.');
+                : (state.deposits.length
+                    ? emptyState('Nothing waiting',
+                        'Every deposit that has arrived is matched to a family. New ones appear here the moment the bank emails about them.')
+                    : emptyState('No deposits yet',
+                        'Nothing has reached your deposit address. That is expected until your bank is sending alerts to it.',
+                        '<button class="me-btn me-btn--pri me-btn--sm" onclick="CampistryDeposits.tab(\'setup\')">Finish setting up</button>'));
         } else if (tab === 'posted') {
             var posted = state.deposits.filter(function (d) { return d.status === 'posted'; }).slice(0, 60);
             h += posted.length
@@ -539,6 +749,8 @@
             h += aliasesHtml();
         } else if (tab === 'layouts') {
             h += templatesHtml();
+        } else if (tab === 'setup') {
+            h += setupHtml();
         }
 
         el.innerHTML = h;
@@ -548,19 +760,32 @@
 
     function busy(msg) { if (host.toast) host.toast(msg); }
 
+    /**
+     * Run a deposit action, with the row showing that it is happening.
+     *
+     * Resolving a deposit is a round trip plus a full reload, and without a
+     * busy state the office clicks a family and nothing visibly changes for a
+     * second -- so they click again. Marking the row and repainting
+     * immediately costs one render and removes the doubt.
+     */
     async function call(fn, args, okMsg) {
         var client = db(), cid = campId();
         if (!client || !cid) return false;
+        state.busyId = args && args.p_deposit_id || null;
+        if (state.busyId) renderInbox();
         try {
             var res = await client.rpc(fn, Object.assign({ p_camp_id: cid }, args));
             if (res.error) throw res.error;
             if (res.data && res.data.success === false) throw new Error(res.data.error || 'failed');
             if (okMsg && host.toast) host.toast(okMsg);
             await D.refresh();
+            state.busyId = null;
             renderInbox();
             host.onChange();
             return true;
         } catch (e) {
+            state.busyId = null;
+            renderInbox();
             if (host.toast) host.toast('Failed: ' + ((e && e.message) || e), 'error');
             return false;
         }

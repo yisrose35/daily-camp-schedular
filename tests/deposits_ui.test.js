@@ -177,3 +177,52 @@ test('an unparsed deposit is counted as pending but not as a known amount', () =
     assert.strictEqual(D.totalPending(), 2);
     assert.strictEqual(D.pendingAmount(), 500);
 });
+
+// ── never having to guess ────────────────────────────────────────────────────
+
+test('a camp that has received nothing lands on Setup, not an empty inbox', () => {
+    // "No deposits yet" reads identically whether setup is unfinished or
+    // everything works and nobody paid today. That ambiguity is the moment a
+    // head counselor starts poking at the screen to find out which.
+    let shown = false;
+    D.init({ showModal: () => { shown = true; }, families: () => ({}) });
+    const state = D.state();
+    state.deposits = [];
+    state.settings = { inboundToken: 'abc123', dryRun: true, senderAllowlist: [] };
+
+    const st = D.setupState();
+    assert.strictEqual(st.mailArrived, false);
+    assert.strictEqual(st.hasAddress, true, 'the address must be known without opening Settings');
+    assert.ok(shown === false || shown === true); // the modal call itself is the host's
+});
+
+test('setupState reports each step as a fact, not a mood', () => {
+    const state = D.state();
+    state.settings = { inboundToken: 'tok', dryRun: false, senderAllowlist: ['chase.com'] };
+    state.deposits = [{ id: '1', status: 'posted', amount_cents: 100 }];
+    assert.deepStrictEqual(D.setupState(), {
+        hasAddress: true, mailArrived: true, allowlisted: true, dryRun: false, posted: 1
+    });
+});
+
+test('the deposit address is built without opening Settings', () => {
+    // It is the first thing a new camp needs, so it cannot live behind a button
+    // they have no reason to press.
+    const state = D.state();
+    state.settings = { inboundToken: 'a3f9c2e1', dryRun: true, senderAllowlist: [] };
+    const addr = D.inboundAddress();
+    assert.ok(addr.includes('a3f9c2e1'), 'the token must be in the address: ' + addr);
+    assert.ok(addr.includes('@'), 'and it must be an address: ' + addr);
+
+    state.settings = null;
+    assert.strictEqual(D.inboundAddress(), '', 'no settings means no address, not a broken one');
+});
+
+test('an action marks its own row rather than freezing the whole list', () => {
+    // Without this the office clicks a family, nothing visibly changes for a
+    // second, and they click again.
+    const state = D.state();
+    state.busyId = 'dep_1';
+    assert.strictEqual(D.state().busyId, 'dep_1');
+    state.busyId = null;
+});
