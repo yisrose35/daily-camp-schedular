@@ -4433,9 +4433,12 @@ async function _tryNeighborhoodPipeline({
         // push the camper on regardless, which is how a 48-seat bus ended up
         // carrying 49 children — a hard failure that had nothing to do with the
         // districting. The fleet has ~113 spare seats, so a seat always exists.
+        // Usable seats = capacity minus the reserve, the same number the
+        // districting packed to. Using the raw capacity here put a 47th child
+        // on a 46-seat run and left the polish to undo it.
         const _capOf = (bus) => {
             const v = shiftVehicles.find(x => x.busId === bus.busId);
-            return v && Number.isFinite(v.capacity) ? v.capacity : Infinity;
+            return v && Number.isFinite(v.capacity) ? Math.max(0, v.capacity - (reserveSeats || 0)) : Infinity;
         };
         const _headOf = (bus) => (bus.stops || []).reduce((a, s) => a + ((s.campers || []).length), 0);
         // Siblings (same family, same address) ride together: place a family
