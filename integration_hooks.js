@@ -789,6 +789,40 @@
                             .maybeSingle();
                         if (!curErr && cur && cur.value && typeof cur.value === 'object') {
                             changesToSync[mergeKey] = { ...cur.value, ...changesToSync[mergeKey] };
+                            // ★ The shallow spread above protects TOP-LEVEL keys
+                            //   and nothing inside them, so `finance` and
+                            //   `families` are still replaced wholesale by
+                            //   whatever this tab had in memory. Five server-side
+                            //   functions write into exactly those two branches —
+                            //   charge-due-installments appends a payment and
+                            //   marks an installment paid; the Stripe, Cardknox,
+                            //   BYOP and hosted-checkout handlers set the
+                            //   card-on-file fields autopay needs to run at all.
+                            //   A tab open since before the 02:00 autopay run
+                            //   therefore erased the charge (the family owes it
+                            //   again) AND reset the installment to pending, so
+                            //   the cron charged the same card the next night.
+                            //   Both quantities only ever append or advance, so
+                            //   putting back what the cloud has and we do not is
+                            //   exact, not a guess.
+                            if (mergeKey === 'campistryMe' && window.CampistryFinanceMerge) {
+                                try {
+                                    window.CampistryFinanceMerge.mergeCampistryMe(
+                                        changesToSync[mergeKey], cur.value);
+                                    const rep = changesToSync[mergeKey]._financeMergeReport;
+                                    delete changesToSync[mergeKey]._financeMergeReport;
+                                    if (rep && (rep.payments || rep.installments || rep.cards)) {
+                                        log('campistryMe: kept server-written money out of the clobber —',
+                                            rep.payments, 'payment(s),', rep.installments,
+                                            'paid installment(s),', rep.cards, 'card field(s)');
+                                    }
+                                } catch (finErr) {
+                                    // Never block the save: a failed merge loses
+                                    // what it would have restored, a thrown one
+                                    // loses everything the office just typed.
+                                    logError('campistryMe finance merge failed:', finErr?.message || finErr);
+                                }
+                            }
                         }
                     } catch (mergeErr) {
                         log(`${mergeKey} fetch-merge failed (will replace wholesale):`, mergeErr?.message || mergeErr);
