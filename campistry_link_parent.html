@@ -1316,7 +1316,7 @@ async function _addSavedCard(cid){
     }
     if(!d||!d.familyKey){ toast('Could not find your family record — contact the camp office.'); return; }
     var status=await _getCampProcessorInfo(cid);
-    var processorKey=(status&&status.processorKey)||'stripe';
+    var processorKey=(status&&status.processorKey)||'none';
     if(processorKey==='banquest'){
         // Banquest: Campistry's own card page (Banquest tokenizes the card in
         // its iframe; payments-save-method turns the nonce into a saved card).
@@ -1482,7 +1482,7 @@ async function startAutopaySetup(cid){
     // fixed, so a BYOP camp's "Update payment method" button always sent
     // the parent to Stripe regardless of the camp's actual processor.
     var status=await _getCampProcessorInfo(cid);
-    var processorKey=(status&&status.processorKey)||'stripe';
+    var processorKey=(status&&status.processorKey)||'none';
     if(processorKey==='cardknox'){
         try{
             toast('Opening secure checkout…');
@@ -1494,6 +1494,14 @@ async function startAutopaySetup(cid){
     if(processorKey==='banquest'){
         // Banquest: Campistry's own card page, same as _addSavedCard.
         _lkGoToCheckout(_lkCardSetupUrl(cid,{familyKey:d.familyKey,familyName:d.familyName||''}));
+        return;
+    }
+    // Everything below is the Stripe path. 'none' means the camp has not
+    // connected a processor at all — it must NOT quietly become Stripe, which
+    // is what the old ||'stripe' fallback did (and would have settled the
+    // camp's money into Campistry's own platform balance).
+    if(processorKey!=='stripe'){
+        toast('This camp hasn\'t set up online payments yet — contact the camp office.');
         return;
     }
     try{
@@ -1677,7 +1685,7 @@ async function _lkPayConfirm(){
     var email=(parent&&parent.email)||'';
     try{
         var info=await _getCampProcessorInfo(cid);
-        var processorKey=(info&&info.processorKey)||'stripe';
+        var processorKey=(info&&info.processorKey)||'none';
         if(processorKey==='cardknox'){
             if(!d.familyKey){toast('Could not start payment: family record not found — contact the camp office','error');return;}
             toast('Opening secure checkout…');
@@ -2178,7 +2186,7 @@ async function addFunds(){
     // reasoning in startCanteenAutoReloadSetup() below: a not-yet-resolved
     // or previously-failed lookup silently fell back to 'stripe' here too.
     var status=await _getCampProcessorInfo(c.campId);
-    var processorKey=(status&&status.processorKey)||'stripe';
+    var processorKey=(status&&status.processorKey)||'none';
     if(processorKey==='cardknox'){
         var addBtn=document.getElementById('canteenAddBtn');
         if(addBtn){addBtn.disabled=true;addBtn.textContent='Opening secure checkout…';}
@@ -2268,7 +2276,7 @@ async function _getCampProcessorInfo(campId){
                 console.warn('[Parent] get_camp_canteen_stripe_status returned failure:',d&&d.error);
                 continue;
             }
-            var info={connected:!!(d.connected&&d.charges_enabled),processorKey:d.processorKey||'stripe'};
+            var info={connected:!!(d.connected&&d.charges_enabled),processorKey:d.processorKey||'none'};
             _campPayStatusByCamp[campId]=info; // only cache a definitive answer
             return info;
         }catch(e){
@@ -2770,7 +2778,7 @@ async function _startCanteenAutoReloadCheckout(c){
     // _getCampProcessorInfo short-circuits to the cached value) guarantees
     // this decision is always made from a real answer, not a race.
     var status=await _getCampProcessorInfo(c.campId);
-    var processorKey=(status&&status.processorKey)||'stripe';
+    var processorKey=(status&&status.processorKey)||'none';
     // Cardknox camps save the card on Sola's own hosted cc:save page (same
     // flow addFunds()/requestCardSetup() already use) instead of Stripe's
     // setup-mode Checkout — canteen-auto-reload's cron only knows how to
@@ -2792,6 +2800,12 @@ async function _startCanteenAutoReloadCheckout(c){
             camperName:c.name, save:true,
             returnUrl:_lkReturnUrl('success','canteen-autoreload')
         }));
+        return;
+    }
+    // Stripe path only — see the same guard in startAutopaySetup. A camp with
+    // no processor connected must not be silently routed to Stripe.
+    if(processorKey!=='stripe'){
+        toast('This camp hasn\'t set up online payments yet — contact the camp office.');
         return;
     }
     try{

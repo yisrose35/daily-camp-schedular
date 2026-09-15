@@ -13363,7 +13363,7 @@ async function _getCampPaymentProcessorKey(){
         var client=window.CampistryDB&&window.CampistryDB.getClient?window.CampistryDB.getClient():null;
         if(!client) return 'stripe';
         var res=await client.rpc('get_camp_payment_processor_status',{p_camp_id:getCampId()});
-        _campPaymentProcessorKey=(res.data&&res.data.success&&res.data.processorKey)||'stripe';
+        _campPaymentProcessorKey=(res.data&&res.data.success&&res.data.processorKey)||'none';
     }catch(e){
         console.warn('[Me] Could not resolve payment processor, defaulting to stripe:',e);
         _campPaymentProcessorKey='stripe';
