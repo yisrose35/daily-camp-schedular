@@ -89,6 +89,9 @@ MANIFEST = [
     # bank_deposits table it now reads. Independent of the access chain.
     ("166_balance_parity",
      "The parent's balance agrees with the camp's: Zelle counted, all families summed"),
+    # Independent of the access chain. Needs the shop order shape from 122.
+    ("167_settle_shop_orders",
+     "The Camp Shop actually takes the money: canteen debit / camp-bill charge, idempotent"),
 ]
 
 HEADER = """-- ═══════════════════════════════════════════════════════════════════════════
@@ -149,6 +152,12 @@ HEADER = """-- ═════════════════════�
 --     with two family records also now see the sum of both rather than one.
 --     Expect some parent balances to DROP when you run this; that is the bug
 --     being fixed, not a new discount.
+--   * !! The Camp Shop starts taking money it never took (167). "Charge to
+--     canteen account" and "Charge to camp bill" were labels on a dropdown
+--     that settled nothing: the order stored the method and the money was
+--     recorded nowhere. Orders placed BEFORE this are not back-charged -- only
+--     orders saved from now on settle -- so if you have unpaid shop orders on
+--     the books, re-save them to post the charge.
 --   * NEW: you can set access once for a whole JOB (165). Before, access was
 --     per-person only, so a camp that restricted its four schedulers got a
 --     fifth one with the run of the place — an unconfigured user keeps full
@@ -355,6 +364,9 @@ UNION ALL SELECT 'parent balance counts Zelle/ACH deposits',
 UNION ALL SELECT 'parent balance sums every family the parent belongs to',
        CASE WHEN (SELECT prosrc FROM pg_proc WHERE proname='get_my_balance' LIMIT 1)
                  LIKE '%v_famKeys%'
+            THEN 'OK' ELSE 'MISSING' END
+UNION ALL SELECT 'camp shop settles its orders',
+       CASE WHEN EXISTS (SELECT 1 FROM pg_proc WHERE proname='settle_shop_order')
             THEN 'OK' ELSE 'MISSING' END
 UNION ALL SELECT 'lost-charge reconciliation report',
        CASE WHEN EXISTS (SELECT 1 FROM pg_proc WHERE proname='reconcile_processor_charges')

@@ -784,7 +784,87 @@ window.shopSaveOrder = function () {
 
     save(); shopClose('ord'); render();
     shopToast(existing ? 'Order updated' : 'Order saved');
+
+    // Take the money. Until this existed, "Charge to canteen account" and
+    // "Charge to camp bill" were labels on a dropdown and nothing more — the
+    // order was stored with the method recorded and the money was never taken
+    // from anywhere. The camp handed over a sweatshirt for free.
+    //
+    // Settled AFTER the local save so the order row exists for the server to
+    // find, and settled SERVER-side because posting to a family's bill writes
+    // campistryMe, which the canteen staff running this page cannot write
+    // themselves. It is idempotent: re-saving an unchanged order posts nothing,
+    // and changing the total or the method moves what was already taken rather
+    // than taking it again.
+    settleOrder(rec, rec.status === 'cancelled');
 };
+
+/**
+ * Move an order's settlement to match what the order now says.
+ *
+ * Deliberately fire-and-forget on the happy path — the order is already saved
+ * and the settlement is the server's record, not this tab's. A FAILURE is
+ * surfaced loudly, because "we took the money" and "we did not" must never be
+ * a silent difference.
+ */
+function settleOrder(rec, cancelled, done) {
+    function finishUp(ok, msg) { if (typeof done === 'function') done(ok, msg); }
+    try {
+        var db = window.CampistryDB;
+        var client = db && db.getClient && db.getClient();
+        var cid = db && db.getCampId && db.getCampId();
+        if (!client || !cid || !rec || !rec.id) { finishUp(false, 'not connected'); return; }
+
+        var total = 0;
+        try { total = SC.orderTotals(rec, shop.products).total || 0; } catch (_) { total = 0; }
+
+        client.rpc('settle_shop_order', {
+            p_camp_id: cid,
+            p_order_id: rec.id,
+            p_pay_method: rec.payMethod || 'none',
+            p_total: total,
+            p_cancelled: !!cancelled
+        }).then(function (res) {
+            var d = res && res.data;
+            if (res && res.error) {
+                // A missing function means migration 167 has not been applied
+                // yet. Say so rather than letting the camp believe money moved.
+                shopToast('Could not post payment: ' + res.error.message, 1);
+                finishUp(false, res.error.message);
+                return;
+            }
+            if (!d || !d.success) {
+                var e = (d && d.error) || 'unknown error';
+                shopToast(
+                    e === 'no_family_for_camper' ? ((d && d.detail) || 'That camper is not on a family record yet.') :
+                    e === 'not_authorized_for_billing' ? 'Only an owner, admin or manager can charge the camp bill.' :
+                    e === 'order_not_found' ? 'Saved, but the order was not found on the server to post payment against.' :
+                    'Could not post payment: ' + e, 1);
+                finishUp(false, (d && d.detail) || e);
+                return;
+            }
+            if (d.unchanged) { finishUp(true); return; }    // nothing moved
+            if (d.method === 'canteen') {
+                shopToast('Charged ' + money(d.amount) + ' to the canteen account');
+                // The canteen blob changed underneath the Snacks page; pull it
+                // back so the balance on screen is not a stale number.
+                if (window.CampistrySnacksRefresh) try { window.CampistrySnacksRefresh(); } catch (_) {}
+            } else if (d.method === 'bill') {
+                shopToast('Posted ' + money(d.amount) + ' to the family’s camp bill');
+            } else if (d.previousMethod === 'canteen' || d.previousMethod === 'bill') {
+                shopToast('Reversed the previous ' +
+                    (d.previousMethod === 'canteen' ? 'canteen charge' : 'camp bill charge'));
+            }
+            finishUp(true);
+        }, function (err) {
+            shopToast('Could not post payment: ' + ((err && err.message) || 'network error'), 1);
+            finishUp(false, (err && err.message) || 'network error');
+        });
+    } catch (e) {
+        shopToast('Could not post payment: ' + (e.message || e), 1);
+        finishUp(false, e.message || String(e));
+    }
+}
 
 function applyStockAcross(order, direction) {
     shop.products.forEach(function (p) {
@@ -796,11 +876,31 @@ function applyStockAcross(order, direction) {
 window.shopDeleteOrder = function (id) {
     var o = orderById(id); if (!o) return;
     if (!confirm('Delete this order for ' + (o.camperName || 'this camper') + '?')) return;
-    // Put the stock back if it had already been taken out.
-    if (o.status === 'packed' || o.status === 'delivered') applyStockAcross(o, 1);
-    shop.orders = shop.orders.filter(function (x) { return x.id !== id; });
-    save(); render();
-    shopToast('Order deleted');
+
+    function removeLocally() {
+        // Put the stock back if it had already been taken out.
+        if (o.status === 'packed' || o.status === 'delivered') applyStockAcross(o, 1);
+        shop.orders = shop.orders.filter(function (x) { return x.id !== id; });
+        save(); render();
+        shopToast('Order deleted');
+    }
+
+    // Give the money back FIRST. settle_shop_order finds the order by id in
+    // campistryShop, so deleting the row before reversing would leave the
+    // camper's canteen debited (or the family billed) for an order that no
+    // longer exists, with nothing left to point at it. Only remove it once the
+    // reversal has actually landed.
+    var settled = o.settlement && o.settlement.method &&
+                  o.settlement.method !== 'none' && Number(o.settlement.amount) > 0;
+    if (!settled) { removeLocally(); return; }
+
+    settleOrder(o, true, function (ok, msg) {
+        if (!ok) {
+            shopToast('Not deleted — the payment could not be reversed: ' + msg, 1);
+            return;
+        }
+        removeLocally();
+    });
 };
 
 // ── export ──────────────────────────────────────────────────────────────────
