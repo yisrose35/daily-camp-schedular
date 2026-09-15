@@ -1182,23 +1182,34 @@ window.CampistryGoNeighborhoods = (function () {
     // Straight-line leg model fitted from road legs: minutes = fixedMin + minPerMi x miles,
     // least squares over a deterministic sample of point pairs. Returns null when
     // there is too little to fit. `factor` is the road factor at `speedMph`.
-    function fitLegModel(pts, legs, speedMph) {
+    // The fit is over the hops the fallbacks price — neighbouring stops, so
+    // pairs up to 3 mi — and on the network: the off-road minutes between a
+    // mid-block point and its nearest node (both ends) are taken out first,
+    // else they masquerade as a per-leg cost (the camp's first fit said 3.0
+    // min per leg; its stamped times say 0.7).
+    function fitLegModel(pts, legs, speedMph, roadNet) {
         const P = (typeof window !== 'undefined') && window.CampistryGoRoutePost;
         if (!P || !pts || pts.length < 8 || typeof legs !== 'function') return null;
-        const n = pts.length, want = 3000, stride = Math.max(1, Math.floor((n * (n - 1) / 2) / want));
+        const offMph = Math.max(1, (P.DEFAULTS && P.DEFAULTS.roadOffMph) || 10);
+        const off = p => { if (!roadNet || typeof roadNet.snap !== 'function') return 0; const s = roadNet.snap(p); return s && Number.isFinite(s.offMi) ? s.offMi / offMph * 60 : 0; };
+        const offOf = new Map();
+        const n = pts.length, want = 4000, stride = Math.max(1, Math.floor((n * (n - 1) / 2) / want));
         let k = 0, cnt = 0, sx = 0, sy = 0, sxx = 0, sxy = 0;
         for (let i = 0; i < n; i++) for (let j = i + 1; j < n; j++) {
             if ((k++ % stride) !== 0) continue;
             const mi = P.haversineMi(pts[i].lat, pts[i].lng, pts[j].lat, pts[j].lng);
-            if (!(mi > 0.05) || mi > 12) continue;
-            const m = legs(pts[i], pts[j]);
-            if (!Number.isFinite(m) || m <= 0 || m > 90) continue;
+            if (!(mi > 0.05) || mi > 3) continue;
+            let m = legs(pts[i], pts[j]);
+            if (!Number.isFinite(m) || m <= 0 || m > 60) continue;
+            if (!offOf.has(pts[i])) offOf.set(pts[i], off(pts[i]));
+            if (!offOf.has(pts[j])) offOf.set(pts[j], off(pts[j]));
+            m = Math.max(0, m - offOf.get(pts[i]) - offOf.get(pts[j]));
             cnt++; sx += mi; sy += m; sxx += mi * mi; sxy += mi * m;
         }
         if (cnt < 30) return null;
         const den = cnt * sxx - sx * sx; if (Math.abs(den) < 1e-9) return null;
         const b = (cnt * sxy - sx * sy) / den, a = (sy - b * sx) / cnt;
-        const minPerMi = Math.max(1, b), fixedMin = Math.min(3, Math.max(0, a));
+        const minPerMi = Math.max(1, b), fixedMin = Math.min(1.5, Math.max(0, a));
         return { fixedMin, minPerMi, factor: Math.min(3, Math.max(1, minPerMi * Math.max(1, speedMph) / 60)), pairs: cnt };
     }
 
@@ -1313,7 +1324,7 @@ window.CampistryGoNeighborhoods = (function () {
             try {
                 const pts = Object.values(_segPt).filter(Boolean);
                 segLegs = roadNet.legMinutesFor([depot].concat(pts));
-                legFit = fitLegModel(pts, segLegs, rideSpeedMph);
+                legFit = fitLegModel(pts, segLegs, rideSpeedMph, roadNet);
                 console.log('[Go-NH] Road legs: ' + pts.length + ' segment points priced on street times' +
                     (legFit ? ' — fitted leg model: ' + legFit.fixedMin.toFixed(1) + ' min per leg + ' + legFit.factor.toFixed(2) + 'x straight line at ' + rideSpeedMph + 'mph (' + legFit.pairs + ' pairs)' : ''));
             } catch (e) { console.warn('[Go-NH] Road legs unavailable for districting: ' + e.message); segLegs = null; legFit = null; }
@@ -2401,7 +2412,7 @@ window.CampistryGoNeighborhoods = (function () {
     // dwell per stop (gap between stops minus the road leg) fitted as
     // a + b x children. Returns { buses, matched, total, kidsTotal, fleetMin,
     // dwellFit } or null.
-    function benchmarkHistory({ history, result, roadNet, depot, avgStopMin = 1, secPerRider = 0 }) {
+    function benchmarkHistory({ history, result, roadNet, depot, avgStopMin = 1, secPerRider = 0, turnPenaltyMin = 0 }) {
         const P = (typeof window !== 'undefined') && window.CampistryGoRoutePost;
         if (!history || !result || !result.nodes || !roadNet || typeof roadNet.legMinutesFor !== 'function' || !depot || !P) return null;
         const byPair = new Map();
@@ -2449,32 +2460,52 @@ window.CampistryGoNeighborhoods = (function () {
             if (!seq.length) { buses.push({ bus, kids, stops: stops.length, matched: 0, minutes: null }); continue; }
             let L;
             try { L = roadNet.legMinutesFor([depot].concat(seq)); } catch (_) { buses.push({ bus, kids, stops: stops.length, matched: seq.length, minutes: null }); continue; }
+            // a reversal at stop i: the bus arrives from and leaves towards the same node
+            const revAt = i => {
+                if (typeof L.hops !== 'function' || i < 1 || i + 1 >= seq.length) return false;
+                const h1 = L.hops(seq[i - 1], seq[i]), h2 = L.hops(seq[i], seq[i + 1]);
+                return !!(h1 && h2 && h1.inNode === h2.outNode);
+            };
             // morning run: first pickup to the last, then the ride to camp
             let min = 0;
-            for (let i = 1; i < seq.length; i++) min += L(seq[i - 1], seq[i]) + dwellOf(seq[i - 1]);
+            for (let i = 1; i < seq.length; i++) min += L(seq[i - 1], seq[i]) + dwellOf(seq[i - 1]) + (revAt(i - 1) ? turnPenaltyMin : 0);
             min += dwellOf(seq[seq.length - 1]) + L(seq[seq.length - 1], depot);
             for (let i = 1; i < seq.length; i++) {
                 if (seq[i].t == null || seq[i - 1].t == null) continue;
                 const gap = seq[i].t - seq[i - 1].t, road = L(seq[i - 1], seq[i]);
                 if (!(gap >= 0) || gap > 25 || !Number.isFinite(road) || road > gap + 3) continue;
-                dwellObs.push({ kids: seq[i - 1].count, dwell: Math.max(0, gap - road) });
+                dwellObs.push({ kids: seq[i - 1].count, dwell: Math.max(0, gap - road), rev: revAt(i - 1) ? 1 : 0 });
             }
             const t0 = seq[0].t, t1 = seq[seq.length - 1].t;
             buses.push({ bus, kids, stops: stops.length, matched: seq.length, minutes: Math.round(min), spanMin: t0 != null && t1 != null ? t1 - t0 : null });
             fleetMin += min;
         }
-        let dwellFit = null;
+        // dwell = a + b x children + c x reversal, least squares (3x3 normal equations)
+        let dwellFit = null, turnFit = null;
         if (dwellObs.length >= 12) {
-            const n = dwellObs.length;
-            const sx = dwellObs.reduce((a, o) => a + o.kids, 0), sy = dwellObs.reduce((a, o) => a + o.dwell, 0);
-            const sxx = dwellObs.reduce((a, o) => a + o.kids * o.kids, 0), sxy = dwellObs.reduce((a, o) => a + o.kids * o.dwell, 0);
-            const den = n * sxx - sx * sx;
-            if (Math.abs(den) > 1e-9) {
-                const b = (n * sxy - sx * sy) / den, a = (sy - b * sx) / n;
-                dwellFit = { minutesPerStop: Math.max(0, a), secondsPerChild: Math.max(0, b * 60), n, meanDwell: sy / n };
-            } else dwellFit = { minutesPerStop: sy / n, secondsPerChild: 0, n, meanDwell: sy / n };
+            const n = dwellObs.length, revs = dwellObs.filter(o => o.rev).length;
+            const cols = [() => 1, o => o.kids, o => o.rev];
+            const useRev = revs >= 8 && revs <= n - 8;
+            const m = useRev ? 3 : 2;
+            const A = Array.from({ length: m }, () => new Array(m).fill(0)), y = new Array(m).fill(0);
+            for (const o of dwellObs) for (let i = 0; i < m; i++) { y[i] += cols[i](o) * o.dwell; for (let j = 0; j < m; j++) A[i][j] += cols[i](o) * cols[j](o); }
+            // Gaussian elimination
+            const M = A.map((r, i) => r.concat([y[i]]));
+            let ok = true;
+            for (let c = 0; c < m && ok; c++) {
+                let p = c; for (let r = c + 1; r < m; r++) if (Math.abs(M[r][c]) > Math.abs(M[p][c])) p = r;
+                if (Math.abs(M[p][c]) < 1e-9) { ok = false; break; }
+                [M[c], M[p]] = [M[p], M[c]];
+                for (let r = 0; r < m; r++) { if (r === c) continue; const f = M[r][c] / M[c][c]; for (let k = c; k <= m; k++) M[r][k] -= f * M[c][k]; }
+            }
+            const mean = y[0] / n;
+            if (ok) {
+                const a = M[0][m] / M[0][0], b = M[1][m] / M[1][1], cRev = m === 3 ? M[2][m] / M[2][2] : null;
+                dwellFit = { minutesPerStop: Math.max(0, a), secondsPerChild: Math.max(0, b * 60), n, meanDwell: mean };
+                if (cRev != null) turnFit = { minutes: Math.min(3, Math.max(0, cRev)), reversals: revs, n };
+            } else dwellFit = { minutesPerStop: mean, secondsPerChild: 0, n, meanDwell: mean };
         }
-        return { buses, matched, total, kidsTotal, fleetMin: Math.round(fleetMin), dwellFit };
+        return { buses, matched, total, kidsTotal, fleetMin: Math.round(fleetMin), dwellFit, turnFit };
     }
 
     function cornerSnapper(result, maxWalkMi) {
