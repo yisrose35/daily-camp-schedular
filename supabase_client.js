@@ -197,6 +197,15 @@
     // =========================================================================
 
     async function detectCampAndRole() {
+        // Public pages (the hosted card page, register, etc.) only ever call
+        // anon RPCs — they have no use for camp/role at all. Without this a
+        // signed-in visitor who doesn't own THIS camp triggers the owner-camp
+        // lookup, fails it 3x, and logs a scary "this is a bug" error on every
+        // auth state change. Opt out by setting the flag before this script.
+        if (typeof window !== 'undefined' && window.__CAMPISTRY_PUBLIC_PAGE__) {
+            log('Public page — skipping camp/role detection');
+            return;
+        }
         if (!_userId) {
             log('No user ID, cannot detect camp/role');
             return;
