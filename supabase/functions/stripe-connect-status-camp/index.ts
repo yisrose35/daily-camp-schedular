@@ -19,6 +19,10 @@ const STRIPE_SECRET = Deno.env.get("STRIPE_SECRET_KEY");
 const STRIPE_API = "https://api.stripe.com/v1";
 const SUPABASE_URL = Deno.env.get("SUPABASE_URL") || "";
 const SUPABASE_ANON_KEY = Deno.env.get("SUPABASE_ANON_KEY") || "";
+// Only for _admin_set_camp_stripe_selected, which is service_role-only: a camp
+// owner may update their own camps row but must not be able to reassign the
+// processor key directly.
+const SUPABASE_SERVICE_KEY = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY") || "";
 
 const corsHeaders = {
   "Access-Control-Allow-Origin": "*",
@@ -79,6 +83,20 @@ serve(async (req) => {
     }
     const { error: updErr } = await asUser.from("camps").update(update).eq("id", campId);
     if (updErr) throw new Error(updErr.message);
+
+    // Stripe is no longer the default processor (migration 153), so completing
+    // Connect has to SAY the camp is on Stripe — it used to inherit that from
+    // camps.payment_processor_key defaulting to 'stripe'. The RPC only moves a
+    // camp that has nothing chosen, so this can never pull a camp off Sola or
+    // Banquest. Best-effort: never fail a successful onboarding over it.
+    if (chargesEnabled) {
+      try {
+        const svc = createClient(SUPABASE_URL, SUPABASE_SERVICE_KEY);
+        await svc.rpc("_admin_set_camp_stripe_selected", { p_camp_id: campId, p_selected: true });
+      } catch (e) {
+        console.error("[stripe-connect-status-camp] could not mark Stripe as the camp's processor:", (e as Error).message);
+      }
+    }
 
     return json({ charges_enabled: chargesEnabled, onboarding_status: onboardingStatus });
   } catch (err) {

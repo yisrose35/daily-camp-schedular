@@ -1243,7 +1243,7 @@ async function _getSnacksProcessorKey() {
         const client = db && db.client;
         if (!campId || !client) return 'stripe';
         const res = await client.rpc('get_camp_payment_processor_status', { p_camp_id: campId });
-        _snacksProcessorKey = (res.data && res.data.success && res.data.processorKey) || 'stripe';
+        _snacksProcessorKey = (res.data && res.data.success && res.data.processorKey) || 'none';
     } catch (e) {
         console.warn('[Snacks] Could not resolve payment processor, defaulting to stripe:', e);
         _snacksProcessorKey = 'stripe';

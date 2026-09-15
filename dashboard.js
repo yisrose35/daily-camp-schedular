@@ -1583,9 +1583,18 @@
                 cffWrap.style.display = showCff ? '' : 'none';
                 if (showCff && window.renderCampCardFormFields) window.renderCampCardFormFields();
             }
-            if (data.processorKey === 'stripe') {
-                box.innerHTML = '<p style="margin:0 0 8px;">On <strong>Stripe</strong> (the default) — the "Where tuition money lands" card above covers this.</p>' +
-                    '<p style="margin:0;font-size:0.78rem;color:var(--slate-400);">Want to use your own processor (Banquest, Sola/Cardknox, etc.) instead? Contact the office — connecting a different processor needs a quick verification call.</p>';
+            if (data.processorKey === 'none' || data.status === 'not_connected') {
+                // Stripe is no longer the default, so this is a real state now:
+                // no processor connected means no online tuition or canteen
+                // payments at all. Say so plainly instead of letting the camp
+                // assume payments work.
+                box.innerHTML = '<p style="margin:0 0 8px;color:#b45309;"><strong>No payment processor connected.</strong> Online tuition payments, saved cards and canteen deposits are switched off until one is set up.</p>' +
+                    '<p style="margin:0;font-size:0.78rem;color:var(--slate-400);">Connect <strong>Stripe</strong> using the "Where tuition money lands" card above, or use your own processor (Banquest, Sola/Cardknox) — contact the office, since connecting one needs a quick verification call.</p>';
+            } else if (data.processorKey === 'stripe') {
+                box.innerHTML = '<p style="margin:0 0 8px;">On <strong>Stripe</strong>' +
+                    (data.status === 'verified' ? '' : ' — <span style="color:#b45309;">not finished setting up yet</span>') +
+                    '. The "Where tuition money lands" card above covers this.</p>' +
+                    '<p style="margin:0;font-size:0.78rem;color:var(--slate-400);">Prefer your own processor (Banquest, Sola/Cardknox)? Contact the office — connecting a different processor needs a quick verification call.</p>';
             } else if (data.status === 'verified') {
                 box.innerHTML = '<p style="margin:0 0 10px;color:#059669;">Connected to your own <strong>' + escTelnyx(data.processorLabel || data.processorKey) + '</strong> account' +
                     (data.connectedAt ? ' since ' + new Date(data.connectedAt).toLocaleDateString() : '') + '. Payments run through your own processor, not Stripe.</p>' +
