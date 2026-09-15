@@ -103,6 +103,22 @@ function bqCardParts(card: Record<string, any> | null | undefined): Record<strin
   return out;
 }
 
+// Banquest's error_details is not a string — it's an object (often nested, or an
+// array) keyed by the offending field, so interpolating it straight into a
+// message yields "[object Object]". Flatten it to "field message; field message".
+function bqErrDetail(d: unknown): string {
+  if (d === null || d === undefined) return "";
+  if (typeof d === "string") return d.trim();
+  if (typeof d === "number" || typeof d === "boolean") return String(d);
+  if (Array.isArray(d)) return d.map(bqErrDetail).filter(Boolean).join("; ");
+  if (typeof d === "object") {
+    return Object.entries(d as Record<string, unknown>)
+      .map(([k, v]) => { const s = bqErrDetail(v); return s ? `${k}: ${s}` : k; })
+      .filter(Boolean).join("; ");
+  }
+  return String(d);
+}
+
 async function banquestChargeNonce(
   creds: Record<string, string>,
   amountCents: number,
@@ -131,7 +147,7 @@ async function banquestChargeNonce(
     // Same reasoning as payments-save-method: a bare "Validation error" in
     // error_message is useless without error_details naming the field.
     console.error("[payments-charge-nonce] banquest charge failed:", resp.status, JSON.stringify(data));
-    const detail = data?.error_details || (Array.isArray(data?.error_messages) && data.error_messages.join("; "));
+    const detail = bqErrDetail(data?.error_details) || bqErrDetail(data?.error_messages);
     const base = data?.error_message || data?.error || data?.message || data?.status || `Declined (HTTP ${resp.status})`;
     return { success: false, error: String(detail ? `${base}: ${detail}` : base) };
   }

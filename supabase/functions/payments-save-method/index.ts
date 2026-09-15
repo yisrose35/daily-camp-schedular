@@ -120,6 +120,22 @@ function bqCardParts(card: Record<string, any> | null | undefined): Record<strin
   return out;
 }
 
+// Banquest's error_details is not a string — it's an object (often nested, or an
+// array) keyed by the offending field, so interpolating it straight into a
+// message yields "[object Object]". Flatten it to "field message; field message".
+function bqErrDetail(d: unknown): string {
+  if (d === null || d === undefined) return "";
+  if (typeof d === "string") return d.trim();
+  if (typeof d === "number" || typeof d === "boolean") return String(d);
+  if (Array.isArray(d)) return d.map(bqErrDetail).filter(Boolean).join("; ");
+  if (typeof d === "object") {
+    return Object.entries(d as Record<string, unknown>)
+      .map(([k, v]) => { const s = bqErrDetail(v); return s ? `${k}: ${s}` : k; })
+      .filter(Boolean).join("; ");
+  }
+  return String(d);
+}
+
 async function banquestSaveMethod(creds: Record<string, string>, nonce: string, billing?: Record<string, string> | null, card?: Record<string, any> | null): Promise<{ success: boolean; customerRef?: string; last4?: string; brand?: string; error?: string }> {
   const resp = await fetch(`${bqBase(creds)}/transactions/verify`, {
     method: "POST",
@@ -139,7 +155,7 @@ async function banquestSaveMethod(creds: Record<string, string>, nonce: string, 
     // a single-use nonce and the billing address) or there is nothing to debug.
     console.error("[payments-save-method] banquest verify failed:", resp.status, JSON.stringify(data));
     console.error("[payments-save-method] request was:", JSON.stringify({ source: "nonce-***", save_card: true, ...bqCardParts(card), ...bqBillingParts(billing) }));
-    const detail = data?.error_details || (Array.isArray(data?.error_messages) && data.error_messages.join("; "));
+    const detail = bqErrDetail(data?.error_details) || bqErrDetail(data?.error_messages);
     const base = data?.error_message || data?.error || data?.message || data?.status || `Could not save payment method (HTTP ${resp.status})`;
     return { success: false, error: detail ? `${base}: ${detail}` : base };
   }
