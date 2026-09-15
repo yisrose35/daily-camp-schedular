@@ -451,9 +451,34 @@ function save(){
         // an empty in-memory copy override a non-empty one already cached.
         var _savedEnrollments=(enrollments&&Object.keys(enrollments).length)?enrollments:((g.campistryMe&&g.campistryMe.enrollments&&typeof g.campistryMe.enrollments==='object'&&Object.keys(g.campistryMe.enrollments).length)?g.campistryMe.enrollments:enrollments);
         var _savedStaffApps=(staffApplications&&Object.keys(staffApplications).length)?staffApplications:((g.campistryMe&&g.campistryMe.staffApplications&&typeof g.campistryMe.staffApplications==='object'&&Object.keys(g.campistryMe.staffApplications).length)?g.campistryMe.staffApplications:staffApplications);
+        // ★ Same class of bug again, and the one with the worst blast radius.
+        // preserveOnSave() above puts the un-scrubbed billing/payroll branches
+        // back onto g.campistryMe — but the Object.assign below then overwrote
+        // them with the MODULE-LEVEL vars, which for a user restricted out of
+        // Billing or Payroll were loaded from the already-scrubbed blob and are
+        // therefore empty ({} / [] / the empty payroll default at the top of
+        // this file). Net effect: a staff member without Billing access wiped
+        // every family ledger, all payment history and all payroll records from
+        // the cloud the first time they saved anything in Campistry Me — an
+        // ordinary bunk edit was enough. Never let an empty in-memory copy
+        // override a non-empty preserved one, exactly as sessions/enrollments/
+        // staffApplications above already do.
+        var _savedFamilies=(families&&Object.keys(families).length)?families:((g.campistryMe&&g.campistryMe.families&&typeof g.campistryMe.families==='object'&&Object.keys(g.campistryMe.families).length)?g.campistryMe.families:families);
+        var _savedPayments=(payments&&payments.length)?payments:((g.campistryMe&&Array.isArray(g.campistryMe.payments)&&g.campistryMe.payments.length)?g.campistryMe.payments:payments);
+        var _payrollHasData=payroll&&((payroll.staff&&payroll.staff.length)||(payroll.timesheets&&payroll.timesheets.length)||(payroll.payRuns&&payroll.payRuns.length)||(payroll.youthCorps&&Object.keys(payroll.youthCorps).length));
+        var _cachedPayroll=g.campistryMe&&g.campistryMe.payroll;
+        var _cachedPayrollHasData=_cachedPayroll&&((_cachedPayroll.staff&&_cachedPayroll.staff.length)||(_cachedPayroll.timesheets&&_cachedPayroll.timesheets.length)||(_cachedPayroll.payRuns&&_cachedPayroll.payRuns.length)||(_cachedPayroll.youthCorps&&Object.keys(_cachedPayroll.youthCorps).length));
+        var _savedPayroll=_payrollHasData?payroll:(_cachedPayrollHasData?_cachedPayroll:payroll);
+        // finance is rebuilt from five separate module vars; if all of them are
+        // empty but the cached blob has finance data, keep the cached copy.
+        var _builtFinance={staff:finStaff,expenses:finExpenses,payments:finPayments,budget:finBudget,integrations:finIntegrations};
+        var _financeHasData=(finStaff&&finStaff.length)||(finExpenses&&finExpenses.length)||(finPayments&&finPayments.length)||(finBudget&&Object.keys(finBudget||{}).length)||(finIntegrations&&Object.keys(finIntegrations||{}).length);
+        var _cachedFinance=g.campistryMe&&g.campistryMe.finance;
+        var _cachedFinanceHasData=_cachedFinance&&((_cachedFinance.staff&&_cachedFinance.staff.length)||(_cachedFinance.expenses&&_cachedFinance.expenses.length)||(_cachedFinance.payments&&_cachedFinance.payments.length));
+        var _savedFinance=_financeHasData?_builtFinance:(_cachedFinanceHasData?_cachedFinance:_builtFinance);
         g.campistryMe=Object.assign({},(g.campistryMe&&typeof g.campistryMe==='object')?g.campistryMe:{},{
-            families:families,
-            payments:payments,
+            families:_savedFamilies,
+            payments:_savedPayments,
             broadcasts:broadcasts,
             bunkAssignments:bunkAsgn,
             bunkManualCounts:bunkManualCounts,
@@ -477,8 +502,8 @@ function save(){
             savedReports:savedReports,
             setupChecklistDismissed:_setupChecklistDismissed,
             promoCodes:enrollSettings.promoCodes||(g.campistryMe?.promoCodes)||{},
-            payroll:payroll,
-            finance:{staff:finStaff,expenses:finExpenses,payments:finPayments,budget:finBudget,integrations:finIntegrations}
+            payroll:_savedPayroll,
+            finance:_savedFinance
         });
         g.updated_at=new Date().toISOString();
 
