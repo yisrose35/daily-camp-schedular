@@ -48,6 +48,8 @@ MANIFEST = [
      "Camp entitlements: what the camp bought, capping owners too (phase 1, no DB enforcement yet)"),
     ("156_entitlements_control_rpcs",
      "Super-admin RPCs behind campistry_control.html (list camps, set entitlements)"),
+    ("157_entitlement_enforcement_per_key",
+     "Entitlements enforced in the DATABASE, per camp_state_kv key (phase 2A)"),
 ]
 
 HEADER = """-- ═══════════════════════════════════════════════════════════════════════════
@@ -77,6 +79,10 @@ HEADER = """-- ═════════════════════�
 --     configured with restrictions has been seeing everything. They will now be
 --     gated as intended — tell your staff before running this, so a suddenly
 --     restricted person isn't reported to you as a regression.
+--   * Camp entitlements start being enforced by the database, not just hidden
+--     in the browser (155-157). This changes NOTHING for any existing camp:
+--     every camp is unrestricted until an entitlement is deliberately set from
+--     the control page, and setting one back to unrestricted undoes it.
 --
 -- PREREQUISITES (long since applied on a live camp; the preflight below fails
 -- loudly rather than confusingly if one is missing): 077 (camp Stripe Connect),
@@ -181,6 +187,21 @@ UNION ALL SELECT 'stale-card cleanup function',
             THEN 'OK' ELSE 'MISSING' END
 UNION ALL SELECT 'stripe-selected helper',
        CASE WHEN EXISTS (SELECT 1 FROM pg_proc WHERE proname='_admin_set_camp_stripe_selected')
+            THEN 'OK' ELSE 'MISSING' END
+UNION ALL SELECT 'camps.entitlements column',
+       CASE WHEN EXISTS (SELECT 1 FROM information_schema.columns
+                          WHERE table_name='camps' AND column_name='entitlements')
+            THEN 'OK' ELSE 'MISSING' END
+UNION ALL SELECT 'get_my_access returns entitlements',
+       CASE WHEN (SELECT prosrc FROM pg_proc WHERE proname='get_my_access' LIMIT 1) LIKE '%entitlements%'
+            THEN 'OK' ELSE 'MISSING' END
+-- Every permissive policy must carry the gate: Postgres ORs them together, so
+-- one policy without it is a hole through the whole entitlement.
+UNION ALL SELECT 'all 6 camp_state_kv policies entitlement-gated',
+       CASE WHEN (SELECT count(*) FROM pg_policies
+                   WHERE tablename='camp_state_kv'
+                     AND COALESCE(qual,'') || COALESCE(with_check,'')
+                         LIKE '%camp_state_key_entitled%') = 6
             THEN 'OK' ELSE 'MISSING' END;
 """
 

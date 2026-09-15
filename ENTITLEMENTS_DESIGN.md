@@ -3,7 +3,8 @@
 Design for: *"a camp buys only part of the program — give them Campistry Me, but
 only the roster and bunk structure, nothing else."*
 
-Status: **design, not built.** Decisions needed at the end.
+Status: **Phase 1 and Phase 2A shipped.** 2B/2C and Phase 3 still to do —
+see §6. Decisions taken are at the end.
 
 ---
 
@@ -202,16 +203,40 @@ that unit.
 Enforce at the level the data is actually stored at — **the key** — instead of
 pretending sections are separable inside one blob.
 
-### Phase 2A — per-key entitlement in RLS *(real enforcement, modest work)*
+### Phase 2A — per-key entitlement in RLS — **SHIPPED** (migration 157)
 
-Apps that already live in their own `camp_state_kv` key can be enforced today:
-`campistrySnacks`, `campistryHealth`, `campistryShop`, `campistryLuggage`,
-`campistry_notes_v1`, `campistryLink`. Add `camp_entitled()` to the RLS
-predicate for those keys and a camp that didn't buy Health genuinely cannot read
-or write it — owner included, from any client, with or without our JavaScript.
+Apps that already live in their own `camp_state_kv` key are enforced in the
+database now. A camp that didn't buy Health genuinely cannot read or write
+`campistryHealth` — owner included, from any client, with or without our
+JavaScript. This covers the whole **app-level** half of the sale for real, and
+it was a policy change rather than a refactor.
 
-This covers the whole **app-level** half of the sale for real, and it is a
-policy change rather than a refactor.
+Gated: `campistrySnacks`→snacks, `campistryHealth`→health,
+`campistry_notes_v1`→notes, `campistryShop`→snacks.shop,
+`campistryLuggage`→go.luggage. Every other key returns true — unknown keys are
+not gated, so nothing unnamed can be affected.
+
+Two things the first draft of this phase got wrong, both caught before shipping
+and worth remembering for 2B:
+
+1. **Gating the three obvious policies was not enough.** Postgres OR-combines
+   permissive policies for the same command, so migration 099's counselor POS
+   write on `campistrySnacks` was a hole straight through the snacks gate. All
+   **six** policies on `camp_state_kv` now carry the predicate, and the bundle's
+   verification query asserts the count is 6 — any future policy added without
+   the gate will show up as MISSING rather than silently reopening it.
+2. **DELETE needed gating too**, for the camp's benefit rather than ours: an
+   owner whose entitlement lapsed could otherwise delete a row they can no
+   longer read, destroying data that a restored entitlement would have brought
+   straight back. An entitlement is reversible; a delete is not.
+
+`campistryLink` is deliberately **not** gated — parents aren't `camp_users` and
+reach the portal by other paths, so gating it risks breaking the portal for a
+camp that did buy it, with no matching upside.
+
+Service role still bypasses all of it, which is load-bearing and correct:
+canteen-auto-reload, the payment webhooks and the deposit inbox must keep
+working on a camp's data regardless of what that camp bought.
 
 ### Phase 2B — move the two sensitive, separable branches out of `campistryMe`
 
