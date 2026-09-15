@@ -46,6 +46,8 @@ MANIFEST = [
      "Section access actually applies: fix the unassigned-record and NULL-preset bugs"),
     ("155_camp_entitlements",
      "Camp entitlements: what the camp bought, capping owners too (phase 1, no DB enforcement yet)"),
+    ("156_entitlements_control_rpcs",
+     "Super-admin RPCs behind campistry_control.html (list camps, set entitlements)"),
 ]
 
 HEADER = """-- ═══════════════════════════════════════════════════════════════════════════
