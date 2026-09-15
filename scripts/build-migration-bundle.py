@@ -72,6 +72,11 @@ MANIFEST = [
     # this project; an unregistered file is one nobody ever applies.
     ("162_reconcile_processor_charges",
      "Report card charges the ledger lost to a stale-tab overwrite (read-only)"),
+    # MUST come after 161: it redefines camp_state_key_user_allowed and has to
+    # carry that migration's snacks entry forward, or replacing the function
+    # would silently un-gate the canteen.
+    ("163_per_user_health_shop_luggage_rls",
+     "Per-user section access on Health, Shop and Luggage (phase 3)"),
 ]
 
 HEADER = """-- ═══════════════════════════════════════════════════════════════════════════
@@ -278,9 +283,17 @@ UNION ALL SELECT 'per-user section access on all 6 camp_state_kv policies',
                      AND COALESCE(qual,'') || COALESCE(with_check,'')
                          LIKE '%camp_state_key_user_allowed%') = 6
             THEN 'OK' ELSE 'MISSING' END
-UNION ALL SELECT 'snacks key gated per user',
-       CASE WHEN (SELECT prosrc FROM pg_proc
-                   WHERE proname='camp_state_key_user_allowed' LIMIT 1) LIKE '%campistrySnacks%'
+-- All six audited keys must be present in the CURRENT definition. The function
+-- is replaced by each step, so a step that forgot to carry an earlier key
+-- forward would silently un-gate it.
+UNION ALL SELECT 'all 6 audited keys gated per user',
+       CASE WHEN (SELECT count(*) FROM (VALUES
+                     ('campistryMePayroll'), ('campistryMeFinance'), ('campistrySnacks'),
+                     ('campistryHealth'), ('campistryShop'), ('campistryLuggage')
+                  ) AS k(name)
+                  WHERE (SELECT prosrc FROM pg_proc
+                          WHERE proname='camp_state_key_user_allowed' LIMIT 1)
+                        LIKE '%' || k.name || '%') = 6
             THEN 'OK' ELSE 'MISSING' END
 -- me.finance is a view-only capability and never resolves to 'edit' for
 -- anyone, the owner included. If the key gate ever tests for 'edit', Finance

@@ -45,14 +45,86 @@
         return d.innerHTML.replace(/"/g, '&quot;');
     }
 
+    // ── what the CAMP bought ────────────────────────────────────────────────
+    //
+    // The entitlement is a ceiling above everything on this screen. resolve()
+    // checks it BEFORE the owner/admin bypass and before any per-staff rule, so
+    // a capability the camp has no entitlement for resolves to 'none' no matter
+    // what is set here.
+    //
+    // Without this the screen lies: an owner could set Health to Edit for their
+    // nurse, save it, see it saved — and the nurse would still get nothing,
+    // with no indication anywhere of why. So unentitled sections are shown
+    // LOCKED rather than hidden (the same choice made everywhere else in the
+    // product) and cannot be set.
+    //
+    // Cached for the life of the page. Null until known, which reads as '{}' —
+    // nothing locked. Failing open matches the rest of the access system: the
+    // resolver is the real boundary and this screen only reports it.
+    var _ent = null;
+    var _entPending = null;
+
+    function entOf() { return _ent || {}; }
+
     /**
-     * The level currently shown for a capability: an explicit override, else
-     * the preset's value, else off.
+     * Where the entitlement comes from.
+     *
+     * NOT from window.CampistrySections: that module is loaded on neither of
+     * the two pages that host this editor (dashboard.html and
+     * team_access_setup.html — the latter says so explicitly in a comment). It
+     * is still preferred when present, because on such a page it has already
+     * been fetched; otherwise this fetches get_my_access itself.
+     *
+     * Everything here degrades to "nothing locked" — an unapplied migration, an
+     * old get_my_access with no entitlements field, a network blip. The editor
+     * then behaves exactly as it did before, which is the right failure: the
+     * resolver is still the boundary, and this screen is only reporting it.
+     */
+    function loadEntitlements() {
+        if (_ent) return Promise.resolve(_ent);
+        if (_entPending) return _entPending;
+        try {
+            var S = window.CampistrySections;
+            if (S && S.entitlements) { _ent = S.entitlements() || {}; return Promise.resolve(_ent); }
+        } catch (_) {}
+        var d = window.CampistryDB;
+        var client = d && d.getClient && d.getClient();
+        var campId = d && d.getCampId && d.getCampId();
+        if (!client || !campId) { _ent = {}; return Promise.resolve(_ent); }
+        _entPending = client.rpc('get_my_access', { p_camp_id: campId }).then(function (r) {
+            var v = r && r.data && r.data.entitlements;
+            _ent = (v && typeof v === 'object') ? v : {};
+            _entPending = null;
+            return _ent;
+        }, function () { _ent = {}; _entPending = null; return _ent; });
+        return _entPending;
+    }
+
+    /** Is this capability covered by what the camp bought? */
+    function capEntitled(key) {
+        var cap = C().get ? C().get(key) : null;
+        if (!cap) cap = C().all().filter(function (c) { return c.key === key; })[0];
+        if (!cap) return true;                       // not catalogued -> not gated
+        return C().entitled(cap, entOf());
+    }
+
+    /**
+     * The level currently STORED for a capability: an explicit override, else
+     * the preset's value, else off. This is what the controls edit.
      */
     function levelOf(key) {
         if (Object.prototype.hasOwnProperty.call(_overrides, key)) return _overrides[key];
         if (_preset) return C().expandPreset(_preset)[key] || 'none';
         return 'none';
+    }
+
+    /**
+     * The level this person will ACTUALLY get. Same as levelOf except that an
+     * unentitled capability is always 'none'. Used for anything the owner reads
+     * as a promise — the on-count, and the control that shows as selected.
+     */
+    function effectiveLevel(key) {
+        return capEntitled(key) ? levelOf(key) : 'none';
     }
 
     /** Apps this member/group can open at all — no point showing sections of the rest. */
@@ -80,7 +152,7 @@
             showAdminNotice();
             return;
         }
-        draw();
+        drawWhenEntitlementsKnown();
     };
 
     /**
@@ -99,8 +171,21 @@
         _groupProducts = (_group.product_access || []).slice();
         _advanced = false;
         _onSaved = onSaved || null;
-        draw();
+        drawWhenEntitlementsKnown();
     };
+
+    // Draw straight away so the modal never waits on a network call, then
+    // redraw once the entitlement is known so the locks appear. Nothing is
+    // locked in between, and doSave() scrubs unentitled sections regardless —
+    // so a fast click before the fetch lands cannot save a false claim.
+    function drawWhenEntitlementsKnown() {
+        var known = !!_ent;
+        draw();
+        if (known) return;
+        loadEntitlements().then(function () {
+            if (document.getElementById('accessSettingsModal')) redraw();
+        });
+    }
 
     function shell(bodyHtml, footHtml) {
         var old = document.getElementById('accessSettingsModal');
@@ -202,7 +287,22 @@
             'No section limits. This is how every account worked before section access existed.',
             unconfigured);
         Cc.PRESETS.filter(function (p) { return p.key !== 'full'; }).forEach(function (p) {
-            h += presetCard(p.key, p.label, p.desc, !unconfigured && matched === p.key);
+            // A role is only as good as the plan behind it. 'Nurse' grants
+            // health.* — pick it at a camp without Health and the person gets
+            // nothing, which is baffling unless the card says so.
+            var exp = Cc.expandPreset(p.key);
+            var granted = 0, reachable = 0;
+            Cc.all().forEach(function (c) {
+                if ((exp[c.key] || 'none') === 'none') return;
+                granted++;
+                if (capEntitled(c.key)) reachable++;
+            });
+            var note = '';
+            if (granted && !reachable) note = ' — nothing in this role is in the camp’s plan';
+            else if (granted && reachable < granted) {
+                note = ' — ' + (granted - reachable) + ' of its ' + granted + ' sections are not in the plan';
+            }
+            h += presetCard(p.key, p.label, p.desc + note, !unconfigured && matched === p.key);
         });
         if (!unconfigured && !matched) {
             h += presetCard('__custom__', 'Custom', 'Your own combination, set below.', true);
@@ -210,8 +310,13 @@
         h += '</div>';
 
         // ── advanced: the full matrix ──
-        var onCount = 0;
-        Cc.all().forEach(function (c) { if (levelOf(c.key) !== 'none') onCount++; });
+        // Count what this person will ACTUALLY get, not what is stored — an
+        // owner reads this number as a promise.
+        var onCount = 0, lockedCount = 0;
+        Cc.all().forEach(function (c) {
+            if (effectiveLevel(c.key) !== 'none') onCount++;
+            if (!capEntitled(c.key)) lockedCount++;
+        });
 
         h += '<div style="margin-top:20px;border-top:1px solid #E2E8F0;padding-top:14px;">';
         h += '<button id="asToggleAdv" style="border:none;background:none;padding:0;cursor:pointer;' +
@@ -228,6 +333,14 @@
                      'This person currently has <strong>full access</strong>. Setting any section below ' +
                      'switches them to explicit access — anything you leave off becomes off.</p>';
             }
+            if (lockedCount) {
+                h += '<p style="font-size:.78rem;color:#334155;background:#F8FAFC;border:1px solid #E2E8F0;' +
+                     'border-radius:9px;padding:9px 12px;margin:12px 0 0;line-height:1.55;">' +
+                     '<strong>' + lockedCount + ' section' + (lockedCount === 1 ? '' : 's') +
+                     ' marked “not in plan”.</strong> Those are not part of this camp’s plan, so they ' +
+                     'cannot be given to anyone — not even an owner. They are shown rather than hidden so ' +
+                     'it is clear what exists; to change what the camp has, the plan itself has to change.</p>';
+            }
             h += '<div style="margin-top:14px;">';
             visibleApps().forEach(function (app) {
                 h += '<div style="margin-bottom:16px;">';
@@ -241,22 +354,35 @@
                      '</div>';
                 app.sections.forEach(function (s) {
                     var key = app.key + '.' + s.key;
-                    var lvl = levelOf(key);
+                    var entitled = capEntitled(key);
+                    var lvl = effectiveLevel(key);
                     var levels = Cc.levelsFor(key);
                     h += '<div style="display:flex;align-items:center;gap:10px;padding:6px 0;' +
-                         'border-bottom:1px solid #F1F5F9;">';
+                         'border-bottom:1px solid #F1F5F9;' + (entitled ? '' : 'opacity:.55;') + '">';
                     h += '<div style="flex:1;min-width:0;"><div style="font-size:.82rem;color:#334155;font-weight:500;">' +
                          esc(s.label) +
                          (s.sensitive ? ' <span style="font-size:.62rem;font-weight:700;color:#B45309;' +
                             'background:#FFFBEB;border-radius:999px;padding:1px 6px;vertical-align:middle;">SENSITIVE</span>' : '') +
+                         (entitled ? '' : ' <span style="font-size:.62rem;font-weight:700;color:#475569;' +
+                            'background:#F1F5F9;border:1px solid #E2E8F0;border-radius:999px;padding:1px 6px;' +
+                            'vertical-align:middle;">NOT IN PLAN</span>') +
                          '</div>' +
-                         '<div style="font-size:.71rem;color:#94A3B8;">' + esc(s.desc || '') + '</div></div>';
+                         '<div style="font-size:.71rem;color:#94A3B8;">' +
+                         (entitled ? esc(s.desc || '')
+                                   : 'This camp’s plan does not include it — nobody can be given it.') +
+                         '</div></div>';
                     h += '<div style="display:flex;gap:3px;flex-shrink:0;">';
                     levels.forEach(function (L) {
                         var on = (lvl === L);
                         var col = L === 'none' ? '#DC2626' : L === 'view' ? '#B45309' : '#059669';
-                        h += '<button data-cap="' + esc(key) + '" data-lvl="' + L + '" ' +
-                             'style="font:inherit;font-size:.7rem;font-weight:600;padding:3px 10px;border-radius:7px;cursor:pointer;' +
+                        // Unentitled: render the row read-only rather than
+                        // clickable. A disabled control that shows 'None' is
+                        // honest; an enabled one that silently resolves to none
+                        // is the lie this whole block exists to stop.
+                        h += '<button data-cap="' + esc(key) + '" data-lvl="' + L + '"' +
+                             (entitled ? '' : ' disabled') +
+                             ' style="font:inherit;font-size:.7rem;font-weight:600;padding:3px 10px;border-radius:7px;' +
+                             'cursor:' + (entitled ? 'pointer' : 'not-allowed') + ';' +
                              'border:1px solid ' + (on ? col : '#E2E8F0') + ';' +
                              'background:' + (on ? col : '#fff') + ';color:' + (on ? '#fff' : '#64748B') + ';">' +
                              (L === 'none' ? 'None' : L === 'view' ? 'View' : 'Edit') + '</button>';
@@ -330,11 +456,21 @@
             b.onclick = function () {
                 var key = b.getAttribute('data-cap');
                 var lvl = b.getAttribute('data-lvl');
+                // The button is rendered disabled, so this is belt and braces —
+                // but it is the one place a bad value would be written, so it
+                // checks rather than trusting the markup.
+                if (!capEntitled(key)) return;
                 // First explicit toggle on an unconfigured person: freeze the
                 // full access they had into overrides, so flipping ONE section
                 // off doesn't silently switch every other section off too.
+                //
+                // "The full access they had" means what they EFFECTIVELY had:
+                // recording edit on an unentitled section would write a claim
+                // resolve() refuses, and would make the person look configured
+                // for something the camp cannot give them.
                 if (!_preset && !Object.keys(_overrides).length) {
                     C().all().forEach(function (c) {
+                        if (!capEntitled(c.key)) { _overrides[c.key] = 'none'; return; }
                         _overrides[c.key] = c.viewOnly ? 'view' : 'edit';
                     });
                 }
@@ -348,9 +484,16 @@
                 var app = b.getAttribute('data-appall');
                 var lvl = b.getAttribute('data-lvl');
                 if (!_preset && !Object.keys(_overrides).length) {
-                    C().all().forEach(function (c) { _overrides[c.key] = c.viewOnly ? 'view' : 'edit'; });
+                    C().all().forEach(function (c) {
+                        // Seeding from "full access" must not record a level for
+                        // something the camp did not buy, or the saved overrides
+                        // claim access that resolve() will refuse.
+                        if (!capEntitled(c.key)) { _overrides[c.key] = 'none'; return; }
+                        _overrides[c.key] = c.viewOnly ? 'view' : 'edit';
+                    });
                 }
                 C().forApp(app).forEach(function (c) {
+                    if (!capEntitled(c.key)) { _overrides[c.key] = 'none'; return; }
                     _overrides[c.key] = (c.viewOnly && lvl === 'edit') ? 'view' : lvl;
                 });
                 redraw();
@@ -381,6 +524,19 @@
         } else {
             payload = Object.assign({}, _overrides);
         }
+
+        // Never persist a grant the entitlement refuses. The controls are
+        // rendered disabled and the seeding paths already skip these, so this
+        // normally changes nothing — it is here because it is the LAST point
+        // before the write, and it makes the guarantee independent of the
+        // entitlement fetch having landed before the owner pressed Save.
+        //
+        // Written as 'none' rather than deleted: the owner's intent for the
+        // rest of the record is explicit, and a silent omission would read as
+        // "never configured" if the camp's plan later gained that section.
+        Object.keys(payload).forEach(function (k) {
+            if (payload[k] !== 'none' && !capEntitled(k)) payload[k] = 'none';
+        });
 
         if (_mode === 'group') { doSaveGroup(m, btn, client, payload); return; }
 

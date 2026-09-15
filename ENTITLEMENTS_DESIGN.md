@@ -314,8 +314,46 @@ the request.
 | `campistryMePayroll` | done (160) | `me.payroll` |
 | `campistryMeFinance` | done (160) | `me.finance` |
 | `campistrySnacks` | done (161) | any `snacks.*` section |
-| `campistryHealth`, `campistryShop`, `campistryLuggage` | next, one at a time | per app |
+| `campistryHealth` | done (163) | any `health.*` section |
+| `campistryShop` | done (163) | `snacks.shop` |
+| `campistryLuggage` | done (163) | `go.luggage` |
 | `campistryMe`, `app1`, `campStructure` | last, if ever — 55 user-session call sites, a raw REST `fetch` in `beforeunload`, an anonymous page that upserts the whole blob | — |
+
+Every app-level key is now covered. Each grain matches what migration 157 uses
+for the *camp* entitlement on the same key, so the camp-level and user-level
+rules read as one rule.
+
+The change worth warning a camp about is **head-counselor and division-head
+losing Health**. Those presets grant no health section, but a *manager* on
+either of them can read `campistryHealth` today — the counselor carve-out is
+role-based, so it never covered them. Medical records are the data this matters
+most for, but it is visible: tell them, or a nurse-ish staff member reports
+Health as broken.
+
+### The owner's editor had to learn about the plan
+
+A defect this work created. `campistry_access_settings.js` — the owner's Teams
+& Access screen, with its preset picker ("roles") and per-person fine-tune
+matrix — had **no knowledge of entitlements**. Since `resolve()` checks the
+entitlement *above* the owner/admin bypass, an owner could set Health to Edit
+for their nurse, save it, see it saved, and the nurse would still get nothing,
+with nothing anywhere explaining why.
+
+Unentitled sections are now shown **locked** rather than hidden (the same choice
+made everywhere else), the count reflects what the person will actually get, and
+preset cards say when a role grants mostly things the camp has not bought
+("nothing in this role is in the camp's plan").
+
+Two traps in wiring it up:
+
+- **`window.CampistrySections` is loaded on neither page that hosts the
+  editor** — `dashboard.html` and `team_access_setup.html` (which says so in a
+  comment). Reading entitlements from it would have made the whole change inert.
+  It is preferred when present and fetched via `get_my_access` otherwise.
+- **The fetch is async, so the guarantee cannot live in the UI.** `doSave`
+  scrubs unentitled grants to `none` as the last step before the write, which
+  makes correctness independent of whether the fetch landed before the owner
+  pressed Save.
 
 The four main policies call `camp_state_key_user_allowed` by name, so adding a
 key is a **function replace, not a policy rewrite** — which is what keeps each

@@ -284,15 +284,33 @@ const mig160 = fs.readFileSync(
     path.join(__dirname, '..', 'migrations', '160_per_user_key_rls.sql'), 'utf8');
 const mig161 = fs.readFileSync(
     path.join(__dirname, '..', 'migrations', '161_per_user_snacks_key_rls.sql'), 'utf8');
+const mig163 = fs.readFileSync(
+    path.join(__dirname, '..', 'migrations', '163_per_user_health_shop_luggage_rls.sql'), 'utf8');
+
+/** The body of camp_state_key_user_allowed as one migration defines it. */
+function gateFn(sql) {
+    return sql.slice(sql.indexOf('FUNCTION public.camp_state_key_user_allowed'),
+                     sql.indexOf('GRANT EXECUTE ON FUNCTION public.camp_state_key_user_allowed'));
+}
 
 test('exactly the audited keys are gated, and both read and write use one rule', () => {
-    // 161 redefines camp_state_key_user_allowed, so IT holds the current set.
-    const fn = mig161.slice(mig161.indexOf('FUNCTION public.camp_state_key_user_allowed'),
-                            mig161.indexOf('GRANT EXECUTE ON FUNCTION public.camp_state_key_user_allowed'));
-    const gated = [...fn.matchAll(/WHEN '([A-Za-z_]+)'/g)].map(m => m[1]).sort();
-    assert.deepStrictEqual(gated,
-        ['campistryMeFinance', 'campistryMePayroll', 'campistrySnacks'],
-        'the set of per-user gated keys changed — audit every reader of the new key first');
+    // 163 is the latest redefinition of camp_state_key_user_allowed, so IT
+    // holds the current set. Each key here was added only after its readers
+    // were audited; changing this list without doing that is the mistake this
+    // assertion exists to catch.
+    const gated = [...gateFn(mig163).matchAll(/WHEN '([A-Za-z_]+)'/g)].map(m => m[1]).sort();
+    assert.deepStrictEqual(gated, [
+        'campistryHealth', 'campistryLuggage', 'campistryMeFinance',
+        'campistryMePayroll', 'campistryShop', 'campistrySnacks',
+    ], 'the set of per-user gated keys changed — audit every reader of the new key first');
+
+    // A later migration must carry every key an earlier one gated, or replacing
+    // the function silently un-gates it. CREATE OR REPLACE makes that a quiet
+    // regression rather than an error.
+    for (const k of ['campistryMePayroll', 'campistryMeFinance'])
+        assert.ok(gateFn(mig163).includes(k), k + ' was dropped by a later redefinition');
+    for (const k of [...gateFn(mig161).matchAll(/WHEN '([A-Za-z_]+)'/g)].map(m => m[1]))
+        assert.ok(gateFn(mig163).includes(k), k + ' was dropped by a later redefinition');
 
     // The four main policies live in 160 and call the gate by name, so adding a
     // key is a function replace. They must all still carry both checks:
@@ -374,6 +392,65 @@ test('a nurse cannot reach the canteen ledger', () => {
     const nurse = member({ preset: 'nurse' });
     assert.ok(!anySnacks(nurse));
     for (const k of SNACKS_CAPS) assert.strictEqual(sqlResolve(k, nurse), 'none');
+});
+
+// ── 5. health / shop / luggage (163) ──────────────────────────────────────
+
+function anyApp(app, u) {
+    return [...CAPS.keys()].filter(k => CAPS.get(k).app === app)
+        .some(k => sqlResolve(k, u) !== 'none');
+}
+
+test('health, shop and luggage land where the presets say they should', () => {
+    // Mirrors the table in 163's header. The grain matches what migration 157
+    // already uses for the CAMP entitlement on these same keys, so the
+    // camp-level and user-level rules stay readable as one rule.
+    var expected = {
+        //                 health,  shop,   luggage
+        'full':            [true,   true,   true],
+        'read-only':       [true,   true,   true],
+        'nurse':           [true,   false,  false],
+        'canteen':         [false,  true,   false],
+        'bus-coordinator': [false,  false,  true],
+        'division-head':   [false,  false,  false],
+        'head-counselor':  [false,  false,  false],
+        'office':          [false,  false,  false],
+        'bookkeeper':      [false,  false,  false],
+    };
+    for (const [preset, want] of Object.entries(expected)) {
+        const u = member({ preset });
+        assert.strictEqual(anyApp('health', u), want[0], preset + ' health');
+        assert.strictEqual(sqlResolve('snacks.shop', u) !== 'none', want[1], preset + ' shop');
+        assert.strictEqual(sqlResolve('go.luggage', u) !== 'none', want[2], preset + ' luggage');
+    }
+});
+
+test('an unconfigured member keeps health, shop and luggage', () => {
+    // The backward-compatibility rule again, on the three newest keys. If this
+    // breaks, applying 163 takes Health away from most of a camp at once.
+    for (const role of ['owner', 'admin', 'manager', 'scheduler', 'viewer', 'counselor']) {
+        const u = member({ role });
+        assert.ok(anyApp('health', u), 'unconfigured ' + role + ' lost Health');
+        assert.notStrictEqual(sqlResolve('snacks.shop', u), 'none');
+        assert.notStrictEqual(sqlResolve('go.luggage', u), 'none');
+    }
+});
+
+test('the nurse preset reaches every health section, and nothing else new', () => {
+    const nurse = member({ preset: 'nurse' });
+    for (const k of [...CAPS.keys()].filter(k => CAPS.get(k).app === 'health')) {
+        assert.notStrictEqual(sqlResolve(k, nurse), 'none', 'nurse lost ' + k);
+    }
+    assert.strictEqual(sqlResolve('go.luggage', nurse), 'none');
+    assert.strictEqual(sqlResolve('snacks.shop', nurse), 'none');
+});
+
+test('163 changes no policies — it only replaces the gate function', () => {
+    // The whole point of routing every policy through one function: adding a
+    // key is a function replace. A CREATE POLICY here would mean the four
+    // policies had drifted and needed re-stating, which is worth noticing.
+    assert.ok(!/CREATE POLICY/.test(mig163),
+        '163 rewrites a policy — adding a key should only replace the gate function');
 });
 
 test('an app with no catalogued sections is not gated', () => {

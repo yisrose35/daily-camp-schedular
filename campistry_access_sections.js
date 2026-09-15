@@ -67,6 +67,13 @@
     S.isReady = function () { return _ready; };
     S.isUnrestricted = function () { return _unrestricted; };
     S.getAccess = function () { return _access; };
+    /**
+     * What the CAMP bought ('{}' = unrestricted). Needed by the owner's access
+     * editor: an owner must not be offered a section the camp has no
+     * entitlement for, because resolve() returns 'none' for it regardless of
+     * what they set — the screen would be promising access it cannot deliver.
+     */
+    S.entitlements = function () { return _entitlements || {}; };
 
     /**
      * Guard for a write action. Returns true when allowed; otherwise tells the
