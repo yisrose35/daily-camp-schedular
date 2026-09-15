@@ -463,19 +463,38 @@ function save(){
         // ordinary bunk edit was enough. Never let an empty in-memory copy
         // override a non-empty preserved one, exactly as sessions/enrollments/
         // staffApplications above already do.
-        var _savedFamilies=(families&&Object.keys(families).length)?families:((g.campistryMe&&g.campistryMe.families&&typeof g.campistryMe.families==='object'&&Object.keys(g.campistryMe.families).length)?g.campistryMe.families:families);
-        var _savedPayments=(payments&&payments.length)?payments:((g.campistryMe&&Array.isArray(g.campistryMe.payments)&&g.campistryMe.payments.length)?g.campistryMe.payments:payments);
-        var _payrollHasData=payroll&&((payroll.staff&&payroll.staff.length)||(payroll.timesheets&&payroll.timesheets.length)||(payroll.payRuns&&payroll.payRuns.length)||(payroll.youthCorps&&Object.keys(payroll.youthCorps).length));
-        var _cachedPayroll=g.campistryMe&&g.campistryMe.payroll;
-        var _cachedPayrollHasData=_cachedPayroll&&((_cachedPayroll.staff&&_cachedPayroll.staff.length)||(_cachedPayroll.timesheets&&_cachedPayroll.timesheets.length)||(_cachedPayroll.payRuns&&_cachedPayroll.payRuns.length)||(_cachedPayroll.youthCorps&&Object.keys(_cachedPayroll.youthCorps).length));
-        var _savedPayroll=_payrollHasData?payroll:(_cachedPayrollHasData?_cachedPayroll:payroll);
-        // finance is rebuilt from five separate module vars; if all of them are
-        // empty but the cached blob has finance data, keep the cached copy.
+        // Restricted ONLY — not "looks empty". An earlier version of this guard
+        // kept the cached copy whenever the in-memory one was empty, which also
+        // reverted a legitimate "delete the last expense". What actually matters
+        // is whether THIS user had the branch scrubbed out from under them at
+        // load; if so preserveOnSave() above has already put the real data back
+        // on g.campistryMe and that is what must be written.
+        var _cachedMe=(g.campistryMe&&typeof g.campistryMe==='object')?g.campistryMe:{};
+        function _keep(section,built,cachedKey){
+            return _secRestricted(section) ? (_cachedMe[cachedKey]!==undefined?_cachedMe[cachedKey]:built) : built;
+        }
+        var _savedFamilies=_keep('billing',families,'families');
+        var _savedPayments=_keep('billing',payments,'payments');
+        var _savedPayroll=_keep('payroll',payroll,'payroll');
+        // finance needs its own rule: Billing WRITES finance.payments, so a user
+        // with billing:edit + finance:none legitimately has new payments to save
+        // while staff/expenses/budget were scrubbed. Taking the cached object
+        // wholesale would drop the payment; taking the built one wholesale wiped
+        // staff/expenses/budget. Merge per sub-branch instead.
         var _builtFinance={staff:finStaff,expenses:finExpenses,payments:finPayments,budget:finBudget,integrations:finIntegrations};
-        var _financeHasData=(finStaff&&finStaff.length)||(finExpenses&&finExpenses.length)||(finPayments&&finPayments.length)||(finBudget&&Object.keys(finBudget||{}).length)||(finIntegrations&&Object.keys(finIntegrations||{}).length);
-        var _cachedFinance=g.campistryMe&&g.campistryMe.finance;
-        var _cachedFinanceHasData=_cachedFinance&&((_cachedFinance.staff&&_cachedFinance.staff.length)||(_cachedFinance.expenses&&_cachedFinance.expenses.length)||(_cachedFinance.payments&&_cachedFinance.payments.length));
-        var _savedFinance=_financeHasData?_builtFinance:(_cachedFinanceHasData?_cachedFinance:_builtFinance);
+        var _savedFinance=_builtFinance;
+        if(_secRestricted('finance')){
+            var _cf=(_cachedMe.finance&&typeof _cachedMe.finance==='object')?_cachedMe.finance:{};
+            _savedFinance={
+                // Owned by Finance, invisible to this user -> keep what's stored.
+                staff:_cf.staff!==undefined?_cf.staff:finStaff,
+                expenses:_cf.expenses!==undefined?_cf.expenses:finExpenses,
+                budget:_cf.budget!==undefined?_cf.budget:finBudget,
+                integrations:_cf.integrations!==undefined?_cf.integrations:finIntegrations,
+                // Written by Billing, which this user may well have open.
+                payments:_secRestricted('billing')?(_cf.payments!==undefined?_cf.payments:finPayments):finPayments
+            };
+        }
         g.campistryMe=Object.assign({},(g.campistryMe&&typeof g.campistryMe==='object')?g.campistryMe:{},{
             families:_savedFamilies,
             payments:_savedPayments,
@@ -1152,6 +1171,16 @@ function _secEdit(section,whatFor){
 function _secCan(section){
     var S=window.CampistrySections;
     return S?S.can(section):true;
+}
+// True when this user cannot see a section at all, which is exactly when its
+// data was scrubbed out of the local blob at load and must not be written back
+// from memory. Anything other than 'none' means they can see it, so what's in
+// memory is authoritative — including a deliberate delete.
+function _secRestricted(section){
+    try{
+        var S=window.CampistrySections;
+        return !!(S&&S.level&&S.level(section)==='none');
+    }catch(_){ return false; }
 }
 
 // ── Payment methods ──────────────────────────────────────────────

@@ -153,65 +153,124 @@ a page broke" risk.
 
 ---
 
-## 5. Rollout
+## 5. What the codebase map changed about this plan
 
-The order matters more than usual, because the last step is irreversible in the
-sense that a mistake locks people out of live data.
+Phases 2 and 3 were written before mapping the code. The map contradicts two of
+their assumptions, so the plan below replaces them.
 
-**Phase 1 — model, no enforcement.**
-Add `camps.entitlements`, the helpers, and return it from `get_my_access`. Have
-`resolve()` intersect it — *before* the owner/admin bypass, which is the one
-place the current code must change. Menu and panes respect it; data still flows.
-Reversible, ships safely, and makes the sale demonstrable.
+**Assumption 1: "migrate the callers onto RPCs."** There are **55 user-session
+call sites** on `camp_state_kv` and **55 service-role ones**.
+`integration_hooks.js` is a choke point for only about **five** of the 55 user
+sites — the other fifty go straight to the table, including a raw REST `fetch`
+in a `beforeunload` handler that bypasses supabase-js entirely, and an anonymous
+page that upserts the whole `campistryMe` blob. Tightening RLS means finding and
+moving all of them; miss one and that feature dies silently in production.
 
-**Phase 2 — the branch map moves to SQL, RPCs land.**
-Define owns/needs per section in SQL. Add `get_camp_state` / `save_camp_state`.
-Migrate clients onto them. RLS unchanged, so anything missed still works.
+**Assumption 2: "scrub sections out of the blob."** Campistry Me's sections are
+not separable, and `save()` writes all three keys (`campStructure`, `app1`,
+`campistryMe`) on **every** save from **any** section — there is no per-section
+write path at all. Concretely:
 
-**Phase 3 — close the door.**
-Tighten `camp_state_kv` RLS so gated keys are only reachable through the RPCs.
-This is the step that makes entitlement real. Do it per key, not all at once,
-and only once Phase 2 has run in production long enough to be sure nothing still
-reads the table directly.
+- **Billing cannot compute a single number** without `enrollments` **and**
+  `sessions` **and** the roster. `sessions` isn't even owned by Me — Dashboard
+  writes it.
+- **Bunk Builder owns no data.** Placements live on `app1.camperRoster[].bunk`,
+  deliberately, so the "bunk structure" half of your roster-only camp writes the
+  campers branch.
+- **Camp Structure propagates into Flow** — renaming a division rewrites the
+  roster in place and pushes into Flow's schedule records.
+- **Reports and Analytics fan out over every branch**, including both sensitive
+  ones.
 
-Doing Phase 3 before Phase 2 breaks every page at once.
+So "Me, roster + bunk structure only" is not a clean data boundary. Roster,
+structure and bunk builder are one inseparable unit — which is fine, because
+that is exactly the bundle being sold. What can't be done is scrubbing *within*
+that unit.
 
----
+### Separability verdict
 
-## 6. Known risks
-
-- **Sections that turn out to be inseparable.** If billing genuinely can't work
-  without a near-complete roster, then "roster only" and "billing only" can be
-  sold, but the scrub for one of them is mostly theatre. Worth discovering in
-  Phase 2, per section, and being honest about in the sales conversation.
-- **Service-role callers bypass all of this** — crons and edge functions read
-  with the service key and must keep doing so. That is correct (they're trusted)
-  but means entitlement is a *user-facing* boundary, not a data-classification
-  one.
-- **Other clients read the same tables.** `campistry_lite.js` and
-  `product_access_guard.js` both read access state directly and already disagree
-  with each other (an empty `product_access` means "blocked" in one and
-  "unrestricted" in the other). Both need to learn the new layer, or Phase 3
-  will lock Lite users out.
-- **The existing per-staff layer is still broken in places** (ungated sections,
-  grouped members locked out of every product page). Those don't block this
-  design, but a camp buying a limited product will meet them.
+| Genuinely separable | Entangled — sell as a unit |
+|---|---|
+| `payroll` (one-way reads from Hiring; only offboarding cross-writes) | `campers` + `structure` + `bunkbuilder` |
+| `finance` (own branch, but Billing writes `finance.payments`) | `billing` + `enrollment` + `settings` |
+| `printsheets` (owns one array, otherwise a pure reader) | `reports`, `analytics` (read everything) |
 
 ---
 
-## 7. Decisions needed
+## 6. Revised plan
 
-1. **Sold per app, per section, or both?** The design assumes both (`"*"` or a
-   list). Confirm you want section granularity on day one rather than app-level
-   first.
-2. **What should a camp see for something it didn't buy** — hidden entirely, or
-   visible but locked with an upgrade prompt? This changes the UI work
-   substantially and is a commercial decision, not a technical one.
-3. **Who sets entitlements?** Assumed: you, via a service-role RPC, not
-   self-serve in the camp's dashboard. Confirm.
-4. **How far does Phase 3 go?** Locking `campistryMe` is clearly worth it.
-   Locking every key is more work for less return. A shortlist beats "all".
-5. **Does the entitlement need to be enforced against a camp's own API/exports?**
-   Print sheets, reports and CSV exports all run client-side over data the page
-   already holds; if they must be gated too, that follows from the scrub, but
-   worth stating.
+Enforce at the level the data is actually stored at — **the key** — instead of
+pretending sections are separable inside one blob.
+
+### Phase 2A — per-key entitlement in RLS *(real enforcement, modest work)*
+
+Apps that already live in their own `camp_state_kv` key can be enforced today:
+`campistrySnacks`, `campistryHealth`, `campistryShop`, `campistryLuggage`,
+`campistry_notes_v1`, `campistryLink`. Add `camp_entitled()` to the RLS
+predicate for those keys and a camp that didn't buy Health genuinely cannot read
+or write it — owner included, from any client, with or without our JavaScript.
+
+This covers the whole **app-level** half of the sale for real, and it is a
+policy change rather than a refactor.
+
+### Phase 2B — move the two sensitive, separable branches out of `campistryMe`
+
+`payroll` and `finance` are the branches actually worth withholding, and they
+are the two that are genuinely separable. Move them to their own keys
+(`campistryMePayroll`, `campistryMeFinance`), then Phase 2A's per-key rule
+covers them too.
+
+This is real work — a data migration plus rewiring `campistry_me.js`'s load and
+save — but it is bounded, and it removes the whole scrub-and-preserve mechanism
+that has now produced **two** separate silent data-loss bugs.
+
+### Phase 2C — the rest of Me stays a UI boundary, on purpose
+
+`campers`, `structure`, `bunkbuilder`, `billing`, `enrollment`, `reports`,
+`analytics` share one blob and genuinely need each other's data. Splitting them
+would be a rewrite of the app's core, not an access-control change. They keep
+the locked-UI treatment from Phase 1.
+
+Be honest about what that means commercially: a roster-only camp is *shown*
+only roster and bunk structure, and a cooperative customer gets exactly the
+product they paid for — but a determined staff member could still read the
+billing branch out of the blob. For selling plans that is fine. For a hard
+confidentiality guarantee it is not, and 2C is where that line sits.
+
+### Phase 3 — close the door, per key, last
+
+Only after 2A/2B, and only for keys whose readers are all accounted for. Do it
+one key at a time. `campistryMe` is the hardest (most call sites) and should go
+last, if at all.
+
+---
+
+## 7. Known risks
+
+- **Service-role writers race the client.** The payment webhooks and
+  `payments-*` functions do whole-blob read-modify-write on `campistryMe` and
+  race `executeBatchSync`'s whole-key upsert, last-writer-wins. Any RPC design
+  has to fix that rather than relocate it.
+- **Anonymous write path.** `campistry_inquiry.html` upserts the whole
+  `campistryMe` blob without a session. Worth closing regardless of this work.
+- **Cross-app keys.** `campStructure` and `app1.camperRoster` are read by Flow,
+  Lite, Snacks, Go, badges and an edge function. Neither can be treated as
+  Me-owned by any policy.
+- **`settings` isn't in Me.** The registry lists `me.settings`, but the UI lives
+  in `dashboard.js`, which writes `campistryMe` directly. `enrollSettings` is
+  co-owned by both files on a whole-key upsert.
+
+---
+
+## 8. Decisions taken
+
+1. **Section-level, scoped to Me** — confirmed. In practice that means selling
+   the roster/structure/bunk unit, with payroll and finance separable for real
+   after 2B.
+2. **Locked, not hidden** — confirmed and shipped in Phase 1.
+3. **Only we set entitlements** — shipped: `campistry_control.html`, gated on
+   the existing `super_admins` allow-list.
+4. **How far Phase 3 goes** — proposed above: per key, sensitive keys first,
+   `campistryMe` last or never.
+5. **Exports** — follows from whatever the data layer allows; no separate
+   mechanism.
