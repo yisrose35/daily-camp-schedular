@@ -78,7 +78,16 @@ fi
 # Paths that cannot affect what a browser is served. Deliberately short --
 # this is an allow-list of things to IGNORE, everything else builds.
 #   tests/  scripts/  .github/  .claude/  *.md  .gitignore  .gitattributes
-ignorable='^(tests/|scripts/|\.github/|\.claude/|\.gitignore$|\.gitattributes$)|\.md$'
+#
+# supabase/ and migrations/ are here because this project has no Supabase CLI:
+# edge functions are deployed by pasting one file into the Supabase Dashboard,
+# and migrations by pasting SQL into the SQL Editor. Nothing under either path
+# is ever served to a browser, yet a run of function-only commits was burning
+# two builds each (one per Vercel project) and eating into the daily deploy
+# budget -- which is exactly when a genuinely user-facing deploy fails to land.
+# NOTE: supabase_client.js lives at the repo ROOT, not under supabase/, so it
+# is NOT caught by this and still builds.
+ignorable='^(tests/|scripts/|\.github/|\.claude/|supabase/|migrations/|\.gitignore$|\.gitattributes$)|\.md$'
 
 # --- Per-project: skip when only the OTHER app's files changed --------------
 # Both Vercel projects deploy this one repo from different branches, so they
