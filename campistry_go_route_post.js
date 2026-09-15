@@ -46,7 +46,8 @@ window.CampistryGoRoutePost = (function () {
         rideRatioSlackMin: 10,
         // Road network (when the OSM graph is available)
         roadEdgePenaltyMin: 0.05,  // ~3s per edge: intersections, turns, slowing for stops
-        turnPenaltyMin: 1.5,       // a reversal at a stop (in and out on the same road: a U-turn or three-point turn) costs this
+        turnPenaltyMin: 0.75,      // a reversal at a stop (in and out on the same road: a U-turn or three-point turn) costs this;
+                                   // fitted from the camp's own stamped times when its history is loaded
         roadOffMph: 10,            // speed for the off-graph bit between a stop and its nearest node
         legMinutes: null,          // (a, b) -> minutes on the road network; null = straight-line x roadFactor
         // Containment
@@ -1324,7 +1325,24 @@ window.CampistryGoRoutePost = (function () {
         // else straight-line x road factor.
         const L = typeof o.legMinutes === 'function' ? o.legMinutes : null;
         let work = 0; // leg evaluations so far: the polish's unit of effort
-        const leg = (a, b) => { work++; return L ? L(a, b) : (haversineMi(a.lat, a.lng, b.lat, b.lng) * o.roadFactor / speed) * 60; };
+        // Street legs come from a matrix keyed by object; a typed-array copy
+        // indexed by atom makes each evaluation a lookup, not two Map probes
+        // (on the camp's 417 segments the polish ran 3x slower without it).
+        let LM = null, LN = 0;
+        if (L) {
+            const atomsAll = []; for (const b of (buckets || [])) for (const a of b) atomsAll.push(a);
+            LN = atomsAll.length + 1;
+            atomsAll.forEach((a, i) => { a._lk = i; });
+            depot._lk = LN - 1;
+            LM = new Float32Array(LN * LN);
+            const pts = atomsAll.concat([depot]);
+            for (let i = 0; i < LN; i++) for (let j = 0; j < LN; j++) LM[i * LN + j] = i === j ? 0 : L(pts[i], pts[j]);
+        }
+        const leg = (a, b) => {
+            work++;
+            if (LM && a._lk != null && b._lk != null) return LM[a._lk * LN + b._lk];
+            return L ? L(a, b) : (haversineMi(a.lat, a.lng, b.lat, b.lng) * o.roadFactor / speed) * 60;
+        };
         // Riders per atom: an explicit count, else the campers list, else one.
         const cnt = x => Number.isFinite(x.count) ? x.count : (riders(x) || 1);
         const perRider = x => o.secPerRider > 0 ? cnt(x) * o.secPerRider / 60 : 0;

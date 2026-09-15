@@ -204,6 +204,7 @@ let _toastTimer = null;
     let _activeRoadNet = null;
     let _lastNhResult = null; // the districting's road graph + homes, for passes that run after it
     let _legFit = null;       // straight-line leg model fitted from the road network on the last run
+    let _turnFit = null;      // reversal cost fitted from the camp's own stamped times, when its history is loaded
     function _roadLegsFor(stops, campLat, campLng) {
         if (!_activeRoadNet) return null;
         try { return _activeRoadNet.legMinutesFor([{ lat: campLat, lng: campLng }].concat(stops || [])); }
@@ -230,6 +231,8 @@ let _toastTimer = null;
             // the leg model for passes without street times: fitted from the road network when it was loaded
             roadFactor: _legFit ? _legFit.factor : ROAD_FACTOR,
             legFixedMin: _legFit ? _legFit.fixedMin : 0,
+            // what a reversal costs: the camp's own history when it says, else the default
+            ...(_turnFit && Number.isFinite(_turnFit.minutes) ? { turnPenaltyMin: _turnFit.minutes } : {}),
             busOverheadMin: _busOverheadMin(),
             equalizeLoads: D.setup.equalizeBusLoads === true,
             returnToDepot: _shiftReturnsToCamp,
@@ -3730,20 +3733,45 @@ function _cornersOnPath(routes, campLat, campLng, isArrival, needsReturn) {
 // today's road network with the camp's dwell model, against this plan. The
 // stamped times also say how long the camp's stops really took, as minutes
 // per stop plus seconds per child, next to the settings in use.
-let _historyCache;
+let _historyCache, _historyLoading = null;
+async function _loadHistory() {
+    if (_historyCache !== undefined) return _historyCache;
+    if (!_historyLoading) _historyLoading = (async () => {
+        try {
+            const r = await fetch('historical_route_stops.json', { cache: 'force-cache' });
+            _historyCache = (r && r.ok) ? await r.json() : null;
+        } catch (_) { _historyCache = null; }
+        return _historyCache;
+    })();
+    return _historyLoading;
+}
+// Before the routing: what the camp's own stamped times say a reversal costs
+// (dwell = a + b x children + c x reversal over last year's stops), so the
+// ordering, the ETAs and the corner choice charge the camp's number, not a
+// guess. Silent when there is no history or too few reversals to fit.
+async function _fitTurnCostFromHistory(campLat, campLng) {
+    _turnFit = null;
+    const NH = window.CampistryGoNeighborhoods;
+    if (!_activeRoadNet || !_lastNhResult || !NH || !NH.benchmarkHistory) return;
+    const history = await _loadHistory();
+    if (!history) return;
+    try {
+        const b = NH.benchmarkHistory({ history, result: _lastNhResult, roadNet: _activeRoadNet, depot: { lat: campLat, lng: campLng },
+                                        avgStopMin: D.setup.avgStopTime || 1, secPerRider: Math.max(0, parseFloat(D.setup.secPerRider) || 0), turnPenaltyMin: 0 });
+        if (b && b.turnFit) {
+            _turnFit = b.turnFit;
+            console.log('[Go] Reversal cost from last year\'s stamped times: ' + b.turnFit.minutes.toFixed(2) + ' min per U-turn (' + b.turnFit.reversals + ' reversals among ' + b.turnFit.n + ' stops)');
+        }
+    } catch (_) { _turnFit = null; }
+}
 async function _benchmarkLastYear(allShiftResults, campLat, campLng) {
     const NH = window.CampistryGoNeighborhoods;
     if (!_activeRoadNet || !_lastNhResult || !NH || !NH.benchmarkHistory) return;
-    if (_historyCache === undefined) {
-        _historyCache = null;
-        try {
-            const r = await fetch('historical_route_stops.json', { cache: 'force-cache' });
-            if (r && r.ok) _historyCache = await r.json();
-        } catch (_) { _historyCache = null; }
-    }
-    if (!_historyCache) return;
-    const b = NH.benchmarkHistory({ history: _historyCache, result: _lastNhResult, roadNet: _activeRoadNet, depot: { lat: campLat, lng: campLng },
-                                    avgStopMin: D.setup.avgStopTime || 1, secPerRider: Math.max(0, parseFloat(D.setup.secPerRider) || 0) });
+    const history = await _loadHistory();
+    if (!history) return;
+    const b = NH.benchmarkHistory({ history, result: _lastNhResult, roadNet: _activeRoadNet, depot: { lat: campLat, lng: campLng },
+                                    avgStopMin: D.setup.avgStopTime || 1, secPerRider: Math.max(0, parseFloat(D.setup.secPerRider) || 0),
+                                    turnPenaltyMin: _routePostOpts().turnPenaltyMin });
     if (!b || !b.total || !b.matched) return;
     const plan = (allShiftResults || []).reduce((a, sr) => a + (sr.routes || []).reduce((x, r) => x + ((r.stops || []).length ? (r.totalDuration || 0) : 0), 0), 0);
     const planBuses = (allShiftResults || []).reduce((a, sr) => a + (sr.routes || []).filter(r => (r.stops || []).length).length, 0);
@@ -4550,6 +4578,10 @@ async function _tryNeighborhoodPipeline({
                 { nodes: nhResult.nodes, edges: nhResult.roadEdges }, _routePostOpts());
             if (_activeRoadNet) console.log('[Go v5] Road network: ' + _activeRoadNet.nodeCount + ' nodes, ' +
                 _activeRoadNet.arcCount + ' arcs — ordering and ETAs on street travel times');
+            // the districting result and the camp's history are known now: fit what a
+            // reversal costs before anything is ordered or priced
+            _lastNhResult = nhResult;
+            await _fitTurnCostFromHistory(campLat, campLng);
         } catch (e) { console.warn('[Go v5] Road network unavailable: ' + e.message); _activeRoadNet = null; }
     }
 

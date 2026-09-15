@@ -169,7 +169,8 @@ addresses ─ geocode ─┬─ road graph (OpenStreetMap) ─ neighbourhoods �
   neighbourhoods (the sweep usually wins anyway), and the road-graph
   download is cached per tile.
 
-* **Reversals cost time** (`legMinutes.hops`, `turnPenaltyMin` 1.5): the
+* **Reversals cost time** (`legMinutes.hops`, `turnPenaltyMin` 0.75 by
+  default, fitted from the camp's history when it is loaded): the
   road network now reports, for every leg, the node the bus arrives from
   and the node it leaves towards. A stop where those are the same node is
   a reversal — a U-turn or a three-point turn for a bus at a cul-de-sac —
@@ -178,7 +179,19 @@ addresses ─ geocode ─┬─ road graph (OpenStreetMap) ─ neighbourhoods �
   this: the shortest path in and out of a side-road corner is the same
   road, and nothing priced the turn. One predecessor map per source
   (cached) keeps the reversal table for a bus at n² lookups, not n²
-  searches.
+  searches. The first cut charged 1.5 min per reversal and the camp's run
+  came out 88 minutes "worse" with the same miles: 80 of those were the new
+  charge. The camp's own stamped times settle it — the benchmark fits
+  dwell = a + b×children + c×reversal over last year's stops, and c is what
+  a reversal costs there ("[Go] Reversal cost from last year's stamped
+  times"); it is fitted before anything is ordered, the plan and last
+  year's routes are priced with the same number, and 0.75 is the fallback.
+  The leg-model fit is likewise over short on-network hops (pairs up to 3
+  mi, the off-road minutes of mid-block points taken out): fitted over
+  all pairs it said 3.0 min per leg, which every fallback then charged.
+  The polish reads street legs from a typed-array matrix built once per
+  call — on 417 segments the Map-keyed lookups had it three to fifteen
+  times slower.
 
 * **Corner stops on the bus's way** (`chooseCornersOnPath`, after the road
   polish): a corner stop was stood at the intersection nearest its homes, and
