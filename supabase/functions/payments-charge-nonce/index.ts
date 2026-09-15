@@ -128,8 +128,12 @@ async function banquestChargeNonce(
                 || String(data?.status || "").toLowerCase() === "approved";
   const ref = data?.reference_number != null ? String(data.reference_number) : "";
   if (resp.status < 200 || resp.status >= 300 || !approved || !ref) {
-    const errMsg = data?.error_message || (Array.isArray(data?.error_messages) && data.error_messages[0]) || data?.error_details || data?.error || data?.message || data?.status || `Declined (HTTP ${resp.status})`;
-    return { success: false, error: String(errMsg) };
+    // Same reasoning as payments-save-method: a bare "Validation error" in
+    // error_message is useless without error_details naming the field.
+    console.error("[payments-charge-nonce] banquest charge failed:", resp.status, JSON.stringify(data));
+    const detail = data?.error_details || (Array.isArray(data?.error_messages) && data.error_messages.join("; "));
+    const base = data?.error_message || data?.error || data?.message || data?.status || `Declined (HTTP ${resp.status})`;
+    return { success: false, error: String(detail ? `${base}: ${detail}` : base) };
   }
   // auth_amount is what actually got captured; fall back to what we asked for.
   const capturedCents = Number(data?.auth_amount) > 0 ? Math.round(Number(data.auth_amount) * 100) : amountCents;

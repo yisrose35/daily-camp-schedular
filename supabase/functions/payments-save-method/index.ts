@@ -107,14 +107,14 @@ function bqBillingParts(billing: Record<string, string> | null | undefined): Rec
   return out;
 }
 
-// The tokenizer hands the browser expiry_month/expiry_year/avs_zip alongside
-// the nonce, and Banquest's own integration example sends them on with the
-// transaction — avs_zip in particular is what AVS actually checks.
+// The tokenizer hands the browser avs_zip (plus expiry) alongside the nonce.
+// Only avs_zip is forwarded on a VERIFY: Banquest documents expiry_month/
+// expiry_year on the CHARGE example, and the nonce already carries the card's
+// expiry, so sending it here is redundant and is a candidate for the gateway's
+// "Validation error". avs_zip is kept because it's what AVS actually checks.
 function bqCardParts(card: Record<string, any> | null | undefined): Record<string, unknown> {
   const c = (card && typeof card === "object") ? card : {};
   const out: Record<string, unknown> = {};
-  if (Number(c.expiryMonth) > 0) out.expiry_month = Number(c.expiryMonth);
-  if (Number(c.expiryYear) > 0) out.expiry_year = Number(c.expiryYear);
   const zip = String(c.avsZip ?? "").trim();
   if (zip) out.avs_zip = zip;
   return out;
@@ -133,8 +133,15 @@ async function banquestSaveMethod(creds: Record<string, string>, nonce: string, 
                 || String(data?.status || "").toLowerCase() === "approved"
                 || !!cardRef; // some verify responses omit status but return card_ref
   if (resp.status < 200 || resp.status >= 300 || !cardRef || !approved) {
-    const errMsg = data?.error_message || (Array.isArray(data?.error_messages) && data.error_messages[0]) || data?.error_details || data?.error || data?.message || data?.status || `Could not save payment method (HTTP ${resp.status})`;
-    return { success: false, error: errMsg };
+    // Banquest answers a malformed body with a bare "Validation error" in
+    // error_message and puts the ACTUAL offending field in error_details, so log
+    // the whole response (and the body we sent, which holds no card data — just
+    // a single-use nonce and the billing address) or there is nothing to debug.
+    console.error("[payments-save-method] banquest verify failed:", resp.status, JSON.stringify(data));
+    console.error("[payments-save-method] request was:", JSON.stringify({ source: "nonce-***", save_card: true, ...bqCardParts(card), ...bqBillingParts(billing) }));
+    const detail = data?.error_details || (Array.isArray(data?.error_messages) && data.error_messages.join("; "));
+    const base = data?.error_message || data?.error || data?.message || data?.status || `Could not save payment method (HTTP ${resp.status})`;
+    return { success: false, error: detail ? `${base}: ${detail}` : base };
   }
   const last4 = data?.last_4 || data?.transaction?.last_4 || data?.card?.last_4 || card?.last4;
   const brand = data?.card_type || data?.transaction?.card_type || data?.card?.card_type || card?.cardType;
