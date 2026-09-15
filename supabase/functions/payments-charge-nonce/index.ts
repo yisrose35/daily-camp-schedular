@@ -127,6 +127,15 @@ async function banquestChargeNonce(
   billing: Record<string, string> | null | undefined,
   card: Record<string, any> | null | undefined,
 ) {
+  // Banquest REQUIRES expiry_month/expiry_year alongside a nonce source (a
+  // verify without them returns {"required":["Must have required property
+  // 'expiry_month'", ...]}). A cached page that predates us sending `card`
+  // would omit them, so fail with something actionable instead of an opaque
+  // gateway validation error.
+  const cardParts = bqCardParts(card);
+  if (cardParts.expiry_month === undefined || cardParts.expiry_year === undefined) {
+    return { success: false, error: "The card's expiry didn't come through — please refresh the page and re-enter the card." };
+  }
   const resp = await fetch(`${bqBase(creds)}/transactions/charge`, {
     method: "POST",
     headers: { "Content-Type": "application/json", "Authorization": bqAuth(creds) },
@@ -134,7 +143,7 @@ async function banquestChargeNonce(
       amount: Number((amountCents / 100).toFixed(2)),
       source: "nonce-" + nonce,
       transaction_details: { description: description.slice(0, 255) },
-      ...bqCardParts(card),
+      ...cardParts,
       ...bqBillingParts(billing),
     }),
   });

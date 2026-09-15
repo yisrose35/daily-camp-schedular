@@ -107,14 +107,17 @@ function bqBillingParts(billing: Record<string, string> | null | undefined): Rec
   return out;
 }
 
-// The tokenizer hands the browser avs_zip (plus expiry) alongside the nonce.
-// Only avs_zip is forwarded on a VERIFY: Banquest documents expiry_month/
-// expiry_year on the CHARGE example, and the nonce already carries the card's
-// expiry, so sending it here is redundant and is a candidate for the gateway's
-// "Validation error". avs_zip is kept because it's what AVS actually checks.
+// The tokenizer hands the browser expiry/avs_zip alongside the nonce, and they
+// have to be forwarded: Banquest REQUIRES expiry_month and expiry_year on the
+// verify even though the nonce already represents the card — omitting them
+// fails with {"required":["Must have required property 'expiry_month'", ...]}.
+// (Confirmed against a live sandbox 400.) avs_zip is optional but is what AVS
+// actually checks.
 function bqCardParts(card: Record<string, any> | null | undefined): Record<string, unknown> {
   const c = (card && typeof card === "object") ? card : {};
   const out: Record<string, unknown> = {};
+  if (Number(c.expiryMonth) > 0) out.expiry_month = Number(c.expiryMonth);
+  if (Number(c.expiryYear) > 0) out.expiry_year = Number(c.expiryYear);
   const zip = String(c.avsZip ?? "").trim();
   if (zip) out.avs_zip = zip;
   return out;
@@ -137,10 +140,16 @@ function bqErrDetail(d: unknown): string {
 }
 
 async function banquestSaveMethod(creds: Record<string, string>, nonce: string, billing?: Record<string, string> | null, card?: Record<string, any> | null): Promise<{ success: boolean; customerRef?: string; last4?: string; brand?: string; error?: string }> {
+  // A page served from cache before `card` was sent would omit the expiry and
+  // get back an opaque gateway validation error; say something actionable.
+  const cardParts = bqCardParts(card);
+  if (cardParts.expiry_month === undefined || cardParts.expiry_year === undefined) {
+    return { success: false, error: "The card's expiry didn't come through — please refresh the page and re-enter the card." };
+  }
   const resp = await fetch(`${bqBase(creds)}/transactions/verify`, {
     method: "POST",
     headers: { "Content-Type": "application/json", "Authorization": "Basic " + btoa(`${creds.sourceKey}:${creds.pin}`) },
-    body: JSON.stringify({ source: "nonce-" + nonce, save_card: true, ...bqCardParts(card), ...bqBillingParts(billing) }),
+    body: JSON.stringify({ source: "nonce-" + nonce, save_card: true, ...cardParts, ...bqBillingParts(billing) }),
   });
   let data: Record<string, any> = {};
   try { data = await resp.json(); } catch { /* non-JSON error body */ }
@@ -154,7 +163,7 @@ async function banquestSaveMethod(creds: Record<string, string>, nonce: string, 
     // the whole response (and the body we sent, which holds no card data — just
     // a single-use nonce and the billing address) or there is nothing to debug.
     console.error("[payments-save-method] banquest verify failed:", resp.status, JSON.stringify(data));
-    console.error("[payments-save-method] request was:", JSON.stringify({ source: "nonce-***", save_card: true, ...bqCardParts(card), ...bqBillingParts(billing) }));
+    console.error("[payments-save-method] request was:", JSON.stringify({ source: "nonce-***", save_card: true, ...cardParts, ...bqBillingParts(billing) }));
     const detail = bqErrDetail(data?.error_details) || bqErrDetail(data?.error_messages);
     const base = data?.error_message || data?.error || data?.message || data?.status || `Could not save payment method (HTTP ${resp.status})`;
     return { success: false, error: detail ? `${base}: ${detail}` : base };
