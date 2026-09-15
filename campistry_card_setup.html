@@ -85,7 +85,7 @@
     window.__CAMPISTRY_PUBLIC_PAGE__ = true;
     // Bump on every change to this page. Printed on load so a stale cached copy
     // is obvious at a glance instead of being mistaken for a code bug.
-    window.__CARD_PAGE_BUILD__ = '2026-09-15-04';
+    window.__CARD_PAGE_BUILD__ = '2026-09-15-05';
     console.log('[Campistry] card page build', window.__CARD_PAGE_BUILD__);
     </script>
     <script src="config.js"></script>
@@ -362,7 +362,16 @@
                             cvv2Container: 'flex:1 1 110px;min-width:0;',
                             cvv2: bqInput,
                             fieldErrors: 'color:#DC2626;font-size:12px;margin-top:4px;',
-                            labelType: 'hidden'
+                            // 'floating', not 'hidden': hidden takes the field
+                            // NAMES away too, leaving three unlabelled boxes with
+                            // no way to tell expiry from CVV. Floating shows the
+                            // name as placeholder text while the field is empty
+                            // and lifts it once it's filled.
+                            labelType: 'floating',
+                            labels: 'font-family:system-ui,-apple-system,"Segoe UI",Roboto,sans-serif;' +
+                                'font-size:11px;font-weight:600;color:#475569;letter-spacing:.01em;',
+                            floatingLabelsPlaceholder: 'font-family:system-ui,-apple-system,"Segoe UI",Roboto,sans-serif;' +
+                                'font-size:15px;font-weight:400;color:#94A3B8;'
                         }
                     });
                 } catch (e) {
