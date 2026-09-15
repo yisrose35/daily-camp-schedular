@@ -85,6 +85,10 @@ MANIFEST = [
     # MUST come after 159: user_section_level reads access_preset_grants.
     ("165_camp_role_access",
      "Per-JOB access defaults a camp owner can set, plus resolver support"),
+    # MUST come after 152 (it redefines get_my_balance) and after 145, whose
+    # bank_deposits table it now reads. Independent of the access chain.
+    ("166_balance_parity",
+     "The parent's balance agrees with the camp's: Zelle counted, all families summed"),
 ]
 
 HEADER = """-- ═══════════════════════════════════════════════════════════════════════════
@@ -137,6 +141,14 @@ HEADER = """-- ═════════════════════�
 --     (Health, Shop, Luggage) and 164 adds campistryMe as a whole-key gate.
 --     Watch for head-counselor and division-head presets losing Health: they
 --     grant no health section, but a MANAGER on either can read it today.
+--   * !! Parents' balances change (166), and for the better: a Zelle or ACH
+--     deposit now counts on the parent's side too. Until now deposits were
+--     unioned into the CAMP's ledger and into autopay, but not into
+--     get_my_balance — so a family that paid by bank transfer read as settled
+--     in Billing and still owing in the parent portal, permanently. Parents
+--     with two family records also now see the sum of both rather than one.
+--     Expect some parent balances to DROP when you run this; that is the bug
+--     being fixed, not a new discount.
 --   * NEW: you can set access once for a whole JOB (165). Before, access was
 --     per-person only, so a camp that restricted its four schedulers got a
 --     fifth one with the run of the place — an unconfigured user keeps full
@@ -332,6 +344,17 @@ UNION ALL SELECT 'get_my_access carries the job default',
 UNION ALL SELECT 'the RLS resolver honours job defaults',
        CASE WHEN (SELECT prosrc FROM pg_proc WHERE proname='user_section_level' LIMIT 1)
                  LIKE '%camp_role_access%'
+            THEN 'OK' ELSE 'MISSING' END
+-- Money parity (166). A parent's balance must include Zelle/ACH deposits, or
+-- a family that paid by bank transfer is settled for the camp and still owing
+-- for the parent, permanently.
+UNION ALL SELECT 'parent balance counts Zelle/ACH deposits',
+       CASE WHEN (SELECT prosrc FROM pg_proc WHERE proname='get_my_balance' LIMIT 1)
+                 LIKE '%bank_deposits%'
+            THEN 'OK' ELSE 'MISSING' END
+UNION ALL SELECT 'parent balance sums every family the parent belongs to',
+       CASE WHEN (SELECT prosrc FROM pg_proc WHERE proname='get_my_balance' LIMIT 1)
+                 LIKE '%v_famKeys%'
             THEN 'OK' ELSE 'MISSING' END
 UNION ALL SELECT 'lost-charge reconciliation report',
        CASE WHEN EXISTS (SELECT 1 FROM pg_proc WHERE proname='reconcile_processor_charges')

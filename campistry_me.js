@@ -10486,6 +10486,21 @@ function enrollCamper(id){
 
     if(famKey&&families[famKey]){
         if(families[famKey].camperIds.indexOf(e.camperName)<0) families[famKey].camperIds.push(e.camperName);
+        // ⚠ families[fk].balance IS NOT THE BALANCE. Do not read it for money.
+        //
+        // It is a stored running total, incremented here and adjusted at the
+        // payment/charge/refund sites, and it CANNOT be trusted: the payment
+        // path clamps it with Math.max(0, ...) so it can never go negative,
+        // which means an overpayment silently loses information and the figure
+        // drifts from the truth permanently. It also knows nothing about bank
+        // deposits, which live in their own table.
+        //
+        // The authoritative balance is computed fresh by buildFamilyLedgers()
+        // (charges − payments − credits, with bank deposits unioned in), and
+        // that is what Billing renders, what the parent portal's
+        // get_my_balance mirrors, and what autopay decides on. This field is
+        // vestigial — kept only because it is persisted in existing blobs.
+        // Nothing reads it for arithmetic today; keep it that way.
         families[famKey].balance=(families[famKey].balance||0)+tuition;
     }else if(e.parentName){
         famKey='fam_'+lastName.toLowerCase().replace(/[^a-z0-9]/g,'')+'_'+(roster[e.camperName]?roster[e.camperName].camperId:Date.now());
