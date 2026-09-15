@@ -380,6 +380,62 @@
         return '';
     };
 
+    /**
+     * Gmail (or Yahoo, or anyone else) asking the camp to confirm forwarding.
+     *
+     * Automatic forwarding is the setup every camp actually wants -- nobody
+     * forwards bank alerts by hand all summer -- and every provider gates it
+     * the same way: send a code to the destination and make you type it back.
+     * The destination here is the camp's deposit address, which is a webhook,
+     * so that mail lands somewhere no human reads.
+     *
+     * Left alone it is worse than invisible: the message mentions no money, so
+     * the parser drops it as a non-event, and the sender allowlist rejects
+     * google.com before that. The camp is told nothing, forwarding can never
+     * be switched on, and there is no way to find out why.
+     *
+     * So this is recognised explicitly and carried through to the inbox, where
+     * the code is shown as the thing to act on. Returns null for everything
+     * else -- the wording has to be about FORWARDING, not merely contain a
+     * confirmation code, which plenty of real bank mail does.
+     */
+    var FWD_VERIFY_RE = /forward(?:ing)?[\s\-]*(?:confirmation|request|verification|address)|verify\s+(?:your\s+)?forward|confirm[^.\n]{0,40}forward|forward[^.\n]{0,40}confirm/i;
+
+    P.forwardingVerification = function (opts) {
+        var o = opts || {};
+        var subject = String(o.subject || '');
+        var body = String(o.text || '');
+        var from = String(o.from || '').toLowerCase();
+        var s = subject + '\n' + body;
+        if (!FWD_VERIFY_RE.test(s)) return null;
+
+        // Gmail puts it in both places: "Confirmation code: 123456789" in the
+        // body and "(#123456789)" in the subject. Either will do.
+        var code = '';
+        var m = s.match(/confirmation\s*code\s*[:\-]?\s*([0-9]{5,12})/i) ||
+                s.match(/\(\s*#\s*([0-9]{5,12})\s*\)/) ||
+                s.match(/\bcode\s*[:\-]\s*([0-9]{5,12})\b/i);
+        if (m) code = m[1];
+
+        var urls = s.match(/https?:\/\/[^\s<>"')\]]+/g) || [];
+        var url = '';
+        for (var i = 0; i < urls.length; i++) {
+            if (/confirm|verif|vf-|forward/i.test(urls[i])) {
+                url = urls[i].replace(/[.,;)]+$/, '');
+                break;
+            }
+        }
+        if (!code && !url) return null;
+
+        var provider = /google|gmail/.test(from + ' ' + s) ? 'Gmail'
+                     : /yahoo/.test(from + ' ' + s) ? 'Yahoo'
+                     : /outlook|microsoft|hotmail|live\.com/.test(from + ' ' + s) ? 'Outlook'
+                     : /proton/.test(from + ' ' + s) ? 'Proton Mail'
+                     : /icloud|apple/.test(from + ' ' + s) ? 'iCloud'
+                     : '';
+        return { provider: provider, code: code, url: url };
+    };
+
     P.stripForwardHeaders = function (text) {
         var lines = String(text || '').split('\n');
         var out = [];

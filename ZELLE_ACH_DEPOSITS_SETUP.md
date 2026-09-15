@@ -329,6 +329,46 @@ Most banks send alerts to the account holder's email only. If the camp cannot
 add a second address, have them set a **forwarding rule** from that mailbox to
 the Campistry address instead — it works identically.
 
+### Automatic forwarding from an existing mailbox
+
+This is what most camps end up doing: the bank already emails a mailbox someone
+watches, and changing the bank's alert recipient is either awkward or not
+theirs to change. Forwarding each alert by hand is not a system, so set the
+rule once.
+
+**Gmail**
+
+1. Settings → *See all settings* → **Forwarding and POP/IMAP** → *Add a
+   forwarding address* → paste the camp's deposit address → **Next** → *Proceed*.
+2. Gmail sends a confirmation code to that address. It appears at the top of
+   **Needs you** in Bank Deposits, usually within a minute, as a green card
+   with the code in large type. Copy it.
+3. Back in Gmail, paste the code → **Verify**.
+4. Do **not** select "Forward a copy of incoming mail to". Instead:
+   Settings → **Filters and Blocked Addresses** → *Create a new filter* →
+   **From:** the bank's alert address (e.g. `no.reply.alerts@chase.com`) →
+   *Create filter* → tick **Forward it to** and pick the deposit address.
+
+Step 4 is the part worth insisting on. "Forward a copy of incoming mail"
+sends the camp's entire inbox through the webhook; a filter sends only the
+bank's alerts, which is all this needs and all it should ever see.
+
+**Outlook / Microsoft 365**
+
+Settings → **Mail** → **Rules** → *Add new rule* → condition **From** = the
+bank's alert address → action **Forward to** = the deposit address. Outlook
+does not require a confirmation code.
+
+> **Why the confirmation code needs help.** The destination address is a
+> webhook, not a mailbox anyone opens. The confirmation email mentions no
+> money, so the parser would correctly drop it as a non-event, and a configured
+> `sender_allowlist` would reject `google.com` before that — leaving the camp
+> unable to enable forwarding with nothing on screen explaining why. So the
+> handler recognises a forwarding request *before* both of those checks
+> (`Parser.forwardingVerification`), stores it with `parse_reason =
+> 'forwarding_verification'`, and the inbox renders it as the code to act on
+> rather than as a failure. It is never counted as money.
+
 ### Lock down the sender
 
 Set `sender_allowlist` to the bank's sending domain (e.g. `chase.com`,

@@ -428,3 +428,63 @@ test('the camp’s own mailbox is never mistaken for the bank', () => {
     assert.ok(P.isPersonalMail('a@icloud.com') && P.isPersonalMail('b@Outlook.com'));
     assert.ok(!P.isPersonalMail('alerts@chase.com') && !P.isPersonalMail('x@capitalone.com'));
 });
+
+// ── the message that turns forwarding on ────────────────────────────────────
+//
+// Automatic forwarding is what every camp ends up doing — nobody forwards bank
+// alerts by hand all summer — and every provider gates it behind a code sent to
+// the DESTINATION. The destination is a webhook, so that mail lands where no
+// human reads. Left alone it is worse than invisible: no money is mentioned, so
+// the parser drops it as a non-event, and the sender allowlist rejects
+// google.com before that. Forwarding could then never be switched on, with
+// nothing on screen to say why.
+const GMAIL_VERIFY = {
+    from: 'forwarding-noreply@google.com',
+    subject: '(#284917365) Gmail Forwarding Confirmation - Receive Mail from yisrose35@gmail.com',
+    text: [
+        'yisrose35@gmail.com has requested to automatically forward mail to your address.',
+        'Confirmation code: 284917365',
+        '',
+        'To allow it, click the link below:',
+        'https://mail-settings.google.com/mail/vf-%5BANGjdJ8kQ%5D'
+    ].join('\n')
+};
+
+test('a forwarding confirmation is recognised and its code read', () => {
+    const v = P.forwardingVerification(GMAIL_VERIFY);
+    assert.ok(v, 'must not be dropped as a non-event');
+    assert.strictEqual(v.code, '284917365');
+    assert.strictEqual(v.provider, 'Gmail');
+    assert.match(v.url, /^https:\/\/mail-settings\.google\.com\//);
+});
+
+test('the subject alone carries the code when the body does not', () => {
+    const v = P.forwardingVerification({
+        from: 'forwarding-noreply@google.com',
+        subject: '(#284917365) Gmail Forwarding Confirmation',
+        text: 'Click the link to confirm forwarding: https://mail-settings.google.com/mail/vf-x'
+    });
+    assert.strictEqual(v.code, '284917365');
+});
+
+test('a bank email carrying a confirmation code is not a forwarding request', () => {
+    // The wording has to be about FORWARDING. Plenty of real bank mail contains
+    // a confirmation code, and treating one as a setup step would park a real
+    // deposit in a card that credits nobody.
+    assert.strictEqual(P.forwardingVerification({
+        from: 'alerts@chase.com',
+        subject: 'You received $3.14',
+        text: 'Your confirmation code is 889231 for this transfer.'
+    }), null);
+    assert.strictEqual(P.forwardingVerification({
+        from: 'alerts@chase.com',
+        subject: 'Yisrael Rosenfeld sent you money',
+        text: '$3.14 was deposited. Memo 3734-1387'
+    }), null);
+});
+
+test('a forwarding request is never read as money', () => {
+    // Belt and braces: even if it reached parseEmail, nothing may be credited.
+    const r = P.parseEmail({ subject: GMAIL_VERIFY.subject, text: GMAIL_VERIFY.text });
+    assert.strictEqual(r.ok, false);
+});

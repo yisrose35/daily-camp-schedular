@@ -71,7 +71,7 @@
     // in the Bank layouts footer. Twice now a fix has been live on the server
     // while the browser ran an older copy, and there was no way to tell from
     // the screen which one was which -- so the screen says.
-    D.BUILD = '20260914-12';
+    D.BUILD = '20260915-01';
 
     var state = {
         loaded: false,
@@ -443,6 +443,42 @@
     // It is shown with the text that actually arrived, because that text is the
     // only way anyone can tell whether it was a real deposit -- and the only
     // way a bank we have never seen becomes visible rather than invisible.
+    /**
+     * The mail provider asking the camp to confirm forwarding.
+     *
+     * This is the opposite of a problem -- it is the last step of the setup
+     * that makes every future deposit arrive by itself -- so it must not sit
+     * in a purple "we could not read this" card next to genuine failures. The
+     * code is the only thing on it worth reading, so the card is the code.
+     */
+    function forwardVerifyRow(d) {
+        var P = W.CampistryDepositParser;
+        var v = (P && P.forwardingVerification)
+            ? P.forwardingVerification({ subject: d.raw_subject || '', text: d.raw_excerpt || '' })
+            : null;
+        var who = (v && v.provider) || 'Your mail provider';
+        return '<div style="border:1px solid #A7F3D0;background:#ECFDF5;border-radius:var(--r);padding:16px 18px;margin-bottom:10px">' +
+            '<div style="font-size:1.05rem;font-weight:700;color:#065F46">' + host.esc(who) +
+            ' is asking you to confirm forwarding</div>' +
+            '<div style="font-size:.87rem;color:#047857;margin-top:6px;max-width:720px;line-height:1.6">' +
+            'Finish this and bank alerts arrive here on their own \u2014 nobody forwards anything by hand again. ' +
+            'Paste the code back into the forwarding screen you just left.</div>' +
+            (v && v.code
+                ? '<div style="display:flex;gap:10px;align-items:center;flex-wrap:wrap;margin-top:14px">' +
+                  '<code style="background:#fff;border:1px solid #A7F3D0;border-radius:var(--r);padding:12px 18px;' +
+                  'font-size:1.4rem;font-weight:700;letter-spacing:.09em;color:#065F46">' + host.esc(v.code) + '</code>' +
+                  copyBtn(v.code, 'Copy code') + '</div>'
+                : '<div style="font-size:.85rem;color:#047857;margin-top:12px">No code in this message \u2014 ' +
+                  'use the confirmation link instead.</div>') +
+            (v && v.url
+                ? '<div style="margin-top:10px"><a href="' + host.esc(v.url) + '" target="_blank" rel="noopener" ' +
+                  'style="font-size:.84rem;color:#065F46;font-weight:600">Or open the confirmation link \u2192</a></div>'
+                : '') +
+            '<div style="margin-top:14px"><button class="me-btn me-btn--ghost me-btn--sm" ' +
+            'onclick="CampistryDeposits.ignore(\'' + host.jesc(d.id) + '\')">Done \u2014 dismiss this</button></div>' +
+            '</div>';
+    }
+
     function unparsedRow(d) {
         var when = (d.created_at || '').slice(0, 10) || '—';
         var body = (d.raw_excerpt || '').slice(0, 1200);
@@ -467,6 +503,7 @@
     }
 
     function depositRow(d) {
+        if (d.parse_reason === 'forwarding_verification') return forwardVerifyRow(d);
         if (d.status === 'unparsed') return unparsedRow(d);
         var amt = (d.amount_cents || 0) / 100;
         var when = d.deposit_date || (d.created_at || '').slice(0, 10) || '—';
@@ -688,7 +725,7 @@
         h += stepRow(3, st.mailArrived, 'Tell your bank to send alerts there',
             'In your camp\'s online banking, add that address as an alert recipient for <strong>incoming ' +
             'deposits</strong> and <strong>Zelle payments received</strong>. If alerts already go to an ' +
-            'existing mailbox, a forwarding rule from there works just as well.' +
+            'existing mailbox, an automatic forwarding rule from there works just as well \u2014 see the next step.' +
             '<div style="font-size:.82rem;color:var(--s500);margin-top:8px">' +
             'Chase: Profile &amp; settings → Alerts → Accounts · Bank of America: Alerts → Deposits &amp; transfers · ' +
             'Wells Fargo: Manage alerts → Deposits · Capital One: Settings → Alerts → Money received</div>',
@@ -697,7 +734,24 @@
                 : '<span style="font-size:.85rem;color:var(--s500)">Nothing has arrived yet. ' +
                   'Send yourself a $1 Zelle to test — it shows up here within a minute.</span>');
 
-        h += stepRow(4, st.mailArrived && !st.dryRun, 'Choose how deposits get credited',
+        // Most camps do not change their bank's alert recipient -- alerts
+        // already go somewhere a person watches, and IT is not always theirs
+        // to change. They forward. Doing that by hand all summer is not a
+        // system, so the automatic rule deserves its own step rather than a
+        // clause inside the one above.
+        h += stepRow(4, st.mailArrived, 'Or forward automatically from the mailbox you already use',
+            'If the bank already emails an existing mailbox, set a rule there that forwards ' +
+            '<strong>only</strong> the bank\'s alerts to your deposit address. Every provider will first send a ' +
+            'confirmation code to that address \u2014 it appears at the top of <strong>Needs you</strong> here, ' +
+            'usually within a minute. Paste it back and forwarding is live.' +
+            '<div style="font-size:.82rem;color:var(--s500);margin-top:8px">' +
+            'Gmail: Settings \u2192 See all settings \u2192 Forwarding and POP/IMAP \u2192 Add a forwarding address, ' +
+            'then Filters \u2192 Create a filter with the bank\'s From: address \u2192 Forward it to. ' +
+            'Outlook: Settings \u2192 Mail \u2192 Rules \u2192 Add new rule \u2192 From \u2192 Forward to. ' +
+            'Use a filter rather than forwarding everything: only the bank\'s mail should leave your mailbox.</div>',
+            '');
+
+        h += stepRow(5, st.mailArrived && !st.dryRun, 'Choose how deposits get credited',
             st.dryRun
                 ? 'You are on <strong>Manual</strong>: every deposit is matched and explained, but nothing is ' +
                   'credited until you say so. Good for the first week of real payments — switch to Automatic once ' +
@@ -706,7 +760,7 @@
                   'Anything less certain still waits for you in <strong>Needs you</strong>.',
             '<button class="me-btn me-btn--sec me-btn--sm" onclick="CampistryDeposits.openSettings()">Change this</button>');
 
-        h += stepRow(5, st.allowlisted, 'Lock it to your bank',
+        h += stepRow(6, st.allowlisted, 'Lock it to your bank',
             'Once you have seen a real alert arrive, restrict the address to that bank\'s sending domain. ' +
             'Until then, anything reaching the address is trusted — fine while testing, not once camps rely on it.',
             st.allowlisted
@@ -736,7 +790,9 @@
     function summaryStrip() {
         var pending = state.deposits.filter(D.isPending);
         var amount = D.pendingAmount();
-        var unparsed = state.deposits.filter(function (d) { return d.status === 'unparsed'; }).length;
+        var unparsed = state.deposits.filter(function (d) {
+            return d.status === 'unparsed' && d.parse_reason !== 'forwarding_verification';
+        }).length;
         var dry = state.settings && state.settings.dryRun;
 
         function stat(value, label, tone) {

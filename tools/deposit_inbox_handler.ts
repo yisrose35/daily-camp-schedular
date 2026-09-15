@@ -400,8 +400,20 @@ serve(async (req) => {
   const campId = camp.campId as string;
 
   // Check 3 of 3 — did the camp's actual bank send this?
+  // Automatic forwarding is the setup a camp actually wants, and every mail
+  // provider gates it behind a code sent to the DESTINATION -- this address.
+  // The allowlist exists to keep everything that is not the camp's bank out,
+  // and google.com is not the camp's bank, so without an exemption here the
+  // one message that can switch forwarding on is the one message guaranteed to
+  // be rejected. The subject is enough to recognise it and carries no money,
+  // so nothing is credited on the strength of it.
+  const verifySender = /(?:forwarding-noreply|no-?reply)@(?:google|gmail|yahoo|outlook|microsoft|proton)/i;
+  const maybeForwardVerify =
+    /forward(?:ing)?[\s\-]*(?:confirmation|request|verification)/i.test(subject) ||
+    fromAddrs.some((a: string) => verifySender.test(a));
+
   const allowlist: string[] = (camp.senderAllowlist ?? []).map((s: string) => s.toLowerCase());
-  if (allowlist.length) {
+  if (allowlist.length && !maybeForwardVerify) {
     const senderDomains = fromAddrs.map(domainOf).filter(Boolean);
     const ok = senderDomains.some((d) =>
       allowlist.some((allowed) => d === allowed || d.endsWith(`.${allowed}`))
@@ -419,6 +431,34 @@ serve(async (req) => {
     const fetched = await fetchBody(emailId);
     text = fetched.text;
     html = fetched.html;
+  }
+
+  // Checked BEFORE parseEmail, which would correctly call this a non-event and
+  // drop it: it mentions no money because it is not about money. It is the
+  // step that makes every future deposit arrive on its own, so it is kept and
+  // shown, with the code as the thing to act on.
+  const fwdVerify = Parser.forwardingVerification({
+    subject,
+    text: text || Parser.htmlToText(html || ""),
+    from: fromAddrs[0] || "",
+  });
+  if (fwdVerify) {
+    const vBody = (text || Parser.htmlToText(html || "")).slice(0, 4000);
+    const vRec = await service.rpc("_deposit_record_unparsed", {
+      p_camp_id: campId,
+      // Keyed on the code so a provider resending the same request collapses
+      // onto one row instead of stacking identical cards in the inbox.
+      p_fingerprint: "fwdverify_" + (fwdVerify.code || emailId || subject).slice(0, 80),
+      p_raw_subject: subject,
+      p_raw_excerpt: vBody,
+      p_reason: "forwarding_verification",
+    });
+    if (vRec.error) {
+      console.error("[deposit-inbox] forwarding verification record failed", vRec.error.message);
+      return json({ error: "record_failed" }, 500);
+    }
+    console.log(`[deposit-inbox] camp ${campId}: forwarding verification kept (${fwdVerify.provider || "unknown"})`);
+    return json({ ok: true, kept: "forwarding_verification" });
   }
 
   const parsed = Parser.parseEmail({
