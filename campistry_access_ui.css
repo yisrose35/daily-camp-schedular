@@ -1,0 +1,229 @@
+/* ============================================================================
+   campistry_access_ui.css — the access matrix, made readable
+   Shared by campistry_team_access.html (owners) and campistry_control.html (us).
+
+   WHY THIS EXISTS: there are 62 sections across nine apps. Both screens showed
+   all of them at once, in a four-column grid, each with its own controls. The
+   result was a wall: correct, complete, and unusable — you could not tell an
+   app heading from a section, or find the one row you came for.
+
+   Three things fix it, in order of how much they help:
+
+     1. COLLAPSE BY DEFAULT. One row per app, with a count and a summary. Open
+        only the app you care about. Nine rows instead of sixty-two.
+     2. ONE SECTION PER ROW, label left, control right, aligned down the page.
+        A grid of controls reads as a puzzle; a list reads as a list.
+     3. A STICKY ACTION BAR. Save stays reachable without scrolling back up
+        past everything you just set.
+
+   Kept deliberately plain: system font stack, no icon font, no JS dependency
+   for layout. Both pages ship their own header and palette on top.
+   ========================================================================= */
+
+:root {
+    --acc-ink:      #0F172A;
+    --acc-ink-soft: #334155;
+    --acc-muted:    #64748B;
+    --acc-faint:    #94A3B8;
+    --acc-line:     #E2E8F0;
+    --acc-line-soft:#F1F5F9;
+    --acc-bg:       #F1F5F9;
+    --acc-brand:    #147D91;
+    --acc-brand-dk: #10697A;
+    --acc-brand-bg: #ECFEFF;
+    --acc-none:     #DC2626;
+    --acc-view:     #B45309;
+    --acc-edit:     #059669;
+}
+
+/* ── steps ──────────────────────────────────────────────────────────────── */
+/* Numbered, so it is obvious there is an order and that step 3 is optional. */
+.acc-step { margin-bottom: 22px; }
+.acc-step-hd {
+    display: flex; align-items: baseline; gap: 10px;
+    margin-bottom: 10px; flex-wrap: wrap;
+}
+.acc-step-n {
+    flex: 0 0 auto;
+    width: 24px; height: 24px; border-radius: 50%;
+    background: var(--acc-brand); color: #fff;
+    font-size: .76rem; font-weight: 700;
+    display: flex; align-items: center; justify-content: center;
+}
+.acc-step-n.off { background: var(--acc-faint); }
+.acc-step-t { font-size: 1rem; font-weight: 700; color: var(--acc-ink); }
+.acc-step-d { font-size: .82rem; color: var(--acc-muted); line-height: 1.5; }
+.acc-step-body { padding-left: 34px; }
+@media (max-width: 640px) { .acc-step-body { padding-left: 0; } }
+
+/* ── pickers (which job / which person) ─────────────────────────────────── */
+/* Roomier than the old cards: two or three across, never four, so a name or a
+   role description never wraps mid-word. */
+.acc-picker {
+    display: grid; gap: 10px;
+    grid-template-columns: repeat(auto-fill, minmax(260px, 1fr));
+}
+.acc-pick {
+    text-align: left; font: inherit; cursor: pointer;
+    padding: 14px 16px; border-radius: 12px;
+    background: #fff; border: 1.5px solid var(--acc-line);
+    transition: border-color .12s, background .12s;
+}
+.acc-pick:hover { border-color: #CBD5E1; background: #FCFDFE; }
+.acc-pick.on { background: var(--acc-brand-bg); border-color: var(--acc-brand); }
+.acc-pick-nm { font-size: .92rem; font-weight: 700; color: var(--acc-ink); }
+.acc-pick-mt { font-size: .78rem; color: var(--acc-muted); margin-top: 3px; line-height: 1.5; }
+.acc-pick-tag {
+    display: inline-block; margin-top: 7px;
+    font-size: .68rem; font-weight: 700; letter-spacing: .03em;
+    padding: 2px 8px; border-radius: 999px;
+    background: var(--acc-line-soft); color: var(--acc-ink-soft);
+    border: 1px solid var(--acc-line);
+}
+.acc-pick-tag.set { background: var(--acc-brand-bg); color: #0E7490; border-color: #A5F3FC; }
+.acc-pick-tag.rec { background: #ECFDF5; color: #047857; border-color: #A7F3D0; }
+
+/* ── the app accordion ──────────────────────────────────────────────────── */
+.acc-apps { border: 1px solid var(--acc-line); border-radius: 12px; overflow: hidden; background: #fff; }
+.acc-app + .acc-app { border-top: 1px solid var(--acc-line); }
+
+.acc-app-hd {
+    display: flex; align-items: center; gap: 12px;
+    width: 100%; padding: 14px 16px;
+    background: #fff; border: none; font: inherit; text-align: left; cursor: pointer;
+}
+.acc-app-hd:hover { background: #FCFDFE; }
+.acc-app-hd[aria-expanded="true"] { background: #F8FAFC; }
+.acc-caret {
+    flex: 0 0 auto; color: var(--acc-faint); font-size: .7rem;
+    transition: transform .15s;
+}
+.acc-app-hd[aria-expanded="true"] .acc-caret { transform: rotate(90deg); }
+.acc-app-nm { font-size: .93rem; font-weight: 700; color: var(--acc-ink); }
+.acc-app-ct { font-size: .78rem; color: var(--acc-muted); margin-left: auto; white-space: nowrap; }
+.acc-app-quick { display: flex; gap: 6px; flex: 0 0 auto; }
+.acc-mini {
+    font: inherit; font-size: .72rem; font-weight: 600;
+    padding: 4px 10px; border-radius: 7px; cursor: pointer;
+    border: 1px solid #CBD5E1; background: #fff; color: var(--acc-ink-soft);
+}
+.acc-mini:hover { background: var(--acc-bg); }
+
+.acc-app-body { padding: 2px 16px 12px; }
+
+/* ── one section per row ────────────────────────────────────────────────── */
+.acc-row {
+    display: flex; align-items: center; gap: 14px;
+    padding: 10px 0; border-top: 1px solid var(--acc-line-soft);
+}
+.acc-row:first-child { border-top: none; }
+.acc-row.locked { opacity: .5; }
+.acc-row-main { flex: 1 1 auto; min-width: 0; }
+/* display:block so the row works whether the markup uses <div>s (the owner
+   screen's three-way control) or <span>s inside a <label> (the control hub's
+   checkbox), rather than needing two sets of classes for one layout. */
+.acc-row-nm { display: block; font-size: .87rem; font-weight: 500; color: var(--acc-ink-soft); }
+.acc-row-d  { display: block; font-size: .76rem; color: var(--acc-faint); line-height: 1.45; margin-top: 1px; }
+
+/* Checkbox variant: a whole-row label, so the generous hit area is the row and
+   not a 16px square. */
+label.acc-row { cursor: pointer; }
+label.acc-row:hover .acc-row-nm { color: var(--acc-ink); }
+.acc-row input[type="checkbox"] {
+    flex: 0 0 auto; width: 17px; height: 17px; margin: 0;
+    accent-color: var(--acc-brand); cursor: pointer;
+}
+
+/* Segmented control. One unit with shared borders, so it reads as a single
+   three-way choice rather than three buttons that happen to be adjacent. */
+.acc-seg { display: flex; flex: 0 0 auto; border-radius: 8px; overflow: hidden; border: 1px solid var(--acc-line); }
+.acc-seg button {
+    font: inherit; font-size: .74rem; font-weight: 600;
+    padding: 6px 13px; cursor: pointer;
+    border: none; background: #fff; color: var(--acc-muted);
+    border-left: 1px solid var(--acc-line);
+}
+.acc-seg button:first-child { border-left: none; }
+.acc-seg button:hover:not(:disabled):not(.on) { background: var(--acc-bg); }
+/* "Off" selected is SLATE, not red. A restrictive role legitimately has most
+   of its 62 rows off, and painting them red made a correct configuration look
+   like a page full of errors — so the eye had nowhere to rest and the genuinely
+   notable states (View, Edit) stopped standing out. Red is kept for things
+   that are actually wrong; see .acc-msg.err. */
+.acc-seg button.on.none { background: #64748B; color: #fff; }
+.acc-seg button.on.view { background: var(--acc-view); color: #fff; }
+.acc-seg button.on.edit { background: var(--acc-edit); color: #fff; }
+.acc-seg button:disabled { cursor: not-allowed; color: #CBD5E1; }
+
+/* ── chips ──────────────────────────────────────────────────────────────── */
+.acc-chip {
+    font-size: .63rem; font-weight: 700; border-radius: 999px;
+    padding: 1px 7px; white-space: nowrap; vertical-align: middle;
+}
+.acc-chip.plan { color: #475569; background: var(--acc-line-soft); border: 1px solid var(--acc-line); }
+.acc-chip.sens { color: var(--acc-view); background: #FFFBEB; border: 1px solid #FDE68A; }
+
+/* ── search ─────────────────────────────────────────────────────────────── */
+.acc-search {
+    width: 100%; border: 1px solid #CBD5E1; border-radius: 10px;
+    padding: 10px 13px; font: inherit; font-size: .9rem; outline: none;
+    margin-bottom: 12px; background: #fff;
+}
+.acc-search:focus { border-color: var(--acc-brand); box-shadow: 0 0 0 3px rgba(20,125,145,.12); }
+
+/* ── sticky action bar ──────────────────────────────────────────────────── */
+/* So Save is reachable after scrolling sixty rows, which is the single most
+   annoying thing about a long settings page. */
+.acc-bar {
+    position: sticky; bottom: 0; z-index: 20;
+    display: flex; align-items: center; gap: 10px; flex-wrap: nowrap;
+    margin-top: 18px; padding: 14px 16px;
+    /* Pad past the phone's home area so the bar is not under the gesture strip. */
+    padding-bottom: calc(14px + env(safe-area-inset-bottom, 0px));
+    background: rgba(255,255,255,.96);
+    border: 1px solid var(--acc-line); border-radius: 12px;
+    box-shadow: 0 -2px 14px rgba(15,23,42,.06);
+}
+/* Shrinkable, so the buttons stay on ONE line. With the summary unshrinkable
+   the bar wrapped and pushed Save onto a row of its own, which is exactly the
+   button you do not want to go looking for. It truncates instead; the message
+   it carries is a hint, not the record. */
+.acc-bar-sum {
+    font-size: .82rem; color: var(--acc-muted);
+    flex: 1 1 auto; min-width: 0;
+    overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.acc-bar .acc-btn, .acc-bar .acc-btn-ghost { flex: 0 0 auto; }
+
+/* Narrow screens: let it wrap after all, with the buttons together on the
+   second line rather than one per line. */
+@media (max-width: 620px) {
+    .acc-bar { flex-wrap: wrap; }
+    .acc-bar-sum { flex: 1 1 100%; white-space: normal; }
+}
+
+/* ── buttons ────────────────────────────────────────────────────────────── */
+.acc-btn, .acc-btn-ghost {
+    font: inherit; font-weight: 600; font-size: .88rem;
+    border-radius: 9px; padding: 10px 18px; cursor: pointer;
+    border: 1px solid transparent;
+}
+.acc-btn { background: var(--acc-brand); color: #fff; }
+.acc-btn:hover { background: var(--acc-brand-dk); }
+.acc-btn:disabled { opacity: .55; cursor: default; }
+.acc-btn-ghost { background: #fff; border-color: #CBD5E1; color: var(--acc-ink-soft); }
+.acc-btn-ghost:hover { background: #F8FAFC; }
+
+/* ── banners ────────────────────────────────────────────────────────────── */
+.acc-banner {
+    border-radius: 12px; padding: 12px 15px; font-size: .84rem;
+    line-height: 1.55; margin-bottom: 14px; border: 1px solid;
+}
+.acc-banner.info { background: #EFF6FF; border-color: #BFDBFE; color: #1E3A8A; }
+.acc-banner.warn { background: #FFFBEB; border-color: #FDE68A; color: #78350F; }
+.acc-banner.ok   { background: #ECFDF5; border-color: #A7F3D0; color: #065F46; }
+
+.acc-muted { color: var(--acc-faint); font-size: .8rem; }
+.acc-msg { font-size: .86rem; }
+.acc-msg.err { color: var(--acc-none); }
+.acc-msg.ok  { color: #047857; }

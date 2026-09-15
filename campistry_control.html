@@ -7,6 +7,7 @@
     <link rel="icon" type="image/png" href="Campistry_logo.png">
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link href="https://fonts.googleapis.com/css2?family=DM+Sans:wght@400;500;600;700&family=Fraunces:wght@600;700&display=swap" rel="stylesheet">
+    <link rel="stylesheet" href="campistry_access_ui.css">
     <style>
         *{box-sizing:border-box;margin:0;padding:0}
         body{font-family:'DM Sans',system-ui,sans-serif;background:#F1F5F9;color:#0F172A;min-height:100vh;padding:28px 18px}
@@ -102,6 +103,10 @@
     var _mode = 'web';
     var _sqlOnlyReason = '';
     var _manualId = '';
+    // Which apps are expanded in the matrix. Collapsed by default — see
+    // matrixHtml. Reset whenever a different camp is opened, so the previous
+    // camp's expansion state doesn't carry over and confuse.
+    var _openApps = {};
 
     function client() {
         return (window.CampistryDB && window.CampistryDB.getClient && window.CampistryDB.getClient()) ||
@@ -398,22 +403,44 @@
             h += '<p class="muted" style="margin-bottom:12px;">Ticked = this camp has it. ' +
                  'Everything ticked is stored as <em>unrestricted</em>, so features added later stay included.</p>';
         }
+        // Collapsed by default, one row per app. Nine rows instead of
+        // sixty-two: the flat grid was complete and unreadable, and you could
+        // not tell an app heading from a section in it. Same treatment as the
+        // owner's screen — see campistry_access_ui.css.
+        h += '<div class="acc-apps">';
         CAPS.APPS.forEach(function (app) {
             var secs = CAPS.forApp(app.key);
-            h += '<div class="app"><div class="app-head">' +
-                 '<span class="app-title">' + esc(app.label) + '</span>' +
-                 '<button class="btn-ghost" data-all="' + esc(app.key) + '" style="padding:2px 8px;font-size:.72rem;">All</button>' +
-                 '<button class="btn-ghost" data-none="' + esc(app.key) + '" style="padding:2px 8px;font-size:.72rem;">None</button>' +
-                 '</div><div class="secs">';
-            secs.forEach(function (cap) {
-                h += '<label class="sec' + (cap.sensitive ? ' sensitive' : '') + '">' +
-                     '<input type="checkbox" data-app="' + esc(app.key) + '" data-sec="' + esc(cap.section) + '"' +
-                     (_draft[app.key][cap.section] ? ' checked' : '') + '>' +
-                     esc(cap.label) + (cap.sensitive ? ' *' : '') + '</label>';
-            });
-            h += '</div></div>';
+            if (!secs.length) return;
+            var open = !!_openApps[app.key];
+            var on = secs.filter(function (c) { return _draft[app.key][c.section]; }).length;
+            h += '<div class="acc-app">' +
+                 '<button class="acc-app-hd" aria-expanded="' + (open ? 'true' : 'false') + '" ' +
+                   'data-appopen="' + esc(app.key) + '">' +
+                   '<span class="acc-caret">▸</span>' +
+                   '<span class="acc-app-nm">' + esc(app.label) + '</span>' +
+                   '<span class="acc-app-ct">' + on + ' of ' + secs.length + '</span>' +
+                 '</button>';
+            if (open) {
+                h += '<div class="acc-app-body">' +
+                     '<div style="display:flex;gap:6px;padding:8px 0 2px;">' +
+                       '<button class="acc-mini" data-all="' + esc(app.key) + '">Tick all</button>' +
+                       '<button class="acc-mini" data-none="' + esc(app.key) + '">Untick all</button>' +
+                     '</div>';
+                secs.forEach(function (cap) {
+                    h += '<label class="acc-row" style="cursor:pointer;">' +
+                         '<input type="checkbox" data-app="' + esc(app.key) + '" data-sec="' + esc(cap.section) + '"' +
+                         (_draft[app.key][cap.section] ? ' checked' : '') + '>' +
+                         '<span class="acc-row-main"><span class="acc-row-nm">' + esc(cap.label) +
+                         (cap.sensitive ? ' <span class="acc-chip sens">SENSITIVE</span>' : '') + '</span>' +
+                         (cap.desc ? '<span class="acc-row-d">' + esc(cap.desc) + '</span>' : '') +
+                         '</span></label>';
+                });
+                h += '</div>';
+            }
+            h += '</div>';
         });
-        h += '<p class="muted">* sensitive section. Unticking every section of an app means the camp did not buy that app.</p>' +
+        h += '</div>';
+        h += '<p class="muted" style="margin-top:10px;">Unticking every section of an app means the camp did not buy that app.</p>' +
              '<div class="actions">' +
              (_mode === 'web' ? '<button class="btn" id="save">Save entitlements</button>' : '') +
              '<button class="' + (_mode === 'web' ? 'btn-ghost' : 'btn') + '" id="showSql">Get the SQL</button>' +
@@ -432,8 +459,23 @@
         box.addEventListener('click', function (e) { e.stopPropagation(); });
         box.querySelectorAll('input[type=checkbox]').forEach(function (cb) {
             cb.addEventListener('change', function () {
-                _draft[cb.getAttribute('data-app')][cb.getAttribute('data-sec')] = cb.checked;
+                var app = cb.getAttribute('data-app');
+                _draft[app][cb.getAttribute('data-sec')] = cb.checked;
                 updatePreview();
+                // The app header carries an "N of M" count now, so a checkbox
+                // has to refresh it — otherwise the summary silently disagrees
+                // with the boxes underneath it. Updated in place rather than by
+                // re-rendering, which would collapse the app the user is
+                // working in and lose their scroll position.
+                updateAppCount(app);
+            });
+        });
+        box.querySelectorAll('[data-appopen]').forEach(function (b) {
+            b.addEventListener('click', function (e) {
+                e.stopPropagation();
+                var k = b.getAttribute('data-appopen');
+                _openApps[k] = !_openApps[k];
+                render();
             });
         });
         box.querySelectorAll('[data-all]').forEach(function (b) {
@@ -466,6 +508,15 @@
         render();
     }
 
+    /** Refresh one app header's "N of M" without re-rendering the matrix. */
+    function updateAppCount(appKey) {
+        var hd = document.querySelector('[data-appopen="' + appKey + '"] .acc-app-ct');
+        if (!hd) return;
+        var secs = CAPS.forApp(appKey);
+        var on = secs.filter(function (c) { return _draft[appKey][c.section]; }).length;
+        hd.textContent = on + ' of ' + secs.length;
+    }
+
     function updatePreview() {
         var p = document.getElementById('preview');
         if (p) p.textContent = 'Will save: ' + summarize(entFrom(_draft));
@@ -476,6 +527,7 @@
         var c = campById(id);
         if (!c) return;
         _openId = id;
+        _openApps = {};
         _draft = draftFrom(c.entitlements);
         render();
     }

@@ -268,11 +268,72 @@
             grants: { 'go.*': 'edit', 'me.campers': 'view', 'notes.notes': 'edit' }
         },
         {
+            key: 'bunk-counselor', label: 'Bunk Counselor',
+            desc: 'Runs a bunk: roll call, absences, pickups. Sees the schedule, no money.',
+            grants: {
+                'live.*': 'edit', 'notes.notes': 'edit',
+                'flow.schedule': 'view', 'flow.camper-locator': 'view',
+                'me.campers': 'view'
+            }
+        },
+        {
+            key: 'gatehouse', label: 'Gatehouse / Security',
+            desc: 'The gate: who is signed in, who is leaving and with whom.',
+            grants: {
+                'guard.*': 'edit',
+                'live.early-pickup': 'edit', 'live.camper-locator': 'view',
+                'me.campers': 'view'
+            }
+        },
+        {
             key: 'read-only', label: 'Read-only',
             desc: 'Can look at everything they can open, change nothing.',
             grants: { '*': 'view' }
         }
     ];
+
+    // ── which roles each preset is a sensible starting point for ─────────────
+    //
+    // There are eleven presets and four job titles that can have a default, and
+    // showing all eleven every time is most of why the screen felt cramped.
+    // Camps do not need to weigh "Nurse" when they are configuring schedulers.
+    //
+    // This is a RECOMMENDATION, not a restriction: the screen shows these first
+    // and puts the rest behind "show all". Any preset can still be applied to
+    // any role — a camp whose bookkeeper happens to hold the scheduler role
+    // should not be argued with.
+    //
+    // 'full' is excluded everywhere on purpose: "no limits" is offered as its
+    // own card ahead of the presets, not as one of them.
+    C.ROLE_PRESETS = {
+        manager:   ['office', 'bookkeeper', 'division-head', 'nurse', 'canteen',
+                    'bus-coordinator', 'gatehouse'],
+        scheduler: ['head-counselor', 'division-head'],
+        counselor: ['bunk-counselor', 'gatehouse'],
+        viewer:    ['read-only']
+    };
+
+    /**
+     * Presets ordered for one role: the ones that make sense for it first, then
+     * everything else. Each entry is { preset, recommended }.
+     *
+     * An unknown role (or none) gets every preset, unrecommended — better a
+     * plain list than a confident wrong suggestion.
+     */
+    C.presetsForRole = function (role) {
+        var rec = (role && C.ROLE_PRESETS[role]) || [];
+        var out = [];
+        rec.forEach(function (k) {
+            var p = C.preset(k);
+            if (p) out.push({ preset: p, recommended: true });
+        });
+        C.PRESETS.forEach(function (p) {
+            if (p.key === 'full') return;                 // offered as its own card
+            if (rec.indexOf(p.key) >= 0) return;
+            out.push({ preset: p, recommended: false });
+        });
+        return out;
+    };
 
     C.preset = function (key) {
         return C.PRESETS.filter(function (p) { return p.key === key; })[0] || null;

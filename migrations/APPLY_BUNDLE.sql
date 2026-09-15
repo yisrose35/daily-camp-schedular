@@ -2299,6 +2299,68 @@ INSERT INTO access_preset_grants (preset, cap_key, level, explicit) VALUES
     ('bookkeeper', 'snacks.settings', 'none', false),
     ('bookkeeper', 'snacks.shop', 'none', false),
     ('bookkeeper', 'snacks.transactions', 'view', true),
+    ('bunk-counselor', 'flow.camper-locator', 'view', true),
+    ('bunk-counselor', 'flow.daily-adjustments', 'none', false),
+    ('bunk-counselor', 'flow.facilities', 'none', false),
+    ('bunk-counselor', 'flow.leagues', 'none', false),
+    ('bunk-counselor', 'flow.master-scheduler', 'none', false),
+    ('bunk-counselor', 'flow.print', 'none', false),
+    ('bunk-counselor', 'flow.report', 'none', false),
+    ('bunk-counselor', 'flow.rules', 'none', false),
+    ('bunk-counselor', 'flow.schedule', 'view', true),
+    ('bunk-counselor', 'flow.setup', 'none', false),
+    ('bunk-counselor', 'flow.specialty-leagues', 'none', false),
+    ('bunk-counselor', 'flow.zones', 'none', false),
+    ('bunk-counselor', 'go.addresses', 'none', false),
+    ('bunk-counselor', 'go.fleet', 'none', false),
+    ('bunk-counselor', 'go.luggage', 'none', false),
+    ('bunk-counselor', 'go.routes', 'none', false),
+    ('bunk-counselor', 'go.setup', 'none', false),
+    ('bunk-counselor', 'go.staff', 'none', false),
+    ('bunk-counselor', 'guard.guard', 'none', false),
+    ('bunk-counselor', 'health.allergies', 'none', false),
+    ('bunk-counselor', 'health.campers', 'none', false),
+    ('bunk-counselor', 'health.dashboard', 'none', false),
+    ('bunk-counselor', 'health.doctor', 'none', false),
+    ('bunk-counselor', 'health.intake', 'none', false),
+    ('bunk-counselor', 'health.medications', 'none', false),
+    ('bunk-counselor', 'health.nighttime', 'none', false),
+    ('bunk-counselor', 'health.reports', 'none', false),
+    ('bunk-counselor', 'health.sick-visits', 'none', false),
+    ('bunk-counselor', 'link.dashboard', 'none', false),
+    ('bunk-counselor', 'link.forms', 'none', false),
+    ('bunk-counselor', 'link.lists', 'none', false),
+    ('bunk-counselor', 'link.messages', 'none', false),
+    ('bunk-counselor', 'link.parents', 'none', false),
+    ('bunk-counselor', 'link.photos', 'none', false),
+    ('bunk-counselor', 'link.tips', 'none', false),
+    ('bunk-counselor', 'live.absences', 'edit', false),
+    ('bunk-counselor', 'live.camper-locator', 'view', false),
+    ('bunk-counselor', 'live.camper-mail', 'edit', false),
+    ('bunk-counselor', 'live.changes', 'edit', false),
+    ('bunk-counselor', 'live.early-pickup', 'edit', false),
+    ('bunk-counselor', 'live.messages', 'edit', false),
+    ('bunk-counselor', 'live.reports', 'view', false),
+    ('bunk-counselor', 'live.roll-call', 'edit', false),
+    ('bunk-counselor', 'me.analytics', 'none', false),
+    ('bunk-counselor', 'me.billing', 'none', false),
+    ('bunk-counselor', 'me.bunkbuilder', 'none', false),
+    ('bunk-counselor', 'me.campers', 'view', true),
+    ('bunk-counselor', 'me.enrollment', 'none', false),
+    ('bunk-counselor', 'me.finance', 'none', false),
+    ('bunk-counselor', 'me.payroll', 'none', false),
+    ('bunk-counselor', 'me.printsheets', 'none', false),
+    ('bunk-counselor', 'me.reports', 'none', false),
+    ('bunk-counselor', 'me.settings', 'none', false),
+    ('bunk-counselor', 'me.structure', 'none', false),
+    ('bunk-counselor', 'notes.notes', 'edit', true),
+    ('bunk-counselor', 'snacks.accounts', 'none', false),
+    ('bunk-counselor', 'snacks.dashboard', 'none', false),
+    ('bunk-counselor', 'snacks.menu', 'none', false),
+    ('bunk-counselor', 'snacks.pos', 'none', false),
+    ('bunk-counselor', 'snacks.settings', 'none', false),
+    ('bunk-counselor', 'snacks.shop', 'none', false),
+    ('bunk-counselor', 'snacks.transactions', 'none', false),
     ('bus-coordinator', 'flow.camper-locator', 'none', false),
     ('bus-coordinator', 'flow.daily-adjustments', 'none', false),
     ('bus-coordinator', 'flow.facilities', 'none', false),
@@ -2547,6 +2609,68 @@ INSERT INTO access_preset_grants (preset, cap_key, level, explicit) VALUES
     ('full', 'snacks.settings', 'edit', false),
     ('full', 'snacks.shop', 'edit', false),
     ('full', 'snacks.transactions', 'edit', false),
+    ('gatehouse', 'flow.camper-locator', 'none', false),
+    ('gatehouse', 'flow.daily-adjustments', 'none', false),
+    ('gatehouse', 'flow.facilities', 'none', false),
+    ('gatehouse', 'flow.leagues', 'none', false),
+    ('gatehouse', 'flow.master-scheduler', 'none', false),
+    ('gatehouse', 'flow.print', 'none', false),
+    ('gatehouse', 'flow.report', 'none', false),
+    ('gatehouse', 'flow.rules', 'none', false),
+    ('gatehouse', 'flow.schedule', 'none', false),
+    ('gatehouse', 'flow.setup', 'none', false),
+    ('gatehouse', 'flow.specialty-leagues', 'none', false),
+    ('gatehouse', 'flow.zones', 'none', false),
+    ('gatehouse', 'go.addresses', 'none', false),
+    ('gatehouse', 'go.fleet', 'none', false),
+    ('gatehouse', 'go.luggage', 'none', false),
+    ('gatehouse', 'go.routes', 'none', false),
+    ('gatehouse', 'go.setup', 'none', false),
+    ('gatehouse', 'go.staff', 'none', false),
+    ('gatehouse', 'guard.guard', 'edit', false),
+    ('gatehouse', 'health.allergies', 'none', false),
+    ('gatehouse', 'health.campers', 'none', false),
+    ('gatehouse', 'health.dashboard', 'none', false),
+    ('gatehouse', 'health.doctor', 'none', false),
+    ('gatehouse', 'health.intake', 'none', false),
+    ('gatehouse', 'health.medications', 'none', false),
+    ('gatehouse', 'health.nighttime', 'none', false),
+    ('gatehouse', 'health.reports', 'none', false),
+    ('gatehouse', 'health.sick-visits', 'none', false),
+    ('gatehouse', 'link.dashboard', 'none', false),
+    ('gatehouse', 'link.forms', 'none', false),
+    ('gatehouse', 'link.lists', 'none', false),
+    ('gatehouse', 'link.messages', 'none', false),
+    ('gatehouse', 'link.parents', 'none', false),
+    ('gatehouse', 'link.photos', 'none', false),
+    ('gatehouse', 'link.tips', 'none', false),
+    ('gatehouse', 'live.absences', 'none', false),
+    ('gatehouse', 'live.camper-locator', 'view', true),
+    ('gatehouse', 'live.camper-mail', 'none', false),
+    ('gatehouse', 'live.changes', 'none', false),
+    ('gatehouse', 'live.early-pickup', 'edit', true),
+    ('gatehouse', 'live.messages', 'none', false),
+    ('gatehouse', 'live.reports', 'none', false),
+    ('gatehouse', 'live.roll-call', 'none', false),
+    ('gatehouse', 'me.analytics', 'none', false),
+    ('gatehouse', 'me.billing', 'none', false),
+    ('gatehouse', 'me.bunkbuilder', 'none', false),
+    ('gatehouse', 'me.campers', 'view', true),
+    ('gatehouse', 'me.enrollment', 'none', false),
+    ('gatehouse', 'me.finance', 'none', false),
+    ('gatehouse', 'me.payroll', 'none', false),
+    ('gatehouse', 'me.printsheets', 'none', false),
+    ('gatehouse', 'me.reports', 'none', false),
+    ('gatehouse', 'me.settings', 'none', false),
+    ('gatehouse', 'me.structure', 'none', false),
+    ('gatehouse', 'notes.notes', 'none', false),
+    ('gatehouse', 'snacks.accounts', 'none', false),
+    ('gatehouse', 'snacks.dashboard', 'none', false),
+    ('gatehouse', 'snacks.menu', 'none', false),
+    ('gatehouse', 'snacks.pos', 'none', false),
+    ('gatehouse', 'snacks.settings', 'none', false),
+    ('gatehouse', 'snacks.shop', 'none', false),
+    ('gatehouse', 'snacks.transactions', 'none', false),
     ('head-counselor', 'flow.camper-locator', 'edit', false),
     ('head-counselor', 'flow.daily-adjustments', 'edit', false),
     ('head-counselor', 'flow.facilities', 'edit', false),
@@ -2798,7 +2922,7 @@ INSERT INTO access_preset_grants (preset, cap_key, level, explicit) VALUES
 
 -- ─── Verification ──────────────────────────────────────────────────────────
 --   select count(*) from access_capabilities;    -- expect 62
---   select count(*) from access_preset_grants;   -- expect 558
+--   select count(*) from access_preset_grants;   -- expect 682
 --
 -- Resolved levels for the two capabilities phase 3 gates, straight from the
 -- JavaScript resolver. After applying 160, user_section_level() must agree with
@@ -2806,10 +2930,12 @@ INSERT INTO access_preset_grants (preset, cap_key, level, explicit) VALUES
 --   me.payroll  role=owner    (no preset)        -> edit
 --   me.payroll  role=admin    (no preset)        -> edit
 --   me.payroll  role=manager  preset=bookkeeper       -> edit
+--   me.payroll  role=manager  preset=bunk-counselor   -> none
 --   me.payroll  role=manager  preset=bus-coordinator  -> none
 --   me.payroll  role=manager  preset=canteen          -> none
 --   me.payroll  role=manager  preset=division-head    -> none
 --   me.payroll  role=manager  preset=full             -> edit
+--   me.payroll  role=manager  preset=gatehouse        -> none
 --   me.payroll  role=manager  preset=head-counselor   -> none
 --   me.payroll  role=manager  preset=nurse            -> none
 --   me.payroll  role=manager  preset=office           -> none
@@ -2817,10 +2943,12 @@ INSERT INTO access_preset_grants (preset, cap_key, level, explicit) VALUES
 --   me.finance  role=owner    (no preset)        -> view
 --   me.finance  role=admin    (no preset)        -> view
 --   me.finance  role=manager  preset=bookkeeper       -> view
+--   me.finance  role=manager  preset=bunk-counselor   -> none
 --   me.finance  role=manager  preset=bus-coordinator  -> none
 --   me.finance  role=manager  preset=canteen          -> none
 --   me.finance  role=manager  preset=division-head    -> none
 --   me.finance  role=manager  preset=full             -> view
+--   me.finance  role=manager  preset=gatehouse        -> none
 --   me.finance  role=manager  preset=head-counselor   -> none
 --   me.finance  role=manager  preset=nurse            -> none
 --   me.finance  role=manager  preset=office           -> none
