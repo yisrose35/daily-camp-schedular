@@ -1216,6 +1216,19 @@ function _resolveFamilyKey(camperName, item){
     });
     return match;
 }
+// Membership ONLY — no fuzzy fallback. Anything that puts money on a family's
+// ledger should use this: _resolveFamilyKey's _famShouldLink fallback links on
+// a shared parent email alone, which is right for SUGGESTING that two campers
+// are one household but wrong for billing, where it silently moves a whole
+// session's tuition onto a family that never enrolled that camper.
+function _resolveFamilyKeyExact(camperName){
+    var match = null;
+    Object.keys(families).forEach(function(fk){
+        if(match) return;
+        if((families[fk].camperIds || []).indexOf(camperName) >= 0) match = fk;
+    });
+    return match;
+}
 // How many of the four fields match between two records (empty fields
 // on either side never count).
 function _famMatchCount(a, b){
@@ -11190,13 +11203,29 @@ function buildFamilyLedgers(){
     // yet.
     Object.entries(enrollments).forEach(function([eid,e]){
         if(e.status!=='enrolled'&&e.status!=='accepted') return;
-        var fk=_resolveFamilyKey(e.camperName,_famItemRaw(e.camperName,e.street,e.city,e.state,e.zip,e.parentName,e.parentEmail));
+        // An ENROLLED camper is already a real member of a family —
+        // enrollCamper() put them in families[fk].camperIds — so require that
+        // exact membership and never bill them via a fuzzy match.
+        // _resolveFamilyKey falls back to _famShouldLink, which links on a
+        // shared parent email ALONE; that was attaching unrelated enrollments
+        // (any camper sharing an email, e.g. test records) to a real family's
+        // ledger, inflating their balance by a whole session's tuition each.
+        // Fuzzy matching stays for 'accepted' applicants, who legitimately
+        // have no camperIds entry yet and need to land on a sibling's ledger.
+        var fk=_resolveFamilyKeyExact(e.camperName);
+        if(!fk&&e.status==='accepted'){
+            fk=_resolveFamilyKey(e.camperName,_famItemRaw(e.camperName,e.street,e.city,e.state,e.zip,e.parentName,e.parentEmail));
+        }
         if(!fk){
-            if(e.status!=='accepted'||!e.parentName) return; // nothing to attribute this charge to
+            // No family owns this camper. Show the charge on its own ephemeral
+            // ledger rather than dropping it (revenue would vanish from
+            // Billing) or guessing at a family (the wrong parent gets billed).
+            if(!e.parentName&&!e.camperName) return;
             var lastName=(e.camperName||'').split(' ').pop();
             fk='pending_'+lastName.toLowerCase().replace(/[^a-z0-9]/g,'')+'_'+eid;
             if(!ledgers[fk]){
-                var parents=[{name:e.parentName,phone:e.parentPhone||'',email:e.parentEmail||'',relation:e.parentRelation||'Parent'}];
+                var parents=[];
+                if(e.parentName)parents.push({name:e.parentName,phone:e.parentPhone||'',email:e.parentEmail||'',relation:e.parentRelation||'Parent'});
                 if(e.parent2Name)parents.push({name:e.parent2Name,phone:e.parent2Phone||'',email:e.parent2Email||'',relation:e.parent2Relation||'Parent'});
                 var synthFamily={
                     name:lastName+' Family',
@@ -11231,11 +11260,20 @@ function buildFamilyLedgers(){
         var _liveTuition=(sessObj&&sessObj.tuition!=null)?Number(sessObj.tuition)||0:0;
         var _snapTuition=Number(e.sessionTuition)||0;
         var tuition=_liveTuition>0?_liveTuition:_snapTuition;
+        // Discount = flat amount PLUS percentage, matching get_my_balance
+        // (v_disc := amt + ROUND(tuition*pct/100)). This used to let pct
+        // REPLACE amt, so a discount carrying both silently lost the flat part.
         var discAmt=e.discount?Number(e.discount.amt)||0:0;
-        if(e.discount&&e.discount.pct>0) discAmt=Math.round(tuition*e.discount.pct/100);
+        if(e.discount&&e.discount.pct>0) discAmt+=Math.round(tuition*e.discount.pct/100);
+        if(discAmt>tuition) discAmt=tuition; // never discount past free
         var net=tuition-discAmt;
-        ledgers[fk].entries.push({type:'charge',category:'Tuition',desc:esc(e.camperName)+' — '+esc(e.session||''),amount:net,date:e.enrolledDate||e.appliedDate||'',ref:eid});
-        ledgers[fk].totalCharges+=net;
+        // Bill the GROSS tuition and let the discount below be the single
+        // credit that reduces it. Previously the net (already discount-free)
+        // went into totalCharges AND the discount went into totalCredits, so
+        // balance = charges - payments - credits subtracted every discount
+        // TWICE — understating what the family owed by the discount amount.
+        ledgers[fk].entries.push({type:'charge',category:'Tuition',desc:esc(e.camperName)+' — '+esc(e.session||''),amount:tuition,date:e.enrolledDate||e.appliedDate||'',ref:eid});
+        ledgers[fk].totalCharges+=tuition;
         if(discAmt>0){
             ledgers[fk].entries.push({type:'credit',category:'Discount',desc:(e.discount.pct?e.discount.pct+'% ':'')+'discount for '+esc(e.camperName),amount:discAmt,date:e.enrolledDate||e.appliedDate||'',ref:eid+'_disc'});
             ledgers[fk].totalCredits+=discAmt;
