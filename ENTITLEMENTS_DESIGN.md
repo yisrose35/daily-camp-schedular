@@ -3,8 +3,8 @@
 Design for: *"a camp buys only part of the program — give them Campistry Me, but
 only the roster and bunk structure, nothing else."*
 
-Status: **Phase 1 and Phase 2A shipped.** 2B/2C and Phase 3 still to do —
-see §6. Decisions taken are at the end.
+Status: **Phases 1, 2A and 2B shipped.** 2C is a deliberate non-goal (§6);
+Phase 3 still to do. Decisions taken are at the end.
 
 ---
 
@@ -238,16 +238,52 @@ Service role still bypasses all of it, which is load-bearing and correct:
 canteen-auto-reload, the payment webhooks and the deposit inbox must keep
 working on a camp's data regardless of what that camp bought.
 
-### Phase 2B — move the two sensitive, separable branches out of `campistryMe`
+### Phase 2B — the two sensitive branches get their own keys — **SHIPPED** (158)
 
-`payroll` and `finance` are the branches actually worth withholding, and they
-are the two that are genuinely separable. Move them to their own keys
-(`campistryMePayroll`, `campistryMeFinance`), then Phase 2A's per-key rule
-covers them too.
+`payroll` and `finance` are the branches actually worth withholding. They now
+live in `campistryMePayroll` and `campistryMeFinance`, so Phase 2A's per-key
+rule covers them.
 
-This is real work — a data migration plus rewiring `campistry_me.js`'s load and
-save — but it is bounded, and it removes the whole scrub-and-preserve mechanism
-that has now produced **two** separate silent data-loss bugs.
+**One correction to the plan above, found by mapping the code.** "Move finance"
+turned out to mean "move most of finance". `finance.payments` is the family
+payment ledger, and it is written by **seven** edge functions doing
+read-modify-write on `campistryMe` (`cardknox-webhook`,
+`payments-hosted-complete`, `payments-charge-nonce`, `charge-saved-card`,
+`charge-due-installments`, `stripe-webhook`, `payments-checkout`) and read by
+`get_my_balance` for the parent portal. Every one of those is deployed by
+pasting it into the Dashboard one at a time, so moving the path would open a
+window where some processors append to the old location and some to the new —
+silently losing recorded payments.
+
+So the ledger stays in `campistryMe`, and that is the **right** filing, not a
+compromise. `finPayments` is consumed by Billing (record payment, refunds,
+family detail), barely by Finance; it is Billing's data that happened to be
+stored under `finance`. Nothing server-side touches `payroll` or
+`finance.{staff,expenses,budget,integrations}` — verified by grep across
+`supabase/functions` and `migrations` — so those moved with **zero** function
+redeploys.
+
+**This also fixed a live data-loss bug.** Scrubbing `me.finance` used to delete
+`campistryMe.finance` wholesale, ledger included. A user with `finance:none` and
+`billing:edit` therefore loaded an *empty* ledger, and recording one payment
+wrote it back over every payment the camp had ever taken. Splitting the two
+halves apart means the ledger is no longer part of what a finance restriction
+scrubs — there is nothing to reconstruct and nothing to get wrong.
+
+Two more things worth carrying into Phase 3:
+
+- **Moving data out of `campistryMe` can silently *grant* access.** A counselor
+  cannot read `campistryMe`, so payroll and finance were protected by being
+  buried in a key they were denied. The SELECT policy allows a counselor every
+  key it does not name, so two brand-new keys are readable by default — the move
+  would have handed every counselor in every camp the payroll file, complete
+  with pay rates and home addresses. 158 adds both keys to the counselor
+  exclusion, and the bundle asserts it. **Any future key split must do this.**
+- **Order of operations: deploy the site first, then run the SQL.**
+  `campistry_me.js` reads the new key and falls back to the legacy branch, so it
+  is correct before and after. The legacy branches are deliberately left in
+  place as the rollback copy; 158 ends with the statement that drops them, to be
+  run later once you're satisfied.
 
 ### Phase 2C — the rest of Me stays a UI boundary, on purpose
 

@@ -553,6 +553,15 @@
                 delete lite.campistryMe.finance;
                 delete lite.campistryMe.bunkAssignments;
             }
+            // Payroll and Finance are their own keys since migration 158, so
+            // they are no longer covered by the campistryMe strip above. Both
+            // grow with headcount (timesheets and pay runs per staff member per
+            // period), which is exactly what this snapshot must not carry —
+            // they belong to the same "unbounded with camp size" class as the
+            // roster. The full state stays in IDB; this is only the fast-path
+            // fallback for the next page load.
+            delete lite.campistryMePayroll;
+            delete lite.campistryMeFinance;
 
             try {
                 const json = JSON.stringify(lite);

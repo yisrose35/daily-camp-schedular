@@ -316,7 +316,23 @@ function loadData(){
         if(!Array.isArray(bunkGenConfig.schoolGrades)||!bunkGenConfig.schoolGrades.length)bunkGenConfig.schoolGrades=_defaultBunkGenConfig().schoolGrades;
         printSheets=Array.isArray(me.printSheets)?me.printSheets:[];
         savedReports=Array.isArray(me.savedReports)?me.savedReports:[];
-        var pr=me.payroll||{};
+        // ── Payroll and Finance live in their OWN camp_state_kv keys ──────────
+        // (migration 158). They used to be branches of the campistryMe blob,
+        // where the database had no way to reach them: an entitlement can only
+        // be enforced at the granularity the data is STORED at, so "this camp
+        // didn't buy Payroll" was a browser-side suggestion and nothing more.
+        // Their own keys make it a real RLS rule — and keep counselors out,
+        // which being buried inside campistryMe used to do by accident.
+        //
+        // The `me.payroll` fallback is the migration bridge, and it is load
+        // bearing in BOTH directions: this code ships before the SQL is run, so
+        // until then the data is still only in the blob; and a camp that has
+        // never saved since the move has no new-key row either. Prefer the new
+        // key when it holds anything, fall back to the legacy branch otherwise.
+        // Once the legacy branches are dropped (the last statement in 158) the
+        // fallback simply stops finding anything, which is the intended end
+        // state — it is not dead code until then.
+        var pr=_preferKey(s.campistryMePayroll,me.payroll);
         payroll={
             staff:Array.isArray(pr.staff)?pr.staff:[],
             timesheets:Array.isArray(pr.timesheets)?pr.timesheets:[],
@@ -332,9 +348,28 @@ function loadData(){
         payroll.staff.forEach(function(s){if(s&&!s.id){s.id=payroll.nextStaffId++}});
         // Ensure promoCodes live inside enrollSettings
         if(me.promoCodes&&!enrollSettings.promoCodes)enrollSettings.promoCodes=me.promoCodes;
-        // Analytics & Finance
-        var fin=me.finance||{};
-        finStaff=fin.staff||[];finExpenses=fin.expenses||[];finPayments=fin.payments||[];
+        // Analytics & Finance — see the note on payroll above. Finance splits in
+        // TWO here, and the split is the point:
+        //
+        //   campistryMeFinance  — staff costs, expenses, budget, integrations.
+        //                         Finance's own data, genuinely withholdable.
+        //   campistryMe.finance.payments — the family payment LEDGER. Stays put.
+        //
+        // payments does not move because SEVEN edge functions append to
+        // me.finance.payments by read-modify-write (the card processors and the
+        // installment runner) and get_my_balance reads it for the parent portal.
+        // Each of those is deployed by hand, one paste at a time, so moving the
+        // path would open a window where some processors write to the old
+        // location and some to the new — losing recorded payments.
+        //
+        // It is also simply filed correctly this way: finPayments is consumed by
+        // BILLING (record payment, refunds, family detail), barely by Finance.
+        // Keeping it in campistryMe is what lets the two halves stop fighting —
+        // it is the storage split that removes the billing-vs-finance merge
+        // guard this function used to need.
+        var fin=_preferKey(s.campistryMeFinance,me.finance);
+        finStaff=fin.staff||[];finExpenses=fin.expenses||[];
+        finPayments=(me.finance&&me.finance.payments)||fin.payments||[];
         finBudget=fin.budget||{revenue:0,payroll:0,expenses:0};finIntegrations=fin.integrations||{};
         // Seed from the new shared field, but also from the two legacy
         // counters (nextCamperId/nextStaffId) that older saves may still
@@ -475,26 +510,33 @@ function save(){
         }
         var _savedFamilies=_keep('billing',families,'families');
         var _savedPayments=_keep('billing',payments,'payments');
-        var _savedPayroll=_keep('payroll',payroll,'payroll');
-        // finance needs its own rule: Billing WRITES finance.payments, so a user
-        // with billing:edit + finance:none legitimately has new payments to save
-        // while staff/expenses/budget were scrubbed. Taking the cached object
-        // wholesale would drop the payment; taking the built one wholesale wiped
-        // staff/expenses/budget. Merge per sub-branch instead.
-        var _builtFinance={staff:finStaff,expenses:finExpenses,payments:finPayments,budget:finBudget,integrations:finIntegrations};
-        var _savedFinance=_builtFinance;
-        if(_secRestricted('finance')){
-            var _cf=(_cachedMe.finance&&typeof _cachedMe.finance==='object')?_cachedMe.finance:{};
-            _savedFinance={
-                // Owned by Finance, invisible to this user -> keep what's stored.
-                staff:_cf.staff!==undefined?_cf.staff:finStaff,
-                expenses:_cf.expenses!==undefined?_cf.expenses:finExpenses,
-                budget:_cf.budget!==undefined?_cf.budget:finBudget,
-                integrations:_cf.integrations!==undefined?_cf.integrations:finIntegrations,
-                // Written by Billing, which this user may well have open.
-                payments:_secRestricted('billing')?(_cf.payments!==undefined?_cf.payments:finPayments):finPayments
-            };
-        }
+        // ── Payroll and Finance are their own keys now (migration 158) ────────
+        // They used to be branches of this blob, and the merge guard that lived
+        // here was the second data-loss bug they caused: Billing writes
+        // finance.payments, so a user with billing:edit + finance:none had
+        // legitimate new payments to save while staff/expenses/budget had been
+        // scrubbed out from under them. Taking the cached finance object
+        // wholesale dropped the payment; taking the built one wholesale wiped
+        // the budget. It needed a hand-written per-sub-branch merge to be
+        // correct, and a hand-written merge is only ever correct until the next
+        // sub-branch is added.
+        //
+        // Separate keys make that impossible rather than guarded: the ledger
+        // stays in campistryMe where Billing and the seven payment edge
+        // functions expect it, and Finance's own data is in a key Billing never
+        // writes. There is nothing left to merge.
+        //
+        // What replaces the guard is simpler and stronger — a restricted user
+        // does not write the key AT ALL (see the save calls below). Not "write
+        // a carefully reconstructed value", just: don't write. A branch you
+        // cannot see is a branch you cannot blank.
+        var _builtFinance={staff:finStaff,expenses:finExpenses,budget:finBudget,integrations:finIntegrations};
+        g.campistryMePayroll=_secRestricted('payroll')
+            ? _preferKey(g.campistryMePayroll,(_cachedMe.payroll||{}))
+            : payroll;
+        g.campistryMeFinance=_secRestricted('finance')
+            ? _preferKey(g.campistryMeFinance,((_cachedMe.finance&&typeof _cachedMe.finance==='object')?(function(){var c=Object.assign({},_cachedMe.finance);delete c.payments;return c})():{}))
+            : _builtFinance;
         g.campistryMe=Object.assign({},(g.campistryMe&&typeof g.campistryMe==='object')?g.campistryMe:{},{
             families:_savedFamilies,
             payments:_savedPayments,
@@ -521,8 +563,27 @@ function save(){
             savedReports:savedReports,
             setupChecklistDismissed:_setupChecklistDismissed,
             promoCodes:enrollSettings.promoCodes||(g.campistryMe?.promoCodes)||{},
-            payroll:_savedPayroll,
-            finance:_savedFinance
+            // 'payroll' is deliberately NOT written here any more — it lives in
+            // campistryMePayroll. The Object.assign spread above leaves whatever
+            // legacy branch is already in the blob exactly as it is, on purpose:
+            // that untouched copy is the rollback. Revert the site and the old
+            // code finds its data right where it left it. It goes stale (the new
+            // key is authoritative, and _preferKey always prefers it), and the
+            // last statement in migration 158 drops it once you're satisfied.
+            //
+            // 'finance' keeps ONLY the ledger. Same rollback reasoning: merge
+            // onto the existing branch rather than replacing it, so the legacy
+            // staff/expenses/budget stay put while payments — which never moved,
+            // because seven payment edge functions and get_my_balance read it
+            // here — is written from memory as it always was.
+            //
+            // finPayments is now always authoritative, which it was not before:
+            // scrubbing 'me.finance' used to delete this whole branch, so a user
+            // with finance:none and billing:edit loaded an EMPTY ledger and
+            // recording one payment wrote it back over the lot. The ledger is
+            // no longer part of what a finance restriction scrubs, so there is
+            // nothing to reconstruct and nothing to get wrong.
+            finance:Object.assign({},(_cachedMe.finance&&typeof _cachedMe.finance==='object')?_cachedMe.finance:{},{payments:finPayments})
         });
         g.updated_at=new Date().toISOString();
 
@@ -537,6 +598,19 @@ function save(){
             window.saveGlobalSettings('campStructure',structure);
             window.saveGlobalSettings('app1',g.app1);
             window.saveGlobalSettings('campistryMe',g.campistryMe);
+            // The two keys lifted out of campistryMe (migration 158). A user
+            // restricted out of the section does NOT write its key at all —
+            // that is the whole structural win of the split. Previously the
+            // only thing standing between a restricted user and a wiped payroll
+            // file was a merge guard reconstructing the branch correctly on
+            // every save; now the write simply doesn't happen, so there is no
+            // reconstruction to get wrong and no new sub-branch to forget.
+            //
+            // Skipping the write is safe because the key is never partially
+            // ours: RLS and the scrub both work at key granularity now, so a
+            // user who may write it has all of it, and one who may not has none.
+            if(!_secRestricted('payroll'))window.saveGlobalSettings('campistryMePayroll',g.campistryMePayroll);
+            if(!_secRestricted('finance'))window.saveGlobalSettings('campistryMeFinance',g.campistryMeFinance);
             // Force-flush so a navigation immediately after import doesn't
             // race the debounced batch sync.
             if(typeof window.forceSyncToCloud==='function'){
@@ -1181,6 +1255,20 @@ function _secRestricted(section){
         var S=window.CampistrySections;
         return !!(S&&S.level&&S.level(section)==='none');
     }catch(_){ return false; }
+}
+// Migration bridge for the branches that moved out of the campistryMe blob into
+// their own camp_state_kv keys (migration 158: payroll, finance).
+//
+// Takes the new key when it actually holds something, the legacy branch
+// otherwise. "Holds something" is deliberately stricter than truthiness: the
+// key can legitimately exist as {} — integration_hooks hydrates every row the
+// camp has, and a restricted user gets the branch scrubbed to nothing — and an
+// empty new key must NOT win over a populated legacy branch, or the first load
+// after the move would show an empty Payroll page and the first save would
+// write that emptiness back.
+function _preferKey(fresh,legacy){
+    if(fresh&&typeof fresh==='object'&&Object.keys(fresh).length)return fresh;
+    return (legacy&&typeof legacy==='object')?legacy:{};
 }
 
 // ── Payment methods ──────────────────────────────────────────────

@@ -520,24 +520,33 @@
     // The map below is the only place that knows which storage branch belongs
     // to which capability. Anything not listed is simply not scrubbed.
 
+    // A path of TWO segments is a branch inside an app blob, ['key','branch'].
+    // A path of ONE segment is a whole camp_state_kv key, ['key'] — used by the
+    // sections whose data has been lifted out of a shared blob into its own key
+    // so the DATABASE can gate it too (migration 158). Scrubbing a whole key is
+    // the same operation one level up, so both shapes go through one code path.
     var BRANCHES = {
         'me.billing':  [['campistryMe', 'families'], ['campistryMe', 'payments']],
-        // youthCorps is NOT top-level — it lives at campistryMe.payroll.youthCorps
-        // (see the payroll loader in campistry_me.js), so the old second path
-        // scrubbed a key that has never existed. Scrubbing 'payroll' already
-        // covers it.
-        'me.payroll':  [['campistryMe', 'payroll']],
-        // Financial data moved under 'me.finance' when Analytics & Finance
-        // split into two pages — 'me.analytics' is now just the enrollment
-        // funnel, nothing sensitive to scrub there anymore.
+        // Payroll and Finance are their own keys now (migration 158). Scrubbing
+        // the key is what the old two-segment paths were reaching for, and it is
+        // now also enforced server-side rather than only here.
         //
-        // These were 'finExpenses' and 'finPayments', neither of which exists:
-        // campistry_me.js writes a single campistryMe.finance object
-        // ({staff, expenses, payments, budget, integrations}). So me.finance
-        // scrubbing was a complete no-op and revenue, expenses, budget and
-        // finance.staff — which holds full payroll records including pay and
-        // addresses — were delivered to and cached by a user set to 'none'.
-        'me.finance': [['campistryMe', 'finance']],
+        // youthCorps needs no separate entry — it lives at payroll.youthCorps,
+        // so the key covers it.
+        'me.payroll':  [['campistryMePayroll']],
+        // Financial data moved under 'me.finance' when Analytics & Finance split
+        // into two pages — 'me.analytics' is now just the enrollment funnel,
+        // nothing sensitive to scrub there anymore.
+        //
+        // NOTE what is NOT scrubbed here: campistryMe.finance.payments, the
+        // family payment ledger, which stays in the Me blob because seven
+        // payment edge functions and get_my_balance write and read it there.
+        // That is a deliberate correction, not an oversight. Scrubbing the old
+        // campistryMe.finance branch took the ledger with it, so a user with
+        // finance:none and billing:edit loaded an EMPTY ledger and wiped the
+        // real one the moment they recorded a payment. The ledger is Billing's
+        // data and is governed by me.billing; Finance's own data is the key.
+        'me.finance': [['campistryMeFinance']],
         'snacks.accounts': [['campistrySnacks', 'accounts']],
         'link.tips':   [['campistryLink', 'tips']]
     };
@@ -550,6 +559,14 @@
         Object.keys(BRANCHES).forEach(function (capKey) {
             if (S.level(capKey) !== 'none') return;
             BRANCHES[capKey].forEach(function (path) {
+                // Whole-key form, ['campistryMePayroll'] — scrub the key itself.
+                if (path.length === 1) {
+                    if (Object.prototype.hasOwnProperty.call(gs, path[0])) {
+                        _preserved[path[0]] = gs[path[0]];
+                        delete gs[path[0]];
+                    }
+                    return;
+                }
                 var parent = gs[path[0]];
                 if (!parent || typeof parent !== 'object') return;
                 if (Object.prototype.hasOwnProperty.call(parent, path[1])) {
@@ -566,6 +583,8 @@
         if (_unrestricted || !gs || !_preserved) return gs;
         Object.keys(_preserved).forEach(function (flat) {
             var path = flat.split('.');
+            // Whole-key form — put the key back as it was.
+            if (path.length === 1) { gs[path[0]] = _preserved[flat]; return; }
             if (!gs[path[0]] || typeof gs[path[0]] !== 'object') gs[path[0]] = {};
             gs[path[0]][path[1]] = _preserved[flat];
         });
@@ -597,4 +616,23 @@
     if (GUARD) S.guardPage(GUARD);
 
     window.CampistrySections = S;
+    // Exposed as module.exports for tests too, matching the same hook at the
+    // bottom of campistry_capabilities.js. The scrub/preserve pair is the only
+    // thing standing between a restricted user and overwriting data they were
+    // never shown, so it needs to be reachable from a test.
+    //
+    // __applyLevelsForTest puts the module into the state apply() leaves it in —
+    // restricted, with a resolved levels map — without standing up a database.
+    // It is deliberately the ONLY seam: everything else a test touches is the
+    // real code path, so a test cannot pass by stubbing out the logic it is
+    // supposed to be checking. No page calls this; the browser goes through
+    // load() -> apply().
+    if (typeof module !== 'undefined' && module.exports) {
+        S.__applyLevelsForTest = function (levels) {
+            _levels = levels || {};
+            _unrestricted = false;
+            _preserved = null;
+        };
+        module.exports = S;
+    }
 })();

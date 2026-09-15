@@ -50,6 +50,11 @@ MANIFEST = [
      "Super-admin RPCs behind campistry_control.html (list camps, set entitlements)"),
     ("157_entitlement_enforcement_per_key",
      "Entitlements enforced in the DATABASE, per camp_state_kv key (phase 2A)"),
+    # MUST come after 157: it redefines camp_state_key_entitled and rewrites the
+    # SELECT policy 157 creates. Running them the other way round would drop the
+    # two new keys back out of the gate and out of the counselor exclusion.
+    ("158_split_payroll_finance_keys",
+     "Payroll and Finance get their own keys so the entitlement can reach them (phase 2B)"),
 ]
 
 HEADER = """-- ═══════════════════════════════════════════════════════════════════════════
@@ -83,6 +88,11 @@ HEADER = """-- ═════════════════════�
 --     in the browser (155-157). This changes NOTHING for any existing camp:
 --     every camp is unrestricted until an entitlement is deliberately set from
 --     the control page, and setting one back to unrestricted undoes it.
+--   * Payroll and Finance move into their own rows so that gate can reach them
+--     (158). DEPLOY THE SITE BEFORE RUNNING THIS — the new page reads the new
+--     rows and falls back to the old blob, so it is correct either way round,
+--     but old code running against moved data would show empty pages. The
+--     family payment ledger deliberately does NOT move.
 --
 -- PREREQUISITES (long since applied on a live camp; the preflight below fails
 -- loudly rather than confusingly if one is missing): 077 (camp Stripe Connect),
@@ -202,7 +212,26 @@ UNION ALL SELECT 'all 6 camp_state_kv policies entitlement-gated',
                    WHERE tablename='camp_state_kv'
                      AND COALESCE(qual,'') || COALESCE(with_check,'')
                          LIKE '%camp_state_key_entitled%') = 6
-            THEN 'OK' ELSE 'MISSING' END;
+            THEN 'OK' ELSE 'MISSING' END
+-- The payroll/finance split is only safe if counselors are excluded from the
+-- two NEW keys. Being buried inside campistryMe used to keep them out; lifting
+-- them into their own keys would otherwise hand every counselor the payroll
+-- file, because the SELECT policy allows a counselor any key it does not name.
+UNION ALL SELECT 'counselors excluded from the new payroll/finance keys',
+       CASE WHEN (SELECT COALESCE(qual,'') FROM pg_policies
+                   WHERE tablename='camp_state_kv' AND policyname='camp_state_kv_select')
+                 LIKE '%campistryMePayroll%'
+            THEN 'OK' ELSE 'MISSING' END
+UNION ALL SELECT 'payroll/finance reachable by the entitlement',
+       CASE WHEN (SELECT prosrc FROM pg_proc WHERE proname='camp_state_key_entitled' LIMIT 1)
+                 LIKE '%campistryMeFinance%'
+            THEN 'OK' ELSE 'MISSING' END
+-- The ledger must NOT have moved: seven payment edge functions and
+-- get_my_balance read campistryMe.finance.payments and were not redeployed.
+UNION ALL SELECT 'payment ledger still in campistryMe',
+       CASE WHEN NOT EXISTS (SELECT 1 FROM camp_state_kv
+                              WHERE key='campistryMeFinance' AND value ? 'payments')
+            THEN 'OK' ELSE 'LEDGER MOVED — INVESTIGATE' END;
 """
 
 

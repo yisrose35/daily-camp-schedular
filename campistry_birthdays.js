@@ -151,9 +151,17 @@
 
     /**
      * Pull everyone with a birthday out of a campGlobalSettings_v1 blob.
-     * Campers come from app1.camperRoster; staff from campistryMe.payroll.staff
-     * (the payroll record) and campistryMe.finance.staff (the older finance
-     * list), deduped by name with the payroll record winning.
+     * Campers come from app1.camperRoster; staff from the payroll record and
+     * the older finance list, deduped by name with the payroll record winning.
+     *
+     * Payroll and Finance moved to their own camp_state_kv keys in migration
+     * 158 (campistryMePayroll / campistryMeFinance), so each list is read from
+     * the new key first and the legacy campistryMe branch second. Both shapes
+     * have to keep working: this runs on a blob that may predate the move, and
+     * on one belonging to a camp that hasn't saved since it.
+     *
+     * A restricted or unentitled user gets neither key, which is the point —
+     * the card then simply shows no staff birthdays rather than failing.
      */
     B.collectFromSettings = function (settings) {
         var s = settings || {};
@@ -170,9 +178,11 @@
 
         var me = s.campistryMe || {};
         var seenStaff = {};
+        var _pay = s.campistryMePayroll || me.payroll || {};
+        var _fin = s.campistryMeFinance || me.finance || {};
         var staffLists = [
-            (me.payroll && me.payroll.staff) || [],
-            (me.finance && me.finance.staff) || []
+            _pay.staff || [],
+            _fin.staff || []
         ];
         staffLists.forEach(function (list) {
             (Array.isArray(list) ? list : []).forEach(function (st) {
