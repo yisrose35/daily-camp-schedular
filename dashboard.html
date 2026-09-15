@@ -254,6 +254,7 @@
             <button class="dash-setup-tab" data-tab="payment" onclick="switchSetupTab('payment')" style="display:none;">Payment</button>
             <button class="dash-setup-tab" data-tab="settings" onclick="switchSetupTab('settings')" style="display:none;">Camp Settings</button>
             <button class="dash-setup-tab" data-tab="team" onclick="switchSetupTab('team')" style="display:none;">Team &amp; Access</button>
+            <button class="dash-setup-tab" data-tab="checklist" onclick="switchSetupTab('checklist')" style="display:none;">Setup Checklist</button>
         </div>
 
         <!-- ===== PROFILE + ACCOUNT ===== -->
@@ -675,6 +676,12 @@
             </div>
         </div>
 
+        <!-- ===== SETUP CHECKLIST (Owners only) ===== -->
+        <!-- The order the rest of this page is meant to be done in. Rendered
+             by campistry_setup_checklist.js on first show; the list itself
+             lives there so it can be read and tested without a browser. -->
+        <div id="dash-setup-checklist" class="dash-setup-panel" style="display: none;"></div>
+
         </div><!-- /dash-camp-setup -->
 
         <!-- ===== ACHIEVEMENTS (populated by badges.js) ===== -->
@@ -817,7 +824,8 @@ if (window.location.protocol === 'file:') {
     <script src="local_cache_idb.js?v=20260903-03"></script>
     <script src="integration_hooks.js?v=20260904-03"></script>
     <script src="cloud_sync_helpers.js?v=20260903-03"></script>
-    <script src="dashboard.js?v=20260908-05"></script>
+    <script src="dashboard.js?v=20260915-01"></script>
+    <script src="campistry_setup_checklist.js?v=20260915-01"></script>
     <script src="campistry_birthdays.js?v=20260903-03"></script>
     <script src="badges.js?v=20260903-03"></script>
     <script src="access_control.js?v=20260903-03"></script>

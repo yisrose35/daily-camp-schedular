@@ -454,7 +454,8 @@
         dates: 'camp-dates-section',
         payment: 'dash-setup-payment',
         settings: 'camp-settings-section',
-        team: 'team-access-section'
+        team: 'team-access-section',
+        checklist: 'dash-setup-checklist'
     };
 
     function _setSetupTabVisible(tab, visible) {
@@ -480,6 +481,12 @@
             const panel = document.getElementById(SETUP_TAB_PANELS[key]);
             if (panel) panel.style.display = (key === tab) ? 'block' : 'none';
         });
+        // The checklist reads its own row out of camp_state_kv, so it mounts
+        // on first show rather than on page load — no reason to make every
+        // dashboard visit pay for a tab most of them will not open.
+        if (tab === 'checklist' && window.CampistrySetupChecklist) {
+            window.CampistrySetupChecklist.mount();
+        }
     };
 
     function setupDashboardForRole() {
@@ -507,6 +514,7 @@
             _setSetupTabVisible('team', false);
             _setSetupTabVisible('settings', false);
             _setSetupTabVisible('payment', false);
+            _setSetupTabVisible('checklist', false);
             _setSessionsCardVisible(false);
 
             // Schedulers and admins can see camp dates (read-only)
@@ -529,6 +537,7 @@
             loadCampDates(false);
             _setSetupTabVisible('settings', true);
             _setSetupTabVisible('payment', true);
+            _setSetupTabVisible('checklist', true);
             loadCampSettingsSection();
         }
         switchSetupTab('profile');
