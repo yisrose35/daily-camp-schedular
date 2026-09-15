@@ -9,34 +9,55 @@
     <link href="https://fonts.googleapis.com/css2?family=DM+Sans:wght@400;500;600;700&family=Fraunces:wght@600;700&display=swap" rel="stylesheet">
     <style>
         *{box-sizing:border-box;margin:0;padding:0}
-        body{font-family:'DM Sans',system-ui,sans-serif;background:#F8FAFC;color:#1E293B;min-height:100vh;display:flex;align-items:center;justify-content:center;padding:24px}
-        .card{background:#fff;border:1px solid #E2E8F0;border-radius:18px;box-shadow:0 12px 40px rgba(15,23,42,.08);max-width:440px;width:100%;padding:36px 32px}
-        h1{font-family:'Fraunces',serif;font-size:1.4rem;margin-bottom:6px;text-align:center}
-        .sub{color:#64748B;font-size:.88rem;line-height:1.55;text-align:center;margin-bottom:22px}
-        .field-label{font-size:.78rem;font-weight:600;color:#475569;margin-bottom:6px;display:block}
-        .field-group{margin-bottom:14px}
-        .cc-field{border:1px solid #CBD5E1;border-radius:10px;padding:11px 12px;background:#fff;min-height:42px}
-        .cc-field.focused{border-color:#147D91}
-        /* Banquest's tokenizer mounts an iframe here holding its OWN card,
-           expiry and CVV inputs. Those are styled from JS via setStyles (the
-           library writes them as inline style attributes inside the iframe) —
-           our stylesheet can't reach across the frame boundary. No border or
-           height here: the library sizes the iframe to its content, and a fixed
-           height would either clip it or leave dead space. */
-        #bq-card iframe{width:100%;border:none;display:block}
+        body{font-family:'DM Sans',system-ui,sans-serif;background:linear-gradient(180deg,#F1F5F9 0%,#F8FAFC 220px);color:#1E293B;min-height:100vh;display:flex;align-items:center;justify-content:center;padding:24px 16px}
+        .card{background:#fff;border:1px solid #E2E8F0;border-radius:20px;box-shadow:0 10px 34px rgba(15,23,42,.08);max-width:460px;width:100%;padding:32px 28px}
+        h1{font-family:'Fraunces',serif;font-size:1.35rem;line-height:1.25;margin-bottom:8px;text-align:center}
+        .sub{color:#64748B;font-size:.85rem;line-height:1.55;text-align:center;margin-bottom:8px}
+        .amount{font-family:'Fraunces',serif;font-size:2rem;text-align:center;color:#0F172A;margin:2px 0 6px}
+
+        /* Small uppercase divider that separates card details from billing */
+        .sec{display:flex;align-items:center;gap:10px;font-size:.68rem;font-weight:700;letter-spacing:.09em;text-transform:uppercase;color:#94A3B8;margin:22px 0 12px}
+        .sec::after{content:"";flex:1;height:1px;background:#E2E8F0}
+
+        .field-label{font-size:.76rem;font-weight:600;color:#475569;margin-bottom:6px;display:block}
+        .field-group{margin-bottom:12px}
         .row{display:flex;gap:10px}
-        .row .field-group{flex:1}
-        button#saveBtn{width:100%;background:#147D91;color:#fff;border:none;border-radius:10px;padding:13px;font-size:.95rem;font-weight:600;cursor:pointer;margin-top:6px}
-        button#saveBtn:disabled{opacity:.6;cursor:default}
-        input.txt{width:100%;border:1px solid #CBD5E1;border-radius:10px;padding:11px 12px;background:#fff;font:inherit;color:#1E293B;outline:none}
-        input.txt:focus{border-color:#147D91}
-        input.txt.bad{border-color:#DC2626}
+        .row .field-group{flex:1;min-width:0}
         .req{color:#DC2626}
-        .msg{font-size:.85rem;text-align:center;margin-top:14px;min-height:1.2em}
+
+        input.txt{width:100%;border:1px solid #CBD5E1;border-radius:10px;padding:11px 13px;background:#fff;font:inherit;font-size:.95rem;color:#1E293B;outline:none;transition:border-color .15s,box-shadow .15s}
+        input.txt::placeholder{color:#94A3B8}
+        input.txt:focus{border-color:#147D91;box-shadow:0 0 0 3px rgba(20,125,145,.13)}
+        input.txt.bad{border-color:#DC2626;box-shadow:0 0 0 3px rgba(220,38,38,.10)}
+
+        /* Banquest's tokenizer mounts an iframe here holding its OWN card,
+           expiry and CVV inputs. Those are styled from JS via the library's
+           styles option (it writes inline style attributes on the elements
+           inside the frame) — our stylesheet cannot reach across the frame
+           boundary. No border or fixed height here: the library sizes the frame
+           to its content, and a fixed height would clip it or leave dead space. */
+        #bq-card iframe{width:100%;border:none;display:block}
+
+        button#saveBtn{width:100%;background:#147D91;color:#fff;border:none;border-radius:11px;padding:14px;font-size:.95rem;font-weight:700;font-family:inherit;cursor:pointer;margin-top:18px;transition:background .15s,transform .05s}
+        button#saveBtn:hover:not(:disabled){background:#10697A}
+        button#saveBtn:active:not(:disabled){transform:translateY(1px)}
+        button#saveBtn:disabled{opacity:.6;cursor:default}
+
+        .msg{font-size:.85rem;text-align:center;margin-top:12px;min-height:1.2em;line-height:1.45}
         .msg.err{color:#DC2626}
         .msg.ok{color:#0E7C4A}
+
+        .trust{display:flex;align-items:center;justify-content:center;gap:6px;margin-top:16px;font-size:.73rem;color:#94A3B8;line-height:1.4;text-align:center}
+        .trust svg{flex:none}
+
         .icon{width:56px;height:56px;border-radius:50%;display:flex;align-items:center;justify-content:center;margin:0 auto 14px;background:#ECFDF5;color:#0E7C4A}
         .note{margin-top:18px;font-size:.75rem;color:#94A3B8;text-align:center}
+
+        @media (max-width:420px){
+            .card{padding:26px 20px}
+            .row{flex-wrap:wrap}
+            .row .field-group{flex:1 1 100%}
+        }
     </style>
 </head>
 <body>
@@ -265,23 +286,28 @@
         // returns a nonce we send to payments-save-method (or the pay-now
         // path), where the server prefixes it as source "nonce-<nonce>".
         function renderBanquestForm(tokenizationKey, tokenizationUrl, cardFormFields) {
-            var title = isPayNow ? ('Pay $' + amount.toFixed(2)) : 'Save a payment method';
-            var privacyNote = 'Your card details go directly to the payment processor and never touch Campistry\'s servers.';
-            var whoFor = isCanteen
-                ? ('For ' + escapeHtml(camperName) + '\'s canteen account')
-                : ('For ' + escapeHtml(familyName));
+            // Pay-now leads with the amount (it's the one number that matters);
+            // save-mode leads with who the card is for.
+            var title = isPayNow ? (isCanteen ? 'Add canteen funds' : 'Make a payment') : 'Save a payment method';
+            var whoFor = isCanteen ? escapeHtml(camperName) + '\'s canteen account' : escapeHtml(familyName);
             var sub = isPayNow
-                ? (whoFor + ' — ' + escapeHtml(payDesc) + '. ' + privacyNote)
-                : (whoFor + ' — ' + (isCanteen ? 'used to top up the balance automatically.' : 'used for future camp charges.') + ' ' + privacyNote);
+                ? ('For ' + whoFor + ' — ' + escapeHtml(payDesc))
+                : ('For ' + whoFor + ' — ' + (isCanteen ? 'used to top up the balance automatically.' : 'used for future camp charges.'));
             var btnLabel = isPayNow ? ('Pay $' + amount.toFixed(2)) : 'Save Payment Method';
             var fields = activeBillingFields(cardFormFields);
+            var lock = '<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5">' +
+                '<rect x="4" y="11" width="16" height="10" rx="2"/><path d="M8 11V7a4 4 0 0 1 8 0v4"/></svg>';
             cardEl.innerHTML =
                 '<h1>' + title + '</h1>' +
+                (isPayNow ? '<div class="amount">$' + amount.toFixed(2) + '</div>' : '') +
                 '<p class="sub">' + sub + '</p>' +
-                '<div class="field-group"><span class="field-label">Card <span class="req">*</span></span><div id="bq-card"></div></div>' +
+                '<div class="sec">Card details</div>' +
+                '<div class="field-group"><div id="bq-card"></div></div>' +
+                (fields.length ? '<div class="sec">Billing details</div>' : '') +
                 billingFieldsHtml(fields) +
                 '<button id="saveBtn" type="button">' + btnLabel + '</button>' +
-                '<div class="msg" id="msg"></div>';
+                '<div class="msg" id="msg"></div>' +
+                '<div class="trust">' + lock + '<span>Your card is entered directly with the payment processor. Campistry never sees or stores your card number.</span></div>';
 
             if (!tokenizationUrl) {
                 setMsg('This camp\'s payment form isn\'t configured yet — please contact the office.', true);
@@ -309,9 +335,9 @@
                     // real stack, not `inherit` — the iframe is a separate
                     // document and never loads our webfont.
                     var bqInput = 'width:100%;box-sizing:border-box;border:1px solid #CBD5E1;' +
-                        'border-radius:10px;padding:11px 12px;background:#fff;color:#1E293B;' +
+                        'border-radius:10px;padding:11px 13px;background:#fff;color:#1E293B;' +
                         'font-family:system-ui,-apple-system,"Segoe UI",Roboto,sans-serif;' +
-                        'font-size:15px;line-height:1.2;outline:none;';
+                        'font-size:15px;line-height:1.25;outline:none;';
                     ht = new window.HostedTokenization(tokenizationKey, {
                         target: '#bq-card',
                         showZip: false,
