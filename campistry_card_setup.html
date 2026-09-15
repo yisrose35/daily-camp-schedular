@@ -81,7 +81,13 @@
          needed. Without this flag, a signed-in visitor who doesn't own THIS
          camp sets off the owner-camp lookup, which fails and logs an alarming
          "this is a bug" error on every auth state change. -->
-    <script>window.__CAMPISTRY_PUBLIC_PAGE__ = true;</script>
+    <script>
+    window.__CAMPISTRY_PUBLIC_PAGE__ = true;
+    // Bump on every change to this page. Printed on load so a stale cached copy
+    // is obvious at a glance instead of being mistaken for a code bug.
+    window.__CARD_PAGE_BUILD__ = '2026-09-15-03';
+    console.log('[Campistry] card page build', window.__CARD_PAGE_BUILD__);
+    </script>
     <script src="config.js"></script>
     <script src="supabase-js@2.js"></script>
     <script src="supabase_client.js"></script>
@@ -441,13 +447,30 @@
             // avs_zip alongside the nonce, so pass them through. avsZip only
             // comes back when the iframe collected it (showZip) — otherwise use
             // the ZIP from our own form.
+            // Banquest REQUIRES expiry_month/expiry_year alongside the nonce, so
+            // this has to survive naming differences between the documented
+            // CardFormResult and what the library actually resolves with.
+            function pick() {
+                for (var i = 0; i < arguments.length; i++) {
+                    var v = cardResult[arguments[i]];
+                    if (v !== undefined && v !== null && v !== '') return v;
+                }
+                return undefined;
+            }
             var card = cardResult ? {
-                expiryMonth: cardResult.expiryMonth,
-                expiryYear: cardResult.expiryYear,
-                avsZip: cardResult.avsZip || (billing && billing.zip) || '',
-                last4: cardResult.last4,
-                cardType: cardResult.cardType
+                expiryMonth: pick('expiryMonth', 'expiry_month', 'month', 'expMonth'),
+                expiryYear: pick('expiryYear', 'expiry_year', 'year', 'expYear'),
+                avsZip: pick('avsZip', 'avs_zip', 'zip') || (billing && billing.zip) || '',
+                last4: pick('last4', 'last_4'),
+                cardType: pick('cardType', 'card_type')
             } : null;
+            // Shape only — no nonce, no PAN. An expiry month/year on its own
+            // identifies nothing, and without this there's no way to tell a
+            // stale cached page from a result whose keys we guessed wrong.
+            try {
+                console.log('[Campistry] tokenizer result keys:', cardResult ? Object.keys(cardResult) : null,
+                            '→ expiry:', card && card.expiryMonth, '/', card && card.expiryYear);
+            } catch (e) { /* console unavailable */ }
             var body = isPayNow
                 ? (isCanteen
                     ? { campId: campId, kind: 'canteen_deposit', camperName: camperName, token: token, amount: amount, description: payDesc, billing: billing, card: card }
