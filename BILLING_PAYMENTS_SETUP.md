@@ -142,3 +142,43 @@ run manually by POSTing to the function with the `x-cron-secret` header.
 - Hardening option: route `stripe-checkout` behind an authenticated RPC so the
   amount/family can't be tampered client-side (low risk today — a parent can
   only pay their own camp).
+
+---
+
+## Migration 162 — finding card charges the ledger lost
+
+`campistryMe` is a single `camp_state_kv` row that the browser rewrites whole
+on every save, from state it read at page load — and it is not the only
+writer. `charge-due-installments` appends `finance.payments` and marks an
+installment paid; the Stripe, Cardknox, BYOP and hosted-checkout handlers write
+the card-on-file fields.
+
+So a tab left open across an overnight autopay run wrote back a blob that
+predated the charge. The payment vanished, the family owed it again, and the
+installment reverted to `pending` — so the card was charged a second time the
+following night. **The balance not going down and the double charge were the
+same defect.**
+
+`campistry_finance_merge.js` closes that window at write time: anything the
+cloud has that the tab does not is restored before the upsert. Both quantities
+only ever append or advance (a payment is never un-made, a refund is a new
+negative row; an installment goes `pending → paid` and never back), so the
+restore is exact rather than a guess, and local still wins on anything it also
+has.
+
+It cannot undo what was already lost. Apply **`migrations/162_reconcile_processor_charges.sql`**
+in the Supabase SQL editor, then run it from **Me → Finance → Integrations →
+"Check for missing charges"**. It compares every successful charge in
+`processor_transactions` against the payments on the ledger and lists any with
+nothing pointing at them.
+
+It writes nothing, deliberately: `processor_transactions` carries no
+`family_key`, so it can say a charge is unaccounted for but not reliably whose
+it is, and crediting a guess to the wrong household is worse than a missing
+payment. Where the processor's own metadata names a family it is shown as a
+suggestion to confirm.
+
+> **It does not cover Stripe.** The Stripe autopay path never wrote to
+> `processor_transactions` at all, so a clean result here does not rule out a
+> gap on Stripe — check the Stripe dashboard for the same dates. The tool says
+> this on screen too.

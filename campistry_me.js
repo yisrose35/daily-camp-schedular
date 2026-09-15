@@ -10931,6 +10931,18 @@ function renderFinance(){
         h+='<h4 style="font-size:.85rem;font-weight:700;color:var(--s800);margin:0 0 4px">API Integration (Coming Soon)</h4>';
         h+='<p style="font-size:.78rem;color:var(--s400)">Direct QuickBooks Online / Xero API sync will be available soon. Contact <a href="mailto:campistryoffice@gmail.com" style="color:var(--me)">campistryoffice@gmail.com</a> to get early access.</p>';
         h+='</div></div>';
+
+        // Card charges the ledger has lost. See migration 162 -- a tab left
+        // open across an autopay run used to write back a blob that predated
+        // the charge, so the payment vanished while the money had already left
+        // the card. campistry_finance_merge.js closes that window; nothing can
+        // recover what went before it, so this at least finds it.
+        h+='<div class="me-card" style="margin-top:14px"><div style="padding:16px 18px">';
+        h+='<h4 style="font-size:.9rem;font-weight:700;color:var(--s800);margin:0 0 4px">Card charges not in this ledger</h4>';
+        h+='<p style="font-size:.78rem;color:var(--s500);line-height:1.6;margin:0 0 10px;max-width:640px">Compares every successful card charge your processor recorded against the payments on this ledger, and lists any with nothing pointing at them. Reads only \u2014 it changes nothing.</p>';
+        h+='<button class="me-btn me-btn--sec me-btn--sm" onclick="CampistryMe.finReconcileCharges()">Check for missing charges</button>';
+        h+='<div id="finReconcileOut" style="margin-top:12px"></div>';
+        h+='</div></div>';
     }
 
     c.innerHTML=h;
@@ -10938,6 +10950,66 @@ function renderFinance(){
 
 // Finance actions
 function finSetTab(t){_finTab=t;_analyticsInvoicePage=1;_analyticsPaymentPage=1;renderFinance()}
+
+/**
+ * Ask the database which processor charges this ledger never recorded.
+ *
+ * Read-only on both sides. processor_transactions carries no family, and the
+ * Stripe autopay path never wrote to it at all, so this can say that a charge
+ * is unaccounted for but not reliably whose it is. Crediting a guess to the
+ * wrong household is the one outcome worse than a missing payment, so the
+ * office is handed the charge and records it themselves.
+ */
+async function finReconcileCharges(){
+    var out=document.getElementById('finReconcileOut');
+    if(!out)return;
+    out.innerHTML='<div style="font-size:.8rem;color:var(--s400)">Checking\u2026</div>';
+    var client=(window.CampistryDB&&window.CampistryDB.getClient)?window.CampistryDB.getClient():window.supabase;
+    var cid=localStorage.getItem('campistry_camp_id')||localStorage.getItem('campistry_user_id')||'';
+    if(!client||!client.rpc||!cid){
+        out.innerHTML='<div style="font-size:.8rem;color:var(--err)">Not connected to the cloud.</div>';
+        return;
+    }
+    var r;
+    try{ r=await client.rpc('reconcile_processor_charges',{p_camp_id:cid,p_since:null}); }
+    catch(e){ r={error:e}; }
+    if(r.error||!r.data||r.data.success===false){
+        var msg=(r.error&&r.error.message)||(r.data&&r.data.error)||'unknown error';
+        out.innerHTML='<div style="font-size:.8rem;color:var(--err)">'+
+            (/does not exist|schema cache/i.test(msg)
+                ? 'Migration 162 has not been applied yet \u2014 paste it into the Supabase SQL editor first.'
+                : esc(msg))+'</div>';
+        return;
+    }
+    var d=r.data, list=d.missing||[];
+    var h='';
+    if(!list.length){
+        h+='<div style="background:#ECFDF5;border:1px solid #A7F3D0;border-radius:var(--r);padding:12px 14px;font-size:.84rem;color:#065F46">'+
+           '<strong>Nothing missing.</strong> All '+d.charges+' recorded charge'+(d.charges===1?' is':'s are')+' accounted for on this ledger.</div>';
+    }else{
+        h+='<div style="background:#FEF2F2;border:1px solid #FECACA;border-radius:var(--r);padding:12px 14px;margin-bottom:10px">'+
+           '<div style="font-size:.9rem;font-weight:700;color:#991B1B">'+list.length+' charge'+(list.length===1?'':'s')+
+           ' totalling '+fm((d.missingCents||0)/100)+' '+(list.length===1?'is':'are')+' not on this ledger</div>'+
+           '<div style="font-size:.8rem;color:#B91C1C;margin-top:4px;line-height:1.6">The money left the card. Record each one against the right household in Billing, then it will count everywhere.</div></div>';
+        h+='<div style="overflow-x:auto"><table style="width:100%;border-collapse:collapse;font-size:.8rem">'+
+           '<tr style="text-align:left;color:var(--s500)"><th style="padding:6px 8px">When</th><th style="padding:6px 8px">Amount</th>'+
+           '<th style="padding:6px 8px">Processor</th><th style="padding:6px 8px">Charge ID</th><th style="padding:6px 8px">Possibly</th></tr>';
+        list.forEach(function(m){
+            h+='<tr style="border-top:1px solid var(--s100)">'+
+               '<td style="padding:6px 8px">'+esc(String(m.created_at||'').slice(0,10))+'</td>'+
+               '<td style="padding:6px 8px;font-weight:600">'+fm((m.amount_cents||0)/100)+'</td>'+
+               '<td style="padding:6px 8px">'+esc(m.processor_key||'')+'</td>'+
+               '<td style="padding:6px 8px;font-family:monospace;font-size:.74rem">'+esc(m.external_transaction_id||'')+'</td>'+
+               '<td style="padding:6px 8px">'+esc(m.suggested_family_name||(m.suggested_family_key?(families[m.suggested_family_key]||{}).name||'':'')||'\u2014')+'</td>'+
+               '</tr>';
+        });
+        h+='</table></div>';
+    }
+    // Never let a clean result read as a clean ledger: this table only ever
+    // held the non-Stripe rails.
+    if(d.covers)h+='<div style="font-size:.74rem;color:var(--s400);margin-top:10px;line-height:1.6">'+esc(d.covers)+'</div>';
+    out.innerHTML=h;
+}
 // All bunk names across the camp structure (for staff bunk assignment).
 function _allBunkNames(){
     var out={};
@@ -17117,6 +17189,7 @@ window.CampistryMe={
     addSectionTextBlock:addSectionTextBlock,_richTextExec:_richTextExec,
     addDiv:function(){openDivForm(null)},editDiv:function(n){openDivForm(n)},deleteDiv:deleteDiv,
     openCsv:function(){openModal('csvModal')},downloadTemplate:downloadTemplate,
+    finReconcileCharges:finReconcileCharges,
     setRosterPage:setRosterPage,setRosterSubTab:setRosterSubTab,setBillingPage:setBillingPage,setAnalyticsInvoicePage:setAnalyticsInvoicePage,setAnalyticsPaymentPage:setAnalyticsPaymentPage,
     _runSetupChecklistAction:_runSetupChecklistAction,dismissSetupChecklist:dismissSetupChecklist,
     bbDrop:bbDrop,autoAssign:autoAssign,autoGenerateBunks:autoGenerateBunks,openBunkGenSettings:openBunkGenSettings,showCamperBunkRequests:showCamperBunkRequests,clearBunks:clearBunks,setBunkCount:setBunkCount,openBunkCountModal:openBunkCountModal,_clearBunkCount:_clearBunkCount,

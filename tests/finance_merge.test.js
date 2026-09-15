@@ -180,3 +180,39 @@ test('the merge is actually wired into the only cloud writer', () => {
             page + ' loads the merge after the thing that uses it');
     });
 });
+
+// ── finding what was lost before the merge existed ──────────────────────────
+//
+// The merge closes the window; it cannot undo what already went through it.
+// Migration 162 reports processor charges with nothing pointing at them, and
+// Finance surfaces it. Both halves are easy to half-ship, so pin them.
+test('the reconciliation migration exists and stays read-only', () => {
+    const sql = fs.readFileSync(path.join(ROOT, 'migrations/162_reconcile_processor_charges.sql'), 'utf8');
+
+    assert.match(sql, /CREATE OR REPLACE FUNCTION public\.reconcile_processor_charges/);
+    assert.match(sql, /_deposit_can_admin/, 'must be admin-gated');
+    assert.match(sql, /SET search_path = public, pg_catalog/, 'SECURITY DEFINER needs a pinned search_path');
+    assert.match(sql, /GRANT EXECUTE ON FUNCTION public\.reconcile_processor_charges/);
+    assert.match(sql, /NOTIFY pgrst/, 'PostgREST will not see it without a schema reload');
+
+    // Read-only is the whole design: it cannot say WHOSE a gap is, so it must
+    // never write one to a guess.
+    assert.ok(!/\b(INSERT|UPDATE|DELETE)\s+(INTO\s+)?(camp_state_kv|processor_transactions|bank_deposits)\b/i.test(sql),
+        'the reconciliation must not write to any ledger table');
+
+    // A clean result must never read as a clean ledger — Stripe autopay never
+    // recorded into this table at all.
+    assert.match(sql, /'covers'/, 'the result must state what it does not cover');
+    assert.match(sql, /Stripe/, 'the caveat has to name the rail it cannot see');
+});
+
+test('Finance can actually run the reconciliation', () => {
+    const me = fs.readFileSync(path.join(ROOT, 'campistry_me.js'), 'utf8');
+    assert.match(me, /function finReconcileCharges/, 'the action is missing');
+    assert.match(me, /rpc\('reconcile_processor_charges'/, 'it never calls the function');
+    assert.match(me, /finReconcileCharges:finReconcileCharges/, 'not exposed, so the button cannot reach it');
+    assert.match(me, /CampistryMe\.finReconcileCharges\(\)/, 'no button calls it');
+    // The one failure a camp will actually hit is the migration not being
+    // applied, and "schema cache" means nothing to them.
+    assert.match(me, /Migration 162 has not been applied/, 'must explain an unapplied migration in words');
+});
