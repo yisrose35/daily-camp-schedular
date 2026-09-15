@@ -17,11 +17,12 @@
         .field-group{margin-bottom:14px}
         .cc-field{border:1px solid #CBD5E1;border-radius:10px;padding:11px 12px;background:#fff;min-height:42px}
         .cc-field.focused{border-color:#147D91}
-        /* Banquest's tokenizer mounts an iframe here containing its OWN card,
-           expiry and CVV inputs, each already bordered by the library. So this
-           is a plain container — no border of ours to double up, and no height
-           cap that would clip the multi-field iframe. */
-        #bq-card{min-height:56px}
+        /* Banquest's tokenizer mounts an iframe here holding its OWN card,
+           expiry and CVV inputs. Those are styled from JS via setStyles (the
+           library writes them as inline style attributes inside the iframe) —
+           our stylesheet can't reach across the frame boundary. No border or
+           height here: the library sizes the iframe to its content, and a fixed
+           height would either clip it or leave dead space. */
         #bq-card iframe{width:100%;border:none;display:block}
         .row{display:flex;gap:10px}
         .row .field-group{flex:1}
@@ -55,6 +56,11 @@
          uses (campistry_register.html, etc.) — config.js injects
          window.__CAMPISTRY_SUPABASE__, supabase_client.js builds the client
          from it. -->
+    <!-- This page is public and only calls anon RPCs — no camp/role detection
+         needed. Without this flag, a signed-in visitor who doesn't own THIS
+         camp sets off the owner-camp lookup, which fails and logs an alarming
+         "this is a bug" error on every auth state change. -->
+    <script>window.__CAMPISTRY_PUBLIC_PAGE__ = true;</script>
     <script src="config.js"></script>
     <script src="supabase-js@2.js"></script>
     <script src="supabase_client.js"></script>
@@ -297,17 +303,34 @@
                     // because we collect ZIP ourselves when the camp asks for it,
                     // and send it on as avs_zip; enabling it here would render a
                     // second ZIP box inside the iframe.
+                    // Styles are written as inline style attributes on the
+                    // elements INSIDE the iframe, so this is the only way to make
+                    // the card fields match the rest of the form. Fonts must be a
+                    // real stack, not `inherit` — the iframe is a separate
+                    // document and never loads our webfont.
+                    var bqInput = 'width:100%;box-sizing:border-box;border:1px solid #CBD5E1;' +
+                        'border-radius:10px;padding:11px 12px;background:#fff;color:#1E293B;' +
+                        'font-family:system-ui,-apple-system,"Segoe UI",Roboto,sans-serif;' +
+                        'font-size:15px;line-height:1.2;outline:none;';
                     ht = new window.HostedTokenization(tokenizationKey, {
                         target: '#bq-card',
                         showZip: false,
                         requireCvv2: true,
                         showFieldErrors: true,
                         styles: {
-                            card: 'font-family: inherit; font-size: 15px',
-                            expiryMonth: 'font-family: inherit; font-size: 15px',
-                            expiryYear: 'font-family: inherit; font-size: 15px',
-                            cvv2: 'font-family: inherit; font-size: 15px',
-                            fieldErrors: 'color:#DC2626; font-size:12px'
+                            // Card number on its own row, expiry + CVV sharing
+                            // the next one.
+                            container: 'display:flex;flex-wrap:wrap;gap:10px;margin:0;padding:0;border:none;',
+                            cardContainer: 'flex:1 1 100%;min-width:0;',
+                            card: bqInput,
+                            expiryContainer: 'flex:1 1 150px;min-width:0;display:flex;align-items:center;gap:6px;',
+                            expiryMonth: bqInput,
+                            expirySeparator: 'color:#94A3B8;padding:0 2px;font-family:system-ui,sans-serif;',
+                            expiryYear: bqInput,
+                            cvv2Container: 'flex:1 1 110px;min-width:0;',
+                            cvv2: bqInput,
+                            fieldErrors: 'color:#DC2626;font-size:12px;margin-top:4px;',
+                            labelType: 'hidden'
                         }
                     });
                 } catch (e) {
