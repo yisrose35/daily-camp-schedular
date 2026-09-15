@@ -34,6 +34,12 @@
 --     rows and falls back to the old blob, so it is correct either way round,
 --     but old code running against moved data would show empty pages. The
 --     family payment ledger deliberately does NOT move.
+--   * !! A staff member's SECTION access starts being enforced by the database
+--     for Payroll and Finance (159/160), not just hidden in the browser. Until
+--     now a manager with payroll:none could still read the data out of the API
+--     with a valid session. Anyone who was never configured (no preset, no
+--     overrides) is unaffected — that is the backward-compatibility rule — but
+--     anyone you DID restrict can no longer reach those two keys at all.
 --
 -- PREREQUISITES (long since applied on a live camp; the preflight below fails
 -- loudly rather than confusingly if one is missing): 077 (camp Stripe Connect),
@@ -2097,6 +2103,1054 @@ CREATE POLICY camp_state_kv_select ON camp_state_kv
 -- ============================================================================
 
 
+-- #########################################################################
+-- ###### 159_access_registry_tables
+-- ###### The capability registry and preset expansions, in SQL (generated)
+-- #########################################################################
+
+-- ============================================================================
+-- Migration 159: the capability registry and preset expansions, in SQL.
+--
+-- GENERATED FILE — do not edit by hand.
+-- Rebuild with:  node scripts/build-access-registry-sql.js
+--
+-- Phase 3 of ENTITLEMENTS_DESIGN.md enforces a STAFF MEMBER's section access in
+-- RLS. Until now that layer was browser-only: a manager with payroll:none could
+-- read campistryMePayroll straight out of the table with curl. To close that,
+-- the database needs the two things that only existed as JavaScript — the
+-- capability registry, and what each preset expands to once '*' and 'app.*' are
+-- resolved.
+--
+-- These tables are DERIVED DATA, not configuration. Nobody edits them; they are
+-- regenerated from campistry_capabilities.js, which stays the single source of
+-- truth. tests/access_registry_sql.test.js fails if this file drifts from it.
+--
+-- Read-only to clients: RLS denies everything and the resolver reads them as
+-- SECURITY DEFINER. They are not camp data — they are the same for every camp.
+--
+-- Idempotent: the tables are recreated and refilled from scratch each run.
+-- ============================================================================
+
+CREATE TABLE IF NOT EXISTS access_capabilities (
+    cap_key    text PRIMARY KEY,
+    app        text NOT NULL,
+    section    text NOT NULL,
+    view_only  boolean NOT NULL DEFAULT false
+);
+
+CREATE TABLE IF NOT EXISTS access_preset_grants (
+    preset     text NOT NULL,
+    cap_key    text NOT NULL,
+    level      text NOT NULL,
+    -- Did the preset literally NAME this key, as opposed to inheriting the
+    -- level from 'app.*' or '*'? Needed for the finance -> analytics legacy
+    -- fallback in user_section_level(); see the header of the generator.
+    explicit   boolean NOT NULL DEFAULT false,
+    PRIMARY KEY (preset, cap_key)
+);
+
+-- Neither table is camp-scoped and neither is client-readable. The resolver is
+-- SECURITY DEFINER, so it sees them regardless.
+ALTER TABLE access_capabilities  ENABLE ROW LEVEL SECURITY;
+ALTER TABLE access_preset_grants ENABLE ROW LEVEL SECURITY;
+
+-- Refill from scratch, so a removed capability or preset actually disappears
+-- rather than lingering and granting access to a section that no longer exists.
+TRUNCATE access_preset_grants;
+TRUNCATE access_capabilities;
+
+INSERT INTO access_capabilities (cap_key, app, section, view_only) VALUES
+    ('flow.camper-locator', 'flow', 'camper-locator', false),
+    ('flow.daily-adjustments', 'flow', 'daily-adjustments', false),
+    ('flow.facilities', 'flow', 'facilities', false),
+    ('flow.leagues', 'flow', 'leagues', false),
+    ('flow.master-scheduler', 'flow', 'master-scheduler', false),
+    ('flow.print', 'flow', 'print', false),
+    ('flow.report', 'flow', 'report', true),
+    ('flow.rules', 'flow', 'rules', false),
+    ('flow.schedule', 'flow', 'schedule', false),
+    ('flow.setup', 'flow', 'setup', false),
+    ('flow.specialty-leagues', 'flow', 'specialty-leagues', false),
+    ('flow.zones', 'flow', 'zones', false),
+    ('go.addresses', 'go', 'addresses', false),
+    ('go.fleet', 'go', 'fleet', false),
+    ('go.luggage', 'go', 'luggage', false),
+    ('go.routes', 'go', 'routes', false),
+    ('go.setup', 'go', 'setup', false),
+    ('go.staff', 'go', 'staff', false),
+    ('guard.guard', 'guard', 'guard', false),
+    ('health.allergies', 'health', 'allergies', false),
+    ('health.campers', 'health', 'campers', false),
+    ('health.dashboard', 'health', 'dashboard', false),
+    ('health.doctor', 'health', 'doctor', false),
+    ('health.intake', 'health', 'intake', false),
+    ('health.medications', 'health', 'medications', false),
+    ('health.nighttime', 'health', 'nighttime', false),
+    ('health.reports', 'health', 'reports', true),
+    ('health.sick-visits', 'health', 'sick-visits', false),
+    ('link.dashboard', 'link', 'dashboard', false),
+    ('link.forms', 'link', 'forms', false),
+    ('link.lists', 'link', 'lists', false),
+    ('link.messages', 'link', 'messages', false),
+    ('link.parents', 'link', 'parents', false),
+    ('link.photos', 'link', 'photos', false),
+    ('link.tips', 'link', 'tips', false),
+    ('live.absences', 'live', 'absences', false),
+    ('live.camper-locator', 'live', 'camper-locator', true),
+    ('live.camper-mail', 'live', 'camper-mail', false),
+    ('live.changes', 'live', 'changes', false),
+    ('live.early-pickup', 'live', 'early-pickup', false),
+    ('live.messages', 'live', 'messages', false),
+    ('live.reports', 'live', 'reports', true),
+    ('live.roll-call', 'live', 'roll-call', false),
+    ('me.analytics', 'me', 'analytics', true),
+    ('me.billing', 'me', 'billing', false),
+    ('me.bunkbuilder', 'me', 'bunkbuilder', false),
+    ('me.campers', 'me', 'campers', false),
+    ('me.enrollment', 'me', 'enrollment', false),
+    ('me.finance', 'me', 'finance', true),
+    ('me.payroll', 'me', 'payroll', false),
+    ('me.printsheets', 'me', 'printsheets', false),
+    ('me.reports', 'me', 'reports', true),
+    ('me.settings', 'me', 'settings', false),
+    ('me.structure', 'me', 'structure', false),
+    ('notes.notes', 'notes', 'notes', false),
+    ('snacks.accounts', 'snacks', 'accounts', false),
+    ('snacks.dashboard', 'snacks', 'dashboard', false),
+    ('snacks.menu', 'snacks', 'menu', false),
+    ('snacks.pos', 'snacks', 'pos', false),
+    ('snacks.settings', 'snacks', 'settings', false),
+    ('snacks.shop', 'snacks', 'shop', false),
+    ('snacks.transactions', 'snacks', 'transactions', false);
+
+INSERT INTO access_preset_grants (preset, cap_key, level, explicit) VALUES
+    ('bookkeeper', 'flow.camper-locator', 'none', false),
+    ('bookkeeper', 'flow.daily-adjustments', 'none', false),
+    ('bookkeeper', 'flow.facilities', 'none', false),
+    ('bookkeeper', 'flow.leagues', 'none', false),
+    ('bookkeeper', 'flow.master-scheduler', 'none', false),
+    ('bookkeeper', 'flow.print', 'none', false),
+    ('bookkeeper', 'flow.report', 'none', false),
+    ('bookkeeper', 'flow.rules', 'none', false),
+    ('bookkeeper', 'flow.schedule', 'none', false),
+    ('bookkeeper', 'flow.setup', 'none', false),
+    ('bookkeeper', 'flow.specialty-leagues', 'none', false),
+    ('bookkeeper', 'flow.zones', 'none', false),
+    ('bookkeeper', 'go.addresses', 'none', false),
+    ('bookkeeper', 'go.fleet', 'none', false),
+    ('bookkeeper', 'go.luggage', 'none', false),
+    ('bookkeeper', 'go.routes', 'none', false),
+    ('bookkeeper', 'go.setup', 'none', false),
+    ('bookkeeper', 'go.staff', 'none', false),
+    ('bookkeeper', 'guard.guard', 'none', false),
+    ('bookkeeper', 'health.allergies', 'none', false),
+    ('bookkeeper', 'health.campers', 'none', false),
+    ('bookkeeper', 'health.dashboard', 'none', false),
+    ('bookkeeper', 'health.doctor', 'none', false),
+    ('bookkeeper', 'health.intake', 'none', false),
+    ('bookkeeper', 'health.medications', 'none', false),
+    ('bookkeeper', 'health.nighttime', 'none', false),
+    ('bookkeeper', 'health.reports', 'none', false),
+    ('bookkeeper', 'health.sick-visits', 'none', false),
+    ('bookkeeper', 'link.dashboard', 'none', false),
+    ('bookkeeper', 'link.forms', 'none', false),
+    ('bookkeeper', 'link.lists', 'none', false),
+    ('bookkeeper', 'link.messages', 'none', false),
+    ('bookkeeper', 'link.parents', 'none', false),
+    ('bookkeeper', 'link.photos', 'none', false),
+    ('bookkeeper', 'link.tips', 'none', false),
+    ('bookkeeper', 'live.absences', 'none', false),
+    ('bookkeeper', 'live.camper-locator', 'none', false),
+    ('bookkeeper', 'live.camper-mail', 'none', false),
+    ('bookkeeper', 'live.changes', 'none', false),
+    ('bookkeeper', 'live.early-pickup', 'none', false),
+    ('bookkeeper', 'live.messages', 'none', false),
+    ('bookkeeper', 'live.reports', 'none', false),
+    ('bookkeeper', 'live.roll-call', 'none', false),
+    ('bookkeeper', 'me.analytics', 'view', true),
+    ('bookkeeper', 'me.billing', 'edit', true),
+    ('bookkeeper', 'me.bunkbuilder', 'none', false),
+    ('bookkeeper', 'me.campers', 'view', true),
+    ('bookkeeper', 'me.enrollment', 'none', false),
+    ('bookkeeper', 'me.finance', 'view', true),
+    ('bookkeeper', 'me.payroll', 'edit', true),
+    ('bookkeeper', 'me.printsheets', 'none', false),
+    ('bookkeeper', 'me.reports', 'view', true),
+    ('bookkeeper', 'me.settings', 'none', false),
+    ('bookkeeper', 'me.structure', 'none', false),
+    ('bookkeeper', 'notes.notes', 'none', false),
+    ('bookkeeper', 'snacks.accounts', 'view', true),
+    ('bookkeeper', 'snacks.dashboard', 'none', false),
+    ('bookkeeper', 'snacks.menu', 'none', false),
+    ('bookkeeper', 'snacks.pos', 'none', true),
+    ('bookkeeper', 'snacks.settings', 'none', false),
+    ('bookkeeper', 'snacks.shop', 'none', false),
+    ('bookkeeper', 'snacks.transactions', 'view', true),
+    ('bus-coordinator', 'flow.camper-locator', 'none', false),
+    ('bus-coordinator', 'flow.daily-adjustments', 'none', false),
+    ('bus-coordinator', 'flow.facilities', 'none', false),
+    ('bus-coordinator', 'flow.leagues', 'none', false),
+    ('bus-coordinator', 'flow.master-scheduler', 'none', false),
+    ('bus-coordinator', 'flow.print', 'none', false),
+    ('bus-coordinator', 'flow.report', 'none', false),
+    ('bus-coordinator', 'flow.rules', 'none', false),
+    ('bus-coordinator', 'flow.schedule', 'none', false),
+    ('bus-coordinator', 'flow.setup', 'none', false),
+    ('bus-coordinator', 'flow.specialty-leagues', 'none', false),
+    ('bus-coordinator', 'flow.zones', 'none', false),
+    ('bus-coordinator', 'go.addresses', 'edit', false),
+    ('bus-coordinator', 'go.fleet', 'edit', false),
+    ('bus-coordinator', 'go.luggage', 'edit', false),
+    ('bus-coordinator', 'go.routes', 'edit', false),
+    ('bus-coordinator', 'go.setup', 'edit', false),
+    ('bus-coordinator', 'go.staff', 'edit', false),
+    ('bus-coordinator', 'guard.guard', 'none', false),
+    ('bus-coordinator', 'health.allergies', 'none', false),
+    ('bus-coordinator', 'health.campers', 'none', false),
+    ('bus-coordinator', 'health.dashboard', 'none', false),
+    ('bus-coordinator', 'health.doctor', 'none', false),
+    ('bus-coordinator', 'health.intake', 'none', false),
+    ('bus-coordinator', 'health.medications', 'none', false),
+    ('bus-coordinator', 'health.nighttime', 'none', false),
+    ('bus-coordinator', 'health.reports', 'none', false),
+    ('bus-coordinator', 'health.sick-visits', 'none', false),
+    ('bus-coordinator', 'link.dashboard', 'none', false),
+    ('bus-coordinator', 'link.forms', 'none', false),
+    ('bus-coordinator', 'link.lists', 'none', false),
+    ('bus-coordinator', 'link.messages', 'none', false),
+    ('bus-coordinator', 'link.parents', 'none', false),
+    ('bus-coordinator', 'link.photos', 'none', false),
+    ('bus-coordinator', 'link.tips', 'none', false),
+    ('bus-coordinator', 'live.absences', 'none', false),
+    ('bus-coordinator', 'live.camper-locator', 'none', false),
+    ('bus-coordinator', 'live.camper-mail', 'none', false),
+    ('bus-coordinator', 'live.changes', 'none', false),
+    ('bus-coordinator', 'live.early-pickup', 'none', false),
+    ('bus-coordinator', 'live.messages', 'none', false),
+    ('bus-coordinator', 'live.reports', 'none', false),
+    ('bus-coordinator', 'live.roll-call', 'none', false),
+    ('bus-coordinator', 'me.analytics', 'none', false),
+    ('bus-coordinator', 'me.billing', 'none', false),
+    ('bus-coordinator', 'me.bunkbuilder', 'none', false),
+    ('bus-coordinator', 'me.campers', 'view', true),
+    ('bus-coordinator', 'me.enrollment', 'none', false),
+    ('bus-coordinator', 'me.finance', 'none', false),
+    ('bus-coordinator', 'me.payroll', 'none', false),
+    ('bus-coordinator', 'me.printsheets', 'none', false),
+    ('bus-coordinator', 'me.reports', 'none', false),
+    ('bus-coordinator', 'me.settings', 'none', false),
+    ('bus-coordinator', 'me.structure', 'none', false),
+    ('bus-coordinator', 'notes.notes', 'edit', true),
+    ('bus-coordinator', 'snacks.accounts', 'none', false),
+    ('bus-coordinator', 'snacks.dashboard', 'none', false),
+    ('bus-coordinator', 'snacks.menu', 'none', false),
+    ('bus-coordinator', 'snacks.pos', 'none', false),
+    ('bus-coordinator', 'snacks.settings', 'none', false),
+    ('bus-coordinator', 'snacks.shop', 'none', false),
+    ('bus-coordinator', 'snacks.transactions', 'none', false),
+    ('canteen', 'flow.camper-locator', 'none', false),
+    ('canteen', 'flow.daily-adjustments', 'none', false),
+    ('canteen', 'flow.facilities', 'none', false),
+    ('canteen', 'flow.leagues', 'none', false),
+    ('canteen', 'flow.master-scheduler', 'none', false),
+    ('canteen', 'flow.print', 'none', false),
+    ('canteen', 'flow.report', 'none', false),
+    ('canteen', 'flow.rules', 'none', false),
+    ('canteen', 'flow.schedule', 'none', false),
+    ('canteen', 'flow.setup', 'none', false),
+    ('canteen', 'flow.specialty-leagues', 'none', false),
+    ('canteen', 'flow.zones', 'none', false),
+    ('canteen', 'go.addresses', 'none', false),
+    ('canteen', 'go.fleet', 'none', false),
+    ('canteen', 'go.luggage', 'none', false),
+    ('canteen', 'go.routes', 'none', false),
+    ('canteen', 'go.setup', 'none', false),
+    ('canteen', 'go.staff', 'none', false),
+    ('canteen', 'guard.guard', 'none', false),
+    ('canteen', 'health.allergies', 'none', false),
+    ('canteen', 'health.campers', 'none', false),
+    ('canteen', 'health.dashboard', 'none', false),
+    ('canteen', 'health.doctor', 'none', false),
+    ('canteen', 'health.intake', 'none', false),
+    ('canteen', 'health.medications', 'none', false),
+    ('canteen', 'health.nighttime', 'none', false),
+    ('canteen', 'health.reports', 'none', false),
+    ('canteen', 'health.sick-visits', 'none', false),
+    ('canteen', 'link.dashboard', 'none', false),
+    ('canteen', 'link.forms', 'none', false),
+    ('canteen', 'link.lists', 'none', false),
+    ('canteen', 'link.messages', 'none', false),
+    ('canteen', 'link.parents', 'none', false),
+    ('canteen', 'link.photos', 'none', false),
+    ('canteen', 'link.tips', 'none', false),
+    ('canteen', 'live.absences', 'none', false),
+    ('canteen', 'live.camper-locator', 'none', false),
+    ('canteen', 'live.camper-mail', 'none', false),
+    ('canteen', 'live.changes', 'none', false),
+    ('canteen', 'live.early-pickup', 'none', false),
+    ('canteen', 'live.messages', 'none', false),
+    ('canteen', 'live.reports', 'none', false),
+    ('canteen', 'live.roll-call', 'none', false),
+    ('canteen', 'me.analytics', 'none', false),
+    ('canteen', 'me.billing', 'none', false),
+    ('canteen', 'me.bunkbuilder', 'none', false),
+    ('canteen', 'me.campers', 'view', true),
+    ('canteen', 'me.enrollment', 'none', false),
+    ('canteen', 'me.finance', 'none', false),
+    ('canteen', 'me.payroll', 'none', false),
+    ('canteen', 'me.printsheets', 'none', false),
+    ('canteen', 'me.reports', 'none', false),
+    ('canteen', 'me.settings', 'none', false),
+    ('canteen', 'me.structure', 'none', false),
+    ('canteen', 'notes.notes', 'none', false),
+    ('canteen', 'snacks.accounts', 'edit', false),
+    ('canteen', 'snacks.dashboard', 'edit', false),
+    ('canteen', 'snacks.menu', 'edit', false),
+    ('canteen', 'snacks.pos', 'edit', false),
+    ('canteen', 'snacks.settings', 'edit', false),
+    ('canteen', 'snacks.shop', 'edit', false),
+    ('canteen', 'snacks.transactions', 'edit', false),
+    ('division-head', 'flow.camper-locator', 'view', true),
+    ('division-head', 'flow.daily-adjustments', 'edit', true),
+    ('division-head', 'flow.facilities', 'none', false),
+    ('division-head', 'flow.leagues', 'none', false),
+    ('division-head', 'flow.master-scheduler', 'none', false),
+    ('division-head', 'flow.print', 'edit', true),
+    ('division-head', 'flow.report', 'view', true),
+    ('division-head', 'flow.rules', 'none', false),
+    ('division-head', 'flow.schedule', 'view', true),
+    ('division-head', 'flow.setup', 'none', false),
+    ('division-head', 'flow.specialty-leagues', 'none', false),
+    ('division-head', 'flow.zones', 'none', false),
+    ('division-head', 'go.addresses', 'none', false),
+    ('division-head', 'go.fleet', 'none', false),
+    ('division-head', 'go.luggage', 'none', false),
+    ('division-head', 'go.routes', 'none', false),
+    ('division-head', 'go.setup', 'none', false),
+    ('division-head', 'go.staff', 'none', false),
+    ('division-head', 'guard.guard', 'none', false),
+    ('division-head', 'health.allergies', 'none', false),
+    ('division-head', 'health.campers', 'none', false),
+    ('division-head', 'health.dashboard', 'none', false),
+    ('division-head', 'health.doctor', 'none', false),
+    ('division-head', 'health.intake', 'none', false),
+    ('division-head', 'health.medications', 'none', false),
+    ('division-head', 'health.nighttime', 'none', false),
+    ('division-head', 'health.reports', 'none', false),
+    ('division-head', 'health.sick-visits', 'none', false),
+    ('division-head', 'link.dashboard', 'none', false),
+    ('division-head', 'link.forms', 'none', false),
+    ('division-head', 'link.lists', 'none', false),
+    ('division-head', 'link.messages', 'none', false),
+    ('division-head', 'link.parents', 'none', false),
+    ('division-head', 'link.photos', 'none', false),
+    ('division-head', 'link.tips', 'none', false),
+    ('division-head', 'live.absences', 'edit', false),
+    ('division-head', 'live.camper-locator', 'view', false),
+    ('division-head', 'live.camper-mail', 'edit', false),
+    ('division-head', 'live.changes', 'edit', false),
+    ('division-head', 'live.early-pickup', 'edit', false),
+    ('division-head', 'live.messages', 'edit', false),
+    ('division-head', 'live.reports', 'view', false),
+    ('division-head', 'live.roll-call', 'edit', false),
+    ('division-head', 'me.analytics', 'none', false),
+    ('division-head', 'me.billing', 'none', false),
+    ('division-head', 'me.bunkbuilder', 'edit', true),
+    ('division-head', 'me.campers', 'view', true),
+    ('division-head', 'me.enrollment', 'none', false),
+    ('division-head', 'me.finance', 'none', false),
+    ('division-head', 'me.payroll', 'none', false),
+    ('division-head', 'me.printsheets', 'edit', true),
+    ('division-head', 'me.reports', 'view', true),
+    ('division-head', 'me.settings', 'none', false),
+    ('division-head', 'me.structure', 'view', true),
+    ('division-head', 'notes.notes', 'edit', true),
+    ('division-head', 'snacks.accounts', 'none', false),
+    ('division-head', 'snacks.dashboard', 'none', false),
+    ('division-head', 'snacks.menu', 'none', false),
+    ('division-head', 'snacks.pos', 'none', false),
+    ('division-head', 'snacks.settings', 'none', false),
+    ('division-head', 'snacks.shop', 'none', false),
+    ('division-head', 'snacks.transactions', 'none', false),
+    ('full', 'flow.camper-locator', 'edit', false),
+    ('full', 'flow.daily-adjustments', 'edit', false),
+    ('full', 'flow.facilities', 'edit', false),
+    ('full', 'flow.leagues', 'edit', false),
+    ('full', 'flow.master-scheduler', 'edit', false),
+    ('full', 'flow.print', 'edit', false),
+    ('full', 'flow.report', 'view', false),
+    ('full', 'flow.rules', 'edit', false),
+    ('full', 'flow.schedule', 'edit', false),
+    ('full', 'flow.setup', 'edit', false),
+    ('full', 'flow.specialty-leagues', 'edit', false),
+    ('full', 'flow.zones', 'edit', false),
+    ('full', 'go.addresses', 'edit', false),
+    ('full', 'go.fleet', 'edit', false),
+    ('full', 'go.luggage', 'edit', false),
+    ('full', 'go.routes', 'edit', false),
+    ('full', 'go.setup', 'edit', false),
+    ('full', 'go.staff', 'edit', false),
+    ('full', 'guard.guard', 'edit', false),
+    ('full', 'health.allergies', 'edit', false),
+    ('full', 'health.campers', 'edit', false),
+    ('full', 'health.dashboard', 'edit', false),
+    ('full', 'health.doctor', 'edit', false),
+    ('full', 'health.intake', 'edit', false),
+    ('full', 'health.medications', 'edit', false),
+    ('full', 'health.nighttime', 'edit', false),
+    ('full', 'health.reports', 'view', false),
+    ('full', 'health.sick-visits', 'edit', false),
+    ('full', 'link.dashboard', 'edit', false),
+    ('full', 'link.forms', 'edit', false),
+    ('full', 'link.lists', 'edit', false),
+    ('full', 'link.messages', 'edit', false),
+    ('full', 'link.parents', 'edit', false),
+    ('full', 'link.photos', 'edit', false),
+    ('full', 'link.tips', 'edit', false),
+    ('full', 'live.absences', 'edit', false),
+    ('full', 'live.camper-locator', 'view', false),
+    ('full', 'live.camper-mail', 'edit', false),
+    ('full', 'live.changes', 'edit', false),
+    ('full', 'live.early-pickup', 'edit', false),
+    ('full', 'live.messages', 'edit', false),
+    ('full', 'live.reports', 'view', false),
+    ('full', 'live.roll-call', 'edit', false),
+    ('full', 'me.analytics', 'view', false),
+    ('full', 'me.billing', 'edit', false),
+    ('full', 'me.bunkbuilder', 'edit', false),
+    ('full', 'me.campers', 'edit', false),
+    ('full', 'me.enrollment', 'edit', false),
+    ('full', 'me.finance', 'view', false),
+    ('full', 'me.payroll', 'edit', false),
+    ('full', 'me.printsheets', 'edit', false),
+    ('full', 'me.reports', 'view', false),
+    ('full', 'me.settings', 'edit', false),
+    ('full', 'me.structure', 'edit', false),
+    ('full', 'notes.notes', 'edit', false),
+    ('full', 'snacks.accounts', 'edit', false),
+    ('full', 'snacks.dashboard', 'edit', false),
+    ('full', 'snacks.menu', 'edit', false),
+    ('full', 'snacks.pos', 'edit', false),
+    ('full', 'snacks.settings', 'edit', false),
+    ('full', 'snacks.shop', 'edit', false),
+    ('full', 'snacks.transactions', 'edit', false),
+    ('head-counselor', 'flow.camper-locator', 'edit', false),
+    ('head-counselor', 'flow.daily-adjustments', 'edit', false),
+    ('head-counselor', 'flow.facilities', 'edit', false),
+    ('head-counselor', 'flow.leagues', 'edit', false),
+    ('head-counselor', 'flow.master-scheduler', 'edit', false),
+    ('head-counselor', 'flow.print', 'edit', false),
+    ('head-counselor', 'flow.report', 'view', false),
+    ('head-counselor', 'flow.rules', 'edit', false),
+    ('head-counselor', 'flow.schedule', 'edit', false),
+    ('head-counselor', 'flow.setup', 'edit', false),
+    ('head-counselor', 'flow.specialty-leagues', 'edit', false),
+    ('head-counselor', 'flow.zones', 'edit', false),
+    ('head-counselor', 'go.addresses', 'none', false),
+    ('head-counselor', 'go.fleet', 'none', false),
+    ('head-counselor', 'go.luggage', 'none', false),
+    ('head-counselor', 'go.routes', 'none', false),
+    ('head-counselor', 'go.setup', 'none', false),
+    ('head-counselor', 'go.staff', 'none', false),
+    ('head-counselor', 'guard.guard', 'none', false),
+    ('head-counselor', 'health.allergies', 'none', false),
+    ('head-counselor', 'health.campers', 'none', false),
+    ('head-counselor', 'health.dashboard', 'none', false),
+    ('head-counselor', 'health.doctor', 'none', false),
+    ('head-counselor', 'health.intake', 'none', false),
+    ('head-counselor', 'health.medications', 'none', false),
+    ('head-counselor', 'health.nighttime', 'none', false),
+    ('head-counselor', 'health.reports', 'none', false),
+    ('head-counselor', 'health.sick-visits', 'none', false),
+    ('head-counselor', 'link.dashboard', 'none', false),
+    ('head-counselor', 'link.forms', 'none', false),
+    ('head-counselor', 'link.lists', 'none', false),
+    ('head-counselor', 'link.messages', 'none', false),
+    ('head-counselor', 'link.parents', 'none', false),
+    ('head-counselor', 'link.photos', 'none', false),
+    ('head-counselor', 'link.tips', 'none', false),
+    ('head-counselor', 'live.absences', 'edit', false),
+    ('head-counselor', 'live.camper-locator', 'view', false),
+    ('head-counselor', 'live.camper-mail', 'edit', false),
+    ('head-counselor', 'live.changes', 'edit', false),
+    ('head-counselor', 'live.early-pickup', 'edit', false),
+    ('head-counselor', 'live.messages', 'edit', false),
+    ('head-counselor', 'live.reports', 'view', false),
+    ('head-counselor', 'live.roll-call', 'edit', false),
+    ('head-counselor', 'me.analytics', 'none', false),
+    ('head-counselor', 'me.billing', 'none', false),
+    ('head-counselor', 'me.bunkbuilder', 'edit', true),
+    ('head-counselor', 'me.campers', 'view', true),
+    ('head-counselor', 'me.enrollment', 'none', false),
+    ('head-counselor', 'me.finance', 'none', false),
+    ('head-counselor', 'me.payroll', 'none', false),
+    ('head-counselor', 'me.printsheets', 'edit', true),
+    ('head-counselor', 'me.reports', 'view', true),
+    ('head-counselor', 'me.settings', 'none', false),
+    ('head-counselor', 'me.structure', 'view', true),
+    ('head-counselor', 'notes.notes', 'edit', true),
+    ('head-counselor', 'snacks.accounts', 'none', false),
+    ('head-counselor', 'snacks.dashboard', 'none', false),
+    ('head-counselor', 'snacks.menu', 'none', false),
+    ('head-counselor', 'snacks.pos', 'none', false),
+    ('head-counselor', 'snacks.settings', 'none', false),
+    ('head-counselor', 'snacks.shop', 'none', false),
+    ('head-counselor', 'snacks.transactions', 'none', false),
+    ('nurse', 'flow.camper-locator', 'none', false),
+    ('nurse', 'flow.daily-adjustments', 'none', false),
+    ('nurse', 'flow.facilities', 'none', false),
+    ('nurse', 'flow.leagues', 'none', false),
+    ('nurse', 'flow.master-scheduler', 'none', false),
+    ('nurse', 'flow.print', 'none', false),
+    ('nurse', 'flow.report', 'none', false),
+    ('nurse', 'flow.rules', 'none', false),
+    ('nurse', 'flow.schedule', 'none', false),
+    ('nurse', 'flow.setup', 'none', false),
+    ('nurse', 'flow.specialty-leagues', 'none', false),
+    ('nurse', 'flow.zones', 'none', false),
+    ('nurse', 'go.addresses', 'none', false),
+    ('nurse', 'go.fleet', 'none', false),
+    ('nurse', 'go.luggage', 'none', false),
+    ('nurse', 'go.routes', 'none', false),
+    ('nurse', 'go.setup', 'none', false),
+    ('nurse', 'go.staff', 'none', false),
+    ('nurse', 'guard.guard', 'none', false),
+    ('nurse', 'health.allergies', 'edit', false),
+    ('nurse', 'health.campers', 'edit', false),
+    ('nurse', 'health.dashboard', 'edit', false),
+    ('nurse', 'health.doctor', 'edit', false),
+    ('nurse', 'health.intake', 'edit', false),
+    ('nurse', 'health.medications', 'edit', false),
+    ('nurse', 'health.nighttime', 'edit', false),
+    ('nurse', 'health.reports', 'view', false),
+    ('nurse', 'health.sick-visits', 'edit', false),
+    ('nurse', 'link.dashboard', 'none', false),
+    ('nurse', 'link.forms', 'none', false),
+    ('nurse', 'link.lists', 'none', false),
+    ('nurse', 'link.messages', 'none', false),
+    ('nurse', 'link.parents', 'none', false),
+    ('nurse', 'link.photos', 'none', false),
+    ('nurse', 'link.tips', 'none', false),
+    ('nurse', 'live.absences', 'none', false),
+    ('nurse', 'live.camper-locator', 'none', false),
+    ('nurse', 'live.camper-mail', 'none', false),
+    ('nurse', 'live.changes', 'none', false),
+    ('nurse', 'live.early-pickup', 'none', false),
+    ('nurse', 'live.messages', 'none', false),
+    ('nurse', 'live.reports', 'none', false),
+    ('nurse', 'live.roll-call', 'none', false),
+    ('nurse', 'me.analytics', 'none', false),
+    ('nurse', 'me.billing', 'none', false),
+    ('nurse', 'me.bunkbuilder', 'none', false),
+    ('nurse', 'me.campers', 'view', true),
+    ('nurse', 'me.enrollment', 'none', false),
+    ('nurse', 'me.finance', 'none', false),
+    ('nurse', 'me.payroll', 'none', false),
+    ('nurse', 'me.printsheets', 'none', false),
+    ('nurse', 'me.reports', 'none', false),
+    ('nurse', 'me.settings', 'none', false),
+    ('nurse', 'me.structure', 'none', false),
+    ('nurse', 'notes.notes', 'edit', true),
+    ('nurse', 'snacks.accounts', 'none', false),
+    ('nurse', 'snacks.dashboard', 'none', false),
+    ('nurse', 'snacks.menu', 'none', false),
+    ('nurse', 'snacks.pos', 'none', false),
+    ('nurse', 'snacks.settings', 'none', false),
+    ('nurse', 'snacks.shop', 'none', false),
+    ('nurse', 'snacks.transactions', 'none', false),
+    ('office', 'flow.camper-locator', 'none', false),
+    ('office', 'flow.daily-adjustments', 'none', false),
+    ('office', 'flow.facilities', 'none', false),
+    ('office', 'flow.leagues', 'none', false),
+    ('office', 'flow.master-scheduler', 'none', false),
+    ('office', 'flow.print', 'none', false),
+    ('office', 'flow.report', 'none', false),
+    ('office', 'flow.rules', 'none', false),
+    ('office', 'flow.schedule', 'none', false),
+    ('office', 'flow.setup', 'none', false),
+    ('office', 'flow.specialty-leagues', 'none', false),
+    ('office', 'flow.zones', 'none', false),
+    ('office', 'go.addresses', 'none', false),
+    ('office', 'go.fleet', 'none', false),
+    ('office', 'go.luggage', 'none', false),
+    ('office', 'go.routes', 'none', false),
+    ('office', 'go.setup', 'none', false),
+    ('office', 'go.staff', 'none', false),
+    ('office', 'guard.guard', 'none', false),
+    ('office', 'health.allergies', 'none', false),
+    ('office', 'health.campers', 'none', false),
+    ('office', 'health.dashboard', 'none', false),
+    ('office', 'health.doctor', 'none', false),
+    ('office', 'health.intake', 'none', false),
+    ('office', 'health.medications', 'none', false),
+    ('office', 'health.nighttime', 'none', false),
+    ('office', 'health.reports', 'none', false),
+    ('office', 'health.sick-visits', 'none', false),
+    ('office', 'link.dashboard', 'edit', false),
+    ('office', 'link.forms', 'edit', false),
+    ('office', 'link.lists', 'edit', false),
+    ('office', 'link.messages', 'edit', false),
+    ('office', 'link.parents', 'edit', false),
+    ('office', 'link.photos', 'edit', false),
+    ('office', 'link.tips', 'edit', false),
+    ('office', 'live.absences', 'none', false),
+    ('office', 'live.camper-locator', 'none', false),
+    ('office', 'live.camper-mail', 'none', false),
+    ('office', 'live.changes', 'none', false),
+    ('office', 'live.early-pickup', 'none', false),
+    ('office', 'live.messages', 'none', false),
+    ('office', 'live.reports', 'none', false),
+    ('office', 'live.roll-call', 'none', false),
+    ('office', 'me.analytics', 'none', false),
+    ('office', 'me.billing', 'edit', true),
+    ('office', 'me.bunkbuilder', 'none', false),
+    ('office', 'me.campers', 'edit', true),
+    ('office', 'me.enrollment', 'edit', true),
+    ('office', 'me.finance', 'none', false),
+    ('office', 'me.payroll', 'none', false),
+    ('office', 'me.printsheets', 'edit', true),
+    ('office', 'me.reports', 'view', true),
+    ('office', 'me.settings', 'none', false),
+    ('office', 'me.structure', 'view', true),
+    ('office', 'notes.notes', 'edit', true),
+    ('office', 'snacks.accounts', 'none', false),
+    ('office', 'snacks.dashboard', 'none', false),
+    ('office', 'snacks.menu', 'none', false),
+    ('office', 'snacks.pos', 'none', false),
+    ('office', 'snacks.settings', 'none', false),
+    ('office', 'snacks.shop', 'none', false),
+    ('office', 'snacks.transactions', 'none', false),
+    ('read-only', 'flow.camper-locator', 'view', false),
+    ('read-only', 'flow.daily-adjustments', 'view', false),
+    ('read-only', 'flow.facilities', 'view', false),
+    ('read-only', 'flow.leagues', 'view', false),
+    ('read-only', 'flow.master-scheduler', 'view', false),
+    ('read-only', 'flow.print', 'view', false),
+    ('read-only', 'flow.report', 'view', false),
+    ('read-only', 'flow.rules', 'view', false),
+    ('read-only', 'flow.schedule', 'view', false),
+    ('read-only', 'flow.setup', 'view', false),
+    ('read-only', 'flow.specialty-leagues', 'view', false),
+    ('read-only', 'flow.zones', 'view', false),
+    ('read-only', 'go.addresses', 'view', false),
+    ('read-only', 'go.fleet', 'view', false),
+    ('read-only', 'go.luggage', 'view', false),
+    ('read-only', 'go.routes', 'view', false),
+    ('read-only', 'go.setup', 'view', false),
+    ('read-only', 'go.staff', 'view', false),
+    ('read-only', 'guard.guard', 'view', false),
+    ('read-only', 'health.allergies', 'view', false),
+    ('read-only', 'health.campers', 'view', false),
+    ('read-only', 'health.dashboard', 'view', false),
+    ('read-only', 'health.doctor', 'view', false),
+    ('read-only', 'health.intake', 'view', false),
+    ('read-only', 'health.medications', 'view', false),
+    ('read-only', 'health.nighttime', 'view', false),
+    ('read-only', 'health.reports', 'view', false),
+    ('read-only', 'health.sick-visits', 'view', false),
+    ('read-only', 'link.dashboard', 'view', false),
+    ('read-only', 'link.forms', 'view', false),
+    ('read-only', 'link.lists', 'view', false),
+    ('read-only', 'link.messages', 'view', false),
+    ('read-only', 'link.parents', 'view', false),
+    ('read-only', 'link.photos', 'view', false),
+    ('read-only', 'link.tips', 'view', false),
+    ('read-only', 'live.absences', 'view', false),
+    ('read-only', 'live.camper-locator', 'view', false),
+    ('read-only', 'live.camper-mail', 'view', false),
+    ('read-only', 'live.changes', 'view', false),
+    ('read-only', 'live.early-pickup', 'view', false),
+    ('read-only', 'live.messages', 'view', false),
+    ('read-only', 'live.reports', 'view', false),
+    ('read-only', 'live.roll-call', 'view', false),
+    ('read-only', 'me.analytics', 'view', false),
+    ('read-only', 'me.billing', 'view', false),
+    ('read-only', 'me.bunkbuilder', 'view', false),
+    ('read-only', 'me.campers', 'view', false),
+    ('read-only', 'me.enrollment', 'view', false),
+    ('read-only', 'me.finance', 'view', false),
+    ('read-only', 'me.payroll', 'view', false),
+    ('read-only', 'me.printsheets', 'view', false),
+    ('read-only', 'me.reports', 'view', false),
+    ('read-only', 'me.settings', 'view', false),
+    ('read-only', 'me.structure', 'view', false),
+    ('read-only', 'notes.notes', 'view', false),
+    ('read-only', 'snacks.accounts', 'view', false),
+    ('read-only', 'snacks.dashboard', 'view', false),
+    ('read-only', 'snacks.menu', 'view', false),
+    ('read-only', 'snacks.pos', 'view', false),
+    ('read-only', 'snacks.settings', 'view', false),
+    ('read-only', 'snacks.shop', 'view', false),
+    ('read-only', 'snacks.transactions', 'view', false);
+
+-- ─── Verification ──────────────────────────────────────────────────────────
+--   select count(*) from access_capabilities;    -- expect 62
+--   select count(*) from access_preset_grants;   -- expect 558
+--
+-- Resolved levels for the two capabilities phase 3 gates, straight from the
+-- JavaScript resolver. After applying 160, user_section_level() must agree with
+-- every line of this:
+--   me.payroll  role=owner    (no preset)        -> edit
+--   me.payroll  role=admin    (no preset)        -> edit
+--   me.payroll  role=manager  preset=bookkeeper       -> edit
+--   me.payroll  role=manager  preset=bus-coordinator  -> none
+--   me.payroll  role=manager  preset=canteen          -> none
+--   me.payroll  role=manager  preset=division-head    -> none
+--   me.payroll  role=manager  preset=full             -> edit
+--   me.payroll  role=manager  preset=head-counselor   -> none
+--   me.payroll  role=manager  preset=nurse            -> none
+--   me.payroll  role=manager  preset=office           -> none
+--   me.payroll  role=manager  preset=read-only        -> view
+--   me.finance  role=owner    (no preset)        -> view
+--   me.finance  role=admin    (no preset)        -> view
+--   me.finance  role=manager  preset=bookkeeper       -> view
+--   me.finance  role=manager  preset=bus-coordinator  -> none
+--   me.finance  role=manager  preset=canteen          -> none
+--   me.finance  role=manager  preset=division-head    -> none
+--   me.finance  role=manager  preset=full             -> view
+--   me.finance  role=manager  preset=head-counselor   -> none
+--   me.finance  role=manager  preset=nurse            -> none
+--   me.finance  role=manager  preset=office           -> none
+--   me.finance  role=manager  preset=read-only        -> view
+--
+-- NOTE 'me.finance' never exceeds 'view' for ANYONE, the owner included — it is
+-- flagged view-only in the registry. That is why migration 160 gates writes on
+-- "not none" rather than "edit": gating on edit would make Finance permanently
+-- unsaveable for every user in every camp.
+-- ============================================================================
+
+
+-- #########################################################################
+-- ###### 160_per_user_key_rls
+-- ###### A staff member's section access enforced in RLS, for the two Me keys (phase 3)
+-- #########################################################################
+
+-- ============================================================================
+-- Migration 160: enforce a STAFF MEMBER's section access in the database.
+--
+-- Phase 3 of ENTITLEMENTS_DESIGN.md, and the last of the three access layers to
+-- become real:
+--
+--     camp entitlement   (what the camp bought)    -> enforced by 157/158
+--     user product_access (which apps)             -> browser only
+--     user section_access (which sections)         -> browser only  <-- THIS
+--
+-- Until now section_access appeared in ZERO RLS policies. A manager or
+-- scheduler configured with payroll:none could still read campistryMePayroll
+-- out of camp_state_kv with curl and a valid session — pay rates, home
+-- addresses, the lot — and write it back. The browser hid the page; nothing
+-- stopped the request.
+--
+-- ── SCOPE: TWO KEYS, DELIBERATELY ──────────────────────────────────────────
+-- The plan says "only for keys whose readers are all accounted for, one key at
+-- a time". This does campistryMePayroll and campistryMeFinance and nothing
+-- else, because those two are the only keys where that is honestly true: they
+-- were created by migration 158, their only readers are campistry_me.js and
+-- campistry_birthdays.js, and both were written in the same change.
+--
+-- NOT done here, on purpose:
+--   * campistrySnacks — read by the POS (counselor role), the Snacks manager,
+--     Campistry Lite and several parent-facing SECURITY DEFINER RPCs. Gating it
+--     needs each of those audited first.
+--   * campistryHealth, campistryShop, campistryLuggage — same reason, fewer
+--     readers. Next, one at a time.
+--   * campistryMe / app1 / campStructure — 55 user-session call sites,
+--     including a raw REST fetch in a beforeunload handler and an anonymous
+--     page that upserts the whole blob. Last, if ever.
+--
+-- ── WHY WRITES ARE GATED ON "NOT NONE" AND NOT ON "EDIT" ───────────────────
+-- me.finance is flagged view-only in the capability registry, so C.resolve
+-- never returns 'edit' for it — not for a manager, not for an admin, not for
+-- the OWNER. Gating writes on level='edit' would therefore make Finance
+-- permanently unsaveable for every user in every camp, and the failure would be
+-- a silent RLS denial on save rather than anything the page reports.
+--
+-- view-only is a UI affordance (it greys out the controls), not a storage rule,
+-- and the Finance page legitimately writes budget and expenses. So the storage
+-- boundary here is "can this person reach the section at all", and edit-vs-view
+-- stays where it already works. Revisit only with a view-only cap that the UI
+-- genuinely never writes.
+--
+-- Idempotent. Requires 159 (the generated registry tables).
+-- ============================================================================
+
+-- ─── 1. The resolver ────────────────────────────────────────────────────────
+-- A faithful mirror of C.resolve() in campistry_capabilities.js. Every branch
+-- below exists because that function has it; the order is its order. If you
+-- change one, change both — tests/access_registry_sql.test.js pins the JS side
+-- and the truth table at the bottom of 159 is generated from it.
+CREATE OR REPLACE FUNCTION public.user_section_level(p_camp_id uuid, p_cap_key text)
+RETURNS text
+LANGUAGE plpgsql
+STABLE
+SECURITY DEFINER
+SET search_path = public, pg_catalog
+AS $$
+DECLARE
+    v_caller      uuid := auth.uid();
+    v_app         text;
+    v_section     text;
+    v_view_only   boolean;
+    v_role        text;
+    v_products    jsonb;
+    v_preset      text;
+    v_overrides   jsonb;
+    v_group_id    uuid;
+    v_grp_found   boolean := false;
+    v_grp_products jsonb;
+    v_grp_preset   text;
+    v_grp_sections jsonb;
+    v_level       text;
+    v_explicit    boolean;
+    v_unconfigured boolean;
+BEGIN
+    IF v_caller IS NULL THEN RETURN 'none'; END IF;
+
+    SELECT app, section, view_only
+      INTO v_app, v_section, v_view_only
+      FROM access_capabilities WHERE cap_key = p_cap_key;
+    -- Not in the registry at all -> not a section we gate. Allow, matching
+    -- S.level()'s "lvl === undefined ? 'edit'" rather than blocking a page we
+    -- simply haven't catalogued.
+    IF NOT FOUND THEN RETURN 'edit'; END IF;
+
+    -- Camp owner: always full. Same short-circuit as get_my_access, and for the
+    -- same reason — anything else and an owner can lock themselves out with no
+    -- way back in. The CAMP ENTITLEMENT still caps them, but that is enforced
+    -- separately (157) and is about what was bought, not who this is.
+    IF EXISTS (SELECT 1 FROM camps WHERE id = p_camp_id AND owner = v_caller) THEN
+        RETURN CASE WHEN v_view_only THEN 'view' ELSE 'edit' END;
+    END IF;
+
+    SELECT role, product_access, access_preset, section_access, access_group_id
+      INTO v_role, v_products, v_preset, v_overrides, v_group_id
+      FROM camp_users
+     WHERE camp_id = p_camp_id AND user_id = v_caller
+     LIMIT 1;
+
+    -- Not a resolvable member. Fail OPEN, matching get_my_access. This is not a
+    -- hole: every policy using this function also requires
+    -- camp_id = get_user_camp_id(), so a non-member never reaches here. Failing
+    -- closed would only lock out a legitimate user during the window where
+    -- membership hasn't propagated.
+    IF NOT FOUND THEN RETURN 'edit'; END IF;
+
+    -- A group assignment replaces the member's own columns WHOLESALE (no
+    -- merge) — migration 097's intended behaviour, and 154's fix. Branch on
+    -- FOUND, never on "record IS NOT NULL": a group whose access_preset is NULL
+    -- fails a row-value null test and would silently fall through to the
+    -- member's own empty columns, which reads as unconfigured and grants
+    -- everything. That exact bug is what 154 existed to fix.
+    IF v_group_id IS NOT NULL THEN
+        SELECT product_access, access_preset, section_access
+          INTO v_grp_products, v_grp_preset, v_grp_sections
+          FROM camp_access_groups WHERE id = v_group_id;
+        v_grp_found := FOUND;
+    END IF;
+    IF v_grp_found THEN
+        v_products  := v_grp_products;
+        v_preset    := v_grp_preset;
+        v_overrides := v_grp_sections;
+    END IF;
+
+    v_products  := COALESCE(v_products,  '[]'::jsonb);
+    v_overrides := COALESCE(v_overrides, '{}'::jsonb);
+    -- Normalise exactly as campistry_access_sections.js apply() does before it
+    -- hands the access object to resolve(), because that normalisation is what
+    -- the JS rules are actually written against:
+    --
+    --   preset: data.preset || null     -> an EMPTY STRING is no preset.
+    --
+    -- This matters. Without it, a preset column holding '' is "not NULL" here,
+    -- so the user is treated as configured, the lookup finds no grant row, and
+    -- the level falls to 'none' — locking someone out of a section the browser
+    -- shows them, which is the worst kind of divergence to debug.
+    IF v_preset = '' THEN v_preset := NULL; END IF;
+
+    -- Owners and admins are never gated by the per-STAFF layers.
+    IF v_role IN ('owner', 'admin') THEN
+        RETURN CASE WHEN v_view_only THEN 'view' ELSE 'edit' END;
+    END IF;
+
+    -- The product gate comes first: no access to the app, no access to any of
+    -- its sections.
+    --
+    -- An EMPTY products array means "no product restriction recorded", NOT "no
+    -- products". resolve() itself would deny everything for [] — it tests
+    -- `Array.isArray(products) && indexOf(app) < 0` with no length check — but
+    -- it never sees one, because apply() maps an empty array to null first
+    -- (`data.products.length ? data.products : null`) on BOTH the group and the
+    -- member path. Reading camp_users/camp_access_groups directly, this
+    -- function CAN see [], so the length test is what keeps it faithful.
+    -- Dropping it would lock out every member whose product_access is [].
+    IF jsonb_typeof(v_products) = 'array'
+       AND jsonb_array_length(v_products) > 0
+       AND NOT (v_products ? v_app) THEN
+        RETURN 'none';
+    END IF;
+
+    -- THE BACKWARD-COMPATIBILITY RULE: a user with no preset and no overrides
+    -- has never had section access configured, and keeps the behaviour from
+    -- before section access existed — full use of every app they can open.
+    v_unconfigured := (v_preset IS NULL AND v_overrides = '{}'::jsonb);
+
+    IF v_unconfigured THEN
+        v_level := 'edit';
+    ELSE
+        -- 'finance' was split out of what used to be one 'analytics' capability
+        -- ("Analytics & Finance"). Access configured before that split only
+        -- names 'analytics', so treating 'finance' as just another unlisted key
+        -- would silently hide financial data from people who already had it.
+        -- Until it is named explicitly — a real override, or a preset that
+        -- names it — 'finance' simply IS 'analytics'. Recursing (rather than
+        -- reading the analytics row directly) also picks up that key's own
+        -- wildcard and legacy fallbacks.
+        IF v_section = 'finance' AND NOT (v_overrides ? p_cap_key) THEN
+            SELECT explicit INTO v_explicit
+              FROM access_preset_grants
+             WHERE preset = v_preset AND cap_key = p_cap_key;
+            IF v_preset IS NULL OR NOT COALESCE(v_explicit, false) THEN
+                RETURN public.user_section_level(p_camp_id, v_app || '.analytics');
+            END IF;
+        END IF;
+
+        IF v_overrides ? p_cap_key THEN
+            v_level := v_overrides ->> p_cap_key;
+        ELSIF v_preset IS NOT NULL THEN
+            SELECT level INTO v_level
+              FROM access_preset_grants
+             WHERE preset = v_preset AND cap_key = p_cap_key;
+        ELSE
+            -- Overrides exist but this key isn't among them and there is no
+            -- preset: the owner is picking sections explicitly, so anything
+            -- unlisted is off.
+            v_level := 'none';
+        END IF;
+    END IF;
+
+    IF v_level IS NULL OR v_level NOT IN ('none', 'view', 'edit') THEN
+        v_level := 'none';
+    END IF;
+
+    -- A read-only role can never come out above 'view', whatever the preset
+    -- says — the fail-closed floor from access_control.
+    IF v_role IN ('viewer', 'counselor') AND v_level = 'edit' THEN
+        v_level := 'view';
+    END IF;
+    IF v_view_only AND v_level = 'edit' THEN
+        v_level := 'view';
+    END IF;
+
+    RETURN v_level;
+END;
+$$;
+REVOKE ALL ON FUNCTION public.user_section_level(uuid, text) FROM public;
+GRANT EXECUTE ON FUNCTION public.user_section_level(uuid, text) TO authenticated, service_role;
+
+-- ─── 2. Which keys this applies to ──────────────────────────────────────────
+-- One place, so read and write can never disagree. Anything not named returns
+-- true: this migration cannot affect a key it does not list, which is what
+-- makes adding the next key a one-line change with a bounded blast radius.
+CREATE OR REPLACE FUNCTION public.camp_state_key_user_allowed(p_camp_id uuid, p_key text)
+RETURNS boolean
+LANGUAGE plpgsql
+STABLE
+SECURITY DEFINER
+SET search_path = public, pg_catalog
+AS $$
+BEGIN
+    RETURN CASE p_key
+        WHEN 'campistryMePayroll' THEN public.user_section_level(p_camp_id, 'me.payroll') <> 'none'
+        WHEN 'campistryMeFinance' THEN public.user_section_level(p_camp_id, 'me.finance') <> 'none'
+        ELSE true
+    END;
+END;
+$$;
+REVOKE ALL ON FUNCTION public.camp_state_key_user_allowed(uuid, text) FROM public;
+GRANT EXECUTE ON FUNCTION public.camp_state_key_user_allowed(uuid, text) TO authenticated, service_role;
+
+-- ─── 3. The policies ────────────────────────────────────────────────────────
+-- 158's predicates with the per-user check conjoined. All FOUR policies that
+-- can touch these keys are rewritten: Postgres OR-combines permissive policies,
+-- so leaving one without the check would reopen the door through it. (099's two
+-- counselor-snacks policies are scoped to key='campistrySnacks' and so cannot
+-- reach these keys; they keep 157's entitlement gate and are left alone.)
+
+DROP POLICY IF EXISTS camp_state_kv_select ON camp_state_kv;
+CREATE POLICY camp_state_kv_select ON camp_state_kv
+    FOR SELECT
+    USING (
+        camp_id = get_user_camp_id()
+        AND camp_state_key_entitled(camp_id, key)
+        AND camp_state_key_user_allowed(camp_id, key)
+        AND (
+            get_user_role() = ANY (ARRAY['owner'::text, 'admin'::text, 'manager'::text, 'scheduler'::text])
+            OR (
+                get_user_role() = 'counselor'::text
+                AND key <> ALL (ARRAY['app1'::text, 'campistryMe'::text, 'campistryHealth'::text,
+                                      'campistryMePayroll'::text, 'campistryMeFinance'::text])
+            )
+        )
+    );
+
+DROP POLICY IF EXISTS camp_state_kv_insert ON camp_state_kv;
+CREATE POLICY camp_state_kv_insert ON camp_state_kv
+    FOR INSERT
+    WITH CHECK (
+        camp_id = get_user_camp_id()
+        AND get_user_role() = ANY (ARRAY['owner'::text, 'admin'::text, 'manager'::text, 'scheduler'::text])
+        AND camp_state_key_entitled(camp_id, key)
+        AND camp_state_key_user_allowed(camp_id, key)
+    );
+
+DROP POLICY IF EXISTS camp_state_kv_update ON camp_state_kv;
+CREATE POLICY camp_state_kv_update ON camp_state_kv
+    FOR UPDATE
+    USING (
+        camp_id = get_user_camp_id()
+        AND get_user_role() = ANY (ARRAY['owner'::text, 'admin'::text, 'manager'::text, 'scheduler'::text])
+        AND camp_state_key_entitled(camp_id, key)
+        AND camp_state_key_user_allowed(camp_id, key)
+    );
+
+DROP POLICY IF EXISTS camp_state_kv_delete ON camp_state_kv;
+CREATE POLICY camp_state_kv_delete ON camp_state_kv
+    FOR DELETE
+    USING (
+        camp_id = get_user_camp_id()
+        AND get_user_role() = 'owner'::text
+        AND camp_state_key_entitled(camp_id, key)
+        AND camp_state_key_user_allowed(camp_id, key)
+    );
+
+-- ─── Sanity checks ─────────────────────────────────────────────────────────
+-- As the OWNER, nothing changes — these must still read as they did:
+--   select user_section_level('<camp>'::uuid, 'me.payroll');   -- edit
+--   select user_section_level('<camp>'::uuid, 'me.finance');   -- view (view-only cap)
+--
+-- As an UNCONFIGURED staff member (no preset, no overrides) nothing changes
+-- either — that is the backward-compatibility rule:
+--   -- expect edit / view, NOT none
+--
+-- As a staff member on the 'nurse' preset:
+--   select user_section_level('<camp>'::uuid, 'me.payroll');   -- none
+--   select key from camp_state_kv where key = 'campistryMePayroll';  -- 0 rows
+--
+-- Every value the resolver should produce is listed in the generated truth
+-- table at the bottom of migration 159. Compare against it:
+--   select preset, level from access_preset_grants
+--    where cap_key = 'me.payroll' order by preset;
+--
+-- All four policies must carry the per-user check — one that doesn't is a hole,
+-- because Postgres ORs permissive policies together:
+--   select policyname, cmd,
+--          (coalesce(qual,'') || coalesce(with_check,'')
+--             like '%camp_state_key_user_allowed%') as gated
+--     from pg_policies where tablename = 'camp_state_kv' order by policyname;
+--   -- expect the 4 unsuffixed policies true; the 2 *_counselor_snacks false
+-- ============================================================================
+
+
 -- ═══════════════════════════════════════════════════════════════════════════
 -- POST-APPLY: backfill saved cards for every camp.
 --
@@ -2197,4 +3251,26 @@ UNION ALL SELECT 'payroll/finance reachable by the entitlement',
 UNION ALL SELECT 'payment ledger still in campistryMe',
        CASE WHEN NOT EXISTS (SELECT 1 FROM camp_state_kv
                               WHERE key='campistryMeFinance' AND value ? 'payments')
-            THEN 'OK' ELSE 'LEDGER MOVED — INVESTIGATE' END;
+            THEN 'OK' ELSE 'LEDGER MOVED — INVESTIGATE' END
+-- Phase 3. The registry tables are generated from campistry_capabilities.js;
+-- if the counts are wrong the database is resolving against stale rules.
+UNION ALL SELECT 'access registry loaded (' || (SELECT count(*)::text FROM access_capabilities)
+                 || ' capabilities)',
+       CASE WHEN (SELECT count(*) FROM access_capabilities) > 0
+             AND (SELECT count(*) FROM access_preset_grants) =
+                 (SELECT count(*) FROM access_capabilities)
+                 * (SELECT count(DISTINCT preset) FROM access_preset_grants)
+            THEN 'OK' ELSE 'MISSING' END
+UNION ALL SELECT 'per-user section access enforced in RLS',
+       CASE WHEN (SELECT count(*) FROM pg_policies
+                   WHERE tablename='camp_state_kv'
+                     AND COALESCE(qual,'') || COALESCE(with_check,'')
+                         LIKE '%camp_state_key_user_allowed%') = 4
+            THEN 'OK' ELSE 'MISSING' END
+-- me.finance is a view-only capability and never resolves to 'edit' for
+-- anyone, the owner included. If the key gate ever tests for 'edit', Finance
+-- becomes permanently unsaveable for every user in every camp.
+UNION ALL SELECT 'finance writes gated on "not none", not "edit"',
+       CASE WHEN (SELECT prosrc FROM pg_proc
+                   WHERE proname='camp_state_key_user_allowed' LIMIT 1) LIKE '%<> ''none''%'
+            THEN 'OK' ELSE 'MISSING' END;

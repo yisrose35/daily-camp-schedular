@@ -55,6 +55,14 @@ MANIFEST = [
     # two new keys back out of the gate and out of the counselor exclusion.
     ("158_split_payroll_finance_keys",
      "Payroll and Finance get their own keys so the entitlement can reach them (phase 2B)"),
+    # 159 is GENERATED from campistry_capabilities.js by
+    # scripts/build-access-registry-sql.js — never edit it here or by hand.
+    ("159_access_registry_tables",
+     "The capability registry and preset expansions, in SQL (generated)"),
+    # MUST come after 158 and 159: it needs the registry tables, and it rewrites
+    # the four camp_state_kv policies 158 leaves in place.
+    ("160_per_user_key_rls",
+     "A staff member's section access enforced in RLS, for the two Me keys (phase 3)"),
 ]
 
 HEADER = """-- ═══════════════════════════════════════════════════════════════════════════
@@ -93,6 +101,12 @@ HEADER = """-- ═════════════════════�
 --     rows and falls back to the old blob, so it is correct either way round,
 --     but old code running against moved data would show empty pages. The
 --     family payment ledger deliberately does NOT move.
+--   * !! A staff member's SECTION access starts being enforced by the database
+--     for Payroll and Finance (159/160), not just hidden in the browser. Until
+--     now a manager with payroll:none could still read the data out of the API
+--     with a valid session. Anyone who was never configured (no preset, no
+--     overrides) is unaffected — that is the backward-compatibility rule — but
+--     anyone you DID restrict can no longer reach those two keys at all.
 --
 -- PREREQUISITES (long since applied on a live camp; the preflight below fails
 -- loudly rather than confusingly if one is missing): 077 (camp Stripe Connect),
@@ -231,7 +245,29 @@ UNION ALL SELECT 'payroll/finance reachable by the entitlement',
 UNION ALL SELECT 'payment ledger still in campistryMe',
        CASE WHEN NOT EXISTS (SELECT 1 FROM camp_state_kv
                               WHERE key='campistryMeFinance' AND value ? 'payments')
-            THEN 'OK' ELSE 'LEDGER MOVED — INVESTIGATE' END;
+            THEN 'OK' ELSE 'LEDGER MOVED — INVESTIGATE' END
+-- Phase 3. The registry tables are generated from campistry_capabilities.js;
+-- if the counts are wrong the database is resolving against stale rules.
+UNION ALL SELECT 'access registry loaded (' || (SELECT count(*)::text FROM access_capabilities)
+                 || ' capabilities)',
+       CASE WHEN (SELECT count(*) FROM access_capabilities) > 0
+             AND (SELECT count(*) FROM access_preset_grants) =
+                 (SELECT count(*) FROM access_capabilities)
+                 * (SELECT count(DISTINCT preset) FROM access_preset_grants)
+            THEN 'OK' ELSE 'MISSING' END
+UNION ALL SELECT 'per-user section access enforced in RLS',
+       CASE WHEN (SELECT count(*) FROM pg_policies
+                   WHERE tablename='camp_state_kv'
+                     AND COALESCE(qual,'') || COALESCE(with_check,'')
+                         LIKE '%camp_state_key_user_allowed%') = 4
+            THEN 'OK' ELSE 'MISSING' END
+-- me.finance is a view-only capability and never resolves to 'edit' for
+-- anyone, the owner included. If the key gate ever tests for 'edit', Finance
+-- becomes permanently unsaveable for every user in every camp.
+UNION ALL SELECT 'finance writes gated on "not none", not "edit"',
+       CASE WHEN (SELECT prosrc FROM pg_proc
+                   WHERE proname='camp_state_key_user_allowed' LIMIT 1) LIKE '%<> ''none''%'
+            THEN 'OK' ELSE 'MISSING' END;
 """
 
 
