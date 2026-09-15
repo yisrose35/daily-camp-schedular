@@ -17,12 +17,12 @@
         .field-group{margin-bottom:14px}
         .cc-field{border:1px solid #CBD5E1;border-radius:10px;padding:11px 12px;background:#fff;min-height:42px}
         .cc-field.focused{border-color:#147D91}
-        /* The tokenizer injects its own card iframe in here. Without an explicit
-           size it can mount at height:0 — the box still LOOKS like an input
-           (the border is ours) but there's nothing to click into. */
-        #bq-card{display:flex;align-items:center}
-        #bq-card iframe{width:100%;min-height:22px;border:none;display:block;flex:1}
-        #bq-card input{width:100%;border:none;outline:none;background:transparent;font:inherit;color:#1E293B}
+        /* Banquest's tokenizer mounts an iframe here containing its OWN card,
+           expiry and CVV inputs, each already bordered by the library. So this
+           is a plain container — no border of ours to double up, and no height
+           cap that would clip the multi-field iframe. */
+        #bq-card{min-height:56px}
+        #bq-card iframe{width:100%;border:none;display:block}
         .row{display:flex;gap:10px}
         .row .field-group{flex:1}
         button#saveBtn{width:100%;background:#147D91;color:#fff;border:none;border-radius:10px;padding:13px;font-size:.95rem;font-weight:600;cursor:pointer;margin-top:6px}
@@ -272,7 +272,7 @@
             cardEl.innerHTML =
                 '<h1>' + title + '</h1>' +
                 '<p class="sub">' + sub + '</p>' +
-                '<div class="field-group"><span class="field-label">Card <span class="req">*</span></span><div class="cc-field" id="bq-card" style="min-height:44px"></div></div>' +
+                '<div class="field-group"><span class="field-label">Card <span class="req">*</span></span><div id="bq-card"></div></div>' +
                 billingFieldsHtml(fields) +
                 '<button id="saveBtn" type="button">' + btnLabel + '</button>' +
                 '<div class="msg" id="msg"></div>';
@@ -291,7 +291,25 @@
                 }
                 var ht;
                 try {
-                    ht = new window.HostedTokenization(tokenizationKey, { target: '#bq-card' });
+                    // v0.3: the card/expiry/CVV iframe is created and mounted by
+                    // the constructor via `target` — there is no separate
+                    // create()/mount() step (that was v0.2). showZip stays false
+                    // because we collect ZIP ourselves when the camp asks for it,
+                    // and send it on as avs_zip; enabling it here would render a
+                    // second ZIP box inside the iframe.
+                    ht = new window.HostedTokenization(tokenizationKey, {
+                        target: '#bq-card',
+                        showZip: false,
+                        requireCvv2: true,
+                        showFieldErrors: true,
+                        styles: {
+                            card: 'font-family: inherit; font-size: 15px',
+                            expiryMonth: 'font-family: inherit; font-size: 15px',
+                            expiryYear: 'font-family: inherit; font-size: 15px',
+                            cvv2: 'font-family: inherit; font-size: 15px',
+                            fieldErrors: 'color:#DC2626; font-size:12px'
+                        }
+                    });
                 } catch (e) {
                     setMsg('Could not load the payment form. Reload and try again.', true);
                     return;
@@ -316,15 +334,26 @@
                         return;
                     }
                     p.then(function(result) {
-                        var nonce = result && (result.nonce || result.token || result.nonceToken || result);
+                        // CardFormResult: { nonce, last4, cardType, expiryMonth,
+                        // expiryYear, avsZip, maskedCard, maskedCvv2 }. The nonce
+                        // expires 15 minutes after it's issued.
+                        var nonce = result && result.nonce;
                         if (!nonce || typeof nonce !== 'string') {
                             setMsg('Could not read the card — check the details and try again.', true);
                             setSaving(false);
                             return;
                         }
-                        submitToken(nonce, billing);
+                        submitToken(nonce, billing, result);
                     }).catch(function(err) {
-                        setMsg((err && err.message) || 'Could not process the card — check the details and try again.', true);
+                        // A validation rejection carries fieldErrors naming the
+                        // bad card fields — much more useful than a generic retry.
+                        var fe = err && err.fieldErrors;
+                        var labels = { card: 'card number', expiryMonth: 'expiry month', expiryYear: 'expiry year', cvv2: 'CVV', avsZip: 'ZIP' };
+                        setMsg(
+                            (fe && fe.length)
+                                ? ('Please check the ' + fe.map(function(k) { return labels[k] || k; }).join(', ') + '.')
+                                : ((err && err.message) || 'Could not process the card — check the details and try again.'),
+                            true);
                         setSaving(false);
                     });
                 });
@@ -357,17 +386,28 @@
         // Save-for-later mode only tokenizes+saves (payments-save-method).
         // `billing` carries whatever the camp configured us to collect; the
         // server forwards it as Banquest billing_info so AVS runs.
-        function submitToken(token, billing) {
+        function submitToken(token, billing, cardResult) {
             var fnName = isPayNow ? 'payments-charge-nonce' : 'payments-save-method';
+            // Banquest's own integration example sends expiry_month/expiry_year/
+            // avs_zip alongside the nonce, so pass them through. avsZip only
+            // comes back when the iframe collected it (showZip) — otherwise use
+            // the ZIP from our own form.
+            var card = cardResult ? {
+                expiryMonth: cardResult.expiryMonth,
+                expiryYear: cardResult.expiryYear,
+                avsZip: cardResult.avsZip || (billing && billing.zip) || '',
+                last4: cardResult.last4,
+                cardType: cardResult.cardType
+            } : null;
             var body = isPayNow
                 ? (isCanteen
-                    ? { campId: campId, kind: 'canteen_deposit', camperName: camperName, token: token, amount: amount, description: payDesc, billing: billing }
-                    : { campId: campId, kind: 'tuition_charge', familyKey: familyKey, familyName: familyName, token: token, amount: amount, description: payDesc, billing: billing })
+                    ? { campId: campId, kind: 'canteen_deposit', camperName: camperName, token: token, amount: amount, description: payDesc, billing: billing, card: card }
+                    : { campId: campId, kind: 'tuition_charge', familyKey: familyKey, familyName: familyName, token: token, amount: amount, description: payDesc, billing: billing, card: card })
                 // Save mode: camperName saves onto that camper's canteen
                 // auto-reload block, familyKey onto the family record.
                 : (isCanteen
-                    ? { campId: campId, camperName: camperName, token: token, billing: billing }
-                    : { campId: campId, familyKey: familyKey, token: token, billing: billing });
+                    ? { campId: campId, camperName: camperName, token: token, billing: billing, card: card }
+                    : { campId: campId, familyKey: familyKey, token: token, billing: billing, card: card });
             client.functions.invoke(fnName, { body: body }).then(function(res) {
                 setSaving(false);
                 var data = res.data;

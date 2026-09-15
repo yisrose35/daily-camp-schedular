@@ -68,11 +68,13 @@ async function cardknoxSaveMethod(apiKey: string, token: string) {
 // the actual card (•••• 4242) instead of a bare "card on file".
 const BANQUEST_DEFAULT_BASE = "https://api.banquestgateway.com/api/v2";
 function bqBase(c: Record<string, string>): string {
-  // Tolerate a stored gatewayUrl that omits the API path (a bare host like
-  // "https://api.sandbox.banquestgateway.com"): the v2 API always lives under
-  // /api/v2, so append it when it isn't already there.
+  // A stored gatewayUrl that already ends in /v2 or /api/v2 is used verbatim;
+  // a bare host gets /api/v2 appended. Both spellings are honoured on purpose:
+  // the API reference documents the base as /api/v2, while the Hosted
+  // Tokenization guide's own backend example posts to /v2 — so whichever path
+  // the camp actually stores is the one we call.
   let b = (c.gatewayUrl || BANQUEST_DEFAULT_BASE).replace(/\/+$/, "");
-  if (!/\/api\/v\d+$/i.test(b)) b += "/api/v2";
+  if (!/\/(api\/)?v\d+$/i.test(b)) b += "/api/v2";
   return b;
 }
 // Maps the card page's collected fields (campistryMe.cardFormFields, migration
@@ -105,11 +107,24 @@ function bqBillingParts(billing: Record<string, string> | null | undefined): Rec
   return out;
 }
 
-async function banquestSaveMethod(creds: Record<string, string>, nonce: string, billing?: Record<string, string> | null): Promise<{ success: boolean; customerRef?: string; last4?: string; brand?: string; error?: string }> {
+// The tokenizer hands the browser expiry_month/expiry_year/avs_zip alongside
+// the nonce, and Banquest's own integration example sends them on with the
+// transaction — avs_zip in particular is what AVS actually checks.
+function bqCardParts(card: Record<string, any> | null | undefined): Record<string, unknown> {
+  const c = (card && typeof card === "object") ? card : {};
+  const out: Record<string, unknown> = {};
+  if (Number(c.expiryMonth) > 0) out.expiry_month = Number(c.expiryMonth);
+  if (Number(c.expiryYear) > 0) out.expiry_year = Number(c.expiryYear);
+  const zip = String(c.avsZip ?? "").trim();
+  if (zip) out.avs_zip = zip;
+  return out;
+}
+
+async function banquestSaveMethod(creds: Record<string, string>, nonce: string, billing?: Record<string, string> | null, card?: Record<string, any> | null): Promise<{ success: boolean; customerRef?: string; last4?: string; brand?: string; error?: string }> {
   const resp = await fetch(`${bqBase(creds)}/transactions/verify`, {
     method: "POST",
     headers: { "Content-Type": "application/json", "Authorization": "Basic " + btoa(`${creds.sourceKey}:${creds.pin}`) },
-    body: JSON.stringify({ source: "nonce-" + nonce, save_card: true, ...bqBillingParts(billing) }),
+    body: JSON.stringify({ source: "nonce-" + nonce, save_card: true, ...bqCardParts(card), ...bqBillingParts(billing) }),
   });
   let data: Record<string, any> = {};
   try { data = await resp.json(); } catch { /* non-JSON error body */ }
@@ -121,8 +136,8 @@ async function banquestSaveMethod(creds: Record<string, string>, nonce: string, 
     const errMsg = data?.error_message || (Array.isArray(data?.error_messages) && data.error_messages[0]) || data?.error_details || data?.error || data?.message || data?.status || `Could not save payment method (HTTP ${resp.status})`;
     return { success: false, error: errMsg };
   }
-  const last4 = data?.last_4 || data?.transaction?.last_4 || data?.card?.last_4;
-  const brand = data?.card_type || data?.transaction?.card_type || data?.card?.card_type;
+  const last4 = data?.last_4 || data?.transaction?.last_4 || data?.card?.last_4 || card?.last4;
+  const brand = data?.card_type || data?.transaction?.card_type || data?.card?.card_type || card?.cardType;
   return { success: true, customerRef: cardRef, last4: last4 ? String(last4) : undefined, brand: brand ? String(brand) : undefined };
 }
 
@@ -161,7 +176,7 @@ serve(async (req) => {
   if (req.method === "OPTIONS") return new Response("ok", { headers: corsHeaders });
 
   try {
-    const { campId, familyKey, camperName, token, billing } = await req.json();
+    const { campId, familyKey, camperName, token, billing, card } = await req.json();
     if (!campId || !token || !(familyKey || camperName)) {
       return json({ success: false, error: "campId, token, and one of familyKey / camperName are required" }, 400);
     }
@@ -208,7 +223,7 @@ serve(async (req) => {
       if (!creds?.sourceKey || !creds?.pin) {
         return json({ success: false, error: "This camp's processor credential is missing its source key or PIN." }, 400);
       }
-      saveResult = await banquestSaveMethod(creds, String(token), billing);
+      saveResult = await banquestSaveMethod(creds, String(token), billing, card);
     }
     if (!saveResult.success || !saveResult.customerRef) {
       return json({ success: false, error: saveResult.error || "Could not save payment method" }, 200);

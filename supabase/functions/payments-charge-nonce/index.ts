@@ -53,7 +53,7 @@ function json(body: unknown, status = 200) {
 const BANQUEST_DEFAULT_BASE = "https://api.banquestgateway.com/api/v2";
 function bqBase(c: Record<string, string>): string {
   let b = (c.gatewayUrl || BANQUEST_DEFAULT_BASE).replace(/\/+$/, "");
-  if (!/\/api\/v\d+$/i.test(b)) b += "/api/v2";
+  if (!/\/(api\/)?v\d+$/i.test(b)) b += "/api/v2";
   return b;
 }
 function bqAuth(c: Record<string, string>): string {
@@ -90,12 +90,26 @@ function bqBillingParts(billing: Record<string, string> | null | undefined): Rec
   return out;
 }
 
+// The tokenizer hands the browser expiry_month/expiry_year/avs_zip alongside the
+// nonce, and Banquest's own integration example sends them on with the charge —
+// avs_zip in particular is what AVS actually checks.
+function bqCardParts(card: Record<string, any> | null | undefined): Record<string, unknown> {
+  const c = (card && typeof card === "object") ? card : {};
+  const out: Record<string, unknown> = {};
+  if (Number(c.expiryMonth) > 0) out.expiry_month = Number(c.expiryMonth);
+  if (Number(c.expiryYear) > 0) out.expiry_year = Number(c.expiryYear);
+  const zip = String(c.avsZip ?? "").trim();
+  if (zip) out.avs_zip = zip;
+  return out;
+}
+
 async function banquestChargeNonce(
   creds: Record<string, string>,
   amountCents: number,
   nonce: string,
   description: string,
   billing: Record<string, string> | null | undefined,
+  card: Record<string, any> | null | undefined,
 ) {
   const resp = await fetch(`${bqBase(creds)}/transactions/charge`, {
     method: "POST",
@@ -104,6 +118,7 @@ async function banquestChargeNonce(
       amount: Number((amountCents / 100).toFixed(2)),
       source: "nonce-" + nonce,
       transaction_details: { description: description.slice(0, 255) },
+      ...bqCardParts(card),
       ...bqBillingParts(billing),
     }),
   });
@@ -122,8 +137,8 @@ async function banquestChargeNonce(
     success: true,
     externalTransactionId: ref,
     amountCents: capturedCents,
-    last4: data?.last_4 ? String(data.last_4) : undefined,
-    brand: data?.card_type ? String(data.card_type) : undefined,
+    last4: data?.last_4 ? String(data.last_4) : (card?.last4 ? String(card.last4) : undefined),
+    brand: data?.card_type ? String(data.card_type) : (card?.cardType ? String(card.cardType) : undefined),
   };
 }
 
@@ -147,7 +162,7 @@ serve(async (req) => {
   if (req.method === "OPTIONS") return new Response("ok", { headers: corsHeaders });
 
   try {
-    const { campId, kind, token, amount, familyKey, familyName, camperName, description, billing } = await req.json();
+    const { campId, kind, token, amount, familyKey, familyName, camperName, description, billing, card } = await req.json();
     if (!campId || !kind || !token || !(Number(amount) > 0)) {
       return json({ success: false, error: "campId, kind, token, and a positive amount are required" }, 400);
     }
@@ -187,7 +202,7 @@ serve(async (req) => {
     }
 
     const desc = String(description || (kind === "canteen_deposit" ? `Canteen funds — ${camperName}` : `Camp payment — ${familyName || familyKey}`));
-    const res = await banquestChargeNonce(creds, amountCents, String(token), desc, billing);
+    const res = await banquestChargeNonce(creds, amountCents, String(token), desc, billing, card);
     if (!res.success || !res.externalTransactionId) {
       return json({ success: false, error: res.error || "Card declined." }, 200);
     }
