@@ -67,6 +67,11 @@ MANIFEST = [
     # snacks key, and re-creates 099's counselor POS policies with the check.
     ("161_per_user_snacks_key_rls",
      "Per-user section access on campistrySnacks, counselor POS included (phase 3)"),
+    # Independent of the entitlement work — a read-only reporting RPC. Added
+    # here because the bundle is the only way a migration actually gets run on
+    # this project; an unregistered file is one nobody ever applies.
+    ("162_reconcile_processor_charges",
+     "Report card charges the ledger lost to a stale-tab overwrite (read-only)"),
 ]
 
 HEADER = """-- ═══════════════════════════════════════════════════════════════════════════
@@ -283,6 +288,9 @@ UNION ALL SELECT 'snacks key gated per user',
 UNION ALL SELECT 'finance writes gated on "not none", not "edit"',
        CASE WHEN (SELECT prosrc FROM pg_proc
                    WHERE proname='camp_state_key_user_allowed' LIMIT 1) LIKE '%<> ''none''%'
+            THEN 'OK' ELSE 'MISSING' END
+UNION ALL SELECT 'lost-charge reconciliation report',
+       CASE WHEN EXISTS (SELECT 1 FROM pg_proc WHERE proname='reconcile_processor_charges')
             THEN 'OK' ELSE 'MISSING' END;
 """
 
