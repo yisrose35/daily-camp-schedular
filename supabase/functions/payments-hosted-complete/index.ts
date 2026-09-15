@@ -40,7 +40,7 @@ function json(body: unknown, status = 200) {
 const BANQUEST_DEFAULT_BASE = "https://api.banquestgateway.com/api/v2";
 function bqBase(c: Record<string, string>): string {
   let b = (c.gatewayUrl || BANQUEST_DEFAULT_BASE).replace(/\/+$/, "");
-  if (!/\/api\/v\d+$/i.test(b)) b += "/api/v2";
+  if (!/\/(api\/)?v\d+$/i.test(b)) b += "/api/v2";
   return b;
 }
 function bqAuth(c: Record<string, string>): string {

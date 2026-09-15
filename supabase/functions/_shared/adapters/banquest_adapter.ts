@@ -46,7 +46,7 @@ const DEFAULT_BASE_URL = "https://api.banquestgateway.com/api/v2";
 
 function baseUrl(credentials: Record<string, string>): string {
   let b = (credentials.gatewayUrl || DEFAULT_BASE_URL).replace(/\/+$/, "");
-  if (!/\/api\/v\d+$/i.test(b)) b += "/api/v2";
+  if (!/\/(api\/)?v\d+$/i.test(b)) b += "/api/v2";
   return b;
 }
 

@@ -63,11 +63,13 @@ async function cardknoxRefund(
 // transaction's card again, not for reversing it).
 const BANQUEST_DEFAULT_BASE = "https://api.banquestgateway.com/api/v2";
 function bqBase(credentials: Record<string, string>): string {
-  // Tolerate a stored gatewayUrl that omits the API path (a bare host like
-  // "https://api.sandbox.banquestgateway.com"): the v2 API always lives under
-  // /api/v2, so append it when it isn't already there.
+  // A stored gatewayUrl that already ends in /v2 or /api/v2 is used verbatim;
+  // a bare host gets /api/v2 appended. Both spellings are honoured on purpose:
+  // the API reference documents the base as /api/v2, while the Hosted
+  // Tokenization guide's own backend example posts to /v2 — so whichever path
+  // the camp actually stores is the one we call.
   let b = (credentials.gatewayUrl || BANQUEST_DEFAULT_BASE).replace(/\/+$/, "");
-  if (!/\/api\/v\d+$/i.test(b)) b += "/api/v2";
+  if (!/\/(api\/)?v\d+$/i.test(b)) b += "/api/v2";
   return b;
 }
 async function banquestRefund(
