@@ -195,7 +195,18 @@
         });
     }
 
-    var PANE_SELECTORS = ['.tab-content', '.snacks-page', '.me-page', '.lk-page'];
+    // Every app's pane class must appear here. A missing one silently disables
+    // BOTH gates that operate on panes: gateOpenSection() can't replace a
+    // 'none' section with the blocked panel, and markViewOnlyPanes() can't add
+    // the read-only banner or run disableWithin() — so Save/Delete controls in
+    // a 'view' section stay fully live.
+    //
+    // '.health-page' and '.live-page' were missing, which meant Campistry
+    // Health — whose registry entries are almost entirely sensitive:true
+    // (medications, allergies, sick visits, nighttime, doctor, intake) — had no
+    // pane blocking and no read-only enforcement at all; only nav hiding
+    // applied, so a deep link or restored tab rendered the section normally.
+    var PANE_SELECTORS = ['.tab-content', '.snacks-page', '.me-page', '.lk-page', '.health-page', '.live-page'];
 
     function paneFor(section) {
         return document.getElementById('page-' + section) ||
@@ -423,11 +434,22 @@
 
     var BRANCHES = {
         'me.billing':  [['campistryMe', 'families'], ['campistryMe', 'payments']],
-        'me.payroll':  [['campistryMe', 'payroll'], ['campistryMe', 'youthCorps']],
+        // youthCorps is NOT top-level — it lives at campistryMe.payroll.youthCorps
+        // (see the payroll loader in campistry_me.js), so the old second path
+        // scrubbed a key that has never existed. Scrubbing 'payroll' already
+        // covers it.
+        'me.payroll':  [['campistryMe', 'payroll']],
         // Financial data moved under 'me.finance' when Analytics & Finance
         // split into two pages — 'me.analytics' is now just the enrollment
         // funnel, nothing sensitive to scrub there anymore.
-        'me.finance': [['campistryMe', 'finExpenses'], ['campistryMe', 'finPayments']],
+        //
+        // These were 'finExpenses' and 'finPayments', neither of which exists:
+        // campistry_me.js writes a single campistryMe.finance object
+        // ({staff, expenses, payments, budget, integrations}). So me.finance
+        // scrubbing was a complete no-op and revenue, expenses, budget and
+        // finance.staff — which holds full payroll records including pay and
+        // addresses — were delivered to and cached by a user set to 'none'.
+        'me.finance': [['campistryMe', 'finance']],
         'snacks.accounts': [['campistrySnacks', 'accounts']],
         'link.tips':   [['campistryLink', 'tips']]
     };
