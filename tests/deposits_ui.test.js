@@ -7,6 +7,8 @@
 // number feeding a server-side guardrail).
 const test = require('node:test');
 const assert = require('node:assert');
+const fs = require('node:fs');
+const path = require('node:path');
 
 globalThis.CampistryDepositMatch = require('../campistry_deposit_match.js');
 const D = require('../campistry_deposits_ui.js');
@@ -225,4 +227,40 @@ test('an action marks its own row rather than freezing the whole list', () => {
     state.busyId = 'dep_1';
     assert.strictEqual(D.state().busyId, 'dep_1');
     state.busyId = null;
+});
+
+// ── reading the email, and teaching who sent it ─────────────────────────────
+test('the email behind a deposit can be read in full from any row', () => {
+    const ui = fs.readFileSync(path.join(__dirname, '..', 'campistry_deposits_ui.js'), 'utf8');
+
+    assert.match(ui, /D\.viewEmail = function/, 'there is no reader');
+    // The row you most need to read is the one that half-worked and landed on
+    // nobody — it used to show nothing at all.
+    assert.match(ui, /CampistryDeposits\.viewEmail\(/, 'no row opens it');
+    assert.match(ui, /read the whole message/, 'the clipped unparsed view must link to the full one');
+    // No clipping in the reader itself: the line explaining an odd deposit is
+    // as likely to be the last as the first.
+    assert.ok(!/viewEmail[\s\S]{0,2000}raw_excerpt\.slice\(/.test(ui),
+        'the reader must not clip the message');
+});
+
+test('a sender can be taught, and the bank can never be one', () => {
+    const ui = fs.readFileSync(path.join(__dirname, '..', 'campistry_deposits_ui.js'), 'utf8');
+
+    assert.match(ui, /D\.teachSender = function/);
+    assert.match(ui, /D\.senderCandidates = function/);
+    assert.match(ui, /add_payer_alias/, 'the rule is never stored');
+
+    // The three exclusions are the whole safety of this feature: every Chase
+    // alert comes from one address, and the camp's own deposit address is on
+    // every message by definition. Keying a family to either would credit them
+    // with every deposit the camp ever receives.
+    assert.match(ui, /This is the bank\./, 'the bank must be excluded by name');
+    assert.match(ui, /your own deposit address/, "the camp's own address must be excluded");
+    assert.match(ui, /already belong to/, 'a domain shared between families must be excluded');
+
+    // Excluded addresses are shown with the reason rather than hidden — an
+    // office that cannot see why its obvious choice is missing will assume the
+    // feature is broken.
+    assert.match(ui, /cannot be used<\/summary>/);
 });

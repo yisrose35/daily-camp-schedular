@@ -436,6 +436,28 @@
         return { provider: provider, code: code, url: url };
     };
 
+    /**
+     * Every email address in the message, de-duplicated, in the order they
+     * appear.
+     *
+     * Used to offer the office something to point at when a payer cannot be
+     * read: the parent who forwarded their own confirmation is in there, next
+     * to the bank and the camp's own mailbox. Which of them means "this
+     * family" is a judgement, so this only gathers the candidates.
+     */
+    P.addressesIn = function (text) {
+        var out = [], seen = {};
+        var re = /[A-Za-z0-9._%+\-]+@[A-Za-z0-9.\-]+\.[A-Za-z]{2,}/g;
+        var m;
+        while ((m = re.exec(String(text || ''))) !== null) {
+            var a = m[0].toLowerCase().replace(/[.,;:>)\]]+$/, '');
+            if (seen[a]) continue;
+            seen[a] = true;
+            out.push(a);
+        }
+        return out;
+    };
+
     P.stripForwardHeaders = function (text) {
         var lines = String(text || '').split('\n');
         var out = [];

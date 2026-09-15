@@ -71,7 +71,7 @@
     // in the Bank layouts footer. Twice now a fix has been live on the server
     // while the browser ran an older copy, and there was no way to tell from
     // the screen which one was which -- so the screen says.
-    D.BUILD = '20260915-01';
+    D.BUILD = '20260915-04';
 
     var state = {
         loaded: false,
@@ -364,6 +364,14 @@
                ';padding:2px 8px;border-radius:999px;font-size:.7rem;font-weight:600">' + m[2] + '</span>';
     }
 
+    /** The loaded deposit row with this id, or null. */
+    function byId(depositId) {
+        for (var i = 0; i < state.deposits.length; i++) {
+            if (String(state.deposits[i].id) === String(depositId)) return state.deposits[i];
+        }
+        return null;
+    }
+
     function famName(fk) {
         var f = (host.families() || {})[fk];
         return (f && f.name) || fk || '—';
@@ -491,11 +499,17 @@
             'If it is a real payment, add it to the family by hand; if it is not, dismiss it.</div>' +
             (d.raw_subject ? '<div style="font-size:.78rem;color:var(--s500);margin-top:6px">Subject: ' + host.esc(d.raw_subject) + '</div>' : '') +
             (body ? '<pre style="white-space:pre-wrap;word-break:break-word;background:#fff;border:1px solid var(--s100);border-radius:var(--r);padding:12px 14px;margin:12px 0 0;font-size:.78rem;line-height:1.55;max-height:260px;overflow:auto">' + host.esc(body) + '</pre>' : '') +
+            ((d.raw_excerpt || '').length > 1200
+                ? '<div style="font-size:.76rem;color:var(--s500);margin-top:6px">Clipped here \u2014 ' +
+                  '<a href="#" onclick="event.preventDefault();CampistryDeposits.viewEmail(\'' + host.jesc(d.id) +
+                  '\')" style="color:var(--me);font-weight:600">read the whole message</a></div>'
+                : '') +
             '<div style="margin-top:8px;display:flex;gap:8px;flex-wrap:wrap">' +
             // Teaching from the email that just failed is the shortest path
             // there is: it is already on screen and it is the exact layout that
             // needs handling.
             '<button class="me-btn me-btn--pri me-btn--sm" onclick="CampistryDeposits.teachFromDeposit(\'' + host.jesc(d.id) + '\')">Show Campistry how to read this</button>' +
+            '<button class="me-btn me-btn--sec me-btn--sm" onclick="CampistryDeposits.teachSender(\'' + host.jesc(d.id) + '\')">Always credit this sender to a family</button>' +
             '<button class="me-btn me-btn--sec me-btn--sm" onclick="CampistryDeposits.reread(\'' + host.jesc(d.id) + '\')">Read again</button>' +
             '<button class="me-btn me-btn--ghost me-btn--sm" onclick="CampistryDeposits.ignore(\'' + host.jesc(d.id) + '\')">Dismiss</button>' +
             '</div>' +
@@ -567,6 +581,12 @@
                 candidateButtons(d) +
                 '<div style="margin-top:10px;display:flex;gap:8px;align-items:center;flex-wrap:wrap">' +
                 familyPicker(d) +
+                (d.raw_excerpt
+                    ? '<button class="me-btn me-btn--ghost me-btn--sm" onclick="CampistryDeposits.viewEmail(\'' +
+                      host.jesc(d.id) + '\')" title="Show the message this deposit came from">Read the email</button>' +
+                      '<button class="me-btn me-btn--ghost me-btn--sm" onclick="CampistryDeposits.teachSender(\'' +
+                      host.jesc(d.id) + '\')" title="Always credit mail from this sender to one family">Always this family</button>'
+                    : '') +
                 '<button class="me-btn me-btn--ghost me-btn--sm" onclick="CampistryDeposits.reread(\'' +
                 host.jesc(d.id) + '\')" title="Read this message again with the current settings and layouts">Read again</button>' +
                 '<button class="me-btn me-btn--ghost me-btn--sm" onclick="CampistryDeposits.ignore(\'' +
@@ -2271,6 +2291,212 @@
                     ' still need a person.</div>' : '') +
                 '</div></div>', null, { maxWidth: 520 });
         }
+    };
+
+
+    // ── read the email, and teach who it is from ─────────────────────────────
+    //
+    // Every deposit keeps the message it arrived in. Until now that text was
+    // visible only as a clipped <pre> on the rows that failed to parse, which
+    // is backwards: the row you most need to READ is the one that half-worked
+    // and landed on nobody.
+
+    function headerLine(label, value) {
+        if (!value) return '';
+        return '<div style="display:flex;gap:10px;padding:5px 0;font-size:.83rem">' +
+            '<span style="flex-shrink:0;width:72px;color:var(--s400)">' + host.esc(label) + '</span>' +
+            '<span style="min-width:0;word-break:break-word;color:var(--s700)">' + host.esc(value) + '</span></div>';
+    }
+
+    D.viewEmail = function (depositId) {
+        var d = byId(depositId);
+        if (!d) return;
+        if (!d.raw_excerpt) {
+            if (host.toast) host.toast('This deposit was recorded before the message text was kept.', 'error');
+            return;
+        }
+        var P = W.CampistryDepositParser;
+        var envelope = d.from_address || '';
+        var others = (P && P.addressesIn ? P.addressesIn(d.raw_excerpt) : [])
+            .filter(function (a) { return a !== envelope; });
+
+        var h = '<div class="me-modal-form">';
+        h += '<div style="background:var(--s50);border:1px solid var(--s100);border-radius:var(--r);padding:12px 16px;margin-bottom:14px">';
+        h += headerLine('Subject', d.raw_subject || '(none)');
+        h += headerLine('From', envelope || 'not recorded');
+        h += headerLine('Arrived', (d.created_at || '').slice(0, 16).replace('T', ' '));
+        if (others.length) h += headerLine('Also in it', others.join(', '));
+        h += '</div>';
+
+        h += '<div style="display:flex;gap:8px;flex-wrap:wrap;margin-bottom:12px">' +
+             '<button class="me-btn me-btn--pri me-btn--sm" onclick="CampistryDeposits.teachSender(\'' + host.jesc(d.id) + '\')">' +
+             'Always credit mail like this to a family</button>' +
+             copyBtn(d.raw_excerpt, 'Copy the message') +
+             '<button class="me-btn me-btn--sec me-btn--sm" onclick="CampistryDeposits.reread(\'' + host.jesc(d.id) + '\')">Read again</button>' +
+             '</div>';
+
+        // The message itself, whole and wrapped. No clipping: the line that
+        // explains an odd deposit is as likely to be the last one as the first.
+        h += '<div style="font-size:.78rem;color:var(--s400);margin-bottom:5px">The message, exactly as it arrived</div>';
+        h += '<pre style="white-space:pre-wrap;word-break:break-word;background:#fff;border:1px solid var(--s200);' +
+             'border-radius:var(--r);padding:14px 16px;margin:0;font-size:.8rem;line-height:1.65;max-height:52vh;overflow:auto">' +
+             host.esc(d.raw_excerpt) + '</pre>';
+        h += '</div>';
+        host.showModal('The email behind this deposit', h, null, { maxWidth: 820 });
+    };
+
+    /**
+     * Which addresses on this deposit could stand for a family, and which
+     * must never be allowed to.
+     *
+     * The dangerous one is the bank. Every Chase alert a camp will ever get
+     * comes from the same chase.com address, so keying a family to it would
+     * credit that household with every future deposit in the camp. Same for
+     * the camp's own deposit address, which is on every single message by
+     * definition. Both are excluded outright rather than warned about.
+     *
+     * A domain already tied to two different families is excluded for the same
+     * reason discovered the hard way rather than reasoned about: it is shared
+     * infrastructure, not a person.
+     */
+    D.senderCandidates = function (d) {
+        var P = W.CampistryDepositParser, T = Tpl();
+        if (!d) return [];
+        var found = layoutFor(d, d.raw_excerpt || '');
+        var bankSig = found.sig || '';
+        var campAddr = String(D.inboundAddress() || '').toLowerCase();
+        var campDomain = campAddr.split('@')[1] || '';
+
+        var all = [];
+        if (d.from_address) all.push(String(d.from_address).toLowerCase());
+        (P && P.addressesIn ? P.addressesIn(d.raw_excerpt || '') : []).forEach(function (a) {
+            if (all.indexOf(a) < 0) all.push(a);
+        });
+
+        // Domains already spread across more than one family.
+        var byDomain = {};
+        state.deposits.forEach(function (x) {
+            if (!x.family_key || !x.from_address) return;
+            var dom = String(x.from_address).split('@')[1] || '';
+            if (!dom) return;
+            (byDomain[dom] = byDomain[dom] || {})[x.family_key] = true;
+        });
+
+        return all.map(function (addr) {
+            var domain = addr.split('@')[1] || '';
+            var why = '';
+            if (addr === campAddr || (campDomain && domain === campDomain)) {
+                why = 'This is your own deposit address — it is on every message.';
+            } else if (T && bankSig && T.signature(addr) === bankSig) {
+                why = 'This is the bank. Every alert comes from it, so it cannot mean one family.';
+            } else if (P && P.isPersonalMail && !P.isPersonalMail(addr) &&
+                       byDomain[domain] && Object.keys(byDomain[domain]).length > 1) {
+                why = 'Deposits from ' + domain + ' already belong to ' + Object.keys(byDomain[domain]).length +
+                      ' different families.';
+            }
+            return { address: addr, usable: !why, why: why };
+        });
+    };
+
+    D.teachSender = function (depositId) {
+        var d = byId(depositId);
+        if (!d) return;
+        var cands = D.senderCandidates(d);
+        var usable = cands.filter(function (c) { return c.usable; });
+        var fams = host.families() || {};
+        var famKeys = Object.keys(fams).sort(function (a, b) {
+            return String((fams[a] || {}).name || '').localeCompare(String((fams[b] || {}).name || ''));
+        });
+
+        var h = '<div class="me-modal-form">';
+        h += '<div style="font-size:.88rem;color:var(--s600);line-height:1.65;margin-bottom:14px;max-width:660px">' +
+             'Pick the address that belongs to the family. From then on, any deposit whose mail carries that address ' +
+             'is credited to them automatically — even when the payer name is unreadable.</div>';
+
+        if (!usable.length) {
+            h += '<div style="background:#FFFBEB;border:1px solid #FDE68A;border-radius:var(--r);padding:12px 14px;' +
+                 'font-size:.85rem;color:#92400E;line-height:1.6">Nothing on this message can stand for one family. ' +
+                 (cands.length
+                     ? 'Every address on it is either the bank’s, your own deposit address, or one already shared ' +
+                       'between families.'
+                     : 'No addresses were found in it.') +
+                 '</div>';
+            cands.forEach(function (c) {
+                h += '<div style="font-size:.78rem;color:var(--s500);margin-top:8px"><code>' + host.esc(c.address) +
+                     '</code> — ' + host.esc(c.why) + '</div>';
+            });
+            h += '</div>';
+            host.showModal('Teach this sender', h, null, { maxWidth: 640 });
+            return;
+        }
+
+        h += '<div style="font-size:.8rem;font-weight:600;color:var(--s600);margin-bottom:6px">Address</div>';
+        h += '<select id="depTeachAddr" class="fs" style="width:100%">' +
+             usable.map(function (c) {
+                 return '<option value="' + host.esc(c.address) + '">' + host.esc(c.address) + '</option>';
+             }).join('') + '</select>';
+
+        var blocked = cands.filter(function (c) { return !c.usable; });
+        if (blocked.length) {
+            h += '<details style="margin-top:8px"><summary style="cursor:pointer;font-size:.78rem;color:var(--s500)">' +
+                 blocked.length + ' address' + (blocked.length === 1 ? '' : 'es') + ' on this message cannot be used</summary>' +
+                 blocked.map(function (c) {
+                     return '<div style="font-size:.78rem;color:var(--s500);margin-top:6px"><code>' +
+                            host.esc(c.address) + '</code> — ' + host.esc(c.why) + '</div>';
+                 }).join('') + '</details>';
+        }
+
+        h += '<div style="font-size:.8rem;font-weight:600;color:var(--s600);margin:14px 0 6px">Family</div>';
+        h += '<select id="depTeachFam" class="fs" style="width:100%">' +
+             '<option value="">— pick a family —</option>' +
+             famKeys.map(function (fk) {
+                 return '<option value="' + host.esc(fk) + '">' + host.esc((fams[fk] || {}).name || fk) + '</option>';
+             }).join('') + '</select>';
+
+        h += '<label style="display:flex;gap:8px;align-items:flex-start;margin-top:14px;font-size:.85rem;color:var(--s600)">' +
+             '<input type="checkbox" id="depTeachApply" checked style="margin-top:3px">' +
+             '<span>Credit this deposit to them now as well</span></label>';
+        h += '</div>';
+
+        host.showModal('Teach this sender', h, function () {
+            var addr = (document.getElementById('depTeachAddr') || {}).value || '';
+            var fk = (document.getElementById('depTeachFam') || {}).value || '';
+            var applyNow = !!(document.getElementById('depTeachApply') || {}).checked;
+            if (!fk) { if (host.toast) host.toast('Pick a family first', 'error'); return; }
+            D.saveSenderRule(depositId, addr, fk, applyNow);
+        }, { maxWidth: 640, saveLabel: 'Remember this sender' });
+    };
+
+    D.saveSenderRule = async function (depositId, address, familyKey, applyNow) {
+        var client = db(), cid = campId();
+        if (!client || !cid || !address || !familyKey) return;
+        var r = await client.rpc('add_payer_alias', {
+            p_camp_id: cid,
+            p_family_key: familyKey,
+            p_display_name: address,
+            p_normalized: '',
+            p_handle: address,
+            p_kind: 'email',
+            p_source: 'confirmed',
+            p_note: 'Taught from the sending address'
+        });
+        if (r.error || (r.data && r.data.success === false)) {
+            if (host.toast) host.toast(D.explainError((r.error && r.error.message) || (r.data && r.data.error)), 'error');
+            return;
+        }
+        if (host.closeModal) host.closeModal('dynModal');
+        if (applyNow) {
+            await D.resolve(depositId, familyKey);
+        } else {
+            await D.refresh();
+            renderInbox();
+        }
+        if (host.toast) {
+            host.toast(r.data && r.data.duplicate
+                ? 'Already knew that ' + address + ' is ' + famName(familyKey)
+                : 'Mail from ' + address + ' will go to ' + famName(familyKey) + ' from now on');
+        }
+        host.onChange();
     };
 
     D.openTemplates = function () {

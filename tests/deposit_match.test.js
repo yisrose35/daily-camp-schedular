@@ -338,3 +338,56 @@ test('a deposit held back by Manual mode still names the family', () => {
     assert.strictEqual(auto.decision, 'auto');
     assert.strictEqual(auto.familyKey, 'fam_z');
 });
+
+// ── teaching a sender ───────────────────────────────────────────────────────
+//
+// When a bank's wording defeats the parser there is no payer name to learn
+// from, and the camp is left crediting the same household by hand every week.
+// They can instead point at an address on the message and say "this is the
+// Klein family". The alias has to be reachable from scoring, or the teaching
+// does nothing.
+const SENDER_FAMS = { fam_k: { name: 'Klein Family', camperIds: ['Leah Klein'] },
+                      fam_o: { name: 'Other Family', camperIds: ['Sam Other'] } };
+
+test('a taught address credits the family even with no readable payer', () => {
+    const aliases = [{ familyKey: 'fam_k', handle: 'leah.klein@gmail.com', kind: 'email', source: 'confirmed' }];
+    const dep = {
+        amount: 300, payerName: '', payerHandle: '',
+        fromAddress: 'no.reply.alerts@chase.com',
+        rawExcerpt: 'From: Chase <no.reply.alerts@chase.com>\nFwd by: leah.klein@gmail.com\nYou received $300'
+    };
+    const r = M.decide(dep, { families: SENDER_FAMS, roster: {}, aliases, balances: {} }, {});
+    assert.strictEqual(r.decision, 'auto');
+    assert.strictEqual(r.familyKey, 'fam_k');
+});
+
+test('the address is found anywhere in the message, not just the sender', () => {
+    // A forwarded alert reports the BANK as its sender — that is exactly what
+    // makes the layout lookup work — so the parent is named in the body and
+    // nowhere else. Scoring only fromAddress would never see them.
+    const aliases = [{ familyKey: 'fam_k', handle: 'leah.klein@gmail.com', kind: 'email' }];
+    const dep = { amount: 300, fromAddress: 'alerts@chase.com',
+                  rawExcerpt: 'line one\nline two\nreply-to: leah.klein@gmail.com\n' };
+    const r = M.score(dep, { families: SENDER_FAMS, roster: {}, aliases });
+    assert.strictEqual(r[0].familyKey, 'fam_k');
+    assert.strictEqual(r[0].score, M.SCORE.ALIAS_HANDLE);
+});
+
+test('an address nobody taught still matches nobody', () => {
+    const dep = { amount: 300, fromAddress: 'alerts@chase.com',
+                  rawExcerpt: 'someone.else@gmail.com sent you money' };
+    const r = M.score(dep, { families: SENDER_FAMS, roster: {}, aliases: [] });
+    assert.strictEqual(r.length, 0, 'an untaught address must not guess a family');
+});
+
+test('a taught sender does not outrank a payment reference', () => {
+    // The reference names a CAMPER and is the strongest signal there is. If a
+    // sender rule could beat it, one wrong rule would quietly misroute every
+    // payment a parent makes for somebody else's child.
+    const roster = { 'Leah Klein': { camperId: 1387 }, 'Sam Other': { camperId: 1002 } };
+    const aliases = [{ familyKey: 'fam_k', handle: 'shared@gmail.com', kind: 'email' }];
+    const dep = { amount: 300, rawExcerpt: 'from shared@gmail.com memo 3734-1002' };
+    const r = M.score(dep, { families: SENDER_FAMS, roster, campNumber: '3734', aliases });
+    assert.strictEqual(r[0].familyKey, 'fam_o', 'the reference wins');
+    assert.ok(r[0].score > r[1].score, 'and wins clearly, not by a tie-break');
+});

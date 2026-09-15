@@ -453,6 +453,28 @@ import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
         return { provider: provider, code: code, url: url };
     };
 
+    /**
+     * Every email address in the message, de-duplicated, in the order they
+     * appear.
+     *
+     * Used to offer the office something to point at when a payer cannot be
+     * read: the parent who forwarded their own confirmation is in there, next
+     * to the bank and the camp's own mailbox. Which of them means "this
+     * family" is a judgement, so this only gathers the candidates.
+     */
+    P.addressesIn = function (text) {
+        var out = [], seen = {};
+        var re = /[A-Za-z0-9._%+\-]+@[A-Za-z0-9.\-]+\.[A-Za-z]{2,}/g;
+        var m;
+        while ((m = re.exec(String(text || ''))) !== null) {
+            var a = m[0].toLowerCase().replace(/[.,;:>)\]]+$/, '');
+            if (seen[a]) continue;
+            seen[a] = true;
+            out.push(a);
+        }
+        return out;
+    };
+
     P.stripForwardHeaders = function (text) {
         var lines = String(text || '').split('\n');
         var out = [];
@@ -1351,6 +1373,32 @@ import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
         var payer = d.payerName || '';
         var payerNorm = M.normalize(payer);
         var handleNorm = M.normalizeHandle(d.payerHandle || '');
+        // Addresses are a second kind of handle, and for a bank whose wording
+        // we cannot read they are often the only one. A camp can teach one
+        // ("mail carrying this address is the Klein family"), and an alias
+        // taught that way has to be reachable from here or the teaching does
+        // nothing.
+        //
+        // Every address in the message, not just the sender: a forwarded alert
+        // reports the BANK as its sender (that is what makes the layout
+        // lookup work), so a parent who forwards their own confirmation is
+        // named three lines into the body and nowhere else.
+        //
+        // Safe only because creating such an alias is guarded where it is
+        // created -- the bank's own address and the camp's deposit address are
+        // on every message by definition, and keying a family to either would
+        // credit them with every deposit the camp ever receives.
+        var senderNorms = {};
+        [d.fromAddress || '', d.payerHandle || ''].forEach(function (a) {
+            var n = M.normalizeHandle(a);
+            if (n) senderNorms[n] = true;
+        });
+        var ADDR_RE = /[A-Za-z0-9._%+\-]+@[A-Za-z0-9.\-]+\.[A-Za-z]{2,}/g;
+        var addrHit, addrSrc = String(d.rawExcerpt || '');
+        while ((addrHit = ADDR_RE.exec(addrSrc)) !== null) {
+            var an = M.normalizeHandle(addrHit[0]);
+            if (an) senderNorms[an] = true;
+        }
 
         var scores = {};   // famKey -> {score, reasons[]}
         function bump(fk, score, reason) {
@@ -1385,6 +1433,9 @@ import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
             var alHandle = M.normalizeHandle(al.handle);
             if (handleNorm && alHandle && alHandle === handleNorm) {
                 bump(al.familyKey, M.SCORE.ALIAS_HANDLE, 'Known handle ' + al.handle);
+            }
+            if (alHandle && senderNorms[alHandle] && alHandle !== handleNorm) {
+                bump(al.familyKey, M.SCORE.ALIAS_HANDLE, 'Mail carrying ' + al.handle + ' is this family');
             }
             var alNorm = al.normalized || M.normalize(al.displayName);
             if (payerNorm && alNorm && alNorm === payerNorm) {
