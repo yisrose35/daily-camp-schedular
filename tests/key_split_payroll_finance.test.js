@@ -93,6 +93,62 @@ test('neither source present yields an empty object, never undefined', () => {
     assert.deepStrictEqual(preferKey(null, 'not an object'), {});
 });
 
+// ── 1b. the stripped-snapshot guard ────────────────────────────────────────
+//
+// Mirrors _hasContent/_writable in campistry_me.js. Both new keys are stripped
+// from the lite localStorage snapshot (they grow with headcount), and on a fresh
+// load — before the IndexedDB read lands — loadGlobalSettings falls back to that
+// snapshot. The key is then ABSENT, not empty, and writing back the module
+// defaults would erase the camp's payroll file.
+//
+// This is the same bug class that integration_hooks fetch-merges app1 and
+// campistryMe to avoid, and that the sessions/enrollments guards exist for.
+
+function hasContent(v) {
+    if (!v || typeof v !== 'object') return false;
+    return Object.keys(v).some(k => {
+        const x = v[k];
+        if (Array.isArray(x)) return x.length > 0;
+        if (x && typeof x === 'object') return Object.keys(x).length > 0;
+        return !(x === undefined || x === null || x === '' || x === 0 || x === 1 || x === false);
+    });
+}
+const writable = (built, wasLoaded) => hasContent(built) || !!wasLoaded;
+
+const PAYROLL_DEFAULT = { staff: [], timesheets: [], youthCorps: {}, payRuns: [], nextStaffId: 1 };
+const FINANCE_DEFAULT = { staff: [], expenses: [], budget: {}, integrations: {} };
+
+test('an untouched default is NOT mistaken for content', () => {
+    // The built object always has its shape, so Object.keys is never 0 — a
+    // naive emptiness check would call these non-empty and write them.
+    assert.strictEqual(hasContent(PAYROLL_DEFAULT), false);
+    assert.strictEqual(hasContent(FINANCE_DEFAULT), false);
+    assert.strictEqual(hasContent({ ...PAYROLL_DEFAULT, nextStaffId: 1 }), false,
+        'nextStaffId defaults to 1, so 1 must not read as content');
+});
+
+test('a key we never loaded is NOT written when empty', () => {
+    // The actual data-loss path: stripped snapshot -> defaults -> save.
+    assert.strictEqual(writable(PAYROLL_DEFAULT, false), false,
+        'an unloaded empty payroll would be written over the real cloud copy');
+    assert.strictEqual(writable(FINANCE_DEFAULT, false), false);
+});
+
+test('a real deletion IS written', () => {
+    // Loaded, then emptied by the user. Must persist, or "remove the last staff
+    // member" silently reverts on reload.
+    assert.strictEqual(writable(PAYROLL_DEFAULT, true), true);
+    assert.strictEqual(writable(FINANCE_DEFAULT, true), true);
+});
+
+test('content always writes, loaded or not — a first-ever save must land', () => {
+    // A brand-new camp has no key anywhere, so wasLoaded is false. Requiring
+    // wasLoaded would make payroll unsaveable forever on such a camp.
+    assert.strictEqual(writable({ ...PAYROLL_DEFAULT, staff: [{ id: 1, name: 'Rivky' }] }, false), true);
+    assert.strictEqual(writable({ ...FINANCE_DEFAULT, budget: { revenue: 100 } }, false), true);
+    assert.strictEqual(writable({ ...PAYROLL_DEFAULT, nextStaffId: 7 }, false), true);
+});
+
 // ── 2. whole-key scrub and preserve ────────────────────────────────────────
 
 // Put the module in the state a real restricted load leaves it in. Only the

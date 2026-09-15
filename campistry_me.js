@@ -47,6 +47,11 @@ var finStaff=[], finExpenses=[], finPayments=[], finBudget={revenue:0,payroll:0,
 //   youthCorps: the program-level worksite setup (see campistry_payroll_core.js)
 //   payRuns:    committed pay periods
 var payroll={staff:[],timesheets:[],youthCorps:{},payRuns:[],nextStaffId:1};
+// Whether loadData actually FOUND campistryMePayroll / campistryMeFinance, as
+// opposed to falling back to the defaults above because the key was absent from
+// a stripped localStorage snapshot. save() needs the distinction so it never
+// writes an empty value over a real one. See the notes at the load sites.
+var _loadedPayroll=false, _loadedFinance=false;
 var _prTab='overview';   // overview | staff | timesheets | youth | runs
 var _prWeek='';          // the week currently open on the Timesheets tab
 var printSheets=[]; // custom printable-sheet templates (columns + grouping)
@@ -333,6 +338,22 @@ function loadData(){
         // fallback simply stops finding anything, which is the intended end
         // state — it is not dead code until then.
         var pr=_preferKey(s.campistryMePayroll,me.payroll);
+        // Did either source actually EXIST? This is not the same question as
+        // "is it empty", and the difference is a data-loss bug.
+        //
+        // These keys are stripped from the lite localStorage snapshot (they grow
+        // with headcount — a timesheet per staff member per period). The full
+        // state lives in IndexedDB, but on a fresh page load, before the IDB
+        // read lands, loadGlobalSettings falls back to that stripped snapshot —
+        // so the key is simply ABSENT, not empty. Writing the resulting default
+        // back would erase the camp's payroll file.
+        //
+        // So: remember whether we saw the key at all. save() will write an empty
+        // value only when we genuinely loaded one and the user emptied it, never
+        // when we never had it. (Same class as the sessions/enrollments guards
+        // further down, and the reason integration_hooks fetch-merges app1 and
+        // campistryMe before upserting them.)
+        _loadedPayroll=(s.campistryMePayroll!==undefined)||(me.payroll!==undefined);
         payroll={
             staff:Array.isArray(pr.staff)?pr.staff:[],
             timesheets:Array.isArray(pr.timesheets)?pr.timesheets:[],
@@ -368,6 +389,8 @@ function loadData(){
         // it is the storage split that removes the billing-vs-finance merge
         // guard this function used to need.
         var fin=_preferKey(s.campistryMeFinance,me.finance);
+        // See the note on _loadedPayroll above — same stripped-snapshot hazard.
+        _loadedFinance=(s.campistryMeFinance!==undefined)||(me.finance!==undefined);
         finStaff=fin.staff||[];finExpenses=fin.expenses||[];
         finPayments=(me.finance&&me.finance.payments)||fin.payments||[];
         finBudget=fin.budget||{revenue:0,payroll:0,expenses:0};finIntegrations=fin.integrations||{};
@@ -609,8 +632,18 @@ function save(){
             // Skipping the write is safe because the key is never partially
             // ours: RLS and the scrub both work at key granularity now, so a
             // user who may write it has all of it, and one who may not has none.
-            if(!_secRestricted('payroll'))window.saveGlobalSettings('campistryMePayroll',g.campistryMePayroll);
-            if(!_secRestricted('finance'))window.saveGlobalSettings('campistryMeFinance',g.campistryMeFinance);
+            //
+            // The second condition is the stripped-snapshot guard. An empty
+            // value is only written when we actually LOADED one and the user
+            // emptied it — a real "I deleted the last staff member". A value
+            // that is empty because the key was never in the snapshot we read
+            // is not a deletion, and writing it would erase the payroll file.
+            // A non-empty value always writes, so a camp's first-ever payroll
+            // save still lands.
+            if(!_secRestricted('payroll')&&_writable(g.campistryMePayroll,_loadedPayroll))
+                window.saveGlobalSettings('campistryMePayroll',g.campistryMePayroll);
+            if(!_secRestricted('finance')&&_writable(g.campistryMeFinance,_loadedFinance))
+                window.saveGlobalSettings('campistryMeFinance',g.campistryMeFinance);
             // Force-flush so a navigation immediately after import doesn't
             // race the debounced batch sync.
             if(typeof window.forceSyncToCloud==='function'){
@@ -1269,6 +1302,28 @@ function _secRestricted(section){
 function _preferKey(fresh,legacy){
     if(fresh&&typeof fresh==='object'&&Object.keys(fresh).length)return fresh;
     return (legacy&&typeof legacy==='object')?legacy:{};
+}
+// May this key be written? Yes if it has content — a real edit always saves.
+// Yes if it is empty but we genuinely loaded it — that is a real deletion.
+// NO if it is empty and we never loaded it: the value is the module defaults,
+// not the camp's data, and writing it would erase what is in the cloud.
+//
+// "Content" looks one level deep on purpose. The built objects always have
+// their shape ({staff:[],timesheets:[],…}), so Object.keys is never 0 and
+// would call an untouched default non-empty. What is actually empty is every
+// branch inside it.
+function _hasContent(v){
+    if(!v||typeof v!=='object')return false;
+    return Object.keys(v).some(function(k){
+        var x=v[k];
+        if(Array.isArray(x))return x.length>0;
+        if(x&&typeof x==='object')return Object.keys(x).length>0;
+        // Scalars: nextStaffId defaults to 1, so 1 must not read as content.
+        return !(x===undefined||x===null||x===''||x===0||x===1||x===false);
+    });
+}
+function _writable(built,wasLoaded){
+    return _hasContent(built)||!!wasLoaded;
 }
 
 // ── Payment methods ──────────────────────────────────────────────
