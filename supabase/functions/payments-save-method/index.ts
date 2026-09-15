@@ -302,15 +302,37 @@ serve(async (req) => {
         const f = me.families[familyKey];
         if (!f) return json({ success: false, error: "Family no longer exists" }, 400);
 
-        f.byopProcessor = processorKey;
-        f.byopCustomerRef = saveResult.customerRef;
-        f.cardOnFile = true;
-        f.cardSavedDate = new Date().toISOString();
-        // Show the real card (•••• 4242) rather than a bare "card on file" when
-        // the processor handed back the last 4 / brand on the save.
-        if (saveResult.last4) {
-          f.paymentMethodLabel = "•••• " + saveResult.last4;
+        // Migration 139: savedPaymentMethods is the real LIST, and it's the ONLY
+        // thing get_my_saved_payment_methods reads — so a card written to just
+        // the legacy single-slot fields below saves and charges fine but never
+        // appears in Link's Cards tab. Append here too, mirroring
+        // cardknox-webhook's card_save: the first card for a family becomes the
+        // default and syncs the legacy fields (so autopay and every charge path
+        // that reads those directly keeps working); an additional card appends
+        // as non-default and leaves the current default alone.
+        const label = saveResult.last4 ? `Card ···· ${saveResult.last4}` : "Card on file";
+        const existingMethods: Record<string, any>[] = Array.isArray(f.savedPaymentMethods) ? f.savedPaymentMethods : [];
+        const isFirstMethod = existingMethods.length === 0;
+        f.savedPaymentMethods = [...existingMethods, {
+          id: "pm_" + crypto.randomUUID().replace(/-/g, ""),
+          type: "card",
+          processor: processorKey,
+          token: saveResult.customerRef,
+          last4: saveResult.last4 || "",
+          label,
+          addedDate: new Date().toISOString(),
+          isDefault: isFirstMethod,
+        }];
+
+        if (isFirstMethod) {
+          f.byopProcessor = processorKey;
+          f.byopCustomerRef = saveResult.customerRef;
+          f.cardOnFile = true;
+          f.cardSavedDate = new Date().toISOString();
+          // Show the real card (···· 4242) rather than a bare "card on file"
+          // when the processor handed back the last 4 / brand on the save.
           f.paymentMethodType = saveResult.brand || "card";
+          f.paymentMethodLabel = label;
         }
 
         const up = await service.from("camp_state_kv").upsert(
