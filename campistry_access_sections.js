@@ -44,6 +44,7 @@
     var S = {};
     var _access = null;         // { role, products, preset, overrides }
     var _entitlements = {};
+    var _roleAccess = null;     // the camp-wide default for this person's job
     var _levels = null;         // capability key -> level
     var _ready = false;
     var _unrestricted = true;   // until proven otherwise
@@ -139,7 +140,23 @@
         _entitlements = ent;
         var entRestricts = Object.keys(ent).length > 0;
 
-        if (data.unrestricted && !entRestricts) { finish(); return; }
+        // The camp-wide default for this person's JOB (migration 165), or null
+        // if the camp set none. Read before the fast path below for the same
+        // reason as the entitlement: `unrestricted` only means "no per-STAFF
+        // restriction on this individual", and a role default IS a restriction
+        // that applies to them. Skipping it here would make every role default
+        // silently do nothing for anyone whose own access was never configured
+        // — which is precisely who they are for.
+        var ra = null;
+        if (data.roleAccess && typeof data.roleAccess === 'object') {
+            var rp = data.roleAccess.preset || null;
+            var ro = (data.roleAccess.overrides && typeof data.roleAccess.overrides === 'object')
+                ? data.roleAccess.overrides : {};
+            if (rp || Object.keys(ro).length) ra = { preset: rp, overrides: ro };
+        }
+        _roleAccess = ra;
+
+        if (data.unrestricted && !entRestricts && !ra) { finish(); return; }
 
         _access = {
             role: data.role,
@@ -149,16 +166,20 @@
             products: (Array.isArray(data.products) && data.products.length) ? data.products : null,
             preset: data.preset || null,
             overrides: data.overrides || {},
-            entitlements: ent
+            entitlements: ent,
+            roleAccess: ra
         };
 
         // An owner/admin keeps full staff-level access; only the entitlement
         // applies to them. Dropping preset/overrides here (rather than leaving
-        // whatever happened to be on the row) keeps that explicit.
+        // whatever happened to be on the row) keeps that explicit — and the
+        // role default goes with them, since resolve() returns early for an
+        // owner/admin anyway and leaving it would only mislead a reader.
         if (data.unrestricted) {
             _access.products = null;
             _access.preset = null;
             _access.overrides = {};
+            _access.roleAccess = null;
         } else if (C.isUnconfigured(_access) && !entRestricts) {
             finish(); return;                                  // legacy full access
         }

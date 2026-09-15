@@ -108,12 +108,30 @@ function sqlResolve(capKey, u) {
         return 'none';
     }
 
-    const unconfigured = (preset == null && Object.keys(overrides).length === 0);
+    // The camp-wide default for this person's JOB (migration 165).
+    const ra = u.roleAccess || null;
+    let roleLevel = null, roleNames = false;
+    if (ra) {
+        const ro = ra.overrides || {};
+        if (Object.prototype.hasOwnProperty.call(ro, capKey)) {
+            roleLevel = ro[capKey]; roleNames = true;
+        } else if (ra.preset) {
+            const g = GRANTS.get(ra.preset + '|' + capKey);
+            roleLevel = g ? g.level : null;
+            roleNames = !!(g && g.explicit);
+        }
+    }
+    const roleConfigures = !!(ra && (ra.preset || Object.keys(ra.overrides || {}).length));
+
+    // A role default makes the person CONFIGURED, or the legacy full-access
+    // rule would override the very thing the owner set on the role.
+    const unconfigured = (preset == null && Object.keys(overrides).length === 0 && !roleConfigures);
     let level;
     if (unconfigured) {
         level = 'edit';
     } else {
-        if (cap.section === 'finance' && !Object.prototype.hasOwnProperty.call(overrides, capKey)) {
+        if (cap.section === 'finance' && !Object.prototype.hasOwnProperty.call(overrides, capKey)
+            && !roleNames) {
             const g = preset != null ? GRANTS.get(preset + '|' + capKey) : null;
             if (preset == null || !(g && g.explicit)) {
                 return sqlResolve(cap.app + '.analytics', u);
@@ -124,6 +142,8 @@ function sqlResolve(capKey, u) {
         } else if (preset != null) {
             const g = GRANTS.get(preset + '|' + capKey);
             level = g ? g.level : null;
+        } else if (roleLevel != null) {
+            level = roleLevel;
         } else {
             level = 'none';
         }
@@ -148,11 +168,12 @@ function jsAccess(u) {
         preset: preset || null,
         overrides: overrides || {},
         entitlements: {},
+        roleAccess: u.roleAccess || null,
     };
 }
 
 const member = o => Object.assign({ isMember: true, isCampOwner: false, role: 'manager',
-    products: null, preset: null, overrides: {}, groupFound: false }, o);
+    products: null, preset: null, overrides: {}, groupFound: false, roleAccess: null }, o);
 
 function agree(t, capKey, u, what) {
     const a = sqlResolve(capKey, u);
@@ -286,6 +307,8 @@ const mig161 = fs.readFileSync(
     path.join(__dirname, '..', 'migrations', '161_per_user_snacks_key_rls.sql'), 'utf8');
 const mig163 = fs.readFileSync(
     path.join(__dirname, '..', 'migrations', '163_per_user_health_shop_luggage_rls.sql'), 'utf8');
+const mig164 = fs.readFileSync(
+    path.join(__dirname, '..', 'migrations', '164_per_user_campistryme_rls.sql'), 'utf8');
 
 /** The body of camp_state_key_user_allowed as one migration defines it. */
 function gateFn(sql) {
@@ -294,23 +317,30 @@ function gateFn(sql) {
 }
 
 test('exactly the audited keys are gated, and both read and write use one rule', () => {
-    // 163 is the latest redefinition of camp_state_key_user_allowed, so IT
+    // 164 is the latest redefinition of camp_state_key_user_allowed, so IT
     // holds the current set. Each key here was added only after its readers
     // were audited; changing this list without doing that is the mistake this
     // assertion exists to catch.
-    const gated = [...gateFn(mig163).matchAll(/WHEN '([A-Za-z_]+)'/g)].map(m => m[1]).sort();
+    const gated = [...gateFn(mig164).matchAll(/WHEN '([A-Za-z_]+)'/g)].map(m => m[1]).sort();
     assert.deepStrictEqual(gated, [
-        'campistryHealth', 'campistryLuggage', 'campistryMeFinance',
+        'campistryHealth', 'campistryLuggage', 'campistryMe', 'campistryMeFinance',
         'campistryMePayroll', 'campistryShop', 'campistrySnacks',
     ], 'the set of per-user gated keys changed — audit every reader of the new key first');
+
+    // app1 and campStructure must NOT be gated: both are read by Flow, Lite,
+    // Snacks, Go, badges and an edge function, so neither can be treated as
+    // Me-owned by any policy.
+    for (const k of ['app1', 'campStructure'])
+        assert.ok(!gateFn(mig164).includes("'" + k + "'"),
+            k + ' is gated on a Me capability — that breaks pages unrelated to Campistry Me');
 
     // A later migration must carry every key an earlier one gated, or replacing
     // the function silently un-gates it. CREATE OR REPLACE makes that a quiet
     // regression rather than an error.
-    for (const k of ['campistryMePayroll', 'campistryMeFinance'])
-        assert.ok(gateFn(mig163).includes(k), k + ' was dropped by a later redefinition');
-    for (const k of [...gateFn(mig161).matchAll(/WHEN '([A-Za-z_]+)'/g)].map(m => m[1]))
-        assert.ok(gateFn(mig163).includes(k), k + ' was dropped by a later redefinition');
+    for (const earlier of [mig161, mig163]) {
+        for (const k of [...gateFn(earlier).matchAll(/WHEN '([A-Za-z_]+)'/g)].map(m => m[1]))
+            assert.ok(gateFn(mig164).includes(k), k + ' was dropped by a later redefinition');
+    }
 
     // The four main policies live in 160 and call the gate by name, so adding a
     // key is a function replace. They must all still carry both checks:
@@ -392,6 +422,108 @@ test('a nurse cannot reach the canteen ledger', () => {
     const nurse = member({ preset: 'nurse' });
     assert.ok(!anySnacks(nurse));
     for (const k of SNACKS_CAPS) assert.strictEqual(sqlResolve(k, nurse), 'none');
+});
+
+// ── 4b. per-JOB defaults (165) ────────────────────────────────────────────
+//
+// "Everyone with the title Scheduler gets this" plus "but THIS scheduler also
+// does bussing". The role default is the WEAKER layer, so the per-person screen
+// stays an exception list rather than a full re-specification.
+
+const SCHED_DEFAULT = { preset: null, overrides: { 'flow.schedule': 'edit', 'flow.print': 'edit' } };
+
+test('a role default applies to someone with no personal access record', () => {
+    // The whole point, and the subtle part: a role default has to make the
+    // person COUNT AS CONFIGURED, or the legacy full-access rule overrides the
+    // very thing the owner just set — and it would appear to do nothing for
+    // exactly the people it is for.
+    const u = member({ role: 'scheduler', roleAccess: SCHED_DEFAULT });
+    assert.strictEqual(sqlResolve('flow.schedule', u), 'edit');
+    assert.strictEqual(sqlResolve('me.billing', u), 'none',
+        'the role default did not restrict anything — legacy full access won');
+    agree(test, 'flow.schedule', u, 'role default');
+    agree(test, 'me.billing', u, 'role default');
+});
+
+test('one person can be given more on top, and keeps the rest of the role', () => {
+    // The scheduler who also does bussing.
+    const u = member({ role: 'scheduler', roleAccess: SCHED_DEFAULT,
+                       overrides: { 'go.routes': 'edit' } });
+    assert.strictEqual(sqlResolve('go.routes', u), 'edit', 'the personal grant did not apply');
+    assert.strictEqual(sqlResolve('flow.schedule', u), 'edit',
+        'the role default was lost the moment one personal override existed');
+    assert.strictEqual(sqlResolve('me.billing', u), 'none');
+    for (const k of ['go.routes', 'flow.schedule', 'me.billing']) agree(test, k, u, 'role + personal');
+});
+
+test('a personal override BEATS the role default, in both directions', () => {
+    const tighter = member({ role: 'scheduler', roleAccess: SCHED_DEFAULT,
+                             overrides: { 'flow.schedule': 'none' } });
+    assert.strictEqual(sqlResolve('flow.schedule', tighter), 'none');
+    const looser = member({ role: 'scheduler',
+                            roleAccess: { preset: null, overrides: { 'flow.schedule': 'none' } },
+                            overrides: { 'flow.schedule': 'edit' } });
+    assert.strictEqual(sqlResolve('flow.schedule', looser), 'edit');
+    agree(test, 'flow.schedule', tighter, 'personal tightens');
+    agree(test, 'flow.schedule', looser, 'personal loosens');
+});
+
+test("a person's own PRESET shadows the role default entirely", () => {
+    // A preset is a complete specification of that person's access, so it
+    // replaces the role's opinion rather than merging with it. Otherwise
+    // "Nurse" would quietly inherit whatever the job default granted.
+    const u = member({ role: 'scheduler', preset: 'nurse', roleAccess: SCHED_DEFAULT });
+    assert.strictEqual(sqlResolve('flow.schedule', u), 'none',
+        'the role default leaked through a personal preset');
+    assert.notStrictEqual(sqlResolve('health.medications', u), 'none');
+    agree(test, 'flow.schedule', u, 'personal preset shadows role');
+});
+
+test('a role default can itself be a preset', () => {
+    const u = member({ role: 'scheduler', roleAccess: { preset: 'head-counselor', overrides: {} } });
+    assert.notStrictEqual(sqlResolve('flow.schedule', u), 'none');
+    assert.strictEqual(sqlResolve('me.billing', u), 'none');
+    for (const cap of CAPS.keys()) agree(test, cap, u, 'role preset default');
+});
+
+test('an EMPTY role default is not a restriction — it is no default', () => {
+    // set_camp_role_access deletes the row for this case on purpose. If an
+    // empty default counted as "configured", a whole job title would be denied
+    // everything unlisted, i.e. everything.
+    for (const empty of [null, { preset: null, overrides: {} }]) {
+        const u = member({ role: 'scheduler', roleAccess: empty });
+        assert.strictEqual(sqlResolve('me.campers', u), 'edit',
+            'an empty role default locked the job out');
+        agree(test, 'me.campers', u, 'empty role default');
+    }
+});
+
+test('the role default never lifts anyone past the entitlement', () => {
+    // The ceiling holds above all of this. Checked through the real resolver,
+    // since the transliteration deliberately does not model entitlements.
+    const access = {
+        role: 'scheduler', products: null, preset: null, overrides: {},
+        entitlements: { me: '*' },              // no Flow
+        roleAccess: SCHED_DEFAULT,              // grants Flow
+    };
+    assert.strictEqual(C.resolve('flow.schedule', access), 'none');
+});
+
+test('a role default does not apply to an owner or admin', () => {
+    // They are ungated by design; a default for them would be a setting that
+    // silently does nothing, which is why the table rejects those roles.
+    for (const role of ['owner', 'admin']) {
+        const u = member({ role, roleAccess: SCHED_DEFAULT });
+        assert.strictEqual(sqlResolve('me.billing', u), 'edit');
+        agree(test, 'me.billing', u, role + ' ignores role defaults');
+    }
+});
+
+test('SQL and JS agree on role defaults across every capability and preset', () => {
+    for (const p of C.PRESETS) {
+        const u = member({ role: 'scheduler', roleAccess: { preset: p.key, overrides: {} } });
+        for (const cap of CAPS.keys()) agree(test, cap, u, 'role default preset=' + p.key);
+    }
 });
 
 // ── 5. health / shop / luggage (163) ──────────────────────────────────────

@@ -310,7 +310,31 @@
         if (!access) return true;
         if (access.preset) return false;
         var o = access.overrides;
-        return !o || Object.keys(o).length === 0;
+        if (o && Object.keys(o).length) return false;
+        // A camp-wide default for this person's JOB counts as configured, or the
+        // legacy full-access rule below would override the very thing the owner
+        // set on the role. See C.roleGrant.
+        var r = access.roleAccess;
+        if (r && (r.preset || (r.overrides && Object.keys(r.overrides).length))) return false;
+        return true;
+    };
+
+    /**
+     * The level a camp-wide ROLE DEFAULT gives for one capability, or undefined
+     * if the role has no opinion about it.
+     *
+     * Camps configure access two ways and both have to compose: "everyone with
+     * the title Scheduler gets this", and "but THIS scheduler also does
+     * bussing". The role default is the weaker of the two — a person's own
+     * preset or overrides beat it — so the per-person screen stays an exception
+     * list rather than a full re-specification.
+     */
+    C.roleGrant = function (key, roleAccess) {
+        if (!roleAccess) return undefined;
+        var o = roleAccess.overrides;
+        if (o && Object.prototype.hasOwnProperty.call(o, key)) return o[key];
+        if (roleAccess.preset) return C.expandPreset(roleAccess.preset)[key];
+        return undefined;
     };
 
     /**
@@ -390,6 +414,14 @@
             var hasOwnOverride = Object.prototype.hasOwnProperty.call(overrides, key);
             var presetObj = access.preset ? C.preset(access.preset) : null;
             var hasOwnPresetGrant = !!(presetObj && Object.prototype.hasOwnProperty.call(presetObj.grants || {}, key));
+            // The camp-wide default for this person's JOB, if the owner set one.
+            // Weaker than anything personal, stronger than "unlisted is off".
+            var ra = access.roleAccess;
+            var roleLevel = C.roleGrant(key, ra);
+            var roleNamesIt = !!(ra && ((ra.overrides &&
+                    Object.prototype.hasOwnProperty.call(ra.overrides, key)) ||
+                (ra.preset && C.preset(ra.preset) &&
+                    Object.prototype.hasOwnProperty.call(C.preset(ra.preset).grants || {}, key))));
 
             // 'finance' was split out of what used to be one 'analytics'
             // capability ("Analytics & Finance"). Access configured before
@@ -401,7 +433,7 @@
             // preset that names it specifically), it just IS 'analytics' —
             // recursing also correctly picks up that key's own
             // wildcard/legacy fallbacks, not only a literal override.
-            if (cap.section === 'finance' && !hasOwnOverride && !hasOwnPresetGrant) {
+            if (cap.section === 'finance' && !hasOwnOverride && !hasOwnPresetGrant && !roleNamesIt) {
                 return C.resolve(cap.app + '.analytics', access);
             }
 
@@ -409,10 +441,13 @@
                 level = overrides[key];
             } else if (access.preset) {
                 level = C.expandPreset(access.preset)[key];
+            } else if (roleLevel !== undefined) {
+                // Nothing personal, but the camp set a default for this job.
+                level = roleLevel;
             } else {
-                // Overrides exist but this key isn't among them and there's no
-                // preset: the owner is picking sections explicitly, so anything
-                // unlisted is off.
+                // Nothing personal, nothing on the role, and this person IS
+                // configured (isUnconfigured said so): the owner is picking
+                // sections explicitly, so anything unlisted is off.
                 level = 'none';
             }
         }

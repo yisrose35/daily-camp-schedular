@@ -105,7 +105,7 @@ case "${CAMPISTRY_APP:-}" in
   link)
     # Admin-only surfaces the parent portal never loads. Checked against the
     # script and link tags in campistry_link_parent.html.
-    other='^(campistry_go|campistry_snacks|campistry_shop|campistry_me|campistry_control|dashboard|flow\.html|scheduler_core_|auto_|total_solver_engine|rotation_|master_schedule_builder|print_center|daily_adjustments|schedule_calendar_views|leagues|specialty_leagues|special_activities|division_times_|unified_schedule_system|historical_route|view_historical_routes|campistry_ops\.css|campistry_payroll)'
+    other='^(campistry_go|campistry_snacks|campistry_shop|campistry_me|campistry_control|campistry_team_access|team_subdivisions_ui|team_access_setup|campistry_access_|dashboard|flow\.html|scheduler_core_|auto_|total_solver_engine|rotation_|master_schedule_builder|print_center|daily_adjustments|schedule_calendar_views|leagues|specialty_leagues|special_activities|division_times_|unified_schedule_system|historical_route|view_historical_routes|campistry_ops\.css|campistry_payroll)'
     ;;
   admin)
     # Parent-portal-only files. campistry_link_branding.js is deliberately NOT

@@ -3,9 +3,10 @@
 Design for: *"a camp buys only part of the program — give them Campistry Me, but
 only the roster and bunk structure, nothing else."*
 
-Status: **Phases 1, 2A, 2B shipped; Phase 3 started** — two keys enforced
-per-user, the rest listed in §6. 2C is a deliberate non-goal. Decisions taken
-are at the end.
+Status: **Phases 1, 2A, 2B and 3 shipped.** Every app-level `camp_state_kv` key
+is enforced per user; `campistryMe` is gated at the key level only, and §6 is
+honest about why that is as far as it goes. 2C remains a deliberate non-goal.
+A fourth layer — **per-JOB access defaults** an owner can set — is in §9.
 
 ---
 
@@ -317,7 +318,26 @@ the request.
 | `campistryHealth` | done (163) | any `health.*` section |
 | `campistryShop` | done (163) | `snacks.shop` |
 | `campistryLuggage` | done (163) | `go.luggage` |
-| `campistryMe`, `app1`, `campStructure` | last, if ever — 55 user-session call sites, a raw REST `fetch` in `beforeunload`, an anonymous page that upserts the whole blob | — |
+| `campistryMe` | done (164), **whole key only** | any `me.*` section |
+| `app1`, `campStructure` | never — read by Flow, Lite, Snacks, Go, badges and an edge function, so neither can be treated as Me-owned by any policy | — |
+
+**`campistryMe` is the honest exception.** The gate is real but near-vacuous
+today: all nine presets grant `me.campers`, so no preset produces a user with
+zero Me access. It cannot express "campers but not billing" — that is the thing
+anyone actually wants — because RLS gates *rows*, and campistryMe is one row.
+
+And the 2B trick does not work here. `families` holds the card-on-file tokens
+and is read **and written** by six edge functions (`cardknox-webhook`,
+`payments-hosted-complete`, `payments-charge-nonce`, `charge-saved-card`,
+`send-broadcast`, `payments-hosted-link`) — exactly like `finance.payments`.
+Moving it would open the same split-brain window across hand-pasted deploys, and
+lose card tokens. Real within-Me separation needs Option B from §3, a refactor
+of 55 call sites.
+
+It is shipped anyway because of what comes next: once owners set access
+explicitly per job and per person, "Go only, no Me at all" becomes a real
+configuration — for a bus coordinator — and without the gate the database would
+hand that person the whole Me blob.
 
 Every app-level key is now covered. Each grain matches what migration 157 uses
 for the *camp* entitlement on the same key, so the camp-level and user-level
@@ -451,3 +471,64 @@ keeps full access. Nobody who was never configured is newly restricted.
    lists what is left and what each one is waiting on.
 5. **Exports** — follows from whatever the data layer allows; no separate
    mechanism.
+
+---
+
+## 9. Per-JOB access defaults (migration 165)
+
+A fourth layer, and the one a camp owner actually reaches for. Camps describe
+access two ways and both have to compose:
+
+> "everyone with the title Scheduler gets this" … "but *this* scheduler also
+> does bussing"
+
+Only the second was expressible. Access was per-person or per named group, so
+"what a scheduler gets here" had to be set on every scheduler individually —
+and **a new hire defaulted to more than the camp intended**, because an
+unconfigured user keeps full access. A camp that carefully restricted its four
+schedulers got a fifth one with the run of the place.
+
+`camp_role_access` is one row per (camp, role), with the same
+`access_preset` + `section_access` shape as a member's own access, so the same
+editor and the same resolver work on it.
+
+### Precedence, weakest last
+
+```
+camp entitlement          what the camp bought — a ceiling over all of it
+└─ owner/admin            never gated by the per-staff layers
+   └─ product_access      which apps at all
+      └─ member overrides "this scheduler also does bussing"
+      └─ member preset    a complete personal specification — shadows the role
+      └─ ROLE DEFAULT     "what a scheduler gets here"
+      └─ legacy full      nobody has configured anything
+```
+
+Two subtleties that are easy to get wrong, both pinned by tests:
+
+- **A role default must make the person count as CONFIGURED.** Otherwise the
+  legacy full-access rule overrides the very thing the owner just set — and it
+  would appear to do nothing for exactly the people it is for (those with no
+  personal access record). This is why `isUnconfigured` and the SQL resolver
+  both consult it.
+- **An empty role default is *no* default, not a restriction.**
+  `set_camp_role_access` deletes the row when the preset is null and the
+  sections are empty. Storing an empty row would leave everyone with that job
+  configured-and-therefore-denied-everything — locking out a whole job title at
+  once.
+
+The role default being *weaker* than anything personal is what keeps the
+per-person screen an exception list rather than a full re-specification.
+
+### The owner's screen
+
+`campistry_team_access.html`, reached from **Team & Access → "What each job can
+open"**. Deliberately the same shape as the super-admin control hub — one matrix
+of every app and section, All/None per app, a live count — because it is the
+same job at a different level: the control hub sets what the camp bought, this
+sets who at the camp can reach it. It can never offer more than the camp bought,
+so anything outside the plan is shown locked.
+
+Owners and admins are not listed under "By job": they are ungated by design, so
+a default for them would be a setting that silently does nothing. The table's
+CHECK constraint refuses those roles for the same reason.

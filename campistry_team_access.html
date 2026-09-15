@@ -1,0 +1,525 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <title>Teams &amp; Access — Campistry</title>
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <link rel="icon" type="image/png" href="Campistry_logo.png">
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link href="https://fonts.googleapis.com/css2?family=DM+Sans:wght@400;500;600;700&family=Fraunces:wght@600;700&display=swap" rel="stylesheet">
+    <style>
+        *{box-sizing:border-box;margin:0;padding:0}
+        body{font-family:'DM Sans',system-ui,sans-serif;background:#F1F5F9;color:#0F172A;min-height:100vh;padding:28px 18px}
+        .wrap{max-width:1180px;margin:0 auto}
+        header{display:flex;align-items:baseline;gap:12px;flex-wrap:wrap;margin-bottom:6px}
+        h1{font-family:'Fraunces',serif;font-size:1.5rem}
+        a.back{font-size:.82rem;color:#147D91;text-decoration:none;font-weight:600}
+        a.back:hover{text-decoration:underline}
+        .sub{color:#64748B;font-size:.87rem;line-height:1.55;margin-bottom:18px;max-width:78ch}
+        .card{background:#fff;border:1px solid #E2E8F0;border-radius:16px;padding:20px;margin-bottom:16px;box-shadow:0 1px 3px rgba(15,23,42,.04)}
+        .tabs{display:flex;gap:6px;flex-wrap:wrap;margin-bottom:14px}
+        .tab{font:inherit;font-weight:600;font-size:.86rem;padding:8px 16px;border-radius:999px;cursor:pointer;
+             border:1px solid #CBD5E1;background:#fff;color:#334155}
+        .tab.on{background:#147D91;border-color:#147D91;color:#fff}
+        .picker{display:grid;grid-template-columns:repeat(auto-fill,minmax(210px,1fr));gap:8px}
+        .pick{text-align:left;font:inherit;cursor:pointer;padding:11px 13px;border-radius:11px;
+              background:#fff;border:1.5px solid #E2E8F0}
+        .pick.on{background:#ECFEFF;border-color:#147D91}
+        .pick .nm{font-size:.86rem;font-weight:700;color:#0F172A}
+        .pick .mt{font-size:.73rem;color:#64748B;margin-top:2px;line-height:1.45}
+        .app{margin-bottom:16px}
+        .app-head{display:flex;align-items:center;gap:10px;margin-bottom:8px}
+        .app-title{font-weight:700;font-size:.9rem}
+        .secs{display:grid;grid-template-columns:repeat(auto-fill,minmax(230px,1fr));gap:6px 14px}
+        .sec{display:flex;align-items:center;gap:8px;font-size:.83rem;color:#334155;padding:4px 0}
+        .sec.locked{opacity:.5}
+        .lv{display:flex;gap:3px;margin-left:auto;flex-shrink:0}
+        .lv button{font:inherit;font-size:.68rem;font-weight:600;padding:3px 9px;border-radius:7px;cursor:pointer;
+                   border:1px solid #E2E8F0;background:#fff;color:#64748B}
+        .lv button.on.none{background:#DC2626;border-color:#DC2626;color:#fff}
+        .lv button.on.view{background:#B45309;border-color:#B45309;color:#fff}
+        .lv button.on.edit{background:#059669;border-color:#059669;color:#fff}
+        .lv button:disabled{cursor:not-allowed}
+        .chip{font-size:.62rem;font-weight:700;border-radius:999px;padding:1px 6px;white-space:nowrap}
+        .chip.plan{color:#475569;background:#F1F5F9;border:1px solid #E2E8F0}
+        .chip.sens{color:#B45309;background:#FFFBEB;border:1px solid #FDE68A}
+        button{font:inherit;font-weight:600;border-radius:9px;padding:8px 14px;cursor:pointer;border:1px solid transparent}
+        .btn{background:#147D91;color:#fff}
+        .btn:hover{background:#10697A}
+        .btn:disabled{opacity:.55;cursor:default}
+        .btn-ghost{background:#fff;border-color:#CBD5E1;color:#334155}
+        .btn-ghost:hover{background:#F8FAFC}
+        .actions{display:flex;gap:8px;flex-wrap:wrap;align-items:center;margin-top:16px;padding-top:14px;border-top:1px solid #E2E8F0}
+        .muted{color:#94A3B8;font-size:.78rem}
+        .msg{font-size:.85rem;min-height:1.3em;margin-top:8px}
+        .msg.err{color:#DC2626}
+        .msg.ok{color:#047857}
+        .banner{border-radius:12px;padding:12px 14px;font-size:.83rem;line-height:1.55;margin-bottom:14px;border:1px solid}
+        .banner.info{background:#EFF6FF;border-color:#BFDBFE;color:#1E3A8A}
+        .banner.warn{background:#FFFBEB;border-color:#FDE68A;color:#78350F}
+        .gate{max-width:460px;margin:80px auto;text-align:center}
+    </style>
+</head>
+<body>
+<div class="wrap" id="root">
+    <header><h1>Teams &amp; Access</h1></header>
+    <p class="sub">Loading…</p>
+</div>
+
+<script src="config.js"></script>
+<script src="supabase-js@2.js"></script>
+<script src="supabase_client.js"></script>
+<script src="campistry_capabilities.js"></script>
+
+<script>
+(function () {
+    'use strict';
+
+    // =========================================================================
+    // The owner's side of the control hub.
+    //
+    // Same shape as campistry_control.html deliberately: one matrix of every
+    // app and section, All/None per app, a live count. The difference is what
+    // is being set. The control hub sets what the CAMP bought; this sets who at
+    // the camp can reach it — and it can never offer more than the camp bought,
+    // so anything outside the plan is shown locked rather than hidden.
+    //
+    // TWO THINGS TO EDIT, which is the whole design:
+    //
+    //   BY JOB     — "what does a Scheduler get here". One setting that covers
+    //                everyone with that title, including people hired later.
+    //                This is the gap it fills: before, access was per-person
+    //                only, so a camp that carefully restricted its four
+    //                schedulers got a fifth one with the run of the place,
+    //                because an unconfigured user keeps full access.
+    //
+    //   BY PERSON  — "this scheduler also does bussing". An exception on top of
+    //                the job default, not a re-specification of it: anything
+    //                left alone here keeps following the job.
+    //
+    // A person's own setting always beats the job default. See
+    // ENTITLEMENTS_DESIGN.md and migration 165 for the full precedence chain.
+    // =========================================================================
+
+    var root = document.getElementById('root');
+    var CAPS = window.CampistryCapabilities;
+
+    // Jobs that can have a default. Owners and admins are ungated by design —
+    // offering them toggles would imply the toggles do something.
+    var JOBS = [
+        { key: 'manager',   label: 'Manager',   desc: 'Runs part of the camp day to day.' },
+        { key: 'scheduler', label: 'Scheduler', desc: 'Builds and adjusts the schedule.' },
+        { key: 'counselor', label: 'Counselor', desc: 'Bunk staff. Never more than view.' },
+        { key: 'viewer',    label: 'Viewer',    desc: 'Can look, never change.' }
+    ];
+
+    var _mode = 'job';        // 'job' | 'person'
+    var _job = null;          // which job is open
+    var _person = null;       // which member is open
+    var _members = [];
+    var _roleDefaults = {};   // role -> { preset, overrides }
+    var _ent = {};            // what the camp bought
+    var _draft = null;        // { preset, overrides } being edited
+    var _msg = '';
+    var _msgKind = '';
+
+    function client() {
+        var d = window.CampistryDB;
+        return (d && d.getClient && d.getClient()) ||
+               (window.supabase && typeof window.supabase.rpc === 'function' ? window.supabase : null);
+    }
+    function campId() {
+        var d = window.CampistryDB;
+        return d && d.getCampId ? d.getCampId() : null;
+    }
+    function esc(s) { var d = document.createElement('div'); d.textContent = s == null ? '' : s; return d.innerHTML; }
+
+    /** Whatever this deployment calls the name column. */
+    function memberName(m) {
+        return m.display_name || m.name || m.full_name || m.email || 'Staff member';
+    }
+    function sortMembers(rows) {
+        return rows.slice().sort(function (a, b) {
+            return memberName(a).localeCompare(memberName(b));
+        });
+    }
+
+    function gate(title, body) {
+        root.innerHTML = '<div class="gate"><h1 style="font-family:Fraunces,serif;font-size:1.3rem;margin-bottom:8px;">' +
+            esc(title) + '</h1><p class="sub" style="margin:0 auto;">' + body + '</p></div>';
+    }
+
+    // ── the entitlement ceiling ─────────────────────────────────────────────
+    // resolve() checks this ABOVE the owner/admin bypass, so a section the camp
+    // has no entitlement for resolves to 'none' whatever is set here. Offering
+    // it would be promising access the product cannot deliver.
+    function entitled(key) {
+        var cap = CAPS.get(key);
+        return cap ? CAPS.entitled(cap, _ent) : true;
+    }
+
+    /** The level the draft currently gives for a capability. */
+    function levelOf(key) {
+        if (!_draft) return 'none';
+        if (Object.prototype.hasOwnProperty.call(_draft.overrides, key)) return _draft.overrides[key];
+        if (_draft.preset) return CAPS.expandPreset(_draft.preset)[key] || 'none';
+        return 'none';
+    }
+    /** What the person will actually get — the entitlement always wins. */
+    function effective(key) { return entitled(key) ? levelOf(key) : 'none'; }
+
+    function isEmptyDraft(d) {
+        return !d || (!d.preset && !Object.keys(d.overrides || {}).length);
+    }
+
+    // ── render ──────────────────────────────────────────────────────────────
+
+    function render() {
+        var html =
+            '<header><h1>Teams &amp; Access</h1>' +
+            '<a class="back" href="dashboard.html">&larr; Back to dashboard</a></header>' +
+            '<p class="sub">Set access once for a whole job, then make exceptions for individual people. ' +
+            'A person’s own setting always beats their job’s. Anything outside your camp’s plan ' +
+            'is shown locked — it cannot be given to anyone, including you.</p>';
+
+        html += '<div class="tabs">' +
+            '<button class="tab' + (_mode === 'job' ? ' on' : '') + '" data-mode="job">By job</button>' +
+            '<button class="tab' + (_mode === 'person' ? ' on' : '') + '" data-mode="person">By person</button>' +
+            '</div>';
+
+        html += '<div class="card">' + (_mode === 'job' ? jobPicker() : personPicker()) + '</div>';
+
+        if (_draft) html += '<div class="card">' + matrix() + '</div>';
+
+        root.innerHTML = html;
+        wire();
+    }
+
+    function jobPicker() {
+        var h = '<div class="muted" style="margin-bottom:10px;">' +
+            'What everyone with this title gets, including people you hire later. ' +
+            'Owners and admins are not listed — they always have full access, so a default for them ' +
+            'would be a setting that does nothing.</div><div class="picker">';
+        JOBS.forEach(function (j) {
+            var d = _roleDefaults[j.key];
+            var set = !isEmptyDraft(d);
+            h += '<button class="pick' + (_job === j.key ? ' on' : '') + '" data-job="' + esc(j.key) + '">' +
+                 '<div class="nm">' + esc(j.label) + '</div>' +
+                 '<div class="mt">' + esc(j.desc) + '<br>' +
+                 (set ? summarize(d) : 'No default — full access to their apps') +
+                 '</div></button>';
+        });
+        return h + '</div>';
+    }
+
+    function personPicker() {
+        if (!_members.length) {
+            return '<div class="muted">No staff to show yet. Invite people from Staff &amp; Access on the ' +
+                   'dashboard first, then come back here to fine-tune what they can open.</div>';
+        }
+        var h = '<div class="muted" style="margin-bottom:10px;">' +
+            'An exception on top of the person’s job. Anything you leave alone keeps following the job — ' +
+            'so to give one scheduler bussing as well, set only the bussing sections here.</div><div class="picker">';
+        _members.forEach(function (m) {
+            var ungated = (m.role === 'owner' || m.role === 'admin');
+            var own = !isEmptyDraft({ preset: m.access_preset, overrides: m.section_access || {} });
+            h += '<button class="pick' + (_person && _person.id === m.id ? ' on' : '') + '" ' +
+                 'data-person="' + esc(m.id) + '">' +
+                 '<div class="nm">' + esc(memberName(m)) + '</div>' +
+                 '<div class="mt">' + esc(m.role || 'staff') +
+                 (ungated ? ' — always full access'
+                          : (own ? ' — has its own exceptions' : ' — follows the job default')) +
+                 '</div></button>';
+        });
+        return h + '</div>';
+    }
+
+    function summarize(d) {
+        if (isEmptyDraft(d)) return 'No default';
+        if (d.preset) {
+            var p = CAPS.preset(d.preset);
+            return 'Role: ' + ((p && p.label) || d.preset);
+        }
+        var n = Object.keys(d.overrides).filter(function (k) { return d.overrides[k] !== 'none'; }).length;
+        return n + ' section' + (n === 1 ? '' : 's') + ' on';
+    }
+
+    function matrix() {
+        var who = _mode === 'job'
+            ? ('everyone with the title ' + (JOBS.filter(function (j) { return j.key === _job; })[0] || {}).label)
+            : memberName(_person);
+
+        var h = '<div style="display:flex;align-items:baseline;gap:10px;flex-wrap:wrap;margin-bottom:4px;">' +
+                '<strong style="font-size:1rem;">' + esc(_mode === 'job' ? 'What ' + who + ' can open'
+                                                                        : 'What ' + who + ' can open') + '</strong>';
+
+        var on = 0, locked = 0;
+        CAPS.all().forEach(function (c) {
+            if (effective(c.key) !== 'none') on++;
+            if (!entitled(c.key)) locked++;
+        });
+        h += '<span class="muted">' + on + ' of ' + CAPS.all().length + ' sections on</span></div>';
+
+        if (_mode === 'person') {
+            if (_person.role === 'owner' || _person.role === 'admin') {
+                return '<div class="banner warn"><strong>' +
+                    esc(_person.role === 'owner' ? 'Owners' : 'Admins') +
+                    ' always have full access.</strong> Section limits deliberately don’t apply to them — ' +
+                    'otherwise an owner could lock themselves out of their own camp with no way back in. ' +
+                    'To restrict this person, change their role first.</div>';
+            }
+            var jd = _roleDefaults[_person.role];
+            h += '<div class="banner info">Their job (<strong>' + esc(_person.role || 'staff') + '</strong>) ' +
+                 (isEmptyDraft(jd)
+                    ? 'has no default, so anything you leave off here is off.'
+                    : 'gives them ' + esc(summarize(jd)).toLowerCase() + '. Anything you leave alone here keeps following it.') +
+                 '</div>';
+        }
+
+        if (locked) {
+            h += '<div class="banner info">' + locked + ' section' + (locked === 1 ? '' : 's') +
+                 ' marked <strong>not in plan</strong> — not part of your camp’s plan, so they cannot be ' +
+                 'given to anyone. Shown rather than hidden so it is clear what exists.</div>';
+        }
+
+        CAPS.APPS.forEach(function (app) {
+            var secs = CAPS.forApp(app.key);
+            if (!secs.length) return;
+            h += '<div class="app"><div class="app-head">' +
+                 '<span class="app-title">' + esc(app.label) + '</span>' +
+                 '<button class="btn-ghost" data-all="' + esc(app.key) + '" style="padding:2px 9px;font-size:.72rem;">All</button>' +
+                 '<button class="btn-ghost" data-none="' + esc(app.key) + '" style="padding:2px 9px;font-size:.72rem;">None</button>' +
+                 '</div><div class="secs">';
+            secs.forEach(function (cap) {
+                var ok = entitled(cap.key);
+                var lvl = effective(cap.key);
+                h += '<div class="sec' + (ok ? '' : ' locked') + '">' +
+                     '<span>' + esc(cap.label) +
+                     (cap.sensitive ? ' <span class="chip sens">SENSITIVE</span>' : '') +
+                     (ok ? '' : ' <span class="chip plan">NOT IN PLAN</span>') + '</span>' +
+                     '<span class="lv">';
+                CAPS.levelsFor(cap.key).forEach(function (L) {
+                    h += '<button class="' + L + (lvl === L ? ' on' : '') + '"' +
+                         ' data-cap="' + esc(cap.key) + '" data-lvl="' + L + '"' + (ok ? '' : ' disabled') + '>' +
+                         (L === 'none' ? 'None' : L === 'view' ? 'View' : 'Edit') + '</button>';
+                });
+                h += '</span></div>';
+            });
+            h += '</div></div>';
+        });
+
+        h += '<div class="actions">' +
+             '<button class="btn" id="save">Save</button>' +
+             '<button class="btn-ghost" id="clear">' +
+             (_mode === 'job' ? 'Remove this job’s default' : 'Follow the job default') + '</button>' +
+             '<button class="btn-ghost" id="cancel">Close</button>' +
+             '<span class="muted">' +
+             (_mode === 'job' ? 'Applies to everyone with this title, now and later.'
+                              : 'Applies to this person only.') +
+             '</span></div>';
+        if (_msg) h += '<div class="msg ' + esc(_msgKind) + '">' + esc(_msg) + '</div>';
+        return h;
+    }
+
+    // ── interaction ─────────────────────────────────────────────────────────
+
+    function wire() {
+        root.querySelectorAll('[data-mode]').forEach(function (b) {
+            b.onclick = function () {
+                _mode = b.getAttribute('data-mode');
+                _draft = null; _job = null; _person = null; _msg = '';
+                render();
+            };
+        });
+        root.querySelectorAll('[data-job]').forEach(function (b) {
+            b.onclick = function () {
+                var k = b.getAttribute('data-job');
+                if (_job === k) { _job = null; _draft = null; render(); return; }
+                _job = k; _msg = '';
+                var d = _roleDefaults[k];
+                _draft = { preset: (d && d.preset) || null, overrides: Object.assign({}, (d && d.overrides) || {}) };
+                render();
+            };
+        });
+        root.querySelectorAll('[data-person]').forEach(function (b) {
+            b.onclick = function () {
+                var id = b.getAttribute('data-person');
+                if (_person && _person.id === id) { _person = null; _draft = null; render(); return; }
+                _person = _members.filter(function (m) { return String(m.id) === String(id); })[0] || null;
+                _msg = '';
+                _draft = _person
+                    ? { preset: _person.access_preset || null,
+                        overrides: Object.assign({}, _person.section_access || {}) }
+                    : null;
+                render();
+            };
+        });
+
+        root.querySelectorAll('[data-cap]').forEach(function (b) {
+            b.onclick = function () {
+                var key = b.getAttribute('data-cap');
+                // Belt and braces — the control is rendered disabled, but this
+                // is the one place a bad value would enter the draft.
+                if (!entitled(key)) return;
+                seedFromPresetIfNeeded();
+                _draft.overrides[key] = b.getAttribute('data-lvl');
+                _msg = '';
+                render();
+            };
+        });
+        root.querySelectorAll('[data-all]').forEach(function (b) {
+            b.onclick = function () { setApp(b.getAttribute('data-all'), 'edit'); };
+        });
+        root.querySelectorAll('[data-none]').forEach(function (b) {
+            b.onclick = function () { setApp(b.getAttribute('data-none'), 'none'); };
+        });
+
+        var s = document.getElementById('save');
+        if (s) s.onclick = save;
+        var c = document.getElementById('clear');
+        if (c) c.onclick = function () { _draft = { preset: null, overrides: {} }; save(); };
+        var x = document.getElementById('cancel');
+        if (x) x.onclick = function () { _draft = null; _job = null; _person = null; _msg = ''; render(); };
+    }
+
+    // Turning one section off while a preset is selected has to freeze the
+    // preset into explicit levels first, or the single change would read as
+    // "preset plus one override" and every other section would silently follow
+    // whatever the preset says rather than what is on screen.
+    function seedFromPresetIfNeeded() {
+        if (!_draft.preset) return;
+        var exp = CAPS.expandPreset(_draft.preset);
+        CAPS.all().forEach(function (c) {
+            if (!Object.prototype.hasOwnProperty.call(_draft.overrides, c.key)) {
+                _draft.overrides[c.key] = entitled(c.key) ? (exp[c.key] || 'none') : 'none';
+            }
+        });
+        _draft.preset = null;
+    }
+
+    function setApp(appKey, lvl) {
+        seedFromPresetIfNeeded();
+        CAPS.forApp(appKey).forEach(function (c) {
+            // Never record a grant the plan refuses.
+            if (!entitled(c.key)) { _draft.overrides[c.key] = 'none'; return; }
+            _draft.overrides[c.key] = (c.viewOnly && lvl === 'edit') ? 'view' : lvl;
+        });
+        _msg = '';
+        render();
+    }
+
+    function save() {
+        var cl = client();
+        if (!cl) { _msg = 'Connection not ready — try again in a moment.'; _msgKind = 'err'; render(); return; }
+
+        // Last line of defence before the write: never persist a grant the
+        // entitlement refuses. The controls are disabled and setApp skips them,
+        // so this normally changes nothing — but it makes the guarantee
+        // independent of the UI having been rendered with the right plan.
+        var payload = {};
+        Object.keys(_draft.overrides).forEach(function (k) {
+            var v = _draft.overrides[k];
+            payload[k] = (v !== 'none' && !entitled(k)) ? 'none' : v;
+        });
+
+        var btn = document.getElementById('save');
+        if (btn) { btn.disabled = true; btn.textContent = 'Saving…'; }
+
+        var p = _mode === 'job'
+            ? cl.rpc('set_camp_role_access', {
+                  p_role: _job, p_preset: _draft.preset, p_section_access: payload })
+            : cl.rpc('set_member_access', {
+                  p_member_id: _person.id, p_preset: _draft.preset, p_section_access: payload });
+
+        p.then(function (res) {
+            if (btn) { btn.disabled = false; btn.textContent = 'Save'; }
+            var d = res.data;
+            if (res.error || !d || !d.success) {
+                var e = (d && d.error) || (res.error && res.error.message) || 'Could not save.';
+                _msg = e === 'not_authorized' ? 'Only the camp owner or an admin can change access.'
+                     : e === 'cannot_restrict_admin' ? 'Owners and admins always have full access — change their role first.'
+                     : e === 'bad_role' ? ((d && d.detail) || 'That job cannot have a default.')
+                     : 'Could not save: ' + e;
+                _msgKind = 'err';
+                render();
+                return;
+            }
+            // Reflect what was saved so the pickers show it without a reload.
+            if (_mode === 'job') {
+                if (d.cleared) delete _roleDefaults[_job];
+                else _roleDefaults[_job] = { preset: d.preset || null, overrides: d.overrides || {} };
+            } else if (_person) {
+                _person.access_preset = _draft.preset;
+                _person.section_access = payload;
+            }
+            _msg = 'Saved.';
+            _msgKind = 'ok';
+            render();
+        }, function (e) {
+            if (btn) { btn.disabled = false; btn.textContent = 'Save'; }
+            _msg = 'Could not save: ' + ((e && e.message) || 'unknown error');
+            _msgKind = 'err';
+            render();
+        });
+    }
+
+    // ── boot ────────────────────────────────────────────────────────────────
+
+    function boot() {
+        var cl = client();
+        if (!cl) { gate('Could not reach Campistry', 'Check your connection and reload.'); return; }
+        if (!CAPS) { gate('Could not load', 'The capability registry failed to load.'); return; }
+        var cid = campId();
+        if (!cid) { gate('Not signed in', 'Sign in to Campistry first, then reload this page.'); return; }
+
+        cl.rpc('get_my_access', { p_camp_id: cid }).then(function (r) {
+            var d = r.data;
+            if (r.error) { gate('Could not check access', esc(r.error.message || 'Unknown error')); return; }
+            if (!d || !d.success) { gate('Could not check access', esc((d && d.error) || 'Unknown error')); return; }
+            if (d.role !== 'owner' && d.role !== 'admin') {
+                gate('Not authorised',
+                     'Only the camp owner or an admin can change who can open what.');
+                return;
+            }
+            _ent = (d.entitlements && typeof d.entitlements === 'object') ? d.entitlements : {};
+            return loadAll(cl, cid);
+        }, function () {
+            gate('Not signed in', 'Sign in to Campistry first, then reload this page.');
+        });
+    }
+
+    function loadAll(cl, cid) {
+        // Role defaults and the staff list. Neither is fatal on its own: with
+        // no defaults the By job tab just shows none set, and with no staff the
+        // By person tab says so. Failing the whole page for either would make
+        // this unusable on a camp that has one but not the other.
+        var roles = cl.rpc('get_camp_role_access', {}).then(function (r) {
+            var d = r.data;
+            if (!r.error && d && d.success && d.roles) _roleDefaults = d.roles;
+        }, function () {});
+
+        // The same staff list the Teams card on the dashboard shows.
+        // AccessControl.getTeamMembers() is the canonical accessor, and it is
+        // preferred when the page happens to have access_control.js loaded —
+        // this one does not, so the fallback below runs, and it is deliberately
+        // the IDENTICAL query (select '*' on camp_users for this camp) rather
+        // than a narrower one. Selecting named columns would have been a guess
+        // about what the name column is called, and a wrong guess shows "no
+        // staff yet" on a camp that has plenty.
+        var staff = (window.AccessControl && window.AccessControl.getTeamMembers)
+            ? window.AccessControl.getTeamMembers().then(function (r) {
+                  if (Array.isArray(r && r.data)) _members = sortMembers(r.data);
+              }, function () {})
+            : cl.from('camp_users').select('*').eq('camp_id', cid).then(function (r) {
+                  if (!r.error && Array.isArray(r.data)) _members = sortMembers(r.data);
+              }, function () {});
+
+        return Promise.all([roles, staff]).then(render, render);
+    }
+
+    if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', boot);
+    else boot();
+})();
+</script>
+</body>
+</html>

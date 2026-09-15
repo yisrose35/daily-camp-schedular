@@ -77,6 +77,14 @@ MANIFEST = [
     # would silently un-gate the canteen.
     ("163_per_user_health_shop_luggage_rls",
      "Per-user section access on Health, Shop and Luggage (phase 3)"),
+    # MUST come after 163 — redefines camp_state_key_user_allowed and has to
+    # carry every key the earlier steps gated, or replacing the function
+    # silently un-gates them.
+    ("164_per_user_campistryme_rls",
+     "Per-user gate on campistryMe (whole key only; see the file header)"),
+    # MUST come after 159: user_section_level reads access_preset_grants.
+    ("165_camp_role_access",
+     "Per-JOB access defaults a camp owner can set, plus resolver support"),
 ]
 
 HEADER = """-- ═══════════════════════════════════════════════════════════════════════════
@@ -125,7 +133,15 @@ HEADER = """-- ═════════════════════�
 --     snacks access — nurse, division head, office, bus coordinator presets —
 --     stop being able to read camper balances and the transaction ledger. The
 --     POS register is unaffected: it runs as a counselor, and an unconfigured
---     counselor still passes the gate.
+--     counselor still passes the gate. 163 finishes the app-level keys
+--     (Health, Shop, Luggage) and 164 adds campistryMe as a whole-key gate.
+--     Watch for head-counselor and division-head presets losing Health: they
+--     grant no health section, but a MANAGER on either can read it today.
+--   * NEW: you can set access once for a whole JOB (165). Before, access was
+--     per-person only, so a camp that restricted its four schedulers got a
+--     fifth one with the run of the place — an unconfigured user keeps full
+--     access. Set it under Team & Access -> "What each job can open", then make
+--     exceptions for individuals. A person's own setting always wins.
 --
 -- PREREQUISITES (long since applied on a live camp; the preflight below fails
 -- loudly rather than confusingly if one is missing): 077 (camp Stripe Connect),
@@ -286,21 +302,36 @@ UNION ALL SELECT 'per-user section access on all 6 camp_state_kv policies',
 -- All six audited keys must be present in the CURRENT definition. The function
 -- is replaced by each step, so a step that forgot to carry an earlier key
 -- forward would silently un-gate it.
-UNION ALL SELECT 'all 6 audited keys gated per user',
-       CASE WHEN (SELECT count(*) FROM (VALUES
-                     ('campistryMePayroll'), ('campistryMeFinance'), ('campistrySnacks'),
-                     ('campistryHealth'), ('campistryShop'), ('campistryLuggage')
-                  ) AS k(name)
-                  WHERE (SELECT prosrc FROM pg_proc
-                          WHERE proname='camp_state_key_user_allowed' LIMIT 1)
-                        LIKE '%' || k.name || '%') = 6
-            THEN 'OK' ELSE 'MISSING' END
 -- me.finance is a view-only capability and never resolves to 'edit' for
 -- anyone, the owner included. If the key gate ever tests for 'edit', Finance
 -- becomes permanently unsaveable for every user in every camp.
 UNION ALL SELECT 'finance writes gated on "not none", not "edit"',
        CASE WHEN (SELECT prosrc FROM pg_proc
                    WHERE proname='camp_state_key_user_allowed' LIMIT 1) LIKE '%<> ''none''%'
+            THEN 'OK' ELSE 'MISSING' END
+-- Phase 3 finished: seven keys gated per user.
+UNION ALL SELECT 'all 7 audited keys gated per user',
+       CASE WHEN (SELECT count(*) FROM (VALUES
+                     ('campistryMePayroll'), ('campistryMeFinance'), ('campistrySnacks'),
+                     ('campistryHealth'), ('campistryShop'), ('campistryLuggage'),
+                     ('campistryMe')
+                  ) AS k(name)
+                  WHERE (SELECT prosrc FROM pg_proc
+                          WHERE proname='camp_state_key_user_allowed' LIMIT 1)
+                        LIKE '%' || k.name || '%') = 7
+            THEN 'OK' ELSE 'MISSING' END
+-- Per-JOB defaults (165).
+UNION ALL SELECT 'per-job access defaults available',
+       CASE WHEN EXISTS (SELECT 1 FROM information_schema.tables
+                          WHERE table_name='camp_role_access')
+             AND EXISTS (SELECT 1 FROM pg_proc WHERE proname='set_camp_role_access')
+            THEN 'OK' ELSE 'MISSING' END
+UNION ALL SELECT 'get_my_access carries the job default',
+       CASE WHEN (SELECT prosrc FROM pg_proc WHERE proname='get_my_access' LIMIT 1) LIKE '%roleAccess%'
+            THEN 'OK' ELSE 'MISSING' END
+UNION ALL SELECT 'the RLS resolver honours job defaults',
+       CASE WHEN (SELECT prosrc FROM pg_proc WHERE proname='user_section_level' LIMIT 1)
+                 LIKE '%camp_role_access%'
             THEN 'OK' ELSE 'MISSING' END
 UNION ALL SELECT 'lost-charge reconciliation report',
        CASE WHEN EXISTS (SELECT 1 FROM pg_proc WHERE proname='reconcile_processor_charges')

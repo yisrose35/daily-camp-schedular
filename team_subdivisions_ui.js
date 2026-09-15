@@ -897,9 +897,12 @@
         container.innerHTML = `
             <div class="card-header">
                 <h2>Team & Access</h2>
-                <a href="team_access_setup.html" class="btn-edit" style="text-decoration:none;">Manage &rarr;</a>
+                <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;">
+                    <a href="campistry_team_access.html" class="btn-edit" style="text-decoration:none;">What each job can open &rarr;</a>
+                    <a href="team_access_setup.html" class="btn-edit" style="text-decoration:none;">Manage &rarr;</a>
+                </div>
             </div>
-            <p class="card-desc">Who's on your team, their role, and what they can access. Invite, edit, and build Access Groups on the setup page.</p>
+            <p class="card-desc">Who's on your team, their role, and what they can access. Invite people and build Access Groups on the setup page &mdash; or set what a whole job can open, and make exceptions for individuals, on the access page.</p>
             <div style="font-size:0.7rem;font-weight:700;color:var(--slate-400,#94A3B8);text-transform:uppercase;letter-spacing:0.05em;margin:14px 0 4px;">Team Members</div>
             ${memberRows}
             <div style="font-size:0.7rem;font-weight:700;color:var(--slate-400,#94A3B8);text-transform:uppercase;letter-spacing:0.05em;margin:18px 0 4px;">Access Groups</div>

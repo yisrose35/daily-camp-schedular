@@ -44,7 +44,15 @@
 --     snacks access — nurse, division head, office, bus coordinator presets —
 --     stop being able to read camper balances and the transaction ledger. The
 --     POS register is unaffected: it runs as a counselor, and an unconfigured
---     counselor still passes the gate.
+--     counselor still passes the gate. 163 finishes the app-level keys
+--     (Health, Shop, Luggage) and 164 adds campistryMe as a whole-key gate.
+--     Watch for head-counselor and division-head presets losing Health: they
+--     grant no health section, but a MANAGER on either can read it today.
+--   * NEW: you can set access once for a whole JOB (165). Before, access was
+--     per-person only, so a camp that restricted its four schedulers got a
+--     fifth one with the run of the place — an unconfigured user keeps full
+--     access. Set it under Team & Access -> "What each job can open", then make
+--     exceptions for individuals. A person's own setting always wins.
 --
 -- PREREQUISITES (long since applied on a live camp; the preflight below fails
 -- loudly rather than confusingly if one is missing): 077 (camp Stripe Connect),
@@ -3592,6 +3600,563 @@ GRANT EXECUTE ON FUNCTION public.camp_state_key_user_allowed(uuid, text) TO auth
 -- ============================================================================
 
 
+-- #########################################################################
+-- ###### 164_per_user_campistryme_rls
+-- ###### Per-user gate on campistryMe (whole key only; see the file header)
+-- #########################################################################
+
+-- ============================================================================
+-- Migration 164: per-user gate on campistryMe.
+--
+-- The last key. Read the honest scope below before expecting much of it.
+--
+-- ── WHAT THIS DOES ─────────────────────────────────────────────────────────
+-- Adds campistryMe to camp_state_key_user_allowed, gated on "has this person
+-- ANY me.* section". A user with every Me section off can no longer read or
+-- write the row.
+--
+-- ── WHAT IT DOES NOT DO, AND CANNOT ────────────────────────────────────────
+-- It cannot express "campers but not billing", which is what anyone actually
+-- wants from gating Campistry Me. campistryMe is ONE row holding campers,
+-- structure, bunk placements, families, payments, enrollments, sessions,
+-- reports and settings together, and RLS gates rows, not JSON branches.
+--
+-- The obvious answer — do what 2B did for payroll and finance, and move the
+-- sensitive branches to their own keys — does not work here. `families` holds
+-- the card-on-file tokens and is read AND written by six edge functions
+-- (cardknox-webhook, payments-hosted-complete, payments-charge-nonce,
+-- charge-saved-card, send-broadcast, payments-hosted-link), exactly like
+-- finance.payments. Every one of those is deployed by hand, one paste at a
+-- time, so moving the path would open a window where some processors write to
+-- the old location and some to the new — losing card tokens and recorded
+-- payments. That is the same reasoning that kept finance.payments in place,
+-- and it applies with more force here.
+--
+-- Real within-Me separation needs the RPC-mediated read/write from
+-- ENTITLEMENTS_DESIGN.md §3 Option B: get_camp_state scrubbing branches on the
+-- way out and save_camp_state merging on the way in. That is a refactor of 55
+-- call sites, not a policy change, and it is not what this migration is.
+--
+-- ── SO IS THIS WORTH APPLYING? YES, BUT IT BITES NOBODY TODAY ──────────────
+-- Every one of the nine presets grants me.campers, so no preset produces a
+-- user with zero Me access. The gate therefore changes nothing for any camp
+-- configured from a preset.
+--
+-- It is here because of what comes next: once owners can set access explicitly
+-- per job and per person (migration 165 and the Teams & Access hub), "Go only,
+-- no Me at all" becomes a configuration a camp will actually create — for a
+-- bus coordinator, say. Without this the database would hand that person the
+-- entire Me blob anyway. Shipping the gate now means it is already in place
+-- when the first such configuration is saved, rather than being remembered
+-- afterwards.
+--
+-- Idempotent. Requires 159, 160, 161, 163.
+-- ============================================================================
+
+CREATE OR REPLACE FUNCTION public.camp_state_key_user_allowed(p_camp_id uuid, p_key text)
+RETURNS boolean
+LANGUAGE plpgsql
+STABLE
+SECURITY DEFINER
+SET search_path = public, pg_catalog
+AS $$
+BEGIN
+    RETURN CASE p_key
+        -- 160
+        WHEN 'campistryMePayroll' THEN public.user_section_level(p_camp_id, 'me.payroll') <> 'none'
+        WHEN 'campistryMeFinance' THEN public.user_section_level(p_camp_id, 'me.finance') <> 'none'
+        -- 161
+        WHEN 'campistrySnacks'    THEN public.user_app_any_section(p_camp_id, 'snacks')
+        -- 163
+        WHEN 'campistryHealth'    THEN public.user_app_any_section(p_camp_id, 'health')
+        WHEN 'campistryShop'      THEN public.user_section_level(p_camp_id, 'snacks.shop') <> 'none'
+        WHEN 'campistryLuggage'   THEN public.user_section_level(p_camp_id, 'go.luggage') <> 'none'
+        -- 164: whole-key only. See the header for why this cannot be per-branch.
+        WHEN 'campistryMe'        THEN public.user_app_any_section(p_camp_id, 'me')
+        ELSE true
+    END;
+END;
+$$;
+REVOKE ALL ON FUNCTION public.camp_state_key_user_allowed(uuid, text) FROM public;
+GRANT EXECUTE ON FUNCTION public.camp_state_key_user_allowed(uuid, text) TO authenticated, service_role;
+
+-- app1 and campStructure are deliberately NOT gated, and should not be:
+-- campStructure and app1.camperRoster are read by Flow, Lite, Snacks, Go,
+-- badges and an edge function. Neither can be treated as Me-owned by any
+-- policy, and gating either on a Me capability would break pages that have
+-- nothing to do with Campistry Me.
+
+-- ─── Sanity checks ─────────────────────────────────────────────────────────
+-- Nothing changes for a preset-configured camp — every preset grants
+-- me.campers, so this is true for all nine:
+--   select user_app_any_section('<camp>'::uuid, 'me');   -- expect true
+--
+-- It bites only an explicitly-configured user with no Me sections:
+--   -- as such a user:
+--   select key from camp_state_kv where key = 'campistryMe';   -- 0 rows
+--
+-- The full gated set is now seven keys:
+--   select prosrc from pg_proc where proname = 'camp_state_key_user_allowed';
+-- ============================================================================
+
+
+-- #########################################################################
+-- ###### 165_camp_role_access
+-- ###### Per-JOB access defaults a camp owner can set, plus resolver support
+-- #########################################################################
+
+-- ============================================================================
+-- Migration 165: per-JOB access defaults, set by the camp owner.
+--
+-- Camps describe access two ways and both have to compose:
+--
+--     "everyone with the title Scheduler gets this"
+--     "...but THIS scheduler also does bussing"
+--
+-- Until now only the second was expressible. Access was per-person
+-- (camp_users.access_preset / section_access) or per named group
+-- (camp_access_groups), so "what a scheduler gets here" had to be set on every
+-- scheduler individually — and a new hire defaulted to FULL access, because an
+-- unconfigured user keeps the pre-section-access behaviour.
+--
+-- That default is the real problem this fixes. A camp that carefully restricted
+-- its four schedulers got a fifth one with the run of the place.
+--
+-- ── THE MODEL ──────────────────────────────────────────────────────────────
+-- One row per (camp, role). Same shape as a member's own access, so the same
+-- editor and the same resolver work on it:
+--
+--     access_preset   — a named role to start from, or null
+--     section_access  — explicit per-capability levels
+--
+-- Precedence, weakest last:
+--
+--     camp entitlement            what the camp bought — a ceiling over all of it
+--     └─ owner/admin              never gated by the per-staff layers
+--        └─ product_access        which apps at all
+--           └─ member overrides   "this scheduler also does bussing"
+--           └─ member preset
+--           └─ ROLE DEFAULT       "what a scheduler gets here"   <- NEW
+--           └─ legacy full        nobody has configured anything
+--
+-- A role default makes a person CONFIGURED, which is what stops the legacy
+-- full-access rule from overriding the very thing the owner just set. That is
+-- the one subtle part: without it, setting a role default would appear to do
+-- nothing for anyone who has no personal access record — i.e. exactly the
+-- people it is for.
+--
+-- The role default being WEAKER than anything personal is what keeps the
+-- per-person screen an exception list rather than a full re-specification.
+--
+-- ── WHAT IT DOES NOT DO ────────────────────────────────────────────────────
+-- It cannot raise anyone above the camp entitlement, and it does not apply to
+-- owners or admins — both deliberately, and both enforced in resolve() and in
+-- user_section_level() rather than here.
+--
+-- Roles are the existing camp_users.role values. 'owner' and 'admin' are
+-- rejected: a default for them would be a no-op that looks like it works.
+--
+-- Idempotent.
+-- ============================================================================
+
+CREATE TABLE IF NOT EXISTS camp_role_access (
+    camp_id        uuid NOT NULL REFERENCES camps(id) ON DELETE CASCADE,
+    role           text NOT NULL,
+    access_preset  text,
+    section_access jsonb NOT NULL DEFAULT '{}'::jsonb,
+    updated_at     timestamptz NOT NULL DEFAULT now(),
+    PRIMARY KEY (camp_id, role),
+    -- Only roles the per-staff layers actually gate. owner/admin are excluded
+    -- because resolve() returns full access for them before any of this is
+    -- consulted, so a row here would be a setting that silently does nothing.
+    CONSTRAINT camp_role_access_role_chk
+        CHECK (role IN ('manager', 'scheduler', 'counselor', 'viewer'))
+);
+
+ALTER TABLE camp_role_access ENABLE ROW LEVEL SECURITY;
+
+-- Every member of the camp may READ their camp's role defaults: get_my_access
+-- has to resolve them, the owner's editor has to show them, and they are not
+-- sensitive — they describe access, they are not access.
+DROP POLICY IF EXISTS camp_role_access_select ON camp_role_access;
+CREATE POLICY camp_role_access_select ON camp_role_access
+    FOR SELECT
+    USING (camp_id = get_user_camp_id());
+
+-- Writing is owner/admin only, and goes through the RPC below rather than the
+-- table, so the shape is validated in one place.
+DROP POLICY IF EXISTS camp_role_access_write ON camp_role_access;
+CREATE POLICY camp_role_access_write ON camp_role_access
+    FOR ALL
+    USING (camp_id = get_user_camp_id()
+           AND get_user_role() = ANY (ARRAY['owner'::text, 'admin'::text]))
+    WITH CHECK (camp_id = get_user_camp_id()
+           AND get_user_role() = ANY (ARRAY['owner'::text, 'admin'::text]));
+
+-- ─── Read: every role default for my camp ───────────────────────────────────
+CREATE OR REPLACE FUNCTION public.get_camp_role_access()
+RETURNS jsonb
+LANGUAGE plpgsql
+STABLE
+SECURITY DEFINER
+SET search_path = public, pg_catalog
+AS $$
+DECLARE
+    v_camp uuid := get_user_camp_id();
+    v_out  jsonb := '{}'::jsonb;
+    r      record;
+BEGIN
+    IF v_camp IS NULL THEN
+        RETURN jsonb_build_object('success', false, 'error', 'no_camp');
+    END IF;
+    FOR r IN SELECT role, access_preset, section_access
+               FROM camp_role_access WHERE camp_id = v_camp LOOP
+        v_out := v_out || jsonb_build_object(r.role, jsonb_build_object(
+            'preset', r.access_preset,
+            'overrides', COALESCE(r.section_access, '{}'::jsonb)));
+    END LOOP;
+    RETURN jsonb_build_object('success', true, 'roles', v_out);
+END;
+$$;
+REVOKE ALL ON FUNCTION public.get_camp_role_access() FROM public, anon;
+GRANT EXECUTE ON FUNCTION public.get_camp_role_access() TO authenticated;
+
+-- ─── Write: set (or clear) one role's default ───────────────────────────────
+-- Passing a null preset AND an empty section_access DELETES the row, which is
+-- how a camp goes back to "no default for this job". Storing an empty row
+-- instead would leave everyone with that job CONFIGURED and therefore denied
+-- everything unlisted — an empty default is not the same as no default, and
+-- confusing the two would lock out a whole job title at once.
+CREATE OR REPLACE FUNCTION public.set_camp_role_access(
+    p_role text, p_preset text, p_section_access jsonb)
+RETURNS jsonb
+LANGUAGE plpgsql
+SECURITY DEFINER
+SET search_path = public, pg_catalog
+AS $$
+DECLARE
+    v_camp uuid := get_user_camp_id();
+    v_me   text := get_user_role();
+    v_sec  jsonb := COALESCE(p_section_access, '{}'::jsonb);
+    v_pre  text := NULLIF(TRIM(COALESCE(p_preset, '')), '');
+BEGIN
+    IF v_camp IS NULL THEN
+        RETURN jsonb_build_object('success', false, 'error', 'no_camp');
+    END IF;
+    IF v_me IS NULL OR v_me NOT IN ('owner', 'admin') THEN
+        RETURN jsonb_build_object('success', false, 'error', 'not_authorized');
+    END IF;
+    IF p_role IS NULL OR p_role NOT IN ('manager', 'scheduler', 'counselor', 'viewer') THEN
+        RETURN jsonb_build_object('success', false, 'error', 'bad_role',
+            'detail', 'Defaults apply to manager, scheduler, counselor or viewer. '
+                   || 'Owners and admins always have full access.');
+    END IF;
+    IF jsonb_typeof(v_sec) <> 'object' THEN
+        RETURN jsonb_build_object('success', false, 'error', 'bad_section_access');
+    END IF;
+
+    -- "No default for this job" — see the note above on why this deletes.
+    IF v_pre IS NULL AND v_sec = '{}'::jsonb THEN
+        DELETE FROM camp_role_access WHERE camp_id = v_camp AND role = p_role;
+        RETURN jsonb_build_object('success', true, 'role', p_role, 'cleared', true);
+    END IF;
+
+    INSERT INTO camp_role_access (camp_id, role, access_preset, section_access, updated_at)
+    VALUES (v_camp, p_role, v_pre, v_sec, now())
+    ON CONFLICT (camp_id, role) DO UPDATE
+       SET access_preset = EXCLUDED.access_preset,
+           section_access = EXCLUDED.section_access,
+           updated_at = now();
+
+    RETURN jsonb_build_object('success', true, 'role', p_role,
+                              'preset', v_pre, 'overrides', v_sec);
+END;
+$$;
+REVOKE ALL ON FUNCTION public.set_camp_role_access(text, text, jsonb) FROM public, anon;
+GRANT EXECUTE ON FUNCTION public.set_camp_role_access(text, text, jsonb) TO authenticated;
+
+-- ─── get_my_access now carries the caller's role default ────────────────────
+-- Same function as migration 154, with roleAccess added. Every other branch is
+-- preserved verbatim, including the owner short-circuit, the not-a-member
+-- fail-open and the deliberate fail-open exception handler — those are policy,
+-- not bugs (documented in campistry_access_sections.js).
+CREATE OR REPLACE FUNCTION public.get_my_access(p_camp_id uuid)
+RETURNS jsonb
+LANGUAGE plpgsql
+SECURITY DEFINER
+STABLE
+SET search_path = public, pg_catalog
+AS $$
+DECLARE
+    caller        uuid := auth.uid();
+    v_row         record;
+    v_grp_found   boolean := false;
+    v_grp_products jsonb;
+    v_grp_preset   text;
+    v_grp_sections jsonb;
+    v_ent         jsonb;
+    v_role_pre    text;
+    v_role_sec    jsonb;
+    v_role_found  boolean := false;
+    v_role_access jsonb := NULL;
+BEGIN
+    IF caller IS NULL THEN
+        RETURN jsonb_build_object('success', false, 'error', 'not_authenticated');
+    END IF;
+
+    SELECT entitlements INTO v_ent FROM camps WHERE id = p_camp_id;
+    v_ent := COALESCE(v_ent, '{}'::jsonb);
+
+    -- Owner of the camp: always full, never gated.
+    IF EXISTS (SELECT 1 FROM camps WHERE id = p_camp_id AND owner = caller) THEN
+        RETURN jsonb_build_object(
+            'success', true, 'role', 'owner',
+            'products', '[]'::jsonb, 'preset', NULL,
+            'overrides', '{}'::jsonb, 'unrestricted', true,
+            'entitlements', v_ent, 'roleAccess', NULL
+        );
+    END IF;
+
+    SELECT role, product_access, access_preset, section_access, access_group_id
+    INTO v_row
+    FROM camp_users
+    WHERE camp_id = p_camp_id AND user_id = caller
+    LIMIT 1;
+
+    IF NOT FOUND THEN
+        -- Not a resolvable member here. Fail OPEN, matching
+        -- product_access_guard.js: the page's own auth handles non-members, and
+        -- RLS is the real boundary.
+        RETURN jsonb_build_object(
+            'success', true, 'role', NULL,
+            'products', '[]'::jsonb, 'preset', NULL,
+            'overrides', '{}'::jsonb, 'unrestricted', true,
+            'entitlements', v_ent, 'roleAccess', NULL
+        );
+    END IF;
+
+    -- The camp-wide default for this person's job, if the owner set one.
+    SELECT access_preset, section_access INTO v_role_pre, v_role_sec
+      FROM camp_role_access
+     WHERE camp_id = p_camp_id AND role = v_row.role;
+    v_role_found := FOUND;
+    IF v_role_found THEN
+        v_role_access := jsonb_build_object(
+            'preset', v_role_pre,
+            'overrides', COALESCE(v_role_sec, '{}'::jsonb));
+    END IF;
+
+    -- Scalars, not a record: an unassigned record cannot be tested safely, and
+    -- a record IS NOT NULL test would also reject a group with a NULL preset.
+    IF v_row.access_group_id IS NOT NULL THEN
+        SELECT product_access, access_preset, section_access
+          INTO v_grp_products, v_grp_preset, v_grp_sections
+          FROM camp_access_groups WHERE id = v_row.access_group_id;
+        v_grp_found := FOUND;
+    END IF;
+
+    -- A group assignment replaces the member's own columns wholesale (no
+    -- merge), which is migration 097's intended behaviour. The ROLE default is
+    -- a separate, weaker layer and is carried through either way.
+    IF v_grp_found THEN
+        RETURN jsonb_build_object(
+            'success', true,
+            'role', v_row.role,
+            'products', COALESCE(v_grp_products, '[]'::jsonb),
+            'preset', v_grp_preset,
+            'overrides', COALESCE(v_grp_sections, '{}'::jsonb),
+            'unrestricted', (v_row.role IN ('owner', 'admin')),
+            'entitlements', v_ent,
+            'roleAccess', v_role_access
+        );
+    END IF;
+
+    RETURN jsonb_build_object(
+        'success', true,
+        'role', v_row.role,
+        'products', COALESCE(v_row.product_access, '[]'::jsonb),
+        'preset', v_row.access_preset,
+        'overrides', COALESCE(v_row.section_access, '{}'::jsonb),
+        'unrestricted', (v_row.role IN ('owner', 'admin')),
+        'entitlements', v_ent,
+        'roleAccess', v_role_access
+    );
+EXCEPTION WHEN OTHERS THEN
+    RETURN jsonb_build_object('success', false, 'error', SQLERRM, 'unrestricted', true);
+END;
+$$;
+REVOKE ALL ON FUNCTION public.get_my_access(uuid) FROM public;
+GRANT EXECUTE ON FUNCTION public.get_my_access(uuid) TO authenticated;
+
+-- ─── The RLS resolver honours role defaults too ─────────────────────────────
+-- Same function as migration 160, with the role default inserted at its place
+-- in the precedence chain. It has to match C.resolve exactly or the database
+-- and the browser disagree about who can see what — see
+-- tests/access_registry_sql.test.js, which cross-checks them.
+CREATE OR REPLACE FUNCTION public.user_section_level(p_camp_id uuid, p_cap_key text)
+RETURNS text
+LANGUAGE plpgsql
+STABLE
+SECURITY DEFINER
+SET search_path = public, pg_catalog
+AS $$
+DECLARE
+    v_caller      uuid := auth.uid();
+    v_app         text;
+    v_section     text;
+    v_view_only   boolean;
+    v_role        text;
+    v_products    jsonb;
+    v_preset      text;
+    v_overrides   jsonb;
+    v_group_id    uuid;
+    v_grp_found   boolean := false;
+    v_grp_products jsonb;
+    v_grp_preset   text;
+    v_grp_sections jsonb;
+    v_role_pre    text;
+    v_role_sec    jsonb;
+    v_role_found  boolean := false;
+    v_role_level  text;
+    v_role_names  boolean := false;
+    v_level       text;
+    v_explicit    boolean;
+    v_unconfigured boolean;
+BEGIN
+    IF v_caller IS NULL THEN RETURN 'none'; END IF;
+
+    SELECT app, section, view_only
+      INTO v_app, v_section, v_view_only
+      FROM access_capabilities WHERE cap_key = p_cap_key;
+    IF NOT FOUND THEN RETURN 'edit'; END IF;
+
+    IF EXISTS (SELECT 1 FROM camps WHERE id = p_camp_id AND owner = v_caller) THEN
+        RETURN CASE WHEN v_view_only THEN 'view' ELSE 'edit' END;
+    END IF;
+
+    SELECT role, product_access, access_preset, section_access, access_group_id
+      INTO v_role, v_products, v_preset, v_overrides, v_group_id
+      FROM camp_users
+     WHERE camp_id = p_camp_id AND user_id = v_caller
+     LIMIT 1;
+
+    IF NOT FOUND THEN RETURN 'edit'; END IF;
+
+    IF v_group_id IS NOT NULL THEN
+        SELECT product_access, access_preset, section_access
+          INTO v_grp_products, v_grp_preset, v_grp_sections
+          FROM camp_access_groups WHERE id = v_group_id;
+        v_grp_found := FOUND;
+    END IF;
+    IF v_grp_found THEN
+        v_products  := v_grp_products;
+        v_preset    := v_grp_preset;
+        v_overrides := v_grp_sections;
+    END IF;
+
+    v_products  := COALESCE(v_products,  '[]'::jsonb);
+    v_overrides := COALESCE(v_overrides, '{}'::jsonb);
+    IF v_preset = '' THEN v_preset := NULL; END IF;
+
+    IF v_role IN ('owner', 'admin') THEN
+        RETURN CASE WHEN v_view_only THEN 'view' ELSE 'edit' END;
+    END IF;
+
+    IF jsonb_typeof(v_products) = 'array'
+       AND jsonb_array_length(v_products) > 0
+       AND NOT (v_products ? v_app) THEN
+        RETURN 'none';
+    END IF;
+
+    -- The camp-wide default for this person's job (migration 165).
+    SELECT access_preset, section_access INTO v_role_pre, v_role_sec
+      FROM camp_role_access
+     WHERE camp_id = p_camp_id AND role = v_role;
+    v_role_found := FOUND;
+    IF v_role_pre = '' THEN v_role_pre := NULL; END IF;
+    v_role_sec := COALESCE(v_role_sec, '{}'::jsonb);
+
+    IF v_role_found THEN
+        IF v_role_sec ? p_cap_key THEN
+            v_role_level := v_role_sec ->> p_cap_key;
+            v_role_names := true;
+        ELSIF v_role_pre IS NOT NULL THEN
+            SELECT level, explicit INTO v_role_level, v_role_names
+              FROM access_preset_grants
+             WHERE preset = v_role_pre AND cap_key = p_cap_key;
+            v_role_names := COALESCE(v_role_names, false);
+        END IF;
+    END IF;
+
+    -- A role default makes this person CONFIGURED. Without that, setting a
+    -- default would do nothing for anyone with no personal access record —
+    -- which is exactly the people it exists for.
+    v_unconfigured := (v_preset IS NULL
+                       AND v_overrides = '{}'::jsonb
+                       AND NOT (v_role_found AND (v_role_pre IS NOT NULL OR v_role_sec <> '{}'::jsonb)));
+
+    IF v_unconfigured THEN
+        v_level := 'edit';
+    ELSE
+        IF v_section = 'finance' AND NOT (v_overrides ? p_cap_key) AND NOT v_role_names THEN
+            SELECT explicit INTO v_explicit
+              FROM access_preset_grants
+             WHERE preset = v_preset AND cap_key = p_cap_key;
+            IF v_preset IS NULL OR NOT COALESCE(v_explicit, false) THEN
+                RETURN public.user_section_level(p_camp_id, v_app || '.analytics');
+            END IF;
+        END IF;
+
+        IF v_overrides ? p_cap_key THEN
+            v_level := v_overrides ->> p_cap_key;
+        ELSIF v_preset IS NOT NULL THEN
+            SELECT level INTO v_level
+              FROM access_preset_grants
+             WHERE preset = v_preset AND cap_key = p_cap_key;
+        ELSIF v_role_level IS NOT NULL THEN
+            v_level := v_role_level;
+        ELSE
+            v_level := 'none';
+        END IF;
+    END IF;
+
+    IF v_level IS NULL OR v_level NOT IN ('none', 'view', 'edit') THEN
+        v_level := 'none';
+    END IF;
+
+    IF v_role IN ('viewer', 'counselor') AND v_level = 'edit' THEN
+        v_level := 'view';
+    END IF;
+    IF v_view_only AND v_level = 'edit' THEN
+        v_level := 'view';
+    END IF;
+
+    RETURN v_level;
+END;
+$$;
+REVOKE ALL ON FUNCTION public.user_section_level(uuid, text) FROM public;
+GRANT EXECUTE ON FUNCTION public.user_section_level(uuid, text) TO authenticated, service_role;
+
+-- ─── Sanity checks ─────────────────────────────────────────────────────────
+-- Set a default for schedulers, then check one:
+--   select set_camp_role_access('scheduler', null,
+--            '{"flow.schedule":"edit","flow.print":"edit"}'::jsonb);
+--   -- as that scheduler:
+--   select user_section_level('<camp>'::uuid, 'flow.schedule');  -- edit
+--   select user_section_level('<camp>'::uuid, 'me.billing');     -- none
+--
+-- Give ONE scheduler bussing on top — the role default must survive for
+-- everything else:
+--   select set_member_access('<member id>', null, '{"go.routes":"edit"}'::jsonb);
+--   select user_section_level('<camp>'::uuid, 'go.routes');      -- edit
+--   select user_section_level('<camp>'::uuid, 'flow.schedule');  -- still edit
+--
+-- Clear the default again:
+--   select set_camp_role_access('scheduler', null, '{}'::jsonb);   -- cleared
+--   select user_section_level('<camp>'::uuid, 'me.billing');       -- edit (legacy full)
+-- ============================================================================
+
+
 -- ═══════════════════════════════════════════════════════════════════════════
 -- POST-APPLY: backfill saved cards for every camp.
 --
@@ -3714,21 +4279,36 @@ UNION ALL SELECT 'per-user section access on all 6 camp_state_kv policies',
 -- All six audited keys must be present in the CURRENT definition. The function
 -- is replaced by each step, so a step that forgot to carry an earlier key
 -- forward would silently un-gate it.
-UNION ALL SELECT 'all 6 audited keys gated per user',
-       CASE WHEN (SELECT count(*) FROM (VALUES
-                     ('campistryMePayroll'), ('campistryMeFinance'), ('campistrySnacks'),
-                     ('campistryHealth'), ('campistryShop'), ('campistryLuggage')
-                  ) AS k(name)
-                  WHERE (SELECT prosrc FROM pg_proc
-                          WHERE proname='camp_state_key_user_allowed' LIMIT 1)
-                        LIKE '%' || k.name || '%') = 6
-            THEN 'OK' ELSE 'MISSING' END
 -- me.finance is a view-only capability and never resolves to 'edit' for
 -- anyone, the owner included. If the key gate ever tests for 'edit', Finance
 -- becomes permanently unsaveable for every user in every camp.
 UNION ALL SELECT 'finance writes gated on "not none", not "edit"',
        CASE WHEN (SELECT prosrc FROM pg_proc
                    WHERE proname='camp_state_key_user_allowed' LIMIT 1) LIKE '%<> ''none''%'
+            THEN 'OK' ELSE 'MISSING' END
+-- Phase 3 finished: seven keys gated per user.
+UNION ALL SELECT 'all 7 audited keys gated per user',
+       CASE WHEN (SELECT count(*) FROM (VALUES
+                     ('campistryMePayroll'), ('campistryMeFinance'), ('campistrySnacks'),
+                     ('campistryHealth'), ('campistryShop'), ('campistryLuggage'),
+                     ('campistryMe')
+                  ) AS k(name)
+                  WHERE (SELECT prosrc FROM pg_proc
+                          WHERE proname='camp_state_key_user_allowed' LIMIT 1)
+                        LIKE '%' || k.name || '%') = 7
+            THEN 'OK' ELSE 'MISSING' END
+-- Per-JOB defaults (165).
+UNION ALL SELECT 'per-job access defaults available',
+       CASE WHEN EXISTS (SELECT 1 FROM information_schema.tables
+                          WHERE table_name='camp_role_access')
+             AND EXISTS (SELECT 1 FROM pg_proc WHERE proname='set_camp_role_access')
+            THEN 'OK' ELSE 'MISSING' END
+UNION ALL SELECT 'get_my_access carries the job default',
+       CASE WHEN (SELECT prosrc FROM pg_proc WHERE proname='get_my_access' LIMIT 1) LIKE '%roleAccess%'
+            THEN 'OK' ELSE 'MISSING' END
+UNION ALL SELECT 'the RLS resolver honours job defaults',
+       CASE WHEN (SELECT prosrc FROM pg_proc WHERE proname='user_section_level' LIMIT 1)
+                 LIKE '%camp_role_access%'
             THEN 'OK' ELSE 'MISSING' END
 UNION ALL SELECT 'lost-charge reconciliation report',
        CASE WHEN EXISTS (SELECT 1 FROM pg_proc WHERE proname='reconcile_processor_charges')
