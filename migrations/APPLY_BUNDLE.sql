@@ -1,36 +1,45 @@
 -- ═══════════════════════════════════════════════════════════════════════════
--- CAMPISTRY — payments / billing migration bundle  (146 → 153)
+-- CAMPISTRY — payments, billing and access bundle
 --
--- Run this whole file in the Supabase SQL Editor. SAFE TO RE-RUN as many times
--- as you like: every statement is CREATE OR REPLACE, IF NOT EXISTS, ON CONFLICT
--- DO NOTHING, or an UPDATE with a WHERE clause that matches nothing once it has
--- already been applied. Running it twice changes nothing the second time.
+-- GENERATED FILE — do not edit by hand.
+-- Rebuild with:  python3 scripts/build-migration-bundle.py
 --
--- WHY A BUNDLE: migration numbers 146-151 were each used TWICE in this repo —
--- once by this payments work and once by the bank-deposit/template work — so
--- "have I run 150?" is ambiguous. This bundle contains only the payments set,
--- in dependency order, so you can run it and know the whole set is in place.
+-- Run this whole file in the Supabase SQL Editor. SAFE TO RE-RUN as often as
+-- you like: every statement is CREATE OR REPLACE, IF NOT EXISTS, ON CONFLICT DO
+-- NOTHING, or an UPDATE whose WHERE clause matches nothing once applied.
+-- Running it a second time changes nothing.
 --
--- ORDER MATTERS and is preserved below:
---   * 146, 148 and 149 each rewrite the Banquest credential_fields; 149 wins.
---   * 146 and 150 each redefine get_camp_public_tokenization_key; 150 wins
---     (it is the one that also returns cardFormFields).
+-- WHY A BUNDLE: there is no migration runner here — migrations are pasted in by
+-- hand — and numbers 146-151 were each used TWICE in this repo (once by the
+-- payments work, once by the bank-deposit/template work), so "have I run 150?"
+-- is ambiguous. This contains only the payments/access set, in dependency
+-- order, so you can run it and know the whole set is in place.
 --
--- WHAT IT CHANGES THAT YOU WILL NOTICE:
+-- WHAT YOU WILL NOTICE AFTERWARDS:
 --   * Parents stop being told they owe money they already paid (152).
---   * Cards saved on Campistry's card page appear under Link → Cards (151).
+--   * Cards saved on Campistry's card page appear under Link -> Cards (151).
 --   * Stripe is no longer the default processor; a camp that has not connected
---     one reads 'none' and online payments are off until it does (153).
+--     one reads 'none' and online payments stay off until it does (153).
+--   * !! Section access starts actually applying (154). Until now it silently
+--     granted full access to every ungrouped staff member, so anyone you had
+--     configured with restrictions has been seeing everything. They will now be
+--     gated as intended — tell your staff before running this, so a suddenly
+--     restricted person isn't reported to you as a regression.
 --
--- PREREQUISITES (all long since applied on a live camp — this only fails loudly
--- if one is somehow missing): migrations 077 (camps.stripe_account_id),
--- 126 (BYOP framework), 129/130 (disconnect RPCs), 137/139 (saved cards).
+-- PREREQUISITES (long since applied on a live camp; the preflight below fails
+-- loudly rather than confusingly if one is missing): 077 (camp Stripe Connect),
+-- 126 (BYOP framework), 129/130 (disconnect RPCs), 137/139 (saved cards),
+-- 097 (access groups).
 -- ═══════════════════════════════════════════════════════════════════════════
 
--- ─── Prerequisite check — fails with a clear message instead of a confusing
--- ─── error 200 lines down if something expected is missing.
+-- ─── Preflight: fail with a readable message instead of a confusing error
+-- ─── several hundred lines down.
 DO $preflight$
 BEGIN
+    IF NOT EXISTS (SELECT 1 FROM information_schema.tables
+                    WHERE table_name='camp_state_kv') THEN
+        RAISE EXCEPTION 'No camp_state_kv table — this is not a Campistry database.';
+    END IF;
     IF NOT EXISTS (SELECT 1 FROM information_schema.columns
                     WHERE table_name='camps' AND column_name='payment_processor_key') THEN
         RAISE EXCEPTION 'Missing camps.payment_processor_key — apply migration 126 (BYOP framework) first.';
@@ -44,19 +53,18 @@ BEGIN
         RAISE EXCEPTION 'Missing payment_processor_catalog — apply migration 126 first.';
     END IF;
     IF NOT EXISTS (SELECT 1 FROM information_schema.tables
-                    WHERE table_name='camp_state_kv') THEN
-        RAISE EXCEPTION 'Missing camp_state_kv — this is not a Campistry database.';
+                    WHERE table_name='camp_access_groups') THEN
+        RAISE EXCEPTION 'Missing camp_access_groups — apply migration 097 (access groups) first.';
     END IF;
-    RAISE NOTICE 'Preflight OK — applying payments bundle 146-153.';
+    RAISE NOTICE 'Preflight OK — applying bundle.';
 END
 $preflight$;
 
 
-
--- ###########################################################################
+-- #########################################################################
 -- ###### 146_banquest_real_api_credentials
 -- ###### Banquest credential shape (sourceKey/pin/tokenizationKey/gatewayUrl/tokenizationUrl)
--- ###########################################################################
+-- #########################################################################
 
 -- ============================================================================
 -- Migration 146: correct the Banquest credential shape for the REAL Banquest
@@ -145,10 +153,10 @@ GRANT EXECUTE ON FUNCTION public.get_camp_public_tokenization_key(uuid) TO anon,
 -- ============================================================================
 
 
--- ###########################################################################
+-- #########################################################################
 -- ###### 147_clear_stale_byop_cards_on_switch
 -- ###### Scrub saved cards belonging to a processor the camp no longer uses
--- ###########################################################################
+-- #########################################################################
 
 -- ============================================================================
 -- Migration 147: clear stale saved cards when a camp (re)connects a processor
@@ -276,10 +284,10 @@ GRANT EXECUTE ON FUNCTION public._admin_clear_stale_byop_cards(uuid, text) TO se
 -- ============================================================================
 
 
--- ###########################################################################
+-- #########################################################################
 -- ###### 148_banquest_api_host_labels
 -- ###### Correct the Banquest API host guidance (api.* host, /api/v2)
--- ###########################################################################
+-- #########################################################################
 
 -- ============================================================================
 -- Migration 148: correct the Banquest gatewayUrl guidance to the REAL API host.
@@ -324,10 +332,10 @@ UPDATE payment_processor_catalog
 -- ============================================================================
 
 
--- ###########################################################################
+-- #########################################################################
 -- ###### 149_banquest_hosted_payment_pages
 -- ###### Hosted Payment Page support: banquest_pending_links + credential fields
--- ###########################################################################
+-- #########################################################################
 
 -- ============================================================================
 -- Migration 149: Banquest redirect-to-hosted-page (Payment Pages) support.
@@ -425,10 +433,10 @@ UPDATE payment_processor_catalog
 -- ============================================================================
 
 
--- ###########################################################################
+-- #########################################################################
 -- ###### 150_card_form_field_config
 -- ###### Admin-configurable card-form fields, returned by the public tokenization RPC
--- ###########################################################################
+-- #########################################################################
 
 -- ============================================================================
 -- Migration 150: admin-configurable card-form fields for the Campistry-hosted
@@ -540,10 +548,10 @@ GRANT EXECUTE ON FUNCTION public.get_camp_public_tokenization_key(uuid) TO anon,
 -- ============================================================================
 
 
--- ###########################################################################
+-- #########################################################################
 -- ###### 151_backfill_saved_payment_methods
 -- ###### Backfill savedPaymentMethods[] from legacy single-slot card fields
--- ###########################################################################
+-- #########################################################################
 
 -- ============================================================================
 -- Migration 151: backfill savedPaymentMethods[] from the legacy single-slot
@@ -656,10 +664,10 @@ GRANT EXECUTE ON FUNCTION public._admin_backfill_saved_payment_methods(uuid) TO 
 -- ============================================================================
 
 
--- ###########################################################################
+-- #########################################################################
 -- ###### 152_fix_get_my_balance_attribution
 -- ###### Credit payments by familyKey/family name; stop summing unreported families
--- ###########################################################################
+-- #########################################################################
 
 -- ============================================================================
 -- Migration 152: fix two balance defects in get_my_balance.
@@ -924,10 +932,10 @@ GRANT EXECUTE ON FUNCTION public.get_my_balance(uuid) TO authenticated;
 -- ============================================================================
 
 
--- ###########################################################################
+-- #########################################################################
 -- ###### 153_stripe_is_not_the_default
 -- ###### Stripe becomes a selectable processor; 'none' is the new default
--- ###########################################################################
+-- #########################################################################
 
 -- ============================================================================
 -- Migration 153: Stripe stops being the default processor and becomes one
@@ -1180,18 +1188,153 @@ UPDATE camps SET payment_processor_key = 'none'
 -- ============================================================================
 
 
+-- #########################################################################
+-- ###### 154_fix_get_my_access_group_resolution
+-- ###### Section access actually applies: fix the unassigned-record and NULL-preset bugs
+-- #########################################################################
+
+-- ============================================================================
+-- Migration 154: fix get_my_access, which silently granted full access.
+--
+-- Migration 097 declared `v_grp record` and then tested `IF v_grp IS NOT NULL`.
+-- That is wrong twice over, and both failures grant MORE access, silently:
+--
+--   1. A member with NO access group never assigns v_grp at all. In PL/pgSQL an
+--      unassigned record raises "record \"v_grp\" is not assigned yet" the
+--      moment it is referenced — including by IS NOT NULL. That exception is
+--      swallowed by the function's own EXCEPTION WHEN OTHERS handler, which
+--      returns success:false + unrestricted:true, and
+--      campistry_access_sections.js treats that as "no restrictions at all".
+--      So for every ungrouped staff member — the common case — section access
+--      has been doing nothing.
+--
+--   2. A member WITH a group whose access_preset is NULL (any group built from
+--      raw section toggles rather than a named preset — including migration
+--      097's own worked example) fails `record IS NOT NULL`, because SQL
+--      row-value semantics require EVERY field to be non-null. Execution falls
+--      through to the member's own columns, which for a grouped member are
+--      typically empty, so resolve() sees "unconfigured" and grants edit on
+--      everything. The group's restrictions are discarded.
+--
+-- Fix: select into three scalar variables instead of a record, and branch on
+-- FOUND. Nothing else about the function changes — the owner short-circuit, the
+-- not-a-member fail-open and the deliberate fail-open exception handler are all
+-- preserved verbatim, because they are policy (documented in
+-- campistry_access_sections.js:26-37), not bugs.
+--
+-- AFTER APPLYING: section access starts actually applying for ungrouped members
+-- for the first time. Any member who was configured with restrictions has been
+-- silently enjoying full access; they will now be gated as intended. Worth
+-- telling the camp before running this, so a suddenly-restricted staff member
+-- isn't reported as a regression.
+--
+-- Idempotent.
+-- ============================================================================
+CREATE OR REPLACE FUNCTION public.get_my_access(p_camp_id uuid)
+RETURNS jsonb
+LANGUAGE plpgsql
+SECURITY DEFINER
+STABLE
+SET search_path = public, pg_catalog
+AS $$
+DECLARE
+    caller        uuid := auth.uid();
+    v_row         record;
+    v_grp_found   boolean := false;
+    v_grp_products jsonb;
+    v_grp_preset   text;
+    v_grp_sections jsonb;
+BEGIN
+    IF caller IS NULL THEN
+        RETURN jsonb_build_object('success', false, 'error', 'not_authenticated');
+    END IF;
+
+    -- Owner of the camp: always full, never gated.
+    IF EXISTS (SELECT 1 FROM camps WHERE id = p_camp_id AND owner = caller) THEN
+        RETURN jsonb_build_object(
+            'success', true, 'role', 'owner',
+            'products', '[]'::jsonb, 'preset', NULL,
+            'overrides', '{}'::jsonb, 'unrestricted', true
+        );
+    END IF;
+
+    SELECT role, product_access, access_preset, section_access, access_group_id
+    INTO v_row
+    FROM camp_users
+    WHERE camp_id = p_camp_id AND user_id = caller
+    LIMIT 1;
+
+    IF NOT FOUND THEN
+        -- Not a resolvable member here. Fail OPEN, matching
+        -- product_access_guard.js: the page's own auth handles non-members, and
+        -- RLS is the real boundary. Failing closed would lock out legitimate
+        -- users during the window where membership hasn't propagated.
+        RETURN jsonb_build_object(
+            'success', true, 'role', NULL,
+            'products', '[]'::jsonb, 'preset', NULL,
+            'overrides', '{}'::jsonb, 'unrestricted', true
+        );
+    END IF;
+
+    -- Scalars, not a record: an unassigned record cannot be tested safely, and
+    -- a record IS NOT NULL test would also reject a group with a NULL preset.
+    IF v_row.access_group_id IS NOT NULL THEN
+        SELECT product_access, access_preset, section_access
+          INTO v_grp_products, v_grp_preset, v_grp_sections
+          FROM camp_access_groups WHERE id = v_row.access_group_id;
+        v_grp_found := FOUND;
+    END IF;
+
+    -- A group assignment replaces the member's own columns wholesale (no
+    -- merge), which is migration 097's intended behaviour.
+    IF v_grp_found THEN
+        RETURN jsonb_build_object(
+            'success', true,
+            'role', v_row.role,
+            'products', COALESCE(v_grp_products, '[]'::jsonb),
+            'preset', v_grp_preset,
+            'overrides', COALESCE(v_grp_sections, '{}'::jsonb),
+            'unrestricted', (v_row.role IN ('owner', 'admin'))
+        );
+    END IF;
+
+    RETURN jsonb_build_object(
+        'success', true,
+        'role', v_row.role,
+        'products', COALESCE(v_row.product_access, '[]'::jsonb),
+        'preset', v_row.access_preset,
+        'overrides', COALESCE(v_row.section_access, '{}'::jsonb),
+        'unrestricted', (v_row.role IN ('owner', 'admin'))
+    );
+EXCEPTION WHEN OTHERS THEN
+    -- Fail open on an unexpected error, for the same reason as above.
+    RETURN jsonb_build_object('success', false, 'error', SQLERRM, 'unrestricted', true);
+END;
+$$;
+
+REVOKE ALL ON FUNCTION public.get_my_access(uuid) FROM public;
+GRANT EXECUTE ON FUNCTION public.get_my_access(uuid) TO authenticated;
+
+-- ─── Sanity check after applying ───────────────────────────────────────────
+-- As a restricted (non-owner, ungrouped) staff member, this should now return
+-- unrestricted:false with their real preset/overrides, instead of
+-- success:false + unrestricted:true:
+--   select get_my_access('<camp id>'::uuid);
+-- ============================================================================
+
+
 -- ═══════════════════════════════════════════════════════════════════════════
 -- POST-APPLY: backfill saved cards for every camp.
 --
 -- Additive and idempotent — it only creates a savedPaymentMethods[] entry for a
 -- family that already has a legacy card token and no array entry carrying that
--- same token, so a second run adds nothing. Without this, a card saved before
--- the fix stays chargeable but invisible under Link → Cards.
+-- same token, so a second run adds nothing. Without it, a card saved before the
+-- fix stays chargeable but invisible under Link -> Cards.
 --
--- NOTE: _admin_clear_stale_byop_cards is deliberately NOT run here. It DELETES
--- saved cards that belong to a processor the camp no longer uses, which is
--- correct after switching processors but is not something a "make sure
--- everything is applied" script should ever do on its own.
+-- _admin_clear_stale_byop_cards is deliberately NOT run here: it DELETES cards
+-- belonging to a processor the camp no longer uses, which is right after
+-- switching processors but is not something an "apply everything" script should
+-- ever do unprompted.
 -- ═══════════════════════════════════════════════════════════════════════════
 DO $backfill$
 DECLARE
@@ -1234,6 +1377,9 @@ UNION ALL SELECT 'tokenization RPC returns cardFormFields',
             THEN 'OK' ELSE 'MISSING' END
 UNION ALL SELECT 'get_my_balance credits payments by familyKey',
        CASE WHEN (SELECT prosrc FROM pg_proc WHERE proname='get_my_balance' LIMIT 1) LIKE '%familyKey%'
+            THEN 'OK' ELSE 'MISSING' END
+UNION ALL SELECT 'get_my_access uses scalars, not an unassigned record',
+       CASE WHEN (SELECT prosrc FROM pg_proc WHERE proname='get_my_access' LIMIT 1) LIKE '%v_grp_found%'
             THEN 'OK' ELSE 'MISSING' END
 UNION ALL SELECT 'saved-card backfill function',
        CASE WHEN EXISTS (SELECT 1 FROM pg_proc WHERE proname='_admin_backfill_saved_payment_methods')
