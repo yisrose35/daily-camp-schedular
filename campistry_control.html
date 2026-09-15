@@ -68,6 +68,7 @@
 <script src="supabase-js@2.js"></script>
 <script src="supabase_client.js"></script>
 <script src="campistry_capabilities.js"></script>
+<script src="campistry_control_matrix.js"></script>
 
 <script>
 (function () {
@@ -118,31 +119,13 @@
     // means no entitlement has been sold, so the camp keeps everything
     // including sections added in future. Ticking every box would freeze them
     // at today's list. The "Give everything" button writes '{}' for that reason.
-    function draftFrom(ent) {
-        var d = {};
-        CAPS.APPS.forEach(function (app) {
-            var v = ent && Object.prototype.hasOwnProperty.call(ent, app.key) ? ent[app.key] : undefined;
-            d[app.key] = {};
-            CAPS.forApp(app.key).forEach(function (cap) {
-                d[app.key][cap.section] =
-                    (v === '*') ? true :
-                    (Array.isArray(v) ? v.indexOf(cap.section) >= 0 : false);
-            });
-        });
-        return d;
-    }
-
-    function entFrom(draft) {
-        var ent = {};
-        CAPS.APPS.forEach(function (app) {
-            var secs = CAPS.forApp(app.key);
-            var on = secs.filter(function (c) { return draft[app.key][c.section]; });
-            if (on.length === 0) return;                       // app not bought
-            if (on.length === secs.length) { ent[app.key] = '*'; return; }  // whole app
-            ent[app.key] = on.map(function (c) { return c.section; });
-        });
-        return ent;
-    }
+    // The encoding lives in campistry_control_matrix.js so it can be tested —
+    // see that file's header for the contract. A tick means "this camp has it",
+    // and everything ticked round-trips to '{}' (unrestricted) rather than to a
+    // frozen list of today's sections.
+    var MTX = window.CampistryControlMatrix;
+    function draftFrom(ent) { return MTX.draftFrom(CAPS, ent); }
+    function entFrom(draft) { return MTX.entFrom(CAPS, draft); }
 
     function summarize(ent) {
         if (!ent || Object.keys(ent).length === 0) return 'Everything (nothing restricted)';
@@ -344,15 +327,39 @@
                     return;
                 }
                 _manualId = v;
-                // A typed-in camp isn't in _camps, so synthesise a row for it.
-                // Its current entitlements are unknown from here, so the matrix
-                // starts empty and the generated statement REPLACES whatever is
-                // stored — which is why the SQL reads it back afterwards.
-                if (!campById(v)) {
+                if (campById(v)) { toggle(v); return; }
+
+                // A typed-in camp isn't in _camps. Try to read its CURRENT
+                // entitlements before opening the matrix — that matters now that
+                // a tick means "has it": if we guessed '{}' the matrix would come
+                // up all-ticked, and saving it unchanged would quietly UNRESTRICT
+                // a camp that was deliberately limited.
+                //
+                // RLS usually allows this only for the caller's own camp. When it
+                // doesn't, the camp is opened with its state marked unknown and
+                // the matrix says so, rather than pretending.
+                mg.disabled = true; mg.textContent = 'Loading…';
+                client().from('camps').select('name,entitlements').eq('id', v).maybeSingle()
+                  .then(function (r) {
+                    mg.disabled = false; mg.textContent = 'Open';
+                    var row = (!r.error && r.data) ? r.data : null;
+                    var ent = row && row.entitlements ? row.entitlements : {};
+                    _camps.push({
+                        id: v,
+                        name: (row && row.name) || '(camp ' + v.slice(0, 8) + ')',
+                        entitlements: ent,
+                        unrestricted: Object.keys(ent).length === 0,
+                        // Could not read it: the ticks below are a STARTING POINT,
+                        // not this camp's current state.
+                        unknown: !row
+                    });
+                    toggle(v);
+                  }, function () {
+                    mg.disabled = false; mg.textContent = 'Open';
                     _camps.push({ id: v, name: '(camp ' + v.slice(0, 8) + ')',
-                                  entitlements: {}, unrestricted: true, typedIn: true });
-                }
-                toggle(v);
+                                  entitlements: {}, unrestricted: true, unknown: true });
+                    toggle(v);
+                  });
             };
             mg.addEventListener('click', open);
             mi.addEventListener('keydown', function (e) { if (e.key === 'Enter') open(); });
@@ -381,6 +388,16 @@
 
     function matrixHtml() {
         var h = '';
+        var c = campById(_openId);
+        if (c && c.unknown) {
+            h += '<div class="banner warn"><strong>This camp\'s current settings could not be read.</strong> ' +
+                 'The boxes below start from "everything", which may not be what this camp actually has — ' +
+                 'the statement you generate REPLACES whatever is stored. Run the lookup SQL above to see ' +
+                 'the camp\'s real entitlements first if you are not sure.</div>';
+        } else {
+            h += '<p class="muted" style="margin-bottom:12px;">Ticked = this camp has it. ' +
+                 'Everything ticked is stored as <em>unrestricted</em>, so features added later stay included.</p>';
+        }
         CAPS.APPS.forEach(function (app) {
             var secs = CAPS.forApp(app.key);
             h += '<div class="app"><div class="app-head">' +
@@ -550,6 +567,7 @@
         var cl = client();
         if (!cl) { gate('Could not reach Campistry', 'Check your connection and reload.'); return; }
         if (!CAPS) { gate('Could not load', 'The capability registry failed to load.'); return; }
+        if (!MTX) { gate('Could not load', 'campistry_control_matrix.js failed to load.'); return; }
 
         cl.rpc('am_i_super_admin', {}).then(function (res) {
             if (res.error && isMissingFunction(res.error)) {
