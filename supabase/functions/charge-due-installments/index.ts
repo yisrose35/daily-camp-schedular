@@ -162,7 +162,12 @@ function todayISO() { return new Date().toISOString().split("T")[0]; }
 //     this below the sum of what's left, so a later installment gets capped
 //     at whatever's actually still owed instead of blindly charging its
 //     original scheduled amount and overcollecting.
-function computeFamilyBalance(me: Record<string, any>, f: Record<string, any>, famKey: string): number {
+function computeFamilyBalance(
+  me: Record<string, any>,
+  f: Record<string, any>,
+  famKey: string,
+  depositsByFamily?: Map<string, number>,
+): number {
   const camperIds: string[] = Array.isArray(f.camperIds) ? f.camperIds : [];
   const enr = (me.enrollments && typeof me.enrollments === "object") ? me.enrollments as Record<string, any> : {};
   const sessions: any[] = Array.isArray(me.sessions) ? me.sessions : [];
@@ -203,7 +208,16 @@ function computeFamilyBalance(me: Record<string, any>, f: Record<string, any>, f
     paid += amt;
   }
 
-  return billed - paid - credits;
+  // Zelle and ACH deposits captured from the bank's alerts are REAL payments
+  // that deliberately live in the bank_deposits table rather than in this
+  // blob (migration 145: the blob has one writer, so a webhook appending to it
+  // gets overwritten). The browser's ledger unions them in at read time. This
+  // did not, so a family who paid by Zelle still looked like they owed the lot
+  // and autopay charged their card for money they had already sent -- the
+  // exact opposite of what deposit capture is for.
+  const fromBank = depositsByFamily ? (depositsByFamily.get(famKey) || 0) : 0;
+
+  return billed - paid - credits - fromBank;
 }
 
 serve(async (req) => {
@@ -236,6 +250,36 @@ serve(async (req) => {
     return new Response(JSON.stringify({ error: error.message }), {
       status: 500, headers: { ...corsHeaders, "Content-Type": "application/json" },
     });
+  }
+
+  // Posted bank deposits, per family, for every camp in one read — same
+  // reasoning as the batch below: this loop can touch thousands of families.
+  // A return/NSF is stored positive with is_reversal set, so the sign is
+  // applied here; without that a bounced ACH would REDUCE what autopay thinks
+  // is owed, on the strength of a payment that just failed.
+  const depositsByFamily = new Map<string, Map<string, number>>();
+  {
+    const { data: depRows, error: depErr } = await supabase
+      .from("bank_deposits")
+      .select("camp_id, family_key, amount_cents, is_reversal")
+      .eq("status", "posted")
+      .not("family_key", "is", null);
+    if (depErr) {
+      // Charging on a balance that ignores deposits over-charges a family who
+      // has already paid. Better to skip this run and retry than to take money
+      // twice, so this is fatal rather than a warning.
+      console.error(`[autopay] could not read bank deposits: ${depErr.message} — aborting rather than over-charging`);
+      return new Response(JSON.stringify({ error: "deposit_read_failed", detail: depErr.message }), {
+        status: 500, headers: { ...corsHeaders, "Content-Type": "application/json" },
+      });
+    }
+    for (const d of (depRows || [])) {
+      const campKey = String(d.camp_id);
+      if (!depositsByFamily.has(campKey)) depositsByFamily.set(campKey, new Map());
+      const byFam = depositsByFamily.get(campKey)!;
+      const amt = (d.is_reversal ? -1 : 1) * (Number(d.amount_cents) || 0) / 100;
+      byFam.set(String(d.family_key), (byFam.get(String(d.family_key)) || 0) + amt);
+    }
   }
 
   // Batch-fetch every connected camp once, up front, instead of a per-family
@@ -311,7 +355,8 @@ serve(async (req) => {
       // One balance check per family per run, decremented as installments
       // get charged in this same run (several can be due the same day across
       // multiple plans) — see computeFamilyBalance's header comment.
-      let remainingBalance = computeFamilyBalance(me, f, famKey);
+      let remainingBalance = computeFamilyBalance(
+        me, f, famKey, depositsByFamily.get(String(row.camp_id)));
 
       for (const plan of plans) {
         if (!plan || !plan.autopay || !Array.isArray(plan.installments)) continue;
@@ -337,6 +382,15 @@ serve(async (req) => {
           // some extra ahead of schedule shouldn't be re-charged the full
           // original installment amount once the real balance is lower.
           const amount = Math.min(scheduledAmount, remainingBalance);
+          // When the two differ, the plan is about to show a number nobody
+          // scheduled. Overwriting inst.amount with no record of why is what
+          // makes an office look at a $5 line on a $500 instalment and
+          // reasonably conclude the data is corrupt -- so keep what was
+          // scheduled and say what happened.
+          const capped = amount < scheduledAmount - 0.005;
+          const cappedNote = capped
+            ? `Charged ${amount.toFixed(2)} of ${scheduledAmount.toFixed(2)} — the rest of this instalment was already covered`
+            : "";
           const camperName = (Array.isArray(f.camperIds) && f.camperIds[0]) ? f.camperIds[0] : (f.name || "");
 
           // ── BYOP camp: charge the family's vaulted processor token ──────
@@ -375,14 +429,19 @@ serve(async (req) => {
               inst.status = "paid";
               inst.paidDate = today;
               inst.byopTransactionId = res.externalTransactionId;
-              if (amount < scheduledAmount) inst.amount = amount; // reflect what was actually charged
+              if (capped) {
+                inst.scheduledAmount = scheduledAmount;  // what the plan asked for
+                inst.amount = amount;                    // what actually left the card
+                inst.note = cappedNote;
+              }
               // Same payment shape payments-charge/cardknox-webhook already
               // write, incl. byopTransactionId — that's what makes Billing's
               // existing "Direct Refund" action work on an autopay charge too.
               me.finance.payments.push({
                 id: "auto_byop_" + res.externalTransactionId, family: camperName, familyKey: famKey,
                 amount: amount, date: today, method: "Autopay (card)",
-                reference: res.externalTransactionId, notes: "Autopay installment",
+                reference: res.externalTransactionId,
+                notes: capped ? "Autopay installment — " + cappedNote : "Autopay installment",
                 byopTransactionId: res.externalTransactionId, byopProcessor: processorKey,
                 status: "succeeded", timestamp: Date.now(),
               });
@@ -427,11 +486,16 @@ serve(async (req) => {
             inst.status = "paid";
             inst.paidDate = today;
             inst.stripePaymentIntentId = pi.id;
-            if (amount < scheduledAmount) inst.amount = amount; // reflect what was actually charged
+            if (capped) {
+              inst.scheduledAmount = scheduledAmount;  // what the plan asked for
+              inst.amount = amount;                    // what actually left the card
+              inst.note = cappedNote;
+            }
             me.finance.payments.push({
               id: "auto_" + pi.id, family: camperName, familyKey: famKey,
               amount: amount, date: today, method: "Autopay (card)",
-              reference: pi.id, notes: "Monthly autopay installment",
+              reference: pi.id,
+              notes: capped ? "Monthly autopay installment — " + cappedNote : "Monthly autopay installment",
               stripePaymentIntentId: pi.id, status: "succeeded", timestamp: Date.now(),
             });
             charged++;

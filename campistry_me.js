@@ -13055,8 +13055,17 @@ function _installmentTableHtml(items,fontSize){
         var overdue=it.status==='failed'||(it.status!=='paid'&&it.dueDate&&it.dueDate<today);
         var paid=it.status==='paid';
         var status=paid?_flatStatus('Paid','ok'):overdue?_flatStatus('Overdue','err'):_flatStatus('Upcoming',null);
+        // Autopay caps a charge at what is actually still owed, then writes
+        // back what it really took. Without saying so, the plan shows a number
+        // nobody scheduled — a $5 line on a $500 instalment reads as corrupt
+        // data, and the office goes looking for an autopay run that never
+        // existed at that amount.
+        var capped=(Number(it.scheduledAmount)||0)>(Number(it.amount)||0)+0.005;
+        var amtCell=fm(it.amount)+(capped
+            ? '<div style="font-weight:500;font-size:.72rem;color:var(--s400);text-decoration:none;line-height:1.4">of '+fm(it.scheduledAmount)+' scheduled<br>the rest was already covered</div>'
+            : '');
         return '<tr><td style="color:var(--s600)">'+esc(it.dueDate||'TBD')+(it.label?' · '+esc(it.label):'')+'</td>'
-            +'<td style="text-align:right;font-weight:600;color:'+(paid?'var(--s400)':overdue?'var(--err)':'var(--s800)')+(paid?';text-decoration:line-through':'')+'">'+fm(it.amount)+'</td>'
+            +'<td style="text-align:right;font-weight:600;color:'+(paid?'var(--s400)':overdue?'var(--err)':'var(--s800)')+(paid&&!capped?';text-decoration:line-through':'')+'">'+amtCell+'</td>'
             +'<td style="text-align:right">'+status+'</td></tr>';
     }).join('');
     return '<table class="me-t" style="margin:0'+(fontSize?';font-size:'+fontSize:'')+'"><thead><tr><th>Due</th><th style="text-align:right">Amount</th><th style="text-align:right">Status</th></tr></thead><tbody>'+rows+'</tbody></table>';
@@ -14236,7 +14245,7 @@ function _planCardHtml(l){
     var out=plans.map(function(plan){
         var pend=plan.installments.filter(function(i){return i.status!=='paid'}).sort(function(a,b){return(a.dueDate||'').localeCompare(b.dueDate||'')});
         var next=pend[0];
-        var table='<div style="background:#fff;border-radius:var(--r);overflow:hidden">'+_installmentTableHtml(plan.installments.map(function(i){return{amount:i.amount,dueDate:i.dueDate,status:i.status};}),'.88rem')+'</div>';
+        var table='<div style="background:#fff;border-radius:var(--r);overflow:hidden">'+_installmentTableHtml(plan.installments.map(function(i){return{amount:i.amount,scheduledAmount:i.scheduledAmount,label:i.label,dueDate:i.dueDate,status:i.status};}),'.88rem')+'</div>';
         // A quick "N x $amount" read at a glance — the installment table
         // below has the full schedule, but a manager scanning this card
         // shouldn't have to add up rows to know the shape of the plan.

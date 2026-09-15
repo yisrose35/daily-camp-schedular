@@ -216,3 +216,51 @@ test('Finance can actually run the reconciliation', () => {
     // applied, and "schema cache" means nothing to them.
     assert.match(me, /Migration 162 has not been applied/, 'must explain an unapplied migration in words');
 });
+
+// ── what autopay charges against ────────────────────────────────────────────
+//
+// The cron computes a family's balance from the campistryMe blob alone. Zelle
+// and ACH deposits deliberately live in bank_deposits (migration 145) and are
+// unioned into the ledger at READ time by the browser — so the cron could not
+// see them, and a family who had already paid by Zelle was charged their card
+// for the same money. That is the exact opposite of what deposit capture is
+// for, and it over-charges rather than under-charges, so it cannot be left to
+// a follow-up.
+test('autopay counts bank deposits when working out what is still owed', () => {
+    const src = fs.readFileSync(path.join(ROOT, 'supabase/functions/charge-due-installments/index.ts'), 'utf8');
+
+    assert.match(src, /from\("bank_deposits"\)/, 'the cron never reads posted deposits');
+    assert.match(src, /\.eq\("status",\s*"posted"\)/, 'only posted deposits are real money');
+    assert.match(src, /depositsByFamily/, 'deposits are read but never reach the balance');
+    assert.match(src, /billed - paid - credits - fromBank/, 'the balance must subtract them');
+
+    // A bounced ACH is stored positive with is_reversal — counting it as a
+    // credit would reduce what autopay charges on the strength of a payment
+    // that just failed.
+    assert.match(src, /is_reversal \? -1 : 1/, 'a reversal must subtract, not add');
+
+    // Reading them is not optional: charging on a balance that ignores
+    // deposits takes money twice, so a failed read must stop the run.
+    assert.match(src, /deposit_read_failed/, 'a failed deposit read must abort the run, not warn');
+});
+
+test('a charge capped at the remaining balance explains itself', () => {
+    // amount = min(scheduled, remaining). When they differ the plan would show
+    // a number nobody scheduled — a $5 line on a $500 instalment — with no
+    // record of why, which is exactly how a real autopay run comes to look
+    // like corrupt data.
+    const src = fs.readFileSync(path.join(ROOT, 'supabase/functions/charge-due-installments/index.ts'), 'utf8');
+    assert.match(src, /const capped = amount < scheduledAmount - 0\.005/);
+    assert.match(src, /inst\.scheduledAmount = scheduledAmount/, 'what the plan asked for must survive');
+    assert.match(src, /cappedNote/, 'the instalment must carry the reason');
+    assert.match(src, /capped \? "Autopay installment/, 'the ledger line must say it too');
+
+    // Both rails, or the BYOP camps keep the confusing behaviour.
+    const hits = src.match(/inst\.scheduledAmount = scheduledAmount/g) || [];
+    assert.strictEqual(hits.length, 2, 'the Stripe and BYOP branches must both record it');
+
+    // And the browser has to show it, or none of the above is visible.
+    const me = fs.readFileSync(path.join(ROOT, 'campistry_me.js'), 'utf8');
+    assert.match(me, /scheduled<br>the rest was already covered/, 'the plan table must explain the gap');
+    assert.match(me, /scheduledAmount:i\.scheduledAmount/, 'the field is dropped before it reaches the table');
+});
