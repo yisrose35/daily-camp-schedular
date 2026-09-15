@@ -307,17 +307,45 @@ The third access layer is now real too. `section_access` used to appear in
 home addresses — and write it back. The browser hid the page; nothing stopped
 the request.
 
-**Two keys, deliberately.** `campistryMePayroll` and `campistryMeFinance` and
-nothing else, because they are the only keys where "all readers accounted for"
-is honestly true: 158 created them, and their only readers (`campistry_me.js`,
-`campistry_birthdays.js`) were written in the same change. Still to do, one at a
-time, each needing its readers audited first:
+**Three keys so far**, each only after its readers were audited:
 
-| Key | Why not yet |
-|---|---|
-| `campistrySnacks` | POS (counselor role), Snacks manager, Lite, parent `SECURITY DEFINER` RPCs |
-| `campistryHealth`, `campistryShop`, `campistryLuggage` | same shape, fewer readers — next |
-| `campistryMe`, `app1`, `campStructure` | 55 user-session call sites, a raw REST `fetch` in `beforeunload`, an anonymous page that upserts the whole blob. Last, if ever. |
+| Key | Status | Grain |
+|---|---|---|
+| `campistryMePayroll` | done (160) | `me.payroll` |
+| `campistryMeFinance` | done (160) | `me.finance` |
+| `campistrySnacks` | done (161) | any `snacks.*` section |
+| `campistryHealth`, `campistryShop`, `campistryLuggage` | next, one at a time | per app |
+| `campistryMe`, `app1`, `campStructure` | last, if ever — 55 user-session call sites, a raw REST `fetch` in `beforeunload`, an anonymous page that upserts the whole blob | — |
+
+The four main policies call `camp_state_key_user_allowed` by name, so adding a
+key is a **function replace, not a policy rewrite** — which is what keeps each
+new key a one-line change with a bounded blast radius, and keeps read and write
+from ever drifting apart.
+
+**The snacks key needed a whole-app question.** It holds seven sections'
+data in one row (dashboard, transactions, accounts, menu, pos, shop, settings),
+so the gate asks "has this person *any* snacks access". Nurse, division-head,
+head-counselor, office and bus-coordinator presets lose the canteen ledger;
+full, bookkeeper, canteen and read-only keep it; unconfigured users keep it.
+
+Two things made it safe, and both were worth checking before touching it:
+
+- **Its readers mostly don't go through RLS at all.** ~20 `SECURITY DEFINER`
+  RPCs (deposits, purchases, limits, auto-reload, shop, PIN login) and 10
+  service-role edge functions bypass it, which is how parents reach the canteen
+  — they aren't `camp_users`. The parent portal mentions `camp_state_kv` only in
+  comments; Lite doesn't touch snacks. The gate reaches exactly three admin-side
+  readers.
+- **The POS register would have been the casualty.** It runs as a *counselor*
+  doing a direct upsert, and `user_section_level` floors counselors at `view` —
+  so an `edit`-based gate would have killed every register in every camp
+  mid-day. The `<> 'none'` rule established in 160 is what makes it work, and
+  an unconfigured counselor resolves `snacks.pos` to `view`.
+- **099's counselor POS policies had to be re-created too.** They grant a
+  counselor its own insert/update on `campistrySnacks`; gating only the four
+  main policies would have left counselors writing the canteen regardless of
+  access. Same hole 157 had to close for the entitlement, in the same two
+  policies. All six now carry both checks, and the bundle asserts the count.
 
 **The registry had to move into SQL, and it is generated.** RLS needs the
 capability registry and the preset expansions (what `nurse` grants once `*` and

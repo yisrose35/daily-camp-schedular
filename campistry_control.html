@@ -44,6 +44,18 @@
         .search{width:100%;border:1px solid #CBD5E1;border-radius:10px;padding:10px 12px;font:inherit;font-size:.92rem;outline:none;margin-bottom:14px}
         .search:focus{border-color:#147D91;box-shadow:0 0 0 3px rgba(20,125,145,.12)}
         .gate{max-width:440px;margin:80px auto;text-align:center}
+        .banner{border-radius:12px;padding:12px 14px;font-size:.84rem;line-height:1.55;margin-bottom:16px;border:1px solid}
+        .banner.warn{background:#FFFBEB;border-color:#FDE68A;color:#78350F}
+        .banner.info{background:#EFF6FF;border-color:#BFDBFE;color:#1E3A8A}
+        .banner code{background:rgba(15,23,42,.06);padding:1px 5px;border-radius:4px;font-size:.95em}
+        .sqlbox{margin-top:14px}
+        .sqlbox textarea{width:100%;min-height:190px;font-family:ui-monospace,SFMono-Regular,Menlo,monospace;
+            font-size:.78rem;line-height:1.6;border:1px solid #CBD5E1;border-radius:10px;padding:12px;
+            background:#0F172A;color:#E2E8F0;resize:vertical;white-space:pre;overflow-wrap:normal;overflow-x:auto}
+        .idrow{display:flex;gap:8px;flex-wrap:wrap;align-items:center;margin-bottom:12px}
+        .idrow input{flex:1;min-width:260px;border:1px solid #CBD5E1;border-radius:10px;padding:9px 11px;font:inherit;font-size:.86rem}
+        .tag{font-size:.7rem;font-weight:700;letter-spacing:.06em;text-transform:uppercase;
+            background:#E0F2FE;color:#075985;border:1px solid #BAE6FD;border-radius:999px;padding:2px 8px}
     </style>
 </head>
 <body>
@@ -66,6 +78,29 @@
     // Working copy of the matrix for the camp currently expanded, so Cancel
     // discards cleanly and a failed save doesn't leave the UI lying.
     var _draft = null;
+
+    // ── two modes, and why the page has to have both ─────────────────────────
+    //
+    //   'web' — the control RPCs (migration 156) are applied and we are a
+    //           super admin. Toggle and hit Save; it writes straight to the
+    //           camp. Still offers the SQL, because sometimes you want the
+    //           statement for the record.
+    //
+    //   'sql' — the RPCs are NOT there yet. This is the bootstrap case and it
+    //           used to be a dead end: the page gated on am_i_super_admin, a
+    //           function that does not exist until the migration is run, so
+    //           the one tool for turning features on was unusable until
+    //           somebody hand-wrote the SQL. Now it falls through to
+    //           generating the statement instead, which is the whole point —
+    //           toggle the boxes, copy, paste into the Supabase SQL editor.
+    //
+    // Generated SQL is inert text: running it needs database credentials this
+    // page never has. So falling back to 'sql' when we cannot TELL whether
+    // somebody is a super admin grants nothing. Being told "no, definitely
+    // not a super admin" is different, and still gates.
+    var _mode = 'web';
+    var _sqlOnlyReason = '';
+    var _manualId = '';
 
     function client() {
         return (window.CampistryDB && window.CampistryDB.getClient && window.CampistryDB.getClient()) ||
@@ -120,6 +155,111 @@
         return bits.join(' · ');
     }
 
+    // ── SQL generation ───────────────────────────────────────────────────────
+    //
+    // Deliberately self-sufficient: it carries its own ADD COLUMN guard, so it
+    // works on a database where migration 155 has never been run. That is
+    // exactly the situation the person using this page is most likely in — the
+    // whole reason for generating SQL rather than saving over the web is that
+    // the server side is not in place yet.
+    //
+    // A plain UPDATE, not _admin_set_camp_entitlements(), for the same reason:
+    // the RPC may not exist. The SQL editor runs as the table owner, so it does
+    // not need the function's SECURITY DEFINER wrapper — and this way there is
+    // one code path that works before and after the migrations.
+
+    function sqlLiteral(s) { return "'" + String(s).replace(/'/g, "''") + "'"; }
+
+    function entitlementsSql(campId, campName, ent) {
+        var json = JSON.stringify(ent, null, 2);
+        var unrestricted = !ent || Object.keys(ent).length === 0;
+        var lines = [];
+        lines.push('-- ══════════════════════════════════════════════════════════════');
+        lines.push('-- Campistry entitlements — ' + (campName || 'camp'));
+        lines.push('-- camp id: ' + campId);
+        lines.push('--');
+        lines.push('-- ' + summarize(ent));
+        if (unrestricted) {
+            lines.push('--');
+            lines.push('-- \'{}\' means UNRESTRICTED — not "nothing". It is the default every');
+            lines.push('-- camp starts on, and it keeps working for sections added in future.');
+            lines.push('-- Setting it back to \'{}\' is how you undo a restriction.');
+        } else {
+            lines.push('--');
+            lines.push('-- Apps not listed below were not bought. Nothing is deleted: the');
+            lines.push('-- camp\'s data stays exactly as it is, and what they did not buy shows');
+            lines.push('-- as locked rather than vanishing. Reversible — set \'{}\' to undo.');
+        }
+        lines.push('--');
+        lines.push('-- Paste into the Supabase SQL editor and Run. Safe to re-run.');
+        lines.push('-- ══════════════════════════════════════════════════════════════');
+        lines.push('');
+        lines.push('-- Present since migration 155; harmless if it already exists.');
+        lines.push('ALTER TABLE camps');
+        lines.push("  ADD COLUMN IF NOT EXISTS entitlements jsonb NOT NULL DEFAULT '{}'::jsonb;");
+        lines.push('');
+        lines.push('UPDATE camps');
+        lines.push('   SET entitlements = ' + sqlLiteral(json) + '::jsonb');
+        lines.push(' WHERE id = ' + sqlLiteral(campId) + '::uuid;');
+        lines.push('');
+        lines.push('-- Read it back — this should show what you just set.');
+        lines.push('SELECT name, entitlements FROM camps WHERE id = ' + sqlLiteral(campId) + '::uuid;');
+        return lines.join('\n');
+    }
+
+    // Two helpers people need when the server side isn't in place yet, and
+    // which are otherwise a trip back to whoever wrote the migrations.
+    function bootstrapSql() {
+        return [
+            '-- Which camps exist, and what each one is currently entitled to.',
+            '-- Run this first: you need a camp id for the statement above.',
+            'SELECT id, name, entitlements FROM camps ORDER BY name;',
+            '',
+            '-- Make yourself a platform owner, so this page can save over the web',
+            '-- instead of generating SQL. Replace the email with your own.',
+            '-- (Requires migration 156 for the control RPCs.)',
+            'INSERT INTO super_admins (user_id, note)',
+            "SELECT id, 'campistry control' FROM auth.users WHERE email = 'you@example.com'",
+            'ON CONFLICT (user_id) DO NOTHING;',
+        ].join('\n');
+    }
+
+    function showSql(text, label) {
+        var box = document.getElementById('sqlbox');
+        if (!box) return;
+        box.innerHTML =
+            '<div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;margin-bottom:6px;">' +
+              '<span class="tag">' + esc(label || 'SQL') + '</span>' +
+              '<button class="btn" id="sqlCopy" style="padding:5px 12px;font-size:.78rem;">Copy</button>' +
+              '<span class="muted" id="sqlCopied"></span>' +
+            '</div><textarea id="sqlText" spellcheck="false" readonly></textarea>';
+        var ta = box.querySelector('#sqlText');
+        ta.value = text;                      // .value, never innerHTML — this is SQL, not markup
+        box.querySelector('#sqlCopy').addEventListener('click', function () {
+            copyText(ta, box.querySelector('#sqlCopied'));
+        });
+        ta.focus(); ta.setSelectionRange(0, 0);
+    }
+
+    function copyText(ta, note) {
+        function done(ok) {
+            if (!note) return;
+            note.textContent = ok ? 'Copied — paste into the Supabase SQL editor.'
+                                  : 'Press ⌘C / Ctrl+C to copy.';
+        }
+        // Select regardless, so the manual fallback is one keystroke away when
+        // the clipboard API is unavailable (it needs a secure context).
+        ta.removeAttribute('readonly');
+        ta.select(); ta.setSelectionRange(0, ta.value.length);
+        ta.setAttribute('readonly', 'readonly');
+        if (navigator.clipboard && navigator.clipboard.writeText) {
+            navigator.clipboard.writeText(ta.value).then(function () { done(true); },
+                                                         function () { done(false); });
+        } else {
+            done(false);
+        }
+    }
+
     // ── render ───────────────────────────────────────────────────────────────
     function render() {
         var q = (document.getElementById('q') || {}).value || '';
@@ -128,13 +268,43 @@
             '<p class="sub">What each camp has bought. A camp with <strong>Everything</strong> is unrestricted — ' +
             'that is the default and what every camp had before entitlements existed. Restricting a camp hides nothing ' +
             'destructive: their data stays exactly as it is, and the features they did not buy appear locked with an ' +
-            'upgrade prompt rather than vanishing.</p>' +
-            '<input class="search" id="q" placeholder="Filter camps by name…" value="' + esc(q) + '">';
+            'upgrade prompt rather than vanishing.</p>';
+
+        if (_mode === 'sql') {
+            html += '<div class="banner warn"><strong>SQL mode.</strong> ' + esc(_sqlOnlyReason) +
+                ' Toggle what a camp should have and this page writes the statement for you — copy it into the ' +
+                'Supabase SQL editor and Run. Everything else on this page works the same; only the Save button ' +
+                'is unavailable.</div>';
+        }
 
         var list = _camps.filter(function (c) {
             return !q || (c.name || '').toLowerCase().indexOf(q.toLowerCase()) >= 0;
         });
-        if (!list.length) html += '<p class="muted">No camps match.</p>';
+
+        // In SQL mode the camp list often can't be read (the listing RPC is
+        // part of the same migration that's missing, and RLS keeps a normal
+        // session to its own camp). Typing an id has to be possible, or the
+        // page is useless in exactly the situation it exists for.
+        if (_mode === 'sql') {
+            html += '<div class="card">' +
+                '<div style="font-weight:700;font-size:.92rem;margin-bottom:4px;">Work on a camp by id</div>' +
+                '<p class="muted" style="margin-bottom:10px;">' +
+                  (list.length ? 'Or pick one from the list below.'
+                               : 'The camp list could not be read, so paste an id here.') +
+                '</p>' +
+                '<div class="idrow">' +
+                  '<input id="manualId" placeholder="00000000-0000-0000-0000-000000000000" value="' + esc(_manualId) + '">' +
+                  '<button class="btn" id="manualGo">Open</button>' +
+                  '<button class="btn-ghost" id="helperSql">Show me the lookup SQL</button>' +
+                '</div>' +
+                '<div class="sqlbox" id="bootstrapBox"></div>' +
+                '</div>';
+        }
+
+        if (_camps.length) {
+            html += '<input class="search" id="q" placeholder="Filter camps by name…" value="' + esc(q) + '">';
+        }
+        if (!list.length && _camps.length) html += '<p class="muted">No camps match.</p>';
 
         list.forEach(function (c) {
             var open = _openId === c.id;
@@ -160,7 +330,53 @@
         root.querySelectorAll('.camp-row').forEach(function (row) {
             row.addEventListener('click', function () { toggle(row.getAttribute('data-camp')); });
         });
+
+        var mi = document.getElementById('manualId');
+        var mg = document.getElementById('manualGo');
+        if (mi && mg) {
+            var open = function () {
+                var v = (mi.value || '').trim();
+                if (!/^[0-9a-f-]{32,36}$/i.test(v)) {
+                    mi.focus();
+                    var bb = document.getElementById('bootstrapBox');
+                    if (bb) bb.innerHTML = '<p class="msg err">That does not look like a camp id. ' +
+                        'Run the lookup SQL below to find one.</p>';
+                    return;
+                }
+                _manualId = v;
+                // A typed-in camp isn't in _camps, so synthesise a row for it.
+                // Its current entitlements are unknown from here, so the matrix
+                // starts empty and the generated statement REPLACES whatever is
+                // stored — which is why the SQL reads it back afterwards.
+                if (!campById(v)) {
+                    _camps.push({ id: v, name: '(camp ' + v.slice(0, 8) + ')',
+                                  entitlements: {}, unrestricted: true, typedIn: true });
+                }
+                toggle(v);
+            };
+            mg.addEventListener('click', open);
+            mi.addEventListener('keydown', function (e) { if (e.key === 'Enter') open(); });
+            var hs = document.getElementById('helperSql');
+            if (hs) hs.addEventListener('click', function () {
+                var box = document.getElementById('bootstrapBox');
+                if (!box) return;
+                box.innerHTML = '<textarea id="bsText" spellcheck="false" readonly></textarea>' +
+                    '<div style="margin-top:6px;"><button class="btn-ghost" id="bsCopy" ' +
+                    'style="padding:5px 12px;font-size:.78rem;">Copy</button> ' +
+                    '<span class="muted" id="bsCopied"></span></div>';
+                var ta = box.querySelector('#bsText');
+                ta.value = bootstrapSql();
+                box.querySelector('#bsCopy').addEventListener('click', function () {
+                    copyText(ta, box.querySelector('#bsCopied'));
+                });
+            });
+        }
+
         wireMatrix();
+    }
+
+    function campById(id) {
+        return _camps.filter(function (x) { return x.id === id; })[0] || null;
     }
 
     function matrixHtml() {
@@ -182,11 +398,13 @@
         });
         h += '<p class="muted">* sensitive section. Unticking every section of an app means the camp did not buy that app.</p>' +
              '<div class="actions">' +
-             '<button class="btn" id="save">Save entitlements</button>' +
+             (_mode === 'web' ? '<button class="btn" id="save">Save entitlements</button>' : '') +
+             '<button class="' + (_mode === 'web' ? 'btn-ghost' : 'btn') + '" id="showSql">Get the SQL</button>' +
              '<button class="btn-ghost" id="everything">Give everything</button>' +
              '<button class="btn-ghost" id="cancel">Cancel</button>' +
              '<span class="muted" id="preview"></span>' +
-             '</div><div class="msg" id="msg"></div>';
+             '</div><div class="msg" id="msg"></div>' +
+             '<div class="sqlbox" id="sqlbox"></div>';
         return h;
     }
 
@@ -208,9 +426,19 @@
             b.addEventListener('click', function () { setApp(b.getAttribute('data-none'), false); });
         });
         var sv = document.getElementById('save');
-        if (sv) sv.addEventListener('click', save);
+        if (sv) sv.addEventListener('click', function () { save(); });
+        var sq = document.getElementById('showSql');
+        if (sq) sq.addEventListener('click', function () {
+            var c = campById(_openId);
+            showSql(entitlementsSql(_openId, c && c.name, entFrom(_draft)), 'Entitlements SQL');
+        });
         var ev = document.getElementById('everything');
-        if (ev) ev.addEventListener('click', function () { save({}); });
+        if (ev) ev.addEventListener('click', function () {
+            // 'Give everything' is '{}', not every box ticked — see draftFrom.
+            if (_mode === 'web') { save({}); return; }
+            var c = campById(_openId);
+            showSql(entitlementsSql(_openId, c && c.name, {}), 'Unrestrict this camp');
+        });
         var cn = document.getElementById('cancel');
         if (cn) cn.addEventListener('click', function () { _openId = null; _draft = null; render(); });
         updatePreview();
@@ -228,7 +456,7 @@
 
     function toggle(id) {
         if (_openId === id) { _openId = null; _draft = null; render(); return; }
-        var c = _camps.filter(function (x) { return x.id === id; })[0];
+        var c = campById(id);
         if (!c) return;
         _openId = id;
         _draft = draftFrom(c.entitlements);
@@ -265,29 +493,91 @@
     }
 
     // ── boot ─────────────────────────────────────────────────────────────────
+    //
+    // The distinction that matters here is between "you are not allowed" and
+    // "I cannot tell yet". The first gates. The second must NOT, because the
+    // thing that makes it unanswerable — migration 156 not being applied — is
+    // precisely the situation this page needs to help with.
+
+    // A missing function comes back as PostgREST PGRST202, or Postgres 42883
+    // (undefined_function) when it resolves but has no matching signature.
+    function isMissingFunction(err) {
+        if (!err) return false;
+        var code = String(err.code || '');
+        var m = String(err.message || '').toLowerCase();
+        return code === 'PGRST202' || code === '42883' ||
+               m.indexOf('could not find the function') >= 0 ||
+               m.indexOf('does not exist') >= 0;
+    }
+
+    function enterSqlMode(reason) {
+        _mode = 'sql';
+        _sqlOnlyReason = reason;
+        // Try the plain table anyway — a super admin may be able to read it
+        // even with the listing RPC absent. RLS normally limits this to the
+        // caller's own camp, which is still one useful row.
+        var cl = client();
+        cl.from('camps').select('id,name,entitlements').order('name').then(function (r) {
+            if (!r.error && Array.isArray(r.data)) {
+                _camps = r.data.map(function (c) {
+                    var ent = c.entitlements || {};
+                    return { id: c.id, name: c.name, entitlements: ent,
+                             unrestricted: Object.keys(ent).length === 0 };
+                });
+            }
+            render();
+        }, function () { render(); });
+    }
+
+    function loadCamps(cl) {
+        return cl.rpc('admin_list_camps_entitlements', {}).then(function (r2) {
+            var d2 = r2.data;
+            if (r2.error && isMissingFunction(r2.error)) {
+                enterSqlMode('The listing RPC is not applied on this database yet.');
+                return;
+            }
+            if (r2.error || !d2 || !d2.success) {
+                gate('Could not load camps',
+                     esc((d2 && d2.error) || (r2.error && r2.error.message) || 'Unknown error'));
+                return;
+            }
+            _camps = d2.camps || [];
+            render();
+        });
+    }
+
     function boot() {
         var cl = client();
         if (!cl) { gate('Could not reach Campistry', 'Check your connection and reload.'); return; }
         if (!CAPS) { gate('Could not load', 'The capability registry failed to load.'); return; }
 
         cl.rpc('am_i_super_admin', {}).then(function (res) {
+            if (res.error && isMissingFunction(res.error)) {
+                // Bootstrap: the control migrations have not been run. This used
+                // to be a dead end — the page gated on a function that only
+                // exists once the SQL it helps you write has been applied.
+                enterSqlMode('The control RPCs (migration 156) are not applied on this database yet.');
+                return;
+            }
             var d = res.data;
-            if (res.error || !d || !d.success || !d.isSuperAdmin) {
+            if (res.error) {
+                gate('Could not check access', esc(res.error.message || 'Unknown error'));
+                return;
+            }
+            if (!d || !d.success || !d.isSuperAdmin) {
+                // A definite no. Gate — unlike the cases above, this one IS an
+                // answer.
                 gate('Not authorised',
                      'This page is for Campistry platform owners. If that should be you, add your user to the ' +
                      '<code>super_admins</code> table from the SQL editor.');
                 return;
             }
-            return cl.rpc('admin_list_camps_entitlements', {}).then(function (r2) {
-                var d2 = r2.data;
-                if (r2.error || !d2 || !d2.success) {
-                    gate('Could not load camps', esc((d2 && d2.error) || (r2.error && r2.error.message) || 'Unknown error'));
-                    return;
-                }
-                _camps = d2.camps || [];
-                render();
-            });
-        }, function () {
+            return loadCamps(cl);
+        }, function (e) {
+            if (isMissingFunction(e)) {
+                enterSqlMode('The control RPCs (migration 156) are not applied on this database yet.');
+                return;
+            }
             gate('Not signed in', 'Sign in to Campistry first, then reload this page.');
         });
     }

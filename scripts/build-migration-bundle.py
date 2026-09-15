@@ -63,6 +63,10 @@ MANIFEST = [
     # the four camp_state_kv policies 158 leaves in place.
     ("160_per_user_key_rls",
      "A staff member's section access enforced in RLS, for the two Me keys (phase 3)"),
+    # MUST come after 160: it redefines camp_state_key_user_allowed to add the
+    # snacks key, and re-creates 099's counselor POS policies with the check.
+    ("161_per_user_snacks_key_rls",
+     "Per-user section access on campistrySnacks, counselor POS included (phase 3)"),
 ]
 
 HEADER = """-- ═══════════════════════════════════════════════════════════════════════════
@@ -107,6 +111,11 @@ HEADER = """-- ═════════════════════�
 --     with a valid session. Anyone who was never configured (no preset, no
 --     overrides) is unaffected — that is the backward-compatibility rule — but
 --     anyone you DID restrict can no longer reach those two keys at all.
+--     161 extends the same rule to the canteen (campistrySnacks): staff with no
+--     snacks access — nurse, division head, office, bus coordinator presets —
+--     stop being able to read camper balances and the transaction ledger. The
+--     POS register is unaffected: it runs as a counselor, and an unconfigured
+--     counselor still passes the gate.
 --
 -- PREREQUISITES (long since applied on a live camp; the preflight below fails
 -- loudly rather than confusingly if one is missing): 077 (camp Stripe Connect),
@@ -255,11 +264,18 @@ UNION ALL SELECT 'access registry loaded (' || (SELECT count(*)::text FROM acces
                  (SELECT count(*) FROM access_capabilities)
                  * (SELECT count(DISTINCT preset) FROM access_preset_grants)
             THEN 'OK' ELSE 'MISSING' END
-UNION ALL SELECT 'per-user section access enforced in RLS',
+-- All SIX policies, the two counselor POS ones included: gating only the four
+-- main policies leaves a counselor writing the canteen straight past the check,
+-- because Postgres OR-combines permissive policies.
+UNION ALL SELECT 'per-user section access on all 6 camp_state_kv policies',
        CASE WHEN (SELECT count(*) FROM pg_policies
                    WHERE tablename='camp_state_kv'
                      AND COALESCE(qual,'') || COALESCE(with_check,'')
-                         LIKE '%camp_state_key_user_allowed%') = 4
+                         LIKE '%camp_state_key_user_allowed%') = 6
+            THEN 'OK' ELSE 'MISSING' END
+UNION ALL SELECT 'snacks key gated per user',
+       CASE WHEN (SELECT prosrc FROM pg_proc
+                   WHERE proname='camp_state_key_user_allowed' LIMIT 1) LIKE '%campistrySnacks%'
             THEN 'OK' ELSE 'MISSING' END
 -- me.finance is a view-only capability and never resolves to 'edit' for
 -- anyone, the owner included. If the key gate ever tests for 'edit', Finance

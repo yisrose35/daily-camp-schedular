@@ -280,26 +280,110 @@ test('the camp owner and a non-member both keep access', () => {
 
 // ── 3. the gate only covers the keys it claims to ─────────────────────────
 
-test('only the two phase-3 keys are gated, and both read and write use one rule', () => {
-    const mig = fs.readFileSync(
-        path.join(__dirname, '..', 'migrations', '160_per_user_key_rls.sql'), 'utf8');
+const mig160 = fs.readFileSync(
+    path.join(__dirname, '..', 'migrations', '160_per_user_key_rls.sql'), 'utf8');
+const mig161 = fs.readFileSync(
+    path.join(__dirname, '..', 'migrations', '161_per_user_snacks_key_rls.sql'), 'utf8');
 
-    const gated = [...mig.matchAll(/WHEN '([A-Za-z_]+)'\s+THEN public\.user_section_level/g)]
-        .map(m => m[1]).sort();
-    assert.deepStrictEqual(gated, ['campistryMeFinance', 'campistryMePayroll'],
+test('exactly the audited keys are gated, and both read and write use one rule', () => {
+    // 161 redefines camp_state_key_user_allowed, so IT holds the current set.
+    const fn = mig161.slice(mig161.indexOf('FUNCTION public.camp_state_key_user_allowed'),
+                            mig161.indexOf('GRANT EXECUTE ON FUNCTION public.camp_state_key_user_allowed'));
+    const gated = [...fn.matchAll(/WHEN '([A-Za-z_]+)'/g)].map(m => m[1]).sort();
+    assert.deepStrictEqual(gated,
+        ['campistryMeFinance', 'campistryMePayroll', 'campistrySnacks'],
         'the set of per-user gated keys changed — audit every reader of the new key first');
 
-    // All four policies must carry the check. Postgres OR-combines permissive
-    // policies, so one without it reopens the door through that command.
-    const policies = ['camp_state_kv_select', 'camp_state_kv_insert',
-                      'camp_state_kv_update', 'camp_state_kv_delete'];
-    for (const p of policies) {
-        const start = mig.indexOf('CREATE POLICY ' + p + ' ');
+    // The four main policies live in 160 and call the gate by name, so adding a
+    // key is a function replace. They must all still carry both checks:
+    // Postgres OR-combines permissive policies, so one without it reopens the
+    // door through that command.
+    for (const p of ['camp_state_kv_select', 'camp_state_kv_insert',
+                     'camp_state_kv_update', 'camp_state_kv_delete']) {
+        const start = mig160.indexOf('CREATE POLICY ' + p + ' ');
         assert.ok(start >= 0, p + ' is not defined in 160');
-        const body = mig.slice(start, mig.indexOf(');', start));
+        const body = mig160.slice(start, mig160.indexOf(');', start));
         assert.ok(body.includes('camp_state_key_user_allowed'), p + ' is missing the per-user check');
         assert.ok(body.includes('camp_state_key_entitled'), p + ' lost the entitlement check');
     }
+});
+
+test("the counselor POS policies carry the check too, or a counselor writes past it", () => {
+    // Migration 099 gives counselors their OWN insert/update policy on
+    // campistrySnacks. Gating only the four main policies does nothing for
+    // them — this is the same hole 157 had to close for the entitlement.
+    for (const p of ['camp_state_kv_insert_counselor_snacks',
+                     'camp_state_kv_update_counselor_snacks']) {
+        const start = mig161.indexOf('CREATE POLICY ' + p + ' ');
+        assert.ok(start >= 0, p + ' is not re-created in 161');
+        const body = mig161.slice(start, mig161.indexOf(');', start));
+        assert.ok(body.includes('camp_state_key_user_allowed'), p + ' is missing the per-user check');
+        assert.ok(body.includes('camp_state_key_entitled'), p + ' lost the entitlement check');
+    }
+});
+
+// ── 4. the snacks key: whole-app grain ────────────────────────────────────
+//
+// campistrySnacks holds seven sections in one key, so the gate asks a
+// whole-app question. This mirrors user_app_any_section().
+
+const SNACKS_CAPS = [...CAPS.keys()].filter(k => CAPS.get(k).app === 'snacks');
+
+function anySnacks(u) {
+    return SNACKS_CAPS.some(k => sqlResolve(k, u) !== 'none');
+}
+
+test('the snacks key follows "any section of the app"', () => {
+    assert.ok(SNACKS_CAPS.length >= 7, 'snacks sections went missing from the registry');
+    const expected = {
+        full: true, bookkeeper: true, canteen: true, 'read-only': true,
+        nurse: false, 'division-head': false, 'head-counselor': false,
+        office: false, 'bus-coordinator': false,
+    };
+    for (const [preset, allowed] of Object.entries(expected)) {
+        assert.strictEqual(anySnacks(member({ preset })), allowed,
+            `preset ${preset}: expected snacks ${allowed ? 'allowed' : 'denied'}`);
+    }
+});
+
+test('THE REGISTER KEEPS WORKING — an unconfigured counselor passes the gate', () => {
+    // The one that could break a camp mid-day. The POS runs as a counselor
+    // doing a direct upsert, and user_section_level floors counselors at
+    // 'view' — so a gate on 'edit' would have killed every register in every
+    // camp. The gate is "not none", and an unconfigured counselor is 'view'.
+    const pos = member({ role: 'counselor' });
+    assert.strictEqual(sqlResolve('snacks.pos', pos), 'view');
+    assert.ok(anySnacks(pos), 'the POS counselor lost canteen access');
+
+    const gate = mig161.slice(mig161.indexOf('FUNCTION public.user_app_any_section'),
+                              mig161.indexOf('GRANT EXECUTE ON FUNCTION public.user_app_any_section'));
+    assert.ok(gate.includes("<> 'none'"), 'the snacks gate no longer tests for "not none"');
+    assert.ok(!/=\s*'edit'/.test(gate), 'the snacks gate tests for edit — every POS register breaks');
+});
+
+test('an unconfigured member of any role keeps the canteen', () => {
+    // The backward-compatibility rule, on the key with the most readers.
+    for (const role of ['owner', 'admin', 'manager', 'scheduler', 'viewer', 'counselor']) {
+        assert.ok(anySnacks(member({ role })), 'unconfigured ' + role + ' lost the canteen');
+    }
+});
+
+test('a nurse cannot reach the canteen ledger', () => {
+    // The actual tightening: balances and spending history stop being readable
+    // by every staff member with a session.
+    const nurse = member({ preset: 'nurse' });
+    assert.ok(!anySnacks(nurse));
+    for (const k of SNACKS_CAPS) assert.strictEqual(sqlResolve(k, nurse), 'none');
+});
+
+test('an app with no catalogued sections is not gated', () => {
+    // user_app_any_section returns true for an unknown app rather than denying
+    // a whole product we simply have not catalogued.
+    assert.strictEqual(
+        [...CAPS.keys()].filter(k => CAPS.get(k).app === 'no-such-app').length, 0);
+    const fn = mig161.slice(mig161.indexOf('FUNCTION public.user_app_any_section'),
+                            mig161.indexOf('GRANT EXECUTE ON FUNCTION public.user_app_any_section'));
+    assert.ok(fn.includes('NOT EXISTS'), 'the unknown-app fallback is gone');
 });
 
 test('writes are gated on "not none", never on "edit"', () => {

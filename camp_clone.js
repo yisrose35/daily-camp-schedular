@@ -275,9 +275,19 @@
         });
         section.innerHTML =
             '<div class="dashboard-card" style="border:1px solid var(--slate-200);">' +
-              '<div class="card-header" style="display:flex;align-items:center;justify-content:space-between;gap:10px;">' +
+              '<div class="card-header" style="display:flex;align-items:center;justify-content:space-between;gap:10px;flex-wrap:wrap;">' +
                 '<h2 style="margin:0;">🧬 Debug Copy <span style="font-size:0.7rem;font-weight:600;color:#b45309;background:#fef3c7;padding:2px 8px;border-radius:999px;vertical-align:middle;">SUPER-ADMIN</span></h2>' +
-                '<button type="button" id="dcRefreshBtn" class="btn-secondary" style="padding:6px 12px;font-size:0.8rem;">Refresh list</button>' +
+                '<div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;">' +
+                  // The entitlements hub. It lives on its own page because it is
+                  // a matrix of every app and section for every camp, which does
+                  // not fit in a dashboard card — but it belongs to the same
+                  // super-admin surface as the debug copier, so it is reached
+                  // from here rather than by remembering a URL.
+                  '<a href="campistry_control.html" id="dcControlBtn" class="btn-secondary" ' +
+                    'style="padding:6px 12px;font-size:0.8rem;text-decoration:none;display:inline-block;">' +
+                    '🎛 Control hub — what each camp has</a>' +
+                  '<button type="button" id="dcRefreshBtn" class="btn-secondary" style="padding:6px 12px;font-size:0.8rem;">Refresh list</button>' +
+                '</div>' +
               '</div>' +
               '<p style="font-size:0.85rem;color:var(--slate-500);margin:6px 0 14px;line-height:1.5;">' +
                 'Make a full, isolated copy of any camp onto your own account. The original is only read — never changed. ' +
