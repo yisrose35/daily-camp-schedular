@@ -43,6 +43,7 @@
 
     var S = {};
     var _access = null;         // { role, products, preset, overrides }
+    var _entitlements = {};
     var _levels = null;         // capability key -> level
     var _ready = false;
     var _unrestricted = true;   // until proven otherwise
@@ -119,7 +120,19 @@
         var C = CAPS();
         if (!data || !data.success || !C) { finish(); return; }
 
-        if (data.unrestricted) { finish(); return; }
+        // What the CAMP bought. '{}' means unrestricted. This is deliberately
+        // read BEFORE the two fast paths below, because neither of them may
+        // skip it: `unrestricted` means "no per-STAFF restriction" and is true
+        // for every owner, and `isUnconfigured` means "this person's
+        // permissions were never set up". An entitlement is neither — it is the
+        // edge of the product, and it has to hold for an owner with no staff
+        // permissions configured, which is exactly the fast path both of those
+        // took.
+        var ent = (data.entitlements && typeof data.entitlements === 'object') ? data.entitlements : {};
+        _entitlements = ent;
+        var entRestricts = Object.keys(ent).length > 0;
+
+        if (data.unrestricted && !entRestricts) { finish(); return; }
 
         _access = {
             role: data.role,
@@ -128,10 +141,20 @@
             // deny every app.
             products: (Array.isArray(data.products) && data.products.length) ? data.products : null,
             preset: data.preset || null,
-            overrides: data.overrides || {}
+            overrides: data.overrides || {},
+            entitlements: ent
         };
 
-        if (C.isUnconfigured(_access)) { finish(); return; }   // legacy full access
+        // An owner/admin keeps full staff-level access; only the entitlement
+        // applies to them. Dropping preset/overrides here (rather than leaving
+        // whatever happened to be on the row) keeps that explicit.
+        if (data.unrestricted) {
+            _access.products = null;
+            _access.preset = null;
+            _access.overrides = {};
+        } else if (C.isUnconfigured(_access) && !entRestricts) {
+            finish(); return;                                  // legacy full access
+        }
 
         _levels = C.resolveAll(_access);
         _unrestricted = false;
@@ -160,7 +183,7 @@
             document.querySelectorAll('[data-page],[data-tab]')
         ).filter(function (n) {
             // Only nav controls, not the panes they reveal.
-            return !/(^|\s)(tab-content|snacks-page|me-page|lk-page)(\s|$)/.test(n.className || '');
+            return !/(^|\s)(tab-content|snacks-page|me-page|lk-page|health-page|live-page)(\s|$)/.test(n.className || '');
         });
     }
 
@@ -169,13 +192,23 @@
     }
 
     function gateNav() {
+        var C = CAPS();
         navNodes().forEach(function (n) {
             var sec = sectionOf(n);
             if (!sec) return;
             var lvl = S.level(sec);
             if (lvl === 'none') {
-                n.style.display = 'none';
-                n.setAttribute('data-access-hidden', '1');
+                // Two different reasons land on 'none', and they want opposite
+                // treatment. "Your camp didn't buy this" is a SALE — leave it
+                // visible, locked, and say how to get it. "You're not allowed
+                // this" is not — hide it, because nobody upsells a counselor on
+                // Payroll.
+                if (C && C.lockedByEntitlement && C.lockedByEntitlement(PRODUCT + '.' + sec, _access)) {
+                    markLockedNav(n);
+                } else {
+                    n.style.display = 'none';
+                    n.setAttribute('data-access-hidden', '1');
+                }
             } else if (lvl === 'view') {
                 n.setAttribute('data-access-view', '1');
             }
@@ -214,6 +247,58 @@
                document.querySelector('[data-section-pane="' + section + '"]');
     }
 
+    // A section the camp hasn't bought: visible, obviously unavailable, and
+    // clicking it explains how to get it rather than doing nothing.
+    function markLockedNav(n) {
+        if (n.getAttribute('data-access-locked') === '1') return;
+        n.setAttribute('data-access-locked', '1');
+        n.style.opacity = '0.55';
+        n.style.cursor = 'not-allowed';
+        if (!n.querySelector('.access-lock-glyph')) {
+            var lock = document.createElement('span');
+            lock.className = 'access-lock-glyph';
+            lock.textContent = ' \uD83D\uDD12';
+            lock.style.fontSize = '.85em';
+            lock.style.opacity = '.8';
+            n.appendChild(lock);
+        }
+        n.addEventListener('click', function (ev) {
+            ev.preventDefault();
+            ev.stopImmediatePropagation();
+            showUpgrade(sectionOf(n));
+        }, true);
+    }
+
+    function showUpgrade(sec) {
+        var C = CAPS();
+        var cap = C && C.get(PRODUCT + '.' + sec);
+        var name = (cap && cap.label) || 'This feature';
+        toast(name + ' isn\'t part of your current plan — contact Campistry to add it.');
+        // If the section is somehow the open pane, replace its body too.
+        for (var i = 0; i < PANE_SELECTORS.length; i++) {
+            var pane = document.querySelector(PANE_SELECTORS[i] + '.active');
+            if (pane && (pane.id || '').replace(/^(page|tab)-/, '') === sec) {
+                pane.innerHTML = upgradeHtml(cap);
+                return;
+            }
+        }
+    }
+
+    function upgradeHtml(cap) {
+        var name = (cap && cap.label) || 'This feature';
+        return '<div style="max-width:460px;margin:56px auto;text-align:center;padding:32px 26px;' +
+            'background:#fff;border:1px solid #E2E8F0;border-radius:16px;">' +
+            '<div style="width:46px;height:46px;border-radius:50%;background:#FFFBEB;color:#B45309;' +
+            'display:flex;align-items:center;justify-content:center;margin:0 auto 14px;">' +
+            '<svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">' +
+            '<rect x="3" y="11" width="18" height="11" rx="2"/><path d="M7 11V7a5 5 0 0 1 10 0v4"/></svg></div>' +
+            '<h2 style="font-size:1.05rem;font-weight:700;color:#0F172A;margin:0 0 7px;">' +
+            esc(name) + ' isn\'t in your plan</h2>' +
+            '<p style="font-size:.86rem;color:#64748B;line-height:1.55;margin:0;">' +
+            'Your camp\'s plan doesn\'t include this yet. Contact Campistry to add it — ' +
+            'your existing data stays exactly as it is.</p></div>';
+    }
+
     function blockedHtml(cap) {
         var name = (cap && cap.label) || 'this section';
         return '<div style="max-width:460px;margin:56px auto;text-align:center;padding:32px 26px;' +
@@ -246,7 +331,10 @@
             document.querySelectorAll(sel + '.active').forEach(function (pane) {
                 var id = (pane.id || '').replace(/^(page|tab)-/, '');
                 if (!id || S.level(id) !== 'none') return;
-                pane.innerHTML = blockedHtml(C && C.get(PRODUCT + '.' + id));
+                var capKey = PRODUCT + '.' + id;
+                pane.innerHTML = (C && C.lockedByEntitlement && C.lockedByEntitlement(capKey, _access))
+                    ? upgradeHtml(C.get(capKey))
+                    : blockedHtml(C && C.get(capKey));
                 var first = firstAllowedNav();
                 if (first) first.click();
             });

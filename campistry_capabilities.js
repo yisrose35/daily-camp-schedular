@@ -323,13 +323,56 @@
      *   overrides: { 'me.billing': 'none' }   // section_access
      * }
      */
+    /**
+     * Is this capability covered by what the CAMP bought?
+     *
+     * entitlements shape (camps.entitlements, '{}' = unrestricted):
+     *   {}                                   -> everything, every app
+     *   { "me": "*" }                        -> all of Me, nothing else
+     *   { "me": ["campers","structure"] }    -> only those sections of Me
+     *   { "me": [] }                         -> Me bought but no sections (rare)
+     * An app absent from a non-empty object was not bought.
+     */
+    C.entitled = function (cap, entitlements) {
+        if (!entitlements || typeof entitlements !== 'object') return true;
+        if (Object.keys(entitlements).length === 0) return true;   // unrestricted
+        if (!Object.prototype.hasOwnProperty.call(entitlements, cap.app)) return false;
+        var v = entitlements[cap.app];
+        if (v === '*') return true;
+        if (!Array.isArray(v)) return false;
+        return v.indexOf(cap.section) >= 0;
+    };
+
+    /**
+     * True when a capability is unavailable BECAUSE THE CAMP DIDN'T BUY IT,
+     * rather than because this staff member isn't allowed it.
+     *
+     * resolve() returns 'none' for both, but they want opposite treatment:
+     *   not bought  -> show it, locked, with an upgrade prompt (it's a sale)
+     *   not allowed -> hide it (nobody upsells a counselor on Payroll)
+     */
+    C.lockedByEntitlement = function (key, access) {
+        var cap = C.get(key);
+        if (!cap) return false;
+        return !C.entitled(cap, (access || {}).entitlements);
+    };
+
     C.resolve = function (key, access) {
         access = access || {};
         var cap = C.get(key);
         if (!cap) return 'none';                    // unknown capability: fail closed
 
-        // Owners and admins are never gated. Anything else and an owner could
-        // lock themselves out of their own camp with no way back in.
+        // ── Camp entitlement — what the camp actually BOUGHT ─────────────────
+        // This is deliberately ABOVE the owner/admin bypass below, and it is the
+        // only rule that is. The bypass exists so an owner can't lock themselves
+        // out of their own camp by misconfiguring staff permissions — but an
+        // entitlement isn't a permission, it's the edge of the product, and an
+        // owner is exactly who it has to hold for. It can only ever subtract, so
+        // an unset entitlement ('{}') leaves every existing camp untouched.
+        if (!C.entitled(cap, access.entitlements)) return 'none';
+
+        // Owners and admins are never gated by the per-STAFF layers. Anything
+        // else and an owner could lock themselves out with no way back in.
         if (access.role === 'owner' || access.role === 'admin') {
             return cap.viewOnly ? 'view' : 'edit';
         }
