@@ -193,40 +193,7 @@ test('the field catalog covers what the form actually asks', () => {
     });
 });
 
-test('a field a camp has not asked for stays off', () => {
-    // Both sides have to agree, or a field added to the catalog appears on
-    // every camp's live form the day it ships.
-    const me = fs.readFileSync(path.join(ROOT, 'campistry_me.js'), 'utf8');
-    const reg = fs.readFileSync(path.join(ROOT, 'campistry_register.html'), 'utf8');
-    const catalog = me.slice(me.indexOf('var FC_FIELD_CATALOG={'), me.indexOf('function getFormConfig'));
-    const offInCatalog = [...catalog.matchAll(/id:'(\w+)'[^}]*off:true/g)].map((m) => m[1]);
 
-    assert.ok(offInCatalog.includes('bunkmate') && offInCatalog.includes('separate'),
-        'bunk requests must default off — a request on a form is a promise a parent hears');
-
-    const offOnForm = reg.slice(reg.indexOf('var FIELD_DEFAULT_OFF={'), reg.indexOf('function applyFieldConfig'));
-    offInCatalog.forEach((f) => {
-        assert.match(offOnForm, new RegExp(f + ':\\s*true'), f + ' is off in the catalog but shows on the form');
-    });
-    // And the renderer must read the flag at all.
-    assert.match(me, /cfg\.enabled!=null\?cfg\.enabled!==false:!f\.off/);
-});
-
-test('required documents default off and are named, not hinted', () => {
-    const me = fs.readFileSync(path.join(ROOT, 'campistry_me.js'), 'utf8');
-    const reg = fs.readFileSync(path.join(ROOT, 'campistry_register.html'), 'utf8');
-
-    assert.match(me, /\{key:'documents',label:'Required Documents'[^}]*default:false\}/,
-        'the documents section must default off');
-    // Each document needs a stable id, or renaming one orphans every file
-    // already filed under it.
-    assert.match(me, /var id=el\.dataset\.id\|\|\('doc_'/);
-    assert.match(me, /required:!!el\.querySelector\('\.fcDocReq'\)/);
-    // The form lists them by name and blocks on the required ones.
-    assert.match(reg, /_regRenderRequiredDocs/);
-    assert.match(reg, /_regMissingDocs/);
-    assert.match(reg, /Still needed: /);
-});
 
 test('the post-acceptance form carries documents, payment and the deposit', () => {
     const me = fs.readFileSync(path.join(ROOT, 'campistry_me.js'), 'utf8');
@@ -254,3 +221,36 @@ test('the deposit screen says when the public form cannot see it', () => {
     assert.match(me, /hasOwnProperty\.call\(d,'depositPolicy'\)/);
     assert.match(me, /164_public_deposit_policy\.sql/, 'it must name the migration to apply');
 });
+
+test('a field a camp has not asked for stays off', () => {
+    const me = fs.readFileSync(path.join(ROOT, 'campistry_me.js'), 'utf8');
+    const catalog = me.slice(me.indexOf('var FC_FIELD_CATALOG={'), me.indexOf('function getFormConfig'));
+    const offInCatalog = [...catalog.matchAll(/id:'(\w+)'[^}]*off:true/g)].map((m) => m[1]);
+
+    assert.ok(offInCatalog.includes('bunkmate') && offInCatalog.includes('separate'),
+        'bunk requests must default off \u2014 a request on a form is a promise a parent hears');
+    // The builder must read the flag, or a camp opening it sees every new
+    // field already ticked.
+    assert.match(me, /cfg\.enabled!=null\?cfg\.enabled!==false:!f\.off/);
+});
+
+test('required documents default off and carry stable ids', () => {
+    const me = fs.readFileSync(path.join(ROOT, 'campistry_me.js'), 'utf8');
+    assert.match(me, /\{key:'documents',label:'Required Documents'[^}]*default:false\}/,
+        'the documents section must default off');
+    // A stable id, or renaming a document orphans every file already filed
+    // under it.
+    assert.match(me, /var id=el\.dataset\.id\|\|\('doc_'/);
+    assert.match(me, /required:!!el\.querySelector\('\.fcDocReq'\)/);
+});
+
+// NOTE — the public registration form's half of the above (the named
+// checklist, the per-upload "what is this?" picker, and the new
+// camper/medical/other-parent fields) was ROLLED BACK after it rendered a
+// blank page in the browser. The cause is not identified: the markup
+// balances, both inline script blocks parse, and a stubbed-DOM run reaches
+// the end without throwing — so the failure is something none of those
+// catch. campistry_register.html is back at 6b47425, which keeps the
+// deposit work and drops the rest. Re-land only with the cause in hand and
+// a check that would have caught it; shipping it again on the same evidence
+// would break the form a second time.
