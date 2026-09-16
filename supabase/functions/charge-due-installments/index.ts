@@ -62,6 +62,27 @@
 import { serve } from "https://deno.land/std@0.168.0/http/server.ts";
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
 
+// ── receipts ────────────────────────────────────────────────────────────────
+// Emailing the parent a receipt is the last step of taking money, not an extra.
+// It is dispatched, never awaited for correctness: the money is already taken,
+// so a receipt that fails must never fail — or retry — the charge. send-payment-
+// receipt is idempotent on the payment reference, so several callers racing for
+// the same payment produce exactly one email.
+async function sendReceipt(o: Record<string, unknown>) {
+  try {
+    if (!SUPABASE_URL || !SUPABASE_SERVICE_KEY) return;
+    const r = await fetch(`${SUPABASE_URL}/functions/v1/send-payment-receipt`, {
+      method: "POST",
+      headers: { Authorization: `Bearer ${SUPABASE_SERVICE_KEY}`, "Content-Type": "application/json" },
+      body: JSON.stringify(o),
+    });
+    if (!r.ok) console.warn(`[receipt] dispatch returned ${r.status} for ref ${String(o.ref || "")}`);
+  } catch (e) {
+    console.warn("[receipt] dispatch failed:", (e as Error)?.message);
+  }
+}
+
+
 const STRIPE_SECRET = Deno.env.get("STRIPE_SECRET_KEY");
 const STRIPE_API = "https://api.stripe.com/v1";
 const SUPABASE_URL = Deno.env.get("SUPABASE_URL") || "";
@@ -656,6 +677,16 @@ serve(async (req) => {
         // so a newly saved card or a card that now works closes the flag without
         // anyone having to dismiss anything.
         await flagPlan(String(row.camp_id), famKey, String(plan.id || ""), null);
+        // An instalment is the charge a parent is LEAST expecting: nobody was
+        // present, it happened overnight, and until now the first they knew of
+        // it was the line on their statement. On the Stripe path the webhook
+        // also dispatches one for this same PaymentIntent and whichever arrives
+        // second sends nothing.
+        await sendReceipt({
+          campId: String(row.camp_id), familyKey: famKey, ref: txnId, amount,
+          what: "Payment plan instalment " + (due.index + 1) + " of " + plan.dueDates.length,
+          method: "Card on file", when: today, balanceAfter: rec.data?.balance,
+        });
         charged++;
         details.push({ camp: row.camp_id, family: f.name, amount,
                        result: (rec.error || !rec.data?.success) ? "charged_not_recorded" : "charged",

@@ -65,6 +65,27 @@
 import { serve } from "https://deno.land/std@0.168.0/http/server.ts";
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
 
+// ── receipts ────────────────────────────────────────────────────────────────
+// Emailing the parent a receipt is the last step of taking money, not an extra.
+// It is dispatched, never awaited for correctness: the money is already taken,
+// so a receipt that fails must never fail — or retry — the charge. send-payment-
+// receipt is idempotent on the payment reference, so several callers racing for
+// the same payment produce exactly one email.
+async function sendReceipt(o: Record<string, unknown>) {
+  try {
+    if (!SUPABASE_URL || !SUPABASE_SERVICE_KEY) return;
+    const r = await fetch(`${SUPABASE_URL}/functions/v1/send-payment-receipt`, {
+      method: "POST",
+      headers: { Authorization: `Bearer ${SUPABASE_SERVICE_KEY}`, "Content-Type": "application/json" },
+      body: JSON.stringify(o),
+    });
+    if (!r.ok) console.warn(`[receipt] dispatch returned ${r.status} for ref ${String(o.ref || "")}`);
+  } catch (e) {
+    console.warn("[receipt] dispatch failed:", (e as Error)?.message);
+  }
+}
+
+
 const STRIPE_SECRET = Deno.env.get("STRIPE_SECRET_KEY");
 const STRIPE_API = "https://api.stripe.com/v1";
 const SUPABASE_URL = Deno.env.get("SUPABASE_URL") || "";
@@ -463,6 +484,14 @@ serve(async (req) => {
         // handleCanteenDeposit once Stripe confirms payment_intent.succeeded
         // — this function never touches `balance` on the Stripe path.
         markSuccess(ar, today, due.amount);
+        // An automatic top-up is money moved with nobody watching, so it gets a
+        // receipt for the same reason an instalment does. Keyed on the
+        // PaymentIntent, so the webhook's copy and this one are one email.
+        await sendReceipt({
+          campId: String(row.camp_id), camperName, ref: String(pi.id || ""),
+          amount: due.amount, when: today, method: "Card on file",
+          what: "Canteen auto-reload (" + due.kind + ")",
+        });
         charged++;
         details.push({ camp: row.camp_id, camper: camperName, amount: due.amount, kind: due.kind, result: "charged", stripeStatus: pi.status });
         await persistAr(String(row.camp_id), camperName, ar);

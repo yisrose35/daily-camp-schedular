@@ -55,6 +55,27 @@ import { serve } from "https://deno.land/std@0.168.0/http/server.ts";
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
 import md5 from "https://esm.sh/js-md5@0.8.3";
 
+// ── receipts ────────────────────────────────────────────────────────────────
+// Emailing the parent a receipt is the last step of taking money, not an extra.
+// It is dispatched, never awaited for correctness: the money is already taken,
+// so a receipt that fails must never fail — or retry — the charge. send-payment-
+// receipt is idempotent on the payment reference, so several callers racing for
+// the same payment produce exactly one email.
+async function sendReceipt(o: Record<string, unknown>) {
+  try {
+    if (!SUPABASE_URL || !SUPABASE_SERVICE_KEY) return;
+    const r = await fetch(`${SUPABASE_URL}/functions/v1/send-payment-receipt`, {
+      method: "POST",
+      headers: { Authorization: `Bearer ${SUPABASE_SERVICE_KEY}`, "Content-Type": "application/json" },
+      body: JSON.stringify(o),
+    });
+    if (!r.ok) console.warn(`[receipt] dispatch returned ${r.status} for ref ${String(o.ref || "")}`);
+  } catch (e) {
+    console.warn("[receipt] dispatch failed:", (e as Error)?.message);
+  }
+}
+
+
 const SUPABASE_URL = Deno.env.get("SUPABASE_URL") || "";
 const SUPABASE_SERVICE_KEY = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY") || "";
 
@@ -296,6 +317,14 @@ serve(async (req) => {
       }
 
       await service.rpc("mark_cardknox_checkout_intent_status", { p_reference: xInvoice, p_status: "completed", p_xref_num: xRefNum || null });
+      // A registration deposit is the FIRST money a family ever sends this
+      // camp, from a form, to a processor they have never seen — so it is the
+      // charge most likely to be queried. There is no family record yet, so the
+      // parent's address comes off the application via the enrollment id.
+      await sendReceipt({
+        campId, enrollmentId: enrollId, ref: String(xRefNum || xInvoice || ""),
+        amount: paid, what: "Registration deposit", method: "Card",
+      });
       console.log(`[cardknox-webhook] registration deposit $${paid} marked on ${enrollId}${(rec as any)?.duplicate ? " (already recorded)" : ""}`);
       return text("ok", 200);
     }
@@ -534,6 +563,15 @@ serve(async (req) => {
     }
 
     await service.rpc("mark_cardknox_checkout_intent_status", { p_reference: xInvoice, p_status: "completed", p_xref_num: xRefNum });
+    // Sola's hosted checkout shows its own confirmation page and then the
+    // parent leaves. Nothing else in this flow ever reaches their inbox.
+    await sendReceipt({
+      campId, ref: String(xRefNum || ""), amount: intent.amountCents / 100,
+      familyKey: intent.familyKey || null,
+      camperName: intent.kind === "canteen_deposit" ? intent.camperName : null,
+      what: intent.kind === "canteen_deposit" ? "Canteen funds" : "Camp payment",
+      method: "Card",
+    });
     console.log(`[cardknox-webhook] Credited ${intent.kind} ${xInvoice}/${xRefNum}: $${xAmount || (intent.amountCents / 100)}, camp ${campId}`);
     return text("ok", 200);
   } catch (err) {

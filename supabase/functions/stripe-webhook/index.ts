@@ -55,6 +55,27 @@ import { serve } from "https://deno.land/std@0.168.0/http/server.ts";
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
 import { Resend } from "npm:resend@2.0.0";
 
+// ── receipts ────────────────────────────────────────────────────────────────
+// Emailing the parent a receipt is the last step of taking money, not an extra.
+// It is dispatched, never awaited for correctness: the money is already taken,
+// so a receipt that fails must never fail — or retry — the charge. send-payment-
+// receipt is idempotent on the payment reference, so several callers racing for
+// the same payment produce exactly one email.
+async function sendReceipt(o: Record<string, unknown>) {
+  try {
+    if (!SUPABASE_URL || !SUPABASE_SERVICE_KEY) return;
+    const r = await fetch(`${SUPABASE_URL}/functions/v1/send-payment-receipt`, {
+      method: "POST",
+      headers: { Authorization: `Bearer ${SUPABASE_SERVICE_KEY}`, "Content-Type": "application/json" },
+      body: JSON.stringify(o),
+    });
+    if (!r.ok) console.warn(`[receipt] dispatch returned ${r.status} for ref ${String(o.ref || "")}`);
+  } catch (e) {
+    console.warn("[receipt] dispatch failed:", (e as Error)?.message);
+  }
+}
+
+
 const STRIPE_WEBHOOK_SECRET = Deno.env.get("STRIPE_WEBHOOK_SECRET");
 const STRIPE_SECRET = Deno.env.get("STRIPE_SECRET_KEY");
 const STRIPE_API = "https://api.stripe.com/v1";
@@ -776,6 +797,32 @@ serve(async (req) => {
       } else {
         const ok = await upsertPayment(supabase, campId, pi, statusFor[event.type]);
         console.log(`[stripe-webhook] ledger ${statusFor[event.type]} $${(pi.amount || 0) / 100} camp ${campId}: ${ok ? "ok" : "FAILED"}`);
+      }
+
+      // The receipt goes out from HERE for every Stripe charge in the product —
+      // a pay link, a registration deposit, a canteen top-up, an autopay
+      // instalment, a card the office charged. All of them end up as a
+      // succeeded PaymentIntent with this metadata, so one call beats five, and
+      // the ones that also dispatch their own (the BYOP sweeps) lose the claim
+      // rather than sending a second email.
+      if (campId && statusFor[event.type] === "succeeded") {
+        const src = String(pi.metadata?.source || "");
+        const what =
+          src === "campistry-canteen-deposit" ? "Canteen funds"
+          : src === "campistry-link-photo-purchase" ? "Photos"
+          : src === "registration_deposit" ? "Registration deposit"
+          : src === "autopay" ? "Payment plan instalment"
+          : "Camp payment";
+        await sendReceipt({
+          campId,
+          ref: String(pi.id || ""),
+          amount: (Number(pi.amount_received ?? pi.amount) || 0) / 100,
+          what,
+          method: "Card",
+          familyKey: pi.metadata?.familyKey || null,
+          camperName: pi.metadata?.camperName || null,
+          enrollmentId: pi.metadata?.enrollmentId || null,
+        });
       }
     } else if (event.type === "charge.refunded") {
       // A refund issued from the STRIPE DASHBOARD rather than from Billing —

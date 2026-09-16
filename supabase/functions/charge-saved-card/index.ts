@@ -28,6 +28,27 @@
 import { serve } from "https://deno.land/std@0.168.0/http/server.ts";
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
 
+// ── receipts ────────────────────────────────────────────────────────────────
+// Emailing the parent a receipt is the last step of taking money, not an extra.
+// It is dispatched, never awaited for correctness: the money is already taken,
+// so a receipt that fails must never fail — or retry — the charge. send-payment-
+// receipt is idempotent on the payment reference, so several callers racing for
+// the same payment produce exactly one email.
+async function sendReceipt(o: Record<string, unknown>) {
+  try {
+    if (!SUPABASE_URL || !SUPABASE_SERVICE_KEY) return;
+    const r = await fetch(`${SUPABASE_URL}/functions/v1/send-payment-receipt`, {
+      method: "POST",
+      headers: { Authorization: `Bearer ${SUPABASE_SERVICE_KEY}`, "Content-Type": "application/json" },
+      body: JSON.stringify(o),
+    });
+    if (!r.ok) console.warn(`[receipt] dispatch returned ${r.status} for ref ${String(o.ref || "")}`);
+  } catch (e) {
+    console.warn("[receipt] dispatch failed:", (e as Error)?.message);
+  }
+}
+
+
 const STRIPE_SECRET = Deno.env.get("STRIPE_SECRET_KEY");
 const STRIPE_API = "https://api.stripe.com/v1";
 const SUPABASE_URL = Deno.env.get("SUPABASE_URL") || "";
@@ -377,6 +398,17 @@ serve(async (req) => {
         console.error(`[charge-saved-card] Charged ${externalTransactionId} but could not record the payment for camp ${campId}`);
       }
     }
+
+    // The office charged a card the parent is not sitting in front of, so the
+    // receipt is the only thing that tells them it happened. Keyed on the
+    // processor's transaction id, which is what the Stripe webhook also keys
+    // on — so the Stripe path gets one email, not two.
+    await sendReceipt({
+      campId: String(campId), familyKey, camperName: camperName || null,
+      ref: String(externalTransactionId || ""), amount: amountCents / 100,
+      what: kind === "canteen_deposit" ? "Canteen funds" : "Camp payment",
+      method: "Card on file",
+    });
 
     const result = { success: true, amount: amountCents / 100, processorKey: chargeProcessorKey };
     await finishLock("succeeded", result);
