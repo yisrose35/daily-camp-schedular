@@ -3386,19 +3386,121 @@ function _familyHasMoney(f){
  * default because forgiving by accident is the failure that loses money, and
  * the office can always post a credit afterwards.
  */
-function _creditWithdrawalsFor(f,name,reason,policy){
-    var B=_billingCore();
-    if(!B||!f)return 0;
-    var n=0;
+function _siblingAPI(){return (typeof window!=='undefined'&&window.CampistrySiblingDiscount)||null}
+
+// Re-price a family's sibling discounts from the family as it is NOW, and post
+// the difference.
+//
+// The discount used to be granted once, at enrollment, to whoever happened to
+// be entered second — and was never looked at again. So a sibling withdrawing
+// left either a discount nobody was entitled to, or one the camp owed and never
+// gave. Recomputing is the only way that stays right; see
+// campistry_sibling_discount.js for why the dearest camper is the one who pays
+// full price.
+//
+// The delta is POSTED, never edited into the tuition charge. Tuition is a fact
+// on an append-only ledger: a discount granted later is a credit, a discount
+// revoked is a charge, and both stay visible. Returns the changes it posted so
+// the caller can tell the office.
+function _resyncSiblingDiscounts(fk){
+    var B=_billingCore(),SD=_siblingAPI();
+    var f=families&&families[fk];
+    if(!B||!SD||!f)return [];
+    var computed=SD.compute({
+        enrollments:enrollments,sessions:sessions,
+        camperNames:Array.isArray(f.camperIds)?f.camperIds:[]
+    });
+    var changes=SD.diff(computed,enrollments);
+    if(!changes.length)return [];
+
+    changes.forEach(function(c){
+        var eid=c.enrollmentId,e=enrollments[eid];
+        if(!e)return;
+        // Idempotent per enrollment per amount: re-running must not stack.
+        var id='le_sib_'+eid+'_'+Math.round(Math.abs(c.delta)*100)+'_'+(c.delta>0?'up':'dn');
+        var entries=Array.isArray(f.entries)?f.entries:[];
+        for(var i=0;i<entries.length;i++){if(entries[i]&&entries[i].id===id)return}
+        B.post(f,{
+            id:id,
+            // delta > 0 means the discount shrank, so they owe MORE.
+            kind:c.delta>0?'charge':'credit',
+            amount:Math.abs(c.delta),
+            reason:'sibling',
+            note:SD.explain(c,fm),
+            by:'system',
+            source:{enrollmentId:eid,camperName:c.camperName,
+                    was:c.was,now:c.now,reason:c.reason}
+        });
+        // The enrollment carries what it is NOW priced at, so the next diff
+        // compares against the truth rather than against the original grant.
+        e.discount=c.now>0?{pct:(computed.byEnrollment[eid]||{}).pct||0,amt:c.now}:null;
+    });
+    return changes;
+}
+
+function _cancelPolicyAPI(){return (typeof window!=='undefined'&&window.CampistryCancellationPolicy)||null}
+
+// What the camp's cancellation policy says this withdrawal is worth back.
+// Returns one result per posted enrollment so the office can be SHOWN it before
+// anything is credited.
+//
+// The old default was `'none'`, which credits zero — and because nothing ever
+// passed a policy, every withdrawal silently kept 100% of the tuition. That was
+// never a decision anybody made; it was the absence of one. An undecided result
+// is now distinct from a decided zero (see campistry_cancellation_policy.js).
+function _withdrawalQuotes(f,name,onDate){
+    var B=_billingCore(),CP=_cancelPolicyAPI();
+    var out=[];
+    if(!B||!f)return out;
     Object.keys(enrollments||{}).forEach(function(eid){
         var e=enrollments[eid];
         if(!e||e.camperName!==name)return;
         if(!B.tuitionEntryFor(f,eid))return;   // nothing posted for it
+        var net=B.netTuitionFor(f,eid);
+        var ses=(sessions||[]).find(function(x){return x&&x.name===e.session})||{};
+        var q=CP?CP.resolve(enrollSettings&&enrollSettings.cancellationPolicy,{
+            sessionStart:ses.startDate||ses.start||e.sessionStart||'',
+            sessionEnd:ses.endDate||ses.end||e.sessionEnd||'',
+            onDate:onDate||today(),
+            tuitionNet:net,
+            financialAid:!!(e.financialAid||(f&&f.financialAid))
+        }):null;
+        out.push({enrollmentId:eid,session:e.session||'',net:net,quote:q});
+    });
+    return out;
+}
+
+// One line per enrollment for a confirm dialog, so "we keep the deposit" is
+// something the office reads before it happens rather than discovers later.
+function _withdrawalQuoteText(quotes){
+    var CP=_cancelPolicyAPI();
+    if(!CP||!quotes||!quotes.length)return '';
+    return quotes.map(function(q){
+        return (q.session?esc(q.session)+': ':'')+esc(CP.explain(q.quote,fm));
+    }).join('<br>');
+}
+
+function _creditWithdrawalsFor(f,name,reason,policy){
+    var B=_billingCore(),CP=_cancelPolicyAPI();
+    if(!B||!f)return 0;
+    var n=0;
+    var quotes=_withdrawalQuotes(f,name);
+    quotes.forEach(function(q){
+        // An explicit policy from the caller always wins — an office overriding
+        // the published policy for one family is a real thing and must not be
+        // second-guessed here.
+        var pol=policy;
+        if(pol==null&&CP&&q.quote&&q.quote.decided)pol=CP.corePolicyFor(q.quote);
+        // Still nothing: no policy configured and no override. Credit NOTHING,
+        // exactly as before — but that is now the narrow case of "nobody has
+        // written the rule down", not the behaviour of every withdrawal.
+        if(pol==null)pol='none';
         var res=B.creditWithdrawal(f,{
-            enrollmentId:eid,camperName:name,
+            enrollmentId:q.enrollmentId,camperName:name,
             camperId:(roster[name]&&roster[name].camperId)||null,
-            policy:policy==null?'none':policy,
-            note:'Camper '+(reason||'removed')+' — '+name,
+            policy:pol,
+            note:'Camper '+(reason||'removed')+' — '+name+
+                 (q.quote&&q.quote.decided?' ('+q.quote.label+')':''),
             by:'office'
         });
         if(res&&res.ok&&res.entry)n++;
@@ -3591,6 +3693,10 @@ function cascadeCamperDelete(name){
             // enrollments rather than posted (see campistry_billing_core.js).
             _creditWithdrawalsFor(f,name,'removed');
             f.camperIds=f.camperIds.filter(function(c){return c!==name});
+            // The family just got smaller, so who is entitled to a sibling
+            // discount has changed. Re-pricing here is the whole point: it used
+            // to be granted once and never revisited.
+            try{_resyncSiblingDiscounts(fk)}catch(_e){console.warn('[Me] sibling re-price failed:',_e&&_e.message)}
             // A family with no campers left is deleted ONLY if it carries no
             // money at all — no ledger, no plan, no card. The deletion exists
             // to stop an empty $0 record sitting in Billing for ever (see the
@@ -3747,6 +3853,7 @@ function unenrollCamper(n){
     // it for them.
     var _fkOf=_resolveFamilyKeyExact(n);
     var _credited=_fkOf?_creditWithdrawalsFor(families[_fkOf],n,'unenrolled'):0;
+    var _sibChanges=[];
     var flipped=[];
     Object.keys(enrollments).forEach(function(id){
         var e=enrollments[id];
@@ -3759,7 +3866,20 @@ function unenrollCamper(n){
         flipped.push({id:id,prev:prev});
         if(e.session&&prev!=='waitlisted') autoPromoteWaitlist(e.session);
     });
+    // AFTER the statuses flip, because the rule prices from who is still
+    // enrolled. A sibling leaving changes what the others are entitled to, and
+    // this is the moment it changes.
+    if(_fkOf){
+        try{_sibChanges=_resyncSiblingDiscounts(_fkOf)}
+        catch(_e){console.warn('[Me] sibling re-price failed:',_e&&_e.message)}
+    }
     save();render(curPage);
+    if(_sibChanges.length){
+        var _SD=_siblingAPI();
+        toast('Sibling pricing updated — '+_sibChanges.map(function(c){
+            return _SD?_SD.explain(c,fm):c.camperName;
+        }).join('; '),'warn');
+    }
     // Same reasoning as deleteCamper: revoke this family's Link parent-portal
     // invite NOW if this was their last active camper, rather than waiting
     // on save()'s debounced auto-provision sweep.
@@ -9418,6 +9538,17 @@ function saveFormConfig(){
         toast('Form saved, but the deposit setting did not \u2014 set it from Registration \u2192 Deposit','error');
     }
 
+    // Same arrangement, same guard: a throw here must not take the whole form
+    // config with it.
+    try{
+        if(_cpAPI()&&document.getElementById('cpOn')){
+            enrollSettings.cancellationPolicy=_cpAPI().normalize(_cpRead());
+        }
+    }catch(e){
+        console.warn('[Me] cancellation policy not saved from the builder:',e&&e.message);
+        toast('Form saved, but the cancellation policy did not \u2014 set it from Registration','error');
+    }
+
     save();
     closeFormBuilder();
     toast('Form configuration saved');
@@ -11066,17 +11197,36 @@ function enrollCamper(id){
     var _snapTuition=Number(e.sessionTuition)||0;
     var tuition=_liveTuition>0?_liveTuition:_snapTuition;
 
-    // Sibling discount only when actually joining a matched family that
-    // already has campers.
-    if(sesObj&&sesObj.siblingDiscount>0&&famKey&&families[famKey]&&families[famKey].camperIds.length>0){
-        var discAmt=Math.round(tuition*sesObj.siblingDiscount/100);
-        tuition-=discAmt;
-        e.discount={pct:sesObj.siblingDiscount,amt:discAmt};
-        console.log('[Me] Sibling discount applied: '+sesObj.siblingDiscount+'% (-'+fm(discAmt)+') for '+e.camperName);
-    }
-
+    // Sibling discount. This USED to be "if the family already has campers,
+    // discount this one" — which handed the discount to whoever was entered
+    // second and never looked again. Two children entered in the other order
+    // were priced differently, and a sibling withdrawing left the discount
+    // wrong in whichever direction.
+    //
+    // It is now computed for the whole family, from the family as it is, after
+    // this camper joins it — so the answer does not depend on typing order and
+    // every sibling is re-priced together. See campistry_sibling_discount.js.
     if(famKey&&families[famKey]){
         if(families[famKey].camperIds.indexOf(e.camperName)<0) families[famKey].camperIds.push(e.camperName);
+        // Price THIS enrollment from the shared rule before its tuition is
+        // posted, so the first charge is already right; _resyncSiblingDiscounts
+        // then posts a delta for any sibling whose price moved because of it.
+        try{
+            var _SD=_siblingAPI();
+            if(_SD){
+                var _c=_SD.compute({enrollments:enrollments,sessions:sessions,
+                                    camperNames:families[famKey].camperIds||[]});
+                var _mine=_c.byEnrollment[id];
+                if(_mine&&_mine.amt>0){
+                    tuition=Math.max(0,tuition-_mine.amt);
+                    e.discount={pct:_mine.pct,amt:_mine.amt};
+                    console.log('[Me] Sibling discount applied: '+_mine.pct+'% (-'+fm(_mine.amt)+') for '+e.camperName);
+                }else if(_mine){
+                    e.discount=null;
+                }
+            }
+        }catch(_e){console.warn('[Me] sibling pricing failed:',_e&&_e.message)}
+
         // ⚠ families[fk].balance IS NOT THE BALANCE. Do not read it for money.
         //
         // It is a stored running total, incremented here and adjusted at the
@@ -15119,6 +15269,76 @@ async function markDepositPaid(id,undo){
  * form. Here the builder's live preview is the preview, and the camp edits it
  * next to the documents and promo codes it sits beside on the page.
  */
+/* ── Cancellation policy ──────────────────────────────────────────────────
+ * What a family gets back when they pull out. Every camp has one; Campistry
+ * had the machinery and no way to state the rule, so every withdrawal silently
+ * kept the whole tuition. The arithmetic lives in
+ * campistry_cancellation_policy.js — this is only the form for it.
+ */
+function _cpAPI(){return (typeof window!=='undefined'&&window.CampistryCancellationPolicy)||null}
+
+function _cpCardSafe(){
+    try{
+        var C=_cpAPI();
+        if(!C)return '';
+        var pol=C.normalize(enrollSettings.cancellationPolicy);
+        return _accCard('Cancellation & Refunds',_cpCardHtml(pol),
+                        {badge:pol.enabled?'on':'decide by hand'});
+    }catch(e){
+        console.warn('[Me] cancellation card failed to render:',e&&e.message);
+        return '';
+    }
+}
+
+function _cpCardHtml(pol){
+    var C=_cpAPI();
+    if(!C)return '';
+    pol=C.normalize(pol);
+    var h='<p style="font-size:.78rem;color:var(--s400);margin:0 0 12px;line-height:1.6">'
+      +'What a family is credited when a camper withdraws. With this off, every '
+      +'withdrawal credits nothing and somebody has to work it out by hand \u2014 '
+      +'which is easy to forget and impossible to audit.</p>';
+
+    h+='<label style="display:flex;gap:9px;align-items:center;font-size:.88rem;font-weight:600;margin-bottom:14px">'
+      +'<input type="checkbox" id="cpOn" '+(pol.enabled?'checked':'')+' onchange="CampistryMe._cpToggle()" style="accent-color:var(--me);width:15px;height:15px">'
+      +'Apply a cancellation policy automatically</label>';
+
+    h+='<div id="cpBody" style="'+(pol.enabled?'':'display:none')+'">';
+    h+='<label style="display:block;font-size:.78rem;color:var(--s500);margin-bottom:4px">Non-refundable deposit (kept in every band)</label>'
+      +'<input type="number" min="0" step="1" id="cpDep" value="'+(pol.nonRefundableDeposit||0)+'" class="fs" style="margin-bottom:14px">';
+
+    h+='<div style="font-size:.78rem;color:var(--s500);margin-bottom:6px">Refunded, by how far ahead they withdraw</div>';
+    for(var i=0;i<3;i++){
+        var t=pol.tiers[i]||{minDaysBefore:0,refundPct:0};
+        h+='<div style="display:flex;gap:8px;align-items:center;margin-bottom:8px">'
+          +'<input type="number" min="0" step="1" id="cpDays'+i+'" value="'+t.minDaysBefore+'" class="fs" style="width:88px">'
+          +'<span style="font-size:.78rem;color:var(--s400)">+ days before \u2192</span>'
+          +'<input type="number" min="0" max="100" step="1" id="cpPct'+i+'" value="'+t.refundPct+'" class="fs" style="width:88px">'
+          +'<span style="font-size:.78rem;color:var(--s400)">% refunded</span></div>';
+    }
+
+    h+='<label style="display:flex;gap:9px;align-items:center;font-size:.82rem;margin:12px 0 8px">'
+      +'<input type="checkbox" id="cpProrate" '+(pol.afterStart==='prorate'?'checked':'')+' style="accent-color:var(--me);width:15px;height:15px">'
+      +'Once the session has started, credit the days not attended</label>';
+    h+='<label style="display:flex;gap:9px;align-items:center;font-size:.82rem;margin-bottom:8px">'
+      +'<input type="checkbox" id="cpAid" '+(pol.financialAidFullRefund?'checked':'')+' style="accent-color:var(--me);width:15px;height:15px">'
+      +'Families on financial aid are credited in full, whenever they withdraw</label>';
+    h+='<p style="font-size:.74rem;color:var(--s400);margin:10px 0 0;line-height:1.6">'+esc(C.describe(pol))+'</p>';
+    h+='</div>';
+    return h;
+}
+
+// Read the form back. Mirrors _dpRead: the builder's save path calls this.
+function _cpRead(){
+    function n(id){var el=document.getElementById(id);return el?(parseFloat(el.value)||0):0}
+    function ck(id){var el=document.getElementById(id);return !!(el&&el.checked)}
+    var tiers=[];
+    for(var i=0;i<3;i++)tiers.push({minDaysBefore:n('cpDays'+i),refundPct:n('cpPct'+i)});
+    return {enabled:ck('cpOn'),nonRefundableDeposit:n('cpDep'),tiers:tiers,
+            afterStart:ck('cpProrate')?'prorate':'none',
+            financialAidFullRefund:ck('cpAid')};
+}
+
 function _dpCardHtml(pol){
     var P=_depPolicyAPI();
     if(!P)return '';
@@ -15259,7 +15479,8 @@ function _dpBuilderCardHtml(){
         var badge=pol.enabled
             ? (pol.basis==='flat'?fm(pol.amount):pol.basis==='percent'?pol.percent+'%':'per session')
             : 'off';
-        return _accCard('Deposit to Register',_dpCardHtml(pol),{badge:badge});
+        return _accCard('Deposit to Register',_dpCardHtml(pol),{badge:badge})
+             + _cpCardSafe();
     }catch(e){
         console.warn('[Me] deposit card failed to render:',e&&e.message);
         return '';
@@ -15287,6 +15508,11 @@ function _dpRefreshCard(){
     if(!document.getElementById('dpPreview'))return;
     _dpPreview();
     if(!_dpRefreshCard._checked){ _dpRefreshCard._checked=true; _dpCheckReach(); }
+}
+
+function _cpToggle(){
+    var on=document.getElementById('cpOn'),body=document.getElementById('cpBody');
+    if(body)body.style.display=on&&on.checked?'':'none';
 }
 
 function _dpToggle(){
@@ -18367,7 +18593,7 @@ window.CampistryMe={
     addDiv:function(){openDivForm(null)},editDiv:function(n){openDivForm(n)},deleteDiv:deleteDiv,
     openCsv:function(){openModal('csvModal')},downloadTemplate:downloadTemplate,
     finReconcileCharges:finReconcileCharges,
-    _dpToggle:_dpToggle,_fbRetryPreview:_fbRetryPreview,markDepositPaid:markDepositPaid,
+    _dpToggle:_dpToggle,_cpToggle:_cpToggle,_fbRetryPreview:_fbRetryPreview,markDepositPaid:markDepositPaid,
     setRosterPage:setRosterPage,setRosterSubTab:setRosterSubTab,setBillingPage:setBillingPage,setAnalyticsInvoicePage:setAnalyticsInvoicePage,setAnalyticsPaymentPage:setAnalyticsPaymentPage,
     _runSetupChecklistAction:_runSetupChecklistAction,dismissSetupChecklist:dismissSetupChecklist,
     bbDrop:bbDrop,autoAssign:autoAssign,autoGenerateBunks:autoGenerateBunks,openBunkGenSettings:openBunkGenSettings,showCamperBunkRequests:showCamperBunkRequests,clearBunks:clearBunks,setBunkCount:setBunkCount,openBunkCountModal:openBunkCountModal,_clearBunkCount:_clearBunkCount,

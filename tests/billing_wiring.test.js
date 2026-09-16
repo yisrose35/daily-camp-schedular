@@ -83,12 +83,22 @@ test('the delete posts a withdrawal credit BEFORE the enrollments go', () => {
         'the credit must be posted while the camper is still linked to the family');
 });
 
-test('the default withdrawal policy forgives NOTHING', () => {
+test('with NO policy stated, a withdrawal still forgives nothing', () => {
     // Forgiving by accident is the failure that loses money. The office can
     // always post a credit afterwards; it cannot un-forgive silently.
+    //
+    // The spelling this used to assert — `policy==null?'none':policy` — was
+    // replaced when the camp gained a cancellation policy it can actually
+    // state. Following a published policy is not forgiving by accident, so the
+    // surviving invariant is narrower and is what is checked now: when no
+    // policy is configured AND the caller passes no override, credit nothing.
     const helper = fnBody(ME, 'function _creditWithdrawalsFor(f,name,reason,policy){', 'function _postTuitionFor');
-    assert.match(helper, /policy:policy==null\?'none':policy/,
-        'the default policy is no longer "forgive nothing"');
+    assert.match(helper, /if\(pol==null\)pol='none';/,
+        'an unstated policy no longer defaults to forgiving nothing');
+    // And a decided policy must be able to override it, or the camp's own rule
+    // is ignored — which is the bug that made this change necessary.
+    assert.match(helper, /pol=CP\.corePolicyFor\(q\.quote\)/,
+        'the camp\'s cancellation policy is never applied');
 });
 
 test('unenroll parks the money and Undo reverses it', () => {
