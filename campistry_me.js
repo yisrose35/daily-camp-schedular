@@ -62,6 +62,15 @@ var _repHighlight=null;  // saved report id to scroll-to/highlight next time Rep
 var PAGE_SIZE=50;
 var _rosterPage=1, _billingPage=1, _analyticsInvoicePage=1, _analyticsPaymentPage=1;
 var _rosterSubTab='enrolled';  // Roster page's own top tab: enrolled | unenrolled
+// Which slice of the roster is on screen: 'today' (who is actually at camp
+// now), 'all' (everyone enrolled, whenever they come), or 'session:<name>'.
+//
+// Defaults to 'today' because that is what an office opening this page in
+// July is asking. Before this, a camp running the first half saw the
+// second-half children mixed in with the ones in front of them, and every
+// head count, bunk list and print-out was wrong by however many had not
+// arrived.
+var _rosterWhen='today';
 // Slice an array to one page. Clamps pageNum into range so a stale page
 // number (filter shrank the result set) never renders an empty page.
 function _paginate(array,pageSize,pageNum){
@@ -87,6 +96,36 @@ function _pagerHtml(total,pageSize,pageNum,onChangeFnName){
 }
 function setRosterPage(n){_rosterPage=n;var inp=document.getElementById('globalSearch');renderCampers(inp?inp.value.trim():'');}
 function setRosterSubTab(t){_rosterSubTab=t;_rosterPage=1;var inp=document.getElementById('globalSearch');renderCampers(inp?inp.value.trim():'');}
+function setRosterWhen(v){_rosterWhen=v||'today';_rosterPage=1;var inp=document.getElementById('globalSearch');renderCampers(inp?inp.value.trim():'');}
+/** The shared presence rule, or null when the module has not loaded. */
+function _presenceAPI(){return (typeof window!=='undefined'&&window.CampistryEnrollmentWindow)||null}
+/**
+ * Presence for every name on the roster, on whatever date the picker is
+ * pointing at. Computed from session dates — nothing is stamped anywhere, so
+ * editing a session's dates moves everybody on it at once.
+ */
+/** The date the roster picker is pointing at. */
+function _rosterOn(){
+    var W=_presenceAPI();
+    if(!W)return '';
+    _freshSessions();
+    if(_rosterWhen.indexOf('session:')===0){
+        var nm=_rosterWhen.slice('session:'.length);
+        var ses=(sessions||[]).find(function(x){return x&&x.name===nm});
+        var w=W.sessionWindow(ses);
+        if(w.from)return w.from;
+    }
+    return W.today();
+}
+function _rosterPresence(){
+    var W=_presenceAPI();
+    if(!W)return null;
+    var on=_rosterOn();
+    var p=W.presenceFor({camperNames:Object.keys(roster||{}),enrollments:enrollments,
+                         sessions:sessions,roster:roster,on:on});
+    p.on=on;   // published, so every caller filters against the SAME date
+    return p;
+}
 function setBillingPage(n){_billingPage=n;renderBilling();}
 function setAnalyticsInvoicePage(n){_analyticsInvoicePage=n;renderFinance();}
 function setAnalyticsPaymentPage(n){_analyticsPaymentPage=n;renderFinance();}
@@ -2530,6 +2569,23 @@ function renderCampers(filter){
     var enrolledEntries=allCamperEntries.filter(function(pair){return !pair[1].unenrolled;});
     var unenrolledEntries=allCamperEntries.filter(function(pair){return pair[1].unenrolled;});
     var showUnenrolled=_rosterSubTab==='unenrolled';
+    // WHO IS ACTUALLY HERE. `unenrolled` is a hand-set flag and the only thing
+    // this page has ever filtered on, so a camp running the first half saw the
+    // second-half children in the same list as the ones in front of them.
+    // Presence is derived from each session's own dates, so it needs no
+    // maintenance and cannot drift.
+    var _W=_presenceAPI();
+    var _pres=showUnenrolled?null:_rosterPresence();
+    var _hiddenByWhen=0;
+    if(_pres&&_W&&_rosterWhen!=='all'){
+        var _keep={};
+        _W.filterNames(_rosterWhen,{camperNames:enrolledEntries.map(function(p){return p[0]}),
+                                    enrollments:enrollments,sessions:sessions,roster:roster,
+                                    on:_pres.on}).forEach(function(n){_keep[n]=1});
+        var _before=enrolledEntries.length;
+        enrolledEntries=enrolledEntries.filter(function(pair){return !!_keep[pair[0]]});
+        _hiddenByWhen=_before-enrolledEntries.length;
+    }
     var camperEntries=showUnenrolled?unenrolledEntries:enrolledEntries;
     var allStaffRows=canStaff?buildStaffRoster():[];
     // Unenrolled campers are a parked, camper-only state — no staff shown there.
@@ -2546,7 +2602,9 @@ function renderCampers(filter){
     // — one entry point instead of two parallel ones that created a camper
     // two different ways (Roster wrote straight to roster[], Registration
     // staged an application). No "+ Add Camper" button here anymore.
-    var h='<div class="sec-hd"><div><h2 class="sec-title">Roster</h2><p class="sec-desc">'+enrolledEntries.length+' camper'+(enrolledEntries.length!==1?'s':'')+(canStaff?' · '+allStaffRows.length+' staff':'')+(unenrolledEntries.length?' · '+unenrolledEntries.length+' unenrolled':'')+'</p></div><div class="sec-actions"><button class="me-btn me-btn--ghost me-btn--sm" onclick="CampistryMe.manageCustomFields()" title="Define custom fields">⚙ Custom Fields</button><button class="me-btn me-btn--sec me-btn--sm" onclick="CampistryMe.downloadTemplate()">Template</button><button class="me-btn me-btn--sec me-btn--sm" onclick="CampistryMe.openCsv()">Import</button></div></div>';
+    var _sliceLabel=(showUnenrolled||_rosterWhen==='all')?''
+        :(_rosterWhen==='today'?' in camp today':' on '+_rosterWhen.replace(/^session:/,''));
+    var h='<div class="sec-hd"><div><h2 class="sec-title">Roster</h2><p class="sec-desc">'+enrolledEntries.length+' camper'+(enrolledEntries.length!==1?'s':'')+_sliceLabel+(canStaff?' · '+allStaffRows.length+' staff':'')+(unenrolledEntries.length?' · '+unenrolledEntries.length+' unenrolled':'')+'</p></div><div class="sec-actions"><button class="me-btn me-btn--ghost me-btn--sm" onclick="CampistryMe.manageCustomFields()" title="Define custom fields">⚙ Custom Fields</button><button class="me-btn me-btn--sec me-btn--sm" onclick="CampistryMe.downloadTemplate()">Template</button><button class="me-btn me-btn--sec me-btn--sm" onclick="CampistryMe.openCsv()">Import</button></div></div>';
     h+=_setupChecklistHtml();
 
     var unplaced=(canStaff&&!showUnenrolled)?hiredStaff().filter(function(a){return !String(a.email||'').trim()||!bunksForStaffEmail(a.email).length;}):[];
@@ -2554,6 +2612,32 @@ function renderCampers(filter){
         h+='<div style="background:#FFF7ED;border:1px solid #FED7AA;border-radius:var(--r);padding:10px 14px;margin-bottom:14px;font-size:.83rem;color:#9A3412">'
           +'<strong>'+unplaced.length+' hired '+(unplaced.length===1?'person is':'people are')+' not set up yet.</strong> '
           +'Open them from Registration &amp; Hiring to add an email and put them on a bunk — until then they can\'t sign in to Campistry Lite or receive notifications.</div>';
+    }
+
+    // THE SESSION PICKER. Only on the Enrolled tab: the Unenrolled tab is a
+    // parked state that has nothing to do with dates.
+    if(!showUnenrolled&&_W){
+        var _opts=_W.pickerOptions(sessions,{on:_rosterOn()});
+        // A camp with one undated session has nothing to pick between, and a
+        // picker that cannot change anything is just furniture.
+        var _datedCount=(sessions||[]).filter(function(x){var w=_W.sessionWindow(x);return w.from||w.to}).length;
+        if(_datedCount>0){
+            h+='<div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;margin-bottom:12px">';
+            h+='<label style="font-size:.78rem;color:var(--s500);font-weight:600">Showing</label>';
+            h+='<select onchange="CampistryMe.setRosterWhen(this.value)" style="padding:6px 9px;border:1px solid var(--s200);border-radius:var(--r);font-size:.8rem;font-family:inherit;background:#fff">';
+            _opts.forEach(function(o){
+                h+='<option value="'+esc(o.value)+'"'+(o.value===_rosterWhen?' selected':'')+'>'+esc(o.label)+'</option>';
+            });
+            h+='</select>';
+            if(_hiddenByWhen>0){
+                // Said out loud, because a roster silently N children short is
+                // exactly the kind of thing an office notices in September.
+                h+='<span style="font-size:.76rem;color:#92400E;background:#FFFBEB;border:1px solid #FDE68A;border-radius:6px;padding:3px 9px">'
+                  +_hiddenByWhen+' enrolled camper'+(_hiddenByWhen===1?' is':'s are')+' not in this slice — '
+                  +'switch to <strong>Everyone enrolled</strong> to see '+(_hiddenByWhen===1?'them':'all of them')+'</span>';
+            }
+            h+='</div>';
+        }
     }
 
     // Unenrolled is a tucked-away second tab — off by default unless there's
@@ -18940,7 +19024,7 @@ window.CampistryMe={
     openCsv:function(){openModal('csvModal')},downloadTemplate:downloadTemplate,
     finReconcileCharges:finReconcileCharges,
     _dpToggle:_dpToggle,_cpToggle:_cpToggle,_fbRetryPreview:_fbRetryPreview,markDepositPaid:markDepositPaid,
-    setRosterPage:setRosterPage,setRosterSubTab:setRosterSubTab,setBillingPage:setBillingPage,setAnalyticsInvoicePage:setAnalyticsInvoicePage,setAnalyticsPaymentPage:setAnalyticsPaymentPage,
+    setRosterPage:setRosterPage,setRosterSubTab:setRosterSubTab,setRosterWhen:setRosterWhen,setBillingPage:setBillingPage,setAnalyticsInvoicePage:setAnalyticsInvoicePage,setAnalyticsPaymentPage:setAnalyticsPaymentPage,
     _runSetupChecklistAction:_runSetupChecklistAction,dismissSetupChecklist:dismissSetupChecklist,
     bbDrop:bbDrop,autoAssign:autoAssign,autoGenerateBunks:autoGenerateBunks,openBunkGenSettings:openBunkGenSettings,showCamperBunkRequests:showCamperBunkRequests,clearBunks:clearBunks,setBunkCount:setBunkCount,openBunkCountModal:openBunkCountModal,_clearBunkCount:_clearBunkCount,
     openBunkAlias:openBunkAlias,bunkLabel:bunkLabel,bunkAlias:bunkAlias,
