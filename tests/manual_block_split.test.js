@@ -156,6 +156,66 @@ describe('ManualBlockSplit.splitBlock — robustness', () => {
     });
 });
 
+describe('ManualBlockSplit.buildDemand', () => {
+    const cands = [
+        { activity: 'Slush', durations: [20] },
+        { activity: 'Popcorn', durations: [20] },
+        { activity: 'Ceramics', durations: [40] },
+        { activity: 'Woodshop', durations: [20, 40] },
+    ];
+
+    it('counts each accessible activity at every length it can run', () => {
+        assert.deepEqual(Split.buildDemand(cands, []), { 20: 3, 40: 2 });
+    });
+
+    it('skips what the bunk already had today', () => {
+        assert.deepEqual(Split.buildDemand(cands, ['Slush', 'Popcorn']), { 20: 1, 40: 2 });
+    });
+
+    it('matches activity names case-insensitively', () => {
+        assert.deepEqual(Split.buildDemand(cands, ['  slush  ']), { 20: 2, 40: 2 });
+    });
+
+    it('does not double-count a duration listed twice on one activity', () => {
+        assert.deepEqual(Split.buildDemand([{ activity: 'X', durations: [20, 20] }], []), { 20: 1 });
+    });
+
+    it('ignores junk entries', () => {
+        assert.deepEqual(Split.buildDemand([null, { durations: [20] }, { activity: 'Y', durations: [0, -5, 'x'] }], []), {});
+        assert.deepEqual(Split.buildDemand(null, null), {});
+    });
+
+    it('drives the split decision end to end', () => {
+        // Three unused 20-min specials → 2x20 beats a single 40.
+        const demand = Split.buildDemand(cands, []);
+        const r = Split.splitBlock({ startMin: 600, endMin: 640, durations: Split.collectDurations(cands), demand, ...P });
+        assert.strictEqual(r.split, true);
+        assert.deepEqual(durs(r), [20, 20]);
+    });
+
+    it('stops splitting once the short activities are used up', () => {
+        // Only Woodshop left, and it can run 40 — one activity cannot fill 2x20.
+        const demand = Split.buildDemand(cands, ['Slush', 'Popcorn', 'Ceramics']);
+        const r = Split.splitBlock({ startMin: 600, endMin: 640, durations: Split.collectDurations(cands), demand, ...P });
+        assert.strictEqual(r.split, false);
+        assert.deepEqual(durs(r), [40]);
+    });
+});
+
+describe('ManualBlockSplit.collectDurations', () => {
+    it('returns every distinct length, ascending', () => {
+        assert.deepEqual(Split.collectDurations([
+            { activity: 'A', durations: [40, 20] },
+            { activity: 'B', durations: [20, 30] },
+        ]), [20, 30, 40]);
+    });
+
+    it('is empty for empty input', () => {
+        assert.deepEqual(Split.collectDurations([]), []);
+        assert.deepEqual(Split.collectDurations(null), []);
+    });
+});
+
 describe('ManualBlockSplit.scoreComposition', () => {
     it('rewards carvings that meet more of what the bunk wants', () => {
         assert.ok(Split.scoreComposition([20, 20], { 20: 2 }) > Split.scoreComposition([40], { 20: 2 }));

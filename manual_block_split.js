@@ -166,11 +166,62 @@
         return { segments: segments, composition: best.slice(), split: true, reason: 'packed' };
     }
 
+    /**
+     * How many more activities of each length could this bunk still use today?
+     *
+     * Counts each accessible activity once per length it is allowed to run at,
+     * skipping anything the bunk has already had today — a repeat is no reason
+     * to carve the block up. Rotation fairness is NOT decided here; the solver
+     * still picks which activity lands in each piece. This only answers whether
+     * splitting buys the bunk anything at all.
+     *
+     * @param {Array} candidates [{ activity, durations: [..] }]
+     * @param {Array} alreadyToday activity names the bunk already has today
+     * @returns {Object} { durationMin: countStillWanted }
+     */
+    function buildDemand(candidates, alreadyToday) {
+        var done = {};
+        (alreadyToday || []).forEach(function (n) {
+            if (n) done[String(n).toLowerCase().trim()] = true;
+        });
+
+        var demand = {};
+        (candidates || []).forEach(function (c) {
+            // Specials carry `name` throughout the codebase, sports options carry
+            // `activity`; accept either rather than silently dropping a whole list.
+            var actName = c && (c.activity || c.name);
+            if (!actName) return;
+            if (done[String(actName).toLowerCase().trim()]) return;
+            var seen = {};
+            (c.durations || []).forEach(function (d) {
+                var n = _int(d);
+                if (n == null || seen[n]) return;
+                seen[n] = true;
+                demand[n] = (demand[n] || 0) + 1;
+            });
+        });
+        return demand;
+    }
+
+    /** Every distinct length the given candidates can run at. */
+    function collectDurations(candidates) {
+        var out = [];
+        (candidates || []).forEach(function (c) {
+            (c && c.durations || []).forEach(function (d) {
+                var n = _int(d);
+                if (n != null && out.indexOf(n) === -1) out.push(n);
+            });
+        });
+        return out.sort(function (a, b) { return a - b; });
+    }
+
     var api = {
         VERSION: VERSION,
         splitBlock: splitBlock,
         normalizeDurations: normalizeDurations,
-        scoreComposition: scoreComposition
+        scoreComposition: scoreComposition,
+        buildDemand: buildDemand,
+        collectDurations: collectDurations
     };
 
     if (typeof window !== 'undefined') {

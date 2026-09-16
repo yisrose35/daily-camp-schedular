@@ -173,6 +173,102 @@
     }
 
     // =========================================================================
+    // VARIABLE-LENGTH TILES
+    // =========================================================================
+    // A tile the user marked splittable can resolve differently per bunk — one
+    // bunk takes a single 40-minute activity, another takes 2x20. Every bunk in
+    // a division shares one slot grid, so the grid is cut to the FINEST carving
+    // any bunk might use and a bunk taking the longer activity simply spans the
+    // sub-slots (the same continuation mechanism multi-period specials already
+    // use). That keeps one entry per (bunk, slot), which the rest of the
+    // pipeline relies on.
+    //
+    // The cut is the GCD of the durations configured on the activities that tile
+    // could host, so every legal carving lands on a sub-slot boundary. It is
+    // rejected when it would shatter the block into more than `maxGridParts`
+    // pieces — a 5-minute grid helps nobody.
+
+    function _gcd(a, b) { while (b) { var t = b; b = a % b; a = t; } return a; }
+
+    function _configuredDurations(kind) {
+        var out = [];
+        var push = function (arr) {
+            (Array.isArray(arr) ? arr : []).forEach(function (d) {
+                var n = parseInt(d, 10);
+                if (isFinite(n) && n > 0 && out.indexOf(n) === -1) out.push(n);
+            });
+        };
+        try {
+            if (kind !== 'sport') {
+                var specials = (typeof window.getAllSpecialActivities === 'function' && window.getAllSpecialActivities())
+                    || (typeof window.getGlobalSpecialActivities === 'function' && window.getGlobalSpecialActivities())
+                    || [];
+                specials.forEach(function (s) { if (s) push(s.durations); });
+            }
+            if (kind !== 'special') {
+                var meta = (typeof window.getSportMetaData === 'function' && window.getSportMetaData())
+                    || window.sportMetaData || {};
+                Object.keys(meta).forEach(function (k) { if (meta[k]) push(meta[k].durations); });
+            }
+        } catch (e) { /* config unreadable → no split */ }
+        return out.sort(function (a, b) { return a - b; });
+    }
+
+    function _splitKindOf(block) {
+        var e = String((block && block.event) || '').toLowerCase();
+        if (e.indexOf('sport') !== -1) return 'sport';
+        if (e.indexOf('special') !== -1) return 'special';
+        return 'any';
+    }
+
+    function expandVariableLengthTiles(blocks, opts) {
+        opts = opts || {};
+        var maxGridParts = parseInt(opts.maxGridParts, 10) || 4;
+        var minPartMin = parseInt(opts.minPartMin, 10) || 10;
+        var expanded = [];
+
+        blocks.forEach(function (block) {
+            if (!block || !block.allowSplit || block.type === 'split' || block.type === 'split_half') {
+                expanded.push(block);
+                return;
+            }
+
+            var len = block.endMin - block.startMin;
+            var durations = _configuredDurations(_splitKindOf(block))
+                .filter(function (d) { return d < len; });
+
+            if (durations.length === 0) { expanded.push(block); return; }
+
+            var unit = durations.reduce(function (g, d) { return _gcd(g, d); }, len);
+            var parts = unit > 0 ? (len / unit) : 0;
+
+            if (unit < minPartMin || parts < 2 || parts > maxGridParts || len % unit !== 0) {
+                log('  variable-length tile "' + block.event + '" not cut: unit=' + unit + ' parts=' + parts);
+                expanded.push(block);
+                return;
+            }
+
+            for (var i = 0; i < parts; i++) {
+                expanded.push(Object.assign({}, block, {
+                    id: (block.id || block._originalId || Date.now()) + '_vl' + i,
+                    startMin: block.startMin + i * unit,
+                    endMin: block.startMin + (i + 1) * unit,
+                    type: block.type || 'slot',
+                    _vlPart: i,
+                    _vlParts: parts,
+                    _vlUnit: unit,
+                    _vlParentEvent: block.event,
+                    _originalStartMin: block.startMin,
+                    _originalEndMin: block.endMin
+                }));
+            }
+            log('  ★ Cut variable-length tile "' + block.event + '" into ' + parts + ' x ' + unit + 'min');
+        });
+
+        return expanded;
+    }
+
+    // =========================================================================
     // CORE: BUILD DIVISION TIMES FROM SKELETON
     // =========================================================================
 
@@ -298,7 +394,9 @@
                 : parsed; // No division boundaries configured → pass through
 
             // ★★★ v1.2 FIX: Expand split tiles BEFORE consolidation ★★★
-            const withExpandedSplits = expandSplitTiles(validated);
+            // Variable-length tiles are cut first, so a tile that is both is
+            // still halved by the split expansion afterwards.
+            const withExpandedSplits = expandSplitTiles(expandVariableLengthTiles(validated));
             // Re-sort after expansion (split halves should be in order)
             withExpandedSplits.sort((a, b) => a.startMin - b.startMin);
 
@@ -355,6 +453,12 @@ if (hasBunkSpecificBlocks) {
             swimLocation: meta?.swimLocation,
             _preChangeMin: meta?._preChangeMin,
             _postChangeMin: meta?._postChangeMin,
+            _vlPart: meta?._vlPart,
+            _vlParts: meta?._vlParts,
+            _vlUnit: meta?._vlUnit,
+            _vlParentEvent: meta?._vlParentEvent,
+            _originalStartMin: meta?._originalStartMin,
+            _originalEndMin: meta?._originalEndMin,
             start: minutesToDate(s),
             end: minutesToDate(e)
         });
@@ -413,6 +517,10 @@ if (hasBunkSpecificBlocks) {
         _splitParentEvent: block._splitParentEvent,
         _splitAct1: block._splitAct1,
         _splitAct2: block._splitAct2,
+        _vlPart: block._vlPart,
+        _vlParts: block._vlParts,
+        _vlUnit: block._vlUnit,
+        _vlParentEvent: block._vlParentEvent,
         _originalStartMin: block._originalStartMin,
         _originalEndMin: block._originalEndMin,
         electiveActivities: block.electiveActivities,
@@ -697,6 +805,13 @@ divisionTimes[divName] = slotsForDiv;
                     _splitParentEvent: slot._splitParentEvent,
                     _splitAct1: slot._splitAct1,
                     _splitAct2: slot._splitAct2,
+                    // Variable-length sub-slot metadata — without it a reloaded
+                    // grid forgets it was ever cut, and the gap pass would fill
+                    // over a bunk whose activity spans the pieces.
+                    _vlPart: slot._vlPart,
+                    _vlParts: slot._vlParts,
+                    _vlUnit: slot._vlUnit,
+                    _vlParentEvent: slot._vlParentEvent,
                     _originalStartMin: slot._originalStartMin,
                     _originalEndMin: slot._originalEndMin
                 }))
@@ -1636,6 +1751,7 @@ function buildUnifiedTimesFromDivisionTimes(divisionTimes) {
         
         // ★★★ v1.2: Expose split tile expansion ★★★
         expandSplitTiles: expandSplitTiles,
+        expandVariableLengthTiles: expandVariableLengthTiles,
         
         // Time parsing
         parseTimeToMinutes,

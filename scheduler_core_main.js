@@ -5447,6 +5447,91 @@ console.log(`[Generation] Rainy Day Mode: ${window.isRainyDay ? 'ACTIVE 🌧️'
         const leagueBlocks = [];
         const specialtyLeagueBlocks = [];
         const GENERATOR_TYPES = ["slot", "activity", "sports", "special", "league", "specialty_league"];
+
+        // ── VARIABLE-LENGTH TILES ────────────────────────────────────────────
+        // A tile the user marked splittable resolves per bunk: one bunk takes a
+        // single 40-minute activity, another takes 2x20. DivisionTimesSystem has
+        // already cut the grid to the finest carving, so here we only choose how
+        // many of those sub-slots each bunk's activity should span.
+        //
+        // We decide DURATIONS. The solver still picks which activity lands in
+        // each piece, with the access / capacity / cooldown / rotation gates it
+        // already runs — so nothing here can place an activity a bunk may not
+        // have.
+
+        const _vlAccessOk = (spec, grade, bunk) => {
+            const ar = spec && spec.accessRestrictions;
+            if (!ar || ar.enabled !== true) return true;
+            const divs = ar.divisions || {};
+            const allow = divs[String(grade)] || divs[grade];
+            if (allow === undefined) return false;
+            if (Array.isArray(allow) && allow.length > 0) return allow.map(String).includes(String(bunk));
+            return true;
+        };
+
+        // Activities this bunk could receive in a tile of this kind, each with
+        // the lengths it is allowed to run at.
+        const _vlCandidates = (slotKind, divName, bunk) => {
+            const out = [];
+            if (slotKind !== 'sport') {
+                (masterSpecials || []).forEach(s => {
+                    if (!s || !s.name) return;
+                    if ((disabledSpecials || []).includes(s.name)) return;
+                    if (!_vlAccessOk(s, divName, bunk)) return;
+                    out.push({ activity: s.name, durations: Array.isArray(s.durations) ? s.durations : [] });
+                });
+            }
+            if (slotKind !== 'special') {
+                const meta = window.getSportMetaData?.() || window.sportMetaData || {};
+                Object.keys(meta).forEach(name => {
+                    const m = meta[name];
+                    if (!m || !Array.isArray(m.durations) || m.durations.length === 0) return;
+                    if ((disabledFields || []).includes(name)) return;
+                    out.push({ activity: name, durations: m.durations });
+                });
+            }
+            return out;
+        };
+
+        const _vlAlreadyToday = (bunk) => {
+            const row = window.scheduleAssignments?.[bunk];
+            if (!Array.isArray(row)) return [];
+            return row.filter(Boolean).map(e => e._activity || e.sport).filter(Boolean);
+        };
+
+        // → array of { startTime, endTime, slots } for this bunk, one per piece.
+        // A single entry spanning every sub-slot means "no split" — today's shape.
+        const _vlPlanForBunk = (item, slotKind, divName, bunk, sMin, eMin, slots) => {
+            const whole = [{ startTime: sMin, endTime: eMin, slots }];
+            if (!item.allowSplit || !window.ManualBlockSplit || slots.length < 2) return whole;
+
+            const candidates = _vlCandidates(slotKind, divName, bunk);
+            if (candidates.length === 0) return whole;
+
+            const plan = window.ManualBlockSplit.splitBlock({
+                startMin: sMin,
+                endMin: eMin,
+                durations: window.ManualBlockSplit.collectDurations(candidates),
+                demand: window.ManualBlockSplit.buildDemand(candidates, _vlAlreadyToday(bunk)),
+                maxSegments: parseInt(item.maxSegments, 10) || 2
+            });
+            if (!plan.split || plan.segments.length < 2) return whole;
+
+            // Map each piece back onto the sub-slots it covers. A piece that
+            // can't be resolved to a slot means the grid and the carving
+            // disagree, so fall back to the whole block rather than guess.
+            const pieces = [];
+            for (const seg of plan.segments) {
+                const covered = slots.filter(idx => {
+                    const s = window.divisionTimes?.[divName]?.[idx];
+                    return s && s.startMin < seg.endMin && s.endMin > seg.startMin;
+                });
+                if (covered.length === 0) return whole;
+                pieces.push({ startTime: seg.startMin, endTime: seg.endMin, slots: covered });
+            }
+            console.log(`[VAR-LEN] ${bunk} "${item.event}" ${sMin}-${eMin} → ${plan.composition.join('+')}min`);
+            return pieces;
+        };
         
         // ★★★ v17.5: Track pinned events for verification ★★★
         let pinnedEventCount = 0;
@@ -5946,19 +6031,25 @@ console.log(`[Generation] Rainy Day Mode: ${window.isRainyDay ? 'ACTIVE 🌧️'
                     const existing = window.scheduleAssignments[bunk]?.[slots[0]];
                     if (existing && existing._bunkOverride) return;
 
-                    schedulableSlotBlocks.push({
-                        divName,
-                        bunk,
-                        event: normalizedGA || eventName,
-                        _slotKind,
-                        type: 'slot',
-                        startTime: sMin,
-                        endTime: eMin,
-                        slots,
-                        // ★ Away (off-campus): restrict the solver to the zone's fields + travel.
-                        _isAway: item.isAway === true,
-                        _awayZone: item.isAway === true ? (item.awayZone || null) : null,
-                        _awayMode: item.isAway === true ? (item.awayMode === 'mixed' ? 'mixed' : 'exclusive') : null
+                    const pieces = _vlPlanForBunk(item, _slotKind, divName, bunk, sMin, eMin, slots);
+                    pieces.forEach((piece, pi) => {
+                        schedulableSlotBlocks.push({
+                            divName,
+                            bunk,
+                            event: normalizedGA || eventName,
+                            _slotKind,
+                            type: 'slot',
+                            startTime: piece.startTime,
+                            endTime: piece.endTime,
+                            slots: piece.slots,
+                            // Only set when the tile really was carved up, so a
+                            // normal tile's block is byte-identical to before.
+                            ...(pieces.length > 1 ? { _vlPart: pi, _vlParts: pieces.length } : {}),
+                            // ★ Away (off-campus): restrict the solver to the zone's fields + travel.
+                            _isAway: item.isAway === true,
+                            _awayZone: item.isAway === true ? (item.awayZone || null) : null,
+                            _awayMode: item.isAway === true ? (item.awayMode === 'mixed' ? 'mixed' : 'exclusive') : null
+                        });
                     });
                 });
             }
@@ -6003,8 +6094,21 @@ console.log(`[Generation] Rainy Day Mode: ${window.isRainyDay ? 'ACTIVE 🌧️'
                 const slotStart = slot.startMin;
                 const slotEnd = slot.endMin;
                 
+                // A variable-length sub-slot is covered either by its own piece
+                // (exact match) or by a longer block spanning it, because a bunk
+                // that takes the whole tile gets ONE block across every piece.
+                // Exact-match alone would read that as a gap and inject a
+                // duplicate full-length block over the top of it.
+                if (slot._vlParts) {
+                    const covered = schedulableSlotBlocks.some(block =>
+                        String(block.divName) === String(divName) &&
+                        block.startTime < slotEnd && block.endTime > slotStart
+                    );
+                    if (covered) return;
+                }
+
                 // ★★★ FIXED: Use String() for divName comparison ★★★
-                const hasBlocks = schedulableSlotBlocks.some(block => 
+                const hasBlocks = schedulableSlotBlocks.some(block =>
                     String(block.divName) === String(divName) &&
                     block.startTime === slotStart &&
                     block.endTime === slotEnd
