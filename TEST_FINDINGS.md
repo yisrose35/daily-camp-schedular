@@ -9,10 +9,16 @@
 > `tests/billing_core.test.js`, `billing_wiring.test.js` and
 > `canteen_identity.test.js` have the proof.
 >
-> Still open, and genuinely so: the canteen `accounts` map is keyed by camper
-> NAME, so two same-named campers cannot coexist there at all. That needs the map
-> re-keyed by `camperId` across the manager, the POS and the parent portal — a
-> data-shape change rather than a logic fix.
+> The canteen name-collision case is now closed too: a new camper arriving with a
+> closed account's name no longer takes it over. The closed account is moved aside
+> to its own key and keeps its money, and its legacy (pre-`camperId`) ledger rows
+> are stamped at that moment so the re-key cannot orphan them — safe precisely
+> there, because until that instant the name had only ever belonged to one child.
+>
+> What remains is cosmetic rather than a money risk: `accounts` is still keyed by
+> name, so the archived account shows as `"Malky Stein #101"`. Keying the map by
+> `camperId` throughout would be tidier, but no money can move between two
+> campers any more, which was the actual defect.
 
 Run against `265127c`. Suite after this pass: **1509 tests, 1495 pass, 14 fail** —
 the 14 are the pre-existing `tests/auto_full_day.test.js` scheduler failures,

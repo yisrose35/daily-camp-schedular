@@ -290,6 +290,40 @@ function ensureAccountsForRoster() {
     if (!snacks.accounts) snacks.accounts = {};
     let changed = false;
     const _dflt = getSettings().defaultDailyLimit;
+
+    // ── TWO CAMPERS, ONE NAME ────────────────────────────────────────────────
+    // `accounts` is keyed by NAME, so a new camper arriving with the same name as
+    // a CLOSED account would land on that account and take it over — the last way
+    // the canteen could hand one child's money to another. Two unrelated children
+    // called the same thing across two summers is ordinary.
+    //
+    // The closed account is moved aside to its own key first. That re-key would
+    // break its ledger link, because a transaction written before camperId
+    // existed matches only by name — so those UNIDENTIFIED rows are stamped with
+    // the departing camper's id at the same moment. Stamping is safe precisely
+    // here and nowhere else: until this instant that name has only ever belonged
+    // to them, so an unidentified row under it can only be theirs.
+    camperList.forEach(c => {
+        const prior = snacks.accounts[c.name];
+        if (!prior || !prior.closed) return;
+        const sameCamper = (c.camperId != null && prior.camperId != null &&
+                            String(prior.camperId) === String(c.camperId));
+        if (sameCamper) return;                 // the SAME child is back — reopen it
+        const archiveId = prior.camperId != null ? prior.camperId
+                        : ('legacy_' + Date.now().toString(36));
+        (snacks.transactions || []).forEach(t => {
+            if (!t || t.camper !== c.name) return;
+            if (t.camperId == null || t.camperId === '') t.camperId = archiveId;
+        });
+        prior.camperId = archiveId;
+        const archiveKey = c.name + ' #' + archiveId;
+        if (!snacks.accounts[archiveKey]) snacks.accounts[archiveKey] = prior;
+        delete snacks.accounts[c.name];
+        changed = true;
+        console.warn('[Snacks] "' + c.name + '" is a new camper sharing a name with a ' +
+            'closed account — the closed one is now "' + archiveKey + '" and keeps its money');
+    });
+
     camperList.forEach(c => {
         if (!snacks.accounts[c.name]) {
             snacks.accounts[c.name] = { balance: 0, dailyLimit: _dflt, spentToday: 0 };

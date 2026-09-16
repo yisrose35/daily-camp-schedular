@@ -62,6 +62,23 @@ function reconcile(data) {
 /** ensureAccountsForRoster() — creates, stamps, and CLOSES rather than deletes. */
 function syncRoster(snacks, roster) {
     snacks.accounts = snacks.accounts || {};
+    // Archive a CLOSED account whose name a different camper is now taking,
+    // stamping its unidentified rows so the re-key cannot break the ledger link.
+    roster.forEach(c => {
+        const prior = snacks.accounts[c.name];
+        if (!prior || !prior.closed) return;
+        if (c.camperId != null && prior.camperId != null &&
+            String(prior.camperId) === String(c.camperId)) return;
+        const archiveId = prior.camperId != null ? prior.camperId : 'legacy_x';
+        (snacks.transactions || []).forEach(t => {
+            if (!t || t.camper !== c.name) return;
+            if (t.camperId == null || t.camperId === '') t.camperId = archiveId;
+        });
+        prior.camperId = archiveId;
+        const archiveKey = c.name + ' #' + archiveId;
+        if (!snacks.accounts[archiveKey]) snacks.accounts[archiveKey] = prior;
+        delete snacks.accounts[c.name];
+    });
     roster.forEach(c => {
         if (!snacks.accounts[c.name]) snacks.accounts[c.name] = { balance: 0, dailyLimit: 10, spentToday: 0 };
         const a = snacks.accounts[c.name];
@@ -236,4 +253,67 @@ test('new transactions are stamped with the camper id', () => {
         assert.match(read(f), /camperId: \(snacks(\.accounts|\s*&&\s*snacks\.accounts)/,
             f + ' writes transactions with no camperId — D4 would return for new data');
     }
+});
+
+// ── the last one: two campers sharing a name can now coexist ───────────────
+
+test('a new camper taking a closed account’s NAME does not take its money', () => {
+    // accounts is keyed by name, so without this the new camper would land on the
+    // closed account and own its balance outright.
+    let s = syncRoster({ transactions: [
+        { camper: 'Malky Stein', camperId: 101, type: 'credit', amount: 50 },
+    ] }, [MALKY]);
+    s = syncRoster(s, []);                                 // camper 101 leaves
+    assert.strictEqual(s.accounts['Malky Stein'].closed, true);
+
+    s = syncRoster(s, [{ name: 'Malky Stein', camperId: 777 }]);   // a different child
+
+    assert.strictEqual(s.accounts['Malky Stein'].camperId, 777);
+    assert.strictEqual(s.accounts['Malky Stein'].balance, 0,
+        'the new camper starts empty');
+    assert.ok(s.accounts['Malky Stein #101'], 'the closed account moved aside');
+    assert.strictEqual(s.accounts['Malky Stein #101'].balance, 50,
+        'and kept its money — it is still owed back to the first family');
+});
+
+test('the archive re-key does not break a LEGACY ledger link', () => {
+    // Rows written before camperId existed match only by name, so moving the
+    // account to a new key would orphan them. They are stamped at the moment of
+    // disambiguation, which is the only point it is provably safe.
+    let s = { accounts: { 'Malky Stein': { balance: 40, closed: true } },
+              transactions: [{ camper: 'Malky Stein', type: 'credit', amount: 40 }] };
+    s = syncRoster(s, [{ name: 'Malky Stein', camperId: 777 }]);
+
+    const archived = Object.keys(s.accounts).find(k => k !== 'Malky Stein');
+    assert.ok(archived, 'the legacy account was moved aside');
+    assert.strictEqual(s.accounts[archived].balance, 40,
+        'its balance survived the re-key');
+    assert.strictEqual(s.accounts['Malky Stein'].balance, 0,
+        'and did not follow the name to the new camper');
+    assert.ok(s.transactions[0].camperId, 'the legacy row was stamped');
+});
+
+test('the SAME camper returning reopens their account, no archive', () => {
+    let s = syncRoster({ transactions: [
+        { camper: 'Malky Stein', camperId: 101, type: 'credit', amount: 50 },
+    ] }, [MALKY]);
+    s = syncRoster(s, []);
+    s = syncRoster(s, [MALKY]);                            // same id, back again
+    assert.deepStrictEqual(Object.keys(s.accounts), ['Malky Stein'],
+        'no archival copy — it is the same child');
+    assert.strictEqual(s.accounts['Malky Stein'].balance, 50);
+    assert.ok(!s.accounts['Malky Stein'].closed);
+});
+
+test('the real sync archives rather than letting the name be taken over', () => {
+    const src = read('campistry_snacks.js');
+    const fn = src.slice(src.indexOf('function ensureAccountsForRoster() {'),
+                         src.indexOf('function getAccount(name)'));
+    assert.match(fn, /const archiveKey = c\.name \+ ' #' \+ archiveId;/,
+        'a name collision no longer archives the closed account');
+    assert.match(fn, /if \(t\.camperId == null \|\| t\.camperId === ''\) t\.camperId = archiveId;/,
+        'legacy rows are not stamped — the re-key would orphan them');
+    // The stamp must happen BEFORE the account moves, or the link is already lost.
+    assert.ok(fn.indexOf('t.camperId = archiveId') < fn.indexOf('delete snacks.accounts[c.name]'),
+        'the account is moved before its ledger rows are stamped');
 });
