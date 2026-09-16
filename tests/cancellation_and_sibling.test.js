@@ -314,3 +314,65 @@ test('the camp can actually set the policy', () => {
     assert.match(ME, /_cpToggle:_cpToggle/, 'the toggle is not exported, so the panel cannot open');
     assert.match(ME, /_cpCardSafe\(\)/, 'the card is never rendered');
 });
+
+// ── 6. the public form applies the same rule ────────────────────────────────
+
+test('sessions carrying only a rate discount the price actually being paid', () => {
+    // The register form passes sessions with siblingDiscount and NO tuition,
+    // deliberately: that makes compute() fall back to each row's own price,
+    // which is already early-bird and promo adjusted. Handing it the list price
+    // would discount a number the family is not paying. This is load-bearing
+    // for the form, so it is pinned here.
+    const rates = [{ name: 'Full', siblingDiscount: 10 }];      // list price absent
+    const enr = {
+        r0: { camperName: 'Camper 1', session: 'Full', status: 'enrolled', sessionTuition: 1800 },
+        r1: { camperName: 'Camper 2', session: 'Full', status: 'enrolled', sessionTuition: 1800 }
+    };
+    const r = S.compute({ enrollments: enr, sessions: rates,
+                          camperNames: ['Camper 1', 'Camper 2'] });
+    const amts = Object.values(r.byEnrollment).map(x => x.amt).sort((a, b) => a - b);
+    // 10% of the 1800 early-bird price, not of a 2000 list price.
+    assert.deepStrictEqual(amts, [0, 180]);
+});
+
+test('the register form no longer multiplies the discount by zero', () => {
+    const reg = read('campistry_register.html');
+    assert.ok(!/var sibDiscount=siblings\.length\*0/.test(reg),
+        'the public form still computes the sibling discount as zero and defers ' +
+        'to a promo code, so a family registering two children pays full price');
+    assert.match(reg, /var _SD=window\.CampistrySiblingDiscount;/,
+        'the form does not use the shared rule, so it can disagree with the office');
+    assert.match(reg, /_SD\.compute\(\{enrollments:_enr,sessions:_rates,camperNames:_names\}\)/);
+});
+
+test('the form passes rates WITHOUT tuition, and applies to each row', () => {
+    const reg = read('campistry_register.html');
+    assert.match(reg, /return \{name:x\.name,siblingDiscount:x\.siblingDiscount\};/,
+        'the form hands compute() a list price, which would discount an amount ' +
+        'the family is not being charged');
+    assert.match(reg, /sessionTuition:r\.price/,
+        "each row's own (early-bird adjusted) price is not what gets discounted");
+    assert.match(reg, /r\.price=Math\.max\(0,r\.price-d\.amt\)/,
+        'the discount is computed and then not applied to the price');
+});
+
+test('a discounted family sees the breakdown, not one misleading per-camper figure', () => {
+    // Two children on the SAME session now legitimately pay different amounts.
+    // "$X per camper" without saying so is simply wrong.
+    const reg = read('campistry_register.html');
+    assert.match(reg, /var anyDiscount=rows\.some\(function\(r\)\{return r\.discount>0\}\);/);
+    assert.match(reg, /\(mixed\|\|anyDiscount\)\?/,
+        'the itemised breakdown only appears for mixed sessions, so a sibling ' +
+        'discount is invisible');
+    assert.match(reg, /sibling -/, 'the per-camper line does not say what was taken off');
+});
+
+test('a failure to price siblings never breaks the form', () => {
+    // The whole point of the form is that a family can apply. A discount that
+    // cannot be worked out must cost them a discount, not the registration.
+    const reg = read('campistry_register.html');
+    const at = reg.indexOf('var _SD=window.CampistrySiblingDiscount;');
+    const block = reg.slice(at - 200, at + 1400);
+    assert.match(block, /try\{/);
+    assert.match(block, /catch\(e\)\{ console\.warn\('\[Register\] sibling discount not applied:'/);
+});

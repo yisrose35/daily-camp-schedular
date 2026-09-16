@@ -945,7 +945,6 @@ function updatePrice(){
     var base=s.tuition;var total=base;var lines=[];
     var today=new Date().toISOString().split('T')[0];
     if(s.earlyBird&&(!s.earlyBirdDeadline||today<=s.earlyBirdDeadline)){total=s.earlyBird;lines.push('<div style="color:var(--ok);font-size:.78rem">Early bird pricing applied</div>')}
-    if(siblings.length>0){var sibDiscount=siblings.length*0;/* sibling discount handled by promo */}
     if(discount.active){
         if(discount.pct){var d=Math.round(total*discount.pct/100);total-=d;lines.push('<div style="color:var(--ok);font-size:.78rem">'+esc(discount.label)+': -'+fm(d)+'</div>')}
         if(discount.amt){total-=discount.amt;lines.push('<div style="color:var(--ok);font-size:.78rem">'+esc(discount.label)+': -'+fm(discount.amt)+'</div>')}
@@ -968,21 +967,66 @@ function updatePrice(){
         var price=(!sib.session||sib.session===selSess)?total:(so?Number(so.tuition)||0:0);
         rows.push({label:'Camper '+(i+2),price:price,session:ownName});
     });
+    // ── sibling discount ────────────────────────────────────────────────
+    // This used to be `var sibDiscount = siblings.length * 0;` — multiplied by
+    // zero, with a comment deferring to a promo code. So a family registering
+    // two children here paid full price for both and had to notice and ask for
+    // it back, which is the exact complaint the industry writes about.
+    //
+    // It calls the SAME rule the office uses (campistry_sibling_discount.js):
+    // every camper except the most expensive is discounted at their own
+    // session's rate. One implementation, so the price quoted here is the price
+    // the office will bill.
+    //
+    // Sessions are passed carrying ONLY the sibling rate, deliberately without
+    // tuition: that makes compute() fall back to each row's own price, which is
+    // already early-bird and promo adjusted. Handing it the list price would
+    // discount a number this family is not paying.
+    try{
+        var _SD=window.CampistrySiblingDiscount;
+        if(_SD){
+            var _rates=(sessions||[]).map(function(x){
+                return {name:x.name,siblingDiscount:x.siblingDiscount};
+            });
+            var _enr={},_names=[];
+            rows.forEach(function(r,i){
+                _enr['r'+i]={camperName:r.label,session:r.session,
+                             status:'enrolled',sessionTuition:r.price};
+                _names.push(r.label);
+            });
+            var _res=_SD.compute({enrollments:_enr,sessions:_rates,camperNames:_names});
+            var _off=0;
+            rows.forEach(function(r,i){
+                var d=_res.byEnrollment['r'+i];
+                if(d&&d.amt>0){ r.discount=d.amt; r.price=Math.max(0,r.price-d.amt); _off+=d.amt; }
+            });
+            if(_off>0){
+                lines.push('<div style="color:var(--ok);font-size:.78rem">Sibling discount: -'+fm(_off)+'</div>');
+            }
+        }
+    }catch(e){ console.warn('[Register] sibling discount not applied:',e&&e.message); }
+
     var grand=rows.reduce(function(a,r){return a+r.price},0);
     var perCamper=rows.length;
+    // Itemise as soon as anyone is discounted, not only on mixed sessions: two
+    // children on the same session now legitimately pay different amounts, and
+    // a single "$X per camper" line would be wrong without saying so.
+    var anyDiscount=rows.some(function(r){return r.discount>0});
 
     el.innerHTML='<div style="padding:10px 14px;background:var(--s50);border-radius:var(--r);border:1px solid var(--s200)">'
         +'<div style="display:flex;justify-content:space-between;align-items:center;gap:12px;flex-wrap:wrap">'
         +'<div><div style="font-size:.78rem;color:var(--s500)">'+perCamper+' camper'+(perCamper>1?'s':'')+'</div>'
         +'<div style="font-size:1.1rem;font-weight:800;color:var(--me)">'+fm(grand)+'</div>'+lines.join('')+'</div>'
         +'<div style="text-align:right;font-size:.75rem;color:var(--s400)">'
-        +(mixed?'different sessions':fm(total)+' per camper')+'</div></div>'
+        +(mixed?'different sessions':anyDiscount?'sibling discount applied':fm(total)+' per camper')+'</div></div>'
         // Only itemised when it says something a single figure cannot: who is
         // on which session, and what each of them costs.
-        +(mixed?'<div style="margin-top:8px;border-top:1px solid var(--s200);padding-top:7px">'
+        +((mixed||anyDiscount)?'<div style="margin-top:8px;border-top:1px solid var(--s200);padding-top:7px">'
             +rows.map(function(r){
                 return '<div style="display:flex;justify-content:space-between;font-size:.78rem;color:var(--s600);padding:2px 0">'
-                    +'<span>'+esc(r.label)+' \u00b7 '+esc(r.session||'no session')+'</span><span>'+fm(r.price)+'</span></div>';
+                    +'<span>'+esc(r.label)+' \u00b7 '+esc(r.session||'no session')
+                    +(r.discount>0?' <span style="color:var(--ok)">(sibling -'+fm(r.discount)+')</span>':'')
+                    +'</span><span>'+fm(r.price)+'</span></div>';
             }).join('')+'</div>':'')
         +'</div>';
     // The deposit can be a share of this, so it moves whenever the price does.
