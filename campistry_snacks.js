@@ -120,7 +120,10 @@ function getCamperList() {
             });
         }
 
-        campers.push({ name, division: div, bunk });
+        // camperId rides along so the canteen can join money to a PERSON rather
+        // than to a name — see _reconcileBalances. It may be absent on an
+        // older roster entry; ensureAccountsForRoster tolerates that.
+        campers.push({ name, division: div, bunk, camperId: data.camperId });
     });
 
     return campers.sort((a, b) => a.name.localeCompare(b.name));
@@ -166,21 +169,50 @@ function _txSig(t) {
     return [t.date, t.time, t.camper, t.type, t.amount, t.items].join('|');
 }
 
-// Recompute every account's balance from the (append-only) transaction ledger,
-// which is the durable record. Preserves dailyLimit/spentToday/etc.
+// The canteen is event-sourced: an account's balance is always Σ of its
+// transactions, recomputed here rather than stored. That is why a balance edited
+// without a matching transaction is erased by the next merge.
+//
+// IDENTITY. The ledger was keyed by camper NAME alone, so a new camper reusing a
+// deleted camper's name inherited their balance — two children called the same
+// thing across two summers is not exotic (TEST_FINDINGS.md D4).
+//
+// An account that HAS a camperId counts its own id's transactions, plus any
+// UNIDENTIFIED transactions under its name. That second part is not laziness: every
+// transaction written before this change has no id, and ignoring them would drop a
+// real balance to zero — the same bug pointed the other way. What it must never do
+// is count a transaction belonging to a DIFFERENT id, which is exactly how the
+// money used to move between two children sharing a name.
 function _reconcileBalances(data) {
     if (!data || !data.accounts) return data;
-    var byCamper = {};
+    var byId = {}, byNameNoId = {}, byName = {};
     (data.transactions || []).forEach(function(t) {
-        if (!t || !t.camper) return;
+        if (!t) return;
         var amt = parseFloat(t.amount) || 0;
-        byCamper[t.camper] = (byCamper[t.camper] || 0) + (t.type === 'credit' ? amt : -amt);
+        var signed = (t.type === 'credit' ? amt : -amt);
+        var hasId = (t.camperId != null && t.camperId !== '');
+        if (hasId) byId[t.camperId] = (byId[t.camperId] || 0) + signed;
+        if (t.camper) {
+            byName[t.camper] = (byName[t.camper] || 0) + signed;
+            if (!hasId) byNameNoId[t.camper] = (byNameNoId[t.camper] || 0) + signed;
+        }
     });
     Object.keys(data.accounts).forEach(function(name) {
-        if (byCamper[name] != null) data.accounts[name].balance = Math.round(byCamper[name] * 100) / 100;
+        var a = data.accounts[name];
+        if (!a) return;
+        var idSum, nameSum;
+        if (a.camperId != null) {
+            idSum = byId[a.camperId];
+            nameSum = byNameNoId[name];
+        } else {
+            nameSum = byName[name];
+        }
+        if (idSum == null && nameSum == null) return;
+        a.balance = Math.round(((idSum || 0) + (nameSum || 0)) * 100) / 100;
     });
     return data;
 }
+
 
 // Cloud write. campistrySnacks is a shared blob that a parent's SECURITY DEFINER
 // deposit (migration 019, FOR UPDATE + merge) and the admin manager both write.
@@ -263,12 +295,46 @@ function ensureAccountsForRoster() {
             snacks.accounts[c.name] = { balance: 0, dailyLimit: _dflt, spentToday: 0 };
             changed = true;
         }
+        // Stamp the stable id so this account's money is joined to a PERSON and
+        // not to a string. A returning camper who is re-added keeps their id, so
+        // their history follows them; an unrelated child who happens to share the
+        // name does not inherit it.
+        const a = snacks.accounts[c.name];
+        if (c.camperId != null && a.camperId !== c.camperId) { a.camperId = c.camperId; changed = true; }
+        if (a.closed) { delete a.closed; delete a.closedAt; changed = true; }
     });
-    // Remove accounts for campers no longer in roster
+    // Campers no longer on the roster. This used to `delete` the account
+    // outright — WITH WHATEVER MONEY WAS ON IT. The transactions stayed, so
+    // canteen revenue still counted a parent's deposit while the balance owed
+    // back to them simply stopped existing, and nothing flagged it
+    // (TEST_FINDINGS.md D3).
+    //
+    // An account holding money, or a saved auto-reload card, is now CLOSED and
+    // kept: the balance is the parent's money and the camp either refunds it or
+    // applies it, but it may not evaporate because a roster changed. Only a
+    // genuinely empty account is dropped, which is what keeps the account list
+    // from filling with noise.
     const rosterNames = new Set(camperList.map(c => c.name));
+    let _closedWithMoney = 0;
     Object.keys(snacks.accounts).forEach(name => {
-        if (!rosterNames.has(name)) { delete snacks.accounts[name]; changed = true; }
+        if (rosterNames.has(name)) return;
+        const a = snacks.accounts[name] || {};
+        const bal = Math.round((Number(a.balance) || 0) * 100) / 100;
+        const hasCard = !!(a.autoReload && (a.autoReload.cardOnFile ||
+            a.autoReload.byopCustomerRef || a.autoReload.stripeCustomerId));
+        if (Math.abs(bal) < 0.005 && !hasCard) { delete snacks.accounts[name]; changed = true; return; }
+        if (!a.closed) {
+            a.closed = true;
+            a.closedAt = new Date().toISOString();
+            changed = true;
+        }
+        if (Math.abs(bal) >= 0.005) _closedWithMoney++;
     });
+    if (_closedWithMoney) {
+        console.warn('[Snacks] ' + _closedWithMoney + ' closed canteen account' +
+            (_closedWithMoney === 1 ? '' : 's') + ' still hold money — refund or apply it; ' +
+            'they are kept rather than deleted so it cannot vanish');
+    }
     // Guarded by _hydratedOnce — see its declaration for why: saving here
     // before real cloud data has loaded once can wholesale-overwrite fresh
     // inventory counters another device just wrote.
@@ -1122,7 +1188,13 @@ window.addDep = function() {
     if (!snacks.transactions) snacks.transactions = [];
     snacks.transactions.unshift({
         time: new Date().toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' }),
-        camper: name, items: 'Deposit' + (note ? ' — ' + note : ''), amount: rounded,
+        camper: name,
+        // Stamped so this money is joined to a person, not a name — see
+        // _reconcileBalances. Absent on anything written before that change,
+        // which is why the name remains the fallback there.
+        camperId: (snacks.accounts[name] && snacks.accounts[name].camperId) != null
+            ? snacks.accounts[name].camperId : undefined,
+        items: 'Deposit' + (note ? ' — ' + note : ''), amount: rounded,
         type: 'credit', kind: 'deposit', method: method, note: note, date: todayStr()
     });
     saveSnacksData(snacks);

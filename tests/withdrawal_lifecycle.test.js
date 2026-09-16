@@ -311,7 +311,11 @@ function syncCanteen(snacks, rosterNames) {
     }
     const live = new Set(rosterNames);
     for (const n of Object.keys(snacks.accounts)) {
-        if (!live.has(n)) delete snacks.accounts[n];
+        if (live.has(n)) { delete snacks.accounts[n].closed; continue; }
+        const a = snacks.accounts[n];
+        // Closed, not deleted, whenever it holds money — see canteen_identity.
+        if (Math.abs(money(a.balance)) < 0.005) { delete snacks.accounts[n]; continue; }
+        a.closed = true;
     }
     // _reconcileBalances: balance := the ledger, for accounts that exist.
     const byCamper = {};
@@ -322,6 +326,26 @@ function syncCanteen(snacks, rosterNames) {
     }
     for (const n of Object.keys(snacks.accounts)) {
         if (byCamper[n] != null) snacks.accounts[n].balance = money(byCamper[n]);
+    }
+    return snacks;
+}
+
+/** _reconcileBalances() as it is now: id first, unidentified-by-name as fallback. */
+function reconcileById(snacks) {
+    const byId = {}, byNameNoId = {};
+    for (const t of (snacks.transactions || [])) {
+        const amt = Number(t.amount) || 0;
+        const signed = (t.type === 'credit' ? amt : -amt);
+        const hasId = (t.camperId != null && t.camperId !== '');
+        if (hasId) byId[t.camperId] = (byId[t.camperId] || 0) + signed;
+        else if (t.camper) byNameNoId[t.camper] = (byNameNoId[t.camper] || 0) + signed;
+    }
+    for (const n of Object.keys(snacks.accounts || {})) {
+        const a = snacks.accounts[n];
+        const idSum = a.camperId != null ? byId[a.camperId] : undefined;
+        const nameSum = a.camperId != null ? byNameNoId[n] : byNameNoId[n];
+        if (idSum == null && nameSum == null) continue;
+        a.balance = money((idSum || 0) + (nameSum || 0));
     }
     return snacks;
 }
@@ -343,46 +367,52 @@ test('a parked camper keeps their canteen balance', () => {
         'have their canteen account, and its balance, deleted by the roster sync');
 });
 
-test('DEFECT: a deleted camper’s canteen money vanishes with no record', () => {
-    // The account is deleted by the roster sync. The TRANSACTIONS are not, so
-    // canteen revenue still counts the deposit while the balance owed back to
-    // the parent simply stops existing. Nothing flags that money was left on a
-    // closed account.
+test('FIXED: a departed camper’s canteen money is closed, not deleted', () => {
+    // Was D3. ensureAccountsForRoster deleted the account of anyone off the
+    // roster, taking whatever money was on it, while the transactions stayed —
+    // so canteen revenue still counted the parent's deposit and the balance owed
+    // back to them stopped existing. It is now CLOSED and kept; the full
+    // behaviour is covered in tests/canteen_identity.test.js.
     const snacks = syncCanteen({
         transactions: [{ camper: 'Malky Stein', type: 'credit', amount: 50 }],
     }, ['Malky Stein']);
     assert.strictEqual(snacks.accounts['Malky Stein'].balance, 50);
 
-    syncCanteen(snacks, []);                           // camper deleted
-    assert.strictEqual(snacks.accounts['Malky Stein'], undefined,
-        'the account is gone');
-    assert.strictEqual(snacks.transactions.length, 1,
-        'but the 50 dollars is still in the ledger, belonging to nobody');
+    syncCanteen(snacks, []);                           // camper off the roster
+    assert.ok(snacks.accounts['Malky Stein'],
+        'the account must survive — the balance is the parent\u2019s money');
+    assert.strictEqual(snacks.accounts['Malky Stein'].balance, 50);
+    assert.strictEqual(snacks.accounts['Malky Stein'].closed, true,
+        'and be flagged closed so the office can refund or apply it');
+    assert.strictEqual(snacks.transactions.length, 1, 'the ledger is untouched');
 });
 
-test('DEFECT: a new camper with the same name inherits the old balance', () => {
-    // Because _reconcileBalances rebuilds every balance from the transaction
-    // ledger and the ledger is keyed by NAME, a fresh account for a reused name
-    // is immediately overwritten with the deleted camper's balance. Two
-    // unrelated children called "Malky Stein" across two summers is not exotic.
-    const snacks = syncCanteen({
-        transactions: [{ camper: 'Malky Stein', type: 'credit', amount: 50 }],
-    }, ['Malky Stein']);
-    syncCanteen(snacks, []);                           // deleted
-    syncCanteen(snacks, ['Malky Stein']);              // a DIFFERENT child, same name
-
-    assert.strictEqual(snacks.accounts['Malky Stein'].balance, 50,
-        'the new camper starts with 50 dollars of someone else’s money');
+test('FIXED: a new camper with the same name no longer inherits the balance', () => {
+    // Was D4. _reconcileBalances rebuilt balances from a ledger keyed by NAME, so
+    // a fresh account for a reused name was immediately overwritten with the
+    // deleted camper's balance. Transactions now carry camperId and an identified
+    // account only counts its own id plus UNIDENTIFIED legacy rows — never
+    // another camper's. Covered properly in tests/canteen_identity.test.js.
+    // Identified history belonging to camper 101...
+    const snacks = { accounts: {}, transactions: [
+        { camper: 'Malky Stein', camperId: 101, type: 'credit', amount: 50 },
+    ] };
+    // ...and a DIFFERENT child, same name, arriving later.
+    snacks.accounts['Malky Stein'] = { balance: 0, camperId: 777 };
+    reconcileById(snacks);
+    assert.strictEqual(snacks.accounts['Malky Stein'].balance, 0,
+        'camper 777 must not inherit camper 101\u2019s 50 dollars');
 });
 
-test('DEFECT: the cloud merge resurrects a locally-deleted account anyway', () => {
-    // cloudSaveSnacks unions accounts (cloud first, local second), so the
-    // roster sync's delete never reaches the cloud while another device still
-    // has the account. The two defects above therefore persist rather than
-    // settling either way.
+test('the cloud merge UNIONS accounts, which is now the right thing', () => {
+    // This used to compound D3/D4: the roster sync's delete never reached the
+    // cloud while another device still held the account, so an orphan flickered
+    // depending on which device saved last. Now that a funded account is closed
+    // rather than deleted, a cloud-first union is exactly what should happen —
+    // it can only ever preserve an account, never lose one.
     const src = read('campistry_snacks.js');
     assert.match(src, /merged\.accounts = Object\.assign\(\{\}, cloud\.accounts \|\| \{\}, data\.accounts \|\| \{\}\)/,
-        'the accounts union changed — re-check whether a delete now propagates');
+        'the accounts union changed — re-check that a closed account still survives a merge');
 });
 
 // ── 6. the note autopay leaves is the only clue an office gets ─────────────

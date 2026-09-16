@@ -82,13 +82,40 @@ function saveSnacksData(data) {
 }
 
 function _txSig(t) { return [t.date, t.time, t.camper, t.type, t.amount, t.items].join('|'); }
+// KEEP IN SYNC with campistry_snacks.js's copy — see its header for the identity
+// rules. Two copies exist because the POS register loads without the manager, and
+// they decide what every canteen balance is, so tests/canteen_identity.test.js
+// asserts they are character-identical once comments are stripped.
 function _reconcileBalances(data) {
     if (!data || !data.accounts) return data;
-    var byCamper = {};
-    (data.transactions || []).forEach(function(t) { if (!t || !t.camper) return; var amt = parseFloat(t.amount) || 0; byCamper[t.camper] = (byCamper[t.camper] || 0) + (t.type === 'credit' ? amt : -amt); });
-    Object.keys(data.accounts).forEach(function(name) { if (byCamper[name] != null) data.accounts[name].balance = Math.round(byCamper[name] * 100) / 100; });
+    var byId = {}, byNameNoId = {}, byName = {};
+    (data.transactions || []).forEach(function(t) {
+        if (!t) return;
+        var amt = parseFloat(t.amount) || 0;
+        var signed = (t.type === 'credit' ? amt : -amt);
+        var hasId = (t.camperId != null && t.camperId !== '');
+        if (hasId) byId[t.camperId] = (byId[t.camperId] || 0) + signed;
+        if (t.camper) {
+            byName[t.camper] = (byName[t.camper] || 0) + signed;
+            if (!hasId) byNameNoId[t.camper] = (byNameNoId[t.camper] || 0) + signed;
+        }
+    });
+    Object.keys(data.accounts).forEach(function(name) {
+        var a = data.accounts[name];
+        if (!a) return;
+        var idSum, nameSum;
+        if (a.camperId != null) {
+            idSum = byId[a.camperId];
+            nameSum = byNameNoId[name];
+        } else {
+            nameSum = byName[name];
+        }
+        if (idSum == null && nameSum == null) return;
+        a.balance = Math.round(((idSum || 0) + (nameSum || 0)) * 100) / 100;
+    });
     return data;
 }
+
 // Cloud write. Fetch-merge so a POS write never clobbers a parent deposit or a
 // server-side purchase (submit_canteen_purchase) that hit the cloud after this
 // tab cached its copy — union the transaction ledgers and recompute balances
@@ -627,7 +654,12 @@ window.charge = function() {
         a.spentToday = Math.round((a.spentToday + total) * 100) / 100;
         a.lastSpendDate = todayStr();
         if (!snacks.transactions) snacks.transactions = [];
-        snacks.transactions.unshift({ time: new Date().toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' }), camper: sel, items: itemNames, amount: total, type: 'debit', date: todayStr() });
+        snacks.transactions.unshift({ time: new Date().toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' }), camper: sel,
+            // See _reconcileBalances: the ledger joins on camperId when it has
+            // one, so a reused name cannot inherit another camper's balance.
+            camperId: (snacks.accounts && snacks.accounts[sel] && snacks.accounts[sel].camperId) != null
+                ? snacks.accounts[sel].camperId : undefined,
+            items: itemNames, amount: total, type: 'debit', date: todayStr() });
         finish(false);
     };
 
