@@ -26,6 +26,26 @@ OUT = os.path.join(MIG, "APPLY_BUNDLE.sql")
 
 # (filename without .sql, one-line description) — in APPLY order.
 MANIFEST = [
+    # ── 122-124 are OLDER than the rest of this bundle and are here because they
+    # were in NO bundle at all. That is not a filing detail: a camp owner
+    # unenrolled a camper and the parent could still message the camp, which is
+    # precisely the symptom of 122 never having been applied. There is no bundle
+    # covering 001-145 (APPLY_ALL.sql only carries 024/026/027), so anything in
+    # that range was applied by hand, one at a time, and 122 evidently was not.
+    #
+    # They are one set: 122 adds the camp_connected flag and the server-side
+    # gates, 123 fixes a multi-camp union bug 122 introduced, 124 stops a
+    # disconnected family's departed camper rendering as a normal child card.
+    # Applying 122 without 123 breaks a parent with kids at two camps.
+    #
+    # All three are idempotent (the column add is IF NOT EXISTS) and they touch
+    # nothing the 146+ set touches, so they run first, in ascending order.
+    ("122_camper_offboard_link_features",
+     "A departed camper disconnects their parent from LIVE features, not from billing"),
+    ("123_fix_link_features_union",
+     "Multi-camp fix for 122: one camp ending must not disconnect the others"),
+    ("124_hide_disconnected_children",
+     "Stop showing a disconnected family's departed camper as a current child"),
     ("146_banquest_real_api_credentials",
      "Banquest credential shape (sourceKey/pin/tokenizationKey/gatewayUrl/tokenizationUrl)"),
     ("147_clear_stale_byop_cards_on_switch",
@@ -463,6 +483,15 @@ UNION ALL SELECT 'the parent balance refuses an incomplete ledger',
        CASE WHEN EXISTS (SELECT 1 FROM pg_proc WHERE proname='family_has_tuition_entry')
              AND (SELECT prosrc FROM pg_proc WHERE proname='get_my_balance' LIMIT 1)
                  LIKE '%ledgerIncomplete%'
+            THEN 'OK' ELSE 'MISSING' END
+UNION ALL SELECT 'an unenrolled camper disconnects the parent from live features',
+       CASE WHEN EXISTS (SELECT 1 FROM information_schema.columns
+                          WHERE table_name='link_parent_invites'
+                            AND column_name='camp_connected')
+             AND (SELECT prosrc FROM pg_proc WHERE proname='submit_parent_message' LIMIT 1)
+                 LIKE '%camp_connected%'
+             AND (SELECT prosrc FROM pg_proc WHERE proname='revoke_orphaned_parent_invites' LIMIT 1)
+                 LIKE '%camp_connected%'
             THEN 'OK' ELSE 'MISSING' END
 UNION ALL SELECT 'camp shop settles its orders',
        CASE WHEN EXISTS (SELECT 1 FROM pg_proc WHERE proname='settle_shop_order')

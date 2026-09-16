@@ -1685,7 +1685,7 @@ function _mfCompareHtml(keyA,keyB){
     var union=(a.camperIds||[]).concat((b.camperIds||[]).filter(function(n){return(a.camperIds||[]).indexOf(n)<0}));
     var balSum=(a.balance||0)+(b.balance||0);
     var h='<div style="font-size:.8rem;color:var(--s600);margin-bottom:12px">Pick which record\'s details to keep for each field below. <strong>'+esc(b.name)+'</strong> will be removed once merged; its campers and balance carry onto <strong>'+esc(a.name)+'</strong>.</div>';
-    h+='<div style="background:var(--s50);padding:8px 12px;border-radius:var(--r);margin-bottom:14px;font-size:.8rem">Campers after merge: '+(union.length?union.map(function(n){return'<strong>'+esc(n)+'</strong>'}).join(', '):'<span style="color:var(--s400)">none</span>')+'<br>Balances will be summed: '+fm(a.balance||0)+' + '+fm(b.balance||0)+' = <strong>'+fm(balSum)+'</strong> (Total Paid summed the same way)</div>';
+    h+='<div style="background:var(--s50);padding:8px 12px;border-radius:var(--r);margin-bottom:14px;font-size:.8rem">Campers after merge: '+(union.length?union.map(function(n){return'<strong>'+esc(_lbl(n))+'</strong>'}).join(', '):'<span style="color:var(--s400)">none</span>')+'<br>Balances will be summed: '+fm(a.balance||0)+' + '+fm(b.balance||0)+' = <strong>'+fm(balSum)+'</strong> (Total Paid summed the same way)</div>';
     h+=_mfFieldRowHtml('mfName','Family Name',a.name,b.name);
     h+=_mfFieldRowHtml('mfHhLabel','Household',hhA.label,hhB.label);
     h+=_mfFieldRowHtml('mfAddress','Address',hhA.address,hhB.address);
@@ -1740,7 +1740,7 @@ function _famSuggestionsBannerHtml(){
         var confLabel=s.confidence==='high'?'High confidence':s.confidence==='medium'?'Medium':'Low';
         h+='<div style="display:flex;align-items:center;gap:12px;padding:10px 14px;background:#fff;border-radius:var(--r);margin-bottom:6px;border:1px solid var(--s200)">';
         h+='<div style="flex:1"><div style="font-weight:700;font-size:.875rem">'+esc(s.lastName)+' Family</div>';
-        h+='<div style="font-size:.75rem;color:var(--s500);margin-top:2px">'+s.campers.map(function(n){return'<strong>'+esc(n)+'</strong>'}).join(', ');
+        h+='<div style="font-size:.75rem;color:var(--s500);margin-top:2px">'+s.campers.map(function(n){return'<strong>'+esc(_lbl(n))+'</strong>'}).join(', ');
         if(s.address) h+=' · '+esc(s.address);
         if(s.parent) h+=' · Parent: '+esc(s.parent);
         h+='</div></div>';
@@ -1828,7 +1828,7 @@ function openFamilyForm(id){
     Object.keys(roster).sort().forEach(function(n){
         var checked=(f.camperIds||[]).indexOf(n)>=0;
         var elsewhere=_assignedElsewhere[n]?' <span style="color:var(--s400);font-size:.7rem">(in '+esc(_assignedElsewhere[n])+')</span>':'';
-        h+='<label style="display:flex;align-items:center;gap:6px;padding:3px 0;font-size:.8rem;cursor:pointer"><input type="checkbox" class="fmCamperCB" value="'+esc(n)+'"'+(checked?' checked':'')+' style="accent-color:var(--me)"> '+esc(n)+elsewhere+'</label>';
+        h+='<label style="display:flex;align-items:center;gap:6px;padding:3px 0;font-size:.8rem;cursor:pointer"><input type="checkbox" class="fmCamperCB" value="'+esc(n)+'"'+(checked?' checked':'')+' style="accent-color:var(--me)"> '+esc(_lbl(n))+elsewhere+'</label>';
     });
     h+='</div>';
     document.getElementById('fmBody').innerHTML=h;
@@ -2567,7 +2567,7 @@ function renderCampers(filter){
                 var n=item.n,d=item.d;
                 var hasMed=!!(d.allergies||d.medications);
                 var altN=[d.altFirstName,d.altLastName].filter(Boolean).join(' ');
-                var nameCell=esc(n)+(altN&&getCampSettings().showAltNames!==false?'<div style="font-size:.7rem;color:var(--s400);font-weight:400">'+esc(altN)+'</div>':'');
+                var nameCell=esc(_lbl(n))+(altN&&getCampSettings().showAltNames!==false?'<div style="font-size:.7rem;color:var(--s400);font-weight:400">'+esc(altN)+'</div>':'');
                 var details=(d.schoolGrade?esc(d.schoolGrade):'<span style="color:var(--s300)">—</span>')+(hasMed?' <span style="color:var(--err);font-size:.7rem;font-weight:600">⚠ Medical</span>':'');
                 var placement=(d.division?dtag(d.division):'<span style="color:var(--s300)">—</span>')+(d.bunk?' '+bdg(d.bunk,'gray'):(d._priorBunk?' '+bdg(d._priorBunk+' (prior)','gray'):''));
                 var contact=(d.parent1Phone||d.parent1Email)?'<span style="font-size:.78rem;color:var(--s500)">'+esc(d.parent1Name||'')+'</span>':'<span style="color:var(--s300)">—</span>';
@@ -2668,7 +2668,7 @@ function _dpCard(title,bodyHtml,opts){
 function _dpAttendanceHistoryCard(personId,personType,name,dob,otherCamps,addOnclick,removeOnclickPrefix){
     var cardId='attHist_'+personType+'_'+personId;
     var otherHtml=(otherCamps&&otherCamps.length)
-        ?otherCamps.map(function(c,i){return '<div style="display:flex;justify-content:space-between;align-items:center;gap:8px;padding:4px 0;font-size:.83rem"><span>'+esc(c.name)+(c.years?' — '+esc(c.years):'')+'</span><button class="me-btn me-btn--ghost me-btn--sm" onclick="'+removeOnclickPrefix+i+')">Remove</button></div>';}).join('')
+        ?otherCamps.map(function(c,i){return '<div style="display:flex;justify-content:space-between;align-items:center;gap:8px;padding:4px 0;font-size:.83rem"><span>'+esc(_lbl(c.name))+(c.years?' — '+esc(c.years):'')+'</span><button class="me-btn me-btn--ghost me-btn--sm" onclick="'+removeOnclickPrefix+i+')">Remove</button></div>';}).join('')
         :'<div style="font-size:.8rem;color:var(--s400);font-style:italic">None on file</div>';
     var h='<div id="'+cardId+'_body"><div style="font-size:.8rem;color:var(--s400)">Loading…</div></div>';
     h+='<div style="margin-top:10px;padding-top:10px;border-top:1px solid var(--s100)">';
@@ -2713,7 +2713,7 @@ async function _loadAttendanceHistory(personId,personType,name,dob,cardId){
         var banner=cands.map(function(c){
             var rc=c.confidence==='high'?'ok':'warn';
             return '<div style="display:flex;align-items:center;gap:8px;background:#FEF9E7;border:1px solid #FDE68A;border-radius:8px;padding:8px 10px;margin-bottom:6px;font-size:.82rem">'
-                +'<span style="flex:1">Might be the same person as <strong>'+esc(c.name)+'</strong> ('+(c.personType==='camper'?'camper':'staff')+(c.seasonLabels&&c.seasonLabels.length?', '+esc(c.seasonLabels.join(', ')):'')+') '+bdg(c.confidence,rc)+'</span>'
+                +'<span style="flex:1">Might be the same person as <strong>'+esc(_lbl(c.name))+'</strong> ('+(c.personType==='camper'?'camper':'staff')+(c.seasonLabels&&c.seasonLabels.length?', '+esc(c.seasonLabels.join(', ')):'')+') '+bdg(c.confidence,rc)+'</span>'
                 +'<button class="me-btn me-btn--pri me-btn--sm" onclick="CampistryMe._confirmPersonLink('+personId+',\''+personType+'\','+c.personId+',\''+c.personType+'\')">Confirm</button>'
                 +'<button class="me-btn me-btn--ghost me-btn--sm" onclick="CampistryMe._dismissPersonLink('+personId+','+c.personId+')">Dismiss</button>'
                 +'</div>';
@@ -2815,7 +2815,7 @@ function renderCamperDetailPage(){
     var h='<button class="me-btn me-btn--ghost me-btn--sm" style="margin-bottom:10px" onclick="CampistryMe.nav(\'campers\')">← Back to Roster</button>';
     h+='<div class="sec-hd"><div style="display:flex;align-items:center;gap:12px">'
         +avatarHtml
-        +'<div><h2 class="sec-title">'+esc(n)+(altName?' <span style="font-weight:500;color:var(--s400);font-size:.85rem">('+esc(altName)+')</span>':'')+'</h2>'
+        +'<div><h2 class="sec-title">'+esc(_lbl(n))+(altName?' <span style="font-weight:500;color:var(--s400);font-size:.85rem">('+esc(altName)+')</span>':'')+'</h2>'
         +'<p class="sec-desc">#'+esc(idStr)+(d.division?' · '+esc(d.division):'')+(d.bunk?' · '+esc(d.bunk):'')+'</p></div>'
         +'</div><div class="sec-actions">'
         +'<button class="me-btn me-btn--sec me-btn--sm" onclick="CampistryMe.reEnrollCamper(\''+je(n)+'\')">Re-Enroll</button>'
@@ -3328,6 +3328,14 @@ function cascadeCamperRename(oldName,newName){
 // BillingCore being absent — campistry_me.js is loaded by eight pages and only
 // some of them include the core, so a missing module must degrade to "this
 // family has no ledger" rather than throw in the middle of a delete.
+// ── Camper display name ────────────────────────────────────────────────────
+// Roster keys are unique but are not always the camper's name: a second camper
+// sharing a name is keyed "Malky Stein #102" (their camperId) and carries
+// displayName — see campistry_camper_identity.js. The suffix is always exactly
+// " #<id>" appended to the plain name, so stripping it needs no lookup and cannot
+// disagree with displayName. IDENTITY keeps the KEY — checkbox values, data-
+// attributes, roster/family/ledger lookups; only visible text comes through here.
+function _lbl(k){var r=roster&&roster[k];return (r&&r.displayName)||String(k==null?'':k).replace(/\s#\d+$/,'')}
 function _billingCore(){return (typeof window!=='undefined'&&window.BillingCore)||null}
 
 /**
@@ -3511,7 +3519,7 @@ async function deleteCamper(n){
     // be told that rather than discovering it later. Warn, don't block: a hard
     // block gets worked around by resetting the roster instead, which had the
     // same effect and no warning at all.
-    var _msg='<strong>'+esc(n)+'</strong> will be permanently deleted.';
+    var _msg='<strong>'+esc(_lbl(n))+'</strong> will be permanently deleted.';
     var _owed=_outstandingForCamper(n);
     if(_owed>0.005){
         _msg+='<br><br>⚠ <strong>'+esc(_famNameForCamper(n))+'</strong> still owes '
@@ -4991,7 +4999,7 @@ function bbC(n){
     var badges='';
     if(req.friends.length)badges+='<span title="Has a bunk request" style="font-size:.62rem">🔗</span>';
     if(req.avoid.length)badges+='<span title="Has a do-not-bunk request" style="font-size:.62rem">🚫</span>';
-    return '<div class="bb-c" draggable="true" ondragstart="event.dataTransfer.setData(\'text/plain\',\''+je(n)+'\')" onclick="CampistryMe.showCamperBunkRequests(\''+je(n)+'\')" style="cursor:pointer"><div style="flex:1;min-width:0"><div class="bb-c-nm">'+esc(n)+'</div></div>'+badges+(d.allergies||d.medications?'<span style="color:var(--err);font-size:.6rem">⚠</span>':'')+'</div>';
+    return '<div class="bb-c" draggable="true" ondragstart="event.dataTransfer.setData(\'text/plain\',\''+je(n)+'\')" onclick="CampistryMe.showCamperBunkRequests(\''+je(n)+'\')" style="cursor:pointer"><div style="flex:1;min-width:0"><div class="bb-c-nm">'+esc(_lbl(n))+'</div></div>'+badges+(d.allergies||d.medications?'<span style="color:var(--err);font-size:.6rem">⚠</span>':'')+'</div>';
 }
 // Quick-view popup for a camper's bunk requests, opened from a Bunk Builder
 // card click — the profile's full Bunk Requests section (viewCamper) shows
@@ -5001,7 +5009,7 @@ function showCamperBunkRequests(n){
     var req=_camperBunkRequests(n);
     var body='';
     if(!req.friends.length&&!req.avoid.length){
-        body='<p style="font-size:.85rem;color:var(--s500)">No bunk requests on file for '+esc(n)+'.</p>';
+        body='<p style="font-size:.85rem;color:var(--s500)">No bunk requests on file for '+esc(_lbl(n))+'.</p>';
     }else{
         if(req.friends.length)body+='<div class="cv-row"><span class="cv-lbl">Wants to bunk with</span><span class="cv-val">'+esc(req.friends.join(', '))+'</span></div>';
         if(req.avoid.length)body+='<div class="cv-row"><span class="cv-lbl">Do not bunk with</span><span class="cv-val cv-warn">'+esc(req.avoid.join(', '))+'</span></div>';
@@ -13820,7 +13828,7 @@ async function printStatement(famKey){
     if(showCampTaxId&&campTaxId) h+='<p style="color:#666;margin:0 0 4px">Tax ID: '+esc(campTaxId)+'</p>';
     h+='<p style="color:#666;margin-bottom:20px">Statement for <strong>'+esc(l.family.name)+'</strong> · Generated '+new Date().toLocaleDateString()+'</p>';
     // Campers
-    h+='<p>Campers: '+(l.family.camperIds||[]).map(function(n){return'<strong>'+esc(n)+'</strong>'}).join(', ')+'</p>';
+    h+='<p>Campers: '+(l.family.camperIds||[]).map(function(n){return'<strong>'+esc(_lbl(n))+'</strong>'}).join(', ')+'</p>';
     // Parent info
     var hh=(l.family.households||[])[0];
     if(hh){
@@ -14946,7 +14954,7 @@ function viewFormResponses(idx){
     }
     if(missing.length){
         h+='<div style="margin-top:14px;font-weight:600;color:var(--err)">Missing ('+missing.length+'):</div><div style="margin-top:6px;font-size:.8rem;color:var(--s600);column-count:2;column-gap:20px">';
-        missing.forEach(function(n){h+='<div style="padding:2px 0">'+esc(n)+'</div>'});
+        missing.forEach(function(n){h+='<div style="padding:2px 0">'+esc(_lbl(n))+'</div>'});
         h+='</div>';
     }
     showModal('Form Responses',h);
@@ -16088,7 +16096,7 @@ function printFamilies(){
     var rows=Object.entries(families).sort(function(a,b){return(a[1].name||'').localeCompare(b[1].name||'')}).map(function(entry){
         var k=entry[0],f=entry[1];
         var pp=(f.households||[])[0]?.parents?.[0]||{};
-        var kids=(f.camperIds||[]).map(function(n){return esc(n)}).join(', ');
+        var kids=(f.camperIds||[]).map(function(n){return esc(_lbl(n))}).join(', ');
         var bal=(ledgers[k]&&ledgers[k].balance)||0;
         return '<tr><td>'+esc(f.name||'')+'</td><td>'+kids+'</td><td>'+esc(pp.name||'')+'</td><td>'+esc(pp.phone||'')+'</td><td>'+esc(pp.email||'')+'</td><td class="right">'+fm(bal)+'</td></tr>';
     }).join('');
@@ -16277,7 +16285,7 @@ function reEnrollCamper(camperName){
     var d=roster[camperName];if(!d)return;
     _freshSessions();
     var sesOpts=sessions.map(function(s){return'<option value="'+esc(s.name)+'">'+esc(s.name)+' — '+fm(s.tuition)+'</option>'}).join('');
-    var h='<div class="me-modal-form"><p style="font-size:.85rem;color:var(--s600);margin-bottom:14px">Re-enroll <strong>'+esc(camperName)+'</strong> for a new session. All info carried over.</p><div style="background:var(--s50);padding:12px;border-radius:var(--r);margin-bottom:14px;font-size:.8rem"><strong>'+esc(d.division||'')+'/'+esc(d.bunk||'')+'</strong> · Parent: '+esc(d.parent1Name||'')+'</div><div class="me-field"><label>Session</label><select id="reSession" class="me-input">'+sesOpts+'</select></div></div>';
+    var h='<div class="me-modal-form"><p style="font-size:.85rem;color:var(--s600);margin-bottom:14px">Re-enroll <strong>'+esc(_lbl(camperName))+'</strong> for a new session. All info carried over.</p><div style="background:var(--s50);padding:12px;border-radius:var(--r);margin-bottom:14px;font-size:.8rem"><strong>'+esc(d.division||'')+'/'+esc(d.bunk||'')+'</strong> · Parent: '+esc(d.parent1Name||'')+'</div><div class="me-field"><label>Session</label><select id="reSession" class="me-input">'+sesOpts+'</select></div></div>';
     showModal('Re-Enroll Camper',h,function(){
         var session=document.getElementById('reSession').value;var sesObj=sessions.find(function(s){return s.name===session});
         var id='enr_'+Date.now()+'_'+Math.random().toString(36).substr(2,4);
@@ -16342,7 +16350,7 @@ function _removeDoc(n,i){if(!roster[n]||!roster[n].documents)return;roster[n].do
 // SCHOLARSHIP / FINANCIAL AID
 // ═══════════════════════════════════════════════════════════════
 function addScholarship(camperName){
-    var h='<div class="me-modal-form"><p style="font-size:.85rem;color:var(--s600);margin-bottom:12px">Award aid to <strong>'+esc(camperName)+'</strong></p><div class="me-field"><label>Type</label><select id="aidType" class="me-input"><option>Scholarship</option><option>Financial Aid</option><option>Campership</option><option>Staff Discount</option><option>Donor Sponsored</option></select></div><div style="display:grid;grid-template-columns:1fr 1fr;gap:10px"><div class="me-field"><label>Amount ($)</label><input type="number" id="aidAmt" class="me-input" step="0.01" min="0"></div><div class="me-field"><label>Source</label><input type="text" id="aidSrc" class="me-input" placeholder="Donor or fund name"></div></div><div class="me-field"><label>Notes</label><input type="text" id="aidNotes" class="me-input"></div></div>';
+    var h='<div class="me-modal-form"><p style="font-size:.85rem;color:var(--s600);margin-bottom:12px">Award aid to <strong>'+esc(_lbl(camperName))+'</strong></p><div class="me-field"><label>Type</label><select id="aidType" class="me-input"><option>Scholarship</option><option>Financial Aid</option><option>Campership</option><option>Staff Discount</option><option>Donor Sponsored</option></select></div><div style="display:grid;grid-template-columns:1fr 1fr;gap:10px"><div class="me-field"><label>Amount ($)</label><input type="number" id="aidAmt" class="me-input" step="0.01" min="0"></div><div class="me-field"><label>Source</label><input type="text" id="aidSrc" class="me-input" placeholder="Donor or fund name"></div></div><div class="me-field"><label>Notes</label><input type="text" id="aidNotes" class="me-input"></div></div>';
     showModal('Award Financial Aid',h,function(){
         var amt=parseFloat(document.getElementById('aidAmt').value)||0;if(!amt){toast('Enter amount','error');return}
         if(!roster[camperName])return;if(!roster[camperName].scholarships)roster[camperName].scholarships=[];

@@ -3057,7 +3057,7 @@
         return `<div class="lite-card lite-camper">
             <button class="lite-camper-row" type="button">
                 <span>
-                    <span class="lite-camper-name">${esc(c.name)}</span>
+                    <span class="lite-camper-name">${esc(_lbl(c.name))}</span>
                     ${meta ? `<div class="lite-camper-meta">${esc(meta)}</div>` : ''}
                 </span>
                 <span class="lite-camper-flags">${flags.join('')}</span>
@@ -3173,7 +3173,7 @@
         return `<div class="lite-card lite-camper">
             <button class="lite-camper-row" type="button" data-camper="${esc(c.name)}">
                 <span>
-                    <span class="lite-camper-name">${esc(c.name)}</span>
+                    <span class="lite-camper-name">${esc(_lbl(c.name))}</span>
                     ${meta ? `<div class="lite-camper-meta">${esc(meta)}</div>` : ''}
                 </span>
                 <span class="lite-camper-flags">${flags.join('')}
@@ -3281,7 +3281,7 @@
         return `
             <div class="lite-detail-head">
                 <div>
-                    <div class="lite-sheet-title" style="margin:0;">${esc(name)}</div>
+                    <div class="lite-sheet-title" style="margin:0;">${esc(_lbl(name))}</div>
                     ${placement ? `<div class="lite-detail-sub">${esc(placement)}</div>` : ''}
                 </div>
                 <button class="lite-sheet-close" id="liteCamperClose" aria-label="Close">
@@ -3469,7 +3469,7 @@
         return `<div class="lite-card lite-med-card">
             <button class="lite-camper-row" type="button" data-camper="${esc(c.name)}">
                 <span>
-                    <span class="lite-camper-name">${esc(c.name)}</span>
+                    <span class="lite-camper-name">${esc(_lbl(c.name))}</span>
                     ${meta ? `<div class="lite-camper-meta">${esc(meta)}</div>` : ''}
                 </span>
                 <svg class="lite-camper-chev" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><polyline points="9 18 15 12 9 6"/></svg>
@@ -3669,7 +3669,7 @@
         return `<div class="lite-card lite-camper">
             <button class="lite-camper-row" type="button" data-camper="${esc(c.name)}">
                 <span>
-                    <span class="lite-camper-name">${esc(c.name)}</span>
+                    <span class="lite-camper-name">${esc(_lbl(c.name))}</span>
                     ${meta ? `<div class="lite-camper-meta">${esc(meta)}</div>` : ''}
                 </span>
                 <span class="lite-camper-flags">${pill}</span>
@@ -4201,7 +4201,7 @@
             const cls = r.state === 'present' ? 'present' : r.state === 'absent' ? 'absent' : 'left';
             return `
             <button type="button" class="lite-camper-row" data-i="${i}" style="width:100%;">
-                <span><span class="lite-camper-name">${esc(r.name)}</span></span>
+                <span><span class="lite-camper-name">${esc(_lbl(r.name))}</span></span>
                 <span class="lite-status ${cls}">${SCAN_STATE_LABEL[r.state] || 'Not marked'}</span>
             </button>`;
         }).join('');
@@ -4348,7 +4348,7 @@
         const meta = [c.bunk, c.division].filter(Boolean).join(' · ');
         return `<div class="lite-card lite-change" data-camper="${esc(name)}">
             <div class="lite-change-top">
-                <span class="lite-camper-name">${esc(name)}</span>
+                <span class="lite-camper-name">${esc(_lbl(name))}</span>
                 <span class="lite-status ${kind === 'late' ? 'absent' : 'left'}">${esc(label)}</span>
             </div>
             ${meta ? `<div class="lite-camper-meta">${esc(meta)}</div>` : ''}
@@ -4396,7 +4396,7 @@
         }).join('');
         return `<div class="lite-card lite-health-card">
             <div class="lite-health-head" data-camper="${esc(name)}">
-                <span class="lite-camper-name">${esc(name)}</span>
+                <span class="lite-camper-name">${esc(_lbl(name))}</span>
                 ${meta ? `<span class="lite-camper-meta">${esc(meta)}</span>` : ''}
             </div>
             ${allergy}
@@ -4522,7 +4522,7 @@
             if (c.dietary) facts.push(`<div class="lite-med-fact diet"><span>Dietary</span>${esc(c.dietary)}</div>`);
             return `<div class="lite-card lite-med-card">
                 <button class="lite-camper-row" type="button" data-camper="${esc(name)}">
-                    <span><span class="lite-camper-name">${esc(name)}</span>${meta ? `<div class="lite-camper-meta">${esc(meta)}</div>` : ''}</span>
+                    <span><span class="lite-camper-name">${esc(_lbl(name))}</span>${meta ? `<div class="lite-camper-meta">${esc(meta)}</div>` : ''}</span>
                     <svg class="lite-camper-chev" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><polyline points="9 18 15 12 9 6"/></svg>
                 </button>
                 ${facts.length ? `<div class="lite-med-facts">${facts.join('')}</div>` : ''}
@@ -4682,7 +4682,7 @@
                 </div>
                 <div class="lite-card lite-thread lite-swipe-fg" data-key="${esc(t.key)}">
                     <div class="lite-thread-top">
-                        <span class="lite-camper-name">${esc(who)}</span>
+                        <span class="lite-camper-name">${esc(_lbl(who))}</span>
                         ${t.unread ? `<span class="lite-unread-dot" aria-label="${t.unread} unread"></span>` : ''}
                         ${t.important ? '<span class="lite-imp-dot" title="Important"></span>' : ''}
                         <span class="lite-thread-time">${esc(shortWhen(t.last.created_at))}</span>
@@ -4921,7 +4921,7 @@
             results.innerHTML = hits.length ? hits.map(([n, c]) => {
                 const on = hasRecipient('camper', n);
                 const contact = [c.bunk, c.parent1Name].filter(Boolean).join(' · ') || 'No parent on file';
-                return `<button class="lite-rec-hit${on ? ' on' : ''}" data-name="${esc(n)}"><span class="lite-camper-name">${esc(n)}</span><div class="lite-camper-meta">${esc(contact)}</div></button>`;
+                return `<button class="lite-rec-hit${on ? ' on' : ''}" data-name="${esc(n)}"><span class="lite-camper-name">${esc(_lbl(n))}</span><div class="lite-camper-meta">${esc(contact)}</div></button>`;
             }).join('') : `<div class="lite-note">No campers match.</div>`;
             results.querySelectorAll('.lite-rec-hit').forEach(btn =>
                 btn.addEventListener('click', () => { toggleRecipient('camper', btn.dataset.name); paintLinkCompose(); }));
@@ -5808,7 +5808,7 @@
                 const key = 'p:' + c.parent1Phone + ':' + c.bunk;
                 if (seen.has(key)) return; // one text per parent per bunk (siblings share)
                 seen.add(key);
-                out.push({ phone: c.parent1Phone, body, label: `${name} — parent (${c.bunk})` });
+                out.push({ phone: c.parent1Phone, body, label: `${_lbl(name)} — parent (${c.bunk})` });
             });
         }
         return out;
@@ -6642,6 +6642,15 @@
     // ════════════════════════════════════════════════════════════════════
     // UTILITIES
     // ════════════════════════════════════════════════════════════════════
+
+// ── Camper display name ────────────────────────────────────────────────────
+// Roster keys are unique but are not always the camper's name: a second camper
+// sharing a name is keyed "Malky Stein #102" (their camperId) — see
+// campistry_camper_identity.js. The suffix is always exactly " #<id>" appended to
+// the plain name, so stripping it needs no roster lookup. IDENTITY keeps the KEY
+// (data-camper, data-name, data-give-name, every lookup); only visible text here.
+function _lbl(k) { return String(k == null ? '' : k).replace(/\s#\d+$/, ''); }
+
 
     function esc(v) {
         return String(v ?? '')

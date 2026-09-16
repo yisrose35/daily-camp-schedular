@@ -235,14 +235,18 @@ test('the POS shows the label but selects by the key', () => {
 // Labelling an option value would break the lookup it feeds.
 
 const SWEPT = ['campistry_health.js', 'campistry_live.js', 'campistry_snacks.js',
-               'campistry_snacks_pos.js', 'campistry_go.js', 'campistry_go_luggage.js'];
+               'campistry_snacks_pos.js', 'campistry_go.js', 'campistry_go_luggage.js',
+               'campistry_me.js', 'campistry_lite.js'];
 
 test('every swept file has the label helper, and it is a pure string function', () => {
     for (const f of SWEPT) {
         const src = read(f);
-        assert.match(src, /function _lbl\(key\) \{ return String\(key == null \? '' : key\)\.replace\(\/\\s#\\d\+\$\/, ''\); \}/,
-            f + ' has no label helper, or it is no longer a pure strip — a roster ' +
-            'lookup here would be slower and could disagree with displayName');
+        // Every copy must strip a trailing " #<id>". campistry_me.js's copy also
+        // prefers displayName, because it has the roster in scope and can.
+        assert.match(src, /function _lbl\((key|k)\)/, f + ' has no label helper');
+        // me.js writes it without the space after the comma.
+        assert.match(src, /\.replace\(\/\\s#\\d\+\$\/,\s*''\)/,
+            f + "'s helper no longer strips the suffix");
     }
 });
 
@@ -288,4 +292,37 @@ test('the camp name was NOT mistaken for a camper name', () => {
         'the route-sheet title changed — check it is still the camp name, unlabelled');
     assert.ok(!/esc\(_lbl\(cn\)\)/.test(go),
         'the camp name is being run through the camper label helper');
+});
+
+test('me.js and lite.js label visible text and keep identity on the key', () => {
+    const ME = read('campistry_me.js');
+    // The family modal's camper checkbox: value is the key, label is the name.
+    assert.match(ME, /class="fmCamperCB" value="'\+esc\(n\)\+'"/,
+        'the checkbox value was labelled — saving the family would drop the camper');
+    assert.match(ME, /accent-color:var\(--me\)\)?"> '\+esc\(_lbl\(n\)\)\+elsewhere/,
+        'the checkbox label still shows the raw key');
+    // The roster table and the camper detail heading.
+    assert.match(ME, /var nameCell=esc\(_lbl\(n\)\)/, 'the roster table shows the raw key');
+    assert.match(ME, /<h2 class="sec-title">'\+esc\(_lbl\(n\)\)/, 'the detail heading does');
+
+    const LITE = read('campistry_lite.js');
+    assert.match(LITE, /data-camper="\$\{esc\(c\.name\)\}"/,
+        'lite\u2019s data-camper was labelled — every tap would resolve to nothing');
+    // Every camper-name span must go through a labelling function — _lbl for a
+    // roster key, or linkLabelOf for an already-resolved Link record.
+    assert.ok(!/class="lite-camper-name">\$\{esc\((?!_lbl\(|linkLabelOf\()/.test(LITE),
+        'a lite camper-name span still renders the raw key');
+});
+
+test('the sweep did not touch bunk, division, grade or staff names', () => {
+    // These look identical to a camper site and are not campers. Sweeping them
+    // would mangle a bunk label or a division heading.
+    const ME = read('campistry_me.js');
+    assert.match(ME, /class="me-bunk-name" data-orig="'\+esc\(name\)\+'">'\+esc\(name\)/,
+        'a BUNK name is being run through the camper label helper');
+    assert.match(ME, /Delete Division\?',message:'<strong>'\+esc\(n\)/,
+        'a DIVISION name is being labelled as a camper');
+    const LITE = read('campistry_lite.js');
+    assert.match(LITE, /class="lite-bunk-name">\$\{esc\(name\)\}/,
+        'lite is labelling a bunk name as a camper');
 });
