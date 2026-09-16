@@ -206,7 +206,11 @@ body{font-family:var(--font);background:var(--s50);color:var(--s800);-webkit-fon
 <label class="po" onclick="selPay(this,'zelle')"><input type="radio" name="pm" value="zelle"><div><div class="po-l">Zelle</div><div class="po-d">Send directly via Zelle</div></div></label>
 <label class="po" onclick="selPay(this,'check')"><input type="radio" name="pm" value="check"><div><div class="po-l">Check</div><div class="po-d">Mail or drop off</div></div></label>
 <label class="po" onclick="selPay(this,'payment_plan')"><input type="radio" name="pm" value="payment_plan"><div><div class="po-l">Payment Plan</div><div class="po-d">Monthly installments</div></div></label>
-</div></div>
+</div>
+<!-- What picking card or ACH actually means, said where it is picked, plus the
+     offer to keep the card. Filled in by _regPayMethodNote(). -->
+<div id="payMethodNote" style="display:none"></div>
+</div>
 
 <!-- Custom Questions (hidden by default, shown when config has questions) -->
 <div class="cd" id="customQCard" style="display:none"><div class="ct"><svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="10"/><path d="M9.09 9a3 3 0 015.83 1c0 2-3 3-3 3"/><line x1="12" y1="17" x2="12.01" y2="17"/></svg>Additional Information</div>
@@ -783,6 +787,7 @@ function applyFormConfig(fc){
     // takes it off the preview immediately.
     if(Array.isArray(fc.paymentMethods))_payMethods=fc.paymentMethods;
     try{ _regRenderPayOpts(); }catch(e){}
+    try{ _regPayMethodNote(); }catch(e){}
     applySectionOrder(fc.sectionOrder);
     applyBranding(fc.branding);
 }
@@ -865,6 +870,9 @@ async function _loadFromCloud(campId){
         // migration and no second delivery path to keep in step.
         _payMethods=(d.formConfig||{}).paymentMethods||null;
         _allowParentPlans=d.allowParentPaymentPlans!==false;
+        // Resolved now rather than at submit: whether a card can be taken at
+        // all changes what the Payment section is allowed to promise.
+        _regLoadPayAbility(campId).then(function(){try{_regPayMethodNote();}catch(e){}});
         applyFormConfig(d.formConfig||{});
         _applySchoolGradeOptions(d.schoolGrades);
         renderSessions();
@@ -913,7 +921,12 @@ window._selSess=function(i){
     document.querySelectorAll('.ss').forEach(function(c,j){c.classList.toggle('sel',j===i)});
     updatePrice();
 };
-window.selPay=function(el,m){selPM=m;document.querySelectorAll('.po').forEach(function(o){o.classList.remove('sel')});el.classList.add('sel')};
+window.selPay=function(el,m){
+    selPM=m;
+    document.querySelectorAll('.po').forEach(function(o){o.classList.remove('sel')});
+    el.classList.add('sel');
+    try{ _regPayMethodNote(); }catch(e){}
+};
 
 function updatePrice(){
     var s=_pickerItems().find(function(s){return s.name===selSess&&s.kind===selSessKind});
@@ -969,6 +982,49 @@ function updatePrice(){
     // The deposit can be a share of this, so it moves whenever the price does.
     try{ _regRenderDeposit(); }catch(e){ console.warn('[Register] deposit box:',e&&e.message); }
 }
+
+// ─── WHAT PICKING A METHOD MEANS ──────────────────────────────
+//
+// A parent who ticks "Credit Card" reasonably expects to type a card. They
+// cannot type one yet -- there is nothing to charge until the application
+// exists -- so the next best thing is to say exactly what will happen, where
+// they picked it, rather than letting them find out after submitting.
+
+/** Methods that end in a trip to the processor. */
+function _regIsOnlineMethod(m){ return m==='credit_card'||m==='ach'||m==='debit'; }
+
+function _regPayMethodNote(){
+    var box=document.getElementById('payMethodNote');
+    if(!box)return;
+    var due=_regDepositDue();
+    var owes=!!(due&&due.total);
+    var pol=(window.CampistryDepositPolicy&&_depositPolicy)
+        ? window.CampistryDepositPolicy.normalize(_depositPolicy) : null;
+    var payNow=owes&&pol&&pol.enabled&&pol.timing!=='later';
+
+    if(!_regIsOnlineMethod(selPM)||!payNow||!(_payAbility&&_payAbility.canPayOnline)){
+        box.style.display='none';_regSetHtml(box,'');return;
+    }
+
+    var who=_payAbility.processor==='banquest'?'the camp\u2019s secure payment page'
+          :_payAbility.processor==='stripe'?'Stripe\u2019s secure checkout'
+          :'a secure payment page';
+
+    box.style.display='';
+    _regSetHtml(box,
+        '<div style="background:var(--s50);border:1px solid var(--s200);border-radius:var(--r);padding:11px 13px;margin-top:8px">'
+        +'<div style="font-size:.82rem;color:var(--s600);line-height:1.6">'
+        +'When you submit, you will be taken to '+esc(who)+' to enter your '
+        +(selPM==='ach'?'bank details':'card')+' and pay the '
+        +(window.CampistryDepositPolicy?window.CampistryDepositPolicy.money(due.total):fm(due.total))
+        +' deposit. Your details never touch this form.</div>'
+        +'<label style="display:flex;gap:9px;align-items:flex-start;margin-top:9px;font-size:.82rem;color:var(--s700);cursor:pointer">'
+        +'<input type="checkbox" id="paySaveCard"'+(_saveCard?' checked':'')+' onchange="_regSaveCardToggle(this)" style="accent-color:var(--me);margin-top:2px">'
+        +'<span>Save it for future payments, so you do not have to enter it again</span></label>'
+        +'</div>');
+}
+window._regSaveCardToggle=function(cb){ _saveCard=!!(cb&&cb.checked); };
+var _saveCard=false;
 
 // ─── PAYING THE DEPOSIT ───────────────────────────────────────
 //
@@ -1042,7 +1098,7 @@ window._regPayDeposit=async function(campId,enrollId){
     if(!client||!client.functions){return fail('Could not reach the payment service. Please try again.');}
     try{
         var r=await client.functions.invoke('registration-deposit-checkout',{
-            body:{campId:campId,enrollmentId:enrollId,
+            body:{campId:campId,enrollmentId:enrollId,saveCard:!!_saveCard,
                   returnUrl:window.location.origin+window.location.pathname}
         });
         var d=r&&r.data;
@@ -1656,9 +1712,19 @@ window.submitApp=async function(){
     // a deposit the camp wants up front -- a pay-later one is already tracked
     // as owed and chasing it here would be noise.
     if(_regDepStamp.depositRequired>0&&_regDepStamp.depositTiming!=='later'){
-        try{ _regOfferDepositPayment(_resolvedCampId||campIdParam,appIds[0],
-                                     _regDepStamp.depositRequired,_regDepStamp.depositLabel); }
-        catch(e){ console.warn('[Register] deposit payment step:',e&&e.message); }
+        try{
+            _regOfferDepositPayment(_resolvedCampId||campIdParam,appIds[0],
+                                    _regDepStamp.depositRequired,_regDepStamp.depositLabel);
+            // Somebody who ticked Credit Card or ACH asked to pay by card. Make
+            // them hunt for a second button and a good share of them will not,
+            // so go straight to the processor -- the step is still on screen
+            // behind it if they come back.
+            if(_regIsOnlineMethod(selPM)&&_payAbility&&_payAbility.canPayOnline){
+                setTimeout(function(){
+                    try{ _regPayDeposit(_resolvedCampId||campIdParam,appIds[0]); }catch(e){}
+                },900);
+            }
+        }catch(e){ console.warn('[Register] deposit payment step:',e&&e.message); }
     }
     window.scrollTo(0,0);
 

@@ -694,8 +694,78 @@ test('the form offers paying only when something is behind the button', () => {
     // costs the family nothing.
     // Compare against the CALL SITE, not the first mention — the function is
     // named in a comment near the top of the file.
-    const callAt = reg.indexOf('try{ _regOfferDepositPayment(');
+    const callAt = reg.indexOf('_regOfferDepositPayment(_resolvedCampId');
     assert.ok(callAt > 0, 'the pay step is never offered');
     assert.ok(reg.indexOf('recordSubmission();') < callAt,
         'the application must be saved before the parent is sent to pay');
+});
+
+// ── going to the processor, and keeping the card ────────────────────────────
+test('picking card or ACH says where it will take you', () => {
+    // A parent who ticks "Credit Card" expects to type a card. They cannot yet
+    // — there is nothing to charge until the application exists — so the form
+    // says what will happen, where they picked it, rather than letting them
+    // find out after submitting.
+    const reg = fs.readFileSync(path.join(ROOT, 'campistry_register.html'), 'utf8');
+    assert.match(reg, /function _regIsOnlineMethod/);
+    assert.match(reg, /id="payMethodNote"/);
+    assert.match(reg, /you will be taken to/);
+    // Named by rail, not generically — "Stripe's secure checkout" is a thing a
+    // parent recognises and trusts.
+    assert.match(reg, /Stripe\\u2019s secure checkout/);
+    assert.match(reg, /camp\\u2019s secure payment page/);
+    assert.match(reg, /never touch this form/);
+    // Only promised when it can actually happen.
+    assert.match(reg, /!\(_payAbility&&_payAbility\.canPayOnline\)/);
+});
+
+test('choosing a card takes them there rather than to a second button', () => {
+    const reg = fs.readFileSync(path.join(ROOT, 'campistry_register.html'), 'utf8');
+    assert.match(reg, /if\(_regIsOnlineMethod\(selPM\)&&_payAbility&&_payAbility\.canPayOnline\)/);
+    assert.match(reg, /_regPayDeposit\(_resolvedCampId\|\|campIdParam,appIds\[0\]\)/);
+    // The step stays on screen behind the redirect, so someone who comes back
+    // has a way to finish.
+    const callAt = reg.indexOf('_regOfferDepositPayment(_resolvedCampId');
+    assert.ok(callAt > 0 && callAt < reg.indexOf('if(_regIsOnlineMethod(selPM)&&_payAbility'),
+        'the pay step must be rendered before the redirect fires');
+});
+
+test('a parent can keep the card they just typed', () => {
+    const reg = fs.readFileSync(path.join(ROOT, 'campistry_register.html'), 'utf8');
+    const fn = fs.readFileSync(path.join(ROOT, 'supabase/functions/registration-deposit-checkout/index.ts'), 'utf8');
+    const stripe = fs.readFileSync(path.join(ROOT, 'supabase/functions/stripe-webhook/index.ts'), 'utf8');
+    const hosted = fs.readFileSync(path.join(ROOT, 'supabase/functions/payments-hosted-complete/index.ts'), 'utf8');
+    const sql = fs.readFileSync(path.join(ROOT, 'migrations/166_registration_saved_card.sql'), 'utf8');
+
+    assert.match(reg, /id="paySaveCard"/);
+    assert.match(reg, /saveCard:!!_saveCard/, 'the choice never reaches the server');
+
+    // Only ever because the parent asked.
+    assert.match(fn, /if \(saveCard\)/);
+    assert.match(fn, /setup_future_usage/, 'a plan needs a method chargeable off-session');
+    assert.match(fn, /saveCard \? "registration_deposit_save" : "registration_deposit"/);
+    assert.match(hosted, /registration_deposit_save/);
+
+    // Both rails record it; neither treats a failure as fatal, because the
+    // money is already in and a lost card just means typing it again.
+    assert.match(stripe, /_record_registration_card/);
+    assert.match(hosted, /_record_registration_card/);
+    assert.match(stripe, /card not saved for/);
+
+    // Never a card number — only the processor's own references and last four.
+    assert.ok(!/card_number|cardNumber|p_pan/i.test(sql), 'no card number may be stored');
+    assert.match(sql, /savedCardLast4/);
+    assert.match(sql, /jsonb_set/, 'written in place, like the deposit itself');
+});
+
+test('the saved card reaches the family when the office accepts', () => {
+    // It waits on the application because there is no family until acceptance.
+    const me = fs.readFileSync(path.join(ROOT, 'campistry_me.js'), 'utf8');
+    const fn = me.slice(me.indexOf('function enrollCamper('), me.indexOf('// Generate payment plan'));
+    assert.match(fn, /e\.savedCardCustomer/);
+    assert.match(fn, /stripeCustomerId/);
+    assert.match(fn, /byopCustomerRef/);
+    // A card the office already has was chosen deliberately and may be the one
+    // autopay runs on — it must not be overwritten by a registration card.
+    assert.match(fn, /if\(!_f\.cardOnFile\)/);
 });

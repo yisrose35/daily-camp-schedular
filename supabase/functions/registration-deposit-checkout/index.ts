@@ -58,7 +58,7 @@ serve(async (req) => {
   if (req.method === "OPTIONS") return new Response("ok", { headers: corsHeaders });
 
   try {
-    const { campId, enrollmentId, returnUrl } = await req.json();
+    const { campId, enrollmentId, returnUrl, saveCard } = await req.json();
     if (!campId || !enrollmentId || !returnUrl) {
       return json({ success: false, error: "campId, enrollmentId and returnUrl are required" }, 400);
     }
@@ -120,10 +120,14 @@ serve(async (req) => {
           redirect_url: returnUrl,
           custom_fields: {
             custom1: "registration_deposit",
-            custom2: "",
+            // The completion step reads this to decide whether to keep the
+            // token it gets back. A card is only ever vaulted because the
+            // parent ticked the box.
+            custom2: saveCard ? "save" : "",
             custom3: "",
             custom4: String(enrollmentId),
           },
+          ...(saveCard ? { save_payment_method: true } : {}),
           transaction: { description: label, amount: Number(owed.toFixed(2)) },
         }),
       });
@@ -143,7 +147,7 @@ serve(async (req) => {
       const { error: insErr } = await service.from("banquest_pending_links").insert({
         key: String(key),
         camp_id: campId,
-        purpose: "registration_deposit",
+        purpose: saveCard ? "registration_deposit_save" : "registration_deposit",
         enrollment_id: String(enrollmentId),
         amount: Number(owed.toFixed(2)),
       });
@@ -171,6 +175,13 @@ serve(async (req) => {
         "line_items[0][price_data][product_data][name]": label,
         "payment_intent_data[description]": label,
       };
+      if (saveCard) {
+        // off_session is what makes the method chargeable later without the
+        // parent present, which is what a payment plan needs. Stripe requires
+        // a customer to attach it to, and Checkout will make one.
+        params["payment_intent_data[setup_future_usage]"] = "off_session";
+        params["customer_creation"] = "always";
+      }
       if (owedRes.parentEmail) params["customer_email"] = String(owedRes.parentEmail);
 
       // On BOTH the session and the intent, so the webhook has it whichever

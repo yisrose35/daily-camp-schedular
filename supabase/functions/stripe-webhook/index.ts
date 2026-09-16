@@ -254,6 +254,27 @@ async function handleRegistrationDeposit(
     return;
   }
   console.log(`[stripe-webhook] registration deposit $${(pi.amount || 0) / 100} marked on ${enrollmentId}${(data as any)?.duplicate ? " (already recorded)" : ""}`);
+
+  // The card, if the parent asked us to keep it. setup_future_usage put the
+  // method on a customer; recording the pair here lets enrollCamper carry it
+  // onto the family the moment the family first exists.
+  const customer = String(pi.customer || "");
+  const method = String(pi.payment_method || "");
+  if (!customer || !method) return;
+  const last4 = String(pi.charges?.data?.[0]?.payment_method_details?.card?.last4 || "");
+  const { error: cardErr } = await supabase.rpc("_record_registration_card", {
+    p_camp_id: campId,
+    p_enroll_id: enrollmentId,
+    p_processor: "stripe",
+    p_customer: customer,
+    p_method: method,
+    p_last4: last4,
+  });
+  // Not fatal: the deposit is already marked and the money is in. A card that
+  // did not stick means the family types it once more later, which is a
+  // nuisance rather than a loss.
+  if (cardErr) console.warn(`[stripe-webhook] card not saved for ${enrollmentId}: ${cardErr.message}`);
+  else console.log(`[stripe-webhook] card saved for ${enrollmentId} (••••${last4})`);
 }
 
 async function handleLinkPhotoPurchase(

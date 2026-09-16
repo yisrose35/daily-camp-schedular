@@ -11106,6 +11106,28 @@ function enrollCamper(id){
         };
     }
 
+    // A card the parent saved while paying their deposit. It has been waiting
+    // on the application because there was no family to put it on yet -- this
+    // is the moment the family first exists. Never overwrite a card the office
+    // already has on file: that one was chosen deliberately and may be the one
+    // autopay is running on.
+    if(famKey&&families[famKey]&&e.savedCardCustomer){
+        var _f=families[famKey];
+        if(!_f.cardOnFile){
+            if(e.savedCardProcessor==='stripe'){
+                _f.stripeCustomerId=_f.stripeCustomerId||e.savedCardCustomer;
+                if(e.savedCardMethod)_f.stripePaymentMethodId=_f.stripePaymentMethodId||e.savedCardMethod;
+            }else if(e.savedCardProcessor){
+                _f.byopCustomerRef=_f.byopCustomerRef||e.savedCardCustomer;
+                _f.byopProcessor=_f.byopProcessor||e.savedCardProcessor;
+            }
+            _f.cardOnFile=true;
+            _f.cardSavedDate=e.depositPaidDate||new Date().toISOString().split('T')[0];
+            if(e.savedCardLast4)_f.paymentMethodLabel='Card ending '+e.savedCardLast4;
+            console.log('[Me] carried the card saved at registration onto '+(_f.name||famKey));
+        }
+    }
+
     // Generate payment plan / installment schedule
     var schedule=_buildInstallmentSchedule(sesObj,tuition);
     if(schedule){

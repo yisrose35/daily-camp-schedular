@@ -239,3 +239,29 @@ without a processor never shows one that cannot work.
 > Banquest in sandbox), submit an application with a deposit required, pay it,
 > and confirm the Registration list flips that application to **paid**. None of
 > this can be verified from the code alone.
+
+### Migration 166 — saving the card at registration
+
+A family paying a deposit has already typed their card into the camp's
+processor. Asking them to type it again in July, to set up a plan or pay an
+instalment, is work nobody needs to do twice.
+
+Picking **Credit Card** or **ACH** now says, where it is picked, exactly what
+will happen — *"When you submit, you will be taken to Stripe's secure checkout
+to enter your card and pay the $250 deposit. Your details never touch this
+form."* — with a tickbox to keep it. On submit they go straight there rather
+than hunting for a second button; the pay step stays on the confirmation screen
+for anyone who comes back.
+
+Apply **`migrations/166_registration_saved_card.sql`** alongside 165, and
+redeploy the same three functions.
+
+**The card number never reaches Campistry.** The parent types it on the
+processor's page. Only the processor's own references and the last four digits
+are stored, which is what every existing card-on-file path here already holds.
+
+The token waits on the *application*, because there is no family record until
+the office accepts — `enrollCamper` carries it onto the family at the moment
+the family first exists, and **never overwrites a card the office already has
+on file**, which was chosen deliberately and may be the one autopay is running
+on.

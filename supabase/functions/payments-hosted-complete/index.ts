@@ -210,7 +210,7 @@ serve(async (req) => {
     // so this credits the APPLICATION, which is what the Registration list and
     // the post-acceptance form both read. Kept as its own early branch so the
     // three flows that already work here are untouched.
-    if (pending.purpose === "registration_deposit") {
+    if (pending.purpose === "registration_deposit" || pending.purpose === "registration_deposit_save") {
       const recRes = await service.rpc("_record_registration_deposit", {
         p_camp_id: campId,
         p_enroll_id: String(pending.enrollment_id || ""),
@@ -225,7 +225,24 @@ serve(async (req) => {
         console.error(`[payments-hosted-complete] registration deposit not recorded for camp ${campId} enrollment ${pending.enrollment_id}: ${(recRes as any)?.error?.message || rec?.error}`);
         return json({ success: false, error: "Your payment went through, but we could not mark it on your application. Please contact the camp with this reference: " + referenceNumber }, 200);
       }
-      return json({ success: true, purpose: "registration_deposit", amount, last4, duplicate: !!rec.duplicate });
+      // The card, only when the parent asked for it on the way in.
+      if (pending.purpose === "registration_deposit_save") {
+        const vaultRef = String(tx?.customer_id || tx?.customer?.id || tx?.token || "");
+        if (vaultRef) {
+          const { error: cardErr } = await service.rpc("_record_registration_card", {
+            p_camp_id: campId,
+            p_enroll_id: String(pending.enrollment_id || ""),
+            p_processor: "banquest",
+            p_customer: vaultRef,
+            p_method: "",
+            p_last4: String(last4 || ""),
+          });
+          // Not fatal: the money is in and the deposit is marked. A card that
+          // did not stick means typing it once more later.
+          if (cardErr) console.warn(`[payments-hosted-complete] card not saved for ${pending.enrollment_id}: ${cardErr.message}`);
+        }
+      }
+      return json({ success: true, purpose: pending.purpose, amount, last4, duplicate: !!rec.duplicate });
     }
 
     // ── canteen: credit the camper's balance (idempotent on the txn id) ──────
