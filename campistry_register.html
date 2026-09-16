@@ -197,9 +197,10 @@ body{font-family:var(--font);background:var(--s50);color:var(--s800);-webkit-fon
 <div id="promoMsg" class="promo-msg" style="display:none"></div></div>
 <p style="font-size:.8rem;color:var(--s500);margin-bottom:8px">Select how you'd like to pay:</p>
 <div id="payOpts">
-<!-- Credit only. The camp's payment policy — and the reasoning for refusing
-     debit on tuition — lives in campistry_payments.js; a camp that re-enables
-     it there gets a Debit option added here at runtime by _regApplyPayPolicy(). -->
+<!-- Rebuilt at runtime by _regRenderPayOpts() from the camp's own choice in
+     the form builder. This markup is what a camp that has never touched that
+     setting sees, so the default is byte-identical to what shipped. The
+     reasoning for refusing debit on tuition lives in campistry_payments.js. -->
 <label class="po" onclick="selPay(this,'credit_card')"><input type="radio" name="pm" value="credit_card"><div><div class="po-l">Credit Card</div><div class="po-d">Visa, Mastercard, Amex — credit cards only</div></div></label>
 <label class="po" onclick="selPay(this,'ach')"><input type="radio" name="pm" value="ach"><div><div class="po-l">ACH / Bank Transfer</div><div class="po-d">Direct from bank account</div></div></label>
 <label class="po" onclick="selPay(this,'zelle')"><input type="radio" name="pm" value="zelle"><div><div class="po-l">Zelle</div><div class="po-d">Send directly via Zelle</div></div></label>
@@ -407,8 +408,18 @@ function applyFieldConfig(fields,sectionsDisabled){
 // so applying it with no customization is a visual no-op.
 var SECTION_ORDER_MAP={camper:'camperCard',siblings:'sibCard',parent:'parentCard',address:'addrCard',summerAddress:'summerAddrCard',otherParent:'otherParentCard',emergency:'emCard',medical:'medCard',preferences:'prefCard',documents:'docCard',payment:'payCard',signature:'sigCard'};
 var DEFAULT_SECTION_ORDER=['camper','siblings','parent','address','summerAddress','emergency','medical','preferences','documents','payment','signature'];
+// Payment and the agreement are always the last two cards, whatever order the
+// camp dragged the rest into, because the submit button sits under them. With
+// Siblings below Payment, adding a child grew the page underneath the part a
+// parent had already filled in -- so Payment drifted up the screen and the
+// submit button stopped being the thing at the end. Anything a parent adds
+// now grows ABOVE the paying and signing, which is the order the form is
+// actually completed in.
+var PINNED_LAST=['payment','signature'];
+
 function applySectionOrder(order){
     order=(order&&order.length)?order:DEFAULT_SECTION_ORDER;
+    order=order.filter(function(k){return PINNED_LAST.indexOf(k)<0;}).concat(PINNED_LAST);
     var anchor=document.getElementById('formErr');
     if(!anchor||!anchor.parentNode)return;
     var parent=anchor.parentNode;
@@ -417,10 +428,14 @@ function applySectionOrder(order){
         var el=elId&&document.getElementById(elId);
         if(el)parent.insertBefore(el,anchor);
     });
-    var cq=document.getElementById('customQCard'),sig=document.getElementById('sigCard');
-    if(cq&&sig&&sig.parentNode)sig.parentNode.insertBefore(cq,sig);
+    // Custom questions and custom sections are still the parent's to fill in,
+    // so they belong above the paying and signing rather than between them.
+    var pay=document.getElementById('payCard'),sig=document.getElementById('sigCard');
+    var before=pay||sig;
+    var cq=document.getElementById('customQCard');
+    if(cq&&before&&before.parentNode)before.parentNode.insertBefore(cq,before);
     var secHolder=document.getElementById('customSectionsHolder');
-    if(secHolder&&sig&&sig.parentNode)sig.parentNode.insertBefore(secHolder,sig);
+    if(secHolder&&before&&before.parentNode)before.parentNode.insertBefore(secHolder,before);
 }
 
 var BRAND_COLOR_DEFAULT='#D97706';
@@ -737,6 +752,10 @@ function applyFormConfig(fc){
     // formConfig, but a camp switching sections on and off expects the whole
     // preview to stay current, and this is the only hook the iframe gets.
     try{ _regRenderDeposit(); }catch(e){}
+    // The builder pushes a draft on every edit, so unticking "Check" there
+    // takes it off the preview immediately.
+    if(Array.isArray(fc.paymentMethods))_payMethods=fc.paymentMethods;
+    try{ _regRenderPayOpts(); }catch(e){}
     applySectionOrder(fc.sectionOrder);
     applyBranding(fc.branding);
 }
@@ -767,6 +786,8 @@ function _loadFromLocalCache(){
         bundles=me.sessionBundles||[];
         promoCodes=me.promoCodes||{EARLYBIRD:{pct:10,label:'Early Bird 10% Off'},SIBLING:{pct:5,label:'Sibling Discount 5%'},REFER:{amt:50,label:'Referral $50 Off'}};
         _depositPolicy=(me.enrollSettings||{}).depositPolicy||null;
+        _payMethods=(me.formConfig||{}).paymentMethods||null;
+        _allowParentPlans=(me.enrollSettings||{}).allowParentPaymentPlans!==false;
         var cn=g.campName||g.app1?.campName||'';
         _baseCampNm=cn;
         if(cn){document.getElementById('campTitle').textContent=cn+' Registration';document.getElementById('campNm').textContent=cn}
@@ -812,6 +833,11 @@ async function _loadFromCloud(campId){
         // public form config. An older database sends nothing and the form
         // behaves exactly as it did before.
         _depositPolicy=d.depositPolicy||null;
+        // paymentMethods rides inside formConfig, which the public RPC has
+        // always sent -- so the camp's choice reaches parents with no
+        // migration and no second delivery path to keep in step.
+        _payMethods=(d.formConfig||{}).paymentMethods||null;
+        _allowParentPlans=d.allowParentPaymentPlans!==false;
         applyFormConfig(d.formConfig||{});
         _applySchoolGradeOptions(d.schoolGrades);
         renderSessions();
@@ -917,6 +943,64 @@ function updatePrice(){
     try{ _regRenderDeposit(); }catch(e){ console.warn('[Register] deposit box:',e&&e.message); }
 }
 
+// ─── HOW FAMILIES MAY PAY ─────────────────────────────────────
+//
+// The camp picks the methods in the form builder; the catalogue and the rules
+// live in campistry_payments.js. Offering a method the camp does not take
+// means turning the parent down afterwards, which is worse than not offering
+// it at all.
+
+// The form's own ids, which predate the shared catalogue. Kept as a mapping
+// rather than renamed, because every application already submitted carries
+// these values and Billing reads them.
+var PAY_ID_MAP={credit:'credit_card',ach:'ach',zelle:'zelle',check:'check',cash:'cash',wire:'wire',debit:'debit'};
+var PAY_BLURB={
+    credit_card:'Visa, Mastercard, Amex \u2014 credit cards only',
+    ach:'Direct from bank account',
+    zelle:'Send directly via Zelle',
+    check:'Mail or drop off',
+    cash:'In person at the camp office',
+    wire:'Bank wire transfer',
+    debit:'Drawn directly from your bank account',
+    payment_plan:'Monthly installments'
+};
+
+function _regRenderPayOpts(){
+    var box=document.getElementById('payOpts');
+    var PM=window.CampistryPayments;
+    if(!box||!PM)return;
+
+    var chosen=Array.isArray(_payMethods)?_payMethods:null;
+    var list=PM.METHODS.filter(function(m){
+        if(m.contexts.indexOf('tuition')<0)return false;
+        return chosen?chosen.indexOf(m.id)>=0:!!m.default;
+    });
+    // Debit is a separate camp-wide decision, not one of the ticks above.
+    if(PM.policy().allowDebit)list.push({id:'debit',label:'Debit card'});
+
+    var html=list.map(function(m){
+        var fid=PAY_ID_MAP[m.id]||m.id;
+        return '<label class="po" onclick="selPay(this,\''+fid+'\')"><input type="radio" name="pm" value="'+fid+'">'
+            +'<div><div class="po-l">'+esc(m.label)+'</div><div class="po-d">'+esc(PAY_BLURB[fid]||'')+'</div></div></label>';
+    }).join('');
+
+    // A payment plan is not a payment METHOD -- it is how the total is broken
+    // up, and the camp controls it separately -- so it is appended rather than
+    // living in the catalogue.
+    if(_allowParentPlans!==false){
+        html+='<label class="po" onclick="selPay(this,\'payment_plan\')"><input type="radio" name="pm" value="payment_plan">'
+            +'<div><div class="po-l">Payment Plan</div><div class="po-d">'+esc(PAY_BLURB.payment_plan)+'</div></div></label>';
+    }
+
+    if(!html){
+        html='<p style="font-size:.82rem;color:var(--s500)">The camp will be in touch about payment.</p>';
+    }
+    _regSetHtml(box,html);
+
+    // A method the camp has since stopped taking must not stay selected.
+    if(selPM&&!box.querySelector('input[value="'+selPM+'"]'))selPM='';
+}
+
 // ─── DEPOSIT TO REGISTER ──────────────────────────────────────
 //
 // The camp's rule lives in enrollSettings.depositPolicy and all the
@@ -925,6 +1009,7 @@ function updatePrice(){
 // application hostage on a public form is a decision for a later change, and
 // the office already sees "awaiting deposit" on its side.
 var _depositPolicy=null, _depDiagSaid=false;
+var _payMethods=null, _allowParentPlans=true;
 
 /** Has a session actually been picked? */
 function _pickerSelected(){

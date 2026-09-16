@@ -8064,16 +8064,30 @@ function _readAdvFields(prefix,catalog){
 // used for camp-structure reordering (_meReorderInit/_meAttachItemDrag),
 // so this feels consistent with the rest of the app rather than inventing
 // a second drag system.
+// Payment and the agreement are pinned last on the registration form itself
+// (see PINNED_LAST there), because the submit button sits under them. Offering
+// a drag the form then ignores is worse than not offering it, so they render
+// as fixed rows rather than draggable ones.
+var _ORDER_PINNED_LAST={fc:['payment','signature']};
+
 function _renderSectionOrderList(prefix,sections,order){
+    var pinned=_ORDER_PINNED_LAST[prefix]||[];
     var keys=(order&&order.length)?order.slice():sections.map(function(s){return s.key});
     // Include any section missing from a stale saved order (e.g. after an app update).
     sections.forEach(function(s){ if(keys.indexOf(s.key)<0) keys.push(s.key); });
+    keys=keys.filter(function(k){return pinned.indexOf(k)<0;}).concat(pinned.filter(function(k){
+        return sections.some(function(s){return s.key===k;});
+    }));
     var byKey={}; sections.forEach(function(s){byKey[s.key]=s;});
     return '<div id="'+prefix+'OrderList">'+keys.map(function(k){
         var s=byKey[k]; if(!s)return'';
-        return '<div class="'+prefix+'OrderRow" data-key="'+k+'" draggable="true" style="display:flex;align-items:center;gap:10px;padding:9px 10px;border:1px solid var(--s200);border-radius:8px;margin-bottom:5px;background:#fff;cursor:grab">'
-            +'<span style="color:var(--s300);font-size:.95rem;line-height:1;letter-spacing:-1px">⠿⠿</span>'
-            +'<span style="flex:1;font-size:.83rem;font-weight:600;color:var(--s700)">'+esc(s.label)+'</span>'
+        var fixed=pinned.indexOf(k)>=0;
+        return '<div class="'+prefix+'OrderRow" data-key="'+k+'"'+(fixed?'':' draggable="true"')
+            +' style="display:flex;align-items:center;gap:10px;padding:9px 10px;border:1px solid var(--s200);border-radius:8px;margin-bottom:5px;background:'
+            +(fixed?'var(--s50)':'#fff')+';cursor:'+(fixed?'default':'grab')+'">'
+            +'<span style="color:var(--s300);font-size:.95rem;line-height:1;letter-spacing:-1px">'+(fixed?'\u2014':'⠿⠿')+'</span>'
+            +'<span style="flex:1;font-size:.83rem;font-weight:600;color:'+(fixed?'var(--s500)':'var(--s700)')+'">'+esc(s.label)+'</span>'
+            +(fixed?'<span style="font-size:.7rem;color:var(--s400);white-space:nowrap">always last</span>':'')
             +'</div>';
     }).join('')+'</div>';
 }
@@ -8127,11 +8141,22 @@ function _collectFormConfigDraft(){
             maxFiles:Math.max(1,Math.min(20,maxFiles))
         });
     });
+    // Which methods the camp offers. Null (rather than a list) when the card
+    // never rendered, so a builder save from a page where the payments module
+    // failed to load cannot silently wipe the camp's choice.
+    var payMethods=null;
+    var payBoxes=document.querySelectorAll('.fcPayM');
+    if(payBoxes.length){
+        payMethods=[];
+        payBoxes.forEach(function(cb){ if(cb.checked)payMethods.push(cb.value); });
+    }
+
     return {
         sections:sections,
         customQuestions:_readCustomQuestions('fc'),
         customSections:_readCustomSections('fc'),
         documents:documents,
+        paymentMethods:payMethods,
         welcomeMessage:(document.getElementById('fcWelcome')?.value||'').trim(),
         instructions:(document.getElementById('fcInstructions')?.value||'').trim(),
         fields:_readAdvFields('fc',FC_FIELD_CATALOG),
@@ -8532,6 +8557,7 @@ function _buildFcPanelHtml(){
         +'<button class="me-btn me-btn--sec me-btn--sm" style="margin-top:4px" onclick="CampistryMe.addDocRow()">+ Add Document</button>';
     h+=_accCard('Required Documents',docsHtml,{badge:docs.length+' set'});
     h+=_dpBuilderCardHtml();
+    h+=_pmBuilderCardHtml(fc);
 
 
     var qHtml='<p style="font-size:.78rem;color:var(--s400);margin:0 0 10px">Standalone questions, shown in an "Additional Information" section. Pick "Show in" to move one inside a built-in section instead (or add it from that section directly, in Sections above).</p>'
@@ -15110,8 +15136,13 @@ function _dpCardHtml(pol){
     // Wording matters less often than the number, so it waits to be asked for.
     h+='<details style="margin:6px 0 4px"><summary style="cursor:pointer;font-size:.82rem;font-weight:600;color:var(--s600);padding:4px 0">What parents see</summary><div style="padding-top:8px">';
     h+=ff('Call it','dpLabel',pol.label);
-    h+='<label style="display:flex;gap:9px;align-items:center;font-size:.82rem;margin:6px 0 10px">'
+    h+='<label style="display:flex;gap:9px;align-items:center;font-size:.82rem;margin:6px 0 4px">'
       +'<input type="checkbox" id="dpRefund" '+(pol.refundable?'checked':'')+' style="accent-color:var(--me);width:15px;height:15px"> Refundable</label>';
+    // Most camps take the deposit off the tuition. Some charge it on top --
+    // a holding fee, an admin charge -- and telling a family it counts when it
+    // does not is a promise the camp has to walk back later.
+    h+='<label style="display:flex;gap:9px;align-items:center;font-size:.82rem;margin:0 0 10px">'
+      +'<input type="checkbox" id="dpCounts" '+(pol.countsTowardTuition?'checked':'')+' style="accent-color:var(--me);width:15px;height:15px"> Counts toward tuition</label>';
     h+=ff('Extra note on the form (optional)','dpNote',pol.note,'textarea');
     h+='</div></details>';
 
@@ -15144,6 +15175,49 @@ async function _dpCheckReach(){
     }catch(e){
         _dpSetHtml(out,'<span style="color:var(--s400)">Could not check whether the public form sees this ('
             +esc((e&&e.message)||'no connection')+').</span>');
+    }
+}
+
+/**
+ * Which ways a family may pay, chosen by the camp.
+ *
+ * The registration form used to hard-code five options, so a camp that does
+ * not take checks still offered checks and then had to chase the parent. The
+ * catalogue and the rules already live in campistry_payments.js -- this only
+ * records which of them this camp wants.
+ *
+ * Stored in formConfig rather than enrollSettings on purpose: formConfig is
+ * already sent to the anonymous public form, so the choice reaches parents
+ * with no migration and no second delivery path to keep in step.
+ */
+function _pmBuilderCardHtml(fc){
+    try{
+        var PM=window.CampistryPayments;
+        if(!PM)return '';
+        var chosen=(fc&&Array.isArray(fc.paymentMethods))?fc.paymentMethods:null;
+        var all=PM.METHODS.filter(function(m){return m.contexts.indexOf('tuition')>=0;});
+        // A camp that has never touched this keeps exactly what the form
+        // offered before, so turning the feature on changes nothing by itself.
+        var isOn=function(id){ return chosen?chosen.indexOf(id)>=0:!!PM.method(id).default; };
+
+        var rows=all.map(function(m){
+            return '<label style="display:flex;gap:9px;align-items:center;padding:7px 2px;font-size:.85rem;border-bottom:1px solid var(--s100)">'
+                +'<input type="checkbox" class="fcPayM" value="'+esc(m.id)+'" '+(isOn(m.id)?'checked':'')
+                +' style="accent-color:var(--me);width:15px;height:15px">'+esc(m.label)+'</label>';
+        }).join('');
+
+        var n=all.filter(function(m){return isOn(m.id)}).length;
+        var body='<p style="font-size:.78rem;color:var(--s400);margin:0 0 10px;line-height:1.6">'
+            +'What a family can choose on the registration form. Untick one and it stops being offered \u2014 '
+            +'a camp that does not take checks should not have to turn one down after the fact.</p>'
+            +rows
+            +'<p style="font-size:.72rem;color:var(--s400);margin:10px 0 0;line-height:1.6">'
+            +'Debit is refused for tuition camp-wide (chargeback and NSF exposure, and it cannot carry an '
+            +'instalment plan). That is a separate, deliberate setting.</p>';
+        return _accCard('How families can pay',body,{badge:n+' offered'});
+    }catch(e){
+        console.warn('[Me] payment methods card failed to render:',e&&e.message);
+        return '';
     }
 }
 
@@ -15233,6 +15307,7 @@ function _dpRead(){
         timing:v('dpTiming')==='They can pay after applying'?'later':'now',
         dueDays:Number(v('dpDueDays'))||0,
         refundable:ck('dpRefund'),
+        countsTowardTuition:ck('dpCounts'),
         label:v('dpLabel'),
         note:v('dpNote')
     };

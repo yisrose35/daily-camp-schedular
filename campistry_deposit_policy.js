@@ -36,6 +36,11 @@
         timing:     'now',      // or 'later'
         dueDays:    14,         // timing 'later': days from applying
         refundable: false,
+        // Most camps treat a deposit as the first slice of tuition. Some do
+        // not -- a non-refundable holding fee, or an admin charge that sits on
+        // top -- and telling a family it "counts toward tuition" when it does
+        // not is a promise the camp then has to walk back.
+        countsTowardTuition: true,
         label:      'Registration deposit',
         note:       ''          // the camp's own words, shown to parents
     };
@@ -61,6 +66,7 @@
         out.timing     = r.timing === 'later' ? 'later' : 'now';
         out.dueDays    = Math.round(num(r.dueDays, P.DEFAULTS.dueDays));
         out.refundable = !!r.refundable;
+        out.countsTowardTuition = r.countsTowardTuition !== false;
         out.label      = String(r.label || P.DEFAULTS.label).trim() || P.DEFAULTS.label;
         out.note       = String(r.note || '').trim();
         return out;
@@ -162,7 +168,12 @@
         var when = pol.timing === 'now'
             ? ' is due now to complete this application'
             : ' is due within ' + pol.dueDays + ' day' + (pol.dueDays === 1 ? '' : 's');
-        return s + who + when + '. It counts toward tuition' +
+        // Said in the order a parent cares about it: does it come off what I
+        // owe, and do I get it back.
+        var counts = pol.countsTowardTuition
+            ? '. It counts toward tuition'
+            : '. It is charged on top of tuition';
+        return s + who + when + counts +
                (pol.refundable ? ' and is refundable' : ' and is not refundable') + '.';
     };
 
@@ -194,6 +205,7 @@
         return {
             depositRequired:   total,
             depositPaid:       0,
+            depositCountsTowardTuition: pol.countsTowardTuition,
             depositPer:        pol.per,
             depositTiming:     pol.timing,
             depositDue:        pol.timing === 'later' ? P.dueDate(pol, nowISO) : (nowISO || '').slice(0, 10),

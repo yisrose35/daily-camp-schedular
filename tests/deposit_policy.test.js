@@ -552,3 +552,65 @@ test('the deposit renders on every path that draws the form', () => {
     const apply = reg.slice(reg.indexOf('function applyFormConfig('), reg.indexOf('// ─── SIBLINGS'));
     assert.match(apply, /_regRenderDeposit/, 'the builder preview never refreshes it');
 });
+
+// ── the camp's own terms ────────────────────────────────────────────────────
+test('a deposit can be charged on top of tuition instead of counting toward it', () => {
+    // Most camps take it off the tuition. Some charge a holding fee on top,
+    // and telling a family it "counts toward tuition" when it does not is a
+    // promise the camp has to walk back.
+    const on = { enabled: true, basis: 'flat', amount: 250, timing: 'now' };
+    const off = { ...on, countsTowardTuition: false };
+    const r = P.amountFor(on, [{ tuition: 1000 }]);
+
+    assert.match(P.describe(on, r), /counts toward tuition/);
+    assert.match(P.describe(off, r), /charged on top of tuition/);
+    // Frozen on the application, like everything else about the deposit.
+    assert.strictEqual(P.stampFor(off, r, '2026-06-01').depositCountsTowardTuition, false);
+    assert.strictEqual(P.stampFor(on, r, '2026-06-01').depositCountsTowardTuition, true);
+    // A camp that never saw this setting keeps the behaviour it had.
+    assert.strictEqual(P.normalize({}).countsTowardTuition, true);
+
+    const me = fs.readFileSync(path.join(ROOT, 'campistry_me.js'), 'utf8');
+    assert.match(me, /id="dpCounts"/, 'no way to change it');
+    assert.match(me, /countsTowardTuition:ck\('dpCounts'\)/, 'the change is never read back');
+});
+
+test('the camp chooses which payment methods families are offered', () => {
+    const me = fs.readFileSync(path.join(ROOT, 'campistry_me.js'), 'utf8');
+    const reg = fs.readFileSync(path.join(ROOT, 'campistry_register.html'), 'utf8');
+
+    assert.match(me, /function _pmBuilderCardHtml/);
+    assert.match(me, /_accCard\('How families can pay'/);
+    // Stored in formConfig, which the public RPC already sends — no migration,
+    // and no second delivery path to keep in step.
+    assert.match(me, /paymentMethods:payMethods/);
+    // Null, not [], when the card never rendered: a save from a page where the
+    // payments module failed to load must not wipe the camp's choice.
+    assert.match(me, /var payMethods=null/);
+
+    assert.match(reg, /function _regRenderPayOpts/);
+    assert.match(reg, /_payMethods=\(d\.formConfig\|\|\{\}\)\.paymentMethods\|\|null/,
+        'the choice never arrives from the cloud');
+    // A method the camp has since stopped taking must not stay selected.
+    assert.match(reg, /if\(selPM&&!box\.querySelector/);
+    // The form's ids predate the shared catalogue and applications already
+    // carry them, so they are mapped rather than renamed.
+    assert.match(reg, /var PAY_ID_MAP=/);
+});
+
+test('paying and signing are always the last thing on the form', () => {
+    // With Siblings below Payment, adding a child grew the page underneath the
+    // part a parent had already filled in, so Payment drifted up the screen
+    // and the submit button stopped being the thing at the end.
+    const reg = fs.readFileSync(path.join(ROOT, 'campistry_register.html'), 'utf8');
+    assert.match(reg, /var PINNED_LAST=\['payment','signature'\]/);
+    assert.match(reg, /order\.filter\(function\(k\)\{return PINNED_LAST\.indexOf\(k\)<0;\}\)\.concat\(PINNED_LAST\)/,
+        'a saved order must not be able to put payment anywhere but last');
+    // Custom questions are still the parent's to fill in, so they go above.
+    assert.match(reg, /var before=pay\|\|sig/);
+
+    // And the builder must not offer a drag the form will ignore.
+    const me = fs.readFileSync(path.join(ROOT, 'campistry_me.js'), 'utf8');
+    assert.match(me, /_ORDER_PINNED_LAST=\{fc:\['payment','signature'\]\}/);
+    assert.match(me, /always last/);
+});
