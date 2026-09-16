@@ -243,28 +243,21 @@ serve(async (req) => {
         console.error(`[cardknox-webhook] card_save ${xInvoice}: could not vault token`);
         return text("Vault failed", 500); // worth a retry from Sola's side
       }
-      let savedCard = false;
-      for (let attempt = 0; attempt < 4 && !savedCard; attempt++) {
-        const cur = await service.from("camp_state_kv").select("value")
-          .eq("camp_id", campId).eq("key", "campistryMe").maybeSingle();
-        const me: Record<string, any> = (cur.data && cur.data.value && typeof cur.data.value === "object") ? cur.data.value : {};
-        if (!me.families || typeof me.families !== "object") me.families = {};
-        const fam = intent.familyKey ? me.families[intent.familyKey] : null;
-        if (!fam) {
-          console.error(`[cardknox-webhook] card_save ${xInvoice}: family ${intent.familyKey} gone for camp ${campId}`);
-          break;
-        }
-        // Migration 139: savedPaymentMethods is now a real LIST, not a single
-        // slot. The first-ever card for a family becomes the default (and
-        // still syncs the legacy single-slot fields below exactly as
-        // before, so autopay/every other existing charge path that reads
-        // those directly keeps working unchanged); an ADDITIONAL card just
-        // appends as non-default, leaving whatever the family's current
-        // default is already used for completely alone.
-        const last4 = (xMaskedCardNumber || "").replace(/[^0-9]/g, "").slice(-4);
-        const existingMethods: any[] = Array.isArray(fam.savedPaymentMethods) ? fam.savedPaymentMethods : [];
-        const isFirstMethod = existingMethods.length === 0;
-        const newMethod = {
+      // Migration 139: savedPaymentMethods is a real LIST, not a single slot.
+      // The first-ever card for a family becomes the default and syncs the
+      // legacy single-slot fields (autopay and every other existing charge path
+      // reads those directly); an ADDITIONAL card just appends as non-default,
+      // leaving whatever the family currently charges completely alone.
+      //
+      // Which of those it is depends on whether the list is empty, so migration
+      // 170's append_family_payment_method decides it under the row lock. The
+      // read-push-upsert this replaces lost one of two cards saved at once, and
+      // appended the SAME card twice if Sola redelivered the webhook.
+      const last4 = (xMaskedCardNumber || "").replace(/[^0-9]/g, "").slice(-4);
+      const { data: saved, error: saveErr } = await service.rpc("append_family_payment_method", {
+        p_camp_id: campId,
+        p_family_key: intent.familyKey || "",
+        p_method: {
           id: "pm_" + crypto.randomUUID().replace(/-/g, ""),
           type: "card",
           processor: "cardknox",
@@ -272,30 +265,30 @@ serve(async (req) => {
           last4,
           label: last4 ? `Card ···· ${last4}` : "Card on file",
           addedDate: new Date().toISOString(),
-          isDefault: isFirstMethod,
-        };
-        fam.savedPaymentMethods = [...existingMethods, newMethod];
-
-        if (isFirstMethod) {
-          fam.byopProcessor = "cardknox";
-          fam.byopCustomerRef = vaulted;
-          fam.cardOnFile = true;
-          fam.cardSavedDate = new Date().toISOString();
-          // Legacy single-slot fields get_my_balance reads for the autopay
-          // card display (v_fam->>'paymentMethodLabel'). Without this the
-          // parent portal only ever shows a generic "a card" instead of the
-          // last four — the actual number the office/parent expects to see.
-          fam.paymentMethodType = "card";
-          fam.paymentMethodLabel = last4 ? `Card ···· ${last4}` : "Card on file";
+        },
+        p_default_fields: {
+          byopProcessor: "cardknox",
+          byopCustomerRef: vaulted,
+          cardOnFile: true,
+          cardSavedDate: new Date().toISOString(),
+          // Legacy single-slot fields get_my_balance reads for the autopay card
+          // display (v_fam->>'paymentMethodLabel'). Without these the parent
+          // portal only ever shows a generic "a card" instead of the last four
+          // — the actual number the office and the parent expect to see.
+          paymentMethodType: "card",
+          paymentMethodLabel: last4 ? `Card ···· ${last4}` : "Card on file",
+        },
+      });
+      if (saveErr || !saved?.success) {
+        const why = saveErr?.message || saved?.error || "unknown";
+        console.error(`[cardknox-webhook] card_save ${xInvoice}: could not record token for camp ${campId} (${why})`);
+        // family_not_found is permanent — the family was deleted between the
+        // parent starting the save and Sola confirming it, so a retry would
+        // fail identically. Anything else is worth Sola retrying.
+        if (saved?.error === "family_not_found") {
+          await service.rpc("mark_cardknox_checkout_intent_status", { p_reference: xInvoice, p_status: "failed", p_xref_num: xRefNum || null });
+          return text("ok", 200);
         }
-        const up = await service.from("camp_state_kv").upsert(
-          { camp_id: campId, key: "campistryMe", value: me, updated_at: new Date().toISOString() },
-          { onConflict: "camp_id,key" },
-        );
-        if (!up.error) savedCard = true;
-      }
-      if (!savedCard) {
-        console.error(`[cardknox-webhook] card_save ${xInvoice}: could not record token for camp ${campId}`);
         return text("Record failed", 500);
       }
       await service.rpc("mark_cardknox_checkout_intent_status", { p_reference: xInvoice, p_status: "completed", p_xref_num: xRefNum || null });
@@ -327,31 +320,27 @@ serve(async (req) => {
         console.error(`[cardknox-webhook] canteen_autoreload_setup ${xInvoice}: could not vault token`);
         return text("Vault failed", 500); // worth a retry from Sola's side
       }
-      let savedCard = false;
-      for (let attempt = 0; attempt < 4 && !savedCard; attempt++) {
-        const cur = await service.from("camp_state_kv").select("value")
-          .eq("camp_id", campId).eq("key", "campistrySnacks").maybeSingle();
-        const snacks: Record<string, any> = (cur.data && cur.data.value && typeof cur.data.value === "object")
-          ? cur.data.value : { accounts: {}, transactions: [] };
-        if (!snacks.accounts || typeof snacks.accounts !== "object") snacks.accounts = {};
-        const camperName = intent.camperName as string;
-        const acct = snacks.accounts[camperName] || (snacks.accounts[camperName] = { balance: 0, dailyLimit: 10, spentToday: 0 });
-        const ar = acct.autoReload || (acct.autoReload = {});
-        ar.byopProcessor = "cardknox";
-        ar.byopCustomerRef = vaulted;
-        ar.cardOnFile = true;
-        ar.paymentMethodType = "card";
-        const last4 = xMaskedCardNumber.replace(/[^0-9]/g, "").slice(-4);
-        if (last4) ar.paymentMethodLabel = "Card ···· " + last4;
-        ar.cardSavedDate = new Date().toISOString();
-        const up = await service.from("camp_state_kv").upsert(
-          { camp_id: campId, key: "campistrySnacks", value: snacks, updated_at: new Date().toISOString() },
-          { onConflict: "camp_id,key" },
-        );
-        if (!up.error) savedCard = true;
-      }
-      if (!savedCard) {
-        console.error(`[cardknox-webhook] canteen_autoreload_setup ${xInvoice}: could not record token for camp ${campId}`);
+      // Migration 170's merge_canteen_autoreload_card — a shallow merge under a
+      // row lock. The blob this touches holds the canteen TRANSACTION LEDGER,
+      // and the canteen balance is recomputed from it, so the whole-blob upsert
+      // this replaces could erase a POS sale (and its money) if a camper bought
+      // something in the seconds a parent was saving a card.
+      const arLast4 = (xMaskedCardNumber || "").replace(/[^0-9]/g, "").slice(-4);
+      const { data: merged, error: mergeErr } = await service.rpc("merge_canteen_autoreload_card", {
+        p_camp_id: campId,
+        p_camper: String(intent.camperName || ""),
+        p_fields: {
+          byopProcessor: "cardknox",
+          byopCustomerRef: vaulted,
+          cardOnFile: true,
+          paymentMethodType: "card",
+          ...(arLast4 ? { paymentMethodLabel: "Card ···· " + arLast4 } : {}),
+          cardSavedDate: new Date().toISOString(),
+        },
+      });
+      if (mergeErr || !merged?.success) {
+        const why = mergeErr?.message || merged?.error || "unknown";
+        console.error(`[cardknox-webhook] canteen_autoreload_setup ${xInvoice}: could not record token for camp ${campId} (${why})`);
         return text("Record failed", 500);
       }
       await service.rpc("mark_cardknox_checkout_intent_status", { p_reference: xInvoice, p_status: "completed", p_xref_num: xRefNum || null });
@@ -392,51 +381,63 @@ serve(async (req) => {
       // matching this project's existing convention of small per-function
       // duplication over a cross-function import chain — see
       // stripe-canteen-refund's own header comment for the same reasoning).
+      // ── atomic: family fields, then the payment ───────────────────────────
+      // This was one blind read-modify-write of the whole campistryMe blob —
+      // read, mutate families[...] AND finance.payments, upsert it all back —
+      // with no lock and no version check, so any overlapping writer silently
+      // discarded whichever change landed first. Worse than the others: the
+      // vault call below is an await INSIDE that read-write window, so the
+      // window was a network round trip wide, not microseconds.
+      //
+      // The read here is only to DECIDE what to change (never overwrite a
+      // token or label the office saved deliberately). The writes are two
+      // locked calls — see migration 168.
       let saved = false;
-      for (let attempt = 0; attempt < 4 && !saved; attempt++) {
-        const cur = await service.from("camp_state_kv").select("value")
-          .eq("camp_id", campId).eq("key", "campistryMe").maybeSingle();
-        const me: Record<string, any> = (cur.data && cur.data.value && typeof cur.data.value === "object") ? cur.data.value : {};
-        if (!me.families || typeof me.families !== "object") me.families = {};
-        const f = intent.familyKey ? me.families[intent.familyKey] : null;
-        if (!f) {
-          console.error(`[cardknox-webhook] Family ${intent.familyKey} gone for camp ${campId} — payment ${xRefNum} not recorded`);
-          break;
-        }
+      const cur = await service.from("camp_state_kv").select("value")
+        .eq("camp_id", campId).eq("key", "campistryMe").maybeSingle();
+      const meNow: Record<string, any> = (cur.data && cur.data.value && typeof cur.data.value === "object") ? cur.data.value : {};
+      const f = intent.familyKey ? ((meNow.families || {})[intent.familyKey] || null) : null;
+      if (!f) {
+        console.error(`[cardknox-webhook] Family ${intent.familyKey} gone for camp ${campId} — payment ${xRefNum} not recorded`);
+      } else {
+        const fields: Record<string, any> = { byopProcessor: "cardknox", cardOnFile: true };
 
-        f.byopProcessor = "cardknox";
-        f.cardOnFile = true;
-        // Sola's webhook hands back an xToken for the card that was just
-        // used (confirmed live in a real payload). Vaulting it as this
-        // family's byopCustomerRef is what lets charge-due-installments
-        // actually charge an autopay plan later — without it, a family who
-        // paid through hosted checkout has cardOnFile:true but nothing
-        // chargeable behind it, and their payment plan silently never runs.
-        // Only set on the FIRST capture: never overwrite a token the office
-        // saved deliberately through campistry_card_setup.html.
+        // Sola's webhook hands back an xToken for the card that was just used.
+        // Vaulting it as this family's byopCustomerRef is what lets
+        // charge-due-installments actually charge an autopay plan later —
+        // without it, a family who paid through hosted checkout has
+        // cardOnFile:true but nothing chargeable behind it, and their payment
+        // plan silently never runs. Only on the FIRST capture: never overwrite
+        // a token the office saved through campistry_card_setup.html.
+        //
+        // Two captures at once could both see no token and both vault. That
+        // leaves one unused token at the processor — harmless, and a far better
+        // trade than holding a database lock across a network call.
         if (xToken && !f.byopCustomerRef) {
           const vaulted = await vaultCardknoxToken(service, campId, xToken);
-          if (vaulted) f.byopCustomerRef = vaulted;
-        }
-        // Record the card's last four so the parent-portal autopay display
-        // (get_my_balance's paymentMethodLabel) shows the real number instead
-        // of a generic "a card". A hosted-checkout capture carries
-        // xMaskedCardNumber; backfill only when we don't already have a label,
-        // so a deliberately-saved card's label is never clobbered by a later
-        // one-off payment on a different card.
-        {
-          const last4 = (xMaskedCardNumber || "").replace(/[^0-9]/g, "").slice(-4);
-          if (last4 && !f.paymentMethodLabel) {
-            f.paymentMethodType = f.paymentMethodType || "card";
-            f.paymentMethodLabel = `Card ···· ${last4}`;
-          }
+          if (vaulted) fields.byopCustomerRef = vaulted;
         }
 
-        if (!me.finance) me.finance = {};
-        if (!Array.isArray(me.finance.payments)) me.finance.payments = [];
-        const pays: Record<string, any>[] = me.finance.payments;
-        if (!pays.find((p) => p.byopTransactionId === xRefNum)) {
-          pays.push({
+        // Record the card's last four so the parent-portal autopay display
+        // shows the real number instead of a generic "a card". Backfill only
+        // when we don't already have a label, so a deliberately-saved card's
+        // label is never clobbered by a later one-off payment on another card.
+        const last4 = (xMaskedCardNumber || "").replace(/[^0-9]/g, "").slice(-4);
+        if (last4 && !f.paymentMethodLabel) {
+          fields.paymentMethodType = f.paymentMethodType || "card";
+          fields.paymentMethodLabel = `Card ···· ${last4}`;
+        }
+
+        const famRes = await service.rpc("merge_camp_family_fields", {
+          p_camp_id: campId, p_family_key: intent.familyKey, p_fields: fields,
+        });
+        if (famRes.error || famRes.data?.success !== true) {
+          console.error(`[cardknox-webhook] could not save card fields for ${intent.familyKey}: ${famRes.error?.message || famRes.data?.error || "unknown"}`);
+        }
+
+        const payRes = await service.rpc("append_camp_payment", {
+          p_camp_id: campId,
+          p_payment: {
             id: "byop_" + xRefNum,
             family: intent.familyName || f.name || "",
             familyKey: intent.familyKey,
@@ -449,14 +450,10 @@ serve(async (req) => {
             byopProcessor: "cardknox",
             status: "succeeded",
             timestamp: Date.now(),
-          });
-        }
-
-        const up = await service.from("camp_state_kv").upsert(
-          { camp_id: campId, key: "campistryMe", value: me, updated_at: new Date().toISOString() },
-          { onConflict: "camp_id,key" },
-        );
-        if (!up.error) saved = true;
+          },
+          p_dedupe_key: xRefNum,
+        });
+        saved = !payRes.error && payRes.data?.success === true;
       }
       if (!saved) {
         console.error(`[cardknox-webhook] Could not record tuition payment ${xRefNum} for camp ${campId} after retries`);

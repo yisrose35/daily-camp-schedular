@@ -140,53 +140,63 @@ serve(async (req) => {
       const pmLast4 = pm?.last4 || last4;
       const pmType = pm?.card_type || cardType || "card";
 
-      let saved = false;
+      // Both branches used to read the whole blob, mutate it and upsert it all
+      // back, four times over on a write error. That retry never covered the
+      // real failure: a lost update is not an error, so an overlapping writer
+      // simply discarded whichever save landed first — and the canteen blob
+      // holds the transaction ledger the balance is recomputed from, so losing
+      // that write could erase a POS sale. Locked RPCs now, one call each.
+      let saveFail: string | null = null;
       if (pending.camper_name) {
-        // Canteen auto-reload card-save: token lives on the camper's autoReload
-        // block (campistrySnacks.accounts[camper].autoReload), mirroring the
-        // Cardknox canteen_autoreload_setup path.
-        for (let attempt = 0; attempt < 4 && !saved; attempt++) {
-          const cur = await service.from("camp_state_kv").select("value")
-            .eq("camp_id", campId).eq("key", "campistrySnacks").maybeSingle();
-          const snacks: Record<string, any> = (cur.data?.value && typeof cur.data.value === "object") ? cur.data.value : {};
-          if (!snacks.accounts || typeof snacks.accounts !== "object") snacks.accounts = {};
-          const acct = snacks.accounts[pending.camper_name];
-          if (!acct) return json({ success: false, error: "Camper no longer exists" }, 400);
-          const ar = (acct.autoReload && typeof acct.autoReload === "object") ? acct.autoReload : {};
-          ar.byopProcessor = "banquest";
-          ar.byopCustomerRef = token;
-          ar.cardOnFile = true;
-          // Re-enable and reset the failure counter, same as a fresh card save.
-          ar.consecutiveFailures = 0;
-          if (pmLast4) { ar.paymentMethodLabel = "•••• " + pmLast4; ar.paymentMethodType = pmType; }
-          acct.autoReload = ar;
-          snacks.accounts[pending.camper_name] = acct;
-          const up = await service.from("camp_state_kv").upsert(
-            { camp_id: campId, key: "campistrySnacks", value: snacks, updated_at: new Date().toISOString() },
-            { onConflict: "camp_id,key" });
-          if (!up.error) saved = true;
+        // Canteen auto-reload card-save: the token lives on the camper's
+        // autoReload block (campistrySnacks.accounts[camper].autoReload),
+        // mirroring the Cardknox canteen_autoreload_setup path. A SHALLOW merge,
+        // so the parent's own trigger config (enabled/threshold*/schedule*)
+        // survives.
+        const { data: merged, error: mergeErr } = await service.rpc("merge_canteen_autoreload_card", {
+          p_camp_id: campId,
+          p_camper: String(pending.camper_name),
+          p_fields: {
+            byopProcessor: "banquest",
+            byopCustomerRef: token,
+            cardOnFile: true,
+            // Re-enable and reset the failure counter, same as a fresh card save.
+            consecutiveFailures: 0,
+            ...(pmLast4 ? { paymentMethodLabel: "•••• " + pmLast4, paymentMethodType: pmType } : {}),
+          },
+          // The parent is looking at the hosted page right now: if the camper is
+          // gone, say so rather than inventing an account to attach a card to.
+          p_require_existing: true,
+        });
+        if (merged?.error === "camper_not_found") {
+          return json({ success: false, error: "Camper no longer exists" }, 400);
         }
+        if (mergeErr || !merged?.success) saveFail = mergeErr?.message || merged?.error || "unknown";
       } else {
-        // Tuition card-save: token lives on the family record.
-        for (let attempt = 0; attempt < 4 && !saved; attempt++) {
-          const cur = await service.from("camp_state_kv").select("value")
-            .eq("camp_id", campId).eq("key", "campistryMe").maybeSingle();
-          const me: Record<string, any> = (cur.data?.value && typeof cur.data.value === "object") ? cur.data.value : {};
-          if (!me.families || typeof me.families !== "object") me.families = {};
-          const f = me.families[pending.family_key];
-          if (!f) return json({ success: false, error: "Family no longer exists" }, 400);
-          f.byopProcessor = "banquest";
-          f.byopCustomerRef = token;
-          f.cardOnFile = true;
-          f.cardSavedDate = new Date().toISOString();
-          if (pmLast4) { f.paymentMethodLabel = "•••• " + pmLast4; f.paymentMethodType = pmType; }
-          const up = await service.from("camp_state_kv").upsert(
-            { camp_id: campId, key: "campistryMe", value: me, updated_at: new Date().toISOString() },
-            { onConflict: "camp_id,key" });
-          if (!up.error) saved = true;
+        // Tuition card-save: the token lives on the family record. A shallow
+        // merge of exactly these fields — deliberately an overwrite, unlike the
+        // Stripe/Cardknox setup handlers: this flow only runs when someone chose
+        // to save a card, and that card is meant to become the chargeable one.
+        const { data: mergedFam, error: famErr } = await service.rpc("merge_camp_family_fields", {
+          p_camp_id: campId,
+          p_family_key: String(pending.family_key),
+          p_fields: {
+            byopProcessor: "banquest",
+            byopCustomerRef: token,
+            cardOnFile: true,
+            cardSavedDate: new Date().toISOString(),
+            ...(pmLast4 ? { paymentMethodLabel: "•••• " + pmLast4, paymentMethodType: pmType } : {}),
+          },
+        });
+        if (mergedFam?.error === "family_not_found" || mergedFam?.error === "no_camp_data") {
+          return json({ success: false, error: "Family no longer exists" }, 400);
         }
+        if (famErr || !mergedFam?.success) saveFail = famErr?.message || mergedFam?.error || "unknown";
       }
-      if (!saved) return json({ success: false, error: "Card saved with Banquest but could not be recorded — contact support." }, 500);
+      if (saveFail) {
+        console.error(`[hosted-complete] card saved with Banquest but not recorded for camp ${campId}: ${saveFail}`);
+        return json({ success: false, error: "Card saved with Banquest but could not be recorded — contact support." }, 500);
+      }
 
       await service.from("banquest_pending_links").update({
         status: "completed", completed_at: new Date().toISOString(),
@@ -217,30 +227,39 @@ serve(async (req) => {
     }
 
     // ── pay_now: append the tuition payment to the family ledger ─────────────
-    let recorded = false;
-    for (let attempt = 0; attempt < 4 && !recorded; attempt++) {
+    // Recorded through append_camp_payment, not a blind blob upsert. The old
+    // path read campistryMe, pushed onto finance.payments and wrote the whole
+    // blob back with no lock — so an overlapping writer (another webhook, the
+    // nightly autopay run, an office save) silently discarded whichever append
+    // landed first. The card was charged and Campistry had no record of it.
+    // The retry loop did not help: it retried on a WRITE ERROR, and a lost
+    // update is not an error. See migration 168.
+    //
+    // The read below is only for the family's display name — no lock needed and
+    // a stale answer is harmless, since attribution matches on familyKey.
+    let famName = String(pending.family_key);
+    try {
       const cur = await service.from("camp_state_kv").select("value")
         .eq("camp_id", campId).eq("key", "campistryMe").maybeSingle();
-      const me: Record<string, any> = (cur.data?.value && typeof cur.data.value === "object") ? cur.data.value : {};
-      if (!me.finance) me.finance = {};
-      if (!Array.isArray(me.finance.payments)) me.finance.payments = [];
-      const pays: Record<string, any>[] = me.finance.payments;
-      if (pays.find((p) => p.byopTransactionId === referenceNumber)) { recorded = true; break; }
-      const f = (me.families && me.families[pending.family_key]) || null;
-      pays.push({
+      const meNow: Record<string, any> = (cur.data?.value && typeof cur.data.value === "object") ? cur.data.value : {};
+      const f = (meNow.families && meNow.families[pending.family_key]) || null;
+      if (f && f.name) famName = f.name;
+    } catch (_) { /* cosmetic only */ }
+
+    const payRes = await service.rpc("append_camp_payment", {
+      p_camp_id: campId,
+      p_payment: {
         id: "byop_" + referenceNumber,
-        family: (f && f.name) || pending.family_key, familyKey: pending.family_key,
+        family: famName, familyKey: pending.family_key,
         amount, date: new Date().toISOString().split("T")[0],
         method: "Card (Banquest, hosted page)",
         reference: referenceNumber, notes: "Paid on Banquest hosted page",
         byopTransactionId: referenceNumber, byopProcessor: "banquest",
         status: "succeeded", timestamp: Date.now(),
-      });
-      const up = await service.from("camp_state_kv").upsert(
-        { camp_id: campId, key: "campistryMe", value: me, updated_at: new Date().toISOString() },
-        { onConflict: "camp_id,key" });
-      if (!up.error) recorded = true;
-    }
+      },
+      p_dedupe_key: referenceNumber,
+    });
+    const recorded = !payRes.error && payRes.data?.success === true;
     if (!recorded) return json({ success: false, error: "Payment went through but recording it failed — contact support." }, 500);
 
     await service.from("banquest_pending_links").update({

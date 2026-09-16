@@ -96,6 +96,15 @@ MANIFEST = [
     # additive, so a function still on the old path keeps working.
     ("168_atomic_payment_writes",
      "Atomic, locking, idempotent payment + family writes (stops lost updates)"),
+    # Independent. The one payment write that has to move TWO things together —
+    # the instalment status and the payment — so it needs its own function
+    # rather than 168's append.
+    ("169_atomic_autopay_installment",
+     "One instalment charge = one locked write (autopay stops losing/repeating charges)"),
+    # Independent. Finishes the set: the two card-on-file writes, which move no
+    # money on the day but silently break autopay and can erase a canteen sale.
+    ("170_atomic_card_on_file_writes",
+     "Atomic saved-card writes for families and canteen auto-reload"),
 ]
 
 HEADER = """-- ═══════════════════════════════════════════════════════════════════════════
@@ -156,13 +165,28 @@ HEADER = """-- ═════════════════════�
 --     with two family records also now see the sum of both rather than one.
 --     Expect some parent balances to DROP when you run this; that is the bug
 --     being fixed, not a new discount.
---   * Payments stop being lost to a lost update (168). The payment webhooks
+--   * Payments stop being lost to a lost update (168-170). The payment webhooks
 --     used to read the whole campistryMe blob, append, and write it back with
 --     no lock -- so two that overlapped silently discarded one another's
 --     payment, and a retried webhook could credit a family twice. The SQL here
 --     only adds the atomic path; each edge function starts using it when you
 --     redeploy it (see the list in the commit). Functions not yet redeployed
 --     keep working exactly as before.
+--     169 is for autopay specifically, which had the widest window of the lot:
+--     it read every camp's blob at the start of the nightly run and wrote it
+--     back at the end, so anything the office saved while it ran was discarded
+--     -- and if the office won, the run's OWN charges vanished, cards charged
+--     with no record. It now writes each instalment and its payment together,
+--     under a lock, and only ever touches an instalment still marked pending,
+--     so a failed run is safe to re-run without charging anyone twice.
+--     170 covers the two SAVED-CARD writes. Those move no money on the day,
+--     which is why they were last and why they matter: losing one silently
+--     stops autopay for that family and nobody notices for a month. It also
+--     stops the same card being saved twice when a processor redelivers its
+--     webhook, and takes the canteen blob off the whole-blob write path -- that
+--     blob holds the snack-bar transaction ledger the balances are recomputed
+--     from, so a card save landing at the same moment as a purchase could erase
+--     the purchase.
 --   * !! The Camp Shop starts taking money it never took (167). "Charge to
 --     canteen account" and "Charge to camp bill" were labels on a dropdown
 --     that settled nothing: the order stored the method and the money was
@@ -379,6 +403,24 @@ UNION ALL SELECT 'parent balance sums every family the parent belongs to',
 UNION ALL SELECT 'atomic payment write path',
        CASE WHEN EXISTS (SELECT 1 FROM pg_proc WHERE proname='append_camp_payment')
              AND EXISTS (SELECT 1 FROM pg_proc WHERE proname='merge_camp_family_fields')
+            THEN 'OK' ELSE 'MISSING' END
+UNION ALL SELECT 'autopay writes the instalment and the payment together',
+       CASE WHEN EXISTS (SELECT 1 FROM pg_proc WHERE proname='record_autopay_installment')
+            THEN 'OK' ELSE 'MISSING' END
+UNION ALL SELECT 'saved-card writes are atomic',
+       CASE WHEN EXISTS (SELECT 1 FROM pg_proc WHERE proname='append_family_payment_method')
+             AND EXISTS (SELECT 1 FROM pg_proc WHERE proname='merge_canteen_autoreload_card')
+            THEN 'OK' ELSE 'MISSING' END
+-- Every money RPC must hold a row lock. A new one added without FOR UPDATE is
+-- the exact defect 167-170 fixed, and it would look fine until money went
+-- missing, so check it here rather than trusting the next author to remember.
+UNION ALL SELECT 'every money RPC takes a row lock',
+       CASE WHEN NOT EXISTS (
+                SELECT 1 FROM pg_proc
+                 WHERE proname IN ('append_camp_payment','merge_camp_family_fields',
+                                   'record_autopay_installment','settle_shop_order',
+                                   'append_family_payment_method','merge_canteen_autoreload_card')
+                   AND prosrc NOT LIKE '%FOR UPDATE%')
             THEN 'OK' ELSE 'MISSING' END
 UNION ALL SELECT 'camp shop settles its orders',
        CASE WHEN EXISTS (SELECT 1 FROM pg_proc WHERE proname='settle_shop_order')

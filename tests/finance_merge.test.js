@@ -251,12 +251,16 @@ test('a charge capped at the remaining balance explains itself', () => {
     // like corrupt data.
     const src = fs.readFileSync(path.join(ROOT, 'supabase/functions/charge-due-installments/index.ts'), 'utf8');
     assert.match(src, /const capped = amount < scheduledAmount - 0\.005/);
-    assert.match(src, /inst\.scheduledAmount = scheduledAmount/, 'what the plan asked for must survive');
+    // Written into the patch that migration 169's RPC persists, not onto the
+    // in-memory instalment — the whole-blob write this function used to do at
+    // the end of the run is gone. recordInstallment applies the patch to `inst`
+    // as well, so the rest of the run still reads it.
+    assert.match(src, /patch\.scheduledAmount = scheduledAmount/, 'what the plan asked for must survive');
     assert.match(src, /cappedNote/, 'the instalment must carry the reason');
     assert.match(src, /capped \? "Autopay installment/, 'the ledger line must say it too');
 
     // Both rails, or the BYOP camps keep the confusing behaviour.
-    const hits = src.match(/inst\.scheduledAmount = scheduledAmount/g) || [];
+    const hits = src.match(/patch\.scheduledAmount = scheduledAmount/g) || [];
     assert.strictEqual(hits.length, 2, 'the Stripe and BYOP branches must both record it');
 
     // And the browser has to show it, or none of the above is visible.

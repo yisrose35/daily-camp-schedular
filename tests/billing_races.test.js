@@ -182,18 +182,25 @@ test('settle_shop_order locks all three blobs, in a fixed order', () => {
 // The failure mode of this fix is silent: a function left on the old path looks
 // identical until money vanishes. So assert the wiring, per file.
 
-const REWIRED = [
-    'charge-saved-card',
-    'payments-charge-nonce',
-    'payments-checkout',
-    'stripe-webhook',
-];
+// All seven, and the locking RPC each one must go through. Six append a
+// payment and nothing else, so 168's append_camp_payment is enough for them.
+// charge-due-installments has to append the payment AND mark the installment
+// paid together, which is 169's record_autopay_installment.
+const REWIRED = {
+    'charge-saved-card': 'append_camp_payment',
+    'payments-charge-nonce': 'append_camp_payment',
+    'payments-checkout': 'append_camp_payment',
+    'stripe-webhook': 'append_camp_payment',
+    'cardknox-webhook': 'append_camp_payment',
+    'payments-hosted-complete': 'append_camp_payment',
+    'charge-due-installments': 'record_autopay_installment',
+};
 
 test('the rewired functions record payments through the atomic RPC', () => {
-    for (const f of REWIRED) {
+    for (const [f, rpc] of Object.entries(REWIRED)) {
         const src = read(fn(f));
-        assert.ok(src.includes('append_camp_payment'),
-            f + ' no longer uses the atomic append — it is racy again');
+        assert.ok(src.includes(rpc),
+            f + ' no longer uses ' + rpc + ' — it is racy again');
     }
 });
 
@@ -201,7 +208,7 @@ test('the rewired functions no longer blind-upsert the payments blob', () => {
     // The specific shape that loses money: pushing onto finance.payments and
     // upserting the whole blob. Other camp_state_kv writes in these files (the
     // canteen, saved-card lists) are called out separately below.
-    for (const f of REWIRED) {
+    for (const f of Object.keys(REWIRED)) {
         const src = read(fn(f));
         assert.ok(!/finance\.payments\.push\(/.test(src),
             f + ' still pushes onto finance.payments in memory');
@@ -218,38 +225,95 @@ test('payments-checkout saves the card through the locking merge', () => {
         'card-on-file is written by a blind blob upsert again');
 });
 
-// ── 4. what is still on the old path ──────────────────────────────────────
+// ── 4. no function writes the payments blob directly any more ─────────────
 //
-// Pinned deliberately. These are known, listed in the handover, and each still
-// works exactly as it does today — just racily. When one is rewired, delete it
-// from this list; if the list ever grows, something regressed.
+// The list of exceptions is empty, and this is what keeps it empty: a new
+// payment writer that upserts campistryMe itself fails here rather than being
+// discovered when a camp's money goes missing.
 
-const STILL_BLIND = [
-    'cardknox-webhook',
-    'payments-hosted-complete',
-    'charge-due-installments',
-];
-
-test('the known-remaining functions are exactly the ones we think they are', () => {
-    for (const f of STILL_BLIND) {
+test('no payment function upserts campistryMe itself', () => {
+    for (const f of Object.keys(REWIRED)) {
         const src = read(fn(f));
-        const racy = /finance\.payments\.push\(|pays\.push\(/.test(src);
-        assert.ok(racy,
-            f + ' looks rewired — if it is, remove it from STILL_BLIND so the ' +
-            'list keeps meaning something');
+        // A read is fine — several of these legitimately read the blob to make
+        // a decision (which families are due, what a family is called). It is
+        // WRITING the whole blob back that loses other writers' money.
+        const upserts = src.split('\n').filter((l, i, all) => {
+            if (l.trim().startsWith('//')) return false;
+            // `.upsert(` and a campistryMe key within the same few lines.
+            if (!/\.upsert\(|\.update\(/.test(l)) return false;
+            return all.slice(i, i + 6).some(n =>
+                !n.trim().startsWith('//') && /key:\s*"campistryMe"|key:\s*'campistryMe'/.test(n));
+        });
+        assert.deepStrictEqual(upserts, [],
+            f + ' writes the whole campistryMe blob again — that is the lost update');
     }
 });
 
-test('charge-due-installments holds the widest window of all of them', () => {
-    // It reads EVERY camp's blob up front, charges cards for the whole run,
-    // then writes each camp's blob at the end — so the blob is stale for the
-    // length of the run, not for milliseconds. Anything that writes during it
-    // is discarded, and its own charges are lost if the office saves.
-    // Rewiring it needs a third RPC (mark an installment paid atomically),
-    // which is why it is not in this pass.
+// ── 5. the autopay runner, which was the widest window of all ─────────────
+
+test('charge-due-installments no longer holds a blob across the whole run', () => {
+    // It reads EVERY camp's blob up front and used to write each one back after
+    // the last card was charged — stale for the length of the run, not for
+    // milliseconds. The read stays (it is what decides who is due); the write
+    // at the end is what had to go.
     const src = read(fn('charge-due-installments'));
-    const readAt = src.indexOf('.select("camp_id, value").eq("key", "campistryMe")');
-    const writeAt = src.lastIndexOf('key: "campistryMe"');
-    assert.ok(readAt > 0 && writeAt > readAt,
-        'the read-then-write-much-later shape changed — re-check the window');
+    assert.ok(src.includes('.select("camp_id, value").eq("key", "campistryMe")'),
+        'the up-front read changed shape — re-check this test');
+    assert.ok(!/upsert\(\s*$/m.test(src.slice(src.indexOf('for (const row of'))) ||
+        !/key: "campistryMe", value: me/.test(src),
+        'the end-of-run whole-blob write is back');
+});
+
+test('each installment outcome is persisted with its payment, not after it', () => {
+    // The failure this guards is subtle and expensive: mark the installment
+    // paid in one call and append the payment in another, and a crash between
+    // them either charges the family again tomorrow or loses the record of a
+    // charge that happened. One call carries both.
+    const src = read(fn('charge-due-installments'));
+    const calls = src.match(/recordInstallment\(/g) || [];
+    assert.ok(calls.length >= 6,
+        'expected every installment outcome to go through recordInstallment');
+    // The two success branches must pass a payment, not just a patch.
+    for (const anchor of ['auto_byop_" + res.externalTransactionId', 'auto_" + pi.id']) {
+        const at = src.indexOf(anchor);
+        assert.ok(at > 0, 'missing the payment built at ' + anchor);
+        const before = src.lastIndexOf('recordInstallment(', at);
+        assert.ok(before > 0 && at - before < 600,
+            'the payment at ' + anchor + ' is not passed to recordInstallment — ' +
+            'it is being written separately from the installment patch');
+    }
+});
+
+test('migration 169 patches only a PENDING installment, under a lock', () => {
+    const sql = read(path.join(__dirname, '..', 'migrations', '169_atomic_autopay_installment.sql'));
+    const body = sql.slice(sql.indexOf('AS $$'));
+    assert.ok(/FOR UPDATE/.test(body), 'no row lock — the lost update is still possible');
+    // This one condition is what makes re-running a failed nightly run safe.
+    assert.ok(/COALESCE\(v_insts->i->>'status', 'pending'\) = 'pending'/.test(body),
+        "the pending check is gone — a re-run would charge a paid installment again");
+    // And the installment patch and the payment append must land in the same
+    // function, before the single UPDATE.
+    const patchAt = body.indexOf("v_patched := true");
+    const payAt = body.indexOf("p_payment IS NOT NULL");
+    const writeAt = body.lastIndexOf('UPDATE camp_state_kv');
+    assert.ok(patchAt > 0 && payAt > patchAt && writeAt > payAt,
+        'the patch and the payment no longer share one write');
+    // Identified by dueDate, never by a caller-supplied installment index: the
+    // blob is re-read under this lock, so an index from before it can point at
+    // a different installment.
+    assert.ok(!/p_installment_index/.test(sql),
+        'an installment index argument is back — it is not safe across the lock');
+});
+
+test('169 dedupes the payment the same way 168 does', () => {
+    // Autopay and a webhook can both record the same charge (a processor that
+    // reports asynchronously). Both functions must recognise the same keys or
+    // one of them appends a duplicate.
+    const keys = ['id', 'reference', 'byopTransactionId', 'stripePaymentIntentId'];
+    const a = read(path.join(__dirname, '..', 'migrations', '168_atomic_payment_writes.sql'));
+    const b = read(path.join(__dirname, '..', 'migrations', '169_atomic_autopay_installment.sql'));
+    for (const k of keys) {
+        assert.ok(a.includes("p->>'" + k + "' = p_dedupe_key"), '168 stopped matching ' + k);
+        assert.ok(b.includes("p->>'" + k + "' = p_dedupe_key"), '169 does not match ' + k);
+    }
 });

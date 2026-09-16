@@ -307,27 +307,22 @@ async function handleAutopaySetup(
     }
   }
 
-  for (let attempt = 0; attempt < 4; attempt++) {
-    const cur = await supabase.from("camp_state_kv").select("value")
-      .eq("camp_id", campId).eq("key", "campistryMe").maybeSingle();
-    const me: Record<string, any> = (cur.data && cur.data.value && typeof cur.data.value === "object")
-      ? cur.data.value : {};
-    if (!me.families || typeof me.families !== "object") me.families = {};
-    const f = me.families[familyKey];
-    if (!f) {
-      console.error(`[stripe-webhook] autopay setup ${si.id}: family ${familyKey} no longer exists in camp ${campId} — skipping`);
-      return;
-    }
-
-    // Migration 139: savedPaymentMethods is a real LIST now, not a single
-    // slot — same reasoning as cardknox-webhook's mirrored change. First
-    // card ever for this family becomes the default (syncing the legacy
-    // single-slot fields below exactly as before, so nothing regresses for
-    // any existing charge path that reads those directly); an ADDITIONAL
-    // card just appends as non-default.
-    const existingMethods: any[] = Array.isArray(f.savedPaymentMethods) ? f.savedPaymentMethods : [];
-    const isFirstMethod = existingMethods.length === 0;
-    const newMethod = {
+  // Migration 139: savedPaymentMethods is a real LIST, not a single slot — same
+  // reasoning as cardknox-webhook's mirrored change. The FIRST card ever for a
+  // family becomes the default and syncs the legacy single-slot fields (which
+  // every existing charge path still reads directly); an ADDITIONAL card just
+  // appends as non-default and must not touch them.
+  //
+  // Which of those it is depends on whether the list is empty, so it is decided
+  // under the row lock inside migration 170's append_family_payment_method, not
+  // here. This used to be a read, a push and a whole-blob upsert: two cards
+  // saved at once lost one, and a redelivered setup_intent.succeeded (Stripe
+  // retries freely) appended the SAME card twice. The RPC dedupes on the
+  // processor token, under the lock.
+  const { data: saved, error: saveErr } = await supabase.rpc("append_family_payment_method", {
+    p_camp_id: campId,
+    p_family_key: familyKey,
+    p_method: {
       id: "pm_" + crypto.randomUUID().replace(/-/g, ""),
       type: pmType,
       processor: "stripe",
@@ -336,43 +331,41 @@ async function handleAutopaySetup(
       last4: (pmLabel.match(/(\d{4})\s*$/) || [])[1] || "",
       label: pmLabel || (pmType === "us_bank_account" ? "Bank account" : "Card on file"),
       addedDate: new Date().toISOString(),
-      isDefault: isFirstMethod,
-    };
-    f.savedPaymentMethods = [...existingMethods, newMethod];
+    },
+    p_default_fields: {
+      stripeCustomerId: customerId,
+      stripePaymentMethodId: paymentMethodId,
+      cardOnFile: true,
+      paymentMethodType: pmType,
+      ...(pmLabel ? { paymentMethodLabel: pmLabel } : {}),
+      cardSavedDate: new Date().toISOString(),
+    },
+  });
 
-    if (isFirstMethod) {
-      f.stripeCustomerId = customerId;
-      f.stripePaymentMethodId = paymentMethodId;
-      f.cardOnFile = true;
-      f.paymentMethodType = pmType;
-      if (pmLabel) f.paymentMethodLabel = pmLabel;
-      f.cardSavedDate = new Date().toISOString();
-    }
-
-    const up = await supabase.from("camp_state_kv").upsert(
-      { camp_id: campId, key: "campistryMe", value: me, updated_at: new Date().toISOString() },
-      { onConflict: "camp_id,key" },
-    );
-    if (!up.error) {
-      console.log(`[stripe-webhook] autopay setup complete for family ${familyKey}, camp ${campId} (${pmType})`);
-      // Owner-facing feed notification — mirrors check-notes-reminders' insert
-      // shape (migration 056). This is the only signal an owner previously
-      // had that a parent finished setting up a payment plan on their end;
-      // idempotent on (camp_id, source, source_id=si.id) so a webhook retry
-      // never double-notifies.
-      const { error: notifErr } = await supabase.from("notifications").upsert({
-        camp_id: campId,
-        source: "autopay_setup",
-        source_id: si.id,
-        title: "Payment plan set up",
-        body: `${f.name || familyKey} saved a ${pmType === "us_bank_account" ? "bank account" : "card"} for autopay${pmLabel ? " (" + pmLabel + ")" : ""}.`,
-        link_target: "campistry_me.html",
-      }, { onConflict: "camp_id,source,source_id", ignoreDuplicates: true });
-      if (notifErr) console.warn(`[stripe-webhook] autopay setup notification insert failed: ${notifErr.message}`);
-      return;
-    }
-    console.warn(`[stripe-webhook] autopay setup upsert attempt ${attempt} failed: ${up.error.message}`);
+  if (saveErr || !saved?.success) {
+    const why = saveErr?.message || saved?.error || "unknown";
+    // family_not_found is the one case that is not a transient failure: the
+    // family was deleted between the parent starting the card save and Stripe
+    // confirming it. Nothing to retry against.
+    console.error(`[stripe-webhook] autopay setup ${si.id}: could not save the card for family ${familyKey} in camp ${campId} (${why})`);
+    return;
   }
+  console.log(`[stripe-webhook] autopay setup complete for family ${familyKey}, camp ${campId} (${pmType})`
+    + (saved.alreadySaved ? " — already on file, redelivery ignored" : ""));
+
+  // Owner-facing feed notification — mirrors check-notes-reminders' insert
+  // shape (migration 056). This is the only signal an owner previously had that
+  // a parent finished setting up a payment plan on their end; idempotent on
+  // (camp_id, source, source_id=si.id) so a webhook retry never double-notifies.
+  const { error: notifErr } = await supabase.from("notifications").upsert({
+    camp_id: campId,
+    source: "autopay_setup",
+    source_id: si.id,
+    title: "Payment plan set up",
+    body: `${saved.familyName || familyKey} saved a ${pmType === "us_bank_account" ? "bank account" : "card"} for autopay${pmLabel ? " (" + pmLabel + ")" : ""}.`,
+    link_target: "campistry_me.html",
+  }, { onConflict: "camp_id,source,source_id", ignoreDuplicates: true });
+  if (notifErr) console.warn(`[stripe-webhook] autopay setup notification insert failed: ${notifErr.message}`);
 }
 
 // Canteen auto-reload's card-save handler — the canteen analog of
@@ -417,32 +410,35 @@ async function handleCanteenAutoReloadSetup(
     }
   }
 
-  for (let attempt = 0; attempt < 4; attempt++) {
-    const cur = await supabase.from("camp_state_kv").select("value")
-      .eq("camp_id", campId).eq("key", "campistrySnacks").maybeSingle();
-    const snacks: Record<string, any> = (cur.data && cur.data.value && typeof cur.data.value === "object")
-      ? cur.data.value : { accounts: {}, transactions: [] };
-    if (!snacks.accounts || typeof snacks.accounts !== "object") snacks.accounts = {};
-    const acct = snacks.accounts[camperName] || (snacks.accounts[camperName] = { balance: 0, dailyLimit: 10, spentToday: 0 });
-    const ar = acct.autoReload || (acct.autoReload = {});
+  // Migration 170's merge_canteen_autoreload_card: a shallow merge of the card
+  // fields onto accounts[camper].autoReload, under a row lock.
+  //
+  // This one mattered more than it looks. The old path upserted the WHOLE
+  // campistrySnacks blob — and that blob holds the canteen transaction ledger,
+  // from which the canteen balance is recomputed. A card save racing a POS sale
+  // did not just lose a card field, it erased a sale and the money with it.
+  const { data: merged, error: mergeErr } = await supabase.rpc("merge_canteen_autoreload_card", {
+    p_camp_id: campId,
+    p_camper: camperName,
+    // Only the card/attempt bookkeeping fields. The parent's trigger config
+    // (enabled, threshold*, schedule*), set via set_canteen_auto_reload
+    // (migration 109), is left untouched by merging rather than overwriting.
+    p_fields: {
+      stripeCustomerId: customerId,
+      stripePaymentMethodId: paymentMethodId,
+      cardOnFile: true,
+      paymentMethodType: pmType,
+      ...(pmLabel ? { paymentMethodLabel: pmLabel } : {}),
+      cardSavedDate: new Date().toISOString(),
+    },
+  });
 
-    ar.stripeCustomerId = customerId;
-    ar.stripePaymentMethodId = paymentMethodId;
-    ar.cardOnFile = true;
-    ar.paymentMethodType = pmType;
-    if (pmLabel) ar.paymentMethodLabel = pmLabel;
-    ar.cardSavedDate = new Date().toISOString();
-
-    const up = await supabase.from("camp_state_kv").upsert(
-      { camp_id: campId, key: "campistrySnacks", value: snacks, updated_at: new Date().toISOString() },
-      { onConflict: "camp_id,key" },
-    );
-    if (!up.error) {
-      console.log(`[stripe-webhook] canteen auto-reload setup complete for ${camperName}, camp ${campId} (${pmType})`);
-      return;
-    }
-    console.warn(`[stripe-webhook] canteen auto-reload setup upsert attempt ${attempt} failed: ${up.error.message}`);
+  if (mergeErr || !merged?.success) {
+    const why = mergeErr?.message || merged?.error || "unknown";
+    console.error(`[stripe-webhook] canteen auto-reload setup ${si.id}: could not save the card for ${camperName} in camp ${campId} (${why})`);
+    return;
   }
+  console.log(`[stripe-webhook] canteen auto-reload setup complete for ${camperName}, camp ${campId} (${pmType})`);
 }
 
 // Best-effort — a failed alert email must never fail the webhook response

@@ -26,6 +26,13 @@
 // Auth: requires header  x-cron-secret: <INSTALLMENT_CRON_SECRET>  so only the
 // scheduler can trigger it.
 //
+// WRITES GO THROUGH migrations/169's record_autopay_installment, one call per
+// installment, NOT through a whole-blob upsert at the end of the run. This used
+// to read every camp's campistryMe up front and write it back after the last
+// card was charged, so the blob was stale for the length of the run: anything
+// the office or a webhook saved in between was discarded, and the run's own
+// charges were lost if anyone else saved first. See that migration's header.
+//
 // If a camp has connected its own Stripe account (camps.stripe_account_id,
 // see stripe-connect-onboard-camp / migrations/077_camp_stripe_connect.sql),
 // each installment charge for that camp becomes a destination charge routing
@@ -319,12 +326,57 @@ serve(async (req) => {
     return creds;
   }
 
+  // Persist ONE installment outcome — the patch, and when a card was actually
+  // charged the payment alongside it — through migration 169's locking RPC.
+  //
+  // The two have to move together. A payment recorded without its installment
+  // marked paid gets charged again tomorrow; an installment marked paid without
+  // its payment is money the office can never see. One call, one row lock, both
+  // writes, and the RPC only ever patches an installment that is still
+  // 'pending', so a re-run of a failed run charges nobody twice.
+  async function recordInstallment(
+    campId: string,
+    famKey: string,
+    plan: Record<string, any>,
+    planIndex: number,
+    inst: Record<string, any>,
+    patch: Record<string, unknown>,
+    payment?: Record<string, unknown> | null,
+    dedupeKey?: string | null,
+  ): Promise<boolean> {
+    // Keep the in-memory copy in step so the rest of THIS run (the details[]
+    // lines below, the next installment on the same plan) reads what was saved.
+    Object.assign(inst, patch);
+    const { data, error } = await supabase.rpc("record_autopay_installment", {
+      p_camp_id: campId,
+      p_family_key: famKey,
+      p_plan_id: plan && plan.id ? String(plan.id) : null,
+      p_plan_index: planIndex,
+      p_due_date: inst.dueDate ? String(inst.dueDate) : null,
+      p_patch: patch,
+      p_payment: payment || null,
+      p_dedupe_key: dedupeKey || null,
+    });
+    if (error || !data?.success) {
+      // Loud on purpose. If a card was charged and this write failed, the money
+      // left the parent's account and Campistry has no record of it — the one
+      // failure in this function a human has to see the same day.
+      const why = error?.message || data?.error || "unknown";
+      console.error(
+        `[autopay] camp ${campId} family ${famKey}: could not record installment (${why})`
+        + (payment ? " — A CARD WAS CHARGED AND IS NOT RECORDED" : ""),
+      );
+      return false;
+    }
+    return true;
+  }
+
   for (const row of (rows || [])) {
     const me = (row.value && typeof row.value === "object") ? row.value as Record<string, any> : null;
     if (!me || !me.families) continue;
-    if (!me.finance) me.finance = {};
-    if (!Array.isArray(me.finance.payments)) me.finance.payments = [];
-    let dirty = false;
+    // `me` is read-only from here on: it is the snapshot the due/owed decisions
+    // are made from, never what gets written back. Every write goes through
+    // recordInstallment, which re-reads the blob under its own lock.
 
     // A BYOP camp charges its families' vaulted processor tokens instead of
     // Stripe customers — same plan/installment data, different rail.
@@ -358,22 +410,30 @@ serve(async (req) => {
       let remainingBalance = computeFamilyBalance(
         me, f, famKey, depositsByFamily.get(String(row.camp_id)));
 
-      for (const plan of plans) {
+      // Indexed, because the RPC identifies the plan by id when it has one and
+      // by POSITION when it does not — so the position has to be the one in
+      // this same normalized list.
+      for (let planIndex = 0; planIndex < plans.length; planIndex++) {
+        const plan = plans[planIndex];
         if (!plan || !plan.autopay || !Array.isArray(plan.installments)) continue;
 
         for (const inst of plan.installments) {
           if (inst.status !== "pending") continue;
           if (!inst.dueDate || inst.dueDate > today) continue; // not due yet
           const scheduledAmount = Number(inst.amount) || 0;
-          if (scheduledAmount <= 0) { inst.status = "paid"; dirty = true; continue; }
+          if (scheduledAmount <= 0) {
+            await recordInstallment(String(row.camp_id), famKey, plan, planIndex, inst, { status: "paid" });
+            continue;
+          }
 
           // Already paid off (in full, or by enough ahead-of-schedule
           // payments to cover what's left) — never charge, just mark covered.
           if (remainingBalance <= 0.005) {
-            inst.status = "paid";
-            inst.paidDate = today;
-            inst.note = "Covered by an earlier payment — not charged";
-            dirty = true;
+            await recordInstallment(String(row.camp_id), famKey, plan, planIndex, inst, {
+              status: "paid",
+              paidDate: today,
+              note: "Covered by an earlier payment — not charged",
+            });
             details.push({ camp: row.camp_id, family: f.name, amount: scheduledAmount, result: "waived_paid_ahead" });
             continue;
           }
@@ -421,30 +481,33 @@ serve(async (req) => {
               ? await cardknoxCharge(String(creds.apiKey), Math.round(amount * 100), String(f.byopCustomerRef))
               : await banquestCharge(creds, Math.round(amount * 100), String(f.byopCustomerRef));
             if (!res.success || !res.externalTransactionId) {
-              inst.status = "failed";
-              inst.failReason = res.error || "Declined";
+              await recordInstallment(String(row.camp_id), famKey, plan, planIndex, inst, {
+                status: "failed", failReason: res.error || "Declined",
+              });
               failed++;
               details.push({ camp: row.camp_id, family: f.name, amount, result: "failed", reason: inst.failReason });
             } else {
-              inst.status = "paid";
-              inst.paidDate = today;
-              inst.byopTransactionId = res.externalTransactionId;
+              const patch: Record<string, unknown> = {
+                status: "paid", paidDate: today, byopTransactionId: res.externalTransactionId,
+              };
               if (capped) {
-                inst.scheduledAmount = scheduledAmount;  // what the plan asked for
-                inst.amount = amount;                    // what actually left the card
-                inst.note = cappedNote;
+                patch.scheduledAmount = scheduledAmount;  // what the plan asked for
+                patch.amount = amount;                    // what actually left the card
+                patch.note = cappedNote;
               }
               // Same payment shape payments-charge/cardknox-webhook already
               // write, incl. byopTransactionId — that's what makes Billing's
               // existing "Direct Refund" action work on an autopay charge too.
-              me.finance.payments.push({
+              // It goes in with the patch, in one transaction: see
+              // recordInstallment's header for why they cannot be two writes.
+              const recorded = await recordInstallment(String(row.camp_id), famKey, plan, planIndex, inst, patch, {
                 id: "auto_byop_" + res.externalTransactionId, family: camperName, familyKey: famKey,
                 amount: amount, date: today, method: "Autopay (card)",
                 reference: res.externalTransactionId,
                 notes: capped ? "Autopay installment — " + cappedNote : "Autopay installment",
                 byopTransactionId: res.externalTransactionId, byopProcessor: processorKey,
                 status: "succeeded", timestamp: Date.now(),
-              });
+              }, String(res.externalTransactionId));
               await supabase.rpc("record_processor_transaction", {
                 p_camp_id: row.camp_id,
                 p_processor_key: processorKey,
@@ -456,9 +519,9 @@ serve(async (req) => {
               });
               charged++;
               remainingBalance -= amount;
-              details.push({ camp: row.camp_id, family: f.name, amount, result: "charged" });
+              details.push({ camp: row.camp_id, family: f.name, amount,
+                result: recorded ? "charged" : "charged_not_recorded" });
             }
-            dirty = true;
             continue;
           }
 
@@ -478,44 +541,39 @@ serve(async (req) => {
           );
 
           if (pi.error || pi.status === "requires_action") {
-            inst.status = "failed";
-            inst.failReason = pi.error?.message || "requires_authentication";
+            await recordInstallment(String(row.camp_id), famKey, plan, planIndex, inst, {
+              status: "failed", failReason: pi.error?.message || "requires_authentication",
+            });
             failed++;
             details.push({ camp: row.camp_id, family: f.name, amount, result: "failed", reason: inst.failReason });
           } else if (pi.status === "succeeded") {
-            inst.status = "paid";
-            inst.paidDate = today;
-            inst.stripePaymentIntentId = pi.id;
+            const patch: Record<string, unknown> = {
+              status: "paid", paidDate: today, stripePaymentIntentId: pi.id,
+            };
             if (capped) {
-              inst.scheduledAmount = scheduledAmount;  // what the plan asked for
-              inst.amount = amount;                    // what actually left the card
-              inst.note = cappedNote;
+              patch.scheduledAmount = scheduledAmount;  // what the plan asked for
+              patch.amount = amount;                    // what actually left the card
+              patch.note = cappedNote;
             }
-            me.finance.payments.push({
+            const recorded = await recordInstallment(String(row.camp_id), famKey, plan, planIndex, inst, patch, {
               id: "auto_" + pi.id, family: camperName, familyKey: famKey,
               amount: amount, date: today, method: "Autopay (card)",
               reference: pi.id,
               notes: capped ? "Monthly autopay installment — " + cappedNote : "Monthly autopay installment",
               stripePaymentIntentId: pi.id, status: "succeeded", timestamp: Date.now(),
-            });
+            }, String(pi.id));
             charged++;
             remainingBalance -= amount;
-            details.push({ camp: row.camp_id, family: f.name, amount, result: "charged" });
+            details.push({ camp: row.camp_id, family: f.name, amount,
+              result: recorded ? "charged" : "charged_not_recorded" });
           } else {
-            // processing (e.g. slower method) — leave pending-ish but note it
+            // Processing (e.g. a slower method). Nothing to persist: the
+            // installment stays 'pending' on purpose, so the next run picks it
+            // up if the intent never lands.
             details.push({ camp: row.camp_id, family: f.name, amount, result: pi.status });
           }
-          dirty = true;
         }
       }
-    }
-
-    if (dirty) {
-      const up = await supabase.from("camp_state_kv").upsert(
-        { camp_id: row.camp_id, key: "campistryMe", value: me, updated_at: new Date().toISOString() },
-        { onConflict: "camp_id,key" },
-      );
-      if (up.error) console.warn(`[autopay] write failed for camp ${row.camp_id}: ${up.error.message}`);
     }
   }
 
