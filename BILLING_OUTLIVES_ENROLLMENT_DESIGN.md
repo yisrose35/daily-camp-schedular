@@ -1,18 +1,22 @@
 # Design: a family's billing outlives their enrollment
 
-**Status:** proposal, no code written.
+**Status:** proposal, no code written. Revision 2.
 **Problem owner's words:** *"if a parent owes money, they always need to be able
 to access the payment regardless of who they have in camp."*
+
+Revision 2 replaces the payment-plan model rather than patching it, after
+looking at how CampMinder actually structures instalments. See
+[Why revision 2](#why-revision-2) for what changed and why.
 
 ---
 
 ## The problem, in one line
 
-Everything about a family's money — the payment plan, the saved card, the
-charges and the credits — is stored **as fields on the family record**, and the
-family record is deleted by routine roster operations.
+Everything about a family's money — the payment plan, the saved card, the charges
+and the credits — is stored **as fields on the family record**, and the family
+record is deleted by routine roster operations.
 
-That single fact causes every money defect found in `TEST_FINDINGS.md`:
+That single fact causes every money defect in `TEST_FINDINGS.md`:
 
 | | What triggers it | What is lost |
 |---|---|---|
@@ -20,21 +24,17 @@ That single fact causes every money defect found in `TEST_FINDINGS.md`:
 | **D1** | Parking a camper and re-enrolling them | the instalments that came due while parked |
 | **Delete** | Removing a family's last camper | that family's plan, card, and the debt itself |
 
-`cascadeCamperDelete` deletes a family once `camperIds` is empty; `importRows`
-in Replace mode does `families={}`. Neither asks whether the family still owes
-money.
+There is a **second, independent** defect underneath D1, and it is the one that
+makes the whole plan model untrustworthy. It gets its own section below.
 
 ---
 
 ## Two things that are already right
 
-This is smaller than it looks, because half the work was done already and the
-other half has an existing mechanic to reuse.
-
 ### 1. Parent portal access already survives (migration 070)
 
 `link_parent_invites` was deliberately split into two independent flags:
-`status` (portal access) and `billing_access`. Migration 070's own header says
+`status` (portal access) and `billing_access`. Migration 070's header says
 billing access *"defaults to true and is permanent unless a staff member
 explicitly closes it"*.
 
@@ -43,27 +43,140 @@ explicitly closes it"*.
   `billing_access`**.
 - `get_my_balance` admits the caller on `status = 'active' OR billing_access = true`.
 
-**So a parent whose child has left still authenticates and still reaches the
-balance RPC.** Nothing needs to change here. The failure is one step later:
-`get_my_balance` resolves the invite's `camper_names` against
-`families[].camperIds`, and the family record has been deleted — so `v_famKeys`
-comes back empty and the balance reads `$0`.
+**A parent whose child has left already authenticates and already reaches the
+balance RPC.** The failure is one step later: `get_my_balance` resolves the
+invite's `camper_names` against `families[].camperIds`, and the family record has
+been deleted, so `v_famKeys` is empty and the balance reads `$0`.
 
-We do not need to build parent access. We need to stop deleting the thing it
-resolves to.
+We do not need to build parent access. We need to stop deleting what it resolves
+to.
 
 ### 2. A family charge already survives a withdrawal
 
-Both balance implementations bill `f.charges` unconditionally, and only bill
-tuition for enrollments in `('enrolled','accepted')`. That asymmetry is already
-deliberate and already tested (*"a family charge SURVIVES a withdrawal — it is
-not tuition"*, `money_parity.test.js`).
+Both balance implementations bill `f.charges` unconditionally, and bill tuition
+only for enrollments in `('enrolled','accepted')`. That asymmetry is deliberate
+and already tested (`money_parity.test.js`). Tuition *should* vanish with the
+enrollment. A debt should not.
 
-That is the mechanic this design turns on. Tuition is enrollment-derived and
-*should* disappear when the enrollment does. A debt should not. **Converting the
-outstanding amount into a standing family charge at the moment of removal** is
-what makes the debt survive, using machinery that already works on both sides of
-the ledger.
+**Converting the outstanding amount into a standing family charge at the moment
+of removal** is what makes the debt survive, using machinery that already works
+on both sides of the ledger.
+
+---
+
+## The plan model is the real bug
+
+This is what you flagged, and you were right that it is a defect rather than a
+consequence to manage.
+
+### What we do now
+
+A plan is a **frozen array of dated instalments, each with a mutable status**:
+
+```js
+f.plans = [{ id, autopay: true, installments: [
+    { dueDate: '2026-01-01', amount: 500, status: 'pending' }, …
+]}]
+```
+
+`charge-due-installments` then reconciles that array against a *recomputed*
+balance, and **mutates the array based on the comparison**:
+
+```js
+if (remainingBalance <= 0.005) {
+    inst.status = 'paid';
+    inst.note   = 'Covered by an earlier payment — not charged';
+}
+```
+
+That line conflates **"nothing is owed at this instant"** with **"this
+instalment is settled forever."** A *transient* zero balance permanently
+destroys an instalment. Nothing ever reopens it. That is D1, and it is also why
+my revision-1 design changed autopay's behaviour as a side effect: any design
+that makes the balance positive again changes what that line does.
+
+Patching the condition is not enough. The model is wrong: it stores an amount
+frozen at plan creation, a status that can be written for reasons other than
+payment, and no record of what was actually charged.
+
+### What CampMinder does instead
+
+CampMinder does not store per-instalment statuses to be marked paid. It stores a
+**billing preference with an instalment counter**, and derives the amount at
+invoice time:
+
+- A preference of, say, monthly × 5.
+- Invoicing takes a proportion of the **balance due** — for a 5-instalment plan
+  the first invoice "adds 20% of the balance due to *due now*" — and **advances
+  the instalment number from 1 to 2**.
+- Sending a *statement* does not advance the counter; an *invoice* does.
+
+The load-bearing property: **each instalment's amount is derived from the
+balance at the time it is charged, not frozen when the plan was created.** The
+counter is the only mutable state, and there is no per-instalment status field to
+corrupt.
+
+Every symptom we have disappears from that model for free:
+
+| Situation | Frozen array + status (today) | Derived from balance (CampMinder) |
+|---|---|---|
+| Camper parked, balance 0 | instalment marked `paid`, **destroyed** | amount computes to 0, nothing charged, nothing destroyed |
+| Re-enrolled | nothing pending left to collect — **money lost** | balance is positive again, next instalment collects |
+| Parent pays extra early | instalment capped, `scheduledAmount` bolted on to explain it | next instalment is simply smaller. No special case |
+| Discount applied late | plan now disagrees with the balance | self-corrects on the next charge |
+| Camper withdrawn, debt carried | plan disagrees with the balance | self-corrects |
+
+### The shape
+
+```js
+f.plans = [{
+    id,
+    autopay: true,
+    dueDates: ['2026-01-01', '2026-02-01', …],   // WHEN, never how much
+    count: 6,
+    nextIndex: 0,                                 // the counter — only mutable state
+    history: [                                    // append-only, what ACTUALLY happened
+        { index: 0, dueDate: '2026-01-01', charged: 500, paymentId: 'auto_pi_1', at: … },
+        { index: 1, dueDate: '2026-02-01', charged: 0, reason: 'nothing_owed', at: … },
+    ],
+}]
+```
+
+Amount at charge time:
+
+```
+due = round( remainingBalance / (count - nextIndex) )
+```
+
+…with the final instalment sweeping the remainder so rounding cannot leave cents
+behind.
+
+Two rules make this safe:
+
+1. **Nothing is ever marked paid that was not charged.** `history` records what
+   happened, including `charged: 0`. A plan can no longer present as settled
+   while money is outstanding.
+2. **A plan that runs out of dates with a balance remaining is loudly
+   outstanding**, surfaced to the office. Today that case is silently swallowed
+   by the `status = 'paid'` write — which is precisely how D1 hides $1,500.
+
+### Migrating existing plans
+
+The one real cost of this change, and it needs care: existing plans carry
+`status` fields that are **known to be corrupted** by D1 — instalments marked
+`paid` that were never charged.
+
+So the conversion must not trust them:
+
+- `dueDates`, `count` — read straight off the existing `installments[]`.
+- `nextIndex` — derived from **dates**: the first instalment whose `dueDate` is
+  in the future.
+- `history` — reconstructed from **`finance.payments`**, not from the plan.
+
+That last point is the rule: **the payment ledger is append-only and
+trustworthy; the plan's statuses are not.** Reconstructing from payments also
+surfaces every family D1 has already under-collected, which the office will want
+to see as a list before this ships.
 
 ---
 
@@ -76,53 +189,55 @@ the ledger.
 
 ### 1. Settle-or-carry at the moment of removal
 
-When `deleteCamper`, `rescindEnrollment` or `unenrollCamper` would leave a
-family with no active campers, compute the family's balance **first**:
+When `deleteCamper`, `rescindEnrollment` or `unenrollCamper` would leave a family
+with no active campers, compute the balance **first**:
 
-- **Balance ≈ 0, no plan, no card, no payments** → delete the family as today.
-  This is the case `cascadeCamperDelete`'s existing comment is protecting
-  against (an empty `$0` card sitting in Billing forever), and it stays.
-- **Balance > 0** → keep the family. Convert what they owe into a family charge
+- **Balance ≈ 0, no plan, no card, no payments** → delete as today. This keeps
+  the Billing-clutter guard that put the deletion there.
+- **Balance > 0** → keep the family, and convert what they owe into a charge
   before the enrollments go:
   ```js
   f.charges.push({
       amount: outstanding,
       note: 'Outstanding balance — Malky Stein, Summer 2026',
       date: today,
-      carriedFrom: { camper: 'Malky Stein', enrollmentIds: [...], reason: 'removed' }
+      carriedFrom: { camper:'Malky Stein', enrollmentIds:[…], reason:'removed' }
   })
   ```
-  Then clear the plan's remaining instalments (the debt now lives in one place,
-  not two) and mark the family `formerCamper: true`.
-- **Balance < 0 (a credit is owed)** → keep the family, flag it as owing a
-  refund. Never delete a family the camp owes money to.
+  Mark the family `formerCamper: true`. The plan needs **no** edit — under the
+  derived model it simply keeps sizing itself off the balance.
+- **Balance < 0** → keep the family, flag a refund owed. Never delete a family
+  the camp owes money to.
 
-`carriedFrom` matters: without it the charge is an unexplained line item, which
-is how a ledger stops being trusted.
+`carriedFrom` matters: an unexplained line item is how a ledger stops being
+trusted.
 
-### 2. Stop the Replace import wiping families
+### 2. Ask about the payment schedule, and guard siblings
 
-`importRows(rows, 'replace')` keeps `families={}` only for families with no
-financial state. Any family with a balance, a plan, a card or payments is
-preserved with its camper links cleared and `formerCamper: true`.
+Adopted from **CampSite** (a different competitor — not CampMinder), whose
+unenroll flow asks the admin *whether to remove the family from the payment
+schedules associated with that camper's enrollment*, and **refuses when an
+enrolled sibling shares the schedule**.
 
-This is the same rule as (1), applied in bulk — which is the point. One
-predicate, `familyHasMoney(f)`, used by both.
+That maps cleanly: the removal dialog offers "also stop this family's payment
+plan", defaulted per the policy decision below, and **never touches a plan when
+the family still has another active camper on it**.
 
-### 3. Billing shows them
+### 3. Stop the Replace import wiping families
+
+`importRows(rows,'replace')` clears only families with no financial state. Any
+family with a balance, plan, card or payments is preserved with camper links
+cleared and `formerCamper: true`. Same predicate as (1) — `familyHasMoney(f)` —
+used in both places.
+
+### 4. Billing shows them
 
 A **"Former families"** section, collapsed by default, listing camperless
-families with a non-zero balance. The existing `pendingEnrollment` synthetic
-ledger already proves Billing can render a ledger that is not a normal
-enrollment; this is the same idea with a real record behind it.
+families with a non-zero balance, plus a "still owes" filter. CampMinder surfaces
+this as a Family Balance filter and a warning icon on the camper record; a
+balance also blocks moving a camper to Alumni or Staff until it is resolved.
 
-The camp needs to be able to find these people. CampMinder surfaces exactly this
-as a "Family Balance" filter and a warning icon on the camper record.
-
-### 4. Warn, don't block, at removal
-
-Following CampMinder — which holds a camper in Enrollment Management until the
-balance is resolved rather than refusing the operation outright:
+### 5. Warn, don't block, at removal
 
 ```
 Remove Malky Stein?
@@ -131,108 +246,129 @@ Remove Malky Stein?
   This will be kept as an outstanding balance. The parent
   keeps portal access and can still pay it.
 
+  [ ] Also stop this family's payment plan
+
 [Cancel]   [Remove and carry the balance]
 ```
 
-A hard block would be worked around by wiping the roster instead, which has the
-same effect and no warning at all.
+A hard block gets worked around by wiping the roster instead — same effect, no
+warning at all.
 
 ---
 
-## The one open decision: autopay
+## The remaining decision: autopay default
 
-This is the only part I am not deciding for you, because it is a chargeback
-judgement about your camps rather than a correctness question.
-
-Once the family record survives, `charge-due-installments` will find it — it has
-`plans` and `cardOnFile`, so **it would keep charging the card of a family whose
-child has left**, unless told not to.
-
-Note the interaction with D1: if we carry the debt as a family *charge* (step 1)
-the balance stays positive, so autopay would no longer waive the instalments —
-it would genuinely keep collecting. That is a real behaviour change, not a
-no-op.
+Under the derived model this is a clean policy choice rather than a mitigation,
+because a former family's plan now collects the *right amount* either way.
 
 | | Keep charging | Pause, parent pays manually |
 |---|---|---|
 | Collects | reliably, no chasing | only if the parent acts |
-| Risk | highest chargeback exposure — auto-charging a card after a child has left is what generates disputes | office has to chase |
-| Parent experience | may be surprised | in control |
+| Risk | highest chargeback exposure — auto-charging after a child has left is what generates disputes | office has to chase |
 
-**My recommendation: pause.** Set `f.autopayPaused = true` alongside
-`formerCamper`, have `charge-due-installments` skip a paused family, and leave
-the balance fully payable from the portal ("Pay now", or resume the plan). It
-matches the stated goal — *they need to be able to access the payment* — and a
-camp that wants to keep collecting can un-pause per family, which is a one-click
-office decision rather than a silent default.
+**Recommendation: pause by default**, with the checkbox in (5) and a per-family
+un-pause. It matches the goal — *they need to be able to access the payment* —
+and makes continuing to collect a deliberate office decision.
 
 ---
 
 ## What this does NOT do
 
-Worth being explicit, because the obvious bigger version of this change is a
-trap.
+**It does not move the billing account out of `campistryMe.families` into its own
+key.** **16 edge functions** and **12 migrations' RPCs** read or write
+`families[...]`. A data move means rewriting all of them with a window where some
+are on the old shape and some on the new, across the exact paths that take money.
+The `finance.payments` split (158) was one branch with seven writers and still
+needed a bridge, a fallback and two follow-up fixes.
 
-**It does not move the billing account out of `campistryMe.families` into its
-own key.** That was the first thing I proposed, and the codebase argues against
-it: **16 edge functions** and **12 migrations' RPCs** read or write
-`families[...]`. A data move means rewriting all of them, with a window where
-some are on the old shape and some on the new — across the exact code paths that
-take money. The `finance.payments` split (migration 158) was one branch with
-seven writers and it still needed a bridge, a fallback and two follow-up fixes.
-
-The goal is *"the ledger outlives enrollment"*, and preserving the record
-achieves that without moving a byte. A future move stays possible and becomes
-easier once roster operations no longer delete the record.
+Preserving the record achieves "the ledger outlives enrollment" without moving a
+byte, and makes a future move easier rather than harder.
 
 ---
 
 ## Rollout
 
-Almost all client-side. **No new migration is required.**
-
 | # | Change | Where |
 |---|---|---|
-| 1 | `familyHasMoney(f)` predicate | `campistry_me.js` |
-| 2 | `cascadeCamperDelete` — preserve + carry the balance | `campistry_me.js` |
-| 3 | Replace import — preserve families with money | `campistry_me.js` |
-| 4 | Removal dialog warning | `campistry_me.js` |
-| 5 | "Former families" section in Billing | `campistry_me.js` |
-| 6 | Skip `autopayPaused` families | `charge-due-installments` (single-file Dashboard paste) |
+| 1 | Derived-instalment plan model + reader/writer updates | `campistry_me.js` |
+| 2 | Plan conversion, reconstructing history from `finance.payments` | one-off, run once per camp |
+| 3 | Under-collection report (who D1 already shorted) | read-only, run **before** 1–2 |
+| 4 | `familyHasMoney(f)` predicate | `campistry_me.js` |
+| 5 | `cascadeCamperDelete` — preserve + carry the balance | `campistry_me.js` |
+| 6 | Replace import — preserve families with money | `campistry_me.js` |
+| 7 | Removal dialog + payment-schedule checkbox + sibling guard | `campistry_me.js` |
+| 8 | "Former families" section | `campistry_me.js` |
+| 9 | Derive the amount; skip `autopayPaused`; write `history` | `charge-due-installments` (single-file Dashboard paste) |
 
-Order: ship 1–5 together (they are one behaviour), then 6. A camp on the old
-site with the new edge function is fine — `autopayPaused` simply never appears.
-A camp on the new site with the old edge function is the risky direction: it
-would preserve families *and* keep charging them. **So deploy the edge function
-first**, or ship 6 in the same release.
+Order matters:
 
-No SQL to paste. `get_my_balance`, `revoke_orphaned_parent_invites` and the
-`billing_access` flag are all already correct.
+- **(3) first, and read it.** It tells you what D1 has already cost before
+  anything changes.
+- **(9) before the site.** A camp on the new site with the old edge function is
+  the dangerous direction — preserved families, old waiving logic. The reverse is
+  harmless.
+- (1)+(2) ship together; a half-converted plan is the one state nothing handles.
+
+`get_my_balance`, `revoke_orphaned_parent_invites` and `billing_access` are all
+already correct — **no SQL to paste** for the access half. (2) and (3) are the
+only new server-side work, and both can be RPCs pasted into the SQL Editor.
 
 ## Tests
 
-`tests/withdrawal_lifecycle.test.js` already pins the current behaviour with
-passing tests. When this lands, these flip and get rewritten — that is the
-signal the change worked:
+`tests/withdrawal_lifecycle.test.js` pins today's behaviour with passing tests.
+When this lands these flip and get rewritten — that is the signal it worked:
 
 - `CLEARING HOUSE: every payment plan and saved card is destroyed`
 - `CLEARING HOUSE: autopay silently stops for everyone`
+- `DEFECT: re-enrolling after a parked spell leaves an uncollectable gap`
 - `deleting the last camper deletes the family record`
 - `a hard delete takes the saved card with it`
 
-New coverage needed: the balance carries as a charge with `carriedFrom`; a
-zero-balance family is still deleted (no clutter regression); a credit-owed
-family is never deleted; the parent portal resolves a `formerCamper` family
-through `billing_access`; a re-enrolling family does not get double-billed by
-both the carried charge and a fresh enrollment.
+New coverage, written **before** the code:
 
-That last one is the trap in this design and deserves a test written before the
-code: the carried charge must be **removed or offset** when the family enrols
-again, or they pay last summer's tuition twice.
+- The derived amount equals `balance / remaining`, and the last instalment
+  sweeps the remainder — no cents left behind.
+- A parked-then-re-enrolled family collects the **full** amount. This is D1's
+  worked example ($1,500 short) as a regression test.
+- Nothing is ever recorded as paid that was not charged: for any plan,
+  `Σ history[].charged === Σ` matching payments in `finance.payments`.
+- A plan whose dates run out with a balance remaining reports outstanding rather
+  than complete.
+- A re-enrolling family is **not** double-billed by both the carried charge and a
+  fresh enrollment — the carried charge must be offset. **This is the trap in
+  this design.**
+- A zero-balance family is still deleted (no clutter regression); a
+  credit-owed family never is.
+- The parent portal resolves a `formerCamper` family through `billing_access`.
+
+## Sourcing, honestly
+
+CampMinder's help site is blocked by this environment's egress proxy, so the
+CampMinder details above come from search-result summaries, not articles I read
+end to end. What is well-grounded: the instalment **counter** advancing on
+invoice, invoices taking a proportion of **balance due**, statements not
+advancing it, balances and credits attaching to the household and carrying across
+enrollments, `Display Financial Data for Previously Enrolled Campers`, and a
+balance blocking a move to Alumni/Staff.
+
+What I could **not** confirm for CampMinder specifically: what it does with
+*automatic* payments after a withdrawal. That may well be per-camp
+configuration rather than a product rule, which is part of why (5) makes it an
+explicit choice rather than a default we invent.
+
+The unenroll prompt in (2) is **CampSite's**, not CampMinder's.
+
+## Why revision 2
+
+Revision 1 kept the frozen-instalment model and treated autopay's behaviour
+change as a policy question to manage. That was wrong: with a frozen array and a
+mutable `status`, *any* change to the balance changes what the waiving line
+destroys, so the policy question could never be answered cleanly. Replacing the
+model with a derived amount removes the question instead of answering it, and
+fixes D1 as a by-product rather than as a separate patch.
 
 ## Still open, tracked separately
 
 D2 (rescind deletes the audit record it promises), D3 and D4 (canteen balance
-vanishes on delete, and a reused name inherits it) are not addressed here. D3/D4
-are the same principle applied to `campistrySnacks` and should follow once this
-shape is proven.
+vanishes on delete; a reused name inherits it). D3/D4 are this same principle
+applied to `campistrySnacks` and should follow once this shape is proven.
