@@ -264,7 +264,15 @@ BEGIN
         END LOOP;
 
         -- ── bank deposits (Zelle/ACH), which never lived in the blob ──────
+        -- The deposit id is carried on the entry (source.depositId, and the
+        -- entry id itself). It was left empty originally, which meant a
+        -- converted deposit could not be told apart from an unconverted one —
+        -- so migration 178's ongoing poster would have posted it a SECOND time
+        -- and credited the family twice. Conversion and ongoing posting now
+        -- produce the same id for the same deposit, which is what makes "has
+        -- this been posted?" have one answer.
         FOR e IN SELECT jsonb_build_object(
+                     'id', d.id::text,
                      'amount', (d.amount_cents::numeric / 100),
                      'rev', d.is_reversal,
                      'date', to_char(d.created_at, 'YYYY-MM-DD')) AS j
@@ -274,14 +282,14 @@ BEGIN
         LOOP
             v_seq := v_seq + 1;
             v_entries := v_entries || jsonb_build_array(jsonb_build_object(
-                'id', 'le_conv_' || famRec.key || '_' || v_seq,
+                'id', 'le_dep_' || (e->>'id'),
                 'kind', CASE WHEN (e->>'rev')::boolean THEN 'refund' ELSE 'payment' END,
                 'amount', ROUND(ABS((e->>'amount')::numeric), 2),
                 'reason', 'zelle',
                 'date', e->>'date',
                 'postedAt', to_char(now_ts, 'YYYY-MM-DD"T"HH24:MI:SS"Z"'),
                 'note', 'bank deposit — ' || v_note, 'by', 'system',
-                'source', '{}'::jsonb));
+                'source', jsonb_build_object('depositId', e->>'id')));
         END LOOP;
 
         IF jsonb_array_length(v_entries) = 0 THEN CONTINUE; END IF;

@@ -491,6 +491,52 @@ const RISK_EVENT_TYPES = new Set([
 // Best-effort and never throws: a failure here must not make the webhook return
 // non-2xx, because Stripe would retry the whole event and the platform email
 // would go out again.
+async function handleChargeRefunded(
+  supabase: ReturnType<typeof createClient>,
+  event: Record<string, any>,
+) {
+  const charge = event.data.object || {};
+  const campId = charge.metadata?.campId || null;
+
+  // Stripe sends the whole charge with its refunds list, and re-sends it on
+  // every subsequent partial refund. So post each refund individually, keyed on
+  // its own id — otherwise a second partial refund would either be missed or
+  // would re-post the first.
+  const refunds: Record<string, any>[] = charge.refunds?.data || [];
+  if (!refunds.length) return;
+
+  if (!campId) {
+    console.error(`[stripe-webhook] charge.refunded ${charge.id} has no campId in metadata — ` +
+      `the refund is NOT on the camp's books; the family still shows a credit they no ` +
+      `longer have. Reconcile by hand.`);
+    return;
+  }
+
+  // Which payment? A row carries the intent id or the charge id depending on
+  // which path recorded it, so offer both rather than picking one.
+  const refs = [charge.payment_intent, charge.id].filter(Boolean).map(String);
+
+  for (const r of refunds) {
+    const refundId = String(r.id || "");
+    const amount = Number((((r.amount || 0) / 100)).toFixed(2));
+    if (!refundId || !(amount > 0)) continue;
+    try {
+      const { data, error } = await supabase.rpc("record_external_refund", {
+        p_camp_id: campId, p_refund_id: refundId, p_refs: refs,
+        p_amount: amount,
+        p_note: r.reason ? `Refund — ${r.reason}` : "Refund issued at the processor",
+      });
+      if (error || !data?.success) {
+        console.error(`[stripe-webhook] refund ${refundId} NOT posted ` +
+          `(${error?.message || data?.error || "unknown"}) — the family still shows a ` +
+          `credit they no longer have. refs=${refs.join(",")}`);
+      }
+    } catch (e) {
+      console.error(`[stripe-webhook] refund ${refundId} threw: ${(e as Error).message}`);
+    }
+  }
+}
+
 async function handleDisputeLedger(
   supabase: ReturnType<typeof createClient>,
   event: Record<string, any>,
@@ -650,6 +696,18 @@ serve(async (req) => {
         const ok = await upsertPayment(supabase, campId, pi, statusFor[event.type]);
         console.log(`[stripe-webhook] ledger ${statusFor[event.type]} $${(pi.amount || 0) / 100} camp ${campId}: ${ok ? "ok" : "FAILED"}`);
       }
+    } else if (event.type === "charge.refunded") {
+      // A refund issued from the STRIPE DASHBOARD rather than from Billing —
+      // which people do constantly. This event was simply not handled, so that
+      // refund produced nothing here at all: no ledger entry, no payment row.
+      // The family kept a credit they no longer had and the camp's payment list
+      // disagreed with its own Stripe account.
+      //
+      // A refund made IN Campistry also lands here, echoed back by Stripe. That
+      // is fine: the RPC keys the entry on the refund id, which is the same key
+      // Billing's refund action writes, so whichever arrives second does
+      // nothing rather than crediting the refund twice.
+      await handleChargeRefunded(supabase, event);
     } else if (event.type === "setup_intent.succeeded") {
       // Not a payment at all — a saved card/bank account for future autopay
       // (tuition) or auto-reload (canteen). Either/or, routed by source.

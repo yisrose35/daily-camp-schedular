@@ -164,6 +164,12 @@ MANIFEST = [
     # we could identify perfectly still went unrecorded.
     ("177_chargeback_amount_from_payment",
      "A chargeback can be recorded even when the processor does not say how much"),
+    # MUST come after 171 (the ledger and the conversion), 172 (autopay's
+    # entries, which it must not double-post) and 174 (the completeness test it
+    # extends). Replaces append_camp_payment from 168 and get_my_balance from
+    # 174, so it has to be the LAST thing that touches either.
+    ("178_every_payment_posts_to_the_ledger",
+     "Every payment and refund reaches the posted ledger, not just autopay"),
 ]
 
 HEADER = """-- ═══════════════════════════════════════════════════════════════════════════
@@ -541,6 +547,19 @@ UNION ALL SELECT 'every live processor conforms',
                 SELECT 1 FROM payment_processor_catalog
                  WHERE active AND key <> 'none'
                    AND NOT COALESCE((processor_conformance(key)->>'ok')::boolean, false))
+            THEN 'OK' ELSE 'MISSING' END
+-- 178: the ledger the parent is shown has to see every payment, not just the
+-- autopay ones. The completeness half is what keeps a missed path honest.
+UNION ALL SELECT 'every payment posts to the ledger',
+       CASE WHEN EXISTS (SELECT 1 FROM pg_proc WHERE proname='sync_family_ledger_payments')
+             AND EXISTS (SELECT 1 FROM pg_proc WHERE proname='record_external_refund')
+             AND (SELECT prosrc FROM pg_proc WHERE proname='append_camp_payment' LIMIT 1)
+                 LIKE '%payment_ledger_entry%'
+            THEN 'OK' ELSE 'MISSING' END
+UNION ALL SELECT 'a ledger missing a payment is not trusted',
+       CASE WHEN EXISTS (SELECT 1 FROM pg_proc WHERE proname='family_payments_all_posted')
+             AND (SELECT prosrc FROM pg_proc WHERE proname='get_my_balance' LIMIT 1)
+                 LIKE '%family_payments_all_posted%'
             THEN 'OK' ELSE 'MISSING' END
 UNION ALL SELECT 'camp shop settles its orders',
        CASE WHEN EXISTS (SELECT 1 FROM pg_proc WHERE proname='settle_shop_order')

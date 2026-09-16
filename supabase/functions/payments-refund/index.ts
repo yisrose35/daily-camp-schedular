@@ -190,6 +190,34 @@ serve(async (req) => {
       p_raw_response: result.raw ? JSON.parse(JSON.stringify(result.raw)) : null,
     });
 
+    // ...and the family's BALANCE, not just the processor's transaction log.
+    // This used to end here, so a refund on a BYOP camp left the family showing
+    // a credit they no longer had. Billing's own screen looked right because it
+    // reads finance.payments, which the browser writes after this returns — but
+    // the parent portal answers from the posted ledger, and nothing put it
+    // there. Posting server-side also means the refund survives the browser
+    // being closed between the gateway call and the save.
+    //
+    // Keyed on the refund's own transaction id, which is the same key the
+    // browser's row carries, so the two cannot post it twice.
+    try {
+      const { data: refData, error: refErr } = await service.rpc("record_external_refund", {
+        p_camp_id: campId,
+        p_refund_id: String(result.externalTransactionId),
+        p_refs: [String(externalTransactionId)],
+        p_amount: Number((amountCents / 100).toFixed(2)),
+        p_note: `Refund — ${processorKey}`,
+      });
+      if (refErr || !refData?.success) {
+        console.error(`[payments-refund] refund ${result.externalTransactionId} succeeded at ` +
+          `${processorKey} but was NOT posted to the family ledger ` +
+          `(${refErr?.message || refData?.error || "unknown"}) — the family still shows a ` +
+          `credit they no longer have. Original transaction: ${externalTransactionId}`);
+      }
+    } catch (e) {
+      console.error(`[payments-refund] ledger post threw: ${(e as Error).message}`);
+    }
+
     console.log(`[payments-refund] ${processorKey} refund ${result.externalTransactionId}: ${result.status} — $${amount} (camp ${campId})`);
 
     return json({ externalTransactionId: result.externalTransactionId, status: result.status, amount });

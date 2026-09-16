@@ -3412,6 +3412,94 @@ function _creditWithdrawalsFor(f,name,reason,policy){
  * render path: BillingCore.postTuition is keyed on the enrollment id, so it
  * cannot double-bill however often it runs.
  */
+// Post a finance.payments row onto the family's POSTED ledger.
+//
+// Every payment and refund used to land in finance.payments only. Billing reads
+// that list directly so the camp's own screen looked right, but the parent
+// portal answers from the ledger — so a family who had just paid was still
+// being shown the money as owing. Only autopay ever posted a payment entry.
+//
+// This MIRRORS payment_ledger_entry() in migration 178: the same id, the same
+// reason mapping, the same rules about what does not post. It has to, because
+// both write the same ledger and the id is what stops a payment being counted
+// twice. Change one, change the other — tests/payment_ledger.test.js checks
+// they still agree.
+//
+// Returns true when it appended something, so the caller knows a save is needed.
+// The PROCESSOR's id when there is one, because the same charge gets recorded
+// twice by two paths: this page writes a row the moment the charge returns, and
+// the webhook writes one whenever Stripe gets round to it. Their local ids never
+// match, so keying on those would post the payment twice whenever the webhook
+// won the race. The intent id is the same in both.
+function _paymentRefOf(p){
+    if(!p)return '';
+    // A refund row keys on the REFUND, not on the payment it refunds — the
+    // webhook and payments-refund both key on the refund id, and a refund
+    // posted under two different keys is a family credited twice.
+    return String(p.stripeRefundId||p.byopRefundId||p.stripePaymentIntentId||
+                  p.byopTransactionId||p.id||p.reference||'');
+}
+// ...but "already posted?" accepts ANY of a row's identifiers, because entries
+// written before this existed carry whichever one their writer used: the
+// conversion stored the row id, autopay stored the processor transaction id. A
+// typed `reference` (a check number) is excluded on purpose — two cheques can
+// share a number and that would silently swallow the second payment.
+function _paymentRefsOf(p){
+    if(!p)return [];
+    var out=[],seen={};
+    [p.id,p.stripeRefundId,p.byopRefundId,p.stripePaymentIntentId,p.byopTransactionId].forEach(function(v){
+        if(v==null||v==='')return;
+        v=String(v); if(seen[v])return; seen[v]=1; out.push(v);
+    });
+    if(!out.length&&p.reference)out.push(String(p.reference));
+    return out;
+}
+function _postPaymentEntry(f,p){
+    var B=_billingCore();
+    if(!B||!f||!p)return false;
+    var ref=_paymentRefOf(p);
+    if(!ref)return false;                                   // nothing to dedupe on
+    var st=String(p.status||'').toLowerCase();
+    if(st==='pending'||st==='failed'||st==='processing'||st==='canceled'||st==='cancelled')return false;
+    var amt=Number(p.amount)||0;
+    if(!amt)return false;
+
+    var id='le_pay_'+ref;
+    var refs=_paymentRefsOf(p);
+    var entries=Array.isArray(f.entries)?f.entries:[];
+    for(var i=0;i<entries.length;i++){
+        var e=entries[i];
+        if(!e)continue;
+        for(var j=0;j<refs.length;j++){
+            // Either an entry we posted, or one autopay/conversion already
+            // posted for the same money (they carry source.paymentId).
+            if(e.id==='le_pay_'+refs[j])return false;
+            if(e.source&&String(e.source.paymentId||'')===refs[j])return false;
+        }
+        if(e.id===id)return false;
+    }
+
+    var m=String(p.method||'').toLowerCase(),reason;
+    if(amt<0)reason='refund';
+    else if(m.indexOf('zelle')>=0)reason='zelle';
+    else if(m.indexOf('cash')>=0)reason='cash';
+    else if(m.indexOf('check')>=0)reason='check';
+    else if(m.indexOf('ach')>=0||m.indexOf('bank')>=0)reason='ach';
+    else reason='card';
+
+    var r=B.post(f,{
+        id:id,
+        kind:amt<0?'refund':'payment',
+        amount:Math.abs(amt),
+        reason:reason,
+        date:p.date||today(),
+        note:p.notes||(amt<0?'Refund':'Payment'),
+        by:'system',
+        source:{paymentId:ref}
+    });
+    return !!(r&&r.ok);
+}
+
 function _postTuitionFor(f,eid){
     var B=_billingCore();
     if(!B||!f)return false;
@@ -13645,7 +13733,9 @@ function openPaymentForFamily(famKey){
         if(!_payAllowed(method,'tuition')){toast('That payment method isn\'t accepted for tuition.','error');return}
         var ref=document.getElementById('payRef').value.trim();
         var notes=document.getElementById('payNotes').value.trim();
-        finPayments.push({id:'pay_'+Date.now(),family:f.name,familyKey:fk,amount:amt,date:date,method:method,reference:ref,notes:notes,timestamp:Date.now()});
+        var _payRow={id:'pay_'+Date.now(),family:f.name,familyKey:fk,amount:amt,date:date,method:method,reference:ref,notes:notes,timestamp:Date.now()};
+        finPayments.push(_payRow);
+        _postPaymentEntry(f,_payRow);   // the balance, not just the receipt
         f.totalPaid=(f.totalPaid||0)+amt;
         f.balance=Math.max(0,(f.balance||0)-amt);
         save();closeModal('dynModal');if(curPage==='familydetail')renderFamilyDetailPage();else renderBilling();toast('Payment of '+fm(amt)+' recorded for '+f.name);
@@ -13934,13 +14024,20 @@ function issueCreditForFamily(famKey){
                     break;
                 }
                 var procNote=isStripe?' (Stripe)':' ('+(p.byopProcessor==='cardknox'?'Sola':(p.byopProcessor||'BYOP'))+')';
-                finPayments.push({
+                var _refRow={
                     id:'ref_'+Date.now()+'_'+ci,
                     family:p.family,familyKey:fk,enrollmentId:p.enrollmentId||null,
                     amount:-chunk,date:today(),method:'Refund',
                     reference:refId||'',notes:'Refund — '+reasonLabel+procNote,
-                    reason:reasonSel,refundOf:p.id,stripeRefundId:isStripe?refId:null,byopProcessor:isStripe?null:p.byopProcessor,offline:false,timestamp:Date.now()
-                });
+                    reason:reasonSel,refundOf:p.id,stripeRefundId:isStripe?refId:null,
+                    // The BYOP twin of stripeRefundId. Without it this row and the
+                    // one payments-refund posts server-side share no key, so the
+                    // same refund lands on the ledger twice.
+                    byopRefundId:isStripe?null:(refId||null),
+                    byopProcessor:isStripe?null:p.byopProcessor,offline:false,timestamp:Date.now()
+                };
+                finPayments.push(_refRow);
+                _postPaymentEntry(f,_refRow);   // a refund the family no longer holds as credit
                 f.totalPaid=Math.max(0,(f.totalPaid||0)-chunk);f.balance=(f.balance||0)+chunk;
                 done=Math.round((done+chunk)*100)/100;
                 remaining=Math.round((remaining-chunk)*100)/100;
@@ -13964,13 +14061,15 @@ function issueCreditForFamily(famKey){
             if(offAmt<=0){toast('Enter an amount to refund','error');return}
             var reasonSel2=document.getElementById('crRefundReason').value;
             var reasonLabel2=_reasonLabels[reasonSel2]||reasonSel2;
-            finPayments.push({
+            var _offRow={
                 id:'ref_'+Date.now(),
                 family:f.name,familyKey:fk,enrollmentId:null,
                 amount:-offAmt,date:today(),method:'Refund',
                 reference:'',notes:'Refund — '+reasonLabel2+' (Offline — check/cash)',
                 reason:reasonSel2,refundOf:null,stripeRefundId:null,byopProcessor:null,offline:true,timestamp:Date.now()
-            });
+            };
+            finPayments.push(_offRow);
+            _postPaymentEntry(f,_offRow);
             f.totalPaid=Math.max(0,(f.totalPaid||0)-offAmt);f.balance=(f.balance||0)+offAmt;
             save();closeModal('dynModal');
             try{renderFinance()}catch(e){console.error('[Me] renderFinance after refund failed:',e)}
@@ -14287,7 +14386,7 @@ async function chargeStoredCard(famKey,amount,description){
         // states like requires_action, handled above).
         if(isBYOP||result.status==='succeeded'){
             // Record payment locally
-            finPayments.push({
+            var _chgRow={
                 id:'pay_'+Date.now(),
                 family:f.name,
                 familyKey:famKey,
@@ -14300,7 +14399,12 @@ async function chargeStoredCard(famKey,amount,description){
                 byopTransactionId:isBYOP?result.externalTransactionId:null,
                 byopProcessor:isBYOP?f.byopProcessor:null,
                 timestamp:Date.now()
-            });
+            };
+            finPayments.push(_chgRow);
+            // The webhook posts this too, keyed on the intent/transaction id —
+            // and posting is idempotent on that id, so whichever arrives second
+            // does nothing rather than crediting the family twice.
+            _postPaymentEntry(f,_chgRow);
             f.totalPaid=(f.totalPaid||0)+amount;
             f.balance=Math.max(0,(f.balance||0)-amount);
             save();if(curPage==='familydetail')renderFamilyDetailPage();else renderBilling();

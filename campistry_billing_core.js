@@ -127,9 +127,17 @@
         'discount', 'withdrawal', 'goodwill', 'correction',         // credits
         'scholarship', 'sibling',                                   // credits
         'card', 'cash', 'check', 'zelle', 'ach', 'autopay',         // payments
-        'chargeback',                                               // refunds
+        'chargeback', 'refund',                                     // refunds
         'reversal', 'adjustment',                                   // either
     ];
+    // The three `refund`-kind reasons are deliberately distinct, because a camp
+    // reading a statement needs to tell them apart:
+    //   refund     — the camp chose to give money back.
+    //   chargeback — the parent's bank pulled it back.
+    //   reversal   — it never really arrived (an ACH debit returned after it
+    //                had already settled, so a payment entry has to be undone).
+    // All three raise the balance by the same amount; only one of them is a
+    // decision anybody made.
 
     // A credit whose reason is one of these reduces what was ASSESSED (the
     // charge should not have been that big). Everything else reduces what is
