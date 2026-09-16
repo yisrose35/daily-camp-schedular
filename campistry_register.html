@@ -186,6 +186,9 @@ body{font-family:var(--font);background:var(--s50);color:var(--s800);-webkit-fon
 
 <!-- Payment -->
 <div class="cd" id="payCard"><div class="ct"><svg viewBox="0 0 24 24"><rect x="1" y="4" width="22" height="16" rx="2"/><line x1="1" y1="10" x2="23" y2="10"/></svg>Payment</div>
+<!-- The camp's deposit. Filled in by _regRenderDeposit() once a session is
+     picked, because the amount can be a share of that session's tuition. -->
+<div id="depositBox" style="display:none"></div>
 <div id="priceDisplay" style="margin-bottom:10px"></div>
 <!-- Promo -->
 <div class="fg"><label class="fl">Promo / Discount Code</label>
@@ -266,6 +269,7 @@ body{font-family:var(--font);background:var(--s50);color:var(--s800);-webkit-fon
 <script src="local_cache_idb.js?v=20260903-03" onerror="console.log('[Register] LocalCacheIDB not loaded — falling back to localStorage')"></script>
 <script src="integration_hooks.js?v=20260915-01" onerror="console.log('[Register] Integration hooks not loaded — local only')"></script>
 <script src="campistry_payments.js?v=20260904-01" onerror="console.log('[Register] Payment policy not loaded — showing the built-in options')"></script>
+<script src="campistry_deposit_policy.js?v=20260916-01" onerror="console.log('[Register] Deposit policy not loaded — the form simply will not mention a deposit')"></script>
 <script>
 // Keep the payment options on this form in step with the camp's policy. The
 // markup above is the default (credit yes, debit no); this only has to do
@@ -757,6 +761,7 @@ function _loadFromLocalCache(){
         sessions=me.sessions||[];
         bundles=me.sessionBundles||[];
         promoCodes=me.promoCodes||{EARLYBIRD:{pct:10,label:'Early Bird 10% Off'},SIBLING:{pct:5,label:'Sibling Discount 5%'},REFER:{amt:50,label:'Referral $50 Off'}};
+        _depositPolicy=(me.enrollSettings||{}).depositPolicy||null;
         var cn=g.campName||g.app1?.campName||'';
         _baseCampNm=cn;
         if(cn){document.getElementById('campTitle').textContent=cn+' Registration';document.getElementById('campNm').textContent=cn}
@@ -798,6 +803,10 @@ async function _loadFromCloud(campId){
         sessions=d.sessions||[];
         bundles=d.sessionBundles||[];
         if(d.promoCodes&&Object.keys(d.promoCodes).length)promoCodes=d.promoCodes;
+        // Migration 164 sends the camp's deposit rule with the rest of the
+        // public form config. An older database sends nothing and the form
+        // behaves exactly as it did before.
+        _depositPolicy=d.depositPolicy||null;
         applyFormConfig(d.formConfig||{});
         _applySchoolGradeOptions(d.schoolGrades);
         renderSessions();
@@ -860,6 +869,69 @@ function updatePrice(){
     if(total<0)total=0;
     var perCamper=1+siblings.length;
     el.innerHTML='<div style="display:flex;justify-content:space-between;align-items:center;padding:10px 14px;background:var(--s50);border-radius:var(--r);border:1px solid var(--s200)"><div><div style="font-size:.78rem;color:var(--s500)">'+perCamper+' camper'+(perCamper>1?'s':'')+'</div><div style="font-size:1.1rem;font-weight:800;color:var(--me)">'+fm(total*(perCamper))+'</div>'+lines.join('')+'</div><div style="text-align:right;font-size:.75rem;color:var(--s400)">'+fm(total)+' per camper</div></div>';
+    // The deposit can be a share of this, so it moves whenever the price does.
+    try{ _regRenderDeposit(); }catch(e){ console.warn('[Register] deposit box:',e&&e.message); }
+}
+
+// ─── DEPOSIT TO REGISTER ──────────────────────────────────────
+//
+// The camp's rule lives in enrollSettings.depositPolicy and all the
+// arithmetic in campistry_deposit_policy.js, so this page only states the
+// amount. It deliberately does not gate the submit button: holding an
+// application hostage on a public form is a decision for a later change, and
+// the office already sees "awaiting deposit" on its side.
+var _depositPolicy=null;
+
+function _regDepositDue(sessObj){
+    var P=window.CampistryDepositPolicy;
+    if(!P||!_depositPolicy)return null;
+    var pol=P.normalize(_depositPolicy);
+    if(!pol.enabled)return null;
+    var sObj=sessObj||_pickerItems().find(function(x){return x.name===selSess&&x.kind===selSessKind});
+    if(!sObj)return null;
+    var t=Number(sObj.tuition)||0;
+    var campers=[{session:sObj,tuition:t}];
+    siblings.forEach(function(){campers.push({session:sObj,tuition:t})});
+    return P.amountFor(pol,campers);
+}
+
+/** Write only when it changes — the same discipline the builder's card needs. */
+function _regSetHtml(el,html){
+    if(!el||el.innerHTML===html)return;
+    el.innerHTML=html;
+}
+
+function _regRenderDeposit(){
+    var box=document.getElementById('depositBox');
+    if(!box)return;
+    var P=window.CampistryDepositPolicy;
+    var due=_regDepositDue();
+    if(!P||!due||!due.total){box.style.display='none';_regSetHtml(box,'');return}
+    var pol=P.normalize(_depositPolicy);
+    var soon=pol.timing==='now';
+    box.style.display='';
+    _regSetHtml(box,
+        '<div style="background:'+(soon?'#FFF7ED':'#EFF6FF')+';border:1px solid '+(soon?'#FDBA74':'#BFDBFE')+';'
+        +'border-radius:var(--r);padding:13px 15px;margin-bottom:14px">'
+        +'<div style="display:flex;justify-content:space-between;gap:12px;align-items:baseline;flex-wrap:wrap">'
+        +'<strong style="font-size:.92rem;color:'+(soon?'#9A3412':'#1E40AF')+'">'+esc(pol.label)+'</strong>'
+        +'<span style="font-size:1.2rem;font-weight:800;color:'+(soon?'#9A3412':'#1E40AF')+'">'+P.money(due.total)+'</span></div>'
+        +'<div style="font-size:.82rem;color:var(--s600);line-height:1.6;margin-top:5px">'+esc(P.describe(pol,due))+'</div>'
+        +(pol.note?'<div style="font-size:.8rem;color:var(--s500);line-height:1.6;margin-top:5px">'+esc(pol.note)+'</div>':'')
+        +'</div>');
+}
+
+/** What the camp required, frozen at what it said today. */
+function _regDepositStamp(sessObj){
+    var P=window.CampistryDepositPolicy;
+    if(!P||!_depositPolicy)return {};
+    var pol=P.normalize(_depositPolicy);
+    if(!pol.enabled)return {};
+    var due=_regDepositDue(sessObj);
+    if(!due||!due.total)return {};
+    var stamp=P.stampFor(pol,due,new Date().toISOString());
+    if(pol.timing==='now')stamp.depositStatus='awaiting';
+    return stamp;
 }
 
 // ─── PROMO CODES ─────────────────────────────────────────────
@@ -1096,6 +1168,12 @@ window.submitApp=async function(){
 
     var sigData=document.getElementById('sigCanvas').toDataURL();
     var sessObj=_pickerItems().find(function(s){return s.name===selSess&&s.kind===selSessKind})||{};
+    // What the camp required to hold a place, as it stood today. Computed once
+    // for the whole submission and guarded: a deposit is the least important
+    // thing on this form and must never stop an application going through.
+    var _regDepStamp={};
+    try{ _regDepStamp=_regDepositStamp(sessObj)||{}; }
+    catch(e){ console.warn('[Register] deposit stamp skipped:',e&&e.message); }
 
     // Build applications (one per camper). Photo is only captured for the
     // primary camper — sibling rows don't get their own upload widget.
@@ -1166,6 +1244,14 @@ window.submitApp=async function(){
                 bunkmate:v('rBnk'),separateFrom:v('rSep'),tshirtSize:v('rShirt'),source:v('rSrc'),notes:v('rNotes'),
                 session:selSess,sessionKind:selSessKind,sessionTuition:sessObj.tuition||0,
                 paymentMethod:selPM,paymentStatus:'pending',paymentAmount:0,
+                depositRequired:_regDepStamp.depositRequired||0,
+                depositPaid:0,
+                depositDue:_regDepStamp.depositDue||'',
+                depositLabel:_regDepStamp.depositLabel||'',
+                depositPer:_regDepStamp.depositPer||'',
+                depositTiming:_regDepStamp.depositTiming||'',
+                depositRefundable:!!_regDepStamp.depositRefundable,
+                depositStatus:_regDepStamp.depositStatus||'',
                 discount:discount.active?{code:discount.code,label:discount.label,pct:discount.pct,amt:discount.amt}:null,
                 signature:sigData,
                 smsEmailConsent:true,

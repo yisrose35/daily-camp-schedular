@@ -131,9 +131,9 @@ const path = require('node:path');
 const ROOT = path.join(__dirname, '..');
 
 test('the public form is actually told the rule', () => {
-    // The camp-facing half is live: the policy is configured in the builder,
-    // stamped onto applications, and migration 164 is ready to hand it to the
-    // public form. The FORM half is not wired up — see the note below.
+    // The public form is anonymous, so everything it knows arrives through
+    // this one RPC. Without the policy here the form cannot state an amount,
+    // and the setting would save and then appear to do nothing.
     const sql = fs.readFileSync(path.join(ROOT, 'migrations/164_public_deposit_policy.sql'), 'utf8');
     assert.match(sql, /'depositPolicy', coalesce\(kv_value #> '\{enrollSettings,depositPolicy\}'/);
     assert.match(sql, /GRANT EXECUTE ON FUNCTION public\.get_public_form_config\(uuid, text\) TO anon/);
@@ -144,39 +144,32 @@ test('the public form is actually told the rule', () => {
         'the public payload must not carry family data');
 });
 
-// NOTE — campistry_register.html is back at 04fb437, the last version before
-// any of this week's work touched it, because the form broke in the browser
-// and stayed broken through one narrower rollback. Everything this week added
-// to that ONE file is gone: the deposit box and its stamp, the named document
-// checklist, and the alternate-name/physician/insurance/other-parent fields.
-// The only difference from 04fb437 is an integration_hooks cache-bust.
+// The public form's share of this is deliberately small. The deposit box, the
+// module, the rule arriving from migration 164, and the stamp on the
+// application — and nothing else from the work that was rolled back after the
+// form broke: no document checklist, no alternate-name/physician/insurance
+// fields. Those stay out until they are re-landed on their own.
 //
-// The camp-facing half is untouched and still works: the deposit is set in
-// the form builder, stamped on applications, shown and settled in
-// Registration, and carried on the post-acceptance form. What is missing is
-// the public form asking for it.
-//
-// Do not re-land any of it without the browser's actual error. Three rounds
-// of reasoning from the file alone — balanced markup, parsing scripts, a
-// stubbed-DOM run that completes — all said it was fine, and it was not.
+// What actually broke the form was never in this file. It was a
+// MutationObserver loop in campistry_me.js (see the tests further down), which
+// is why reverting this file twice did not help.
 
 test('the office can set it and see who has not paid', () => {
     const me = fs.readFileSync(path.join(ROOT, 'campistry_me.js'), 'utf8');
 
-    // The deposit is a money decision, not a form-layout one. It has its own
-    // editor on the Registration page — putting it inside the form builder
-    // meant opening the whole form editor to change a number.
+    // One place to set it: the card in the Registration form builder. The
+    // standalone button was a second door to the same room.
     assert.match(me, /function _dpCardHtml/);
-    assert.match(me, /function openDepositPolicy/);
-    assert.match(me, /openDepositPolicy:openDepositPolicy/, 'not exposed, so no button reaches it');
-    // Two hosts, one renderer, so they cannot drift: a card in the
-    // Registration form builder, and a standalone editor for changing a
-    // number without opening the whole layout tool.
     assert.match(me, /_accCard\('Deposit to Register'/);
-    assert.match(me, /_dpCardHtml\(enrollSettings\.depositPolicy\)/);
+    assert.ok(!/openDepositPolicy/.test(me),
+        'the standalone editor is gone \u2014 no dead code, no second entry point');
 
     assert.match(me, /markDepositPaid:markDepositPaid/);
-    assert.match(me, /enrollSettings\.depositPolicy=pol/, 'the policy is never saved');
+    assert.match(me, /enrollSettings\.depositPolicy=_dpNew/, 'the policy is never saved');
+    // Switched on and set to zero would announce a deposit and then let
+    // everyone through, so that combination is refused — but the rest of the
+    // form config still saves.
+    assert.match(me, /switched on but set to zero/);
     // A deposit is a payment toward tuition. Recording it here AND in Billing
     // would halve the balance, so this must not invent a payment row.
     const fn = me.slice(me.indexOf('async function markDepositPaid'), me.indexOf('function openDepositPolicy'));
@@ -369,4 +362,78 @@ test('every write the deposit editor makes is compared first', () => {
         assert.ok(!/\.innerHTML\s*=/.test(body),
             fn + ' assigns innerHTML directly — use _dpSetHtml so an unchanged refresh writes nothing');
     });
+});
+
+test('what the card offers is what _dpRead understands', () => {
+    // The card's dropdowns and _dpRead are two lists of the same strings in
+    // different places. Reword one and the other silently falls through to its
+    // default — a camp picks "a share of the tuition", saves, and gets a flat
+    // $0 deposit with nothing on screen to say why.
+    const me = fs.readFileSync(path.join(ROOT, 'campistry_me.js'), 'utf8');
+    const card = me.slice(me.indexOf('function _dpCardHtml('), me.indexOf('function _dpBuilderCardHtml('));
+    const read = me.slice(me.indexOf('function _dpRead('), me.indexOf('function _dpPreview('));
+
+    const options = (id) => {
+        const m = card.match(new RegExp("'" + id + "'[\\s\\S]{0,200}?'select',\\[([^\\]]+)\\]"));
+        assert.ok(m, 'no options found for ' + id);
+        return [...m[1].matchAll(/'([^']+)'/g)].map((x) => x[1]);
+    };
+    // Every non-default option must appear verbatim in the reader.
+    ['dpBasis', 'dpPer', 'dpTiming'].forEach((id) => {
+        const opts = options(id);
+        assert.ok(opts.length >= 2, id + ' should offer a choice');
+        const matched = opts.filter((o) => read.includes("'" + o + "'"));
+        assert.ok(matched.length >= opts.length - 1,
+            id + ': _dpRead does not recognise ' + JSON.stringify(opts.filter((o) => !read.includes("'" + o + "'"))));
+    });
+});
+
+test('only the field that applies is on screen', () => {
+    // Two amount boxes side by side, where only one counts, is what made this
+    // feel like a puzzle. _dpToggle owns the swap.
+    const me = fs.readFileSync(path.join(ROOT, 'campistry_me.js'), 'utf8');
+    const toggle = me.slice(me.indexOf('function _dpToggle('), me.indexOf('/** Read the form into a policy'));
+    ['dpBody', 'dpAmountWrap', 'dpPercentWrap', 'dpDueWrap'].forEach((id) => {
+        assert.ok(toggle.includes("'" + id + "'"), id + ' is never shown or hidden');
+    });
+    // And every edit runs it, or the card would only update on the on/off box.
+    assert.match(me, /try\{ _dpToggle\(\); \}catch/);
+});
+
+test('the public form states the deposit, minimally and without gating', () => {
+    const reg = fs.readFileSync(path.join(ROOT, 'campistry_register.html'), 'utf8');
+
+    assert.match(reg, /id="depositBox"/);
+    assert.match(reg, /campistry_deposit_policy\.js\?v=/);
+    assert.match(reg, /_depositPolicy=d\.depositPolicy\|\|null/, 'the rule never arrives from the cloud');
+    assert.match(reg, /_regDepositStamp/, 'nothing is recorded on the application');
+    // The amount can be a share of tuition, so it has to move with the price.
+    assert.match(reg, /try\{ _regRenderDeposit\(\); \}catch/);
+
+    // Same write discipline as the builder card, even though this page has no
+    // MutationObserver today — the habit is what stops the loop coming back.
+    assert.match(reg, /function _regSetHtml/);
+    const render = reg.slice(reg.indexOf('function _regRenderDeposit('), reg.indexOf('/** What the camp required'));
+    assert.ok(!/\.innerHTML\s*=/.test(render), 'assign through _regSetHtml, not directly');
+
+    // A deposit must never stop an application going through.
+    assert.match(reg, /deposit stamp skipped/, 'the stamp must be guarded');
+
+    // The rolled-back work stays rolled back.
+    ['_regRenderRequiredDocs', 'campistry_finance_merge.js', 'rAltF', 'rDocN'].forEach((m) => {
+        assert.ok(!reg.includes(m), m + ' is back in the public form — that part is still reverted');
+    });
+});
+
+test('the post-acceptance form carries it too', () => {
+    const pa = fs.readFileSync(path.join(ROOT, 'campistry_postaccept.html'), 'utf8');
+    assert.match(pa, /id="depositBox"/);
+    assert.match(pa, /function _paRenderDeposit/);
+    assert.match(pa, /campistry_deposit_policy\.js/);
+    // Read off the enrollment, not recomputed: what was owed is frozen at what
+    // the policy said the day they applied, so a camp that raised its deposit
+    // since does not present this family with the new number.
+    const fn = pa.slice(pa.indexOf('function _paRenderDeposit('), pa.indexOf('// Which built-in sections'));
+    assert.match(fn, /e\.depositRequired/);
+    assert.ok(!/amountFor/.test(fn), 'the post-acceptance form must not recompute the amount');
 });

@@ -2357,7 +2357,6 @@ function _renderRegistrationPane(){
             +'<div class="me-more-menu" id="pplFormsMenu" style="min-width:210px">'
             +'<button onclick="CampistryMe.openFormConfig()">Registration Form</button><button onclick="CampistryMe.openPostAcceptFormConfig()" title="Sent after a camper is accepted">Post-Acceptance Form</button>'
             +'</div></div>'
-            +'<button class="me-btn me-btn--sec me-btn--sm" onclick="CampistryMe.openDepositPolicy()" title="Money required to hold a place">Deposit</button>'
             +'<button class="me-btn me-btn--pri" onclick="CampistryMe.addApplication()">+ Manual Entry</button>';
     }
     h+='<div class="me-more-wrap"><button class="me-btn me-btn--sec me-btn--sm" onclick="CampistryMe._toggleMenu(\'pplLinkMenu\')">🔗 Get Link</button>'
@@ -2384,7 +2383,7 @@ function _renderRegistrationPane(){
                 +'margin-bottom:12px;font-size:.82rem;color:#1E40AF;display:flex;gap:12px;align-items:baseline;flex-wrap:wrap">'
                 +'<strong>'+esc(_pol.label)+':</strong><span>'+esc(_dp.explain(_pol,null))+'</span>'
                 +(_owing?'<span style="margin-left:auto;font-weight:700">'+_owing+' unpaid</span>':'')
-                +'<button class="me-btn me-btn--ghost me-btn--sm" onclick="CampistryMe.openDepositPolicy()">Change</button></div>';
+                +'<button class="me-btn me-btn--ghost me-btn--sm" onclick="CampistryMe.openFormConfig()">Change</button></div>';
         }
     }
 
@@ -9349,7 +9348,16 @@ function saveFormConfig(){
     // this function and must not take the rest with it.
     try{
         if(_depPolicyAPI()&&document.getElementById('dpOn')){
-            enrollSettings.depositPolicy=_depPolicyAPI().normalize(_dpRead());
+            var _dpNew=_depPolicyAPI().normalize(_dpRead());
+            // A deposit switched on and set to zero is a trap: the form would
+            // announce one and then let everyone through. The rest of the form
+            // config still saves either way -- refusing a whole form over one
+            // number would be worse than the trap.
+            if(_dpNew.enabled&&((_dpNew.basis==='flat'&&!_dpNew.amount)||(_dpNew.basis==='percent'&&!_dpNew.percent))){
+                toast('Deposit not saved: it is switched on but set to zero','error');
+            }else{
+                enrollSettings.depositPolicy=_dpNew;
+            }
         }
     }catch(e){
         console.warn('[Me] deposit policy not saved from the builder:',e&&e.message);
@@ -15037,44 +15045,49 @@ function _dpCardHtml(pol){
     if(!P)return '';
     pol=P.normalize(pol);
 
-    var h='<p style="font-size:.78rem;color:var(--s400);margin:0 0 10px;line-height:1.6">'
-      +'Money a family must put down to hold a place. It counts toward tuition \u2014 it is never an extra charge \u2014 '
-      +'and appears in the Payment section of the form.</p>';
+    var h='<p style="font-size:.78rem;color:var(--s400);margin:0 0 12px;line-height:1.6">'
+      +'Money a family puts down to hold a place. It counts toward tuition \u2014 it is never an extra charge.</p>';
 
-    h+='<label style="display:flex;gap:9px;align-items:center;font-size:.86rem;font-weight:600;margin-bottom:12px">'
+    h+='<label style="display:flex;gap:9px;align-items:center;font-size:.88rem;font-weight:600;margin-bottom:14px">'
       +'<input type="checkbox" id="dpOn" '+(pol.enabled?'checked':'')+' onchange="CampistryMe._dpToggle()" style="accent-color:var(--me);width:15px;height:15px">'
       +'Require a deposit to register</label>';
 
     h+='<div id="dpBody" style="'+(pol.enabled?'':'display:none')+'">';
-    h+='<div class="fr">'
-      +ff('Based on','dpBasis',pol.basis==='flat'?'A flat amount':pol.basis==='percent'?'A percentage of tuition':"The session's own deposit",
-          'select',['A flat amount','A percentage of tuition',"The session's own deposit"])
-      +ff('Charged','dpPer',pol.per==='family'?'Once per family':'Once per camper','select',['Once per camper','Once per family'])
-      +'</div>';
-    h+='<div class="fr">'+ff('Flat amount ($)','dpAmount',pol.amount||'','number')
-      +ff('Percentage (%)','dpPercent',pol.percent,'number')+'</div>';
-    h+='<p style="font-size:.72rem;color:var(--s400);margin:-4px 0 10px;padding-left:2px">'
-      +'The percentage is also the fallback when a session carries no deposit of its own, so turning this on never asks for $0. '
-      +'A deposit is never more than the tuition it is part of.</p>';
 
-    h+='<div class="fr">'
-      +ff('Due','dpTiming',pol.timing==='later'?'Can be paid later':'Must be paid to submit the form','select',
-          ['Must be paid to submit the form','Can be paid later'])
-      +ff('Days to pay','dpDueDays',pol.dueDays,'number')+'</div>';
-    h+='<p style="font-size:.72rem;color:var(--s400);margin:-4px 0 10px;padding-left:2px">'
-      +'"Must be paid" holds the application as <strong>awaiting deposit</strong> until the money arrives. '
-      +'"Days to pay" applies only to the later option.</p>';
+    // One question at a time. The old layout showed a flat-amount box and a
+    // percentage box side by side, always, whichever the camp had picked --
+    // two boxes where only one counts is what makes a settings screen feel
+    // like a puzzle. _dpToggle swaps them as the answer changes.
+    h+='<div class="fsec" style="margin-top:0">How much</div>';
+    h+=ff('Work it out from','dpBasis',
+          pol.basis==='flat'?'A flat amount':pol.basis==='percent'?'A share of the tuition':'Whatever the session says',
+          'select',['A flat amount','A share of the tuition','Whatever the session says']);
+    h+='<div id="dpAmountWrap" style="'+(pol.basis==='flat'?'':'display:none')+'">'
+      +ff('Amount','dpAmount',pol.amount||'','number')+'</div>';
+    h+='<div id="dpPercentWrap" style="'+(pol.basis==='flat'?'display:none':'')+'">'
+      +ff('Share of tuition (%)','dpPercent',pol.percent,'number')
+      +'<p id="dpPercentNote" style="font-size:.72rem;color:var(--s400);margin:-6px 0 10px;padding-left:2px"></p></div>';
+    h+=ff('One deposit per','dpPer',pol.per==='family'?'Family':'Camper','select',['Camper','Family']);
 
+    h+='<div class="fsec">When it is due</div>';
+    h+=ff('Timing','dpTiming',pol.timing==='later'?'They can pay after applying':'Before the form can be submitted',
+          'select',['Before the form can be submitted','They can pay after applying']);
+    h+='<div id="dpDueWrap" style="'+(pol.timing==='later'?'':'display:none')+'">'
+      +ff('Days they have to pay','dpDueDays',pol.dueDays,'number')+'</div>';
+    h+='<p id="dpTimingNote" style="font-size:.72rem;color:var(--s400);margin:-4px 0 10px;padding-left:2px"></p>';
+
+    // Wording matters less often than the number, so it waits to be asked for.
+    h+='<details style="margin:6px 0 4px"><summary style="cursor:pointer;font-size:.82rem;font-weight:600;color:var(--s600);padding:4px 0">What parents see</summary><div style="padding-top:8px">';
     h+=ff('Call it','dpLabel',pol.label);
     h+='<label style="display:flex;gap:9px;align-items:center;font-size:.82rem;margin:6px 0 10px">'
-      +'<input type="checkbox" id="dpRefund" '+(pol.refundable?'checked':'')+' style="accent-color:var(--me);width:15px;height:15px"> This deposit is refundable</label>';
-    h+=ff('Note on the form (optional)','dpNote',pol.note,'textarea');
+      +'<input type="checkbox" id="dpRefund" '+(pol.refundable?'checked':'')+' style="accent-color:var(--me);width:15px;height:15px"> Refundable</label>';
+    h+=ff('Extra note on the form (optional)','dpNote',pol.note,'textarea');
+    h+='</div></details>';
 
     h+='<div id="dpPreview" style="background:var(--s50);border:1px solid var(--s200);border-radius:var(--r);'
-      +'padding:11px 13px;margin-top:12px;font-size:.8rem;color:var(--s600);line-height:1.6"></div>';
-    // "I saved it and parents still do not see it" has exactly one common
-    // cause and no way to tell from this screen: the public form is anonymous,
-    // so everything it knows comes through get_public_form_config, and an
+      +'padding:11px 13px;margin-top:10px;font-size:.8rem;color:var(--s600);line-height:1.6"></div>';
+    // "I saved it and parents still do not see it" has one common cause and no
+    // way to tell from this screen: the public form is anonymous, so an
     // unapplied migration 164 means the policy never crosses.
     h+='<div id="dpReach" style="margin-top:8px;font-size:.76rem;color:var(--s400)">Checking that your registration form can see this\u2026</div>';
     h+='</div>';
@@ -15108,9 +15121,8 @@ async function _dpCheckReach(){
  *
  * Wrapped rather than inlined: the panel is built as one string, so a throw
  * while building the newest thing on it returns an empty builder. This returns
- * '' instead -- the camp loses the card, not the builder, and the Deposit
- * button on the Registration page still edits the same policy through the same
- * renderer.
+ * '' instead -- the camp loses the card, not the builder, and everything else
+ * on the panel still renders and still saves.
  */
 function _dpBuilderCardHtml(){
     try{
@@ -15137,7 +15149,10 @@ function _dpBuilderCardHtml(){
  * second pass regardless; keeping the two apart means it never starts.
  */
 function _dpOnPanelEdit(){
-    try{ _dpRefreshCard(); }catch(e){ /* a preview line is never worth a broken builder */ }
+    // _dpToggle does the show/hide AND calls the refresh, so one handler keeps
+    // the card consistent: switch to "a share of the tuition" and the flat
+    // amount box disappears in the same tick the preview updates.
+    try{ _dpToggle(); }catch(e){ /* a preview line is never worth a broken builder */ }
 }
 
 /** Keep the editor's preview and reachability line current as the camp types. */
@@ -15147,51 +15162,30 @@ function _dpRefreshCard(){
     if(!_dpRefreshCard._checked){ _dpRefreshCard._checked=true; _dpCheckReach(); }
 }
 
-/**
- * The deposit editor, on its own.
- *
- * It lived briefly inside the Registration form builder, on the reasoning
- * that it changes what the form asks for. That was wrong for how a camp
- * actually works: the deposit is a money decision, not a form-layout one, and
- * burying it in the builder means opening the whole form editor to change a
- * number. _dpCardHtml is shared, so the two never drift.
- */
-function openDepositPolicy(){
-    var P=_depPolicyAPI();
-    if(!P){toast('Deposit settings aren\'t available in this build','error');return}
-    showModal('Deposit to register','<div class="me-modal-form">'+_dpCardHtml(enrollSettings.depositPolicy)+'</div>',
-        function(){ _dpSave(); },{maxWidth:680,saveLabel:'Save deposit policy'});
-    setTimeout(function(){
-        var box=document.getElementById('dynModal');
-        if(box){ box.addEventListener('input',_dpRefreshCard); box.addEventListener('change',_dpRefreshCard); }
-        _dpRefreshCard._checked=false;
-        _dpRefreshCard();
-    },0);
-}
-
-function _dpSave(){
-    var P=_depPolicyAPI();
-    if(!P)return;
-    var pol=P.normalize(_dpRead());
-    // A policy that is on and asks for nothing is a trap: the form would say a
-    // deposit is required and then let anyone through.
-    if(pol.enabled&&pol.basis==='flat'&&!pol.amount){
-        toast('Set a flat amount, or base the deposit on tuition','error');return;
-    }
-    if(pol.enabled&&pol.basis==='percent'&&!pol.percent){
-        toast('Set a percentage above zero','error');return;
-    }
-    enrollSettings.depositPolicy=pol;
-    save();
-    closeModal('dynModal');
-    renderRegistrationPage();
-    toast(pol.enabled?'Deposit policy saved':'Deposit no longer required');
-}
-
 function _dpToggle(){
+    function show(id,on){var el=document.getElementById(id);if(el)el.style.display=on?'':'none'}
     var on=document.getElementById('dpOn');
-    var body=document.getElementById('dpBody');
-    if(body)body.style.display=(on&&on.checked)?'':'none';
+    show('dpBody',!!(on&&on.checked));
+
+    var basis=(document.getElementById('dpBasis')||{}).value||'';
+    show('dpAmountWrap',basis==='A flat amount');
+    show('dpPercentWrap',basis!=='A flat amount');
+
+    var later=((document.getElementById('dpTiming')||{}).value||'')==='They can pay after applying';
+    show('dpDueWrap',later);
+
+    // Say what a choice does next to the choice, rather than in a paragraph of
+    // caveats under everything.
+    var pn=document.getElementById('dpPercentNote');
+    if(pn)pn.textContent=basis==='Whatever the session says'
+        ? 'Used for any session with no deposit of its own, so turning this on never asks for $0.'
+        : 'A deposit is never more than the tuition it is part of.';
+    var tn=document.getElementById('dpTimingNote');
+    if(tn)tn.textContent=later
+        ? 'The application goes through straight away and the deposit is tracked as owed.'
+        : 'The application is held as awaiting deposit until the money arrives.';
+
+    try{ _dpRefreshCard(); }catch(e){}
 }
 
 /** Read the form into a policy object. One reader, used by preview and save. */
@@ -15201,11 +15195,11 @@ function _dpRead(){
     var basisLabel=v('dpBasis');
     return {
         enabled:ck('dpOn'),
-        basis:basisLabel==='A percentage of tuition'?'percent':basisLabel==="The session's own deposit"?'session':'flat',
+        basis:basisLabel==='A share of the tuition'?'percent':basisLabel==='Whatever the session says'?'session':'flat',
         amount:Number(v('dpAmount'))||0,
         percent:Number(v('dpPercent'))||0,
-        per:v('dpPer')==='Once per family'?'family':'camper',
-        timing:v('dpTiming')==='Can be paid later'?'later':'now',
+        per:v('dpPer')==='Family'?'family':'camper',
+        timing:v('dpTiming')==='They can pay after applying'?'later':'now',
         dueDays:Number(v('dpDueDays'))||0,
         refundable:ck('dpRefund'),
         label:v('dpLabel'),
@@ -18245,7 +18239,7 @@ window.CampistryMe={
     addDiv:function(){openDivForm(null)},editDiv:function(n){openDivForm(n)},deleteDiv:deleteDiv,
     openCsv:function(){openModal('csvModal')},downloadTemplate:downloadTemplate,
     finReconcileCharges:finReconcileCharges,
-    _dpToggle:_dpToggle,_fbRetryPreview:_fbRetryPreview,openDepositPolicy:openDepositPolicy,markDepositPaid:markDepositPaid,
+    _dpToggle:_dpToggle,_fbRetryPreview:_fbRetryPreview,markDepositPaid:markDepositPaid,
     setRosterPage:setRosterPage,setRosterSubTab:setRosterSubTab,setBillingPage:setBillingPage,setAnalyticsInvoicePage:setAnalyticsInvoicePage,setAnalyticsPaymentPage:setAnalyticsPaymentPage,
     _runSetupChecklistAction:_runSetupChecklistAction,dismissSetupChecklist:dismissSetupChecklist,
     bbDrop:bbDrop,autoAssign:autoAssign,autoGenerateBunks:autoGenerateBunks,openBunkGenSettings:openBunkGenSettings,showCamperBunkRequests:showCamperBunkRequests,clearBunks:clearBunks,setBunkCount:setBunkCount,openBunkCountModal:openBunkCountModal,_clearBunkCount:_clearBunkCount,
