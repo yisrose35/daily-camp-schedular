@@ -2831,7 +2831,7 @@ serve(async (req) => {
     from: fromAddrs[0] || "",
   });
   if (fwdVerify) {
-    const vBody = (text || Parser.htmlToText(html || "")).slice(0, 4000);
+    const vBody = (text || Parser.htmlToText(html || "")).slice(0, 32000);
     const vRec = await service.rpc("_deposit_record_unparsed", {
       p_camp_id: campId,
       // Keyed on the code so a provider resending the same request collapses
@@ -2897,7 +2897,7 @@ serve(async (req) => {
       return json({ ok: true, skipped: parsed.reason });
     }
 
-    const bodyText = (text || Parser.htmlToText(html || "")).slice(0, 4000);
+    const bodyText = (text || Parser.htmlToText(html || "")).slice(0, 32000);
     const unparsed = await service.rpc("_deposit_record_unparsed", {
       p_camp_id: campId,
       // No parsed fields to fingerprint on, so the message itself is the
@@ -2931,7 +2931,7 @@ serve(async (req) => {
   // Kept on the row so a payer name read off unfamiliar prose can be checked
   // against what actually arrived. Without it, "is this name right?" has no
   // answer anyone can look up.
-  deposit.rawExcerpt = (text || Parser.htmlToText(html || "")).slice(0, 4000);
+  deposit.rawExcerpt = (text || Parser.htmlToText(html || "")).slice(0, 32000);
   // Which bank sent it. Needed later: when staff correct this deposit, the
   // browser derives layout rules from the correction and has to say which
   // bank's layout they belong to.

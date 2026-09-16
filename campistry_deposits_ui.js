@@ -71,7 +71,7 @@
     // in the Bank layouts footer. Twice now a fix has been live on the server
     // while the browser ran an older copy, and there was no way to tell from
     // the screen which one was which -- so the screen says.
-    D.BUILD = '20260915-04';
+    D.BUILD = '20260916-01';
 
     var state = {
         loaded: false,
@@ -2335,9 +2335,28 @@
              '<button class="me-btn me-btn--sec me-btn--sm" onclick="CampistryDeposits.reread(\'' + host.jesc(d.id) + '\')">Read again</button>' +
              '</div>';
 
-        // The message itself, whole and wrapped. No clipping: the line that
-        // explains an odd deposit is as likely to be the last one as the first.
-        h += '<div style="font-size:.78rem;color:var(--s400);margin-bottom:5px">The message, exactly as it arrived</div>';
+        // What this is, said plainly. It is the message TEXT as stored: an
+        // email sent as HTML was converted, so there are no logos, no styling
+        // and no images -- and a camp comparing this against the mail in their
+        // own inbox should know that before they conclude something is wrong.
+        //
+        // And the stored copy is capped. A body sitting on the cap was almost
+        // certainly cut, and showing a message that stops mid-sentence without
+        // saying so is how an office comes to distrust the whole screen.
+        var CAP = 32000, OLD_CAP = 4000;
+        var len = d.raw_excerpt.length;
+        var cut = len >= CAP - 10 || (len >= OLD_CAP - 10 && len <= OLD_CAP);
+        h += '<div style="font-size:.78rem;color:var(--s400);margin-bottom:5px">' +
+             'The message text as it arrived \u2014 an email sent as HTML is stored converted, ' +
+             'so there is no styling or images here.</div>';
+        if (cut) {
+            h += '<div style="background:#FFFBEB;border:1px solid #FDE68A;border-radius:var(--r);padding:9px 12px;' +
+                 'margin-bottom:8px;font-size:.8rem;color:#92400E;line-height:1.6"><strong>This is only the first ' +
+                 (len <= OLD_CAP ? '4,000' : '32,000') + ' characters.</strong> ' +
+                 (len <= OLD_CAP
+                     ? 'Deposits recorded before the limit was raised kept this much and no more, so anything further down \u2014 including a memo \u2014 was never stored and Read again cannot recover it.'
+                     : 'The rest was not stored.') + '</div>';
+        }
         h += '<pre style="white-space:pre-wrap;word-break:break-word;background:#fff;border:1px solid var(--s200);' +
              'border-radius:var(--r);padding:14px 16px;margin:0;font-size:.8rem;line-height:1.65;max-height:52vh;overflow:auto">' +
              host.esc(d.raw_excerpt) + '</pre>';

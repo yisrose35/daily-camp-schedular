@@ -264,3 +264,36 @@ test('a sender can be taught, and the bank can never be one', () => {
     // feature is broken.
     assert.match(ui, /cannot be used<\/summary>/);
 });
+
+test('the reader says what it is showing, and when it is not all of it', () => {
+    const ui = fs.readFileSync(path.join(__dirname, '..', 'campistry_deposits_ui.js'), 'utf8');
+
+    // A camp comparing this against the mail in their own inbox needs to know
+    // an HTML email is stored converted — no logos, no styling — before they
+    // conclude something is broken.
+    assert.match(ui, /stored converted/, 'the reader must say the text is converted');
+
+    // raw_excerpt is capped. A message that stops mid-sentence with no notice
+    // is how an office comes to distrust the whole screen — and for rows kept
+    // under the old 4k cap the missing text is genuinely gone, so Read again
+    // can never recover it.
+    assert.match(ui, /This is only the first/, 'truncation must be stated');
+    assert.match(ui, /Read again cannot recover it/, 'and its consequence said plainly');
+});
+
+test('the stored message is big enough to hold a real bank email', () => {
+    // 4,000 characters was sized for "an excerpt". A bank alert sent as HTML,
+    // converted to text, inside a forward with the original quoted underneath
+    // passes that on footers alone — and a memo past the cap was not hidden,
+    // it was never stored, so no amount of parser work could find it.
+    const handler = fs.readFileSync(path.join(__dirname, '..', 'tools/deposit_inbox_handler.ts'), 'utf8');
+    assert.ok(!/slice\(0, 4000\)/.test(handler), 'the edge function still truncates to 4k');
+    assert.match(handler, /slice\(0, 32000\)/);
+
+    // Both sides have to move together, or the database cap silently wins.
+    const sql = fs.readFileSync(path.join(__dirname, '..', 'migrations/163_raw_excerpt_room_to_read.sql'), 'utf8');
+    assert.match(sql, /LEFT\(p_raw_excerpt, 32000\)/);
+    assert.match(sql, /LEFT\(p_deposit->>'rawExcerpt', 32000\)/);
+    assert.ok(!/4000\)/.test(sql), 'a leftover 4k cap in either function undoes the change');
+    assert.match(sql, /NOTIFY pgrst/);
+});
