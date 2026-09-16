@@ -1471,6 +1471,22 @@ async function editTile(id) {
         });
       }
     }
+    // Variable length: let this block resolve differently per bunk — one bunk
+    // takes a single activity for the whole block, another takes two shorter
+    // ones back to back. Only offered on schedulable slots; a pinned event or a
+    // league game is one thing at one time by definition.
+    if (ev.type === 'slot') {
+      modalFields.push({
+        name: 'allowSplit', label: 'Different lengths per bunk', type: 'select',
+        options: [
+          { value: '', label: 'Off — one activity fills the block' },
+          { value: '2', label: 'Allow up to 2 activities' },
+          { value: '3', label: 'Allow up to 3 activities' },
+          { value: '4', label: 'Allow up to 4 activities' }
+        ],
+        default: ev.allowSplit ? String(parseInt(ev.maxSegments, 10) || 2) : ''
+      });
+    }
     if (hasLocations) {
       modalFields.push({ name: 'reservedFields', label: 'Reserve Locations (optional)', type: 'grouped-checkbox', groups: locationGroups, default: ev.reservedFields || [] });
     }
@@ -1482,6 +1498,11 @@ async function editTile(id) {
     ev.reservedFields = reservedFields;
     ev.location = reservedFields.length === 1 ? reservedFields[0] : (reservedFields.length > 1 ? null : ev.location);
     if (result.leagueName !== undefined) { ev.leagueName = result.leagueName; if (result.leagueName) ev.event = result.leagueName; }
+    if (result.allowSplit !== undefined) {
+      const _segs = parseInt(result.allowSplit, 10);
+      if (_segs >= 2) { ev.allowSplit = true; ev.maxSegments = _segs; }
+      else { delete ev.allowSplit; delete ev.maxSegments; }
+    }
     // ★ Away (off-campus) flag — restricts generation to the chosen zone's fields + travel.
     if (_supportsAway) {
       const _awayOn = (result.isAway === 'true' || result.isAway === true);
@@ -4637,6 +4658,11 @@ function renderEventTile(ev, top, height, spanInfo) {
     innerHtml += `<div style="font-size:9px;opacity:0.85;margin-top:2px;">📍 ${ev.reservedFields.map(_mbEsc).join(', ')}</div>`;
   }
 
+
+  if (ev.allowSplit) {
+    const _segs = parseInt(ev.maxSegments, 10) || 2;
+    innerHtml += `<div title="Bunks can take up to ${_segs} shorter activities here instead of one long one" style="font-size:9px;font-weight:600;color:#065f46;background:#d1fae5;display:inline-block;padding:1px 5px;border-radius:4px;margin-top:2px;">⧉ up to ${_segs}</div>`;
+  }
 
   if (ev.leagueName) {
     innerHtml += `<div style="font-size:9px;opacity:0.85;margin-top:2px;">${_mbEsc(ev.leagueName)}</div>`;

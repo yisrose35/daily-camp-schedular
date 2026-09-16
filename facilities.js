@@ -2136,12 +2136,39 @@ function getSportDurationValue(sport) {
     const d = parseInt(m.duration, 10);
     return d > 0 ? d : null;
 }
+// Every length this sport may run at. Like specials, a sport can list several
+// ("20 or 40") — the scheduler picks whichever fits the block, and a manual
+// block marked splittable can fit two short ones where one long one would go.
+function getSportDurationsValue(sport) {
+    const m = (sportMetaData && sportMetaData[sport]) || {};
+    if (Array.isArray(m.durations) && m.durations.length) {
+        return m.durations.map(d => parseInt(d, 10)).filter(d => d > 0);
+    }
+    const d = parseInt(m.duration, 10);
+    return d > 0 ? [d] : [];
+}
+// Accepts a single length, a list, or a "20, 40" string. durations is canonical;
+// the scalar duration mirrors the shortest so older readers keep working.
+function parseSportDurations(input) {
+    const raw = Array.isArray(input) ? input : String(input == null ? '' : input).split(/[,/\s]+/);
+    const seen = new Set();
+    const out = [];
+    raw.forEach(x => {
+        const v = parseInt(x, 10);
+        if (!Number.isFinite(v) || v <= 0) return;
+        const clamped = Math.max(5, Math.min(180, v));
+        if (seen.has(clamped)) return;
+        seen.add(clamped);
+        out.push(clamped);
+    });
+    return out.sort((a, b) => a - b);
+}
 function setSportDurationGlobal(sport, mins) {
     if (!sportMetaData[sport]) sportMetaData[sport] = {};
-    const v = parseInt(mins, 10);
-    if (Number.isFinite(v) && v > 0) {
-        sportMetaData[sport].durations = [v];
-        sportMetaData[sport].duration = v;
+    const list = parseSportDurations(mins);
+    if (list.length > 0) {
+        sportMetaData[sport].durations = list;
+        sportMetaData[sport].duration = list[0];
     } else {
         sportMetaData[sport].durations = [];
         sportMetaData[sport].duration = null;
@@ -2161,9 +2188,9 @@ function setSportDurationGlobal(sport, mins) {
 function summaryFieldDurations(f) {
     const sports = (f.activities || []).filter(Boolean);
     if (!sports.length) return "No sports selected";
-    const set = sports.map(s => ({ s, d: getSportDurationValue(s) })).filter(x => x.d);
+    const set = sports.map(s => ({ s, d: getSportDurationsValue(s) })).filter(x => x.d.length);
     if (!set.length) return "Flexible (uses block size)";
-    const parts = set.slice(0, 3).map(x => `${x.s} ${x.d}m`);
+    const parts = set.slice(0, 3).map(x => `${x.s} ${x.d.join('/')}m`);
     const extra = set.length - parts.length;
     return parts.join(', ') + (extra > 0 ? ` +${extra}` : '');
 }
@@ -2173,7 +2200,7 @@ function renderFieldDurations(f) {
 
     const desc = document.createElement("p");
     desc.style.cssText = "font-size:0.85rem; color:#6B7280; margin:0 0 12px 0;";
-    desc.textContent = "Set a fixed length for any sport this facility hosts. When set, the auto-scheduler keeps that sport to exactly this duration (like a special). Leave blank to use the layer's block size. This length applies to the sport everywhere it's played.";
+    desc.textContent = "Set the length for any sport this facility hosts. When set, the scheduler keeps that sport to exactly this duration (like a special). Enter several separated by commas (\"20, 40\") and it picks whichever fits the block — a block you marked splittable can then fit two short ones where one long one would go. Leave blank to use the block size. This applies to the sport everywhere it's played.";
     box.appendChild(desc);
 
     if (!sports.length) {
@@ -2199,18 +2226,15 @@ function renderFieldDurations(f) {
         row.appendChild(nameEl);
 
         const input = document.createElement("input");
-        input.type = "number";
-        input.min = "5"; input.max = "180"; input.step = "5";
+        input.type = "text";
+        input.inputMode = "numeric";
         input.placeholder = "—";
-        const cur = getSportDurationValue(sport);
-        input.value = cur != null ? cur : "";
-        input.style.cssText = "width:80px; padding:5px 8px; border:1px solid #D1D5DB; border-radius:6px; text-align:center; font-size:0.85rem;";
-        input.title = "Fixed duration in minutes for " + sport + ". Leave blank to use the layer block size.";
+        input.value = getSportDurationsValue(sport).join(", ");
+        input.style.cssText = "width:110px; padding:5px 8px; border:1px solid #D1D5DB; border-radius:6px; text-align:center; font-size:0.85rem;";
+        input.title = "Length in minutes for " + sport + ", or several separated by commas (\"20, 40\"). Leave blank to use the block size.";
         input.onchange = () => {
-            const v = parseInt(input.value, 10);
-            const clamped = Number.isFinite(v) && v > 0 ? Math.max(5, Math.min(180, v)) : null;
-            setSportDurationGlobal(sport, clamped);
-            if (clamped != null) input.value = clamped; else input.value = "";
+            setSportDurationGlobal(sport, input.value);
+            input.value = getSportDurationsValue(sport).join(", ");
             updateSummary();
         };
         row.appendChild(input);
