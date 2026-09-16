@@ -9670,6 +9670,41 @@ function saveFormConfig(){
         toast('Form saved, but the cancellation policy did not \u2014 set it from Registration','error');
     }
 
+    // Card fees. Same arrangement and the same guard, plus one extra step: the
+    // policy is ALSO written through set_card_fee_policy, which clamps the
+    // surcharge to the card brands' cap server-side. Saving it only into the blob
+    // would let a policy edited in the cloud, or written by an older build,
+    // exceed 3% — and the amount a family is charged must not depend on which
+    // build last touched it.
+    try{
+        if(_cfAPI()&&document.querySelector('input[name="cfMode"]')){
+            var _cfPol=_cfAPI().normalize(_cfRead());
+            enrollSettings.cardFeePolicy=_cfPol;
+            var _cfClient=window.CampistryDB&&window.CampistryDB.getClient?window.CampistryDB.getClient():window.supabase;
+            var _cfCampId=getCampId();
+            if(_cfClient&&_cfCampId){
+                _cfClient.rpc('set_card_fee_policy',{p_camp_id:_cfCampId,p_policy:_cfPol})
+                    .then(function(res){
+                        var d=res&&res.data;
+                        if(d&&d.success&&d.policy){
+                            // Take back whatever the server clamped, so the screen
+                            // shows the number that will actually be charged.
+                            enrollSettings.cardFeePolicy=_cfAPI().normalize(d.policy);
+                            save();
+                        }else if(d&&!d.success){
+                            console.warn('[Me] card fee policy rejected:',d.error);
+                            toast('Card fees not saved: '+(d.error==='not_owner'
+                                ? 'only the camp owner can set them' : d.error),'error');
+                        }
+                    })
+                    .catch(function(err){console.warn('[Me] card fee policy save failed:',err&&err.message)});
+            }
+        }
+    }catch(e){
+        console.warn('[Me] card fee policy not saved from the builder:',e&&e.message);
+        toast('Form saved, but the card fee policy did not \u2014 set it from Registration','error');
+    }
+
     save();
     closeFormBuilder();
     toast('Form configuration saved');
@@ -15745,6 +15780,140 @@ function _cpRead(){
             financialAidFullRefund:ck('cpAid')};
 }
 
+// ═══════════════════════════════════════════════════════════════
+// CARD FEES — surcharge / convenience fee / cash discount
+// ═══════════════════════════════════════════════════════════════
+function _cfAPI(){return (typeof window!=='undefined'&&window.CampistryCardFees)||null}
+
+function _cfCardSafe(){
+    try{
+        var F=_cfAPI();
+        if(!F)return '';
+        var pol=F.normalize(enrollSettings.cardFeePolicy);
+        var x=F.explain(pol);
+        // The badge says "not yet live" rather than "on" when something the card
+        // brands or a state require is missing. A camp that thinks surcharging is
+        // switched on and is collecting nothing needs to be told which.
+        var badge=pol.mode==='off'?'off':((x.blockers&&x.blockers.length)?'not yet live':pol.mode.replace('_',' '));
+        return _accCard('Card Fees',_cfCardHtml(pol),{badge:badge});
+    }catch(e){
+        console.warn('[Me] card fee card failed to render:',e&&e.message);
+        return '';
+    }
+}
+
+function _cfCardHtml(pol){
+    var F=_cfAPI();
+    if(!F)return '';
+    pol=F.normalize(pol);
+    var x=F.explain(pol);
+
+    var h='<p style="font-size:.78rem;color:var(--s400);margin:0 0 12px;line-height:1.6">'
+      +'Passing card processing costs to families. These are three different things '
+      +'with three different rule books \u2014 picking the wrong one is how a camp '
+      +'loses its merchant account, so the constraints are spelled out below rather '
+      +'than left for you to find out.</p>';
+
+    var MODES=[
+        ['off','Nothing passed on','The camp absorbs the processing cost.'],
+        ['surcharge','Credit-card surcharge (%)','A percentage on credit cards only. Capped at 3%. Never on debit.'],
+        ['convenience','Online payment fee (flat)','A fixed amount per online payment. Applies to debit and bank transfers too.'],
+        ['cash_discount','Discount for not paying by card','The card price is the posted price. Safest of the three.']
+    ];
+    h+='<div style="margin-bottom:14px">';
+    MODES.forEach(function(m){
+        h+='<label style="display:flex;gap:9px;align-items:flex-start;font-size:.84rem;margin-bottom:9px;cursor:pointer">'
+          +'<input type="radio" name="cfMode" value="'+m[0]+'" '+(pol.mode===m[0]?'checked':'')
+          +' onchange="CampistryMe._cfToggle()" style="accent-color:var(--me);width:15px;height:15px;margin-top:2px">'
+          +'<span><strong>'+esc(m[1])+'</strong><br><span style="font-size:.76rem;color:var(--s400)">'+esc(m[2])+'</span></span></label>';
+    });
+    h+='</div>';
+
+    // ── surcharge ──
+    h+='<div id="cfSurcharge" style="'+(pol.mode==='surcharge'?'':'display:none')+'">';
+    h+='<div style="display:flex;gap:10px;flex-wrap:wrap;margin-bottom:10px">';
+    h+='<div><label style="display:block;font-size:.78rem;color:var(--s500);margin-bottom:4px">Surcharge %</label>'
+      +'<input type="number" min="0" max="3" step="0.01" id="cfPct" value="'+(pol.surchargePct||0)+'" class="fs" style="width:110px"></div>';
+    h+='<div><label style="display:block;font-size:.78rem;color:var(--s500);margin-bottom:4px">Your cost of acceptance %</label>'
+      +'<input type="number" min="0" max="10" step="0.01" id="cfCost" value="'+(pol.costOfAcceptancePct||0)+'" class="fs" style="width:150px"></div>';
+    h+='</div>';
+    h+='<p style="font-size:.74rem;color:var(--s400);margin:0 0 10px;line-height:1.6">'
+      +'The brands allow the LESSER of your own cost and 3%, so a camp paying 2.6% may not charge 3%. '
+      +'Leave the cost blank if you do not know it and the 3% ceiling applies.</p>';
+    h+='<div style="display:flex;gap:10px;flex-wrap:wrap;margin-bottom:10px">';
+    h+='<div><label style="display:block;font-size:.78rem;color:var(--s500);margin-bottom:4px">Camp\u2019s state</label>'
+      +'<input type="text" maxlength="2" id="cfState" value="'+esc(pol.state||'')+'" class="fs" placeholder="NY" style="width:80px;text-transform:uppercase"></div>';
+    h+='<div><label style="display:block;font-size:.78rem;color:var(--s500);margin-bottom:4px">Date you notified your processor</label>'
+      +'<input type="date" id="cfNotified" value="'+esc(pol.processorNotifiedOn||'')+'" class="fs" style="width:170px"></div>';
+    h+='</div>';
+    h+='<p style="font-size:.74rem;color:var(--s400);margin:0 0 4px;line-height:1.6">'
+      +'Visa requires 30 days\u2019 written notice to your processor before you start surcharging. '
+      +'Until a date is here, no surcharge is added \u2014 the setting is saved, it just does not fire.</p>';
+    h+='</div>';
+
+    // ── convenience ──
+    h+='<div id="cfConvenience" style="'+(pol.mode==='convenience'?'':'display:none')+'">';
+    h+='<label style="display:block;font-size:.78rem;color:var(--s500);margin-bottom:4px">Fee per online payment ($)</label>'
+      +'<input type="number" min="0" step="0.01" id="cfFlat" value="'+(pol.convenienceFlat||0)+'" class="fs" style="width:130px;margin-bottom:10px">';
+    h+='<p style="font-size:.74rem;color:var(--s400);margin:0;line-height:1.6">'
+      +'A FLAT amount \u2014 Visa and American Express do not permit a percentage here. '
+      +'A percentage is a surcharge and follows those rules instead, including never touching a debit card.</p>';
+    h+='</div>';
+
+    // ── cash discount ──
+    h+='<div id="cfCashDiscount" style="'+(pol.mode==='cash_discount'?'':'display:none')+'">';
+    h+='<div style="display:flex;gap:10px;flex-wrap:wrap;margin-bottom:10px">';
+    h+='<div><label style="display:block;font-size:.78rem;color:var(--s500);margin-bottom:4px">Discount %</label>'
+      +'<input type="number" min="0" max="100" step="0.01" id="cfDiscPct" value="'+(pol.cashDiscountPct||0)+'" class="fs" style="width:110px"></div>';
+    h+='<div><label style="display:block;font-size:.78rem;color:var(--s500);margin-bottom:4px">or flat $</label>'
+      +'<input type="number" min="0" step="0.01" id="cfDiscFlat" value="'+(pol.cashDiscountFlat||0)+'" class="fs" style="width:110px"></div>';
+    h+='</div></div>';
+
+    // What is standing in the way, and what a parent will be shown.
+    if(x.blockers&&x.blockers.length){
+        h+='<div style="background:#FFFBEB;border:1px solid #FDE68A;color:#92400E;padding:9px 12px;border-radius:var(--r);margin-top:12px;font-size:.78rem;line-height:1.6">'
+          +'<strong>Not live yet.</strong><ul style="margin:6px 0 0;padding-left:18px">'
+          +x.blockers.map(function(b){return '<li>'+esc(b)+'</li>'}).join('')+'</ul></div>';
+    }
+    var disc=F.disclosure(pol,{fmt:fm});
+    if(disc){
+        h+='<div style="background:var(--s50);padding:9px 12px;border-radius:var(--r);margin-top:12px;font-size:.78rem;color:var(--s600);line-height:1.6">'
+          +'<strong>Families will be shown:</strong><br>\u201c'+esc(disc)+'\u201d</div>';
+    }
+    if(x.notes&&x.notes.length){
+        h+='<ul style="margin:12px 0 0;padding-left:18px;font-size:.74rem;color:var(--s400);line-height:1.7">'
+          +x.notes.map(function(n){return '<li>'+esc(n)+'</li>'}).join('')+'</ul>';
+    }
+    return h;
+}
+
+function _cfToggle(){
+    var el=document.querySelector('input[name="cfMode"]:checked');
+    var mode=el?el.value:'off';
+    [['cfSurcharge','surcharge'],['cfConvenience','convenience'],['cfCashDiscount','cash_discount']]
+        .forEach(function(pair){
+            var box=document.getElementById(pair[0]);
+            if(box)box.style.display=(mode===pair[1])?'':'none';
+        });
+}
+
+/** Read the form back. Mirrors _cpRead — the same save path calls both. */
+function _cfRead(){
+    function n(id){var el=document.getElementById(id);return el?(parseFloat(el.value)||0):0}
+    function t(id){var el=document.getElementById(id);return el?String(el.value||'').trim():''}
+    var el=document.querySelector('input[name="cfMode"]:checked');
+    return {
+        mode:el?el.value:'off',
+        surchargePct:n('cfPct'),
+        costOfAcceptancePct:n('cfCost'),
+        convenienceFlat:n('cfFlat'),
+        cashDiscountPct:n('cfDiscPct'),
+        cashDiscountFlat:n('cfDiscFlat'),
+        state:t('cfState').toUpperCase().slice(0,2),
+        processorNotifiedOn:t('cfNotified')
+    };
+}
+
 function _dpCardHtml(pol){
     var P=_depPolicyAPI();
     if(!P)return '';
@@ -15886,7 +16055,8 @@ function _dpBuilderCardHtml(){
             ? (pol.basis==='flat'?fm(pol.amount):pol.basis==='percent'?pol.percent+'%':'per session')
             : 'off';
         return _accCard('Deposit to Register',_dpCardHtml(pol),{badge:badge})
-             + _cpCardSafe();
+             + _cpCardSafe()
+             + _cfCardSafe();
     }catch(e){
         console.warn('[Me] deposit card failed to render:',e&&e.message);
         return '';
@@ -19023,7 +19193,7 @@ window.CampistryMe={
     addDiv:function(){openDivForm(null)},editDiv:function(n){openDivForm(n)},deleteDiv:deleteDiv,
     openCsv:function(){openModal('csvModal')},downloadTemplate:downloadTemplate,
     finReconcileCharges:finReconcileCharges,
-    _dpToggle:_dpToggle,_cpToggle:_cpToggle,_fbRetryPreview:_fbRetryPreview,markDepositPaid:markDepositPaid,
+    _dpToggle:_dpToggle,_cpToggle:_cpToggle,_cfToggle:_cfToggle,_fbRetryPreview:_fbRetryPreview,markDepositPaid:markDepositPaid,
     setRosterPage:setRosterPage,setRosterSubTab:setRosterSubTab,setRosterWhen:setRosterWhen,setBillingPage:setBillingPage,setAnalyticsInvoicePage:setAnalyticsInvoicePage,setAnalyticsPaymentPage:setAnalyticsPaymentPage,
     _runSetupChecklistAction:_runSetupChecklistAction,dismissSetupChecklist:dismissSetupChecklist,
     bbDrop:bbDrop,autoAssign:autoAssign,autoGenerateBunks:autoGenerateBunks,openBunkGenSettings:openBunkGenSettings,showCamperBunkRequests:showCamperBunkRequests,clearBunks:clearBunks,setBunkCount:setBunkCount,openBunkCountModal:openBunkCountModal,_clearBunkCount:_clearBunkCount,

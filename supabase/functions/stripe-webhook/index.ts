@@ -382,13 +382,23 @@ async function handleRegistrationCardCapture(
   // Brand and last four, purely so the form can print "Visa ending 4242".
   // Cosmetic: a failure here must not cost the parent an accepted card.
   let last4: string | null = null, brand: string | null = null;
+  // FUNDING — 'credit' | 'debit' | 'prepaid' | 'unknown'. Captured because a
+  // credit-card surcharge may NEVER be applied to a debit, prepaid, FSA, HSA or
+  // Medicare Flex card, and until now every card-saving path here recorded the
+  // brand and the last four digits and threw this away. Without it
+  // campistry_card_fees.js refuses to surcharge at all, which is the right
+  // answer but collects nothing.
+  let funding: string | null = null;
   if (STRIPE_SECRET) {
     try {
       const resp = await fetch(`${STRIPE_API}/payment_methods/${paymentMethodId}`, {
         headers: { "Authorization": `Bearer ${STRIPE_SECRET}` },
       });
       const pm = await resp.json();
-      if (pm?.card) { last4 = pm.card.last4 || null; brand = pm.card.brand || null; }
+      if (pm?.card) {
+        last4 = pm.card.last4 || null; brand = pm.card.brand || null;
+        funding = pm.card.funding || null;
+      }
       else if (pm?.us_bank_account) { last4 = pm.us_bank_account.last4 || null; brand = pm.us_bank_account.bank_name || "Bank"; }
     } catch (e) {
       console.warn(`[stripe-webhook] could not label card capture ${reference}: ${(e as Error).message}`);
@@ -398,7 +408,7 @@ async function handleRegistrationCardCapture(
   const { data, error } = await supabase.rpc("complete_card_capture", {
     p_reference: String(reference), p_status: "completed",
     p_customer_ref: String(customerId), p_method_ref: String(paymentMethodId),
-    p_last4: last4, p_brand: brand, p_error: null,
+    p_last4: last4, p_brand: brand, p_funding: funding, p_error: null,
   });
   if (error || !data?.success) {
     console.error(`[stripe-webhook] card capture ${reference} accepted but not recorded:`, error?.message || data?.error);
@@ -440,6 +450,9 @@ async function handleAutopaySetup(
   // of finding out through a decline mid-summer.
   let pmExpMonth: number | null = null;
   let pmExpYear: number | null = null;
+  // See the card-capture handler above: a surcharge is credit-only, so the
+  // funding type has to be on file or no saved-card charge can ever carry one.
+  let pmFunding: string | null = null;
   if (STRIPE_SECRET) {
     try {
       const resp = await fetch(`${STRIPE_API}/payment_methods/${paymentMethodId}`, {
@@ -451,6 +464,7 @@ async function handleAutopaySetup(
         pmLabel = `${pm.card.brand || "Card"} ···· ${pm.card.last4 || ""}`.trim();
         pmExpMonth = Number(pm.card.exp_month) || null;
         pmExpYear = Number(pm.card.exp_year) || null;
+        pmFunding = pm.card.funding || null;
       }
       else if (pmType === "us_bank_account" && pm.us_bank_account) pmLabel = `${pm.us_bank_account.bank_name || "Bank"} ···· ${pm.us_bank_account.last4 || ""}`.trim();
     } catch (e) {
@@ -486,6 +500,9 @@ async function handleAutopaySetup(
       // Absent for a bank account, which does not expire — card_expiry_status
       // reads that as 'unknown' and says nothing, which is correct.
       ...(pmExpMonth && pmExpYear ? { expMonth: pmExpMonth, expYear: pmExpYear } : {}),
+      // Absent for a bank account and for a card Stripe could not classify.
+      // Absent means "do not surcharge", never "assume credit".
+      ...(pmFunding ? { funding: pmFunding } : {}),
     },
     p_default_fields: {
       stripeCustomerId: customerId,

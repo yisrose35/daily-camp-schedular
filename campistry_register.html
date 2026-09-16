@@ -199,6 +199,11 @@ body{font-family:var(--font);background:var(--s50);color:var(--s800);-webkit-fon
 <div class="promo-row"><input class="fi" id="promoIn" placeholder="Enter code"><button class="promo-btn" onclick="applyPromo()">Apply</button></div>
 <div id="promoMsg" class="promo-msg" style="display:none"></div></div>
 <p style="font-size:.8rem;color:var(--s500);margin-bottom:8px">Select how you'd like to pay:</p>
+<!-- The camp's card fee, stated BEFORE the payment method is chosen. That
+     ordering is a card-brand requirement, not a courtesy, and it is also
+     what stops the fee turning into a dispute. Filled in by
+     _regRenderCardFee(); empty for a camp that passes nothing on. -->
+<div id="cardFeeNote" style="display:none"></div>
 <div id="payOpts">
 <!-- Rebuilt at runtime by _regRenderPayOpts() from the camp's own choice in
      the form builder. This markup is what a camp that has never touched that
@@ -289,6 +294,7 @@ body{font-family:var(--font);background:var(--s50);color:var(--s800);-webkit-fon
 <script src="integration_hooks.js?v=20260915-01" onerror="console.log('[Register] Integration hooks not loaded — local only')"></script>
 <script src="campistry_payments.js?v=20260904-01" onerror="console.log('[Register] Payment policy not loaded — showing the built-in options')"></script>
 <script src="campistry_deposit_policy.js?v=20260916-01" onerror="console.log('[Register] Deposit policy not loaded — the form simply will not mention a deposit')"></script>
+<script src="campistry_card_fees.js?v=20260916-01" onerror="console.log('[Register] Card fee policy not loaded — the form simply will not mention a card fee')"></script>
 <script src="campistry_card_capture.js?v=20260916-01" onerror="console.log('[Register] Card capture not loaded — the form will fall back to paying after submit')"></script>
 <script src="campistry_sibling_discount.js?v=20260916-01" onerror="console.log('[Register] Sibling discount not loaded — the form will not apply one')"></script>
 <script>
@@ -796,6 +802,7 @@ function applyFormConfig(fc){
     // formConfig, but a camp switching sections on and off expects the whole
     // preview to stay current, and this is the only hook the iframe gets.
     try{ _regRenderDeposit(); }catch(e){}
+    try{ _regRenderCardFee(); }catch(e){}
     // The builder pushes a draft on every edit, so unticking "Check" there
     // takes it off the preview immediately.
     if(Array.isArray(fc.paymentMethods))_payMethods=fc.paymentMethods;
@@ -891,6 +898,10 @@ async function _loadFromCloud(campId){
         // public form config. An older database sends nothing and the form
         // behaves exactly as it did before.
         _depositPolicy=d.depositPolicy||null;
+        // Migration 192 sends the camp's card fee rule with the rest of the
+        // public config, for the same reason the deposit rule rides along: the
+        // form cannot disclose a fee it has not been told about.
+        _cardFeePolicy=d.cardFeePolicy||null;
         // paymentMethods rides inside formConfig, which the public RPC has
         // always sent -- so the camp's choice reaches parents with no
         // migration and no second delivery path to keep in step.
@@ -935,7 +946,7 @@ function renderSessions(){
     if(!items.length){c.innerHTML='<p style="color:var(--s400);font-size:.85rem;text-align:center;padding:10px">No sessions available.</p>';return}
     // Drawn here too: on first load nothing is selected, so updatePrice has
     // nothing to do and the deposit would otherwise never be mentioned.
-    setTimeout(function(){try{_regRenderDeposit();}catch(e){}},0);
+    setTimeout(function(){try{_regRenderDeposit();}catch(e){}try{_regRenderCardFee();}catch(e){}},0);
     c.innerHTML=items.map(function(s,i){
         var today=new Date().toISOString().split('T')[0];
         var eb=s.earlyBird&&(!s.earlyBirdDeadline||today<=s.earlyBirdDeadline);
@@ -1072,6 +1083,7 @@ function updatePrice(){
         +'</div>';
     // The deposit can be a share of this, so it moves whenever the price does.
     try{ _regRenderDeposit(); }catch(e){ console.warn('[Register] deposit box:',e&&e.message); }
+    try{ _regRenderCardFee(); }catch(e){ console.warn('[Register] card fee note:',e&&e.message); }
 }
 
 // ─── WHAT PICKING A METHOD MEANS ──────────────────────────────
@@ -1083,6 +1095,38 @@ function updatePrice(){
 
 /** Methods that end in a trip to the processor. */
 function _regIsOnlineMethod(m){ return m==='credit_card'||m==='ach'||m==='debit'; }
+
+// The camp's card fee rule, from the public config. Null until the cloud
+// answers, and a null policy discloses nothing — which is right: a fee the form
+// has not been told about must not be implied, let alone charged.
+var _cardFeePolicy=null;
+/**
+ * State the fee where the payment method is chosen.
+ *
+ * Deliberately a DISCLOSURE and not a line on the total. A surcharge is
+ * credit-only and nobody — not this form, not the camp — knows whether the card a
+ * parent is about to type is credit or debit until it is typed, so quoting an
+ * exact figure here would be a number that changes. The rule is stated; the
+ * amount is worked out when the card is known.
+ *
+ * A flat online-payment fee IS knowable up front, so that one is quoted exactly.
+ */
+function _regRenderCardFee(){
+    var box=document.getElementById('cardFeeNote');
+    if(!box)return;
+    var F=window.CampistryCardFees;
+    if(!F||!_cardFeePolicy){box.style.display='none';_regSetHtml(box,'');return}
+    var pol=F.normalize(_cardFeePolicy);
+    var line=F.disclosure(pol,{fmt:fm});
+    // A policy whose blockers are unmet adds nothing, so it must say nothing —
+    // announcing a fee that will not be charged is its own kind of wrong.
+    var x=F.explain(pol);
+    if(!line||(x.blockers&&x.blockers.length)){box.style.display='none';_regSetHtml(box,'');return}
+    box.style.display='';
+    _regSetHtml(box,'<div style="background:#FFFBEB;border:1px solid #FDE68A;color:#92400E;'
+        +'padding:9px 12px;border-radius:var(--r);margin-bottom:10px;font-size:.8rem;line-height:1.55">'
+        +esc(line)+'</div>');
+}
 
 function _regPayMethodNote(){
     var box=document.getElementById('payMethodNote');

@@ -548,7 +548,10 @@ test('the deposit renders on every path that draws the form', () => {
     // updatePrice's early return, the session list, and the builder's pushed
     // draft. Miss any one and it is invisible in a state somebody will hit.
     assert.match(reg, /el\.innerHTML='';try\{_regRenderDeposit\(\);\}catch/);
-    assert.match(reg, /setTimeout\(function\(\)\{try\{_regRenderDeposit\(\);\}catch\(e\)\{\}\},0\)/);
+    // Anchored on the CALL inside the deferred draw, not the whole statement:
+    // the card-fee note now shares that timeout, and pinning the exact line
+    // makes a second renderer look like a regression.
+    assert.match(reg, /setTimeout\(function\(\)\{try\{_regRenderDeposit\(\);\}catch\(e\)\{\}/);
     const apply = reg.slice(reg.indexOf('function applyFormConfig('), reg.indexOf('// ─── SIBLINGS'));
     assert.match(apply, /_regRenderDeposit/, 'the builder preview never refreshes it');
 });

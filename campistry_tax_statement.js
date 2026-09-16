@@ -84,7 +84,14 @@
         notQualifying: [
             /canteen/i, /snack/i, /\bshop\b/i, /swag/i, /merch/i, /store/i,
             /photo/i, /\btip\b/i, /gratuity/i, /donation/i, /fundrais/i,
-            /late\s*fee/i, /\bnsf\b/i, /returned/i, /insurance/i, /laundry/i
+            /late\s*fee/i, /\bnsf\b/i, /returned/i, /insurance/i, /laundry/i,
+            // A card fee is a cost of PAYING, not a cost of care, so it is not a
+            // Form 2441 expense however it is labelled. Listed ahead of the
+            // qualifying patterns by virtue of this array being tested first —
+            // "credit card fee" would otherwise match /camp\s*fee/ through
+            // "card fee" and be counted as care.
+            /surcharge/i, /convenience\s*fee/i, /card\s*fee/i,
+            /processing\s*fee/i, /service\s*fee/i, /payment\s*fee/i
         ]
     };
 
