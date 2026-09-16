@@ -1,5 +1,5 @@
 -- =============================================================================
--- 189 — a session capacity that is actually a capacity
+-- 190 — a session capacity that is actually a capacity
 --
 -- Every session in this app carries a `capacity`. The dashboard asks for it,
 -- saves it, and prints it back. NOTHING has ever read it. Not the public

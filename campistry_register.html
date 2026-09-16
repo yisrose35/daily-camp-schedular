@@ -861,7 +861,7 @@ async function _loadFromCloud(campId){
     }
     try{
         var res=await client.rpc('get_public_form_config',{p_camp_id:campId,p_kind:'registration'});
-        // How full each session is (migration 189). Fetched separately from the
+        // How full each session is (migration 190). Fetched separately from the
         // form config because it is a live count, not configuration — and
         // fetched at all because a session capacity was collected by the
         // dashboard and enforced by nothing, so a camp could take sixty
@@ -2024,7 +2024,7 @@ window.submitApp=async function(){
     // a deposit the camp wants up front -- a pay-later one is already tracked
     // as owed and chasing it here would be noise.
     // A session that filled up between loading this form and submitting it.
-    // The server queued the application instead of refusing it (migration 189),
+    // The server queued the application instead of refusing it (migration 190),
     // which is the right answer — but saying nothing would let a parent read
     // "Received by the camp" as a place confirmed.
     var _wl=(cloudRes&&cloudRes.waitlisted)||[];

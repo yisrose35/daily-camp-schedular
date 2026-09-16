@@ -23,7 +23,7 @@ const read = p => fs.readFileSync(path.join(ROOT, p), 'utf8');
 // satisfy an assertion about the code.
 const code = p => read(p).split('\n').filter(l => !/^\s*(--|\/\/|\*|\/\*)/.test(l)).join('\n');
 
-const SQL = code('migrations/189_session_capacity.sql');
+const SQL = code('migrations/190_session_capacity.sql');
 const ME = read('campistry_me.js');
 const REG = read('campistry_register.html');
 
@@ -201,7 +201,7 @@ test('the migration parses as SQL', () => {
     try {
         out = execFileSync('python3', ['-c',
             'import pglast,sys;pglast.parse_sql(open(sys.argv[1]).read());print("ok")',
-            path.join(ROOT, 'migrations/189_session_capacity.sql')], { encoding: 'utf8' });
+            path.join(ROOT, 'migrations/190_session_capacity.sql')], { encoding: 'utf8' });
     } catch (e) {
         if (/ModuleNotFoundError/.test(String(e.stderr || ''))) return;
         throw e;

@@ -11145,7 +11145,7 @@ function autoPromoteWaitlist(sessionName){
 
 /**
  * How full a session is, counted from the same statuses the server counts
- * (migration 189): anybody the camp has not turned away.
+ * (migration 190): anybody the camp has not turned away.
  *
  * Returns null when the session has no capacity set, because an empty box on
  * the dashboard's session form means UNLIMITED — treating it as zero would
