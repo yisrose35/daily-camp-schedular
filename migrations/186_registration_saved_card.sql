@@ -15,7 +15,7 @@
 -- file path here already holds. The number never reaches Campistry at all --
 -- the parent types it on the processor's page.
 --
--- Idempotent -- safe to re-run. Requires 165.
+-- Idempotent -- safe to re-run. Requires 185.
 -- =============================================================================
 
 CREATE OR REPLACE FUNCTION public._record_registration_card(

@@ -190,7 +190,7 @@ suggestion to confirm.
 A camp can require money to hold a place (migration 164). Until now the form
 could only **say** so. This is the paying half.
 
-**Apply `migrations/165_registration_deposit.sql`**, then **deploy the new
+**Apply `migrations/185_registration_deposit.sql`**, then **deploy the new
 `registration-deposit-checkout` function** (Supabase Dashboard → Edge Functions
 → Deploy a new function → paste
 `supabase/functions/registration-deposit-checkout/index.ts`), and **redeploy
@@ -254,7 +254,7 @@ form."* — with a tickbox to keep it. On submit they go straight there rather
 than hunting for a second button; the pay step stays on the confirmation screen
 for anyone who comes back.
 
-Apply **`migrations/166_registration_saved_card.sql`** alongside 165, and
+Apply **`migrations/186_registration_saved_card.sql`** alongside 185, and
 redeploy the same three functions.
 
 **The card number never reaches Campistry.** The parent types it on the
@@ -269,7 +269,7 @@ on.
 
 ### Migration 167 — Cardknox / Sola
 
-Apply **`migrations/167_cardknox_registration_deposit.sql`** and redeploy
+Apply **`migrations/187_cardknox_registration_deposit.sql`** and redeploy
 **`cardknox-webhook`** as well.
 
 Sola's hosted checkout already carries a real per-transaction amount

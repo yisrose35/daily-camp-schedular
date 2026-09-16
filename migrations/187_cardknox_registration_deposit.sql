@@ -12,7 +12,7 @@
 -- deposit belongs to neither: the family record does not exist until the office
 -- accepts. So the intent gains an application to point at.
 --
--- Idempotent -- safe to re-run. Requires 134, 136 and 165.
+-- Idempotent -- safe to re-run. Requires 134, 136 and 185.
 -- =============================================================================
 
 -- ─── 1. an intent can belong to an application ──────────────────────────────

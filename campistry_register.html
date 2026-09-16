@@ -238,7 +238,7 @@ body{font-family:var(--font);background:var(--s50);color:var(--s800);-webkit-fon
 </div>
 
 <div id="formErr" class="err-msg"></div>
-<button class="sub-btn" onclick="submitApp()">Submit Application</button>
+<button class="sub-btn" id="submitAppBtn" onclick="submitApp()">Submit Application</button>
 <div class="pwr">Powered by <a href="index.html">Campistry</a></div>
 </div>
 
@@ -1001,29 +1001,66 @@ function _regPayMethodNote(){
     var pol=(window.CampistryDepositPolicy&&_depositPolicy)
         ? window.CampistryDepositPolicy.normalize(_depositPolicy) : null;
     var payNow=owes&&pol&&pol.enabled&&pol.timing!=='later';
+    var money=function(n){ return window.CampistryDepositPolicy?window.CampistryDepositPolicy.money(n):fm(n); };
 
-    if(!_regIsOnlineMethod(selPM)||!payNow||!(_payAbility&&_payAbility.canPayOnline)){
-        box.style.display='none';_regSetHtml(box,'');return;
+    _regSyncSubmitLabel(payNow&&_regIsOnlineMethod(selPM)?due.total:0);
+
+    if(!_regIsOnlineMethod(selPM)){ box.style.display='none';_regSetHtml(box,'');return; }
+
+    var details=(selPM==='ach'?'bank details':'card');
+    var noun=(selPM==='ach'?'bank account':'card');
+    var kind=(selPM==='ach'?'bank transfers':'card payments');
+    var body, saveCard=false;
+
+    if(!payNow){
+        // A card picked for a later bill. Saying nothing here reads as
+        // "nothing happens", and then a charge arrives.
+        body='Nothing is charged now. The camp will use this '+noun+' when a payment is due.';
+    } else if(_payAbility&&_payAbility.canPayOnline){
+        var who=_payAbility.processor==='banquest'?'the camp\u2019s secure payment page'
+              :_payAbility.processor==='cardknox'?'the camp\u2019s secure checkout page'
+              :_payAbility.processor==='stripe'?'Stripe\u2019s secure checkout'
+              :'a secure payment page';
+        body='Finish this form and press <strong>Submit &amp; pay '+money(due.total)+'</strong> at the bottom. '
+            +'That opens '+esc(who)+' in this window, where you enter your '+details+'. '
+            +'Your details never touch this form.';
+        saveCard=true;
+    } else if(_payAbility){
+        // The camp genuinely cannot take a card here. Better said now than
+        // discovered on the confirmation screen.
+        body='This camp does not take '+kind+' through this form. '
+            +'Submit the application and the camp will send you how to pay the '+money(due.total)+' deposit.';
+    } else {
+        // Ability unknown -- offline, an old database, or the RPC is not
+        // there yet. True either way, and never silence.
+        body='You will be shown how to pay the '+money(due.total)+' deposit as soon as you submit this form.';
     }
-
-    var who=_payAbility.processor==='banquest'?'the camp\u2019s secure payment page'
-          :_payAbility.processor==='cardknox'?'the camp\u2019s secure checkout page'
-          :_payAbility.processor==='stripe'?'Stripe\u2019s secure checkout'
-          :'a secure payment page';
 
     box.style.display='';
     _regSetHtml(box,
         '<div style="background:var(--s50);border:1px solid var(--s200);border-radius:var(--r);padding:11px 13px;margin-top:8px">'
-        +'<div style="font-size:.82rem;color:var(--s600);line-height:1.6">'
-        +'When you submit, you will be taken to '+esc(who)+' to enter your '
-        +(selPM==='ach'?'bank details':'card')+' and pay the '
-        +(window.CampistryDepositPolicy?window.CampistryDepositPolicy.money(due.total):fm(due.total))
-        +' deposit. Your details never touch this form.</div>'
-        +'<label style="display:flex;gap:9px;align-items:flex-start;margin-top:9px;font-size:.82rem;color:var(--s700);cursor:pointer">'
+        +'<div style="font-size:.82rem;color:var(--s600);line-height:1.6">'+body+'</div>'
+        +(saveCard?'<label style="display:flex;gap:9px;align-items:flex-start;margin-top:9px;font-size:.82rem;color:var(--s700);cursor:pointer">'
         +'<input type="checkbox" id="paySaveCard"'+(_saveCard?' checked':'')+' onchange="_regSaveCardToggle(this)" style="accent-color:var(--me);margin-top:2px">'
-        +'<span>Save it for future payments, so you do not have to enter it again</span></label>'
+        +'<span>Save it for future payments, so you do not have to enter it again</span></label>':'')
         +'</div>');
 }
+
+/**
+ * The button at the bottom is the only thing a parent can actually press to
+ * reach the processor -- there is nothing to charge until the application
+ * exists -- so it says so instead of leaving them hunting for a link.
+ */
+function _regSyncSubmitLabel(amount){
+    var b=document.getElementById('submitAppBtn');
+    if(!b||b.disabled)return;
+    var money=function(n){ return window.CampistryDepositPolicy?window.CampistryDepositPolicy.money(n):fm(n); };
+    var want=(Number(amount)>0&&_payAbility&&_payAbility.canPayOnline)
+        ? 'Submit & pay '+money(amount)
+        : 'Submit Application';
+    if(b.textContent!==want)b.textContent=want;
+}
+
 window._regSaveCardToggle=function(cb){ _saveCard=!!(cb&&cb.checked); };
 var _saveCard=false;
 
@@ -1252,6 +1289,7 @@ function _regRenderDeposit(){
                 : !P.normalize(_depositPolicy).enabled ? 'the camp has a deposit rule but it is switched off'
                 : 'the rule is on but works out to $0 for this session'));
         }
+        try{ _regPayMethodNote(); }catch(e){}
         return;
     }
     var pol=P.normalize(_depositPolicy);
@@ -1266,6 +1304,10 @@ function _regRenderDeposit(){
         +'<div style="font-size:.82rem;color:var(--s600);line-height:1.6;margin-top:5px">'+esc(P.describe(pol,due))+'</div>'
         +(pol.note?'<div style="font-size:.8rem;color:var(--s500);line-height:1.6;margin-top:5px">'+esc(pol.note)+'</div>':'')
         +'</div>');
+    // The amount drives both the note under the payment methods and the
+    // wording on the submit button, so they follow it rather than going
+    // stale when a different session is picked.
+    try{ _regPayMethodNote(); }catch(e){}
 }
 
 /** What the camp required, frozen at what it said today. */

@@ -621,7 +621,7 @@ test('paying and signing are always the last thing on the form', () => {
 // decides the amount and what happens when something goes wrong.
 test('the amount charged is never the caller’s to name', () => {
     const fn = fs.readFileSync(path.join(ROOT, 'supabase/functions/registration-deposit-checkout/index.ts'), 'utf8');
-    const sql = fs.readFileSync(path.join(ROOT, 'migrations/165_registration_deposit.sql'), 'utf8');
+    const sql = fs.readFileSync(path.join(ROOT, 'migrations/185_registration_deposit.sql'), 'utf8');
 
     // The page asking is anonymous by design. If it could send an amount it
     // could name its own price — in either direction.
@@ -645,7 +645,7 @@ test('the amount charged is never the caller’s to name', () => {
 });
 
 test('a deposit is recorded once, and on the application', () => {
-    const sql = fs.readFileSync(path.join(ROOT, 'migrations/165_registration_deposit.sql'), 'utf8');
+    const sql = fs.readFileSync(path.join(ROOT, 'migrations/185_registration_deposit.sql'), 'utf8');
 
     // There is no family record yet, so the application is what gets credited.
     assert.match(sql, /ARRAY\['enrollments', p_enroll_id, 'depositPaid'\]/);
@@ -701,22 +701,60 @@ test('the form offers paying only when something is behind the button', () => {
 });
 
 // ── going to the processor, and keeping the card ────────────────────────────
-test('picking card or ACH says where it will take you', () => {
+test('picking card or ACH always says what happens next', () => {
     // A parent who ticks "Credit Card" expects to type a card. They cannot yet
     // — there is nothing to charge until the application exists — so the form
     // says what will happen, where they picked it, rather than letting them
-    // find out after submitting.
+    // find out after submitting. The first version of this went SILENT
+    // whenever pay-ability was unknown (an unapplied migration, an offline
+    // load), which looked exactly like a broken form: a parent ticked the card
+    // and nothing appeared at all. Every branch now says something.
     const reg = fs.readFileSync(path.join(ROOT, 'campistry_register.html'), 'utf8');
     assert.match(reg, /function _regIsOnlineMethod/);
     assert.match(reg, /id="payMethodNote"/);
-    assert.match(reg, /you will be taken to/);
     // Named by rail, not generically — "Stripe's secure checkout" is a thing a
     // parent recognises and trusts.
     assert.match(reg, /Stripe\\u2019s secure checkout/);
     assert.match(reg, /camp\\u2019s secure payment page/);
     assert.match(reg, /never touch this form/);
-    // Only promised when it can actually happen.
-    assert.match(reg, /!\(_payAbility&&_payAbility\.canPayOnline\)/);
+
+    const fn = reg.slice(reg.indexOf('function _regPayMethodNote()'),
+                         reg.indexOf('function _regSyncSubmitLabel('));
+    // The ONLY way out without rendering anything is "this is not an online
+    // method" — every other path falls through to the render at the bottom.
+    const blanks = fn.match(/_regSetHtml\(box,''\)/g) || [];
+    assert.strictEqual(blanks.length, 1,
+        'the note may only go blank for a method that never reaches a processor');
+    assert.ok(fn.indexOf("if(!_regIsOnlineMethod(selPM)){") < fn.indexOf("_regSetHtml(box,'')"),
+        'the one blank branch must be the non-online one');
+
+    // Unknown ability is not silence — it is the honest sentence.
+    assert.match(fn, /You will be shown how to pay the/);
+    // A camp that cannot take cards says so here, not on the confirmation.
+    assert.match(fn, /does not take '\+kind\+' through this form/);
+    // A deposit due later still explains why a card was asked for.
+    assert.match(fn, /Nothing is charged now/);
+    // Save-the-card is only offered where a card is actually entered.
+    assert.ok(fn.indexOf('saveCard=true') > 0 && /\(saveCard\?/.test(fn),
+        'the save-card tick only appears on the branch that reaches a processor');
+});
+
+test('the button they press to reach the processor says so', () => {
+    // The complaint that started this: "nothing opens to allow to tell the
+    // user to input or click on this link to open". There is no link to open
+    // before the application is saved — so the submit button itself names the
+    // payment step instead of leaving a parent hunting for one.
+    const reg = fs.readFileSync(path.join(ROOT, 'campistry_register.html'), 'utf8');
+    assert.match(reg, /id="submitAppBtn"/);
+    const fn = reg.slice(reg.indexOf('function _regSyncSubmitLabel('));
+    assert.match(fn.slice(0, 900), /Submit & pay '\+money\(amount\)/);
+    // Never promises a payment step the camp cannot actually run.
+    assert.match(fn.slice(0, 900), /_payAbility&&_payAbility\.canPayOnline/);
+    // A submit already in flight owns the label; this must not fight it.
+    assert.match(fn.slice(0, 900), /if\(!b\|\|b\.disabled\)return/);
+    // Kept in step with the amount, not set once.
+    assert.ok(/_regSyncSubmitLabel\(payNow&&_regIsOnlineMethod\(selPM\)\?due\.total:0\)/.test(reg),
+        'the label follows the deposit that is actually due');
 });
 
 test('choosing a card takes them there rather than to a second button', () => {
@@ -735,7 +773,7 @@ test('a parent can keep the card they just typed', () => {
     const fn = fs.readFileSync(path.join(ROOT, 'supabase/functions/registration-deposit-checkout/index.ts'), 'utf8');
     const stripe = fs.readFileSync(path.join(ROOT, 'supabase/functions/stripe-webhook/index.ts'), 'utf8');
     const hosted = fs.readFileSync(path.join(ROOT, 'supabase/functions/payments-hosted-complete/index.ts'), 'utf8');
-    const sql = fs.readFileSync(path.join(ROOT, 'migrations/166_registration_saved_card.sql'), 'utf8');
+    const sql = fs.readFileSync(path.join(ROOT, 'migrations/186_registration_saved_card.sql'), 'utf8');
 
     assert.match(reg, /id="paySaveCard"/);
     assert.match(reg, /saveCard:!!_saveCard/, 'the choice never reaches the server');
@@ -778,8 +816,8 @@ test('the saved card reaches the family when the office accepts', () => {
 // invented — only taught about applications.
 test('a Cardknox camp can take the deposit too', () => {
     const fn = fs.readFileSync(path.join(ROOT, 'supabase/functions/registration-deposit-checkout/index.ts'), 'utf8');
-    const sql = fs.readFileSync(path.join(ROOT, 'migrations/167_cardknox_registration_deposit.sql'), 'utf8');
-    const ability = fs.readFileSync(path.join(ROOT, 'migrations/165_registration_deposit.sql'), 'utf8');
+    const sql = fs.readFileSync(path.join(ROOT, 'migrations/187_cardknox_registration_deposit.sql'), 'utf8');
+    const ability = fs.readFileSync(path.join(ROOT, 'migrations/185_registration_deposit.sql'), 'utf8');
 
     assert.match(fn, /processorKey === "cardknox"/);
     assert.match(fn, /secure\.cardknox\.com/);
@@ -806,7 +844,7 @@ test('the application survives Sola not echoing our reference', () => {
     // list would resolve a registration deposit to an intent with no
     // application to credit, and the money would land nowhere.
     const hook = fs.readFileSync(path.join(ROOT, 'supabase/functions/cardknox-webhook/index.ts'), 'utf8');
-    const sql = fs.readFileSync(path.join(ROOT, 'migrations/167_cardknox_registration_deposit.sql'), 'utf8');
+    const sql = fs.readFileSync(path.join(ROOT, 'migrations/187_cardknox_registration_deposit.sql'), 'utf8');
 
     const fallback = hook.slice(hook.indexOf('if (candidates && candidates.length === 1)'),
                                 hook.indexOf('} else if (candidates'));

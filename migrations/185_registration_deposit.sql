@@ -1,5 +1,5 @@
 -- =============================================================================
--- 165 — take the registration deposit on the form
+-- 185 — take the registration deposit on the form
 --
 -- A camp can require money to hold a place (migration 164). Until now the form
 -- could only SAY so: the parent read the amount, submitted, and the office
