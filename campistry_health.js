@@ -31,7 +31,14 @@
     // Unenrolled campers (Me's "Unenroll" action — kept in the record for
     // billing/audit history but no longer active) are dropped here so a kid
     // who's left camp never shows up in a live medical/directory list.
-    function getRoster()    { var g = readGlobal(), all = (g.app1 && g.app1.camperRoster) || {}, out = {}; Object.keys(all).forEach(function(n){ if(!all[n].unenrolled) out[n] = all[n]; }); return out; }
+    // Presence joins the `unenrolled` test at the one place this page resolves
+    // its roster, so every downstream list — medication sheets, allergy sheets,
+    // the forms table — inherits it. A medication sheet listing a child who
+    // arrives in three weeks is a sheet a nurse has to second-guess.
+    function getRoster()    { var g = readGlobal(), all = (g.app1 && g.app1.camperRoster) || {}, out = {};
+        var P = window.CampistryPresence, gate = !!(P && P.hasDates());
+        Object.keys(all).forEach(function(n){ if(all[n].unenrolled) return; if(gate && !P.isHere(n)) return; out[n] = all[n]; });
+        return out; }
 
 // ── Camper display name ────────────────────────────────────────────────────
 // Roster keys are unique but are not always the camper's name: a second camper

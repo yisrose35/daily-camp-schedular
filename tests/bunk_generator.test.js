@@ -55,6 +55,50 @@ function tinyCamp(bunks, campers, opts) {
 }
 const NO_CRIT = [];
 
+// ═══ PRESENCE ════════════════════════════════════════════════════════════
+// A camper registered for the SECOND half must not be given a bunk during the
+// first. The bed they take is one a camper who IS here needs, and a bunk list
+// with absent children in it is one the office redoes by hand at the changeover.
+describe('presence', function () {
+  it('0a. a camper who is not at camp today is given no bunk', function () {
+    const camp = standardCamp(7);
+    const names = Object.keys(camp.roster);
+    const away = names.slice(0, 6);           // six of 108, spread across a cohort
+    const awaySet = new Set(away);
+    const r = runGenerator(Object.assign({}, camp, {
+      presence: { matters: true, here: (n) => !awaySet.has(n) }
+    }));
+    away.forEach((n) => assert.equal(camp.roster[n].bunk || '', '',
+      n + ' is not at camp and must not have been placed'));
+    // And everybody who IS here still got one.
+    names.filter((n) => !awaySet.has(n)).forEach((n) =>
+      assert.ok(camp.roster[n].bunk, n + ' is here and should have a bunk'));
+    assert.ok(r.report, 'a report should still be produced');
+  });
+
+  it('0b. absent campers are not counted as "unplaced" in the report', function () {
+    // Otherwise the report reads as a failure every time a camp has a second
+    // half booked, and an office learns to ignore it.
+    const camp = standardCamp(7);
+    const away = new Set(Object.keys(camp.roster).slice(0, 6));
+    const r = runGenerator(Object.assign({}, camp, {
+      presence: { matters: true, here: (n) => !away.has(n) }
+    }));
+    (r.report.unplaced || []).forEach((n) => assert.ok(!away.has(n),
+      n + ' is absent, so it is not an unplaced camper'));
+  });
+
+  it('0c. with no session dates, presence changes nothing', function () {
+    // A camp that has not filled in dates must generate exactly as before.
+    const a = standardCamp(7);
+    const b = standardCamp(7);
+    runGenerator(a);
+    runGenerator(Object.assign({}, b, { presence: { matters: false } }));
+    assert.deepEqual(Object.keys(a.roster).map((n) => a.roster[n].bunk),
+                     Object.keys(b.roster).map((n) => b.roster[n].bunk));
+  });
+});
+
 // ═══ BUNK SIZE ═══════════════════════════════════════════════════════════
 describe('bunk size', function () {
   it('1. largest and smallest non-empty bunk differ by at most 3 on a 108-camper camp', function () {

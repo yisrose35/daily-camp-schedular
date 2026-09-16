@@ -67,7 +67,14 @@ function _lbl(key) { return String(key == null ? '' : key).replace(/\s#\d+$/, ''
         }
         // See campistry_snacks.js's copy: `name` is the roster key, `label` is
         // what a human should see.
-        campers.push({ name, division: div, bunk, camperId: data.camperId,
+        // `here` is derived, not stored: is this camper at camp TODAY. It is a
+        // FLAG and not a filter on purpose. This list is also what decides which
+        // canteen accounts are still on the roster, and filtering it by presence
+        // would make a first-half camper's account look orphaned in August — with
+        // their money in it. Membership and presence are different questions.
+        var _P = window.CampistryPresence;
+        var _here = !(_P && _P.hasDates()) || _P.isHere(name);
+        campers.push({ name, division: div, bunk, camperId: data.camperId, here: _here,
                        label: (data && data.displayName) || String(name).replace(/\s#\d+$/, '') });
     });
     return campers.sort((a, b) => a.name.localeCompare(b.name));

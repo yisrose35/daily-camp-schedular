@@ -99,11 +99,48 @@ function setRosterSubTab(t){_rosterSubTab=t;_rosterPage=1;var inp=document.getEl
 function setRosterWhen(v){_rosterWhen=v||'today';_rosterPage=1;var inp=document.getElementById('globalSearch');renderCampers(inp?inp.value.trim():'');}
 /** The shared presence rule, or null when the module has not loaded. */
 function _presenceAPI(){return (typeof window!=='undefined'&&window.CampistryEnrollmentWindow)||null}
+// The adapter (campistry_presence.js) reads the synced snapshot on every
+// other page. On THIS page the live objects are right here, and a snapshot of
+// state this page is in the middle of editing would be a page disagreeing with
+// itself about who is at camp.
+if(typeof window!=='undefined'){
+    window.CampistryPresenceState=function(){
+        return {roster:roster,enrollments:enrollments,sessions:sessions};
+    };
+}
 /**
  * Presence for every name on the roster, on whatever date the picker is
  * pointing at. Computed from session dates — nothing is stamped anywhere, so
  * editing a session's dates moves everybody on it at once.
  */
+/**
+ * Is this camper at camp today?
+ *
+ * The Me page's own lists — bunk generation, the roster export, the allergy
+ * sheet, broadcast audiences, the head-count tile — all asked `unenrolled` and
+ * nothing else, so a camper registered for the second half was in every one of
+ * them all through the first. This is the same rule the roster picker uses, on
+ * today's date, and it answers TRUE whenever presence cannot be worked out.
+ */
+function _hereToday(name){
+    var W=_presenceAPI();
+    if(!W)return true;
+    _freshSessions();
+    return W.presenceOf({camperName:name,enrollments:enrollments,sessions:sessions,
+                         roster:roster,on:W.today()}).state==='active';
+}
+/** True only when some session has dates, i.e. when presence can mean anything. */
+function _presenceMatters(){
+    var W=_presenceAPI();
+    if(!W)return false;
+    _freshSessions();
+    for(var i=0;i<(sessions||[]).length;i++){
+        var w=W.sessionWindow(sessions[i]);
+        if(w.from||w.to)return true;
+    }
+    return false;
+}
+
 /** The date the roster picker is pointing at. */
 function _rosterOn(){
     var W=_presenceAPI();
@@ -6403,7 +6440,13 @@ function autoGenerateBunks(){
     Object.keys(byCohort).forEach(function(key){
         var cohort=byCohort[key],div=cohort.div,gr=cohort.gr;
         var mapped=_cohortSchoolGrades(div,gr).length>0;
+        // A camper who has not arrived must not be put in a bunk. The bunk they
+        // would take is a bed somebody who IS here needs, and a generated bunk
+        // list with absent children in it is one the office has to redo by hand
+        // when the half changes over.
+        var _gate=_presenceMatters();
         var pool=Object.keys(roster).filter(function(n){
+            if(_gate&&!_hereToday(n))return false;
             var c=roster[n];
             if(c.bunk||c.unenrolled||ambiguousSkipped[n])return false;
             if(mapped){
@@ -6417,10 +6460,13 @@ function autoGenerateBunks(){
         pool.forEach(function(n){if(roster[n].bunk)handled[n]=true;});
     });
 
-    var leftover=Object.keys(roster).filter(function(n){return !roster[n].bunk&&!roster[n].unenrolled&&!handled[n]&&!ambiguousSkipped[n];});
+    var _gateLeft=_presenceMatters();
+    var leftover=Object.keys(roster).filter(function(n){return !roster[n].bunk&&!roster[n].unenrolled&&!handled[n]&&!ambiguousSkipped[n]&&(!_gateLeft||_hereToday(n));});
     if(leftover.length)_bunkGenFallback(leftover,allBunksFlat,cfg,report);
 
-    report.unplaced=Object.keys(roster).filter(function(n){return !roster[n].bunk&&!roster[n].unenrolled;});
+    // “Unplaced” has to mean “here and without a bunk”, or the report reads as a
+    // failure every time a camp has a second half booked.
+    report.unplaced=Object.keys(roster).filter(function(n){return !roster[n].bunk&&!roster[n].unenrolled&&(!_gateLeft||_hereToday(n));});
     report.placed=Object.keys(roster).filter(function(n){return roster[n].bunk;}).length;
     save();
     renderBB();
@@ -10255,7 +10301,11 @@ async function _sendLinkNow(isStaff){
         Object.values(families).forEach(function(f){(f.households||[]).forEach(function(hh){(hh.parents||[]).forEach(function(p){if(p.email)recipients.push({email:p.email,name:p.name||''});});});});
         var seen={};recipients=recipients.filter(function(r){var k=r.email.toLowerCase();if(seen[k])return false;seen[k]=true;return true;});
         if(audience!=='all'){
-            var divCampers={};Object.entries(roster).forEach(function(entry){if(entry[1].division===audience)divCampers[entry[0]]=1;});
+            // Only families whose child is AT CAMP. A division broadcast about
+            // today reaching the parents of children who arrive next month is how
+            // a camp teaches families to ignore its messages.
+            var _gateB=_presenceMatters();
+            var divCampers={};Object.entries(roster).forEach(function(entry){if(entry[1].division===audience&&(!_gateB||_hereToday(entry[0])))divCampers[entry[0]]=1;});
             var divEmails={};Object.values(families).forEach(function(f){if((f.camperIds||[]).some(function(n){return divCampers[n];}))(f.households||[]).forEach(function(hh){(hh.parents||[]).forEach(function(p){if(p.email)divEmails[p.email.toLowerCase()]=1;});});});
             recipients=recipients.filter(function(r){return divEmails[r.email.toLowerCase()];});
         }
@@ -11529,7 +11579,10 @@ function renderAnalytics(){
     var h='<div class="sec-hd"><div><h2 class="sec-title">Analytics</h2><p class="sec-desc">Enrollment and camp-wide operational metrics</p></div></div>';
 
     h+=statRow(
-        statTile('Campers on Roster',String(roster?Object.keys(roster).length:0))+
+        statTile(_presenceMatters()?'Campers in Camp Today':'Campers on Roster',
+                 String(roster?Object.keys(roster).filter(function(n){
+                     return !roster[n].unenrolled&&(!_presenceMatters()||_hereToday(n));
+                 }).length:0))+
         statTile('Staff',String(hiredStaff().length))+
         statTile('Divisions',String(divisions.length))+
         statTile('Bunks',String(bunkCount))
@@ -17632,7 +17685,12 @@ function dlCsv(name,csv){
 }
 function exportRosterReport(){
     var csv='Name,Alternate Name,Camper ID,Division,Grade,Bunk,DOB,Gender,School,Parent 1,Parent 1 Phone,Parent 1 Email,Street,City,State,ZIP,Allergies,Medications,Dietary\n';
-    Object.entries(roster).sort(function(a,b){return a[0].localeCompare(b[0])}).forEach(function([n,c]){
+    // This export had no filter at all — not even `unenrolled`. Both apply now:
+    // a roster sheet is what somebody prints and carries around, and a name on it
+    // for a child who is not at camp is a name somebody goes looking for.
+    var _gateCsv=_presenceMatters();
+    Object.entries(roster).filter(function([n,c]){return !c.unenrolled&&(!_gateCsv||_hereToday(n))})
+      .sort(function(a,b){return a[0].localeCompare(b[0])}).forEach(function([n,c]){
         var altN=[c.altFirstName,c.altLastName].filter(Boolean).join(' ');
         csv+=[n,altN,c.camperId||'',c.division||'',c.grade||'',c.bunk||'',c.dob||'',c.gender||'',c.school||'',c.parent1Name||'',c.parent1Phone||'',c.parent1Email||'',c.street||'',c.city||'',c.state||'',c.zip||'',c.allergies||'',c.medications||'',c.dietary||''].map(function(v){return'"'+String(v).replace(/"/g,'""')+'"'}).join(',')+'\n';
     });
@@ -17700,7 +17758,12 @@ function exportDivisionReport(){
 }
 function exportMedicalReport(){
     var csv='Name,Division,Bunk,Allergies,Medications,Dietary,Emergency Contact,Emergency Phone\n';
-    Object.entries(roster).filter(function([,c]){return c.allergies||c.medications||c.dietary}).sort(function(a,b){return a[0].localeCompare(b[0])}).forEach(function([n,c]){
+    // A medication and allergy sheet is the most safety-critical list this app
+    // prints, and it had no roster filter at all. A nurse reading a name for a
+    // child who is not here has to decide whether that is an error or a missing
+    // camper — exactly the doubt a sheet like this exists to remove.
+    var _gateMed=_presenceMatters();
+    Object.entries(roster).filter(function([n,c]){return (c.allergies||c.medications||c.dietary)&&!c.unenrolled&&(!_gateMed||_hereToday(n))}).sort(function(a,b){return a[0].localeCompare(b[0])}).forEach(function([n,c]){
         csv+=[n,c.division||'',c.bunk||'',c.allergies||'',c.medications||'',c.dietary||'',c.emergencyName||'',c.emergencyPhone||''].map(function(v){return'"'+String(v).replace(/"/g,'""')+'"'}).join(',')+'\n';
     });
     dlCsv('campistry_medical_'+new Date().toISOString().split('T')[0]+'.csv',csv);
@@ -17726,7 +17789,8 @@ async function sendBroadcastNow(broadcast){
         Object.values(families).forEach(function(f){(f.households||[]).forEach(function(hh){(hh.parents||[]).forEach(function(p){if(p.email)recipients.push({email:p.email,name:p.name||'',phone:p.phone||'',consent:!!p.smsEmailConsent})})})});
         var seen=new Set();recipients=recipients.filter(function(r){if(seen.has(r.email))return false;seen.add(r.email);return true});
         if(target!=='all families'&&target!=='enrolled'&&target!=='all'&&target){
-            var divCampers=new Set();Object.entries(roster).forEach(function([n,c]){if(c.division===broadcast.to)divCampers.add(n)});
+            var _gateB2=_presenceMatters();
+            var divCampers=new Set();Object.entries(roster).forEach(function([n,c]){if(c.division===broadcast.to&&(!_gateB2||_hereToday(n)))divCampers.add(n)});
             var divEmails=new Set();Object.values(families).forEach(function(f){if((f.camperIds||[]).some(function(n){return divCampers.has(n)}))(f.households||[]).forEach(function(hh){(hh.parents||[]).forEach(function(p){if(p.email)divEmails.add(p.email)})})});
             recipients=recipients.filter(function(r){return divEmails.has(r.email)});
         }

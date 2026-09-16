@@ -42,7 +42,22 @@
         } catch (e) {}
         try { return JSON.parse(localStorage.getItem(GLOBAL_KEY) || '{}'); } catch (e) { return {}; }
     }
-    function getRoster() { var g = readGlobal(); return (g.app1 && g.app1.camperRoster) || {}; }
+    // WHO IS ACTUALLY HERE. `unenrolled` is a hand-set flag, so a camper
+    // registered for the second half was on this list all through the first —
+    // counted at roll call, marked present, included in every absence figure for
+    // a child who had not arrived. Presence is derived from each session's own
+    // dates (campistry_presence.js); if it cannot be worked out, everybody is
+    // here, because a missing name at pickup is a far worse failure than a spare
+    // one on a sheet.
+    function _presentOnly(all) {
+        var P = window.CampistryPresence;
+        if (!P || !P.hasDates()) return all;
+        var out = {};
+        Object.keys(all).forEach(function (n) { if (P.isHere(n)) out[n] = all[n]; });
+        return out;
+    }
+    function getRoster() { var g = readGlobal(); return _presentOnly((g.app1 && g.app1.camperRoster) || {}); }
+
 
 // ── Camper display name ────────────────────────────────────────────────────
 // Roster keys are unique but are not always the camper's name: a second camper

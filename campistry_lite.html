@@ -164,6 +164,10 @@
                     (native || window.location.protocol === 'file:')
                         ? 'jsqr@1.4.0.js'
                         : 'https://cdn.jsdelivr.net/npm/jsqr@1.4.0/dist/jsQR.js',
+                    // The presence rule and its adapter, before campistry_lite.js
+                    // uses them to filter the bunk roster to who is at camp today.
+                    'campistry_enrollment_window.js',
+                    'campistry_presence.js',
                     'campistry_lite.js',
                     'campistry_ota.js'               // LAST: confirms the bundle booted (live updates)
                 ];

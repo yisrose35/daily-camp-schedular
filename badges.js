@@ -196,12 +196,25 @@ async function collectStats(campId) {
             .from("camp_state_kv")
             .select("key, value")
             .eq("camp_id", campId)
-            .in("key", ["app1", "bunkMetaData"]);
+            // campistryMe comes along for the presence rule below — the count
+            // is meant to be campers AT CAMP, not everyone ever enrolled.
+            .in("key", ["app1", "bunkMetaData", "campistryMe"]);
         if (!error && Array.isArray(data)) {
             const state = {};
             data.forEach(r => { state[r.key] = r.value; });
             const roster = state.app1?.camperRoster || {};
-            let campers = Object.keys(roster).length;
+            // A second-half camper is enrolled and not here; counting them in
+            // June makes this badge disagree with the room.
+            let names = Object.keys(roster);
+            try {
+                const P = window.CampistryPresence;
+                if (P) {
+                    P.provide({ roster, enrollments: state.campistryMe?.enrollments || {},
+                                sessions: state.campistryMe?.sessions || [] });
+                    if (P.hasDates()) names = names.filter(n => P.isHere(n));
+                }
+            } catch (e) { /* no presence rule loaded — count everyone */ }
+            let campers = names.length;
             if (campers === 0) {
                 const bunkMeta = state.bunkMetaData || state.app1?.bunkMetaData || {};
                 Object.values(bunkMeta).forEach(meta => { campers += (meta && meta.size) || 0; });

@@ -410,6 +410,35 @@
                 ? app1.divisionOrder
                 : (Array.isArray(app1.manualColumnOrder) ? app1.manualColumnOrder : []);
             camp.roster = app1.camperRoster || {};
+            // WHO IS ACTUALLY HERE. A counsellor's bunk list, the medication
+            // list and every head count on this page were showing campers who
+            // have not arrived yet, because `unenrolled` is a hand-set flag and
+            // nothing else distinguished a second-half camper in June.
+            //
+            // campistryMe is already in KV_KEYS, so the enrollments and sessions
+            // this needs are loaded. Handing them to the shared adapter keeps ONE
+            // definition of “at camp” across the whole app. A counsellor whose
+            // role is denied campistryMe gets no enrollments, and the adapter
+            // then treats everybody as present — which is the safe direction: a
+            // missing child on a bunk list is far worse than a spare name.
+            try {
+                if (window.CampistryPresence) {
+                    window.CampistryPresence.provide({
+                        roster: camp.roster,
+                        enrollments: (camp.me && camp.me.enrollments) || {},
+                        sessions: (camp.me && camp.me.sessions) || []
+                    });
+                    var _P = window.CampistryPresence;
+                    if (_P.hasDates()) {
+                        var _here = {};
+                        Object.keys(camp.roster).forEach(function (n) {
+                            if (_P.isHere(n)) _here[n] = camp.roster[n];
+                        });
+                        camp.rosterAll = camp.roster;
+                        camp.roster = _here;
+                    }
+                }
+            } catch (e) { console.warn('[Lite] presence filter skipped:', e && e.message); }
             camp.structure = byKey.campStructure || {};
             camp.bunkSerials = byKey.liveBunkSerials || {};
             camp.leagues = byKey.leaguesByName || {};

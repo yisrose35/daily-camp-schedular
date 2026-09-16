@@ -101,6 +101,12 @@ function getStructure() {
 }
 
 // Build flat camper list from roster: [ { name, division, bunk } ]
+/** True when presence is knowable at this camp and therefore worth gating on. */
+function _snacksPresenceGate() {
+    var P = window.CampistryPresence;
+    return !!(P && P.hasDates());
+}
+
 function getCamperList() {
 
 // ── Camper display name ────────────────────────────────────────────────────
@@ -136,7 +142,15 @@ function _lbl(key) { return String(key == null ? '' : key).replace(/\s#\d+$/, ''
         // "Malky Stein #102" and carries displayName. Accounts and the ledger
         // key off the KEY (so two same-named campers now get two accounts, which
         // is the point), while every screen shows `label`.
-        campers.push({ name, division: div, bunk, camperId: data.camperId,
+        // `here` is derived, not stored: is this camper at camp TODAY. A FLAG and
+        // not a filter, deliberately — `rosterNames` below is built from this list
+        // to decide which canteen accounts are still on the roster, and filtering
+        // by presence would make a first-half camper's account look orphaned in
+        // August with their money still in it. Membership and presence are
+        // different questions, and this list answers the first one.
+        var _P = window.CampistryPresence;
+        var _here = !(_P && _P.hasDates()) || _P.isHere(name);
+        campers.push({ name, division: div, bunk, camperId: data.camperId, here: _here,
                        label: (data && data.displayName) || String(name).replace(/\s#\d+$/, '') });
     });
 
@@ -996,6 +1010,10 @@ function buildOfflineExportData() {
         };
     });
     Object.keys(roster).forEach(function(name) {
+        // No wallet for a camper who has not arrived. Opening one in June for
+        // a second-half camper puts an empty account with a spending limit on
+        // the till weeks before there is anybody to spend it.
+        if (_snacksPresenceGate() && !window.CampistryPresence.isHere(name)) return;
         if (!exportAccounts[name]) {
             var c = roster[name];
             exportAccounts[name] = {
@@ -1084,6 +1102,10 @@ window.exportForOfflinePOS = function() {
     });
     // Also include roster campers who don't have an account yet
     Object.keys(roster).forEach(function(name) {
+        // No wallet for a camper who has not arrived. Opening one in June for
+        // a second-half camper puts an empty account with a spending limit on
+        // the till weeks before there is anybody to spend it.
+        if (_snacksPresenceGate() && !window.CampistryPresence.isHere(name)) return;
         if (!exportAccounts[name]) {
             var c = roster[name];
             exportAccounts[name] = {

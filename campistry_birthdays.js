@@ -167,9 +167,24 @@
         var s = settings || {};
         var people = [];
         var roster = (s.app1 && s.app1.camperRoster) || {};
+        // Only campers who are AT CAMP. A birthday card for a child who arrives
+        // in three weeks is a card nobody can hand over, and one for a camper who
+        // went home at the half is worse — it reads as though the office has not
+        // noticed they left.
+        var _P = (typeof window !== 'undefined' && window.CampistryPresence) || null;
+        var _gate = false;
+        try {
+            if (_P) {
+                _P.provide({ roster: roster,
+                             enrollments: (s.campistryMe && s.campistryMe.enrollments) || {},
+                             sessions: (s.campistryMe && s.campistryMe.sessions) || [] });
+                _gate = _P.hasDates();
+            }
+        } catch (e) { _gate = false; }
         Object.keys(roster).forEach(function (name) {
             var c = roster[name] || {};
             if (!c.dob) return;
+            if (_gate && !_P.isHere(name)) return;
             people.push({
                 name: name, dob: c.dob, kind: 'camper',
                 division: c.division || '', bunk: c.bunk || '', grade: c.grade || ''

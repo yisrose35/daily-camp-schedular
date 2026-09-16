@@ -547,6 +547,45 @@
             }
             if (lite.campistryMe) {
                 lite.campistryMe = Object.assign({}, lite.campistryMe);
+                // A COMPACT PRESENCE INDEX, built before enrollments are dropped.
+                //
+                // Every operational list in the app — attendance, the canteen
+                // till, bunk lists, the counsellor app — needs to know which
+                // campers are actually AT CAMP today, and that is derived from
+                // each camper's sessions and their dates. Those live in
+                // enrollments, which is deleted three lines below because it grows
+                // without bound with camp size.
+                //
+                // So the spans come along instead: per camper, the session name
+                // and its start/end, and nothing else. A few tens of kilobytes
+                // against megabytes, no family data, no money, no addresses.
+                //
+                // Rebuilt from the full state on EVERY snapshot write, so it
+                // cannot go stale — which is what went wrong the last time this
+                // app tried to carry a per-camper date window around (see
+                // migration 191's header on 035/039).
+                try {
+                    const _enr = (data.campistryMe && data.campistryMe.enrollments) || {};
+                    const _ses = (data.campistryMe && data.campistryMe.sessions) || [];
+                    const _win = {};
+                    (Array.isArray(_ses) ? _ses : []).forEach(function (x) {
+                        if (x && x.name) _win[x.name] = { f: x.startDate || '', t: x.endDate || '' };
+                    });
+                    const _idx = {};
+                    Object.keys(_enr).forEach(function (eid) {
+                        const e = _enr[eid];
+                        if (!e || !e.camperName) return;
+                        if (e.status !== 'enrolled' && e.status !== 'accepted') return;
+                        const w = _win[e.session] || { f: '', t: '' };
+                        if (!_idx[e.camperName]) _idx[e.camperName] = [];
+                        _idx[e.camperName].push({ s: e.session || '', f: w.f, t: w.t });
+                    });
+                    if (Object.keys(_idx).length) lite.campistryMe.presenceIndex = _idx;
+                } catch (e) {
+                    // A missing index means every camper reads as present, which is
+                    // the safe direction — never let this fail a state write.
+                    log('presence index skipped: ' + (e && e.message));
+                }
                 delete lite.campistryMe.families;
                 delete lite.campistryMe.enrollments;
                 delete lite.campistryMe.payments;

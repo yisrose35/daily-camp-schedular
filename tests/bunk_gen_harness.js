@@ -80,8 +80,18 @@ function runGenerator(camp) {
 
   const captured = { report: null, toasts: [], saves: 0, renders: 0 };
 
+  // Presence. The generator asks whether a camper is AT CAMP before giving them a
+  // bunk, so a second-half camper is not handed a bed during the first half. The
+  // real helpers live at the top of campistry_me.js, outside this block, so they
+  // are stubbed here — defaulting to "presence does not apply", which is what a
+  // camp with no session dates gets and the right baseline for tests about
+  // packing. Pass camp.presence to drive the gate:
+  //     presence: { matters: true, here: name => name !== 'Late Arrival' }
+  const _pres = camp.presence || null;
   const sandbox = {
     roster, structure, enrollments, bunkGenConfig, bunkCapacity, age,
+    _presenceMatters() { return !!(_pres && _pres.matters); },
+    _hereToday(name) { return !_pres || !_pres.matters || !_pres.here || _pres.here(name); },
     save() { captured.saves++; },
     renderBB() { captured.renders++; },
     toast(msg, kind) { captured.toasts.push({ msg, kind: kind || 'info' }); },
