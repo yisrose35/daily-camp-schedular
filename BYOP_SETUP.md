@@ -311,6 +311,36 @@ through hosted Checkout every time they wanted to pay something themselves.
 
 ## How to connect a camp (human-assisted, on purpose)
 
+### The required checklist — every camp, every time
+
+A camp is not onboarded when it can take money. It's onboarded when it can
+also give money back and be told when someone takes money back. Work through
+all of these:
+
+| # | Step | Skipping it means |
+|---|------|-------------------|
+| 1 | `admin-connect-processor` call (below) | Nothing works — this one is obvious |
+| 2 | **Dispute webhook in the camp's processor dashboard** | A chargeback pulls money out of the camp's bank account and Campistry keeps showing the payment as collected. **Silent.** |
+| 3 | **One real test dispute, then read the logs** | The dispute mapping is unproven for that processor |
+| 4 | Cardknox only: Postback URL + PIN | Hosted-checkout payments never reach Campistry |
+| 5 | Cardknox only: success/error redirects | Parents finish on Sola and never come back to the app |
+| 6 | If this is the **2nd+** camp on that processor: go back and add `&camp=` to the earlier camps' dispute URLs | Their disputes silently stop being recorded |
+
+**You don't have to remember this table.** Step 1 returns the rest in a
+`remainingSetup` array with the real URLs already filled in for that camp —
+including whether `&camp=` is needed, which it works out by counting rather
+than by anyone remembering, and including step 6 with the affected camp ids
+listed. Read what the connect call hands back and do what it says. This table
+is here so the shape of the job is visible before you start.
+
+Steps 2 and 3 are the ones worth being stubborn about. Everything else on this
+list fails loudly on the first attempt — a wrong PIN, a broken redirect, a
+camp that can't take a payment all get noticed the same day. A missing dispute
+webhook shows no symptom at all until months later, when the books turn out to
+have been overstating collected cash the whole time.
+
+### The connect call
+
 This is intentionally not a self-serve Dashboard form — a live processor
 API key can move real money out of a camp's own account if mishandled, so
 a Campistry staffer verifies the camp (by call/support channel) before

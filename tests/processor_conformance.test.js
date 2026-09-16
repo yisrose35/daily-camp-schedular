@@ -290,6 +290,92 @@ test("the 'none' sentinel stays non-conformant", () => {
     `"no processor connected" placeholder`);
 });
 
+// ── 4. onboarding hands over the steps it cannot do itself ──────────────────
+//
+// The dispute webhook lives in the CAMP's own processor dashboard, which no
+// code here can reach. That makes it a manual step, and a manual step written
+// down only in a setup doc is what produced this whole gap: a camp onboarded
+// without it takes payments perfectly well and shows no symptom until a parent
+// charges back months later. So the connect call hands the checklist back at
+// the moment someone is onboarding, and these tests keep it there.
+
+const CONNECT = 'supabase/functions/admin-connect-processor/index.ts';
+
+test('connecting a camp returns the setup steps it could not perform', () => {
+  const src = read(CONNECT);
+  assert.match(src, /remainingSetup/,
+    'the connect response no longer carries the outstanding manual steps');
+  assert.match(src, /byop-dispute-webhook/,
+    'connecting a camp never mentions the dispute webhook — the step it exists to stop anyone forgetting');
+  assert.match(src, /\$\{SUPABASE_URL\}\/functions\/v1\/byop-dispute-webhook/,
+    'the dispute URL is not built from the real project URL, so it is a placeholder to look up rather than a URL to paste');
+});
+
+test('the dispute step is given for EVERY processor, not a hardcoded list', () => {
+  // The point of generating it from processorKey is that the next processor
+  // gets the step for free. A per-processor if/else would reproduce exactly the
+  // "whatever its author remembered" failure one level up.
+  const src = read(CONNECT);
+
+  // The URL is built once, then pushed as a step. Everything between those two
+  // points must be unconditional: an `if` in there is a guard, and the only
+  // guard anyone would plausibly add is a per-processor one.
+  const declared = src.indexOf('const disputeUrl');
+  const pushed = src.indexOf('${disputeUrl}', declared);
+  assert.ok(declared >= 0 && pushed > declared,
+    'the dispute URL is no longer built and then pushed as a step — this test cannot see the shape it checks');
+
+  const between = src.slice(declared, pushed);
+  assert.ok(!/\bif\s*\(/.test(between),
+    'the dispute step sits behind a branch. Whatever the condition is, a processor ' +
+    'added later will not match it and will be onboarded without dispute reporting — ' +
+    'which fails silently and is the exact gap this step exists to close.');
+
+  // And it must be written for whatever processor was just connected.
+  assert.ok(/\$\{processorKey\}/.test(between + src.slice(pushed, pushed + 400)),
+    'the dispute step does not interpolate processorKey, so it is written for specific processors');
+});
+
+test('whether &camp= is needed is counted, never remembered', () => {
+  // With one camp on a processor the webhook resolves the camp itself; with
+  // several it refuses to guess. Getting that wrong by hand means either a
+  // harmless extra parameter or silently dropped disputes, so it is derived.
+  const src = read(CONNECT);
+  assert.match(src, /camp_processor_credentials[\s\S]{0,200}eq\(\s*["']processor_key["']/,
+    'the connect call never counts how many camps share the processor');
+  assert.match(src, /campsOnProcessor\s*>\s*1\s*\?\s*`&camp=/,
+    '&camp= is not decided from that count');
+});
+
+test('connecting a second camp warns that it just broke the first', () => {
+  // The nastiest edge in the whole flow: camp #1 was set up correctly with no
+  // &camp=, and connecting camp #2 makes the webhook ambiguous, so camp #1's
+  // disputes stop being recorded. Nothing errors. The only moment anyone can
+  // act on it is right here.
+  const src = read(CONNECT);
+  assert.match(src, /otherCampIds/,
+    'the connect call does not work out which other camps share this processor');
+  assert.match(src, /otherCampIds\.length\s*>\s*0/,
+    'nothing is said when an existing camp is affected');
+  assert.ok(/otherCampIds\.join/.test(src),
+    'the affected camps are not named, so there is nothing to act on');
+});
+
+test('the required checklist is written down as well as returned', () => {
+  // The returned steps are what gets acted on; the doc is what makes the shape
+  // of the job visible before starting, and survives someone reading about
+  // onboarding without running it.
+  const doc = readRaw('BYOP_SETUP.md');
+  assert.match(doc, /required checklist/i,
+    'BYOP_SETUP.md has no onboarding checklist');
+  assert.match(doc, /byop-dispute-webhook/,
+    'the checklist does not mention the dispute webhook');
+  assert.match(doc, /&camp=/,
+    'the checklist never explains when &camp= is needed');
+  assert.match(doc, /remainingSetup/,
+    'the doc does not point at the steps the connect call hands back, so the two can drift apart unnoticed');
+});
+
 test('176 is idempotent', () => {
   // Every migration in this repo is re-run as part of APPLY_BUNDLE.sql.
   const creates = [...M176.matchAll(/CREATE\s+(OR\s+REPLACE\s+)?FUNCTION/gi)];

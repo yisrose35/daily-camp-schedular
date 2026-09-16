@@ -171,7 +171,113 @@ serve(async (req) => {
 
     console.log(`[admin-connect-processor] Connected ${processorKey} for camp "${camp.name}" (${campId})`);
 
-    return json({ success: true, campName: camp.name, processorKey });
+    // ── The steps this call CANNOT do for you ───────────────────────────────
+    //
+    // Connecting a camp has always had manual steps left over — they live in
+    // the camp's OWN processor dashboard, which we have no access to. Those
+    // steps were written down in BYOP_SETUP.md and nowhere else, and the
+    // dispute webhook is the proof that is not good enough: a camp onboarded
+    // without it takes payments perfectly well and only reveals the gap months
+    // later, when a parent charges back and the money leaves the camp's bank
+    // account with nothing in Campistry to show for it.
+    //
+    // So the checklist is returned HERE, at the moment someone is onboarding a
+    // camp, with the real URLs already filled in. Nothing to look up and
+    // nothing to remember.
+    const steps: Array<{ do: string; why: string }> = [];
+
+    // Does this camp's webhook URL need &camp=? Counted, not remembered. With
+    // one camp on a processor the webhook resolves the camp itself; with
+    // several it refuses to guess, because posting a chargeback against the
+    // wrong camp's books is worse than not recording it.
+    let campsOnProcessor = 1;
+    let otherCampIds: string[] = [];
+    try {
+      const { data: onProc } = await service
+        .from("camp_processor_credentials")
+        .select("camp_id")
+        .eq("processor_key", processorKey);
+      if (onProc && onProc.length > 0) {
+        campsOnProcessor = onProc.length;
+        otherCampIds = onProc.map((r: { camp_id: string }) => String(r.camp_id))
+                             .filter((id: string) => id !== String(campId));
+      }
+    } catch {
+      // Can't count: assume the ambiguous case. An unnecessary &camp= is
+      // harmless; a missing one silently drops every dispute for this camp.
+      campsOnProcessor = 2;
+    }
+
+    const disputeUrl = `${SUPABASE_URL}/functions/v1/byop-dispute-webhook` +
+      `?processor=${processorKey}` +
+      (campsOnProcessor > 1 ? `&camp=${campId}` : "");
+
+    steps.push({
+      do: `In the camp's ${processorKey} dashboard, point the chargeback / dispute ` +
+          `notification at: ${disputeUrl}`,
+      why: campsOnProcessor > 1
+        ? `REQUIRED. Without it a chargeback pulls money out of the camp's bank account ` +
+          `while Campistry still shows the payment as collected. ${campsOnProcessor} camps ` +
+          `now use ${processorKey}, so the &camp= is required too — with more than one ` +
+          `camp the webhook refuses to guess which camp a dispute belongs to.`
+        : `REQUIRED. Without it a chargeback pulls money out of the camp's bank account ` +
+          `while Campistry still shows the payment as collected. No &camp= needed yet — ` +
+          `this is the only camp on ${processorKey}, so the webhook resolves it. If a ` +
+          `second camp connects ${processorKey}, THIS camp's URL must have &camp=${campId} ` +
+          `added to it as well.`,
+    });
+
+    // Connecting THIS camp can break a camp that was already set up. Once a
+    // second camp shares a processor the webhook stops resolving the camp on
+    // its own, so every URL without &camp= goes from working to silently
+    // dropping disputes. The operator is standing right here — tell them now.
+    if (otherCampIds.length > 0) {
+      steps.push({
+        do: `Go back and add &camp=<that camp's id> to the dispute webhook URL of the ` +
+            `${otherCampIds.length} camp(s) already on ${processorKey}: ${otherCampIds.join(", ")}`,
+        why: `THIS CONNECT JUST BROKE THEM. While one camp used ${processorKey} the webhook ` +
+             `could resolve the camp by itself, so their URLs have no &camp=. Now that ` +
+             `${campsOnProcessor} camps share it, the webhook refuses to guess — it will not ` +
+             `post a chargeback against a camp it is not sure about — so their disputes are ` +
+             `dropped until their URLs are updated. Nothing will error; it just stops working.`,
+      });
+    }
+
+    steps.push({
+      do: `Send one test dispute from the ${processorKey} dashboard and check the ` +
+          `byop-dispute-webhook logs.`,
+      why: `The field names are taken from the adapter so the payment reference is right, ` +
+           `but neither processor's dispute envelope could be verified against their docs. ` +
+           `The function logs the whole body when it can't find a reference. Until you've ` +
+           `done this once for ${processorKey}, treat its chargeback handling as plumbed ` +
+           `but unproven.`,
+    });
+
+    if (processorKey === "cardknox") {
+      steps.push({
+        do: `Portal Settings -> Gateway Settings -> Webhook Settings: set the Postback URL to ` +
+            `${SUPABASE_URL}/functions/v1/cardknox-webhook?campId=${campId} and the PIN to the ` +
+            `exact webhookPin you just stored.`,
+        why: `Required for hosted checkout — this is how a parent's payment gets credited. ` +
+             `A mismatched PIN means payments complete on Sola and never reach Campistry.`,
+      });
+      steps.push({
+        do: `Same screen: set Redirect on success AND Redirect on error to ` +
+            `https://link.campistry.org/campistry_link_parent.html`,
+        why: `Brings the parent back into the app. Crediting happens via the postback above ` +
+             `regardless of what this redirect does.`,
+      });
+    }
+
+    return json({
+      success: true,
+      campName: camp.name,
+      processorKey,
+      campsOnProcessor,
+      // Named "remainingSetup" and not "notes" on purpose: this is not
+      // information, it is work that is still outstanding.
+      remainingSetup: steps,
+    });
   } catch (err) {
     console.error("[admin-connect-processor] Error:", (err as Error).message);
     return json({ success: false, error: (err as Error).message }, 500);
