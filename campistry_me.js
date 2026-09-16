@@ -8127,6 +8127,10 @@ function _fbOpenPreviewWindow(){
     if(!_fbPreviewWin)toast('Allow pop-ups to preview the form','error');
 }
 function _fbPushPreview(){
+    // The deposit card sits in the Registration panel, so its own preview
+    // line rides the hook that is already firing on every edit. Guarded: a
+    // throw here would stop the form preview updating at all.
+    try{ _dpRefreshCard(); }catch(e){}
     clearTimeout(_fbPushTimer);
     _fbPushTimer=setTimeout(_fbCollectAndSend,150);
 }
@@ -8203,6 +8207,9 @@ function openFormBuilder(kind){
     var panel=document.getElementById('fbPanel');
     panel.innerHTML=isStaff?_buildSfcPanelHtml():isPaf?_buildPafPanelHtml():isPhf?_buildPhfPanelHtml():_buildFcPanelHtml();
     _initOrderDrag(isStaff?'sfc':isPaf?'paf':isPhf?'phf':'fc');
+    // One reachability check per time the builder is opened, not per keystroke.
+    _dpRefreshCard._checked=false;
+    setTimeout(function(){ try{ _dpRefreshCard(); }catch(e){} },0);
 
     // Live-update the preview on any edit — typing, checkboxes, drag
     // reorder, or a row being added/removed — via one delegated listener
@@ -8406,6 +8413,7 @@ function _buildFcPanelHtml(){
         +'<div id="fcDocList">'+docs.map(_renderDocRow).join('')+'</div>'
         +'<button class="me-btn me-btn--sec me-btn--sm" style="margin-top:4px" onclick="CampistryMe.addDocRow()">+ Add Document</button>';
     h+=_accCard('Required Documents',docsHtml,{badge:docs.length+' set'});
+    h+=_dpBuilderCardHtml();
 
 
     var qHtml='<p style="font-size:.78rem;color:var(--s400);margin:0 0 10px">Standalone questions, shown in an "Additional Information" section. Pick "Show in" to move one inside a built-in section instead (or add it from that section directly, in Sections above).</p>'
@@ -9242,6 +9250,20 @@ function saveFormConfig(){
         promos[code]={label:(labels[i]?.value||'').trim(),pct:parseFloat(pcts[i]?.value)||0,amt:parseFloat(amts[i]?.value)||0};
     }
     enrollSettings.promoCodes=promos;
+
+    // Same arrangement promo codes have: edited in the builder, stored in
+    // enrollSettings so it persists through save() and reaches the public
+    // form. Guarded because a throw here would lose the whole form config the
+    // camp just spent time on -- the deposit is the least important thing in
+    // this function and must not be able to take the rest with it.
+    try{
+        if(_depPolicyAPI()&&document.getElementById('dpOn')){
+            enrollSettings.depositPolicy=_depPolicyAPI().normalize(_dpRead());
+        }
+    }catch(e){
+        console.warn('[Me] deposit policy not saved from the builder:',e&&e.message);
+        toast('Form saved, but the deposit setting did not \u2014 set it from Registration \u2192 Deposit','error');
+    }
 
     save();
     closeFormBuilder();
@@ -14935,6 +14957,31 @@ async function _dpCheckReach(){
     }catch(e){
         out.innerHTML='<span style="color:var(--s400)">Could not check whether the public form sees this ('
             +esc((e&&e.message)||'no connection')+').</span>';
+    }
+}
+
+/**
+ * The deposit as a card in the Registration builder.
+ *
+ * Wrapped rather than inlined, and deliberately so: this card is the newest
+ * thing on the panel and the panel is one string. If building it ever throws
+ * -- a missing module, a shape nobody expected in a saved policy -- the whole
+ * builder would come back empty, which is exactly the failure that cost two
+ * days. It returns '' instead, the rest of the builder renders, and the
+ * Deposit button on the Registration page is still there to edit it.
+ */
+function _dpBuilderCardHtml(){
+    try{
+        var P=_depPolicyAPI();
+        if(!P)return '';
+        var pol=P.normalize(enrollSettings.depositPolicy);
+        var badge=pol.enabled
+            ? (pol.basis==='flat'?fm(pol.amount):pol.basis==='percent'?pol.percent+'%':'per session')
+            : 'off';
+        return _accCard('Deposit to Register',_dpCardHtml(pol),{badge:badge});
+    }catch(e){
+        console.warn('[Me] deposit card failed to render:',e&&e.message);
+        return '';
     }
 }
 

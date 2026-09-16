@@ -169,9 +169,10 @@ test('the office can set it and see who has not paid', () => {
     assert.match(me, /function _dpCardHtml/);
     assert.match(me, /function openDepositPolicy/);
     assert.match(me, /openDepositPolicy:openDepositPolicy/, 'not exposed, so no button reaches it');
-    assert.ok(!/_accCard\('Deposit to Register'/.test(me),
-        'the deposit must not be a card inside the form builder');
-    // One renderer, so the editor cannot drift from whatever hosts it.
+    // Two hosts, one renderer, so they cannot drift: a card in the
+    // Registration form builder, and a standalone editor for changing a
+    // number without opening the whole layout tool.
+    assert.match(me, /_accCard\('Deposit to Register'/);
     assert.match(me, /_dpCardHtml\(enrollSettings\.depositPolicy\)/);
 
     assert.match(me, /markDepositPaid:markDepositPaid/);
@@ -289,4 +290,83 @@ test('a preview that does not load says so', () => {
     assert.match(me, /_fbRetryPreview:_fbRetryPreview/, 'the retry button is not reachable');
     // The timer must not outlive the overlay.
     assert.match(me, /if\(_fbPreviewTimer\)\{clearTimeout\(_fbPreviewTimer\);_fbPreviewTimer=null;\}\n    _fbPreviewWin=null/);
+});
+
+// ── the deposit card in the form builder ────────────────────────────────────
+//
+// This card is the newest thing on a panel that is built as one string, so a
+// throw while building it takes the WHOLE builder with it — which is the shape
+// of failure that cost two days. These run the real function rather than
+// grepping for a try/catch, because a guard that is present but wrong reads
+// identically to one that works.
+function loadBuilderCard(depositApi) {
+    const src = fs.readFileSync(path.join(ROOT, 'campistry_me.js'), 'utf8');
+    const grab = (name) => {
+        const i = src.indexOf('function ' + name + '(');
+        assert.ok(i >= 0, 'missing ' + name);
+        let depth = 0, k = src.indexOf('{', i);
+        for (; k < src.length; k++) {
+            if (src[k] === '{') depth++;
+            else if (src[k] === '}' && --depth === 0) break;
+        }
+        return src.slice(i, k + 1);
+    };
+    const sandbox = {
+        esc: (s) => String(s == null ? '' : s),
+        fm: (n) => '$' + (Number(n) || 0),
+        ff: (l, id) => '<input id="' + id + '">',
+        _accCard: (t, body) => '<CARD:' + t + '>' + body + '</CARD>',
+        enrollSettings: { depositPolicy: { enabled: true, basis: 'percent', percent: 25 } },
+        sessions: [{ name: 'Full Season', tuition: 1250 }],
+        console: { warn() {} },
+        _depPolicyAPI: depositApi,
+        document: { getElementById: () => null }
+    };
+    const code = [grab('_dpBuilderCardHtml'), grab('_dpCardHtml'), grab('_dpPreview'), grab('_dpRead')].join('\n');
+    const names = Object.keys(sandbox);
+    return new Function(...names, code + '\nreturn _dpBuilderCardHtml();')(...names.map((n) => sandbox[n]));
+}
+
+test('the deposit card renders in the builder', () => {
+    const out = loadBuilderCard(() => P);
+    assert.match(out, /^<CARD:Deposit to Register>/);
+    assert.match(out, /id="dpOn"/, 'the on/off switch must be there');
+    assert.match(out, /id="dpBasis"/);
+    assert.match(out, /id="dpTiming"/);
+});
+
+test('a broken deposit card cannot blank the form builder', () => {
+    // A saved policy in a shape nobody expected, or a module that failed to
+    // load, must cost the camp the card — never the builder.
+    assert.strictEqual(loadBuilderCard(() => ({ normalize() { throw new Error('boom'); } })), '',
+        'a throw must be swallowed into an empty string');
+    assert.strictEqual(loadBuilderCard(() => null), '',
+        'a missing module must render nothing rather than crash');
+});
+
+test('saving the form cannot be lost by the deposit', () => {
+    // The deposit is the least important thing in saveFormConfig and must not
+    // be able to take a form config the camp just spent time on with it.
+    const me = fs.readFileSync(path.join(ROOT, 'campistry_me.js'), 'utf8');
+    const start = me.indexOf('function saveFormConfig()');
+    assert.ok(start >= 0, 'saveFormConfig is gone');
+    const fn = me.slice(start, me.indexOf('\nfunction ', start + 10));
+    const tryAt = fn.indexOf('try{');
+    const writeAt = fn.indexOf('enrollSettings.depositPolicy=');
+    assert.ok(tryAt >= 0 && writeAt > tryAt, 'the deposit read-back must be inside a try');
+    assert.ok(fn.indexOf('save();') > fn.indexOf('depositPolicy'),
+        'save() must still run after the deposit block, whatever it did');
+    assert.match(fn, /set it from Registration/, 'a failure must tell the camp where to set it instead');
+});
+
+test('the public registration form stays out of this', () => {
+    // It broke twice and was reverted to 04fb437. Nothing about deposits goes
+    // back into that file without the browser error that caused it, so this
+    // fails loudly if anyone (including me) wires it back in by habit.
+    const reg = fs.readFileSync(path.join(ROOT, 'campistry_register.html'), 'utf8');
+    ['depositBox', '_regRenderDeposit', '_regDepositStamp', 'campistry_deposit_policy.js',
+     '_regRenderRequiredDocs', 'campistry_finance_merge.js'].forEach((marker) => {
+        assert.ok(!reg.includes(marker),
+            marker + ' is back in the public form — that file is reverted on purpose');
+    });
 });
