@@ -182,25 +182,33 @@ test('settle_shop_order locks all three blobs, in a fixed order', () => {
 // The failure mode of this fix is silent: a function left on the old path looks
 // identical until money vanishes. So assert the wiring, per file.
 
-// All seven, and the locking RPC each one must go through. Six append a
-// payment and nothing else, so 168's append_camp_payment is enough for them.
-// charge-due-installments has to append the payment AND mark the installment
-// paid together, which is 169's record_autopay_installment.
+// Every function that records money or a saved card, and the locking RPC it
+// must go through. Most append a payment and nothing else, so 168's
+// append_camp_payment is enough. charge-due-installments has to append the
+// payment AND mark the installment paid together (169). payments-save-method
+// writes only cards, on two different blobs (170).
 const REWIRED = {
-    'charge-saved-card': 'append_camp_payment',
-    'payments-charge-nonce': 'append_camp_payment',
-    'payments-checkout': 'append_camp_payment',
-    'stripe-webhook': 'append_camp_payment',
-    'cardknox-webhook': 'append_camp_payment',
-    'payments-hosted-complete': 'append_camp_payment',
-    'charge-due-installments': 'record_autopay_installment',
+    'charge-saved-card': ['append_camp_payment'],
+    'payments-charge-nonce': ['append_camp_payment'],
+    'payments-checkout': ['append_camp_payment'],
+    'stripe-webhook': ['append_camp_payment', 'append_family_payment_method',
+                       'merge_canteen_autoreload_card'],
+    'cardknox-webhook': ['append_camp_payment', 'append_family_payment_method',
+                         'merge_canteen_autoreload_card'],
+    'payments-hosted-complete': ['append_camp_payment', 'merge_camp_family_fields',
+                                 'merge_canteen_autoreload_card'],
+    'charge-due-installments': ['record_autopay_installment'],
+    'payments-save-method': ['append_family_payment_method',
+                             'merge_canteen_autoreload_card'],
 };
 
-test('the rewired functions record payments through the atomic RPC', () => {
-    for (const [f, rpc] of Object.entries(REWIRED)) {
+test('the rewired functions write through the atomic RPCs', () => {
+    for (const [f, rpcs] of Object.entries(REWIRED)) {
         const src = read(fn(f));
-        assert.ok(src.includes(rpc),
-            f + ' no longer uses ' + rpc + ' — it is racy again');
+        for (const rpc of rpcs) {
+            assert.ok(src.includes(rpc),
+                f + ' no longer uses ' + rpc + ' — it is racy again');
+        }
     }
 });
 
@@ -225,27 +233,68 @@ test('payments-checkout saves the card through the locking merge', () => {
         'card-on-file is written by a blind blob upsert again');
 });
 
-// ── 4. no function writes the payments blob directly any more ─────────────
+// ── 4. no function writes a money blob directly any more ──────────────────
 //
-// The list of exceptions is empty, and this is what keeps it empty: a new
-// payment writer that upserts campistryMe itself fails here rather than being
-// discovered when a camp's money goes missing.
+// DISCOVERED, NOT LISTED. This test scans every edge function rather than the
+// REWIRED map above, because a hand-maintained list is exactly what went wrong:
+// the first pass of this audit called payments-save-method's two blind writes
+// "seven functions, all done" and missed it, since it was not on the list.
+// Anything new that upserts one of these blobs now fails here.
 
-test('no payment function upserts campistryMe itself', () => {
-    for (const f of Object.keys(REWIRED)) {
-        const src = read(fn(f));
-        // A read is fine — several of these legitimately read the blob to make
-        // a decision (which families are due, what a family is called). It is
-        // WRITING the whole blob back that loses other writers' money.
-        const upserts = src.split('\n').filter((l, i, all) => {
-            if (l.trim().startsWith('//')) return false;
-            // `.upsert(` and a campistryMe key within the same few lines.
-            if (!/\.upsert\(|\.update\(/.test(l)) return false;
-            return all.slice(i, i + 6).some(n =>
-                !n.trim().startsWith('//') && /key:\s*"campistryMe"|key:\s*'campistryMe'/.test(n));
+const FUNCTIONS_DIR = path.join(__dirname, '..', 'supabase', 'functions');
+
+/** Every function that writes a whole campistry* blob back to camp_state_kv. */
+function blindBlobWriters() {
+    const out = {};
+    for (const dir of fs.readdirSync(FUNCTIONS_DIR)) {
+        const p = path.join(FUNCTIONS_DIR, dir, 'index.ts');
+        if (!fs.existsSync(p)) continue;
+        const lines = read(p).split('\n');
+        const hits = [];
+        lines.forEach((l, i) => {
+            if (l.trim().startsWith('//')) return;
+            if (!/\.upsert\(|\.update\(/.test(l)) return;
+            // A read is fine — several functions legitimately read a blob to
+            // decide what to change. It is writing the whole thing back that
+            // discards whatever another writer just put there.
+            const near = lines.slice(i, i + 6).filter(n => !n.trim().startsWith('//')).join('\n');
+            if (/key:\s*["']campistry\w+["']|key["']?\s*,\s*["']campistry\w+["']/.test(near)
+                || (/camp_state_kv/.test(near) && /["']campistry\w+["']/.test(near))) {
+                hits.push(i + 1);
+            }
         });
-        assert.deepStrictEqual(upserts, [],
-            f + ' writes the whole campistryMe blob again — that is the lost update');
+        if (hits.length) out[dir] = hits;
+    }
+    return out;
+}
+
+// Pinned with a reason, not as a convenience. If one is fixed, delete it; if
+// the set grows, something regressed.
+const ALLOWED_BLIND_WRITERS = {
+    // Flips smsEmailConsent=false across every camp when someone texts STOP.
+    // Same lost-update shape, and losing one means continuing to text a person
+    // who asked you to stop — so it is worth fixing, it is just not a money
+    // path. Needs an RPC that matches a normalised phone number under the lock.
+    'telnyx-sms-webhook': 'SMS STOP consent flip — needs its own RPC',
+    // Writes the whole blob back to record savedReports[].schedule.lastSentAt.
+    // Its own comment says the window was narrowed but not closed "(no
+    // JSON-patch primitive here)" — there is one now, so this wants a small
+    // mark_scheduled_report_sent RPC. Worst case is a duplicate emailed report.
+    'send-scheduled-reports': 'lastSentAt write-back — wants a narrow RPC',
+};
+
+test('no edge function writes a whole campistry* blob back', () => {
+    const found = blindBlobWriters();
+    const unexpected = Object.keys(found).filter(f => !(f in ALLOWED_BLIND_WRITERS));
+    assert.deepStrictEqual(unexpected, [],
+        'these write a whole camp_state_kv blob — the lost update: ' +
+        unexpected.map(f => `${f}:${found[f].join(',')}`).join(' '));
+
+    // And the pinned exceptions must still actually be doing it, or the pin is
+    // stale and hiding a regression somewhere else.
+    for (const f of Object.keys(ALLOWED_BLIND_WRITERS)) {
+        assert.ok(f in found,
+            f + ' looks fixed — remove it from ALLOWED_BLIND_WRITERS');
     }
 });
 

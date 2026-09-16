@@ -261,59 +261,57 @@ serve(async (req) => {
       return json({ success: false, error: saveResult.error || "Could not save payment method" }, 200);
     }
 
-    // Same retry-loop read-modify-write convention already used by
-    // stripe-webhook's handleAutopaySetup for this exact JSON blob.
-    let saved = false;
+    // Both branches used to be a retry-loop read-modify-write of the whole blob
+    // — the convention stripe-webhook's handleAutopaySetup also followed, and
+    // for the same reason it had to go (migrations 168/170). The retry only ever
+    // covered a write ERROR; a lost update is not an error, so an overlapping
+    // writer silently discarded whichever save landed first. Locked RPCs now.
+    let saveFail: string | null = null;
     if (isCamperScoped) {
       // Canteen auto-reload: the token belongs on this camper's autoReload
-      // block (campistrySnacks), which is what canteen-auto-reload charges.
-      for (let attempt = 0; attempt < 4 && !saved; attempt++) {
-        const cur = await service.from("camp_state_kv").select("value")
-          .eq("camp_id", campId).eq("key", "campistrySnacks").maybeSingle();
-        const snacks: Record<string, any> = (cur.data && cur.data.value && typeof cur.data.value === "object") ? cur.data.value : {};
-        if (!snacks.accounts || typeof snacks.accounts !== "object") snacks.accounts = {};
-        const acct = snacks.accounts[String(camperName)];
-        if (!acct) return json({ success: false, error: "Camper no longer exists" }, 400);
-        const ar = (acct.autoReload && typeof acct.autoReload === "object") ? acct.autoReload : {};
-        ar.byopProcessor = processorKey;
-        ar.byopCustomerRef = saveResult.customerRef;
-        ar.cardOnFile = true;
-        // A fresh card clears the decline streak that may have paused
-        // auto-reload (3 consecutive failures disables it).
-        ar.consecutiveFailures = 0;
-        if (saveResult.last4) {
-          ar.paymentMethodLabel = "•••• " + saveResult.last4;
-          ar.paymentMethodType = saveResult.brand || "card";
-        }
-        acct.autoReload = ar;
-        snacks.accounts[String(camperName)] = acct;
-        const up = await service.from("camp_state_kv").upsert(
-          { camp_id: campId, key: "campistrySnacks", value: snacks, updated_at: new Date().toISOString() },
-          { onConflict: "camp_id,key" },
-        );
-        if (!up.error) saved = true;
+      // block (campistrySnacks), which is what canteen-auto-reload charges. A
+      // SHALLOW merge, so the parent's own trigger config survives — and so the
+      // snack-bar transaction ledger in the same blob is never rewritten, which
+      // the old whole-blob upsert could do right over a POS sale.
+      const { data: merged, error: mergeErr } = await service.rpc("merge_canteen_autoreload_card", {
+        p_camp_id: campId,
+        p_camper: String(camperName),
+        p_fields: {
+          byopProcessor: processorKey,
+          byopCustomerRef: saveResult.customerRef,
+          cardOnFile: true,
+          // A fresh card clears the decline streak that may have paused
+          // auto-reload (3 consecutive failures disables it).
+          consecutiveFailures: 0,
+          ...(saveResult.last4
+            ? { paymentMethodLabel: "•••• " + saveResult.last4,
+                paymentMethodType: saveResult.brand || "card" }
+            : {}),
+        },
+        // Someone is saving a card for a named camper right now: if that camper
+        // is gone, say so rather than inventing an account to attach it to.
+        p_require_existing: true,
+      });
+      if (merged?.error === "camper_not_found") {
+        return json({ success: false, error: "Camper no longer exists" }, 400);
       }
+      if (mergeErr || !merged?.success) saveFail = mergeErr?.message || merged?.error || "unknown";
     } else {
-      for (let attempt = 0; attempt < 4 && !saved; attempt++) {
-        const cur = await service.from("camp_state_kv").select("value")
-          .eq("camp_id", campId).eq("key", "campistryMe").maybeSingle();
-        const me: Record<string, any> = (cur.data && cur.data.value && typeof cur.data.value === "object") ? cur.data.value : {};
-        if (!me.families || typeof me.families !== "object") me.families = {};
-        const f = me.families[familyKey];
-        if (!f) return json({ success: false, error: "Family no longer exists" }, 400);
-
-        // Migration 139: savedPaymentMethods is the real LIST, and it's the ONLY
-        // thing get_my_saved_payment_methods reads — so a card written to just
-        // the legacy single-slot fields below saves and charges fine but never
-        // appears in Link's Cards tab. Append here too, mirroring
-        // cardknox-webhook's card_save: the first card for a family becomes the
-        // default and syncs the legacy fields (so autopay and every charge path
-        // that reads those directly keeps working); an additional card appends
-        // as non-default and leaves the current default alone.
-        const label = saveResult.last4 ? `Card ···· ${saveResult.last4}` : "Card on file";
-        const existingMethods: Record<string, any>[] = Array.isArray(f.savedPaymentMethods) ? f.savedPaymentMethods : [];
-        const isFirstMethod = existingMethods.length === 0;
-        f.savedPaymentMethods = [...existingMethods, {
+      // Migration 139: savedPaymentMethods is the real LIST, and it's the ONLY
+      // thing get_my_saved_payment_methods reads — so a card written to just the
+      // legacy single-slot fields saves and charges fine but never appears in
+      // Link's Cards tab. The RPC appends to the list AND syncs the legacy
+      // fields when it is the family's first card, mirroring
+      // cardknox-webhook's card_save; an additional card appends as non-default
+      // and leaves the current default alone.
+      //
+      // Whether it IS the first depends on the list being empty, which is only
+      // knowable under the lock — so 170 decides it there, not here.
+      const label = saveResult.last4 ? `Card ···· ${saveResult.last4}` : "Card on file";
+      const { data: saved, error: saveErr } = await service.rpc("append_family_payment_method", {
+        p_camp_id: campId,
+        p_family_key: familyKey,
+        p_method: {
           id: "pm_" + crypto.randomUUID().replace(/-/g, ""),
           type: "card",
           processor: processorKey,
@@ -321,28 +319,27 @@ serve(async (req) => {
           last4: saveResult.last4 || "",
           label,
           addedDate: new Date().toISOString(),
-          isDefault: isFirstMethod,
-        }];
-
-        if (isFirstMethod) {
-          f.byopProcessor = processorKey;
-          f.byopCustomerRef = saveResult.customerRef;
-          f.cardOnFile = true;
-          f.cardSavedDate = new Date().toISOString();
+        },
+        p_default_fields: {
+          byopProcessor: processorKey,
+          byopCustomerRef: saveResult.customerRef,
+          cardOnFile: true,
+          cardSavedDate: new Date().toISOString(),
           // Show the real card (···· 4242) rather than a bare "card on file"
           // when the processor handed back the last 4 / brand on the save.
-          f.paymentMethodType = saveResult.brand || "card";
-          f.paymentMethodLabel = label;
-        }
-
-        const up = await service.from("camp_state_kv").upsert(
-          { camp_id: campId, key: "campistryMe", value: me, updated_at: new Date().toISOString() },
-          { onConflict: "camp_id,key" },
-        );
-        if (!up.error) saved = true;
+          paymentMethodType: saveResult.brand || "card",
+          paymentMethodLabel: label,
+        },
+      });
+      if (saved?.error === "family_not_found" || saved?.error === "no_camp_data") {
+        return json({ success: false, error: "Family no longer exists" }, 400);
       }
+      if (saveErr || !saved?.success) saveFail = saveErr?.message || saved?.error || "unknown";
     }
-    if (!saved) return json({ success: false, error: "Payment method saved with the processor but could not be recorded — contact support." }, 500);
+    if (saveFail) {
+      console.error(`[payments-save-method] saved with the processor but not recorded for camp ${campId}: ${saveFail}`);
+      return json({ success: false, error: "Payment method saved with the processor but could not be recorded — contact support." }, 500);
+    }
 
     console.log(`[payments-save-method] Saved ${processorKey} method for ${isCamperScoped ? `camper ${camperName}` : `family ${familyKey}`}, camp ${campId}`);
     return json({ success: true });
