@@ -186,8 +186,9 @@ body{font-family:var(--font);background:var(--s50);color:var(--s800);-webkit-fon
 
 <!-- Payment -->
 <div class="cd" id="payCard"><div class="ct"><svg viewBox="0 0 24 24"><rect x="1" y="4" width="22" height="16" rx="2"/><line x1="1" y1="10" x2="23" y2="10"/></svg>Payment</div>
-<!-- The camp's deposit. Filled in by _regRenderDeposit() once a session is
-     picked, because the amount can be a share of that session's tuition. -->
+<!-- The camp's deposit, filled in by _regRenderDeposit(). Rendered before a
+     session is picked too: a required deposit that only appears at the end is
+     a surprise at the worst moment. -->
 <div id="depositBox" style="display:none"></div>
 <div id="priceDisplay" style="margin-bottom:10px"></div>
 <!-- Promo -->
@@ -732,6 +733,10 @@ function applyFormConfig(fc){
 
     // Advanced: per-field overrides, section order, branding
     applyFieldConfig(fc.fields,sectionsDisabled);
+    // The builder pushes a draft on every edit. The deposit is not part of
+    // formConfig, but a camp switching sections on and off expects the whole
+    // preview to stay current, and this is the only hook the iframe gets.
+    try{ _regRenderDeposit(); }catch(e){}
     applySectionOrder(fc.sectionOrder);
     applyBranding(fc.branding);
 }
@@ -835,6 +840,9 @@ function renderSessions(){
     var c=document.getElementById('sessList');
     var items=_pickerItems();
     if(!items.length){c.innerHTML='<p style="color:var(--s400);font-size:.85rem;text-align:center;padding:10px">No sessions available.</p>';return}
+    // Drawn here too: on first load nothing is selected, so updatePrice has
+    // nothing to do and the deposit would otherwise never be mentioned.
+    setTimeout(function(){try{_regRenderDeposit();}catch(e){}},0);
     c.innerHTML=items.map(function(s,i){
         var today=new Date().toISOString().split('T')[0];
         var eb=s.earlyBird&&(!s.earlyBirdDeadline||today<=s.earlyBirdDeadline);
@@ -857,7 +865,11 @@ window.selPay=function(el,m){selPM=m;document.querySelectorAll('.po').forEach(fu
 function updatePrice(){
     var s=_pickerItems().find(function(s){return s.name===selSess&&s.kind===selSessKind});
     var el=document.getElementById('priceDisplay');
-    if(!s||!s.tuition){el.innerHTML='';return}
+    // The deposit is rendered on BOTH paths. It used to hang off the end of
+    // this function, so with no session picked the early return skipped it --
+    // which is every first view of the form and the whole of the builder's
+    // preview, the two places somebody would go looking for it.
+    if(!s||!s.tuition){el.innerHTML='';try{_regRenderDeposit();}catch(e){}return}
     var base=s.tuition;var total=base;var lines=[];
     var today=new Date().toISOString().split('T')[0];
     if(s.earlyBird&&(!s.earlyBirdDeadline||today<=s.earlyBirdDeadline)){total=s.earlyBird;lines.push('<div style="color:var(--ok);font-size:.78rem">Early bird pricing applied</div>')}
@@ -914,6 +926,11 @@ function updatePrice(){
 // the office already sees "awaiting deposit" on its side.
 var _depositPolicy=null, _depDiagSaid=false;
 
+/** Has a session actually been picked? */
+function _pickerSelected(){
+    return !!_pickerItems().find(function(x){return x.name===selSess&&x.kind===selSessKind});
+}
+
 function _regDepositDue(sessObj){
     var P=window.CampistryDepositPolicy;
     if(!P||!_depositPolicy)return null;
@@ -940,6 +957,28 @@ function _regRenderDeposit(){
     var box=document.getElementById('depositBox');
     if(!box)return;
     var P=window.CampistryDepositPolicy;
+    var pol=(P&&_depositPolicy)?P.normalize(_depositPolicy):null;
+
+    // A required deposit that appears only after a session is picked is a
+    // surprise at the worst moment. When the camp charges a flat amount it can
+    // be stated immediately; when it is a share of tuition, say so and say
+    // what it depends on, rather than showing nothing.
+    if(pol&&pol.enabled&&!_pickerSelected()){
+        var flat=(pol.basis==='flat'&&pol.amount>0)?P.money(pol.amount):'';
+        box.style.display='';
+        _regSetHtml(box,
+            '<div style="background:#EFF6FF;border:1px solid #BFDBFE;border-radius:var(--r);padding:12px 14px;margin-bottom:14px">'
+            +'<div style="display:flex;justify-content:space-between;gap:12px;align-items:baseline;flex-wrap:wrap">'
+            +'<strong style="font-size:.9rem;color:#1E40AF">'+esc(pol.label)+'</strong>'
+            +(flat?'<span style="font-size:1.15rem;font-weight:800;color:#1E40AF">'+flat+'</span>':'')+'</div>'
+            +'<div style="font-size:.82rem;color:var(--s600);line-height:1.6;margin-top:5px">'
+            +(flat
+                ? 'Due '+(pol.timing==='now'?'with this application':'after you apply')+'. It counts toward tuition.'
+                : 'A share of tuition. Choose a session above and the exact amount appears here.')
+            +'</div></div>');
+        return;
+    }
+
     var due=_regDepositDue();
     if(!P||!due||!due.total){
         box.style.display='none';_regSetHtml(box,'');

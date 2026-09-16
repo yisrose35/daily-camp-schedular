@@ -479,3 +479,76 @@ test('a missing deposit box says which kind of missing it is', () => {
     // Once, not once per keystroke — updatePrice runs on every edit.
     assert.match(reg, /_depDiagSaid/);
 });
+
+// ── the deposit before a session is picked ──────────────────────────────────
+//
+// _regRenderDeposit used to hang off the end of updatePrice, which returns
+// early when no session is selected — so on every first view of the form, and
+// throughout the builder's preview, it never ran. Not the box, not even the
+// diagnostic line that was supposed to explain the box's absence.
+function runDeposit({ policy, sessions, selected }) {
+    const src = fs.readFileSync(path.join(ROOT, 'campistry_register.html'), 'utf8');
+    const body = [...src.matchAll(/<script(?![^>]*\bsrc=)[^>]*>([\s\S]*?)<\/script>/g)].map((m) => m[1])[1];
+    const grab = (name) => {
+        const i = body.indexOf('function ' + name + '(');
+        assert.ok(i >= 0, 'missing ' + name);
+        let depth = 0, k = body.indexOf('{', i);
+        for (; k < body.length; k++) {
+            if (body[k] === '{') depth++;
+            else if (body[k] === '}' && --depth === 0) break;
+        }
+        return body.slice(i, k + 1);
+    };
+    let held = '';
+    const logs = [];
+    const box = { style: {}, get innerHTML() { return held; }, set innerHTML(v) { held = v; } };
+    const sandbox = {
+        esc: (s) => String(s == null ? '' : s), fm: (n) => '$' + (Number(n) || 0),
+        _pickerItems: () => sessions, selSess: selected, selSessKind: 'session', siblings: [],
+        _depositPolicy: policy, _depDiagSaid: false,
+        console: { log: (m) => logs.push(m), warn() {} },
+        document: { getElementById: (id) => (id === 'depositBox' ? box : null) },
+        window: { CampistryDepositPolicy: P }
+    };
+    const code = grab('_pickerSelected') + grab('_regDepositDue') + grab('_regSetHtml') + grab('_regRenderDeposit');
+    const names = Object.keys(sandbox);
+    new Function(...names, code + '\n_regRenderDeposit();')(...names.map((n) => sandbox[n]));
+    return { html: held, logs };
+}
+
+const ONE_SESSION = [{ name: '1st Half', kind: 'session', tuition: 2300 }];
+
+test('a required deposit is mentioned before a session is picked', () => {
+    // A deposit that only appears at the end is a surprise at the worst
+    // moment, and "nothing there" is indistinguishable from "not set up".
+    const pct = runDeposit({ policy: { enabled: true, basis: 'percent', percent: 25 }, sessions: ONE_SESSION, selected: '' });
+    assert.match(pct.html, /Choose a session/, 'must say what the amount depends on');
+
+    // A flat amount does not depend on the session, so it is stated at once.
+    const flat = runDeposit({ policy: { enabled: true, basis: 'flat', amount: 250 }, sessions: ONE_SESSION, selected: '' });
+    assert.match(flat.html, /\$250/);
+});
+
+test('with a session picked it shows the real number', () => {
+    const r = runDeposit({ policy: { enabled: true, basis: 'percent', percent: 25 }, sessions: ONE_SESSION, selected: '1st Half' });
+    assert.match(r.html, /\$575/, '25% of $2,300');
+});
+
+test('and when there is nothing to show it says which nothing', () => {
+    const none = runDeposit({ policy: null, sessions: ONE_SESSION, selected: '1st Half' });
+    assert.match(none.logs[0] || '', /migration 164 not applied/);
+    assert.strictEqual(none.html, '', 'nothing is drawn for a camp with no deposit');
+
+    const off = runDeposit({ policy: { enabled: false }, sessions: ONE_SESSION, selected: '1st Half' });
+    assert.match(off.logs[0] || '', /switched off/);
+});
+
+test('the deposit renders on every path that draws the form', () => {
+    const reg = fs.readFileSync(path.join(ROOT, 'campistry_register.html'), 'utf8');
+    // updatePrice's early return, the session list, and the builder's pushed
+    // draft. Miss any one and it is invisible in a state somebody will hit.
+    assert.match(reg, /el\.innerHTML='';try\{_regRenderDeposit\(\);\}catch/);
+    assert.match(reg, /setTimeout\(function\(\)\{try\{_regRenderDeposit\(\);\}catch\(e\)\{\}\},0\)/);
+    const apply = reg.slice(reg.indexOf('function applyFormConfig('), reg.indexOf('// ─── SIBLINGS'));
+    assert.match(apply, /_regRenderDeposit/, 'the builder preview never refreshes it');
+});
