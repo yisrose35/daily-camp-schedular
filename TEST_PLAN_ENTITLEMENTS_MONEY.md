@@ -38,6 +38,11 @@ out) before anything else.
 
 ## Part A — what a Claude Code session can verify on its own
 
+> **A1–A5 and the withdrawal work are DONE** — results in `TEST_FINDINGS.md`.
+> The entitlement chain, resolver precedence and lock ordering are clean; four
+> defects were found around taking a camper out of camp. **A6 (the two UI pages
+> in a browser) and A7 (the key-split bridge) are still open.**
+
 A remote session has the repo, `node`, `python3` with `pglast`, and Chromium +
 Playwright preinstalled. It has **no** access to your Supabase project, no
 service-role key, and no card processor. So it can verify logic, consistency and
@@ -49,7 +54,7 @@ the browser UI against a stubbed backend — not live behaviour.
 node --test tests/*.test.js
 ```
 
-Expected: **1491 tests, 1477 pass, 14 fail.** The 14 are all in
+Expected: **1509 tests, 1495 pass, 14 fail.** The 14 are all in
 `tests/auto_full_day.test.js`, all one symptom (`Main Activity count = 0 (want
 exactly 1)` for every bunk), and all fail identically on `main` before any of
 this work — verify that claim by stashing, don't take it on trust. Anything
@@ -285,6 +290,41 @@ vanished (cards charged, no record). Afterwards, both must survive. Check
 `finance.payments` against the processor's own dashboard for that night —
 migration 162's `reconcile_processor_charges` report exists to find exactly the
 charges that used to go missing, so run it and expect zero new ones.
+
+### B7. Taking a camper out of camp
+
+Automated coverage is in `tests/money_parity.test.js` (balance parity) and
+`tests/withdrawal_lifecycle.test.js` (the lifecycle). The balance math is
+correct; four defects are documented in `TEST_FINDINGS.md`. What still needs a
+real camp:
+
+On a throwaway camp, with a family that has **paid something** and has a card on
+file and an autopay plan:
+
+1. **Park a camper** (Roster → Unenroll). Confirm: tuition drops off Billing, the
+   parent's portal shows a **credit** (a negative balance), the family record,
+   plan, saved card and **canteen balance** all survive, and the camper is off
+   the active roster and out of their bunk.
+2. **Let autopay run** while they are parked. It must charge **nothing**. Check
+   the processor's dashboard, not just Campistry.
+3. **Re-enrol them** and let autopay run again. This is defect **D1** — expect the
+   plan to read fully paid while the family still owes the instalments that came
+   due while parked. Confirm it on a real camp before deciding how to fix it.
+4. **Rescind** a registration. The dialog promises the application stays marked
+   *Withdrawn* for the audit trail. This is defect **D2** — expect it to be gone
+   from the pipeline entirely.
+5. **Delete** a camper who has paid by card. Confirm: the payment stays in
+   Billing's ledger, the family card disappears (the record is deleted once it has
+   no campers), autopay stops, and a refund by **transaction id** still works
+   while a refund to the **saved card** does not — the token went with the family.
+6. **Delete a camper with money left on their canteen account.** This is defect
+   **D3** — expect the balance to vanish with no refund and no record. Then
+   **add a new camper with the same name** and check their opening canteen balance:
+   defect **D4** says it will be the deleted camper's.
+7. **Withdraw one sibling of two.** The other must stay billed in full and autopay
+   must keep running for them.
+
+Do 6 last, and on a camp you are willing to leave in a messy state.
 
 ---
 

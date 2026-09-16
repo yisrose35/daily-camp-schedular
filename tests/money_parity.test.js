@@ -575,3 +575,93 @@ test('migration 166 sums every family and caps the discount', () => {
     assert.ok(!/ELSE\s+CONTINUE;\s+END IF;/.test(sql),
         'the single-family restriction is back — split households lose charges');
 });
+
+// ── 10. a camper taken out of camp ─────────────────────────────────────────
+//
+// Withdrawal is where the two sides are most likely to drift, because the
+// tuition disappears from the BILLED side while everything already paid stays
+// on the PAID side. Both implementations filter on the same two statuses —
+// `enrolled` and `accepted` — so every other status must stop the billing, and
+// must stop it on both sides at once.
+//
+// The office has three separate ways to take a camper out, and they are not
+// the same operation:
+//
+//   unenrollCamper()   flips live enrollments to 'unenrolled' and parks the
+//                      camper. Reversible. Family, payments, plan, saved card
+//                      and canteen account all stay.
+//   rescindEnrollment() flips one enrollment to 'withdrawn'.
+//   deleteCamper()     permanent; cascadeCamperDelete deletes the enrollment
+//                      rows outright AND deletes the family record once it has
+//                      no campers left. Payments deliberately stay.
+//
+// The first two are tested here as balance questions. The third changes the
+// SHAPE of the data, not just a status, so it lives in
+// tests/withdrawal_lifecycle.test.js.
+
+const NON_BILLABLE = ['unenrolled', 'withdrawn', 'declined', 'waitlisted', 'pending'];
+
+test('every non-billable status stops the tuition on BOTH sides', () => {
+    for (const status of NON_BILLABLE) {
+        const d = oneCamper();
+        d.enrollments.e1.status = status;
+        agree(test, d, MALKY, 0, `status '${status}'`);
+    }
+});
+
+test('a withdrawal AFTER paying leaves a credit, not a zero', () => {
+    // The camp keeps the money on the books and owes it back. Clamping this to
+    // zero on either side would hide a refund the camp genuinely owes — which
+    // is why neither implementation clamps.
+    const d = oneCamper({ payments: [{ familyKey: 'f1', amount: 1200, status: 'succeeded' }] });
+    agree(test, d, MALKY, 1800, 'still enrolled');
+    d.enrollments.e1.status = 'unenrolled';
+    agree(test, d, MALKY, -1200, 'unenrolled after paying 1200 — a credit is owed');
+});
+
+test('a Zelle payer who withdraws is owed the deposit back, on both sides', () => {
+    // The deposit lives in bank_deposits, not the blob, so this is the one case
+    // where a withdrawal could easily land on only one side of the ledger.
+    const d = oneCamper({
+        deposits: [{ status: 'posted', family_key: 'f1', amount_cents: 300000 }],
+    });
+    agree(test, d, MALKY, 0, 'paid in full by Zelle');
+    d.enrollments.e1.status = 'withdrawn';
+    agree(test, d, MALKY, -3000, 'withdrew after paying by Zelle — the full deposit is owed back');
+});
+
+test('withdrawing ONE camper of two leaves the other still billed', () => {
+    const d = db({
+        sessions: [{ name: 'Full Summer', tuition: 3000 }],
+        enrollments: {
+            e1: { camperName: 'Malky Stein', session: 'Full Summer', status: 'enrolled' },
+            e2: { camperName: 'Shaya Stein', session: 'Full Summer', status: 'enrolled' },
+        },
+        families: { f1: { name: 'Stein Family', camperIds: ['Malky Stein', 'Shaya Stein'] } },
+        camperFamily: { 'Malky Stein': 'f1', 'Shaya Stein': 'f1' },
+    });
+    const BOTH = ['Malky Stein', 'Shaya Stein'];
+    agree(test, d, BOTH, 6000, 'two campers enrolled');
+    d.enrollments.e1.status = 'unenrolled';
+    agree(test, d, BOTH, 3000, 'one unenrolled — the sibling is still billed in full');
+});
+
+test('a family charge SURVIVES a withdrawal — it is not tuition', () => {
+    // A late fee, a bus charge, a damaged-property charge: these are charges on
+    // the FAMILY, not on the enrollment, so taking the camper out does not
+    // cancel them. If a withdrawal wiped these the camp would silently forgive
+    // real debts.
+    const d = oneCamper();
+    d.families.f1.charges = [{ amount: 150, note: 'Bus' }];
+    agree(test, d, MALKY, 3150, 'enrolled, plus a bus charge');
+    d.enrollments.e1.status = 'unenrolled';
+    agree(test, d, MALKY, 150, 'unenrolled — tuition gone, the bus charge stands');
+});
+
+test('re-enrolling restores the tuition exactly, on both sides', () => {
+    const d = oneCamper({ payments: [{ familyKey: 'f1', amount: 500, status: 'succeeded' }] });
+    d.enrollments.e1.status = 'unenrolled';
+    agree(test, d, MALKY, -500, 'parked');
+    d.enrollments.e1.status = 'enrolled';   // reenrollCamper
+    agree(test, d, MALKY, 2500, 're-enrolled — billed again, the 500 still counts');
+});
