@@ -7707,7 +7707,11 @@ var FC_SECTIONS=[
     {key:'emergency',label:'Emergency Contact',desc:'Name, relationship, phone',default:true},
     {key:'medical',label:'Medical Information',desc:'Allergies, medications, dietary, notes',default:true},
     {key:'preferences',label:'Preferences',desc:'Bunkmate request, separation, t-shirt, referral source',default:true},
-    {key:'documents',label:'Document Uploads',desc:'Immunization records, health forms, insurance',default:true},
+    // OFF by default. A camp that has not said which documents it wants gets
+    // an upload box asking for nothing in particular, and families either skip
+    // it or send the wrong thing. Turn it on, list what you need, and the form
+    // asks for those by name.
+    {key:'documents',label:'Required Documents',desc:'List exactly which documents families must upload — immunization, insurance card, physical form',default:false},
     {key:'payment',label:'Payment Preference',desc:'Payment method selection and promo codes',default:true},
     {key:'signature',label:'E-Signature & Agreement',desc:'Waivers, checkboxes, signature capture',default:true},
     {key:'siblings',label:'Sibling Registration',desc:'Allow adding multiple campers in one form',default:true}
@@ -7721,6 +7725,12 @@ var FC_FIELD_CATALOG={
     camper:[
         {id:'first',label:'Camper First Name',required:true},
         {id:'last',label:'Camper Last Name',required:true},
+        // The name a camper is actually called at camp. Me's roster has
+        // carried these for a while; the form never asked, so offices typed
+        // them in by hand afterwards. Off by default -- most camps do not
+        // need it and an unexplained extra name field on a form is noise.
+        {id:'altFirst',label:'Alternate First Name',off:true},
+        {id:'altLast',label:'Alternate Last Name',off:true},
         {id:'dob',label:'Date of Birth',required:true},
         {id:'gender',label:'Gender'},
         {id:'school',label:'School Name'},
@@ -7769,14 +7779,36 @@ var FC_FIELD_CATALOG={
         {id:'allergies',label:'Allergies'},
         {id:'medications',label:'Medications'},
         {id:'dietary',label:'Dietary Restrictions'},
+        // The two things an office reaches for in an emergency and could not
+        // ask for on the form until now. Off by default: a camp that collects
+        // them on a separate health form does not want them twice.
+        {id:'physicianName',label:'Physician Name',off:true},
+        {id:'physicianPhone',label:'Physician Phone',off:true},
+        {id:'insuranceCarrier',label:'Insurance Carrier',off:true},
+        {id:'insurancePolicy',label:'Insurance Policy Number',off:true},
         {id:'medicalNotes',label:'Additional Medical Notes'}
     ],
     preferences:[
-        {id:'bunkmate',label:'Bunkmate Request'},
-        {id:'separate',label:'Separation Request'},
+        // Bunk requests are off by default. A camp that honours them wants
+        // them; one that does not should never have asked, because a request
+        // on a form is a promise a parent hears whether or not it was meant.
+        {id:'bunkmate',label:'Bunkmate Request',off:true},
+        {id:'separate',label:'Separation Request',off:true},
         {id:'shirt',label:'T-Shirt Size'},
         {id:'source',label:'How did you hear about us?'},
         {id:'notes',label:'Additional Notes'}
+    ],
+    // This section existed as a toggle with no fields behind it, so a camp
+    // could show it and then not choose what it asked for.
+    otherParent:[
+        {id:'opStreet',label:'Street'},
+        {id:'opCity',label:'City'},
+        {id:'opState',label:'State'},
+        {id:'opZip',label:'ZIP'},
+        {id:'opSummerStreet',label:'Summer Street',off:true},
+        {id:'opSummerCity',label:'Summer City',off:true},
+        {id:'opSummerState',label:'Summer State',off:true},
+        {id:'opSummerZip',label:'Summer ZIP',off:true}
     ]
 };
 
@@ -7798,7 +7830,12 @@ function getFormConfig(){
 var PAF_SECTIONS=[
     {key:'bunk',label:'Bunk & Session Choices',desc:'Bunkmate request, separation request, session confirmation',default:true},
     {key:'logistics',label:'Logistics',desc:'T-shirt size, transportation',default:true},
-    {key:'consent',label:'Photo & Media Consent',desc:'Permission to use photos/video',default:true}
+    {key:'consent',label:'Photo & Media Consent',desc:'Permission to use photos/video',default:true},
+    // All three default OFF. This form was choices-only until now, and a camp
+    // that never asks for paperwork or money after acceptance must see exactly
+    // the form it had before.
+    {key:'documents',label:'Required Documents',desc:'The same named list as the registration form — for camps that take the paperwork after acceptance',default:false},
+    {key:'payment',label:'Payment Preference & Deposit',desc:'How the family intends to pay, and what they still owe on their deposit',default:false}
 ];
 var PAF_FIELD_CATALOG={
     bunk:[
@@ -7812,6 +7849,9 @@ var PAF_FIELD_CATALOG={
     ],
     consent:[
         {id:'photoConsent',label:'Photo/Media Permission'}
+    ],
+    payment:[
+        {id:'paymentMethod',label:'Payment Method'}
     ]
 };
 function getPostAcceptFormConfig(){
@@ -7877,7 +7917,11 @@ function _getLinkLists(){
 // depends on.
 function _renderAdvFieldRow(prefix,sectionKey,f,cfg){
     cfg=cfg||{};
-    var enabled=f.locked?true:(cfg.enabled!==false);
+    // `off` means "a camp has to ask for this", as against `required`, which
+    // is about whether a shown field may be left blank. Without the distinction
+    // every new field added to the catalog would appear on every camp's form
+    // the day it shipped.
+    var enabled=f.locked?true:(cfg.enabled!=null?cfg.enabled!==false:!f.off);
     var required=f.locked?true:(cfg.required!=null?cfg.required:!!f.required);
     var label=cfg.label!=null?cfg.label:f.label;
     var lockAttr=f.locked?' disabled':'';
@@ -7955,7 +7999,19 @@ function _collectFormConfigDraft(){
         var name=(el.querySelector('.fcDocName')?.value||'').trim();
         if(!name)return;
         var maxFiles=parseInt(el.querySelector('.fcDocMax')?.value,10)||1;
-        documents.push({name:name,maxFiles:Math.max(1,Math.min(20,maxFiles))});
+        // A stable id, kept once assigned: an upload is tagged with it, so
+        // renaming "Health form" to "Physical form" must not orphan every
+        // file already filed under it.
+        var id=el.dataset.id||('doc_'+name.toLowerCase().replace(/[^a-z0-9]+/g,'_').replace(/^_|_$/g,'')+'_'+documents.length);
+        el.dataset.id=id;
+        documents.push({
+            id:id,
+            name:name,
+            label:name,
+            note:(el.querySelector('.fcDocNote')?.value||'').trim(),
+            required:!!el.querySelector('.fcDocReq')?.checked,
+            maxFiles:Math.max(1,Math.min(20,maxFiles))
+        });
     });
     return {
         sections:sections,
@@ -8001,6 +8057,11 @@ function _collectPostAcceptFormConfigDraft(){
         sections:sections,
         customQuestions:_readCustomQuestions('paf'),
         customSections:_readCustomSections('paf'),
+        // Deliberately the registration form's list rather than a second one.
+        // A camp asks for an immunization record once; which form it arrives
+        // on is a timing decision, not a different requirement, and two lists
+        // would drift the moment one was edited.
+        documents:((getFormConfig()||{}).documents)||[],
         welcomeMessage:(document.getElementById('pafWelcome')?.value||'').trim(),
         instructions:(document.getElementById('pafInstructions')?.value||'').trim(),
         fields:_readAdvFields('paf',PAF_FIELD_CATALOG),
@@ -8289,8 +8350,13 @@ function _buildFcPanelHtml(){
     h+=_accCard('Sections',sectionsHtml,{open:true});
 
     // Required documents — each with a max number of files parents may upload.
-    var docs=(fc.documents&&fc.documents.length)?fc.documents:[{name:'Immunization records',maxFiles:1},{name:'Health form',maxFiles:1},{name:'Insurance card',maxFiles:2}];
-    var docsHtml='<p style="font-size:.78rem;color:var(--s400);margin:0 0 10px">Documents parents upload during registration. Set how many files each accepts (e.g. front + back of an insurance card = 2).</p>'
+    var docs=(fc.documents&&fc.documents.length)?fc.documents:[
+        {id:'doc_immunization',name:'Immunization records',maxFiles:1,required:true},
+        {id:'doc_health_form',name:'Health form',maxFiles:1,required:true},
+        {id:'doc_insurance_card',name:'Insurance card',maxFiles:2,required:true}];
+    var _docsOn=!!(fc.sections&&fc.sections.documents&&fc.sections.documents.enabled);
+    var docsHtml='<p style="font-size:.78rem;color:var(--s400);margin:0 0 10px">Each one is listed on the form by name, with a tick as the parent uploads it \u2014 a required one holds up the application until it is there. Max files covers a two-sided card.</p>'
+        +(_docsOn?'':'<div style="background:#FFFBEB;border:1px solid #FDE68A;border-radius:var(--r);padding:8px 12px;margin-bottom:10px;font-size:.78rem;color:#92400E">The <strong>Required Documents</strong> section is switched off, so none of this is on the form yet. Turn it on under Sections above.</div>')
         +'<div id="fcDocList">'+docs.map(_renderDocRow).join('')+'</div>'
         +'<button class="me-btn me-btn--sec me-btn--sm" style="margin-top:4px" onclick="CampistryMe.addDocRow()">+ Add Document</button>';
     h+=_accCard('Required Documents',docsHtml,{badge:docs.length+' set'});
@@ -8683,9 +8749,14 @@ function addSectionTextBlock(prefix,sid){
 
 function _renderDocRow(d){
     d=d||{};
-    return '<div class="fcDoc" style="display:flex;gap:6px;align-items:center;margin-bottom:4px;padding:6px 10px;border:1px solid var(--s200);border-radius:var(--r)">'
+    return '<div class="fcDoc" data-id="'+esc(d.id||'')+'" style="display:flex;gap:6px;align-items:center;margin-bottom:4px;padding:6px 10px;border:1px solid var(--s200);border-radius:var(--r)">'
         +'<input class="fi fcDocName" style="flex:1;font-size:.8rem;padding:5px 8px" value="'+esc(d.name||'')+'" placeholder="Document name">'
+        +'<input class="fi fcDocNote" style="flex:1;font-size:.78rem;padding:5px 8px" value="'+esc(d.note||'')+'" placeholder="Note to parents (optional)">'
         +'<label style="font-size:.72rem;color:var(--s500);white-space:nowrap">Max files <input class="fi fcDocMax" type="number" min="1" max="20" style="width:56px;font-size:.8rem;padding:5px 6px;display:inline-block" value="'+(d.maxFiles||1)+'"></label>'
+        // A listed document a parent may skip is a different thing from one
+        // that holds up the application, and a camp that cannot say which is
+        // which ends up marking everything required and blocking people.
+        +'<label style="font-size:.72rem;color:var(--s500);white-space:nowrap;display:flex;align-items:center;gap:4px"><input type="checkbox" class="fcDocReq"'+(d.required===false?'':' checked')+' style="accent-color:var(--me)">Required</label>'
         +'<button class="me-btn me-btn--ghost" style="color:var(--err);font-size:.7rem" onclick="this.closest(\'.fcDoc\').remove()">✕</button></div>';
 }
 function addDocRow(){
@@ -14789,6 +14860,12 @@ function openDepositPolicy(){
 
     h+='<div id="dpPreview" style="background:var(--s50);border:1px solid var(--s200);border-radius:var(--r);'
       +'padding:12px 14px;margin-top:14px;font-size:.84rem;color:var(--s600);line-height:1.6"></div>';
+    // "I saved it and parents still do not see it" has exactly one common
+    // cause and no way to tell from this screen: the public form is anonymous,
+    // so everything it knows comes through get_public_form_config, and an
+    // unapplied migration 164 means the policy never crosses. Ask the same
+    // question the form asks and report the answer.
+    h+='<div id="dpReach" style="margin-top:10px;font-size:.8rem;color:var(--s400)">Checking that your registration form can see this\u2026</div>';
     h+='</div></div>';
 
     showModal('Deposit to register',h,function(){ _dpSave(); },{maxWidth:680,saveLabel:'Save deposit policy'});
@@ -14798,7 +14875,32 @@ function openDepositPolicy(){
             if(el){el.addEventListener('change',_dpPreview);el.addEventListener('input',_dpPreview);}
         });
         _dpPreview();
+        _dpCheckReach();
     },0);
+}
+
+/** Ask the public form's own RPC whether the policy actually reaches it. */
+async function _dpCheckReach(){
+    var out=document.getElementById('dpReach');
+    if(!out)return;
+    var client=(window.CampistryDB&&window.CampistryDB.getClient)?window.CampistryDB.getClient():window.supabase;
+    var cid=localStorage.getItem('campistry_camp_id')||localStorage.getItem('campistry_user_id')||'';
+    if(!client||!client.rpc||!cid){out.textContent='';return}
+    try{
+        var r=await client.rpc('get_public_form_config',{p_camp_id:cid,p_kind:'registration'});
+        var d=r&&r.data;
+        if(r&&r.error)throw r.error;
+        if(d&&Object.prototype.hasOwnProperty.call(d,'depositPolicy')){
+            out.innerHTML='<span style="color:var(--ok);font-weight:600">\u2713 Your registration form can see this.</span>';
+        }else{
+            out.innerHTML='<span style="color:#B45309;font-weight:600">\u26a0 Your registration form cannot see this yet.</span> '
+                +'Apply <code>migrations/164_public_deposit_policy.sql</code> in the Supabase SQL editor \u2014 until then the '
+                +'policy saves here but parents are never shown it.';
+        }
+    }catch(e){
+        out.innerHTML='<span style="color:var(--s400)">Could not check whether the public form sees this ('
+            +esc((e&&e.message)||'no connection')+').</span>';
+    }
 }
 
 function _dpToggle(){

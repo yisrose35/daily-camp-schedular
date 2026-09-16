@@ -94,6 +94,10 @@ body{font-family:var(--font);background:var(--s50);color:var(--s800);-webkit-fon
 <!-- Primary Camper -->
 <div class="cd" id="camperCard"><div class="ct"><svg viewBox="0 0 24 24"><path d="M20 21v-2a4 4 0 00-4-4H8a4 4 0 00-4 4v2"/><circle cx="12" cy="7" r="4"/></svg>Camper Information</div>
 <div class="fr"><div class="fg"><label class="fl">First Name<span class="rq">*</span></label><input class="fi" id="rF"></div><div class="fg"><label class="fl">Last Name<span class="rq">*</span></label><input class="fi" id="rL"></div></div>
+<!-- The name a camper is actually called at camp. Me's roster has carried
+     altFirstName/altLastName for a while; the form never asked for it, so
+     every camp typed them in by hand afterwards. -->
+<div class="fr"><div class="fg"><label class="fl">Alternate First Name</label><input class="fi" id="rAltF"></div><div class="fg"><label class="fl">Alternate Last Name</label><input class="fi" id="rAltL"></div></div>
 <div class="fr"><div class="fg"><label class="fl">Date of Birth<span class="rq">*</span></label><input type="date" class="fi" id="rDob"></div><div class="fg"><label class="fl">Gender</label><select class="fs" id="rGen"><option value="">—</option><option>Male</option><option>Female</option><option>Non-binary</option><option>Other</option></select></div></div>
 <div class="fr"><div class="fg"><label class="fl">School Name</label><input class="fi" id="rSch"></div><div class="fg"><label class="fl">School Grade</label><select class="fs" id="rSchGr"><option value="">—</option><option>Pre-K</option><option>Kindergarten</option><option>1st Grade</option><option>2nd Grade</option><option>3rd Grade</option><option>4th Grade</option><option>5th Grade</option><option>6th Grade</option><option>7th Grade</option><option>8th Grade</option><option>9th Grade</option><option>10th Grade</option><option>11th Grade</option><option>12th Grade</option></select></div></div>
 <div class="fg"><label class="fl">Teacher</label><input class="fi" id="rTch"></div>
@@ -166,6 +170,8 @@ body{font-family:var(--font);background:var(--s50);color:var(--s800);-webkit-fon
 <div class="fg"><label class="fl">Allergies</label><input class="fi" id="rAlg" placeholder="Food, medication, environmental"></div>
 <div class="fg"><label class="fl">Medications</label><input class="fi" id="rMed" placeholder="Current medications and dosages"></div>
 <div class="fg"><label class="fl">Dietary Restrictions</label><input class="fi" id="rDit" placeholder="Kosher, vegetarian, gluten-free, etc."></div>
+<div class="fr"><div class="fg"><label class="fl">Physician Name</label><input class="fi" id="rDocN"></div><div class="fg"><label class="fl">Physician Phone</label><input class="fi" id="rDocP" type="tel"></div></div>
+<div class="fr"><div class="fg"><label class="fl">Insurance Carrier</label><input class="fi" id="rInsC"></div><div class="fg"><label class="fl">Policy Number</label><input class="fi" id="rInsP"></div></div>
 <div class="fg"><label class="fl">Additional Medical Notes</label><textarea class="fta" id="rMdN" placeholder="Asthma, ADHD, anxiety, physical limitations, etc."></textarea></div>
 </div>
 
@@ -178,7 +184,11 @@ body{font-family:var(--font);background:var(--s50);color:var(--s800);-webkit-fon
 
 <!-- Documents -->
 <div class="cd" id="docCard"><div class="ct"><svg viewBox="0 0 24 24"><path d="M14 2H6a2 2 0 00-2 2v16a2 2 0 002 2h12a2 2 0 002-2V8z"/><polyline points="14 2 14 8 20 8"/></svg>Document Uploads</div>
-<p style="font-size:.8rem;color:var(--s500);margin-bottom:10px">Upload any required documents (immunization records, health forms, insurance card, etc.)</p>
+<!-- Filled in by _regRenderRequiredDocs() from the camp's own list. The
+     generic sentence below is the fallback for a camp that turned the
+     section on without naming anything. -->
+<div id="reqDocList"></div>
+<p id="docGenericNote" style="font-size:.8rem;color:var(--s500);margin-bottom:10px">Upload any required documents (immunization records, health forms, insurance card, etc.)</p>
 <div class="up-zone" id="upZone"><svg width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="var(--me)" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 01-2 2H5a2 2 0 01-2-2v-4"/><polyline points="7 10 12 5 17 10"/><line x1="12" y1="5" x2="12" y2="15"/></svg><p>Drop files here or click to browse</p><small>PDF, JPG, PNG — max 5MB each</small></div>
 <input type="file" id="upInput" multiple accept=".pdf,.jpg,.jpeg,.png,.doc,.docx" style="display:none">
 <div id="upFiles"></div>
@@ -329,26 +339,31 @@ var sigCtx=null,sigDrawing=false,sigHasData=false;
 // field-by-field in the Advanced customizer (payment/signature/siblings/
 // documents stay whole-section toggles, handled by secMap in load()).
 var FIELD_ELEMENT_MAP={
-    first:'rF',last:'rL',dob:'rDob',gender:'rGen',school:'rSch',schoolGrade:'rSchGr',teacher:'rTch',photo:'rPhotoData',
+    first:'rF',last:'rL',altFirst:'rAltF',altLast:'rAltL',dob:'rDob',gender:'rGen',school:'rSch',schoolGrade:'rSchGr',teacher:'rTch',photo:'rPhotoData',
     parentFirst:'rParFirst',parentLast:'rParLast',parentRelation:'rRel',parentPhone:'rPh',homePhone:'rHomePh',parentEmail:'rEm',maritalStatus:'rMarital',parent2First:'rP2First',parent2Last:'rP2Last',parent2Relation:'rP2Rel',parent2Phone:'rP2Ph',parent2Email:'rP2Em',
     street:'rSt',city:'rCi',state:'rSa',zip:'rZp',
+    opStreet:'rOpSt',opCity:'rOpCi',opState:'rOpSa',opZip:'rOpZp',
+    opSummerStreet:'rOpSumSt',opSummerCity:'rOpSumCi',opSummerState:'rOpSumSa',opSummerZip:'rOpSumZp',
     summerStreet:'rSumSt',summerCity:'rSumCi',summerState:'rSumSa',summerZip:'rSumZp',summerPhone:'rSumPh',
     emName:'rEmN',emRelation:'rEmR',emPhone:'rEmPh',
-    allergies:'rAlg',medications:'rMed',dietary:'rDit',medicalNotes:'rMdN',
+    allergies:'rAlg',medications:'rMed',dietary:'rDit',physicianName:'rDocN',physicianPhone:'rDocP',insuranceCarrier:'rInsC',insurancePolicy:'rInsP',medicalNotes:'rMdN',
     bunkmate:'rBnk',separate:'rSep',shirt:'rShirt',source:'rSrc',notes:'rNotes'
 };
 var FIELD_DEFAULT_LABEL={
-    first:'First Name',last:'Last Name',dob:'Date of Birth',gender:'Gender',school:'School Name',schoolGrade:'School Grade',teacher:'Teacher',photo:'Camper Photo',
+    first:'First Name',last:'Last Name',altFirst:'Alternate First Name',altLast:'Alternate Last Name',dob:'Date of Birth',gender:'Gender',school:'School Name',schoolGrade:'School Grade',teacher:'Teacher',photo:'Camper Photo',
     parentFirst:'Parent / Guardian First Name',parentLast:'Parent / Guardian Last Name',parentRelation:'Relationship',parentPhone:'Cell Phone',homePhone:'Home Phone',parentEmail:'Email',maritalStatus:'Marital Status',parent2First:'Second Parent / Guardian First Name',parent2Last:'Second Parent / Guardian Last Name',parent2Relation:'Relationship',parent2Phone:'Second Parent Phone',parent2Email:'Second Parent Email',
     street:'Street',city:'City',state:'State',zip:'ZIP',
+    opStreet:"Other Parent's Street",opCity:"Other Parent's City",opState:"Other Parent's State",opZip:"Other Parent's ZIP",
+    opSummerStreet:"Other Parent's Summer Street",opSummerCity:"Other Parent's Summer City",opSummerState:"Other Parent's Summer State",opSummerZip:"Other Parent's Summer ZIP",
     summerStreet:'Summer Street',summerCity:'Summer City',summerState:'Summer State',summerZip:'Summer ZIP',summerPhone:'Summer Phone',
     emName:'Emergency Contact Name',emRelation:'Relationship',emPhone:'Phone',
-    allergies:'Allergies',medications:'Medications',dietary:'Dietary Restrictions',medicalNotes:'Additional Medical Notes',
+    allergies:'Allergies',medications:'Medications',dietary:'Dietary Restrictions',physicianName:'Physician Name',physicianPhone:'Physician Phone',insuranceCarrier:'Insurance Carrier',insurancePolicy:'Policy Number',medicalNotes:'Additional Medical Notes',
     bunkmate:'Bunkmate Request',separate:'Separation Request',shirt:'T-Shirt Size',source:'How did you hear about us?',notes:'Additional Notes'
 };
 // Defaults match the hardcoded validation this page shipped with — a camp
 // that never opens the Advanced tab sees byte-identical required-ness.
 var FIELD_REQUIRED_STATE={
+    altFirst:false,altLast:false,physicianName:false,physicianPhone:false,insuranceCarrier:false,insurancePolicy:false,opStreet:false,opCity:false,opState:false,opZip:false,opSummerStreet:false,opSummerCity:false,opSummerState:false,opSummerZip:false,
     first:true,last:true,dob:true,gender:false,school:false,schoolGrade:false,teacher:false,photo:false,
     parentFirst:true,parentLast:true,parentRelation:false,parentPhone:true,homePhone:false,parentEmail:true,maritalStatus:false,parent2First:false,parent2Last:false,parent2Relation:false,parent2Phone:false,parent2Email:false,
     street:true,city:true,state:false,zip:true,
@@ -364,19 +379,32 @@ var FIELD_ENABLED_STATE={};
 // visually hidden), or a camp that disables e.g. Camper Info leaves the form
 // permanently stuck asking for a field nobody can see or fill in.
 var FIELD_TO_SECTION={
-    first:'camper',last:'camper',dob:'camper',gender:'camper',school:'camper',schoolGrade:'camper',teacher:'camper',photo:'camper',
+    first:'camper',last:'camper',altFirst:'camper',altLast:'camper',dob:'camper',gender:'camper',school:'camper',schoolGrade:'camper',teacher:'camper',photo:'camper',
     parentFirst:'parent',parentLast:'parent',parentRelation:'parent',parentPhone:'parent',homePhone:'parent',parentEmail:'parent',maritalStatus:'parent',parent2First:'parent',parent2Last:'parent',parent2Relation:'parent',parent2Phone:'parent',parent2Email:'parent',
     street:'address',city:'address',state:'address',zip:'address',
     summerStreet:'summerAddress',summerCity:'summerAddress',summerState:'summerAddress',summerZip:'summerAddress',summerPhone:'summerAddress',
     emName:'emergency',emRelation:'emergency',emPhone:'emergency',
-    allergies:'medical',medications:'medical',dietary:'medical',medicalNotes:'medical',
+    allergies:'medical',medications:'medical',dietary:'medical',physicianName:'medical',physicianPhone:'medical',insuranceCarrier:'medical',insurancePolicy:'medical',medicalNotes:'medical',
+    opStreet:'otherParent',opCity:'otherParent',opState:'otherParent',opZip:'otherParent',
+    opSummerStreet:'otherParent',opSummerCity:'otherParent',opSummerState:'otherParent',opSummerZip:'otherParent',
     bunkmate:'preferences',separate:'preferences',shirt:'preferences',source:'preferences',notes:'preferences'
 };
 
 // Baseline required-state this page shipped with — applyFieldConfig resets
 // to this before applying overrides, so it's safe to call repeatedly with a
 // changing draft config (live preview) rather than only ever adding hides.
-var FIELD_REQUIRED_DEFAULT={first:true,last:true,dob:true,gender:false,school:false,schoolGrade:false,teacher:false,photo:false,parentFirst:true,parentLast:true,parentRelation:false,parentPhone:true,homePhone:false,parentEmail:true,maritalStatus:false,parent2First:false,parent2Last:false,parent2Relation:false,parent2Phone:false,parent2Email:false,street:true,city:true,state:false,zip:true,summerStreet:false,summerCity:false,summerState:false,summerZip:false,summerPhone:false,emName:true,emRelation:false,emPhone:true,allergies:false,medications:false,dietary:false,medicalNotes:false,bunkmate:false,separate:false,shirt:false,source:false,notes:false};
+var FIELD_REQUIRED_DEFAULT={altFirst:false,altLast:false,physicianName:false,physicianPhone:false,insuranceCarrier:false,insurancePolicy:false,opStreet:false,opCity:false,opState:false,opZip:false,opSummerStreet:false,opSummerCity:false,opSummerState:false,opSummerZip:false,first:true,last:true,dob:true,gender:false,school:false,schoolGrade:false,teacher:false,photo:false,parentFirst:true,parentLast:true,parentRelation:false,parentPhone:true,homePhone:false,parentEmail:true,maritalStatus:false,parent2First:false,parent2Last:false,parent2Relation:false,parent2Phone:false,parent2Email:false,street:true,city:true,state:false,zip:true,summerStreet:false,summerCity:false,summerState:false,summerZip:false,summerPhone:false,emName:true,emRelation:false,emPhone:true,allergies:false,medications:false,dietary:false,medicalNotes:false,bunkmate:false,separate:false,shirt:false,source:false,notes:false};
+// Fields a camp has to ASK for, mirroring the `off` flag in Me's
+// FC_FIELD_CATALOG. Without this every field added to the catalog would
+// appear on every camp's form the day it shipped, because "no config" has
+// always meant "show it".
+var FIELD_DEFAULT_OFF={
+    altFirst:true,altLast:true,
+    physicianName:true,physicianPhone:true,insuranceCarrier:true,insurancePolicy:true,
+    bunkmate:true,separate:true,
+    opSummerStreet:true,opSummerCity:true,opSummerState:true,opSummerZip:true
+};
+
 function applyFieldConfig(fields,sectionsDisabled){
     fields=fields||{}; sectionsDisabled=sectionsDisabled||{};
     Object.keys(FIELD_ELEMENT_MAP).forEach(function(fid){
@@ -385,7 +413,7 @@ function applyFieldConfig(fields,sectionsDisabled){
         var fg=input.closest('.fg');
         var cfg=fields[fid];
         var sectionOff=sectionsDisabled[FIELD_TO_SECTION[fid]];
-        var enabled=sectionOff?false:(cfg?(cfg.enabled!==false):true);
+        var enabled=sectionOff?false:(cfg&&cfg.enabled!=null?cfg.enabled!==false:!FIELD_DEFAULT_OFF[fid]);
         FIELD_ENABLED_STATE[fid]=enabled;
         if(!enabled){ if(fg)fg.style.display='none'; return; }
         if(fg)fg.style.display='';
@@ -650,6 +678,17 @@ function applyFormConfig(fc){
     // left it visible. Force it off unless explicitly enabled, then let
     // regMaritalChanged() layer its own conditional (Divorced/Separated
     // only) on top.
+    // Required Documents defaults OFF for the same reason Other Parent does:
+    // a camp that has not said which documents it wants gets an upload box
+    // asking for nothing in particular, and families send the wrong thing.
+    (function(){
+        var docCard=document.getElementById('docCard');
+        if(!docCard)return;
+        var docsOn=!!(fc.sections&&fc.sections.documents&&fc.sections.documents.enabled);
+        docCard.style.display=docsOn?'':'none';
+        if(docsOn)sectionsDisabled.documents=false; else sectionsDisabled.documents=true;
+        if(docsOn)_regRenderRequiredDocs(fc);
+    })();
     (function(){
         var opCard=document.getElementById('otherParentCard');
         if(!opCard)return;
@@ -877,6 +916,66 @@ function updatePrice(){
 }
 
 
+// ─── REQUIRED DOCUMENTS ───────────────────────────────────────
+//
+// "Upload any required documents" is not a request — it is a hint, and
+// families answer it by uploading nothing, or by uploading the wrong thing and
+// finding out in July. A camp that needs an immunization record and an
+// insurance card should be able to say exactly that, and the form should say
+// which ones are still missing.
+
+function _regRequiredDocs(fc){
+    var list=(fc&&fc.documents)||(_currentFC&&_currentFC.documents)||[];
+    return Array.isArray(list)?list.filter(function(d){return d&&d.label}):[];
+}
+
+function _regRenderRequiredDocs(fc){
+    var box=document.getElementById('reqDocList');
+    var generic=document.getElementById('docGenericNote');
+    if(!box)return;
+    var docs=_regRequiredDocs(fc);
+    if(!docs.length){ box.innerHTML=''; if(generic)generic.style.display=''; return; }
+    if(generic)generic.style.display='none';
+
+    box.innerHTML='<p style="font-size:.82rem;color:var(--s600);margin-bottom:8px;line-height:1.6">'
+        +'Please upload each of these. Choose what a file is after you add it.</p>'
+        +'<ul style="list-style:none;padding:0;margin:0 0 12px">'
+        +docs.map(function(d){
+            var have=uploads.some(function(u){return u.docId===d.id});
+            return '<li data-reqdoc="'+esc(d.id)+'" style="display:flex;gap:9px;align-items:baseline;padding:5px 0;font-size:.85rem">'
+                +'<span style="color:'+(have?'var(--ok)':'var(--s300)')+';font-weight:700">'+(have?'\u2713':'\u25cb')+'</span>'
+                +'<span style="color:var(--s700)">'+esc(d.label)+(d.required===false?'':' <span class="rq">*</span>')+'</span>'
+                +(d.note?'<span style="color:var(--s400);font-size:.78rem">'+esc(d.note)+'</span>':'')
+                +'</li>';
+        }).join('')+'</ul>';
+}
+
+/** The select that lets a parent say which document a file is. */
+function _regDocSelect(idx){
+    var docs=_regRequiredDocs();
+    if(!docs.length)return '';
+    var cur=(uploads[idx]||{}).docId||'';
+    return '<select class="fi" style="max-width:220px;font-size:.78rem;padding:4px 8px" onchange="_regSetDocKind('+idx+',this.value)">'
+        +'<option value="">What is this?</option>'
+        +docs.map(function(d){
+            return '<option value="'+esc(d.id)+'"'+(cur===d.id?' selected':'')+'>'+esc(d.label)+'</option>';
+        }).join('')+'</select>';
+}
+window._regSetDocKind=function(idx,docId){
+    if(uploads[idx])uploads[idx].docId=docId;
+    renderUploads();
+    _regRenderRequiredDocs();
+};
+
+/** Which required documents still have no file against them. */
+function _regMissingDocs(){
+    if(!(_currentFC.sections&&_currentFC.sections.documents&&_currentFC.sections.documents.enabled))return [];
+    return _regRequiredDocs().filter(function(d){
+        if(d.required===false)return false;
+        return !uploads.some(function(u){return u.docId===d.id});
+    });
+}
+
 // ─── DEPOSIT TO REGISTER ──────────────────────────────────────
 //
 // The camp's own rule lives in enrollSettings.depositPolicy and the
@@ -1027,8 +1126,11 @@ window.removeUpload=function(i){uploads.splice(i,1);renderUploads()};
 function renderUploads(){
     document.getElementById('upFiles').innerHTML=uploads.map(function(u,i){
         var sz=u.size<1024?u.size+'B':u.size<1048576?Math.round(u.size/1024)+'KB':Math.round(u.size/1048576*10)/10+'MB';
-        return'<div class="up-file"><span style="font-size:14px">📄</span><span class="nm">'+esc(u.name)+'</span><span style="color:var(--s400);font-size:.72rem">'+sz+'</span><button class="rm" onclick="removeUpload('+i+')">✕</button></div>';
+        return'<div class="up-file"><span style="font-size:14px">📄</span><span class="nm">'+esc(u.name)+'</span><span style="color:var(--s400);font-size:.72rem">'+sz+'</span>'+_regDocSelect(i)+'<button class="rm" onclick="removeUpload('+i+')">✕</button></div>';
     }).join('');
+    // A tick moves to the checklist above as soon as a file is named, so the
+    // parent can see what is still outstanding without scrolling back.
+    try{ _regRenderRequiredDocs(); }catch(_){}
 }
 
 // ─── CAMPER PHOTO ────────────────────────────────────────────
@@ -1167,6 +1269,10 @@ window.submitApp=async function(){
         }
     }
     if(!selSess&&_pickerItems().length)return showErr('Select a session.');
+    // Named documents are a real requirement, not a hint. Only the ones the
+    // camp marked required block, and only when the section is on.
+    var _missDocs=_regMissingDocs();
+    if(_missDocs.length)return showErr('Still needed: '+_missDocs.map(function(d){return d.label}).join(', ')+'.');
     for(var si=0;si<siblings.length;si++){if(!siblings[si].first||!siblings[si].last)return showErr('Enter name for Camper '+(si+2)+'.')}
     // Signature/agreement is only required when the camp has that section on
     // — a camp that turns it off shouldn't get a form nobody can submit.
@@ -1247,7 +1353,13 @@ window.submitApp=async function(){
                 summerZip:_summerSame?zp:v('rSumZp'),
                 summerPhone:v('rSumPh'),
                 emergencyName:emN,emergencyPhone:emPh,emergencyRel:v('rEmR'),
+                altFirstName:v('rAltF'),altLastName:v('rAltL'),
                 allergies:v('rAlg'),medications:v('rMed'),dietary:v('rDit'),medicalNotes:v('rMdN'),
+                physicianName:v('rDocN'),physicianPhone:v('rDocP'),
+                insuranceCarrier:v('rInsC'),insurancePolicy:v('rInsP'),
+                otherParentAddress:{street:v('rOpSt'),city:v('rOpCi'),state:v('rOpSa'),zip:v('rOpZp'),
+                    summerSameAsHome:!!(document.getElementById('rOpSummerSame')||{}).checked,
+                    summerStreet:v('rOpSumSt'),summerCity:v('rOpSumCi'),summerState:v('rOpSumSa'),summerZip:v('rOpSumZp')},
                 bunkmate:v('rBnk'),separateFrom:v('rSep'),tshirtSize:v('rShirt'),source:v('rSrc'),notes:v('rNotes'),
                 session:selSess,sessionKind:selSessKind,sessionTuition:sessObj.tuition||0,
                 paymentMethod:selPM,paymentStatus:'pending',paymentAmount:0,
@@ -1260,7 +1372,7 @@ window.submitApp=async function(){
                 discount:discount.active?{code:discount.code,label:discount.label,pct:discount.pct,amt:discount.amt}:null,
                 signature:sigData,
                 smsEmailConsent:true,
-                documents:uploads.map(function(u){return{name:u.name,size:u.size,data:u.data}}),
+                documents:uploads.map(function(u){return{name:u.name,size:u.size,data:u.data,docId:u.docId||'',docLabel:(_regRequiredDocs().filter(function(d){return d.id===u.docId})[0]||{}).label||''}}),
                 status:'applied',appliedDate:new Date().toISOString().split('T')[0],appliedTime:new Date().toISOString(),
                 formsRequired:3,formsCompleted:uploads.length>0?1:0,
                 siblingGroup:appIds.length>1?appIds[0]:null,

@@ -159,3 +159,89 @@ test('the office can set it and see who has not paid', () => {
     const fn = me.slice(me.indexOf('async function markDepositPaid'), me.indexOf('function openDepositPolicy'));
     assert.ok(!/finPayments\.push/.test(fn), 'marking a deposit paid must not create a payment');
 });
+
+// ── the form builder ────────────────────────────────────────────────────────
+test('the field catalog covers what the form actually asks', () => {
+    // A field on the form with no catalog entry cannot be renamed, hidden or
+    // made required — it is simply outside the camp's control, which is what
+    // "the advanced tab is missing a lot" means in practice.
+    const me = fs.readFileSync(path.join(ROOT, 'campistry_me.js'), 'utf8');
+    const reg = fs.readFileSync(path.join(ROOT, 'campistry_register.html'), 'utf8');
+
+    const mapBlock = reg.slice(reg.indexOf('var FIELD_ELEMENT_MAP={'),
+                               reg.indexOf('var FIELD_DEFAULT_LABEL='));
+    const formFields = [...mapBlock.matchAll(/(\w+)\s*:\s*'r\w+'/g)].map((m) => m[1]);
+    const catalog = me.slice(me.indexOf('var FC_FIELD_CATALOG={'), me.indexOf('function getFormConfig'));
+
+    const missing = formFields.filter((f) => !new RegExp("id:'" + f + "'").test(catalog));
+    assert.deepStrictEqual(missing, [], 'these form fields are not configurable: ' + missing.join(', '));
+
+    // And the other way: Other Parent's Address was a section toggle with no
+    // fields behind it, so a camp could show it without choosing what it asked.
+    assert.match(catalog, /otherParent:\s*\[/);
+    ['opStreet', 'opCity', 'opState', 'opZip'].forEach((f) => {
+        assert.match(catalog, new RegExp("id:'" + f + "'"), f + ' is not configurable');
+    });
+});
+
+test('a field a camp has not asked for stays off', () => {
+    // Both sides have to agree, or a field added to the catalog appears on
+    // every camp's live form the day it ships.
+    const me = fs.readFileSync(path.join(ROOT, 'campistry_me.js'), 'utf8');
+    const reg = fs.readFileSync(path.join(ROOT, 'campistry_register.html'), 'utf8');
+    const catalog = me.slice(me.indexOf('var FC_FIELD_CATALOG={'), me.indexOf('function getFormConfig'));
+    const offInCatalog = [...catalog.matchAll(/id:'(\w+)'[^}]*off:true/g)].map((m) => m[1]);
+
+    assert.ok(offInCatalog.includes('bunkmate') && offInCatalog.includes('separate'),
+        'bunk requests must default off — a request on a form is a promise a parent hears');
+
+    const offOnForm = reg.slice(reg.indexOf('var FIELD_DEFAULT_OFF={'), reg.indexOf('function applyFieldConfig'));
+    offInCatalog.forEach((f) => {
+        assert.match(offOnForm, new RegExp(f + ':\\s*true'), f + ' is off in the catalog but shows on the form');
+    });
+    // And the renderer must read the flag at all.
+    assert.match(me, /cfg\.enabled!=null\?cfg\.enabled!==false:!f\.off/);
+});
+
+test('required documents default off and are named, not hinted', () => {
+    const me = fs.readFileSync(path.join(ROOT, 'campistry_me.js'), 'utf8');
+    const reg = fs.readFileSync(path.join(ROOT, 'campistry_register.html'), 'utf8');
+
+    assert.match(me, /\{key:'documents',label:'Required Documents'[^}]*default:false\}/,
+        'the documents section must default off');
+    // Each document needs a stable id, or renaming one orphans every file
+    // already filed under it.
+    assert.match(me, /var id=el\.dataset\.id\|\|\('doc_'/);
+    assert.match(me, /required:!!el\.querySelector\('\.fcDocReq'\)/);
+    // The form lists them by name and blocks on the required ones.
+    assert.match(reg, /_regRenderRequiredDocs/);
+    assert.match(reg, /_regMissingDocs/);
+    assert.match(reg, /Still needed: /);
+});
+
+test('the post-acceptance form carries documents, payment and the deposit', () => {
+    const me = fs.readFileSync(path.join(ROOT, 'campistry_me.js'), 'utf8');
+    const pa = fs.readFileSync(path.join(ROOT, 'campistry_postaccept.html'), 'utf8');
+
+    const paf = me.slice(me.indexOf('var PAF_SECTIONS='), me.indexOf('var PAF_FIELD_CATALOG='));
+    assert.match(paf, /key:'documents'[^}]*default:false/, 'must default off — this form was choices-only');
+    assert.match(paf, /key:'payment'[^}]*default:false/);
+
+    assert.match(pa, /id="docCard"/);
+    assert.match(pa, /id="payCard"/);
+    assert.match(pa, /id="depositBox"/);
+    assert.match(pa, /_paMissingDocs/, 'required documents must block here too');
+    assert.match(pa, /campistry_deposit_policy\.js/, 'the deposit module is never loaded');
+    // One document list, shared. Two would drift the moment one was edited.
+    assert.match(me, /documents:\(\(getFormConfig\(\)\|\|\{\}\)\.documents\)\|\|\[\]/);
+});
+
+test('the deposit screen says when the public form cannot see it', () => {
+    // The one failure a camp will actually hit, and the one they cannot
+    // diagnose: the policy saves, and parents are never shown it.
+    const me = fs.readFileSync(path.join(ROOT, 'campistry_me.js'), 'utf8');
+    assert.match(me, /async function _dpCheckReach/);
+    assert.match(me, /rpc\('get_public_form_config'/);
+    assert.match(me, /hasOwnProperty\.call\(d,'depositPolicy'\)/);
+    assert.match(me, /164_public_deposit_policy\.sql/, 'it must name the migration to apply');
+});
