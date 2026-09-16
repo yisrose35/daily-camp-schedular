@@ -131,22 +131,34 @@ const path = require('node:path');
 const ROOT = path.join(__dirname, '..');
 
 test('the public form is actually told the rule', () => {
+    // The camp-facing half is live: the policy is configured in the builder,
+    // stamped onto applications, and migration 164 is ready to hand it to the
+    // public form. The FORM half is not wired up — see the note below.
     const sql = fs.readFileSync(path.join(ROOT, 'migrations/164_public_deposit_policy.sql'), 'utf8');
     assert.match(sql, /'depositPolicy', coalesce\(kv_value #> '\{enrollSettings,depositPolicy\}'/);
     assert.match(sql, /GRANT EXECUTE ON FUNCTION public\.get_public_form_config\(uuid, text\) TO anon/);
     assert.match(sql, /NOTIFY pgrst/);
-    // Only the rule crosses to an anonymous page — never any family's standing
-    // against it.
+    // Only the rule crosses to an anonymous page — never any family's
+    // standing against it.
     assert.ok(!/families|finance|payments/i.test(sql.split('RETURN jsonb_build_object')[1] || ''),
         'the public payload must not carry family data');
-
-    const reg = fs.readFileSync(path.join(ROOT, 'campistry_register.html'), 'utf8');
-    assert.match(reg, /d\.depositPolicy/, 'the form never reads it out of the payload');
-    assert.match(reg, /campistry_deposit_policy\.js\?v=/, 'the form never loads the module');
-    assert.match(reg, /_regDepositStamp/, 'nothing is stamped on the application');
-    // The amount is a share of the price, so it has to move when the price does.
-    assert.match(reg, /_regRenderDeposit\(\)/);
 });
+
+// NOTE — campistry_register.html is back at 04fb437, the last version before
+// any of this week's work touched it, because the form broke in the browser
+// and stayed broken through one narrower rollback. Everything this week added
+// to that ONE file is gone: the deposit box and its stamp, the named document
+// checklist, and the alternate-name/physician/insurance/other-parent fields.
+// The only difference from 04fb437 is an integration_hooks cache-bust.
+//
+// The camp-facing half is untouched and still works: the deposit is set in
+// the form builder, stamped on applications, shown and settled in
+// Registration, and carried on the post-acceptance form. What is missing is
+// the public form asking for it.
+//
+// Do not re-land any of it without the browser's actual error. Three rounds
+// of reasoning from the file alone — balanced markup, parsing scripts, a
+// stubbed-DOM run that completes — all said it was fine, and it was not.
 
 test('the office can set it and see who has not paid', () => {
     const me = fs.readFileSync(path.join(ROOT, 'campistry_me.js'), 'utf8');
