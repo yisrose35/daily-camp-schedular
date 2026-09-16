@@ -131,6 +131,29 @@ body{font-family:var(--font);background:var(--s50);color:var(--s800);-webkit-fon
 <script src="supabase-js@2.js?v=20260903-03" onerror="console.log('[StaffApply] supabase-js not loaded')"></script>
 <script src="supabase_client.js?v=20260903-03" onerror="console.log('[StaffApply] supabase_client not loaded')"></script>
 <script>
+// A submission id is a BEARER TOKEN, not a row number: it is what
+// get_postaccept_bootstrap / get_contract_offer accept in place of a login,
+// and what they hand a family's or a staff member's file back to — payType and
+// payRate included. The old scheme was 'enr_'+Date.now()+'_'+6 base36 chars:
+// about 2.2 billion combinations, narrowed by a timestamp anyone can bracket.
+// crypto.getRandomValues gives 122 bits and ends the question. Math.random is
+// the last resort only — it is not a CSPRNG and must never be the normal path.
+// Migration 184 enforces the length server-side, because a convention living in
+// two HTML files is one edit from being gone.
+function _campistrySubmissionId(prefix){
+    try{
+        if(window.crypto&&typeof window.crypto.randomUUID==='function')
+            return prefix+'_'+window.crypto.randomUUID();
+        if(window.crypto&&typeof window.crypto.getRandomValues==='function'){
+            var b=new Uint8Array(20);window.crypto.getRandomValues(b);
+            return prefix+'_'+Array.from(b).map(function(x){return x.toString(16).padStart(2,'0')}).join('');
+        }
+    }catch(e){}
+    console.warn('[Campistry] no secure RNG available — submission id is weak');
+    return prefix+'_'+Date.now()+'_'+Math.random().toString(36).slice(2,10)
+                  +Math.random().toString(36).slice(2,10)+Math.random().toString(36).slice(2,10);
+}
+
 (function(){
 // The camp this form belongs to — travels in the URL because a first-time
 // applicant has no session for getCampId() to resolve from (see migration
@@ -657,7 +680,7 @@ window.submitApp=async function(){
         return {label:sec.label,answers:answers,fieldLabels:(sec.fields||[]).map(function(f){return f.label;})};
     });
 
-    var id='staff_'+Date.now()+'_'+Math.random().toString(36).slice(2,6);
+    var id=_campistrySubmissionId('staff');
     var rec={
         first:first,last:last,name:first+' '+last,email:email,phone:phone,homePhone:v('aHomeP'),dob:v('aDob'),
         street:v('aSt'),city:v('aCi'),state:v('aSa'),zip:v('aZp'),photo:photoData||'',

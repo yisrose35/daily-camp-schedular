@@ -35,7 +35,7 @@ const M183 = read('migrations/183_lock_down_camp_scoped_readers.sql');
 
 const MIGRATIONS = fs.readdirSync(path.join(ROOT, 'migrations'))
     .filter(f => /^\d+[a-z]?_.*\.sql$/.test(f))
-    .sort((a, b) => parseInt(a, 10) - parseInt(b, 10));
+    .sort((a, b) => (parseInt(a, 10) - parseInt(b, 10)) || a.localeCompare(b));
 
 /** Every CREATE of a function, in apply order: name -> {args, body}. Last wins. */
 function catalogue() {
@@ -221,6 +221,10 @@ test('no camp-scoped SECURITY DEFINER function is open to anon without a gate', 
         submit_postaccept_response: 'gated by the enrollment id (bearer token)',
         get_contract_offer: 'gated by the staff application id (bearer token)',
         accept_staff_contract: 'gated by the staff application id (bearer token)',
+        get_public_pay_ability:
+            'says only WHETHER a camp can take money online and on which rail — ' +
+            'no account ids, no keys; the public registration page needs it before ' +
+            'anyone has logged in',
         get_posthire_bootstrap: 'gated by the staff application id (bearer token)',
         submit_posthire_response: 'gated by the staff application id (bearer token)',
     };
@@ -260,4 +264,38 @@ test('nothing that WRITES is reachable by anon at all', () => {
     }
     assert.deepStrictEqual(bad, [],
         'anon can call these and they write: ' + bad.join(', '));
+});
+
+// ── 6. migration numbers, because two files sharing one is how this gets lost ─
+
+test('no NEW migration reuses a number', () => {
+    // Migrations are pasted into the SQL Editor by hand, one at a time. Two
+    // files numbered the same means "have I run 165?" has no answer — the exact
+    // problem APPLY_BUNDLE.sql's header describes for 146-151. It also makes
+    // apply ORDER ambiguous for anything that redefines the same object, which
+    // is how a later definition can silently lose to an earlier one.
+    //
+    // It turned out to be widespread — 19 numbers are already reused, going
+    // back to 007. This does not pretend that is fine; it freezes it, so the
+    // debt is recorded and cannot grow while it waits to be paid off.
+    const KNOWN = {
+        '007': 2, '008': 2, '009': 2, '010': 2, '011': 2, '012': 2, '013': 3,
+        '014': 2, '046': 2, '145': 3, '146': 2, '147': 2, '148': 2, '149': 2,
+        '150': 2, '151': 2, '163': 2, '164': 2, '165': 2,
+    };
+    const byNumber = {};
+    for (const f of fs.readdirSync(path.join(ROOT, 'migrations'))) {
+        const m = /^(\d+)[a-z]?_.*\.sql$/.exec(f);
+        if (!m) continue;
+        (byNumber[m[1]] || (byNumber[m[1]] = [])).push(f);
+    }
+    const broken = [];
+    for (const [n, files] of Object.entries(byNumber)) {
+        const allowed = KNOWN[n] || 1;
+        if (files.length > allowed) {
+            broken.push(`${n} is used ${files.length} times (was ${allowed}): ${files.join(', ')}`);
+        }
+    }
+    assert.deepStrictEqual(broken, [],
+        'pick the next unused number instead:\n  ' + broken.join('\n  '));
 });
