@@ -668,3 +668,76 @@ test('the parent summary keeps the shape the portal already renders', () => {
     assert.match(sql, /does NOT\s*--? ?re-add bank deposits|NOT re-add bank deposits/,
         'the double-counting note is gone — check deposits are not added twice');
 });
+
+// ── 11. the ledger must be COMPLETE, not merely present ───────────────────
+//
+// A live bug: a camper was registered on a $2,500 session. Campistry Me showed
+// $2,500; the parent's portal showed nothing. Migration 173 preferred the ledger
+// whenever a family HAD one, and a family can have a ledger that is real but
+// BEHIND — holding last season's entries while a charge posted seconds ago has
+// not reached it. Under-reporting is the worst direction for a balance to fail
+// in: the parent is told they owe less, pays it, and believes they are settled.
+
+test('174 falls back to derived when a billable enrollment is unposted', () => {
+    const sql = fs.readFileSync(
+        path.join(__dirname, '..', 'migrations', '174_ledger_must_be_complete.sql'), 'utf8');
+    assert.match(sql, /family_has_tuition_entry/, 'the per-enrollment check is gone');
+    assert.match(sql, /IF NOT v_complete THEN[\s\S]{0,300}'ledger', false/,
+        'an incomplete ledger no longer falls back — the parent would be under-billed');
+    assert.match(sql, /'ledgerIncomplete', true/,
+        'the gap is not reported, so this would be invisible from the portal again');
+    assert.match(sql, /'unpostedEnrollments', v_missing/,
+        'which enrollments are missing is no longer returned');
+});
+
+test('the completeness check is per-enrollment, not a comparison of totals', () => {
+    // Totals cannot work: a withdrawal legitimately makes the derived total
+    // SMALLER than the ledger's (derived drops the tuition, the ledger keeps the
+    // charge and adds a credit), so neither direction of inequality means
+    // "behind". Presence of each enrollment's charge is the only real test.
+    const sql = fs.readFileSync(
+        path.join(__dirname, '..', 'migrations', '174_ledger_must_be_complete.sql'), 'utf8');
+    assert.match(sql, /e->'source'->>'enrollmentId' = p_enr_id/,
+        'the check no longer matches on the enrollment id');
+    assert.match(sql, /jsonb_array_elements\([\s\S]{0,120}v_base->'enrollments'/,
+        'it no longer walks the enrollments the derived figure actually billed');
+});
+
+test('174 keeps 173’s recursion marker, or the rename guard breaks', () => {
+    // 174 replaces the wrapper in place. If it dropped the marker, re-running 173
+    // would rename THIS function aside and build a self-caller.
+    const sql = fs.readFileSync(
+        path.join(__dirname, '..', 'migrations', '174_ledger_must_be_complete.sql'), 'utf8');
+    const body = sql.slice(sql.indexOf('CREATE OR REPLACE FUNCTION public.get_my_balance('));
+    assert.match(body, /LEDGER_WRAPPER_V173/,
+        'the marker is gone — re-running 173 would create infinite recursion');
+});
+
+test('the client posts tuition for an ACCEPTED registration too', () => {
+    // The specific gap: an accepted registration has no families[].camperIds
+    // entry (enrollCamper is the only thing that creates one), so the exact
+    // matcher found nothing and the charge was never posted — while Billing
+    // still showed it via the fuzzy matcher.
+    const ME = fs.readFileSync(path.join(__dirname, '..', 'campistry_me.js'), 'utf8');
+    const fn = ME.slice(ME.indexOf('function buildFamilyLedgers(){'),
+                        ME.indexOf('function PC(){'));
+    assert.match(fn, /if\(!fk&&e\.status==='accepted'\)\{/,
+        'an accepted registration is still skipped — its tuition never reaches the ledger');
+    assert.match(fn, /fk=_resolveFamilyKey\(e\.camperName,/,
+        'it no longer uses the same fuzzy matcher Billing uses');
+});
+
+test('a posting render actually saves, and cannot loop', () => {
+    // buildFamilyLedgers is a READ — search, analytics, finance and Billing all
+    // call it — so posting without saving left the charge in memory only, where
+    // the next hydration dropped it.
+    const ME = fs.readFileSync(path.join(__dirname, '..', 'campistry_me.js'), 'utf8');
+    const fn = ME.slice(ME.indexOf('function buildFamilyLedgers(){'),
+                        ME.indexOf('function PC(){'));
+    assert.match(fn, /if\(_posted\)\{try\{setTimeout\(function\(\)\{try\{save\(\)\}catch\(_\)\{\}\}/,
+        'nothing persists what the render posted');
+    // Only when something was NEW, and postTuition is idempotent, so the save's
+    // own re-render posts nothing and the loop terminates.
+    assert.match(fn, /if\(fk&&families\[fk\]&&_postTuitionFor\(families\[fk\],eid\)\)_posted\+\+;/,
+        'the save is no longer conditional on something actually being posted');
+});

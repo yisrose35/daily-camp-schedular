@@ -120,6 +120,12 @@ MANIFEST = [
     # guarded so re-running cannot make the wrapper call itself.
     ("173_parent_balance_from_ledger",
      "The PARENT's balance comes from the posted ledger too (closes 171's gap)"),
+    # MUST come after 173: it replaces 173's wrapper in place (same marker, so
+    # 173's rename guard keeps working) and adds the completeness test. Without
+    # it a ledger that is merely BEHIND reads as authoritative and under-reports
+    # to the parent — the $2,500 registration that showed as $0.
+    ("174_ledger_must_be_complete",
+     "The parent's balance only trusts a ledger that has every billable enrollment"),
 ]
 
 HEADER = """-- ═══════════════════════════════════════════════════════════════════════════
@@ -452,6 +458,11 @@ UNION ALL SELECT 'the parent balance reads the posted ledger',
              AND EXISTS (SELECT 1 FROM pg_proc WHERE proname='family_ledger_summary')
              AND (SELECT count(*) FROM pg_proc
                    WHERE prosrc LIKE '%LEDGER_WRAPPER_V173%') = 1
+            THEN 'OK' ELSE 'MISSING' END
+UNION ALL SELECT 'the parent balance refuses an incomplete ledger',
+       CASE WHEN EXISTS (SELECT 1 FROM pg_proc WHERE proname='family_has_tuition_entry')
+             AND (SELECT prosrc FROM pg_proc WHERE proname='get_my_balance' LIMIT 1)
+                 LIKE '%ledgerIncomplete%'
             THEN 'OK' ELSE 'MISSING' END
 UNION ALL SELECT 'camp shop settles its orders',
        CASE WHEN EXISTS (SELECT 1 FROM pg_proc WHERE proname='settle_shop_order')

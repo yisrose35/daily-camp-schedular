@@ -11725,12 +11725,32 @@ function buildFamilyLedgers(){
     // render — BillingCore.postTuition is keyed on the enrollment id and refuses
     // a second post, so it cannot double-bill (see rule 2 in its header).
     if(_billingCore()){
+        var _posted=0;
         Object.keys(enrollments||{}).forEach(function(eid){
             var e=enrollments[eid];
             if(!e||(e.status!=='enrolled'&&e.status!=='accepted'))return;
             var fk=_resolveFamilyKeyExact(e.camperName);
-            if(fk&&families[fk])_postTuitionFor(families[fk],eid);
+            // An ACCEPTED registration has no families[].camperIds entry yet —
+            // enrollCamper() is the only thing that creates one — so the exact
+            // matcher finds nothing and the charge was never posted. Billing
+            // still SHOWED it (step 1 below falls back to the fuzzy matcher and
+            // then to a synthetic 'pending_' ledger), but the parent's balance
+            // now comes from the ledger, so a freshly registered camper's
+            // tuition was visible to the camp and invisible to the parent.
+            // Use the same fuzzy matcher Billing uses, for the same reason it
+            // does: a sibling's real family should carry the charge.
+            if(!fk&&e.status==='accepted'){
+                fk=_resolveFamilyKey(e.camperName,
+                    _famItemRaw(e.camperName,e.street,e.city,e.state,e.zip,e.parentName,e.parentEmail));
+            }
+            if(fk&&families[fk]&&_postTuitionFor(families[fk],eid))_posted++;
         });
+        // buildFamilyLedgers is a READ — search, analytics, finance and Billing
+        // all call it — so posting here and not saving left the charge in memory
+        // only, where the next hydration dropped it. Save once, out of band, if
+        // anything was genuinely new. postTuition is idempotent, so the save's
+        // own re-render posts nothing and cannot loop.
+        if(_posted){try{setTimeout(function(){try{save()}catch(_){}} ,0)}catch(_){}}
     }
 
     var ledgers={}; // famKey → {family, entries[], totalCharges, totalPayments, totalGrossPayments, totalRefunds, totalCredits, balance}
