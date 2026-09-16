@@ -11143,8 +11143,40 @@ function autoPromoteWaitlist(sessionName){
     }
 }
 
+/**
+ * How full a session is, counted from the same statuses the server counts
+ * (migration 189): anybody the camp has not turned away.
+ *
+ * Returns null when the session has no capacity set, because an empty box on
+ * the dashboard's session form means UNLIMITED — treating it as zero would
+ * declare every unlimited session full.
+ */
+function _sessionCapacityOf(sessionName){
+    _freshSessions();
+    var ses=(sessions||[]).find(function(x){return x&&x.name===sessionName});
+    var cap=ses?(parseInt(ses.capacity,10)||0):0;
+    if(!(cap>0))return null;
+    var LIVE={applied:1,waitlisted:1,accepted:1,enrolled:1};
+    var taken=0;
+    Object.keys(enrollments||{}).forEach(function(k){
+        var e=enrollments[k];
+        if(e&&e.session===sessionName&&LIVE[String(e.status||'')])taken++;
+    });
+    return {capacity:cap,taken:taken,remaining:Math.max(0,cap-taken),full:taken>=cap};
+}
+
 function enrollCamper(id){
     var e=enrollments[id];if(!e)return;
+    // Over capacity is the office's call to make, not ours — a camp does
+    // squeeze one more in. But it has to be a call, made knowingly: the
+    // number was collected by the dashboard and read by nothing, so a camp
+    // could fill a forty-place session with sixty campers and only find out
+    // when the bunks would not add up.
+    var _cap=_sessionCapacityOf(e.session);
+    if(_cap&&_cap.full&&e.status!=='enrolled'){
+        toast(e.session+' is full ('+_cap.taken+' of '+_cap.capacity+') — enrolling '
+              +(e.camperName||'this camper')+' puts it over capacity','error');
+    }
     e.status='enrolled';
     // addApplication()/addStaffApp()/reEnrollCamper() all call this before
     // reading `sessions` — enrollCamper() didn't, so a Me tab left open since

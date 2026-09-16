@@ -210,6 +210,13 @@ test('no camp-scoped SECURITY DEFINER function is open to anon without a gate', 
         get_public_form_config:
             'the public registration/staff form itself — p_kind is just which of ' +
             'the two, not a secret, and the form is meant to be open',
+        session_capacity_state:
+            'how many places are left in each session — the public registration ' +
+            'form has to say "Full, join the waitlist" BEFORE anyone fills ' +
+            'anything in, and before anyone has logged in. It does return a head ' +
+            'count per session, which is the one thing it discloses; that is what ' +
+            'a camp puts on its own website, and it carries no camper, parent or ' +
+            'family data of any kind (asserted in tests/session_capacity.test.js)',
         // These four are gated by an id that acts as a bearer token: an
         // enrollment id ('enr_<ms>_<6 base36>') or a staff application id
         // ('staff_<ms>_<4 base36>'), both minted client-side by the public

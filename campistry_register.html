@@ -28,6 +28,9 @@ body{font-family:var(--font);background:var(--s50);color:var(--s800);-webkit-fon
 .fr3{display:flex;gap:10px}.fr3>*{flex:1;min-width:0}
 /* Session */
 .ss{border:1.5px solid var(--s200);border-radius:var(--r);padding:12px;cursor:pointer;transition:all .15s;position:relative;margin-bottom:6px}
+/* A full session stays SELECTABLE — applying joins the waitlist, which is the
+   whole point. It just has to stop looking like an ordinary open place. */
+.ss-full{background:#FFFBEB;border-color:#FDE68A}
 .ss:hover{border-color:var(--me);background:rgba(217,119,6,.02)}
 .ss.sel{border-color:var(--me);background:rgba(217,119,6,.04);box-shadow:0 0 0 3px rgba(217,119,6,.1)}
 .ss.sel::after{content:'✓';position:absolute;top:10px;right:12px;width:20px;height:20px;border-radius:50%;background:var(--me);color:#fff;font-size:11px;font-weight:700;display:flex;align-items:center;justify-content:center}
@@ -357,7 +360,9 @@ function _pickerItems(){
         var ids=b.sessionIds||[];
         if(ids.length<2||!ids.every(function(id){return openIds[id]}))return;
         var names=ids.map(function(id){return byId[id]&&byId[id].name}).filter(Boolean);
-        items.push({kind:'bundle',name:b.name,dates:names.join(' + '),tuition:b.price,earlyBird:0,earlyBirdDeadline:''});
+        // sessionNames so a bundle can be checked against the capacity of each
+        // session it covers — it is full the moment any one of them is.
+        items.push({kind:'bundle',name:b.name,sessionNames:names,dates:names.join(' + '),tuition:b.price,earlyBird:0,earlyBirdDeadline:''});
     });
     return items;
 }
@@ -856,6 +861,19 @@ async function _loadFromCloud(campId){
     }
     try{
         var res=await client.rpc('get_public_form_config',{p_camp_id:campId,p_kind:'registration'});
+        // How full each session is (migration 189). Fetched separately from the
+        // form config because it is a live count, not configuration — and
+        // fetched at all because a session capacity was collected by the
+        // dashboard and enforced by nothing, so a camp could take sixty
+        // deposits for forty places and find out in August.
+        try{
+            var capRes=await client.rpc('session_capacity_state',{p_camp_id:campId});
+            var capD=capRes&&capRes.data;
+            if(capD&&capD.success&&Array.isArray(capD.sessions)){
+                _sessCapacity={};
+                capD.sessions.forEach(function(x){if(x&&x.name)_sessCapacity[x.name]=x});
+            }
+        }catch(e){ console.warn('[Register] capacity:',e&&e.message); }
         var d=res&&res.data;
         if(res&&res.error){console.warn('[Register] get_public_form_config failed:',res.error.message);return;}
         if(!d||d.success===false){
@@ -905,6 +923,12 @@ if(new URLSearchParams(window.location.search).get('preview')==='1'){
     try{ _previewSrc.postMessage({type:'campistry-form-preview-ready'},'*'); }catch(e){}
 }
 
+// name -> {capacity, taken, remaining, full}. Empty until the cloud answers:
+// an unknown capacity must read as "no limit stated", never as "full", or a
+// slow network would close registration.
+var _sessCapacity={};
+function _capOf(name){ return _sessCapacity[name]||null; }
+function _isFull(name){ var c=_capOf(name); return !!(c&&c.full); }
 function renderSessions(){
     var c=document.getElementById('sessList');
     var items=_pickerItems();
@@ -916,7 +940,22 @@ function renderSessions(){
         var today=new Date().toISOString().split('T')[0];
         var eb=s.earlyBird&&(!s.earlyBirdDeadline||today<=s.earlyBirdDeadline);
         var bundleTag=s.kind==='bundle'?'<span class="ss-bundle-tag">BUNDLE</span>':'';
-        return'<div class="ss" id="ss_'+i+'" onclick="window._selSess('+i+')"><div class="ss-nm">'+esc(s.name)+' '+bundleTag+'</div>'+(s.dates?'<div class="ss-meta">'+esc(s.dates)+'</div>':'')+(s.tuition?'<div class="ss-price">'+fm(s.tuition)+'</div>':'')+(eb?'<div class="ss-eb">Early bird: '+fm(s.earlyBird)+(s.earlyBirdDeadline?' until '+s.earlyBirdDeadline:'')+'</div>':'')+'</div>';
+        // A bundle covers several sessions; it is full when ANY of them is.
+        var capNames=(s.kind==='bundle'&&Array.isArray(s.sessionNames))?s.sessionNames:[s.name];
+        var full=capNames.some(_isFull);
+        var left=null;
+        capNames.forEach(function(n){
+            var c=_capOf(n);
+            if(c&&c.remaining!=null&&(left==null||c.remaining<left))left=c.remaining;
+        });
+        // Said before the family types anything, not after they have paid: a
+        // waitlist nobody was warned about reads as a bait and switch.
+        var capLine=full
+            ? '<div class="ss-meta" style="color:#92400E;font-weight:600">Full — you can still apply and join the waitlist</div>'
+            : (left!=null&&left<=5
+                ? '<div class="ss-meta" style="color:#92400E">'+left+' place'+(left===1?'':'s')+' left</div>'
+                : '');
+        return'<div class="ss'+(full?' ss-full':'')+'" id="ss_'+i+'" onclick="window._selSess('+i+')"><div class="ss-nm">'+esc(s.name)+' '+bundleTag+'</div>'+(s.dates?'<div class="ss-meta">'+esc(s.dates)+'</div>':'')+capLine+(s.tuition?'<div class="ss-price">'+fm(s.tuition)+'</div>':'')+(eb?'<div class="ss-eb">Early bird: '+fm(s.earlyBird)+(s.earlyBirdDeadline?' until '+s.earlyBirdDeadline:'')+'</div>':'')+'</div>';
     }).join('');
 }
 
@@ -1984,6 +2023,32 @@ window.submitApp=async function(){
     // Offer to pay, now that there is an application to pay against. Only for
     // a deposit the camp wants up front -- a pay-later one is already tracked
     // as owed and chasing it here would be noise.
+    // A session that filled up between loading this form and submitting it.
+    // The server queued the application instead of refusing it (migration 189),
+    // which is the right answer — but saying nothing would let a parent read
+    // "Received by the camp" as a place confirmed.
+    var _wl=(cloudRes&&cloudRes.waitlisted)||[];
+    if(_wl.length){
+        if(syncNote){
+            syncNote.innerHTML='✓ Received by the camp — '
+                +esc(_wl.join(', '))+(_wl.length===1?' is':' are')+' on the waitlist';
+            syncNote.style.color='#92400E';
+        }
+        var _wlBox=document.getElementById('summaryOut');
+        if(_wlBox){
+            _wlBox.innerHTML='<div style="background:#FFFBEB;border:1px solid #FDE68A;color:#92400E;'
+                +'padding:10px 12px;border-radius:6px;margin-bottom:10px;font-size:.85rem">'
+                +'<strong>'+esc(_wl.join(', '))+'</strong> '+(_wl.length===1?'is':'are')
+                +' on the waitlist — this session filled up. Nothing has been charged, and the camp '
+                +'will be in touch if a place opens up.</div>'+_wlBox.innerHTML;
+        }
+    }
+
+    // Nothing is owed to hold a place that was not given. The server already
+    // zeroes depositRequired on a waitlisted application; this stops the form
+    // asking before it has re-read it.
+    if(_wl.length>=allCampers.length) _regDepStamp.depositRequired=0;
+
     if(_regDepStamp.depositRequired>0&&_regDepStamp.depositTiming!=='later'){
         try{
             _regOfferDepositPayment(_resolvedCampId||campIdParam,appIds[0],
@@ -2046,14 +2111,26 @@ async function _flushEnrollmentsToCloud(campistryMe){
         // server-side — no read-modify-write from this browser, so two
         // families submitting around the same moment can't clobber each other.
         var ids=Object.keys(campistryMe.enrollments||{});
+        var _waitlisted=[];
         for(var j=0;j<ids.length;j++){
             var id=ids[j];
             var res=await client.rpc('submit_public_application',{p_camp_id:campId,p_kind:'enrollments',p_entry_id:id,p_entry:campistryMe.enrollments[id]});
             if(res&&res.error){ console.warn('[Register] Cloud submit failed for',id,res.error.message); return {ok:false,reason:res.error.message}; }
             if(res&&res.data&&res.data.success===false){ console.warn('[Register] Cloud submit rejected for',id,res.data.error); return {ok:false,reason:res.data.error}; }
+            // The session filled up between loading this form and submitting
+            // it. The server queued the application rather than refusing it, so
+            // the family's typing is safe — but they have to be TOLD, and the
+            // local copy has to agree with the server or the confirmation
+            // screen will claim a place that was not given.
+            if(res&&res.data&&res.data.waitlisted){
+                _waitlisted.push(campistryMe.enrollments[id].camperName||'camper');
+                campistryMe.enrollments[id].status='waitlisted';
+                campistryMe.enrollments[id].depositRequired=0;
+            }
         }
-        console.log('[Register] ✓ Application synced to cloud — '+ids.length+' enrollment(s)');
-        return {ok:true};
+        console.log('[Register] ✓ Application synced to cloud — '+ids.length+' enrollment(s)'
+                    +(_waitlisted.length?' ('+_waitlisted.length+' waitlisted)':''));
+        return {ok:true,waitlisted:_waitlisted.slice()};
     }catch(e){ console.warn('[Register] Cloud flush error:',e&&e.message); return {ok:false,reason:e&&e.message}; }
 }
 
