@@ -159,7 +159,7 @@ serve(async (req) => {
 
     // ── the card the processor already accepted ─────────────────────────────
     // The parent settled the card BEFORE this form was submitted
-    // (card-capture-start, migration 188): the processor said yes, the form
+    // (card-capture-start, migration 189): the processor said yes, the form
     // showed a tick, and only then would it let them submit. All that is left
     // is to charge it.
     //

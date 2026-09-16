@@ -1,5 +1,5 @@
 -- =============================================================================
--- Migration 188: capture the card BEFORE the form is submitted.
+-- Migration 189: capture the card BEFORE the form is submitted.
 --
 -- Until now a parent picked "Credit Card", submitted, and only then met the
 -- processor. That is the wrong way round: they find out their card is

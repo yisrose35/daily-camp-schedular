@@ -348,7 +348,7 @@ async function handleLinkPhotoPurchase(
   console.log(`[stripe-webhook] link photo purchase (${meta.kind}) $${(pi.amount || 0) / 100} camp ${campId}: ${error ? "FAILED " + error.message : JSON.stringify(data)}`);
 }
 
-// A card checked on a public registration form (migration 188). The parent is
+// A card checked on a public registration form (migration 189). The parent is
 // still filling the form in, so there is no family and no application to hang
 // this on -- it lands on the capture row keyed by the reference we minted, the
 // form's poll flips to a tick, and the deposit is charged against it once the
@@ -904,7 +904,7 @@ serve(async (req) => {
       } else if (si.metadata?.source === "registration_card_capture") {
         // A card checked on a registration form, before the application
         // exists. There is no family to attach it to yet -- it goes on the
-        // capture row the form is watching (migration 188).
+        // capture row the form is watching (migration 189).
         await handleRegistrationCardCapture(supabase, si);
       } else {
         await handleAutopaySetup(supabase, si);

@@ -787,7 +787,7 @@ test('the check costs nothing and the amount is still not the browser’s', () =
 test('what the form is allowed to learn about a capture', () => {
     // The status RPC is anon, so it must hand back nothing that can move
     // money — a tick, a brand and four digits, which the form prints anyway.
-    const sql = fs.readFileSync(path.join(ROOT, 'migrations/188_registration_card_capture.sql'), 'utf8');
+    const sql = fs.readFileSync(path.join(ROOT, 'migrations/189_registration_card_capture.sql'), 'utf8');
     const rpc = sql.slice(sql.indexOf('CREATE OR REPLACE FUNCTION public.get_card_capture_status'),
                           sql.indexOf('CREATE OR REPLACE FUNCTION public._claim_card_capture'));
     assert.ok(!/customer_ref|method_ref/.test(rpc),

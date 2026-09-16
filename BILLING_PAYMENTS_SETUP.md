@@ -287,9 +287,9 @@ the family first exists, and **never overwrites a card the office already has
 on file**, which was chosen deliberately and may be the one autopay is running
 on.
 
-### Migration 188 — the card is checked before the form is sent
+### Migration 189 — the card is checked before the form is sent
 
-Apply **`migrations/188_registration_card_capture.sql`**, deploy the new
+Apply **`migrations/189_registration_card_capture.sql`**, deploy the new
 **`card-capture-start`** function, and redeploy **`stripe-webhook`**,
 **`cardknox-webhook`** and **`registration-deposit-checkout`**.
 

@@ -335,7 +335,7 @@ serve(async (req) => {
       return text("ok", 200);
     }
 
-    // A registration card CHECK (migration 188). Same cc:save shape as
+    // A registration card CHECK (migration 189). Same cc:save shape as
     // card_save below and moves no money either, but there is no family yet
     // to hang the token on -- the parent is still filling in the form. The
     // token goes onto the capture row, the form's poll flips to a tick, and
