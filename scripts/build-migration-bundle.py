@@ -170,6 +170,10 @@ MANIFEST = [
     # 174, so it has to be the LAST thing that touches either.
     ("178_every_payment_posts_to_the_ledger",
      "Every payment and refund reaches the posted ledger, not just autopay"),
+    # MUST come after 175, whose flag_plan_collection it replaces to add the
+    # attempt count, the retry schedule and the escalation.
+    ("179_dunning_and_card_expiry",
+     "A failing card is chased on a schedule and escalated; an expiring one warns first"),
 ]
 
 HEADER = """-- ═══════════════════════════════════════════════════════════════════════════
@@ -560,6 +564,17 @@ UNION ALL SELECT 'a ledger missing a payment is not trusted',
        CASE WHEN EXISTS (SELECT 1 FROM pg_proc WHERE proname='family_payments_all_posted')
              AND (SELECT prosrc FROM pg_proc WHERE proname='get_my_balance' LIMIT 1)
                  LIKE '%family_payments_all_posted%'
+            THEN 'OK' ELSE 'MISSING' END
+-- 179: a decline has to get louder, and cost less, the longer it goes on.
+UNION ALL SELECT 'a failing card is chased and escalated',
+       CASE WHEN EXISTS (SELECT 1 FROM pg_proc WHERE proname='collection_retry_days')
+             AND EXISTS (SELECT 1 FROM pg_proc WHERE proname='plan_collection_ready')
+             AND (SELECT prosrc FROM pg_proc WHERE proname='flag_plan_collection' LIMIT 1)
+                 LIKE '%escalated%'
+            THEN 'OK' ELSE 'MISSING' END
+UNION ALL SELECT 'an expiring card warns before it declines',
+       CASE WHEN EXISTS (SELECT 1 FROM pg_proc WHERE proname='flag_expiring_cards')
+             AND EXISTS (SELECT 1 FROM pg_proc WHERE proname='card_expiry_status')
             THEN 'OK' ELSE 'MISSING' END
 UNION ALL SELECT 'camp shop settles its orders',
        CASE WHEN EXISTS (SELECT 1 FROM pg_proc WHERE proname='settle_shop_order')

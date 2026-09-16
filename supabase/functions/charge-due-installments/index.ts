@@ -415,6 +415,31 @@ serve(async (req) => {
   for (const row of (rows || [])) {
     const me = (row.value && typeof row.value === "object") ? row.value as Record<string, any> : null;
     if (!me || !me.families) continue;
+
+    // Look AHEAD at the cards, before charging anything with them. A card
+    // expires on a date known the day it was saved, so autopay starting to
+    // decline mid-summer is a failure nobody had to have. This runs here rather
+    // than in its own scheduled function because this one already runs nightly
+    // and already holds every camp's families — a second cron is a second thing
+    // to deploy and a second thing to notice has stopped.
+    //
+    // It reports only what was captured. Stripe gives exp_month/exp_year and
+    // stripe-webhook stores them; the BYOP adapters return a brand and last four
+    // and no expiry, so those cards come back 'unknown' and are deliberately not
+    // warned about. Best-effort: never fail a run over it.
+    try {
+      const { data: exp, error: expErr } = await supabase.rpc("flag_expiring_cards", {
+        p_camp_id: row.camp_id, p_as_of: today, p_days: 30,
+      });
+      if (expErr) {
+        console.warn(`[autopay] camp ${row.camp_id}: card expiry check failed (${expErr.message})`);
+      } else if (exp?.expired || exp?.expiringSoon) {
+        console.log(`[autopay] camp ${row.camp_id}: ${exp.expired} expired card(s), ` +
+          `${exp.expiringSoon} expiring within 30 days`);
+      }
+    } catch (e) {
+      console.warn(`[autopay] camp ${row.camp_id}: card expiry check threw (${(e as Error).message})`);
+    }
     // `me` is read-only from here on: it is the snapshot the due/owed decisions
     // are made from, never what gets written back. Every write goes through
     // recordInstallment, which re-reads the blob under its own lock.
@@ -468,6 +493,22 @@ serve(async (req) => {
         .filter((p: Record<string, any>) => p && Array.isArray(p.dueDates));
       for (const plan of ledgerPlans) {
         if (!plan.autopay || plan.paused) continue;
+
+        // A plan already known to be failing gets chased on a schedule rather
+        // than on every due date (migration 179). Two reasons this check sits
+        // BEFORE the gateway call and not after: most processors bill the camp
+        // for an authorisation whether it approves or declines, so retrying a
+        // closed account daily is a charge for nothing; and a decline still
+        // advances the instalment counter, so an unthrottled dead card burns
+        // through the whole plan in a week of due dates and leaves it reading
+        // finished with the balance untouched.
+        const blocked = plan.collectionBlocked;
+        if (blocked && blocked.nextRetryAt && String(blocked.nextRetryAt) > today) {
+          details.push({ camp: row.camp_id, family: f.name, result: "waiting_to_retry",
+                         reason: blocked.reason, attempts: blocked.attempts,
+                         nextRetryAt: blocked.nextRetryAt });
+          continue;
+        }
 
         const { data: due, error: dueErr } = await supabase.rpc("plan_due_for", {
           p_camp_id: row.camp_id, p_family_key: famKey,

@@ -12261,6 +12261,10 @@ function buildFamilyLedgers(){
             .map(function(p){return p&&p.collectionBlocked?
                 Object.assign({planId:p.id},p.collectionBlocked):null})
             .filter(Boolean);
+        // A card that has expired, or is about to (migration 179). Separate
+        // from the block above because it is the problem BEFORE the problem:
+        // acting on it is what stops the decline happening at all.
+        l.cardExpiry=l.family.cardExpiry||null;
         l.entries.sort(function(a,b){return(a.date||'').localeCompare(b.date||'')});
         // Determine status
         var today=new Date().toISOString().split('T')[0];
@@ -13299,6 +13303,38 @@ function viewFamily(famKey){
 // Plain colored text, no pill/background — used throughout Billing instead
 // of bdg()'s filled rounded badges, which read as too playful for a money
 // screen. Same semantic colors, just quieter.
+// The warning that autopay is not collecting — or is about to stop.
+//
+// The plan carried collectionBlocked since migration 175 and Billing computed
+// it, but nothing ever rendered it: the code even said "show it — a
+// notification alone is missed" above a value no screen used. A plan that has
+// silently collected nothing since June still read as active.
+//
+// Escalated blocks (three consecutive failures) read as an error rather than a
+// warning, and say so, because "declined" and "declined every time for a
+// fortnight" need different words in front of whoever is looking.
+function _collectionWarning(l){
+    if(!l)return '';
+    var out=[];
+    (l.collectionBlocked||[]).forEach(function(b){
+        if(!b)return;
+        var n=Number(b.attempts)||0;
+        var label=b.reason==='no_card'?'No card on file'
+                 :b.reason==='declined'?'Card declined'
+                 :b.reason==='no_processor'?'Processor not connected'
+                 :String(b.reason||'Cannot collect');
+        if(n>1)label+=' ×'+n;
+        if(b.escalated)label='Not collecting — '+label;
+        if(b.nextRetryAt)label+=' · retries '+esc(b.nextRetryAt);
+        out.push(_flatStatus(label,b.escalated?'err':'warn'));
+    });
+    if(l.cardExpiry&&l.cardExpiry.status==='expired')
+        out.push(_flatStatus('Card expired'+(l.cardExpiry.label?' ('+l.cardExpiry.label+')':''),'err'));
+    else if(l.cardExpiry&&l.cardExpiry.status==='expiring')
+        out.push(_flatStatus('Card expires soon'+(l.cardExpiry.label?' ('+l.cardExpiry.label+')':''),'warn'));
+    return out.length?' · '+out.join(' · '):'';
+}
+
 function _flatStatus(label,type){
     var col=type==='ok'?'var(--ok)':type==='err'?'var(--err)':type==='warn'?'var(--warn)':'var(--s500)';
     return '<span style="font-size:.78rem;font-weight:700;color:'+col+'">'+esc(label)+'</span>';
@@ -13466,7 +13502,7 @@ function renderBilling(){
             // only needs to answer "who, and how much."
             h+='<div class="me-card" id="billfam-'+je(l.famKey)+'" style="margin-bottom:10px;cursor:pointer" onclick="CampistryMe.viewFamily(\''+je(l.famKey)+'\')">';
             h+='<div style="display:flex;align-items:center;gap:12px">';
-            h+='<div style="flex:1;min-width:0"><h3 style="margin:0;font-size:.95rem;font-weight:700;color:var(--s800)">'+esc(l.family.name||'')+'</h3><span style="font-size:.75rem;color:var(--s400)">'+esc(camperNames)+'</span> · '+statusBadge+(l.pendingEnrollment?' · '+_flatStatus('Accepted — pending enrollment','warn'):'')+'</div>';
+            h+='<div style="flex:1;min-width:0"><h3 style="margin:0;font-size:.95rem;font-weight:700;color:var(--s800)">'+esc(l.family.name||'')+'</h3><span style="font-size:.75rem;color:var(--s400)">'+esc(camperNames)+'</span> · '+statusBadge+(l.pendingEnrollment?' · '+_flatStatus('Accepted — pending enrollment','warn'):'')+_collectionWarning(l)+'</div>';
             h+='<div style="display:flex;align-items:center;gap:10px;flex-shrink:0">';
             h+='<span style="font-size:1rem;font-weight:800;color:'+(l.balance>0?'var(--err)':'var(--ok)')+'">'+fm(l.balance)+'</span>';
             h+='<span style="font-size:1rem;color:var(--s300)">›</span></div>';
@@ -13513,7 +13549,7 @@ function renderFamilyDetailPage(){
     // easily at a glance, not need squinting.
     h+='<div style="display:flex;justify-content:space-between;align-items:flex-start;gap:16px;flex-wrap:wrap;margin-bottom:16px">';
     h+='<div><h2 style="font-size:1.4rem;font-weight:800;color:var(--s800);margin:0 0 4px">'+esc(l.family.name||'')+'</h2>';
-    h+='<p style="font-size:.88rem;color:var(--s500);margin:0">'+esc(camperNames)+' · '+statusBadge+(l.pendingEnrollment?' · '+_flatStatus('Accepted — pending enrollment','warn'):'')+'</p>';
+    h+='<p style="font-size:.88rem;color:var(--s500);margin:0">'+esc(camperNames)+' · '+statusBadge+(l.pendingEnrollment?' · '+_flatStatus('Accepted — pending enrollment','warn'):'')+_collectionWarning(l)+'</p>';
     // The Zelle/bank memo code. This is the one signal that survives a payer
     // name that doesn't match the household — a business account, a maiden
     // name, a grandparent — because the parent controls it and it names the

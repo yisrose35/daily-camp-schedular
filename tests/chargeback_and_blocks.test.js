@@ -155,8 +155,11 @@ test('the camp is notified, not just the platform', () => {
 test('flag_plan_collection sets, clears, and keeps the original `since`', () => {
     assert.match(SQL, /v_plan - 'collectionBlocked'/, 'a null reason no longer clears the flag');
     // `since` must not reset every night, or nobody can see how long a plan has
-    // been stuck.
-    assert.match(SQL, /v_plan->'collectionBlocked'->>'reason' = p_reason\s*\n?\s*THEN v_plan->'collectionBlocked'->>'since'/,
+    // been stuck. Asserted on the BEHAVIOUR — that the repeat branch carries the
+    // previous block's own `since` forward — rather than on one spelling of it:
+    // 179 rewrote the same logic through v_same/v_prev when it added the attempt
+    // count, and a test that only knew 175's wording called that a regression.
+    assert.match(SQL, /'since',\s*CASE WHEN [^\n]{0,60}THEN [^\n]{0,40}->>'since'/,
         'the since date resets on every run');
 });
 

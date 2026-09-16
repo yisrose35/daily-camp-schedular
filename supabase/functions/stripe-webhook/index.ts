@@ -293,6 +293,12 @@ async function handleAutopaySetup(
   // way for both once a PaymentMethod is attached to a Customer.
   let pmType = "card";
   let pmLabel = "";
+  // The expiry date, which we were fetching and throwing away. A card expires on
+  // a date known the day it is saved, so storing these two numbers is what lets
+  // the camp be warned BEFORE autopay starts declining (migration 179) instead
+  // of finding out through a decline mid-summer.
+  let pmExpMonth: number | null = null;
+  let pmExpYear: number | null = null;
   if (STRIPE_SECRET) {
     try {
       const resp = await fetch(`${STRIPE_API}/payment_methods/${paymentMethodId}`, {
@@ -300,7 +306,11 @@ async function handleAutopaySetup(
       });
       const pm = await resp.json();
       if (pm.type) pmType = pm.type;
-      if (pmType === "card" && pm.card) pmLabel = `${pm.card.brand || "Card"} ···· ${pm.card.last4 || ""}`.trim();
+      if (pmType === "card" && pm.card) {
+        pmLabel = `${pm.card.brand || "Card"} ···· ${pm.card.last4 || ""}`.trim();
+        pmExpMonth = Number(pm.card.exp_month) || null;
+        pmExpYear = Number(pm.card.exp_year) || null;
+      }
       else if (pmType === "us_bank_account" && pm.us_bank_account) pmLabel = `${pm.us_bank_account.bank_name || "Bank"} ···· ${pm.us_bank_account.last4 || ""}`.trim();
     } catch (e) {
       console.warn(`[stripe-webhook] could not fetch payment_method ${paymentMethodId} for label: ${(e as Error).message}`);
@@ -331,6 +341,10 @@ async function handleAutopaySetup(
       last4: (pmLabel.match(/(\d{4})\s*$/) || [])[1] || "",
       label: pmLabel || (pmType === "us_bank_account" ? "Bank account" : "Card on file"),
       addedDate: new Date().toISOString(),
+      // Stored so the camp can be warned before this card starts declining.
+      // Absent for a bank account, which does not expire — card_expiry_status
+      // reads that as 'unknown' and says nothing, which is correct.
+      ...(pmExpMonth && pmExpYear ? { expMonth: pmExpMonth, expYear: pmExpYear } : {}),
     },
     p_default_fields: {
       stripeCustomerId: customerId,
