@@ -105,6 +105,12 @@ MANIFEST = [
     # money on the day but silently break autopay and can erase a canteen sale.
     ("170_atomic_card_on_file_writes",
      "Atomic saved-card writes for families and canteen auto-reload"),
+    # Independent. The family balance stops being re-derived from live
+    # enrollments and becomes a posted, append-only ledger, so removing a camper
+    # can no longer erase a debt. Transitional: reads the ledger when a family
+    # has one, falls back to the old derived path when it does not.
+    ("171_posted_ledger",
+     "The family balance becomes a posted ledger (a debt survives a withdrawal)"),
 ]
 
 HEADER = """-- ═══════════════════════════════════════════════════════════════════════════
@@ -421,6 +427,11 @@ UNION ALL SELECT 'every money RPC takes a row lock',
                                    'record_autopay_installment','settle_shop_order',
                                    'append_family_payment_method','merge_canteen_autoreload_card')
                    AND prosrc NOT LIKE '%FOR UPDATE%')
+            THEN 'OK' ELSE 'MISSING' END
+UNION ALL SELECT 'the family balance is a posted ledger',
+       CASE WHEN EXISTS (SELECT 1 FROM pg_proc WHERE proname='family_ledger_balance')
+             AND EXISTS (SELECT 1 FROM pg_proc WHERE proname='convert_family_ledgers')
+             AND EXISTS (SELECT 1 FROM pg_proc WHERE proname='report_plan_undercollection')
             THEN 'OK' ELSE 'MISSING' END
 UNION ALL SELECT 'camp shop settles its orders',
        CASE WHEN EXISTS (SELECT 1 FROM pg_proc WHERE proname='settle_shop_order')
