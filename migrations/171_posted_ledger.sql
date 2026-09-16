@@ -21,13 +21,17 @@
 -- number and the camp's number are two independent implementations and the only
 -- thing keeping them honest is that they compute the same thing.
 --
--- ── TRANSITIONAL, ON PURPOSE ───────────────────────────────────────────────
--- get_my_balance reads the ledger WHEN THE FAMILY HAS ONE and falls back to the
--- old derived path when it does not. That is what lets a camp be converted
--- whenever it suits rather than at the same instant the SQL lands; an
--- unconverted family behaves exactly as it does today. Once
--- convert_family_ledgers has run for every camp the fallback is dead code and
--- can go.
+-- ── SCOPE: THIS FILE IS THE ARITHMETIC AND THE CONVERSION, NOT THE READERS ──
+-- It adds family_ledger_balance, the conversion and the under-collection report.
+-- It deliberately does NOT redefine get_my_balance — migration 173 does that,
+-- by renaming 166's version aside and wrapping it. Applying 171 alone leaves the
+-- parent portal on the derived number, which is why the two belong in the same
+-- bundle and 173 must follow this file.
+--
+-- Both readers are TRANSITIONAL on purpose: they use the ledger when the family
+-- has one and fall back to the derived path when it does not, so a camp can be
+-- converted whenever it suits rather than at the instant the SQL lands. Once
+-- convert_family_ledgers has run everywhere the fallback is dead code.
 --
 -- Idempotent.
 -- ============================================================================

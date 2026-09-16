@@ -594,3 +594,77 @@ test('a negative stored payment converts to a refund, not a negative payment', (
     assert.match(sql, /ABS\(\(e->>'amount'\)::numeric\)/,
         'the amount is not made positive');
 });
+
+// ── 10. the parent's side, and the recursion guard ────────────────────────
+
+test('173 wraps get_my_balance instead of duplicating it', () => {
+    const sql = fs.readFileSync(
+        path.join(__dirname, '..', 'migrations', '173_parent_balance_from_ledger.sql'), 'utf8');
+    assert.match(sql, /ALTER FUNCTION public\.get_my_balance\(uuid\) RENAME TO get_my_balance_derived;/,
+        '166’s function is no longer moved aside — 173 must not duplicate its 250 lines');
+    assert.match(sql, /v_base := public\.get_my_balance_derived\(p_camp_id\);/,
+        'the wrapper no longer calls the derived function');
+});
+
+test('the rename is guarded against making the wrapper call itself', () => {
+    // Re-running 173 must not rename the WRAPPER to get_my_balance_derived and
+    // then create a wrapper that calls itself — that is infinite recursion in
+    // the RPC the parent portal depends on.
+    const sql = fs.readFileSync(
+        path.join(__dirname, '..', 'migrations', '173_parent_balance_from_ledger.sql'), 'utf8');
+    const guard = sql.slice(sql.indexOf('DO $rename$'), sql.indexOf('$rename$;'));
+    assert.match(guard, /LEDGER_WRAPPER_V173/, 'the guard no longer checks for the marker');
+    assert.ok(guard.indexOf('LEDGER_WRAPPER_V173') < guard.indexOf('ALTER FUNCTION'),
+        'the marker check must come BEFORE the rename');
+    assert.match(guard, /RETURN;/, 'the guard does not bail out when already wrapped');
+    // And the marker must actually be present in the wrapper body, or the guard
+    // can never fire.
+    const body = sql.slice(sql.indexOf('CREATE OR REPLACE FUNCTION public.get_my_balance('));
+    assert.match(body, /LEDGER_WRAPPER_V173/,
+        'the wrapper carries no marker — the guard would never match and a ' +
+        're-run would build a self-calling function');
+    // The bundle's verification row counts pg_proc rows whose prosrc carries the
+    // marker and expects exactly ONE. Only the wrapper is a pg_proc row — a DO
+    // block is not — so the invariant that matters is that the marker lives in
+    // the guard and in the wrapper, and in no OTHER function body.
+    // Each body is bounded at its OWN `$$;` terminator, not at the next CREATE —
+    // the guarded DO block sits between two functions, and slicing to the next
+    // CREATE swept its marker into the preceding function.
+    const fnStarts = [...sql.matchAll(/CREATE OR REPLACE FUNCTION public\.(\w+)/g)];
+    const carriers = fnStarts.filter((m) => {
+        const end = sql.indexOf('\n$$;', m.index);
+        return sql.slice(m.index, end < 0 ? sql.length : end)
+                  .includes('LEDGER_WRAPPER_V173');
+    }).map(m => m[1]);
+    assert.deepStrictEqual(carriers, ['get_my_balance'],
+        'exactly one function body may carry the marker, or the bundle check breaks');
+});
+
+test('a partly-converted household falls back rather than mixing the two', () => {
+    // Some families posted and some derived would total to neither number.
+    const sql = fs.readFileSync(
+        path.join(__dirname, '..', 'migrations', '173_parent_balance_from_ledger.sql'), 'utf8');
+    assert.match(sql, /IF NOT v_allHave THEN[\s\S]{0,200}RETURN v_base/,
+        'the wrapper no longer bails out when a family is unconverted');
+    assert.match(sql, /v_allHave := false;\s*EXIT;/,
+        'it no longer stops at the first unconverted family');
+});
+
+test('the parent summary keeps the shape the portal already renders', () => {
+    // billed − paid − credits is what get_my_balance has always returned and
+    // what the portal renders; changing the shape here would need a client change.
+    const sql = fs.readFileSync(
+        path.join(__dirname, '..', 'migrations', '173_parent_balance_from_ledger.sql'), 'utf8');
+    const fn = sql.slice(sql.indexOf('FUNCTION public.family_ledger_summary'),
+                         sql.indexOf('REVOKE ALL ON FUNCTION public.family_ledger_summary'));
+    for (const k of ['billed', 'paid', 'credits']) {
+        assert.ok(fn.includes("'" + k + "',"), 'the summary no longer returns ' + k);
+    }
+    // A refund must REDUCE what counts as paid, or a refunded family reads as
+    // having paid money the camp gave back.
+    assert.match(fn, /WHEN kind = 'refund'\s+THEN -amount/,
+        'a refund no longer reduces `paid`');
+    // And deposits must not be re-added: the conversion already posts them.
+    assert.match(sql, /does NOT\s*--? ?re-add bank deposits|NOT re-add bank deposits/,
+        'the double-counting note is gone — check deposits are not added twice');
+});

@@ -115,6 +115,11 @@ MANIFEST = [
     # family_ledger_balance, and plan_due_for reads a converted plan's shape.
     ("172_autopay_posts_to_ledger",
      "Autopay charges a DERIVED amount and posts it to the ledger (kills D1)"),
+    # MUST come after 166 AND 171: it renames 166's get_my_balance aside and
+    # wraps it, and the wrapper calls 171's family_has_ledger. The rename is
+    # guarded so re-running cannot make the wrapper call itself.
+    ("173_parent_balance_from_ledger",
+     "The PARENT's balance comes from the posted ledger too (closes 171's gap)"),
 ]
 
 HEADER = """-- ═══════════════════════════════════════════════════════════════════════════
@@ -441,6 +446,12 @@ UNION ALL SELECT 'autopay derives the amount and posts to the ledger',
        CASE WHEN EXISTS (SELECT 1 FROM pg_proc WHERE proname='record_autopay_charge')
              AND EXISTS (SELECT 1 FROM pg_proc WHERE proname='plan_due')
              AND EXISTS (SELECT 1 FROM pg_proc WHERE proname='plan_due_for')
+            THEN 'OK' ELSE 'MISSING' END
+UNION ALL SELECT 'the parent balance reads the posted ledger',
+       CASE WHEN EXISTS (SELECT 1 FROM pg_proc WHERE proname='get_my_balance_derived')
+             AND EXISTS (SELECT 1 FROM pg_proc WHERE proname='family_ledger_summary')
+             AND (SELECT count(*) FROM pg_proc
+                   WHERE prosrc LIKE '%LEDGER_WRAPPER_V173%') = 1
             THEN 'OK' ELSE 'MISSING' END
 UNION ALL SELECT 'camp shop settles its orders',
        CASE WHEN EXISTS (SELECT 1 FROM pg_proc WHERE proname='settle_shop_order')
