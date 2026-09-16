@@ -128,6 +128,29 @@ function check(label, cond, detail) {
     check('a bunk with only the long special left takes one 40',
       JSON.stringify(carve.sated) === '[40]', JSON.stringify(carve.sated));
 
+    // ── rotation, not just availability, decides the shape ──
+    const rota = await page.evaluate(() => {
+      const S = window.ManualBlockSplit;
+      const pool = [
+        { name: 'Slush', durations: [20] },
+        { name: 'Popcorn', durations: [20] },
+        { name: 'Ceramics', durations: [40] }
+      ];
+      const durations = S.collectDurations(pool);
+      const carveFor = (counts) => S.splitBlock({
+        startMin: 600, endMin: 640, durations,
+        demand: S.buildDemand(pool, [], { counts, limit: 2 }), maxSegments: 2
+      }).segments.map(s => s.durationMin);
+      return {
+        owedLong: carveFor({ Slush: 4, Popcorn: 4, Ceramics: 0 }),
+        owedShort: carveFor({ Slush: 0, Popcorn: 0, Ceramics: 4 })
+      };
+    });
+    check('same grade, same block: the bunk owed a long activity gets one 40',
+      JSON.stringify(rota.owedLong) === '[40]', JSON.stringify(rota.owedLong));
+    check('same grade, same block: the bunk owed two short ones gets 2x20',
+      JSON.stringify(rota.owedShort) === '[20,20]', JSON.stringify(rota.owedShort));
+
     // ── the grid cut agrees with the carving, on the page's own config ──
     const grid = await page.evaluate(() => {
       const skel = [{

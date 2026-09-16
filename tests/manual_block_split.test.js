@@ -202,6 +202,82 @@ describe('ManualBlockSplit.buildDemand', () => {
     });
 });
 
+describe('ManualBlockSplit.buildDemand — rotation drives the shape', () => {
+    // A grade's shared pool: two short specials, one long one.
+    const POOL = [
+        { name: 'Slush', durations: [20] },
+        { name: 'Popcorn', durations: [20] },
+        { name: 'Ceramics', durations: [40] },
+    ];
+    const durations = Split.collectDurations(POOL);
+    const carve = (counts) => Split.splitBlock({
+        startMin: 600, endMin: 640, durations,
+        demand: Split.buildDemand(POOL, [], { counts, limit: 2 }),
+        maxSegments: 2, ...P
+    });
+
+    it('two bunks in one grade carve the SAME block differently on history alone', () => {
+        // Bunk A has had both short specials plenty and is owed Ceramics.
+        const a = carve({ Slush: 5, Popcorn: 5, Ceramics: 0 });
+        // Bunk B is owed both short ones and has had Ceramics recently.
+        const b = carve({ Slush: 0, Popcorn: 0, Ceramics: 5 });
+
+        assert.deepEqual(durs(a), [40], 'owed the long activity → takes the whole block');
+        assert.deepEqual(durs(b), [20, 20], 'owed two short ones → carves 2x20');
+    });
+
+    it('only the activities the bunk is most owed count toward the shape', () => {
+        // Ceramics is the single most-owed; Slush is next. limit 2 stops Popcorn
+        // from stacking a second 20 and outvoting the 40 the bunk actually needs.
+        const counts = { Ceramics: 0, Slush: 1, Popcorn: 2 };
+        assert.deepEqual(Split.buildDemand(POOL, [], { counts, limit: 2 }), { 40: 1, 20: 1 });
+        assert.deepEqual(durs(carve(counts)), [40]);
+    });
+
+    it('without a cap the whole catalogue votes and every bunk looks alike', () => {
+        const owedLong = { Ceramics: 0, Slush: 9, Popcorn: 9 };
+        // Uncapped, the two short specials still contribute and win on count.
+        assert.deepEqual(Split.buildDemand(POOL, [], { counts: owedLong }), { 20: 2, 40: 1 });
+        // Capped to what the block could hold, the bunk's real need shows through.
+        assert.deepEqual(Split.buildDemand(POOL, [], { counts: owedLong, limit: 2 }), { 40: 1, 20: 1 });
+    });
+
+    it('ranks least-used first, exactly like the solver seats specials', () => {
+        const counts = { Slush: 3, Popcorn: 1, Ceramics: 2 };
+        // Popcorn(1) then Ceramics(2) are the two most owed; Slush(3) drops out.
+        assert.deepEqual(Split.buildDemand(POOL, [], { counts, limit: 2 }), { 20: 1, 40: 1 });
+    });
+
+    it('treats an unseen activity as most owed', () => {
+        // Ceramics has no entry at all → count 0 → ahead of everything used once.
+        const counts = { Slush: 1, Popcorn: 1 };
+        assert.deepEqual(Split.buildDemand(POOL, [], { counts, limit: 1 }), { 40: 1 });
+    });
+
+    it('still skips what the bunk already has today, however owed it is', () => {
+        const counts = { Slush: 0, Popcorn: 0, Ceramics: 9 };
+        assert.deepEqual(Split.buildDemand(POOL, ['Slush'], { counts, limit: 2 }), { 20: 1, 40: 1 });
+    });
+
+    it('is deterministic when counts tie', () => {
+        const counts = { Slush: 2, Popcorn: 2, Ceramics: 2 };
+        const first = JSON.stringify(Split.buildDemand(POOL, [], { counts, limit: 2 }));
+        for (let i = 0; i < 20; i++) {
+            assert.strictEqual(JSON.stringify(Split.buildDemand(POOL, [], { counts, limit: 2 })), first);
+        }
+        // Alphabetical tiebreak: Ceramics then Popcorn.
+        assert.deepEqual(JSON.parse(first), { 40: 1, 20: 1 });
+    });
+
+    it('falls back to counting everything when no history is supplied', () => {
+        assert.deepEqual(Split.buildDemand(POOL, []), { 20: 2, 40: 1 });
+    });
+
+    it('a bunk with no history at all still gets a sensible shape', () => {
+        assert.deepEqual(durs(carve({})), [40], 'all tied → alphabetical → Ceramics leads');
+    });
+});
+
 describe('ManualBlockSplit.collectDurations', () => {
     it('returns every distinct length, ascending', () => {
         assert.deepEqual(Split.collectDurations([

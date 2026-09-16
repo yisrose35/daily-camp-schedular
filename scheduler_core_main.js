@@ -5499,12 +5499,19 @@ console.log(`[Generation] Rainy Day Mode: ${window.isRainyDay ? 'ACTIVE 🌧️'
             const candidates = _vlCandidates(slotKind, divName, bunk);
             if (candidates.length === 0) return whole;
 
+            const maxSegments = parseInt(item.maxSegments, 10) || 2;
             const plan = window.ManualBlockSplit.splitBlock({
                 startMin: sMin,
                 endMin: eMin,
                 durations: window.ManualBlockSplit.collectDurations(candidates),
-                demand: window.ManualBlockSplit.buildDemand(candidates, _vlAlreadyToday(bunk)),
-                maxSegments: parseInt(item.maxSegments, 10) || 2
+                // Rotation drives the shape: rank this bunk's own history
+                // least-used-first and let the lengths it is most owed decide
+                // whether the block is worth carving up.
+                demand: window.ManualBlockSplit.buildDemand(candidates, _vlAlreadyToday(bunk), {
+                    counts: (historicalCounts || {})[bunk] || {},
+                    limit: maxSegments
+                }),
+                maxSegments
             });
             if (!plan.split || plan.segments.length < 2) return whole;
 

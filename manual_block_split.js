@@ -166,32 +166,70 @@
         return { segments: segments, composition: best.slice(), split: true, reason: 'packed' };
     }
 
+    function _nameOf(c) {
+        // Specials carry `name` throughout the codebase, sports options carry
+        // `activity`; accept either rather than silently dropping a whole list.
+        return c && (c.activity || c.name);
+    }
+
     /**
-     * How many more activities of each length could this bunk still use today?
+     * What lengths does this bunk's ROTATION actually call for right now?
      *
-     * Counts each accessible activity once per length it is allowed to run at,
-     * skipping anything the bunk has already had today — a repeat is no reason
-     * to carve the block up. Rotation fairness is NOT decided here; the solver
-     * still picks which activity lands in each piece. This only answers whether
-     * splitting buys the bunk anything at all.
+     * The bunk's accessible activities are ranked least-used-first out of its
+     * rotation history — the same ordering the solver's own special seating uses
+     * — and only the ones it is most due for are counted, at most as many as the
+     * block could ever be carved into. Their lengths are the demand.
      *
-     * @param {Array} candidates [{ activity, durations: [..] }]
+     * So the same 40-minute block reads differently per bunk: a bunk whose two
+     * most-owed activities are 20 minutes each wants 2x20, while a bunk owed a
+     * 40-minute one wants the whole block. That is the whole point of carving
+     * per bunk rather than per tile.
+     *
+     * This decides SHAPE only. Which activity lands in each piece is still the
+     * solver's call, with the full rotation, cooldown and capacity gates — so a
+     * bunk ranked here is never actually *given* anything by this function.
+     *
+     * @param {Array} candidates [{ activity|name, durations: [..] }]
      * @param {Array} alreadyToday activity names the bunk already has today
+     * @param {Object} opts
+     *   counts {Object} historicalCounts[bunk] — {activityName: timesHad}
+     *   limit  {number} most pieces the block could be carved into
      * @returns {Object} { durationMin: countStillWanted }
      */
-    function buildDemand(candidates, alreadyToday) {
+    function buildDemand(candidates, alreadyToday, opts) {
+        opts = opts || {};
+        var counts = opts.counts || null;
+        var limit = _int(opts.limit);
+
         var done = {};
         (alreadyToday || []).forEach(function (n) {
             if (n) done[String(n).toLowerCase().trim()] = true;
         });
 
+        var pool = (candidates || []).filter(function (c) {
+            var actName = _nameOf(c);
+            if (!actName) return false;
+            // A repeat is no reason to carve the block up.
+            return !done[String(actName).toLowerCase().trim()];
+        });
+
+        if (counts) {
+            // Least-used first; name breaks ties so the same history always
+            // produces the same carving.
+            pool = pool.slice().sort(function (a, b) {
+                var ca = counts[_nameOf(a)] || 0;
+                var cb = counts[_nameOf(b)] || 0;
+                if (ca !== cb) return ca - cb;
+                return String(_nameOf(a)).localeCompare(String(_nameOf(b)));
+            });
+            // Past this many, an activity cannot influence the shape anyway —
+            // and counting the whole catalogue would make every bunk look the
+            // same, which is exactly what rotation is supposed to break up.
+            if (limit != null && limit > 0) pool = pool.slice(0, limit);
+        }
+
         var demand = {};
-        (candidates || []).forEach(function (c) {
-            // Specials carry `name` throughout the codebase, sports options carry
-            // `activity`; accept either rather than silently dropping a whole list.
-            var actName = c && (c.activity || c.name);
-            if (!actName) return;
-            if (done[String(actName).toLowerCase().trim()]) return;
+        pool.forEach(function (c) {
             var seen = {};
             (c.durations || []).forEach(function (d) {
                 var n = _int(d);
