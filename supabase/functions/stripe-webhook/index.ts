@@ -471,8 +471,77 @@ const RISK_EVENT_TYPES = new Set([
   "radar.early_fraud_warning.created",
   "review.opened",
   "charge.dispute.created",
+  // Added with migration 175: a dispute the camp WINS has to put the money back
+  // on the family's ledger, so the close event matters as much as the open one.
+  "charge.dispute.closed",
   "payout.failed",
 ]);
+
+// ── The CAMP's side of a dispute (migration 175) ───────────────────────────
+// handleRiskEvent below emails RISK_ALERT_EMAIL, which is the PLATFORM's
+// address. That is the right audience for a fraud signal and the wrong one for a
+// chargeback: the money has left the CAMP's account, so the camp's books are now
+// wrong until something moves it back.
+//
+// A chargeback is a reversal of cash received, so it posts a refund entry to the
+// family's ledger — the balance goes back up because the ledger got longer, and
+// the original payment stays on the record. Winning the dispute posts the
+// payment back. Neither edits anything.
+//
+// Best-effort and never throws: a failure here must not make the webhook return
+// non-2xx, because Stripe would retry the whole event and the platform email
+// would go out again.
+async function handleDisputeLedger(
+  supabase: ReturnType<typeof createClient>,
+  event: Record<string, any>,
+) {
+  const obj = event.data.object || {};
+  const disputeId = String(obj.id || "");
+  if (!disputeId) return;
+
+  // Stripe gives the charge id and (on current API versions) the payment_intent.
+  // A payment row may carry either depending on which path recorded it, so pass
+  // both and let the RPC match on the set — that is what stops a dispute failing
+  // to find its own payment.
+  const refs = [obj.payment_intent, obj.charge, obj.id]
+    .filter(Boolean).map(String);
+
+  // Which camp? The charge's metadata carries campId on every path that takes
+  // money. Without it there is nothing to post against and guessing would put a
+  // chargeback on the wrong camp's books.
+  const campId = obj.metadata?.campId || event.data.object?.metadata?.campId || null;
+  if (!campId) {
+    console.error(`[stripe-webhook] dispute ${disputeId} has no campId in metadata — ` +
+      `cannot post it to a ledger; reconcile by hand (refs: ${refs.join(", ")})`);
+    return;
+  }
+
+  try {
+    if (event.type === "charge.dispute.created") {
+      const { data, error } = await supabase.rpc("record_chargeback", {
+        p_camp_id: campId, p_dispute_id: disputeId, p_refs: refs,
+        p_amount: Number(((obj.amount || 0) / 100).toFixed(2)),
+        p_reason: obj.reason || null, p_status: obj.status || null,
+      });
+      if (error || !data?.success) {
+        console.error(`[stripe-webhook] chargeback ${disputeId} NOT posted to the ledger ` +
+          `(${error?.message || data?.error || "unknown"}) — the camp's books now ` +
+          `overstate collected cash until this is reconciled by hand`);
+      }
+    } else if (event.type === "charge.dispute.closed") {
+      // `won` means the camp kept the money. Anything else leaves the refund
+      // standing, which is already correct.
+      const won = String(obj.status || "") === "won";
+      const { error } = await supabase.rpc("resolve_chargeback", {
+        p_camp_id: campId, p_dispute_id: disputeId, p_won: won,
+        p_status: obj.status || null,
+      });
+      if (error) console.warn(`[stripe-webhook] dispute ${disputeId} close not recorded: ${error.message}`);
+    }
+  } catch (e) {
+    console.error(`[stripe-webhook] dispute ${disputeId} ledger write threw: ${(e as Error).message}`);
+  }
+}
 
 async function handleRiskEvent(event: Record<string, any>) {
   const obj = event.data.object || {};
@@ -501,6 +570,14 @@ async function handleRiskEvent(event: Record<string, any>) {
         <p><strong>Reason:</strong> ${obj.reason || "—"}</p>
         <p><strong>Charge:</strong> ${obj.charge || "—"}</p>
         <p><strong>Respond by:</strong> ${obj.evidence_details?.due_by ? new Date(obj.evidence_details.due_by * 1000).toLocaleString() : "—"}</p>`;
+      break;
+    case "charge.dispute.closed":
+      heading = "A disputed charge was closed — " + (obj.status || "unknown outcome");
+      detailsHtml = `
+        <p><strong>Outcome:</strong> ${obj.status || "—"}</p>
+        <p><strong>Amount:</strong> $${((obj.amount || 0) / 100).toFixed(2)} ${(obj.currency || "usd").toUpperCase()}</p>
+        <p><strong>Charge:</strong> ${obj.charge || "—"}</p>
+        <p>${obj.status === "won" ? "The money has been returned to the camp and posted back to the family's ledger." : "The refund posted when the dispute opened stands."}</p>`;
       break;
     case "payout.failed":
       heading = "A Stripe payout failed";
@@ -583,7 +660,13 @@ serve(async (req) => {
         await handleAutopaySetup(supabase, si);
       }
     } else if (RISK_EVENT_TYPES.has(event.type)) {
-      // Platform-account risk signal — alert the operator, not any camp.
+      // A dispute also moves real money out of the CAMP's account, so it needs a
+      // ledger entry as well as the platform alert. Ledger first: if the email
+      // provider is down, the money must still be right.
+      if (event.type === "charge.dispute.created" || event.type === "charge.dispute.closed") {
+        await handleDisputeLedger(supabase, event);
+      }
+      // Platform-account risk signal — alerts the operator, not any camp.
       await handleRiskEvent(event);
     } else {
       console.log(`[stripe-webhook] Unhandled event: ${event.type}`);

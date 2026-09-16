@@ -11984,6 +11984,14 @@ function buildFamilyLedgers(){
             l.postedSummary=_B.summary(l.family);
         }
         l.formerCamper=!!l.family.formerCamper;
+        // A plan that cannot collect (migration 175): no card on file, a declined
+        // card, or a disconnected processor. Surfaced on the ledger so Billing can
+        // show it — a notification alone is missed, and the plan otherwise still
+        // reads as active while nothing is being taken.
+        l.collectionBlocked=(Array.isArray(l.family.plans)?l.family.plans:[])
+            .map(function(p){return p&&p.collectionBlocked?
+                Object.assign({planId:p.id},p.collectionBlocked):null})
+            .filter(Boolean);
         l.entries.sort(function(a,b){return(a.date||'').localeCompare(b.date||'')});
         // Determine status
         var today=new Date().toISOString().split('T')[0];

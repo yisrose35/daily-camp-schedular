@@ -127,6 +127,7 @@
         'discount', 'withdrawal', 'goodwill', 'correction',         // credits
         'scholarship', 'sibling',                                   // credits
         'card', 'cash', 'check', 'zelle', 'ach', 'autopay',         // payments
+        'chargeback',                                               // refunds
         'reversal', 'adjustment',                                   // either
     ];
 
@@ -136,6 +137,11 @@
     // it matters: the first shrinks your revenue, the second is a discount you
     // gave, and a camp reporting to a board needs them apart.
     var CORRECTION_REASONS = { correction: 1, reversal: 1, adjustment: 1 };
+
+    // A chargeback is NOT a refund the camp chose to give — it is cash pulled
+    // back by the parent's bank. It posts as a `refund` entry because the effect
+    // on the balance is identical (they owe it again), but the reason keeps the
+    // two apart in a report: one is a decision, the other is a loss.
 
     var _seq = 0;
     function newId(prefix, now) {

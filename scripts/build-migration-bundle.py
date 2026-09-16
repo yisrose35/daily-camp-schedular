@@ -146,6 +146,11 @@ MANIFEST = [
     # to the parent — the $2,500 registration that showed as $0.
     ("174_ledger_must_be_complete",
      "The parent's balance only trusts a ledger that has every billable enrollment"),
+    # MUST come after 171 (family_ledger_balance) and 056 (the notifications
+    # table and its UNIQUE(camp_id, source, source_id), which is what makes both
+    # alerts fire once rather than nightly).
+    ("175_chargebacks_and_collection_blocks",
+     "A chargeback moves the money back; a plan that cannot collect says so"),
 ]
 
 HEADER = """-- ═══════════════════════════════════════════════════════════════════════════
@@ -492,6 +497,11 @@ UNION ALL SELECT 'an unenrolled camper disconnects the parent from live features
                  LIKE '%camp_connected%'
              AND (SELECT prosrc FROM pg_proc WHERE proname='revoke_orphaned_parent_invites' LIMIT 1)
                  LIKE '%camp_connected%'
+            THEN 'OK' ELSE 'MISSING' END
+UNION ALL SELECT 'a chargeback moves the money back',
+       CASE WHEN EXISTS (SELECT 1 FROM pg_proc WHERE proname='record_chargeback')
+             AND EXISTS (SELECT 1 FROM pg_proc WHERE proname='resolve_chargeback')
+             AND EXISTS (SELECT 1 FROM pg_proc WHERE proname='flag_plan_collection')
             THEN 'OK' ELSE 'MISSING' END
 UNION ALL SELECT 'camp shop settles its orders',
        CASE WHEN EXISTS (SELECT 1 FROM pg_proc WHERE proname='settle_shop_order')

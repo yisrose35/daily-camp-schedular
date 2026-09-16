@@ -343,6 +343,30 @@ serve(async (req) => {
     return creds;
   }
 
+  // Mark a plan as unable to collect, or clear it (migration 175).
+  //
+  // Two ways autopay silently stops and nobody is told: a parent removes their
+  // last card (the plan still reads active, and the runner skips the family
+  // BEFORE the plan loop, so the counter never advances — the plan does not even
+  // run out, it stalls on the same instalment forever), or a card declines. This
+  // writes the reason onto the plan, which both the office's Billing page and
+  // the parent's portal already receive, and raises ONE notification per plan per
+  // reason rather than one a night.
+  //
+  // Best-effort: a failure here must never stop the run charging other families.
+  async function flagPlan(campId: string, famKey: string, planId: string,
+                          reason: string | null, detail?: string) {
+    if (!planId) return;
+    try {
+      await supabase.rpc("flag_plan_collection", {
+        p_camp_id: campId, p_family_key: famKey, p_plan_id: planId,
+        p_reason: reason, p_detail: detail || null,
+      });
+    } catch (e) {
+      console.warn(`[autopay] could not flag plan ${planId}: ${(e as Error).message}`);
+    }
+  }
+
   // Persist ONE installment outcome — the patch, and when a card was actually
   // charged the payment alongside it — through migration 169's locking RPC.
   //
@@ -417,6 +441,14 @@ serve(async (req) => {
         const why = !f.cardOnFile ? "no card on file"
           : (processorKey ? "no vaulted card token (byopCustomerRef) — the card was never saved to the processor" : "no Stripe customer");
         console.warn(`[autopay] camp ${row.camp_id} family "${f.name}": autopay is on but ${why} — cannot charge`);
+        // Say so ON THE PLAN. Skipping here happens before the plan loop, so
+        // nothing else in this run will ever mention this family again — which is
+        // exactly how a removed card silently stopped collection.
+        for (const p of (Array.isArray(f.plans) ? f.plans : [])) {
+          if (p && Array.isArray(p.dueDates) && p.autopay && !p.paused) {
+            await flagPlan(String(row.camp_id), famKey, String(p.id || ""), "no_card", why);
+          }
+        }
         details.push({ camp: row.camp_id, family: f.name, result: "skipped_no_chargeable_card", reason: why, processor: processorKey || "stripe" });
         continue;
       }
@@ -476,6 +508,8 @@ serve(async (req) => {
             // Not a decline and not the family's fault. Record NOTHING so the
             // counter does not advance — the instalment retries next run once
             // the camp's processor is connected.
+            await flagPlan(String(row.camp_id), famKey, String(plan.id || ""),
+                           "no_processor", `processor ${processorKey} is not connected`);
             details.push({ camp: row.camp_id, family: f.name, amount, result: "skipped_no_processor", processor: processorKey });
             continue;
           }
@@ -528,6 +562,7 @@ serve(async (req) => {
             p_plan_id: String(plan.id || ""), p_index: due.index,
             p_due_date: due.dueDate, p_amount: 0, p_reason: "declined: " + failWhy,
           });
+          await flagPlan(String(row.camp_id), famKey, String(plan.id || ""), "declined", failWhy);
           failed++;
           details.push({ camp: row.camp_id, family: f.name, amount, result: "failed", reason: failWhy });
           continue;
@@ -557,6 +592,10 @@ serve(async (req) => {
         if (rec.error || !rec.data?.success) {
           console.error(`[autopay] camp ${row.camp_id} family ${famKey}: A CARD WAS CHARGED AND IS NOT RECORDED (${rec.error?.message || rec.data?.error || "unknown"})`);
         }
+        // Collected: whatever was blocking is over. Clearing uses the same call,
+        // so a newly saved card or a card that now works closes the flag without
+        // anyone having to dismiss anything.
+        await flagPlan(String(row.camp_id), famKey, String(plan.id || ""), null);
         charged++;
         details.push({ camp: row.camp_id, family: f.name, amount,
                        result: (rec.error || !rec.data?.success) ? "charged_not_recorded" : "charged",
