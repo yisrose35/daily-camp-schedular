@@ -2356,8 +2356,6 @@ function _renderRegistrationPane(){
         h+='<div class="me-more-wrap"><button class="me-btn me-btn--teal" onclick="CampistryMe._toggleMenu(\'pplFormsMenu\')">Customize Forms ▾</button>'
             +'<div class="me-more-menu" id="pplFormsMenu" style="min-width:210px">'
             +'<button onclick="CampistryMe.openFormConfig()">Registration Form</button><button onclick="CampistryMe.openPostAcceptFormConfig()" title="Sent after a camper is accepted">Post-Acceptance Form</button>'
-            +'<div style="border-top:1px solid var(--s100);margin:4px 0"></div>'
-            +'<button onclick="CampistryMe.openDepositPolicy()" title="Money required to hold a place">Deposit to Register</button>'
             +'</div></div>'
             +'<button class="me-btn me-btn--pri" onclick="CampistryMe.addApplication()">+ Manual Entry</button>';
     }
@@ -2385,7 +2383,7 @@ function _renderRegistrationPane(){
                 +'margin-bottom:12px;font-size:.82rem;color:#1E40AF;display:flex;gap:12px;align-items:baseline;flex-wrap:wrap">'
                 +'<strong>'+esc(_pol.label)+':</strong><span>'+esc(_dp.explain(_pol,null))+'</span>'
                 +(_owing?'<span style="margin-left:auto;font-weight:700">'+_owing+' unpaid</span>':'')
-                +'<button class="me-btn me-btn--ghost me-btn--sm" onclick="CampistryMe.openDepositPolicy()">Change</button></div>';
+                +'<button class="me-btn me-btn--ghost me-btn--sm" onclick="CampistryMe.openFormConfig()">Change</button></div>';
         }
     }
 
@@ -8128,6 +8126,9 @@ function _fbOpenPreviewWindow(){
     if(!_fbPreviewWin)toast('Allow pop-ups to preview the form','error');
 }
 function _fbPushPreview(){
+    // The deposit card lives in the Registration panel, so its own preview
+    // line rides the same edit hook the form preview does.
+    try{ _dpRefreshCard(); }catch(_){}
     clearTimeout(_fbPushTimer);
     _fbPushTimer=setTimeout(_fbCollectAndSend,150);
 }
@@ -8204,6 +8205,8 @@ function openFormBuilder(kind){
     var panel=document.getElementById('fbPanel');
     panel.innerHTML=isStaff?_buildSfcPanelHtml():isPaf?_buildPafPanelHtml():isPhf?_buildPhfPanelHtml():_buildFcPanelHtml();
     _initOrderDrag(isStaff?'sfc':isPaf?'paf':isPhf?'phf':'fc');
+    _dpRefreshCard._checked=false;
+    setTimeout(function(){ try{ _dpRefreshCard(); }catch(_){} },0);
 
     // Live-update the preview on any edit — typing, checkboxes, drag
     // reorder, or a row being added/removed — via one delegated listener
@@ -8360,6 +8363,17 @@ function _buildFcPanelHtml(){
         +'<div id="fcDocList">'+docs.map(_renderDocRow).join('')+'</div>'
         +'<button class="me-btn me-btn--sec me-btn--sm" style="margin-top:4px" onclick="CampistryMe.addDocRow()">+ Add Document</button>';
     h+=_accCard('Required Documents',docsHtml,{badge:docs.length+' set'});
+
+    // The deposit belongs here rather than behind its own menu item: it is a
+    // thing the form ASKS FOR, edited while you are looking at the form, and
+    // its preview is the form itself. Storage stays in enrollSettings (not
+    // formConfig) so it reaches the public page through migration 164 --
+    // same arrangement promo codes already have, read back in saveFormConfig.
+    var _dpPol=_depPolicyAPI()?_depPolicyAPI().normalize(enrollSettings.depositPolicy):null;
+    if(_dpPol){
+        h+=_accCard('Deposit to Register',_dpCardHtml(_dpPol),
+            {badge:_dpPol.enabled?(_dpPol.basis==='flat'?fm(_dpPol.amount):_dpPol.basis==='percent'?_dpPol.percent+'%':'per session'):'off'});
+    }
 
     var qHtml='<p style="font-size:.78rem;color:var(--s400);margin:0 0 10px">Standalone questions, shown in an "Additional Information" section. Pick "Show in" to move one inside a built-in section instead (or add it from that section directly, in Sections above).</p>'
         +'<div id="fcQList">'+fcQSplit.flat.map(function(q,i){return renderCustomQ(q,i,'fc',true);}).join('')+'</div>'
@@ -9195,6 +9209,14 @@ function saveFormConfig(){
         promos[code]={label:(labels[i]?.value||'').trim(),pct:parseFloat(pcts[i]?.value)||0,amt:parseFloat(amts[i]?.value)||0};
     }
     enrollSettings.promoCodes=promos;
+
+    // Same reasoning as promo codes: the deposit lives in enrollSettings so
+    // it persists through save() and reaches the public form, but it is
+    // edited in the builder because that is where a camp is thinking about
+    // what the form asks for.
+    if(_depPolicyAPI()&&document.getElementById('dpOn')){
+        enrollSettings.depositPolicy=_depPolicyAPI().normalize(_dpRead());
+    }
 
     save();
     closeFormBuilder();
@@ -14812,71 +14834,61 @@ async function markDepositPaid(id,undo){
     toast(undo?'Deposit marked unpaid':'Deposit recorded \u2014 record the money itself in Billing so it counts toward tuition');
 }
 
-function openDepositPolicy(){
+/**
+ * The deposit editor, as a card in the Registration form builder.
+ *
+ * It used to be its own menu item and its own modal, which put the one
+ * setting that changes what the form ASKS FOR somewhere you could not see the
+ * form. Here the builder's live preview is the preview, and the camp edits it
+ * next to the documents and promo codes it sits beside on the page.
+ */
+function _dpCardHtml(pol){
     var P=_depPolicyAPI();
-    if(!P){toast('Deposit settings aren\'t available in this build','error');return}
-    var pol=P.normalize(enrollSettings.depositPolicy);
+    if(!P)return '';
+    pol=P.normalize(pol);
 
-    var h='<div class="me-modal-form">';
-    h+='<p style="font-size:.86rem;color:var(--s600);line-height:1.65;margin:0 0 14px;max-width:660px">'
-      +'Money a family must put down to hold a place. It counts toward tuition — it is never an extra charge — '
-      +'and it appears on the registration form with a way to pay.</p>';
+    var h='<p style="font-size:.78rem;color:var(--s400);margin:0 0 10px;line-height:1.6">'
+      +'Money a family must put down to hold a place. It counts toward tuition \u2014 it is never an extra charge \u2014 '
+      +'and appears in the Payment section of the form.</p>';
 
-    h+='<label style="display:flex;gap:9px;align-items:center;font-size:.92rem;font-weight:600;margin-bottom:14px">'
-      +'<input type="checkbox" id="dpOn" '+(pol.enabled?'checked':'')+' onchange="CampistryMe._dpToggle()">'
+    h+='<label style="display:flex;gap:9px;align-items:center;font-size:.86rem;font-weight:600;margin-bottom:12px">'
+      +'<input type="checkbox" id="dpOn" '+(pol.enabled?'checked':'')+' onchange="CampistryMe._dpToggle()" style="accent-color:var(--me);width:15px;height:15px">'
       +'Require a deposit to register</label>';
 
     h+='<div id="dpBody" style="'+(pol.enabled?'':'display:none')+'">';
-
-    h+='<div class="fsec">How much</div>';
     h+='<div class="fr">'
       +ff('Based on','dpBasis',pol.basis==='flat'?'A flat amount':pol.basis==='percent'?'A percentage of tuition':"The session's own deposit",
           'select',['A flat amount','A percentage of tuition',"The session's own deposit"])
       +ff('Charged','dpPer',pol.per==='family'?'Once per family':'Once per camper','select',['Once per camper','Once per family'])
       +'</div>';
-    h+='<div class="fr">'
-      +ff('Flat amount ($)','dpAmount',pol.amount||'','number')
-      +ff('Percentage (%)','dpPercent',pol.percent,'number')
-      +'</div>';
+    h+='<div class="fr">'+ff('Flat amount ($)','dpAmount',pol.amount||'','number')
+      +ff('Percentage (%)','dpPercent',pol.percent,'number')+'</div>';
     h+='<p style="font-size:.72rem;color:var(--s400);margin:-4px 0 10px;padding-left:2px">'
       +'The percentage is also the fallback when a session carries no deposit of its own, so turning this on never asks for $0. '
       +'A deposit is never more than the tuition it is part of.</p>';
 
-    h+='<div class="fsec">When</div>';
     h+='<div class="fr">'
       +ff('Due','dpTiming',pol.timing==='later'?'Can be paid later':'Must be paid to submit the form','select',
           ['Must be paid to submit the form','Can be paid later'])
-      +ff('Days to pay','dpDueDays',pol.dueDays,'number')
-      +'</div>';
+      +ff('Days to pay','dpDueDays',pol.dueDays,'number')+'</div>';
     h+='<p style="font-size:.72rem;color:var(--s400);margin:-4px 0 10px;padding-left:2px">'
-      +'"Must be paid" holds the application as <strong>awaiting deposit</strong> until the money arrives — the family still '
-      +'fills the form in once, and is taken straight to payment. "Days to pay" applies only to the later option.</p>';
+      +'"Must be paid" holds the application as <strong>awaiting deposit</strong> until the money arrives. '
+      +'"Days to pay" applies only to the later option.</p>';
 
-    h+='<div class="fsec">What parents see</div>';
     h+=ff('Call it','dpLabel',pol.label);
-    h+='<label style="display:flex;gap:9px;align-items:center;font-size:.86rem;margin:8px 0 10px">'
-      +'<input type="checkbox" id="dpRefund" '+(pol.refundable?'checked':'')+'> This deposit is refundable</label>';
+    h+='<label style="display:flex;gap:9px;align-items:center;font-size:.82rem;margin:6px 0 10px">'
+      +'<input type="checkbox" id="dpRefund" '+(pol.refundable?'checked':'')+' style="accent-color:var(--me);width:15px;height:15px"> This deposit is refundable</label>';
     h+=ff('Note on the form (optional)','dpNote',pol.note,'textarea');
 
     h+='<div id="dpPreview" style="background:var(--s50);border:1px solid var(--s200);border-radius:var(--r);'
-      +'padding:12px 14px;margin-top:14px;font-size:.84rem;color:var(--s600);line-height:1.6"></div>';
+      +'padding:11px 13px;margin-top:12px;font-size:.8rem;color:var(--s600);line-height:1.6"></div>';
     // "I saved it and parents still do not see it" has exactly one common
     // cause and no way to tell from this screen: the public form is anonymous,
     // so everything it knows comes through get_public_form_config, and an
-    // unapplied migration 164 means the policy never crosses. Ask the same
-    // question the form asks and report the answer.
-    h+='<div id="dpReach" style="margin-top:10px;font-size:.8rem;color:var(--s400)">Checking that your registration form can see this\u2026</div>';
-    h+='</div></div>';
-
-    showModal('Deposit to register',h,function(){ _dpSave(); },{maxWidth:680,saveLabel:'Save deposit policy'});
-    setTimeout(function(){
-        ['dpBasis','dpPer','dpAmount','dpPercent','dpTiming','dpDueDays','dpLabel','dpRefund'].forEach(function(id){
-            var el=document.getElementById(id);
-            if(el){el.addEventListener('change',_dpPreview);el.addEventListener('input',_dpPreview);}
-        });
-        _dpPreview();
-        _dpCheckReach();
-    },0);
+    // unapplied migration 164 means the policy never crosses.
+    h+='<div id="dpReach" style="margin-top:8px;font-size:.76rem;color:var(--s400)">Checking that your registration form can see this\u2026</div>';
+    h+='</div>';
+    return h;
 }
 
 /** Ask the public form's own RPC whether the policy actually reaches it. */
@@ -14888,19 +14900,24 @@ async function _dpCheckReach(){
     if(!client||!client.rpc||!cid){out.textContent='';return}
     try{
         var r=await client.rpc('get_public_form_config',{p_camp_id:cid,p_kind:'registration'});
-        var d=r&&r.data;
         if(r&&r.error)throw r.error;
-        if(d&&Object.prototype.hasOwnProperty.call(d,'depositPolicy')){
-            out.innerHTML='<span style="color:var(--ok);font-weight:600">\u2713 Your registration form can see this.</span>';
-        }else{
-            out.innerHTML='<span style="color:#B45309;font-weight:600">\u26a0 Your registration form cannot see this yet.</span> '
-                +'Apply <code>migrations/164_public_deposit_policy.sql</code> in the Supabase SQL editor \u2014 until then the '
-                +'policy saves here but parents are never shown it.';
-        }
+        var d=r&&r.data;
+        out.innerHTML=(d&&Object.prototype.hasOwnProperty.call(d,'depositPolicy'))
+            ? '<span style="color:var(--ok);font-weight:600">\u2713 Your registration form can see this.</span>'
+            : '<span style="color:#B45309;font-weight:600">\u26a0 Your registration form cannot see this yet.</span> '
+              +'Apply <code>migrations/164_public_deposit_policy.sql</code> in the Supabase SQL editor \u2014 until then the '
+              +'deposit saves here but parents are never shown it.';
     }catch(e){
         out.innerHTML='<span style="color:var(--s400)">Could not check whether the public form sees this ('
             +esc((e&&e.message)||'no connection')+').</span>';
     }
+}
+
+/** Keep the card's preview and reachability line current as the camp types. */
+function _dpRefreshCard(){
+    if(!document.getElementById('dpPreview'))return;
+    _dpPreview();
+    if(!_dpRefreshCard._checked){ _dpRefreshCard._checked=true; _dpCheckReach(); }
 }
 
 function _dpToggle(){
@@ -14955,24 +14972,7 @@ function _dpPreview(){
     out.innerHTML=h;
 }
 
-function _dpSave(){
-    var P=_depPolicyAPI();
-    if(!P)return;
-    var pol=P.normalize(_dpRead());
-    // A policy that is on and asks for nothing is a trap: the form would say a
-    // deposit is required and then let anyone through.
-    if(pol.enabled&&pol.basis==='flat'&&!pol.amount){
-        toast('Set a flat amount, or base the deposit on tuition','error');return;
-    }
-    if(pol.enabled&&pol.basis!=='flat'&&!pol.percent&&pol.basis==='percent'){
-        toast('Set a percentage above zero','error');return;
-    }
-    enrollSettings.depositPolicy=pol;
-    save();
-    closeModal('dynModal');
-    renderRegistrationPage();
-    toast(pol.enabled?'Deposit policy saved':'Deposit no longer required');
-}
+
 
 // ═══════════════════════════════════════════════════════════════
 // BROADCASTS — Full messaging system
@@ -17956,7 +17956,7 @@ window.CampistryMe={
     addDiv:function(){openDivForm(null)},editDiv:function(n){openDivForm(n)},deleteDiv:deleteDiv,
     openCsv:function(){openModal('csvModal')},downloadTemplate:downloadTemplate,
     finReconcileCharges:finReconcileCharges,
-    openDepositPolicy:openDepositPolicy,_dpToggle:_dpToggle,markDepositPaid:markDepositPaid,
+    _dpToggle:_dpToggle,markDepositPaid:markDepositPaid,
     setRosterPage:setRosterPage,setRosterSubTab:setRosterSubTab,setBillingPage:setBillingPage,setAnalyticsInvoicePage:setAnalyticsInvoicePage,setAnalyticsPaymentPage:setAnalyticsPaymentPage,
     _runSetupChecklistAction:_runSetupChecklistAction,dismissSetupChecklist:dismissSetupChecklist,
     bbDrop:bbDrop,autoAssign:autoAssign,autoGenerateBunks:autoGenerateBunks,openBunkGenSettings:openBunkGenSettings,showCamperBunkRequests:showCamperBunkRequests,clearBunks:clearBunks,setBunkCount:setBunkCount,openBunkCountModal:openBunkCountModal,_clearBunkCount:_clearBunkCount,
