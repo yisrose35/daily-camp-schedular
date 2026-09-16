@@ -19,19 +19,31 @@
 ALTER TABLE public.cardknox_checkout_intents
     ADD COLUMN IF NOT EXISTS enrollment_id text;
 
--- The kind list has been widened once already (136). Rebuild it rather than
--- guessing at the constraint's current name.
+-- The kind list has been widened once already (136). Drop the constraint by
+-- its known name first -- that is how 136 did it and the name has not moved --
+-- and then sweep up any copy under a different name, so re-running this cannot
+-- collide with one that is already there.
+--
+-- NOT matched on 'kind%IN%': Postgres does not store a CHECK as it was
+-- written. `kind IN (...)` is normalised to `kind = ANY (ARRAY[...])`, so a
+-- pattern looking for IN matches nothing, drops nothing, and the ADD below
+-- then fails with "constraint already exists". 136's own sanity note prints
+-- the ANY form; that is the shape to match.
+ALTER TABLE public.cardknox_checkout_intents
+    DROP CONSTRAINT IF EXISTS cardknox_checkout_intents_kind_check;
+
 DO $$
 DECLARE c_name text;
 BEGIN
-    SELECT conname INTO c_name
-      FROM pg_constraint
-     WHERE conrelid = 'public.cardknox_checkout_intents'::regclass
-       AND contype = 'c'
-       AND pg_get_constraintdef(oid) ILIKE '%kind%IN%';
-    IF c_name IS NOT NULL THEN
+    FOR c_name IN
+        SELECT conname
+          FROM pg_constraint
+         WHERE conrelid = 'public.cardknox_checkout_intents'::regclass
+           AND contype = 'c'
+           AND pg_get_constraintdef(oid) ILIKE '%kind%'
+    LOOP
         EXECUTE format('ALTER TABLE public.cardknox_checkout_intents DROP CONSTRAINT %I', c_name);
-    END IF;
+    END LOOP;
 END $$;
 
 ALTER TABLE public.cardknox_checkout_intents

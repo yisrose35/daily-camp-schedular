@@ -299,3 +299,58 @@ test('no NEW migration reuses a number', () => {
     assert.deepStrictEqual(broken, [],
         'pick the next unused number instead:\n  ' + broken.join('\n  '));
 });
+
+// ── a CHECK is not stored the way it was written ────────────────────────────
+test('no migration looks for a CHECK by the word IN', () => {
+    // Postgres normalises `CHECK (kind IN ('a','b'))` to
+    // `CHECK ((kind = ANY (ARRAY['a'::text, 'b'::text])))` before storing it,
+    // so pg_get_constraintdef NEVER returns the IN form. A migration that
+    // hunts for the old constraint with ILIKE '%...IN%' matches nothing, drops
+    // nothing, and then dies on its own ADD CONSTRAINT with "already exists" —
+    // which is exactly what 187 did on a real database. Drop by name
+    // (DROP CONSTRAINT IF EXISTS), or match the ANY form.
+    const bad = [];
+    for (const f of fs.readdirSync(path.join(ROOT, 'migrations'))) {
+        if (!f.endsWith('.sql')) continue;
+        const sql = fs.readFileSync(path.join(ROOT, 'migrations', f), 'utf8');
+        // Only where the pattern is being matched against a constraint
+        // definition — plenty of legitimate SQL says IN.
+        if (!/pg_get_constraintdef/.test(sql)) continue;
+        const lines = sql.split('\n');
+        lines.forEach((ln, i) => {
+            if (/pg_get_constraintdef\([^)]*\)\s+I?LIKE\s+'[^']*IN%'/i.test(ln)) {
+                bad.push(`${f}:${i + 1}  ${ln.trim()}`);
+            }
+        });
+    }
+    assert.deepStrictEqual(bad, [],
+        'match the ANY(ARRAY[...]) form, or drop the constraint by name:\n  ' + bad.join('\n  '));
+});
+
+// ── re-running a migration must not be how you find out it is not idempotent ─
+test('every migration that widens a CHECK drops it by name first', () => {
+    // A DO block that sweeps for a differently-named copy is fine as a
+    // belt-and-braces second step, but on its own it depends on a text match
+    // holding. The named drop is the one that cannot miss.
+    const bad = [];
+    for (const f of fs.readdirSync(path.join(ROOT, 'migrations'))) {
+        if (!f.endsWith('.sql')) continue;
+        const sql = fs.readFileSync(path.join(ROOT, 'migrations', f), 'utf8');
+        const adds = sql.match(/ADD\s+CONSTRAINT\s+([a-z0-9_]+)\s+CHECK/gi) || [];
+        for (const a of adds) {
+            const name = /ADD\s+CONSTRAINT\s+([a-z0-9_]+)/i.exec(a)[1];
+            const dropsByName = new RegExp('DROP\\s+CONSTRAINT\\s+IF\\s+EXISTS\\s+' + name, 'i').test(sql);
+            // A constraint born inside its own CREATE TABLE has nothing to
+            // drop; only a later widening does.
+            const inCreateTable = new RegExp('CREATE TABLE[\\s\\S]{0,4000}?CONSTRAINT\\s+' + name, 'i').test(sql);
+            // Equally safe: add it only when it is not already there
+            // (046's shape). The point is that re-running cannot collide, not
+            // which of the two ways got you there.
+            const guardedByExists = new RegExp(
+                'IF\\s+NOT\\s+EXISTS[\\s\\S]{0,400}?conname\\s*=\\s*\'' + name + '\'', 'i').test(sql);
+            if (!dropsByName && !inCreateTable && !guardedByExists) bad.push(`${f}: ${name}`);
+        }
+    }
+    assert.deepStrictEqual(bad, [],
+        'add DROP CONSTRAINT IF EXISTS <name> before the ADD:\n  ' + bad.join('\n  '));
+});
