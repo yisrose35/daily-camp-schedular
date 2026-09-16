@@ -213,7 +213,8 @@ camp cannot be on one processor here and another there:
 |---|---|
 | Stripe (or none set, with Stripe connected) | Stripe Checkout — card and ACH, with the camp's own account as the destination when connected |
 | Banquest | The camp's hosted pay page |
-| Cardknox, others | No online step. The amount is stated and the camp collects it as it already does. |
+| Cardknox / Sola | Sola's own hosted checkout at `secure.cardknox.com/<slug>`, with a real per-transaction amount |
+| Anything else | No online step. The amount is stated and the camp collects it as it already does. |
 
 The form asks `get_public_pay_ability` before offering a button, so a camp
 without a processor never shows one that cannot work.
@@ -265,3 +266,22 @@ the office accepts — `enrollCamper` carries it onto the family at the moment
 the family first exists, and **never overwrites a card the office already has
 on file**, which was chosen deliberately and may be the one autopay is running
 on.
+
+### Migration 167 — Cardknox / Sola
+
+Apply **`migrations/167_cardknox_registration_deposit.sql`** and redeploy
+**`cardknox-webhook`** as well.
+
+Sola's hosted checkout already carries a real per-transaction amount
+(`?xAmount=`) and correlates back through an intent row (migration 134), and it
+saves cards through `cc:save` (135/136). Nothing new was invented — the intent
+only had to learn about applications, because every other kind belongs to a
+family or a camper and neither exists before the office accepts.
+
+> **The detail that matters.** Live testing established that Sola's
+> hosted-checkout webhook **never echoes `xInvoice` back**; it correlates by
+> amount within a bounded window instead. That amount-matched path builds its
+> intent object field by field, and it did not carry `enrollment_id` — so a
+> registration deposit would have resolved to an intent with no application to
+> credit and the money would have landed nowhere. That is the normal path on
+> this rail, not an edge case.

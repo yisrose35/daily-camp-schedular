@@ -769,3 +769,70 @@ test('the saved card reaches the family when the office accepts', () => {
     // autopay runs on — it must not be overwritten by a registration card.
     assert.match(fn, /if\(!_f\.cardOnFile\)/);
 });
+
+// ── Cardknox / Sola ─────────────────────────────────────────────────────────
+//
+// I first said this rail had no hosted page. It does: a real Sola checkout at
+// secure.cardknox.com/<slug> with a per-transaction amount, an intent row for
+// correlation, a webhook, and card saving through cc:save. Nothing had to be
+// invented — only taught about applications.
+test('a Cardknox camp can take the deposit too', () => {
+    const fn = fs.readFileSync(path.join(ROOT, 'supabase/functions/registration-deposit-checkout/index.ts'), 'utf8');
+    const sql = fs.readFileSync(path.join(ROOT, 'migrations/167_cardknox_registration_deposit.sql'), 'utf8');
+    const ability = fs.readFileSync(path.join(ROOT, 'migrations/165_registration_deposit.sql'), 'utf8');
+
+    assert.match(fn, /processorKey === "cardknox"/);
+    assert.match(fn, /secure\.cardknox\.com/);
+    assert.match(fn, /xAmount=/, 'the hosted page needs a real per-transaction amount');
+    assert.match(fn, /xInvoice=/, 'and our own reference to correlate on');
+    assert.match(fn, /create_cardknox_registration_intent/);
+    // The form must offer the button at all for these camps.
+    assert.match(ability, /v_key IN \('banquest', 'cardknox'\)/);
+
+    // An intent belongs to a family or a camper today; this one belongs to an
+    // application, which exists before either does.
+    assert.match(sql, /ADD COLUMN IF NOT EXISTS enrollment_id text/);
+    assert.match(sql, /'registration_deposit'\)\)/, 'the kind constraint must allow it');
+    // A new signature rather than a changed one, so the existing callers in
+    // cardknox-checkout-start keep working while this ships.
+    assert.match(sql, /CREATE OR REPLACE FUNCTION public\.create_cardknox_registration_intent/);
+});
+
+test('the application survives Sola not echoing our reference', () => {
+    // Live testing in this repo established that Sola's hosted-checkout webhook
+    // never sends xInvoice back — it correlates by amount instead. That makes
+    // the amount-matched fallback the NORMAL path, and it used to build its
+    // intent object by hand, field by field. Leaving enrollment_id out of that
+    // list would resolve a registration deposit to an intent with no
+    // application to credit, and the money would land nowhere.
+    const hook = fs.readFileSync(path.join(ROOT, 'supabase/functions/cardknox-webhook/index.ts'), 'utf8');
+    const sql = fs.readFileSync(path.join(ROOT, 'migrations/167_cardknox_registration_deposit.sql'), 'utf8');
+
+    const fallback = hook.slice(hook.indexOf('if (candidates && candidates.length === 1)'),
+                                hook.indexOf('} else if (candidates'));
+    assert.match(fallback, /enrollmentId: row\.enrollment_id/,
+        'the amount-matched fallback must carry the application through');
+    // And the by-reference path needs it from the RPC.
+    assert.match(sql, /'enrollmentId', i\.enrollment_id/);
+    assert.match(hook, /enrollmentId\?: string/, 'the type must allow it');
+});
+
+test('the Cardknox branch credits the application and can keep the card', () => {
+    const hook = fs.readFileSync(path.join(ROOT, 'supabase/functions/cardknox-webhook/index.ts'), 'utf8');
+    const branch = hook.slice(hook.indexOf('if (intent.kind === "registration_deposit")'),
+                              hook.indexOf('// A card save (Sola'));
+
+    assert.match(branch, /_record_registration_deposit/);
+    assert.match(branch, /record_processor_transaction/,
+        'a charge must be visible to the reconciliation tool even if the next step fails');
+    // xToken only comes back when the checkout was told to save a card.
+    assert.match(branch, /vaultCardknoxToken/);
+    assert.match(branch, /_record_registration_card/);
+    // Money moved and the mark failed → ask Sola to retry, never a silent ok.
+    assert.match(branch, /return text\("Could not record deposit", 500\)/);
+    // It must run BEFORE the family-scoped paths, which look for a familyKey
+    // that does not exist yet.
+    assert.ok(hook.indexOf('if (intent.kind === "registration_deposit")') <
+              hook.indexOf('if (intent.kind === "card_save")'),
+        'the application branch must come before the family-scoped ones');
+});

@@ -1007,6 +1007,7 @@ function _regPayMethodNote(){
     }
 
     var who=_payAbility.processor==='banquest'?'the camp\u2019s secure payment page'
+          :_payAbility.processor==='cardknox'?'the camp\u2019s secure checkout page'
           :_payAbility.processor==='stripe'?'Stripe\u2019s secure checkout'
           :'a secure payment page';
 

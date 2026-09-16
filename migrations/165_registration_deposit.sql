@@ -154,7 +154,11 @@ BEGIN
     -- no keys, nothing an anonymous page has any business holding.
     RETURN jsonb_build_object(
         'success', true,
-        'canPayOnline', (v_key IN ('banquest') OR (v_key IS NULL AND v_stripe) OR (v_key = 'stripe' AND v_stripe)),
+        -- Banquest and Cardknox/Sola both have real hosted checkout pages
+        -- with per-transaction amounts; Stripe needs a connected account.
+        'canPayOnline', (v_key IN ('banquest', 'cardknox')
+                         OR (v_key IS NULL AND v_stripe)
+                         OR (v_key = 'stripe' AND v_stripe)),
         'processor', COALESCE(v_key, CASE WHEN v_stripe THEN 'stripe' ELSE '' END)
     );
 END;

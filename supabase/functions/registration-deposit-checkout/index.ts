@@ -215,10 +215,50 @@ serve(async (req) => {
       return json({ success: true, url: session.url, processor: "stripe" });
     }
 
+    // ── Cardknox / Sola: their own hosted checkout ──────────────────────────
+    // Sola's page carries a real per-transaction amount (?xAmount=) and one
+    // field that survives to the webhook (xInvoice), so the correlation is our
+    // own reference against an intent row -- exactly the mechanism
+    // cardknox-checkout-start already uses for tuition and canteen.
+    if (processorKey === "cardknox") {
+      const { data: credResult } = await service.rpc("_admin_get_processor_credential", { p_camp_id: campId });
+      const checkoutSlug = credResult?.credentials?.checkoutSlug;
+      if (!credResult?.success || !checkoutSlug) {
+        return json({
+          success: false,
+          error: "This camp has not finished setting up online payments.",
+          reason: "cardknox_not_configured",
+        }, 200);
+      }
+
+      const reference = "ckrd_" + crypto.randomUUID().replace(/-/g, "");
+      const { data: intentRes, error: intentErr } = await service.rpc("create_cardknox_registration_intent", {
+        p_camp_id: campId,
+        p_reference: reference,
+        p_enroll_id: String(enrollmentId),
+        p_amount_cents: Math.round(owed * 100),
+        p_description: label,
+      });
+      if (intentErr || !intentRes?.success) {
+        console.error(`[registration-deposit] cardknox intent failed: ${intentErr?.message || intentRes?.error}`);
+        return json({ success: false, error: "Could not start the payment — please try again." }, 500);
+      }
+
+      // xCustomerVaultSaveCard is what tells Sola's hosted page to hand back a
+      // reusable token alongside the charge. Only ever sent because the parent
+      // asked -- a card is never vaulted quietly.
+      const url = "https://secure.cardknox.com/" + encodeURIComponent(checkoutSlug) +
+        "?xAmount=" + encodeURIComponent(owed.toFixed(2)) +
+        "&xInvoice=" + encodeURIComponent(reference) +
+        (saveCard ? "&xCustomerVaultSaveCard=true" : "");
+
+      console.log(`[registration-deposit] cardknox intent ${reference}: $${owed.toFixed(2)}, camp ${campId}`);
+      return json({ success: true, url, processor: "cardknox", reference });
+    }
+
     // ── anything else ───────────────────────────────────────────────────────
-    // Cardknox and the rest have no hosted page wired here yet. Say so plainly
-    // rather than showing a button that cannot work: the camp still collects
-    // the deposit the way it already does.
+    // Say so plainly rather than showing a button that cannot work: the camp
+    // still collects the deposit the way it already does.
     console.log(`[registration-deposit] camp ${campId} is on '${processorKey}', which has no hosted page here yet`);
     return json({
       success: false,

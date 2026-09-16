@@ -154,7 +154,7 @@ serve(async (req) => {
     const xToken = fields.get("xToken") || fields.get("xtoken") || "";
     const xMaskedCardNumber = fields.get("xMaskedCardNumber") || fields.get("xmaskedcardnumber") || "";
 
-    type IntentMatch = { success: boolean; campId?: string; kind?: string; familyKey?: string; familyName?: string; camperName?: string; amountCents?: number; status?: string };
+    type IntentMatch = { success: boolean; campId?: string; kind?: string; familyKey?: string; familyName?: string; camperName?: string; enrollmentId?: string; amountCents?: number; status?: string };
     let intent: IntentMatch | null = null;
 
     if (xInvoice) {
@@ -200,7 +200,13 @@ serve(async (req) => {
         xInvoice = row.reference;
         intent = {
           success: true, campId: row.camp_id, kind: row.kind, familyKey: row.family_key,
-          familyName: row.family_name, camperName: row.camper_name, amountCents: row.amount_cents,
+          familyName: row.family_name, camperName: row.camper_name,
+          // Sola does not echo xInvoice back, so this amount-matched path is
+          // the NORMAL one for a hosted-checkout payment. Leaving this out
+          // would resolve a registration deposit to an intent with no
+          // application to credit, and the money would land nowhere.
+          enrollmentId: row.enrollment_id,
+          amountCents: row.amount_cents,
           status: row.status,
         };
       } else if (candidates && candidates.length > 1) {
@@ -225,6 +231,72 @@ serve(async (req) => {
     if (xResult !== "Approved") {
       await service.rpc("mark_cardknox_checkout_intent_status", { p_reference: xInvoice, p_status: "failed", p_xref_num: xRefNum || null });
       console.log(`[cardknox-webhook] Intent ${xInvoice} not approved (xResponseResult=${xResult}) — no credit issued`);
+      return text("ok", 200);
+    }
+
+    // ── a registration deposit ──────────────────────────────────────────────
+    // There is no family record yet — the office has not accepted anybody — so
+    // this credits the APPLICATION. Its own branch, ahead of everything
+    // family-scoped below, which would otherwise look for a familyKey that
+    // does not exist.
+    if (intent.kind === "registration_deposit") {
+      const enrollId = String(intent.enrollmentId || "");
+      if (!enrollId) {
+        console.error(`[cardknox-webhook] registration deposit ${xInvoice} has no application on its intent — cannot credit`);
+        await service.rpc("mark_cardknox_checkout_intent_status", { p_reference: xInvoice, p_status: "failed", p_xref_num: xRefNum || null });
+        return text("ok", 200);
+      }
+      const paid = (intent.amountCents || Math.round(parseFloat(xAmount || "0") * 100)) / 100;
+
+      // Recorded first, so the reconciliation tool in Finance can see a charge
+      // that exists on the processor even if the step after it fails.
+      await service.rpc("record_processor_transaction", {
+        p_camp_id: campId,
+        p_processor_key: "cardknox",
+        p_external_transaction_id: xRefNum || xInvoice,
+        p_kind: "charge",
+        p_amount_cents: Math.round(paid * 100),
+        p_status: "approved",
+        p_raw_response: { source: "registration_deposit", enrollmentId: enrollId },
+      });
+
+      const { data: rec, error: recErr } = await service.rpc("_record_registration_deposit", {
+        p_camp_id: campId,
+        p_enroll_id: enrollId,
+        p_amount: paid,
+        p_reference: xRefNum || xInvoice,
+      });
+      if (recErr || !(rec as any)?.success) {
+        // The money moved. A 500 asks Sola to retry, which is the right answer
+        // here — a silent success would leave a paid family marked unpaid.
+        console.error(`[cardknox-webhook] could not mark registration deposit for ${enrollId}: ${recErr?.message || (rec as any)?.error}`);
+        return text("Could not record deposit", 500);
+      }
+
+      // The card, only when the parent asked on the way in — xToken only comes
+      // back at all when the checkout was told to save one.
+      if (xToken) {
+        const vaulted = await vaultCardknoxToken(service, campId, xToken);
+        if (vaulted) {
+          const last4 = (xMaskedCardNumber || "").replace(/[^0-9]/g, "").slice(-4);
+          const { error: cardErr } = await service.rpc("_record_registration_card", {
+            p_camp_id: campId,
+            p_enroll_id: enrollId,
+            p_processor: "cardknox",
+            p_customer: vaulted,
+            p_method: "",
+            p_last4: last4,
+          });
+          // Not fatal: the deposit is marked and the money is in. A card that
+          // did not stick means typing it once more later.
+          if (cardErr) console.warn(`[cardknox-webhook] card not saved for ${enrollId}: ${cardErr.message}`);
+        } else {
+          console.warn(`[cardknox-webhook] could not vault the card for ${enrollId} — deposit still recorded`);
+        }
+      }
+
+      await service.rpc("mark_cardknox_checkout_intent_status", { p_reference: xInvoice, p_status: "completed", p_xref_num: xRefNum || null });
+      console.log(`[cardknox-webhook] registration deposit $${paid} marked on ${enrollId}${(rec as any)?.duplicate ? " (already recorded)" : ""}`);
       return text("ok", 200);
     }
 
