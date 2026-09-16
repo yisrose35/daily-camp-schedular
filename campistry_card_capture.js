@@ -65,6 +65,13 @@
         var o = opts || {};
         var state = {
             status: 'idle',   // idle | opening | waiting | accepted | refused | error
+            // Set when the SERVER says this camp has no rail at all (no
+            // processor connected, or one with no card entry here). That is
+            // the only trustworthy answer to "can this camp take a card" --
+            // it is the same code that would have to run the charge -- so the
+            // host form uses it to decide whether to hold Submit, rather than
+            // guessing from a separate lookup that may not even be deployed.
+            unavailable: false,
             reference: null,
             processor: null,
             mode: null,
@@ -82,6 +89,7 @@
         function snapshot() {
             return {
                 accepted: state.status === 'accepted',
+                unavailable: state.unavailable,
                 status: state.status,
                 reference: state.reference,
                 processor: state.processor,
@@ -156,10 +164,20 @@
                 var d = r && r.data;
                 if ((r && r.error) || !d || !d.success) {
                     if (pending) { try { pending.close(); } catch (e) {} }
+                    // "This camp has no way to take a card" is a different
+                    // answer from "that did not work" -- one is permanent and
+                    // must release the form, the other is worth retrying.
+                    var reason = d && d.reason;
+                    state.unavailable = reason === 'no_processor'
+                                     || reason === 'processor_unsupported'
+                                     || reason === 'no_stripe_key'
+                                     || reason === 'banquest_not_configured'
+                                     || reason === 'cardknox_not_configured';
                     state.status = 'error';
                     state.error = (d && d.error) || 'Could not open card entry. Try again.';
                     return changed();
                 }
+                state.unavailable = false;
                 state.reference = d.reference;
                 state.processor = d.processor;
                 state.mode = d.mode;
@@ -231,7 +249,8 @@
 
         function reset() {
             stopPolling();
-            state = { status: 'idle', reference: null, processor: null, mode: null, last4: null, brand: null, error: null };
+            state = { status: 'idle', unavailable: false, reference: null, processor: null,
+                      mode: null, last4: null, brand: null, error: null };
             changed();
         }
 
@@ -273,6 +292,16 @@
             var busy = state.status === 'opening';
             var refused = state.status === 'refused';
             var problem = refused || state.status === 'error';
+
+            // A camp with no rail at all gets no button: there is nothing
+            // behind it, and Submit has already been released.
+            if (state.unavailable) {
+                setHtml(el,
+                    '<div style="font-size:.82rem;color:#475569;line-height:1.6;margin-top:8px">' +
+                    esc(state.error || 'This camp takes payment another way.') +
+                    ' You can submit the form \u2014 they will be in touch.</div>');
+                return;
+            }
 
             setHtml(el,
                 '<div style="margin-top:8px">' +

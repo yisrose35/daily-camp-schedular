@@ -1110,6 +1110,28 @@ function _regPayMethodNote(){
         // A card picked for a later bill. Saying nothing here reads as
         // "nothing happens", and then a charge arrives.
         body='Nothing is charged now. The camp will use this '+noun+' when a payment is due.';
+    } else if(_regCardUnavailable()){
+        // The server said there is no rail. That is the one case where a
+        // parent is genuinely paying after the fact.
+        body='This camp does not take '+kind+' through this form. '
+            +'Submit the application and the camp will send you how to pay '+sum+'.';
+    } else if(_regCardRequired()&&global_CampistryCardCapture()){
+        // The button is right below. Describe THAT, not some later step --
+        // this used to fall through to "you will be shown how to pay when you
+        // submit" whenever the pay-ability lookup had not answered yet, which
+        // is most of the time on first paint and always before migration 185.
+        var who=!_payAbility?'the camp\u2019s payment page'
+              :_payAbility.processor==='banquest'?'the camp\u2019s secure payment page'
+              :_payAbility.processor==='cardknox'?'the camp\u2019s secure checkout page'
+              :_payAbility.processor==='stripe'?'Stripe\u2019s secure checkout'
+              :'a secure payment page';
+        body=_regCardAccepted()
+            ? ('Your '+noun+' is accepted. '+sum.charAt(0).toUpperCase()+sum.slice(1)
+               +' will be taken when you submit this form.')
+            : ('Enter your '+details+' below \u2014 it opens '+esc(who)+'. '
+               +'Nothing is charged there; we only check the '+noun+' is good. '
+               +'You can submit once it is accepted, and '+sum+' is taken then.');
+        body+=' Your details never touch this form.';
     } else if(_payAbility&&_payAbility.canPayOnline){
         var who=_payAbility.processor==='banquest'?'the camp\u2019s secure payment page'
               :_payAbility.processor==='cardknox'?'the camp\u2019s secure checkout page'
@@ -1169,9 +1191,14 @@ function _regPayMethodNote(){
 var _cardDiagSaid=false;
 var _cap=null;          // the live CampistryCardCapture instance, if any
 
-/** Is there a rail behind the button at all? */
+/** Do we already KNOW this camp can take a card online? */
 function _regInlineCardOk(){
     return !!(_payAbility&&_payAbility.canPayOnline);
+}
+
+/** Has the server told us this camp has no card rail at all? */
+function _regCardUnavailable(){
+    return !!(_cap&&_cap.state().unavailable);
 }
 
 /** Has the processor actually accepted a card? */
@@ -1188,7 +1215,31 @@ function _regCardAccepted(){
  * payment nobody can make would be worse than no gate at all.
  */
 function _regCardRequired(){
-    return _regIsOnlineMethod(selPM)&&_regDepositPending()&&_regInlineCardOk()&&!!(_resolvedCampId||campIdParam);
+    // Deliberately NOT gated on _payAbility. That answer comes from a separate
+    // lookup which is a round trip away on load and missing entirely until
+    // migration 185 is applied -- and while it was the gate, ticking Credit
+    // Card showed a sentence about submitting instead of the button. The
+    // button appears on what we know immediately: the parent wants to pay by
+    // card, and the camp wants money with the application.
+    //
+    // Whether a card can ACTUALLY be taken is answered by the server the
+    // moment the button is pressed, by the same code that would run the
+    // charge. That is a better answer than the lookup, and it arrives at the
+    // only moment it matters.
+    return _regIsOnlineMethod(selPM)&&_regDepositPending()&&!!(_resolvedCampId||campIdParam);
+}
+
+/**
+ * Should Submit wait?
+ *
+ * Only once there is something to wait FOR. A camp with no card rail -- which
+ * the server says out loud when the button is pressed -- releases the form
+ * immediately; so does a page where the capture module never loaded. Holding a
+ * form hostage over a payment nobody can take would be worse than no gate.
+ */
+function _regCardBlocks(){
+    return _regCardRequired()&&!!global_CampistryCardCapture()
+        &&!_regCardUnavailable()&&!_regCardAccepted();
 }
 
 function _regRenderCardInline(){
@@ -1254,9 +1305,7 @@ function _regSyncSubmitGate(){
     var b=document.getElementById('submitAppBtn');
     // A submit already in flight owns the button; this must not fight it.
     if(!b||_registerSubmitInFlight)return;
-    var need=_regCardRequired()&&!!global_CampistryCardCapture();
-    var have=_regCardAccepted();
-    if(need&&!have){
+    if(_regCardBlocks()){
         b.disabled=true;
         b.style.opacity='.55';
         b.style.cursor='not-allowed';
@@ -1802,7 +1851,7 @@ window.submitApp=async function(){
     //
     // The button is already disabled while this is true; this is the belt to
     // that braces, for a keyboard submit or a stale enabled button.
-    if(_regCardRequired()&&window.CampistryCardCapture&&!_regCardAccepted()){
+    if(_regCardBlocks()){
         try{ document.getElementById('cardInline').scrollIntoView({behavior:'smooth',block:'center'}); }catch(e){}
         return showErr(selPM==='ach'
             ? 'Please enter your bank details above — we need them accepted before your application can be sent.'

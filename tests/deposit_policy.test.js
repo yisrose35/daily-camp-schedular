@@ -749,13 +749,33 @@ test('the card is checked by the processor before the form can be sent', () => {
     assert.match(reg, /Enter your bank details to submit/);
     // Belt as well as braces: a keyboard submit must not slip past.
     const submit = reg.slice(reg.indexOf('window.submitApp=async function()'));
-    assert.match(submit.slice(0, 2000),
-        /if\(_regCardRequired\(\)&&window\.CampistryCardCapture&&!_regCardAccepted\(\)\)/);
+    assert.match(submit.slice(0, 2000), /if\(_regCardBlocks\(\)\)/);
 
-    // Never blocks on a step that cannot run: no processor, no module, no
-    // deposit due, or a method that never reaches a processor.
-    const gate = reg.slice(reg.indexOf('function _regSyncSubmitGate()'));
-    assert.match(gate.slice(0, 900), /var need=_regCardRequired\(\)&&!!global_CampistryCardCapture\(\)/);
+    // The BUTTON appears on what the page knows immediately. It is explicitly
+    // NOT gated on the pay-ability lookup, which is a round trip away on load
+    // and absent entirely before migration 185 — while it was the gate,
+    // ticking Credit Card showed a sentence about submitting instead.
+    // Checked against the CODE, not the comments — the comment there has to
+    // name _payAbility to explain why it is deliberately not used.
+    const required = reg.slice(reg.indexOf('function _regCardRequired(){'),
+                               reg.indexOf('function _regCardBlocks(){'))
+                        .replace(/\/\/[^\n]*/g, '');
+    assert.ok(!/_payAbility|_regInlineCardOk\(\)/.test(required),
+        'the card button must not wait on the pay-ability lookup');
+    assert.match(required, /_regIsOnlineMethod\(selPM\)&&_regDepositPending\(\)/);
+
+    // SUBMIT waits only once there is something to wait for. A camp with no
+    // rail — which the server says when the button is pressed — and a page
+    // where the module never loaded both release the form.
+    const blocks = reg.slice(reg.indexOf('function _regCardBlocks(){'));
+    assert.match(blocks.slice(0, 400), /!!global_CampistryCardCapture\(\)/);
+    assert.match(blocks.slice(0, 400), /!_regCardUnavailable\(\)/);
+    assert.match(blocks.slice(0, 400), /!_regCardAccepted\(\)/);
+
+    // And "no rail" is the server's word, not a guess.
+    const cap2 = fs.readFileSync(path.join(ROOT, 'campistry_card_capture.js'), 'utf8');
+    assert.match(cap2, /reason === 'no_processor'/);
+    assert.match(cap2, /reason === 'processor_unsupported'/);
 });
 
 test('the check costs nothing and the amount is still not the browser’s', () => {
@@ -836,6 +856,8 @@ test('both forms use the same card step', () => {
         assert.match(html, /id="cardInline"/, name + ' must have somewhere to draw it');
         assert.match(html, /CampistryCardCapture(\(\))?\.create\(\{/, name + ' must use it');
         assert.match(html, /to submit'/, name + ' must say what is missing on the button');
+        assert.match(html, /CardBlocks\(\)/, name + ' must hold submit through the shared rule');
+        assert.match(html, /CardUnavailable\(\)/, name + ' must release it when there is no rail');
     }
     // The post-acceptance form charges after it saves, never before.
     const save = pa.slice(pa.indexOf('async function saveResponse('));

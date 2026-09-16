@@ -514,9 +514,23 @@ function _paDepositOutstanding(){
 
 function _paCardAccepted(){ return !!(_paCap&&_paCap.accepted()); }
 
+function _paCardUnavailable(){
+    return !!(_paCap&&_paCap.state().unavailable);
+}
+
 function _paCardRequired(){
-    return _paOnlineMethod(selPM)&&_paDepositOutstanding()>0
-        &&!!(_paPayAbility&&_paPayAbility.canPayOnline)&&!!_paCampId();
+    // Not gated on _paPayAbility, for the same reason the registration form
+    // is not: that lookup is a round trip away and missing entirely until
+    // migration 185 is applied, and while it was the gate, picking a card
+    // showed a sentence instead of the button. Whether a card can actually be
+    // taken is answered by the server when the button is pressed.
+    return _paOnlineMethod(selPM)&&_paDepositOutstanding()>0&&!!_paCampId();
+}
+
+/** Should Submit wait? Only once there is something to wait for. */
+function _paCardBlocks(){
+    return _paCardRequired()&&!!window.CampistryCardCapture
+        &&!_paCardUnavailable()&&!_paCardAccepted();
 }
 
 function _paCampId(){
@@ -561,17 +575,16 @@ function _paRenderCardStep(){
     var body;
     if(owed<=0){
         body='Nothing is outstanding. The camp will use this '+noun+' when a payment is due.';
-    } else if(_paPayAbility&&_paPayAbility.canPayOnline){
+    } else if(_paCardUnavailable()||!window.CampistryCardCapture){
+        body='This camp does not take '+(selPM==='ach'?'bank transfers':'card payments')
+            +' through this form. Submit it and the camp will send you how to pay '+sum+'.';
+    } else {
+        // The button is right below, so describe that.
         body=_paCardAccepted()
             ? ('Your '+noun+' is accepted. '+sum+' will be taken when you submit this form.')
             : ('Enter your '+details+' below. Nothing is charged there — we only check the '+noun
                +' is good. You can submit once it is accepted, and '+sum+' is taken then.');
         body+=' Your details never touch this form.';
-    } else if(_paPayAbility){
-        body='This camp does not take '+(selPM==='ach'?'bank transfers':'card payments')
-            +' through this form. Submit it and the camp will send you how to pay '+sum+'.';
-    } else {
-        body='You will be shown how to pay '+sum+' as soon as you submit this form.';
     }
     note.style.display='';
     _paSetHtml(note,'<div style="background:var(--s50);border:1px solid var(--s200);border-radius:var(--r);'
@@ -618,7 +631,7 @@ function _paRenderCardStep(){
 function _paSyncSubmitGate(){
     var b=document.querySelector('.sub-btn');
     if(!b||_paSubmitting)return;
-    if(_paCardRequired()&&window.CampistryCardCapture&&!_paCardAccepted()){
+    if(_paCardBlocks()){
         b.disabled=true;
         b.textContent=(selPM==='ach'?'Enter your bank details to submit':'Enter your card to submit');
         return;
@@ -879,7 +892,7 @@ window.submitApp=function submitApp(){
     // The card has to be settled with the processor before this form goes.
     // The button is already disabled while it is not; this is the belt to
     // that braces, for a keyboard submit or a stale enabled button.
-    if(_paCardRequired()&&window.CampistryCardCapture&&!_paCardAccepted()){
+    if(_paCardBlocks()){
         try{ document.getElementById('cardInline').scrollIntoView({behavior:'smooth',block:'center'}); }catch(e){}
         errEl.textContent=(selPM==='ach'
             ? 'Please enter your bank details above — we need them accepted before this form can be sent.'
