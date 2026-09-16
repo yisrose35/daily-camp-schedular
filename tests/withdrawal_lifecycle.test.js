@@ -384,3 +384,132 @@ test('the waiver note does not mention the camper leaving', () => {
         'the waiver note changed — if it now distinguishes a withdrawal, ' +
         'update the DEFECT test above too');
 });
+
+// ── 7. CLEARING HOUSE FOR A NEW SUMMER ────────────────────────────────────
+//
+// The scenario that matters most, because it is ANNUAL and ROUTINE rather than
+// an edge case: the camp resets the roster for a new season while families are
+// still part-way through last season's payment plan.
+//
+// The reset is a CSV import in REPLACE mode — importRows()'s own comment calls
+// it "the only 'start fresh' action this app has". It wipes four things:
+//
+//     roster={}; structure={}; families={}; bunkAsgn={};
+//
+// `families={}` is the one that costs money. Every payment plan, every saved
+// card and every family charge/credit lives ON the family record.
+//
+// The confirm dialog says it will "wipe all current campers, divisions, grades,
+// bunks, and families". An office reads "families" as contact records. Nothing
+// in the dialog mentions payment plans, saved cards or outstanding balances,
+// and the archive offered in the same dialog saves none of them.
+
+/** importRows(rows, 'replace') — the wipe, exactly as campistry_me.js does it. */
+function replaceImportWipe(db) {
+    db.roster = {};
+    db.structure = {};
+    db.families = {};          // plans, saved cards, charges, credits — all of it
+    db.bunkAsgn = {};
+    // NOT wiped: enrollments, finance.payments.
+    return db;
+}
+
+test('the Replace wipe is exactly these four, and enrollments is not one', () => {
+    const src = read('campistry_me.js');
+    const wipe = src.slice(src.indexOf('═══ WIPE EXISTING DATA'),
+                           src.indexOf('nextPersonId is intentionally NOT reset'));
+    assert.ok(wipe.length > 0, 'the wipe block moved — re-check this test');
+    for (const k of ['roster={}', 'structure={}', 'families={}', 'bunkAsgn={}']) {
+        assert.ok(wipe.includes(k), `the wipe no longer clears ${k}`);
+    }
+    // If enrollments ever joins the wipe, the orphaned-charge behaviour below
+    // changes completely and these tests need rewriting.
+    assert.ok(!/\benrollments\s*=\s*\{\}/.test(wipe),
+        'enrollments is now wiped too — re-derive what Billing shows');
+});
+
+test('CLEARING HOUSE: every payment plan and saved card is destroyed', () => {
+    const d = steinDb();
+    d.payments.push({ familyKey: 'f1', amount: 1000, status: 'succeeded' });
+    assert.ok(d.families.f1.plans[0].installments.some(i => i.status === 'pending'),
+        'four instalments still owed before the reset');
+
+    replaceImportWipe(d);
+
+    assert.deepStrictEqual(Object.keys(d.families), [],
+        'the plan, the card and the balance all lived on the family record');
+    // The payment history survives — see the next test for why that is load-bearing.
+    assert.strictEqual(d.payments.length, 1);
+});
+
+test('CLEARING HOUSE: autopay silently stops for everyone', () => {
+    // charge-due-installments iterates me.families. After the wipe there are
+    // none, so it charges nobody — with no error and no log line, because the
+    // loop body simply never runs. Every remaining instalment goes uncollected.
+    const d = steinDb();
+    assert.deepStrictEqual(autopayNight(d, 'f1', '2026-01-01').map(c => c.result),
+        ['charged'], 'autopay works before the reset');
+
+    replaceImportWipe(d);
+
+    assert.deepStrictEqual(autopayNight(d, 'f1', '2026-02-01'), [],
+        'autopay is dead — and says nothing');
+    assert.deepStrictEqual(autopayNight(d, 'f1', '2026-06-01'), [],
+        'and stays dead for every remaining instalment');
+});
+
+test('CLEARING HOUSE: the payment HISTORY survives the cloud write', () => {
+    // The wipe also pushes campistryMe to the cloud. The lite localStorage
+    // snapshot has `finance` stripped from it (integration_hooks.js:553), so a
+    // naive wholesale upsert would delete every payment the camp ever took.
+    // It does not, because the sync layer fetch-merges campistryMe: absent
+    // top-level branches are preserved from the cloud value, and `families` is
+    // overwritten only because the wipe sets it explicitly to {}.
+    const hooks = read('integration_hooks.js');
+    assert.ok(hooks.includes("const FETCH_MERGE_KEYS = ['app1', 'campistryMe']"),
+        'the fetch-merge guard is gone — a Replace import would now wipe the ' +
+        'entire payment history along with the families');
+    assert.ok(hooks.includes('{ ...cur.value, ...changesToSync[mergeKey] }'),
+        'the shallow merge changed shape');
+    assert.ok(hooks.includes('delete lite.campistryMe.finance'),
+        'finance is no longer stripped from the lite snapshot — if that is ' +
+        'deliberate the guard above matters less, but re-check both together');
+});
+
+test('CLEARING HOUSE: last season’s charge reappears on a synthetic ledger', () => {
+    // enrollments is NOT wiped, so last season's 'enrolled' rows survive with
+    // no camper and no family behind them. buildFamilyLedgers does not drop
+    // them — _resolveFamilyKeyExact finds no family, so each one lands on an
+    // ephemeral `pending_<lastname>_<eid>` ledger instead.
+    //
+    // The PAYMENTS do not follow: a payment is matched by
+    // `(p.familyKey && families[p.familyKey]) ? p.familyKey : _payFamilyByName(p)`,
+    // and after the wipe neither branch resolves to that synthetic key. So the
+    // charge shows on one ledger and the money shows as unmatched — the family
+    // reads as owing the whole tuition again.
+    const src = read('campistry_me.js');
+    const build = src.slice(src.indexOf('function buildFamilyLedgers'));
+
+    assert.ok(build.includes("fk='pending_'+lastName.toLowerCase()"),
+        'the synthetic pending ledger is gone — an orphaned charge would now ' +
+        'vanish from Billing entirely');
+    assert.ok(build.includes('var fk=(p.familyKey&&families[p.familyKey])?p.familyKey:_payFamilyByName(p)'),
+        'payment matching changed — re-check whether payments can now reach a ' +
+        'synthetic ledger');
+});
+
+test('CLEARING HOUSE: the season archive saves nothing financial', () => {
+    // archive_camp_season is offered in the same dialog as the wipe, which
+    // reads as "your history is safe". It snapshots attendance and
+    // demographics only.
+    const sql = read('migrations/088_camp_person_seasons.sql');
+    const fn = sql.slice(sql.indexOf('archive_camp_season'));
+    for (const field of ['division', 'grade', 'bunk', 'parentEmail']) {
+        assert.ok(fn.includes(`'${field}'`), `the archive no longer saves ${field}`);
+    }
+    for (const money of ['plans', 'balance', 'installments', 'cardOnFile', 'payments']) {
+        assert.ok(!fn.includes(`'${money}'`),
+            `the archive now saves ${money} — if season rollover was fixed, ` +
+            `rewrite these tests`);
+    }
+});

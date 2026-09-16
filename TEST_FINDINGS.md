@@ -4,7 +4,7 @@ Run against `265127c`. Suite after this pass: **1509 tests, 1495 pass, 14 fail**
 the 14 are the pre-existing `tests/auto_full_day.test.js` scheduler failures,
 unchanged and unrelated (verified by stashing).
 
-18 new tests added: 7 in `tests/money_parity.test.js` (withdrawal parity) and 11
+25 new tests added: 7 in `tests/money_parity.test.js` (withdrawal parity) and 18
 in the new `tests/withdrawal_lifecycle.test.js`.
 
 ---
@@ -153,6 +153,81 @@ Compounding both: `cloudSaveSnacks` unions accounts cloud-first
 never propagates while another device still holds the account. The orphan neither
 cleans up nor settles — it flickers depending on which device saved last.
 
+---
+
+## D0 — Season rollover destroys every live payment plan
+
+**This is the most serious finding, and it is not an edge case — it is the
+annual reset.** Raised as: *"camp clears house for a new summer but we have
+plenty of people who are still on payment plans."*
+
+The reset is a CSV import in **Replace** mode. `importRows()`'s own comment
+calls it "the only 'start fresh' action this app has". It wipes four things:
+
+```js
+roster={}; structure={}; families={}; bunkAsgn={};
+```
+
+`families={}` is the one that costs money. Every payment plan (`f.plans`), every
+saved card (`byopCustomerRef`, `stripeCustomerId`, `savedPaymentMethods`) and
+every family charge/credit lives **on the family record**.
+
+`enrollments` and `finance.payments` are not wiped.
+
+### What that does to a family mid-plan
+
+| | Before the reset | After |
+|---|---|---|
+| Payment plan | live | **gone** |
+| Saved card | live | **gone** (token orphaned at the processor) |
+| Autopay | charging monthly | **silently dead** |
+| Parent portal | correct balance | **$0 owed** |
+| Camp's Billing | one correct ledger | charge on a synthetic ledger, payments unmatched |
+| Payment history | intact | **intact** |
+
+1. **Autopay stops for everyone, silently.** `charge-due-installments` iterates
+   `me.families`. There are none, so the loop body never runs — no error, no
+   warning, not even a log line. Every remaining instalment is simply never
+   collected.
+2. **The parent portal reads $0.** `get_my_balance` resolves the family from
+   `families`; it is gone.
+3. **The camp's books go incoherent rather than empty.** Last season's
+   `enrolled` enrollments survive with no camper and no family behind them.
+   `buildFamilyLedgers` does not drop them — `_resolveFamilyKeyExact` finds no
+   family, so each lands on an ephemeral `pending_<lastname>_<eid>` ledger. The
+   payments do **not** follow: matching is
+   `(p.familyKey && families[p.familyKey]) ? p.familyKey : _payFamilyByName(p)`,
+   and after the wipe neither branch reaches that synthetic key. So the charge
+   sits on one ledger and the money shows as unmatched — the family reads as
+   owing the entire tuition again.
+4. **The season archive does not help.** `archive_camp_season` (migration 088)
+   snapshots division, grade, bunk, dob, school, parent name and parent email.
+   Nothing financial. It is offered in the same dialog as the wipe, which makes
+   it read as "your history is safe."
+5. **The warning does not say any of this.** The dialog reads: *"Replace — wipe
+   all current campers, divisions, grades, bunks, and families, and start fresh
+   from this file. Cannot be undone."* An office reads "families" as contact
+   records, not as every payment plan and saved card in the camp.
+
+### The one piece of good news
+
+The payment **history** survives. The wipe also pushes `campistryMe` to the
+cloud, and the lite localStorage snapshot has `finance` stripped from it
+(`integration_hooks.js:553`) — so a wholesale upsert would have deleted every
+payment the camp ever took. It does not, because the sync layer fetch-merges
+`campistryMe` (`FETCH_MERGE_KEYS`, shallow spread): branches absent from the
+payload are preserved from the cloud value, and `families` is overwritten only
+because the wipe sets it explicitly to `{}`. That guard is now pinned by a test,
+because if it is ever removed this goes from "plans lost" to "every payment the
+camp ever recorded, lost."
+
+### Relationship to D1
+
+D1 (parked camper) loses the instalments that came due during one camper's gap.
+D0 loses **the entire remaining plan for every family at once**, as part of a
+routine annual operation. Same root cause: money that lives on the family record
+has no life independent of enrollment, and nothing reconciles a plan against
+what is still actually owed.
 ---
 
 ## Not checked
