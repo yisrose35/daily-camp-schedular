@@ -129,50 +129,57 @@ async function upsertPayment(
   const type = (pi.payment_method_types && pi.payment_method_types[0]) || "card";
   const errorMsg = pi.last_payment_error?.message || "";
 
-  for (let attempt = 0; attempt < 4; attempt++) {
-    const cur = await supabase.from("camp_state_kv").select("value")
-      .eq("camp_id", campId).eq("key", "campistryMe").maybeSingle();
-    const me: Record<string, any> = (cur.data && cur.data.value && typeof cur.data.value === "object")
-      ? cur.data.value : {};
-    if (!me.finance) me.finance = {};
-    if (!Array.isArray(me.finance.payments)) me.finance.payments = [];
-    const pays: Record<string, any>[] = me.finance.payments;
+  // ── one atomic call, not a blind read-modify-write ──────────────────────
+  // This used to read campistryMe, mutate finance.payments and upsert the whole
+  // blob, with no lock and no version check. Two overlapping writers — a second
+  // webhook, the nightly autopay run, an office save — both read the same blob
+  // and the later write silently discarded the earlier append. The card was
+  // charged and Campistry had no record of it.
+  //
+  // The retry loop that was here did not help: it retried on a WRITE ERROR, and
+  // a lost update is not an error. Both writes succeed.
+  //
+  // Stripe sends several events for ONE intent (pending, then succeeded or
+  // failed), so this is an upsert rather than an append: p_update_on_match
+  // patches the row already recorded for that intent instead of adding a second
+  // payment for the same charge. Both the match and the write happen under one
+  // row lock, which also makes Stripe's routine webhook retries safe — the
+  // duplicate delivery sees the first one's row. See migration 168.
+  const patch: Record<string, any> = {
+    status: status,
+    amount: amount,
+    method: methodLabel(type),
+  };
+  if (errorMsg) patch.notes = "Online payment failed — " + errorMsg;
 
-    const existing = pays.find((p) => p.stripePaymentIntentId === pi.id);
-    if (existing) {
-      existing.status = status;
-      existing.amount = amount;
-      existing.method = methodLabel(type);
-      if (errorMsg) existing.notes = "Online payment failed — " + errorMsg;
-    } else {
-      pays.push({
-        id: "pi_" + pi.id,
-        family: meta.familyName || "",
-        familyKey: meta.familyKey || null,
-        enrollmentId: meta.enrollmentId || null,
-        amount: amount,
-        date: new Date().toISOString().split("T")[0],
-        method: methodLabel(type),
-        reference: pi.id,
-        notes: status === "failed"
-          ? "Online payment failed — " + errorMsg
-          : status === "pending"
-            ? "Online payment (" + methodLabel(type) + ") — awaiting settlement"
-            : "Online payment (" + methodLabel(type) + ")",
-        stripePaymentIntentId: pi.id,
-        status: status,
-        timestamp: Date.now(),
-      });
-    }
-
-    const up = await supabase.from("camp_state_kv").upsert(
-      { camp_id: campId, key: "campistryMe", value: me, updated_at: new Date().toISOString() },
-      { onConflict: "camp_id,key" },
-    );
-    if (!up.error) return true;
-    console.warn(`[stripe-webhook] upsert attempt ${attempt} failed: ${up.error.message}`);
+  const res = await supabase.rpc("append_camp_payment", {
+    p_camp_id: campId,
+    p_payment: {
+      id: "pi_" + pi.id,
+      family: meta.familyName || "",
+      familyKey: meta.familyKey || null,
+      enrollmentId: meta.enrollmentId || null,
+      amount: amount,
+      date: new Date().toISOString().split("T")[0],
+      method: methodLabel(type),
+      reference: pi.id,
+      notes: status === "failed"
+        ? "Online payment failed — " + errorMsg
+        : status === "pending"
+          ? "Online payment (" + methodLabel(type) + ") — awaiting settlement"
+          : "Online payment (" + methodLabel(type) + ")",
+      stripePaymentIntentId: pi.id,
+      status: status,
+      timestamp: Date.now(),
+    },
+    p_dedupe_key: pi.id,
+    p_update_on_match: patch,
+  });
+  if (res.error || res.data?.success !== true) {
+    console.warn(`[stripe-webhook] could not record ${pi.id}: ${res.error?.message || res.data?.error || "unknown"}`);
+    return false;
   }
-  return false;
+  return true;
 }
 
 // Only acts on a final 'succeeded' status — canteen has no "pending balance"

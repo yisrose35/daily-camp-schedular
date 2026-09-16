@@ -273,19 +273,32 @@ serve(async (req) => {
     }
 
     // ── tuition: append to the family ledger (dedup on the gateway txn id) ───
-    let recorded = false;
-    for (let attempt = 0; attempt < 4 && !recorded; attempt++) {
+    // ── recorded through append_camp_payment, NOT a blind blob upsert ──────
+    // This used to read campistryMe, push onto finance.payments and upsert the
+    // whole blob, with no lock and no version check — so any writer that
+    // overlapped (another webhook, the nightly autopay run, an office save)
+    // silently discarded whichever append landed first. The card was charged
+    // and Campistry had no record of it. The retry loop did not help: it
+    // retried on a WRITE ERROR, and a lost update is not an error.
+    //
+    // The read below is only for the family's display name, so it needs no
+    // lock and a stale answer is harmless — parent-side attribution matches on
+    // familyKey, not on this string. The WRITE is what had to become atomic.
+    // See migration 168.
+    let famName = familyName || String(familyKey);
+    try {
       const cur = await service.from("camp_state_kv").select("value")
         .eq("camp_id", campId).eq("key", "campistryMe").maybeSingle();
-      const me: Record<string, any> = (cur.data?.value && typeof cur.data.value === "object") ? cur.data.value : {};
-      if (!me.finance) me.finance = {};
-      if (!Array.isArray(me.finance.payments)) me.finance.payments = [];
-      const pays: Record<string, any>[] = me.finance.payments;
-      if (pays.find((p) => p.byopTransactionId === txnId)) { recorded = true; break; }
-      const famNow = (me.families && me.families[String(familyKey)]) || null;
-      pays.push({
+      const meNow: Record<string, any> = (cur.data?.value && typeof cur.data.value === "object") ? cur.data.value : {};
+      const famNow = (meNow.families && meNow.families[String(familyKey)]) || null;
+      if (famNow && famNow.name) famName = famNow.name;
+    } catch (_) { /* cosmetic only */ }
+
+    const rec = await service.rpc("append_camp_payment", {
+      p_camp_id: campId,
+      p_payment: {
         id: "byop_" + txnId,
-        family: (famNow && famNow.name) || familyName || familyKey,
+        family: famName,
         familyKey: String(familyKey),
         amount: charged,
         date: new Date().toISOString().split("T")[0],
@@ -296,12 +309,10 @@ serve(async (req) => {
         byopProcessor: "banquest",
         status: "succeeded",
         timestamp: Date.now(),
-      });
-      const up = await service.from("camp_state_kv").upsert(
-        { camp_id: campId, key: "campistryMe", value: me, updated_at: new Date().toISOString() },
-        { onConflict: "camp_id,key" });
-      if (!up.error) recorded = true;
-    }
+      },
+      p_dedupe_key: txnId,
+    });
+    const recorded = !rec.error && rec.data?.success === true;
     if (!recorded) {
       console.error(`[payments-charge-nonce] captured ${txnId} but could not record it for camp ${campId}/${familyKey}`);
       return json({ success: false, error: "Your card was charged but recording it failed — contact the camp office." }, 200);

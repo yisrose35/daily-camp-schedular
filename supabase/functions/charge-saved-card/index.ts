@@ -327,36 +327,40 @@ serve(async (req) => {
     } else {
       // Tuition — same shape cardknox-webhook/payments-charge already write
       // into campistryMe.finance.payments.
-      let saved = false;
-      for (let attempt = 0; attempt < 4 && !saved; attempt++) {
-        const cur = await service.from("camp_state_kv").select("value")
-          .eq("camp_id", campId).eq("key", "campistryMe").maybeSingle();
-        const cur_me: Record<string, any> = (cur.data?.value && typeof cur.data.value === "object") ? cur.data.value : {};
-        if (!cur_me.finance) cur_me.finance = {};
-        if (!Array.isArray(cur_me.finance.payments)) cur_me.finance.payments = [];
-        const pays: Record<string, any>[] = cur_me.finance.payments;
-        if (!pays.find((p) => p.byopTransactionId === externalTransactionId || p.stripePaymentIntentId === externalTransactionId)) {
-          const isByop = chargeProcessorKey === "cardknox" || chargeProcessorKey === "banquest";
-          pays.push({
-            id: (isByop ? "byop_" : "stripe_") + externalTransactionId,
-            family: fam.name || familyKey, familyKey,
-            amount: amountCents / 100,
-            date: new Date().toISOString().split("T")[0],
-            method: isByop ? ("Card on file (" + (chargeProcessorKey === "cardknox" ? "Sola" : "Banquest") + ")") : "Card on file (Stripe)",
-            reference: externalTransactionId,
-            notes: "Charged card on file",
-            ...(isByop ? { byopTransactionId: externalTransactionId, byopProcessor: chargeProcessorKey } : { stripePaymentIntentId: externalTransactionId }),
-            status: "succeeded", timestamp: Date.now(),
-          });
-        }
-        const up = await service.from("camp_state_kv").upsert(
-          { camp_id: campId, key: "campistryMe", value: cur_me, updated_at: new Date().toISOString() },
-          { onConflict: "camp_id,key" },
-        );
-        if (!up.error) saved = true;
-      }
+      // ── recorded through append_camp_payment, NOT a blind blob upsert ────
+      // The old code here read campistryMe, pushed onto finance.payments and
+      // upserted the whole blob. With no lock and no version check, any other
+      // writer that overlapped — a second webhook, the nightly autopay run, an
+      // office save — silently discarded whichever append landed first. The
+      // money left the card and Campistry had no record of it.
+      //
+      // The retry loop that used to wrap this did not help: it retried on a
+      // WRITE ERROR, and a lost update is not an error. Both writes succeed.
+      //
+      // append_camp_payment does the read, the dedupe and the write inside one
+      // transaction holding a row lock, so a concurrent writer waits instead of
+      // overwriting — and the dedupe on the processor's own transaction id now
+      // happens under that lock too, which is what makes a retried webhook
+      // land once instead of racing itself. See migration 168.
+      const isByop = chargeProcessorKey === "cardknox" || chargeProcessorKey === "banquest";
+      const rec = await service.rpc("append_camp_payment", {
+        p_camp_id: campId,
+        p_payment: {
+          id: (isByop ? "byop_" : "stripe_") + externalTransactionId,
+          family: fam.name || familyKey, familyKey,
+          amount: amountCents / 100,
+          date: new Date().toISOString().split("T")[0],
+          method: isByop ? ("Card on file (" + (chargeProcessorKey === "cardknox" ? "Sola" : "Banquest") + ")") : "Card on file (Stripe)",
+          reference: externalTransactionId,
+          notes: "Charged card on file",
+          ...(isByop ? { byopTransactionId: externalTransactionId, byopProcessor: chargeProcessorKey } : { stripePaymentIntentId: externalTransactionId }),
+          status: "succeeded", timestamp: Date.now(),
+        },
+        p_dedupe_key: externalTransactionId,
+      });
+      const saved = !rec.error && rec.data?.success === true;
       if (!saved) {
-        console.error(`[charge-saved-card] Charged ${externalTransactionId} but could not record the payment for camp ${campId} after retries`);
+        console.error(`[charge-saved-card] Charged ${externalTransactionId} but could not record the payment for camp ${campId}`);
       }
     }
 

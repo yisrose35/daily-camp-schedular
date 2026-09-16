@@ -101,53 +101,66 @@ serve(async (req) => {
       p_raw_response: chargeResult.raw ? JSON.parse(JSON.stringify(chargeResult.raw)) : null,
     });
 
-    // Save the card on file (a free bonus — we already have a real
-    // customerRef from saveMethod above) and record the payment into the
-    // exact same finance.payments array stripe-webhook's upsertPayment
-    // writes Stripe online payments into, so Billing's balance math is
-    // identical regardless of processor. Same retry-loop read-modify-write
-    // convention already used by payments-save-method / upsertPayment for
-    // this exact JSON blob.
-    let saved = false;
-    for (let attempt = 0; attempt < 4 && !saved; attempt++) {
+    // Save the card on file and record the payment.
+    //
+    // Both used to happen in ONE blind read-modify-write of the whole
+    // campistryMe blob: read, mutate families[...] and finance.payments, upsert
+    // it all back. With no lock and no version check, any overlapping writer —
+    // another webhook, the nightly autopay run, an office save — silently
+    // discarded whichever change landed first. Losing the payment means the
+    // card was charged with no record; losing the card-on-file fields means
+    // autopay quietly stops working for that family.
+    //
+    // Two atomic calls now (migration 168), each taking a row lock across its
+    // own read and write. They are separate transactions, but each is
+    // independently safe and idempotent, which is strictly better than one
+    // write that can lose either.
+    const famRes = await service.rpc("merge_camp_family_fields", {
+      p_camp_id: campId,
+      p_family_key: familyKey,
+      p_fields: {
+        byopProcessor: processorKey,
+        byopCustomerRef: saveResult.customerRef,
+        cardOnFile: true,
+        cardSavedDate: new Date().toISOString(),
+      },
+    });
+    if (famRes.error || famRes.data?.success !== true) {
+      const why = famRes.error?.message || famRes.data?.error || "unknown";
+      if (why === "family_not_found") {
+        return json({ success: false, error: "Payment succeeded (ref " + chargeResult.externalTransactionId + ") but the family record is gone — contact support." }, 500);
+      }
+      console.error(`[payments-checkout] could not save card on file for ${familyKey}: ${why}`);
+    }
+
+    let famName = familyName || "";
+    try {
       const cur = await service.from("camp_state_kv").select("value")
         .eq("camp_id", campId).eq("key", "campistryMe").maybeSingle();
-      const me: Record<string, any> = (cur.data && cur.data.value && typeof cur.data.value === "object") ? cur.data.value : {};
-      if (!me.families || typeof me.families !== "object") me.families = {};
-      const f = me.families[familyKey];
-      if (!f) return json({ success: false, error: "Payment succeeded (ref " + chargeResult.externalTransactionId + ") but the family record is gone — contact support." }, 500);
+      const meNow: Record<string, any> = (cur.data && cur.data.value && typeof cur.data.value === "object") ? cur.data.value : {};
+      const fNow = (meNow.families && meNow.families[familyKey]) || null;
+      if (!famName && fNow && fNow.name) famName = fNow.name;
+    } catch (_) { /* cosmetic only */ }
 
-      f.byopProcessor = processorKey;
-      f.byopCustomerRef = saveResult.customerRef;
-      f.cardOnFile = true;
-      f.cardSavedDate = new Date().toISOString();
-
-      if (!me.finance) me.finance = {};
-      if (!Array.isArray(me.finance.payments)) me.finance.payments = [];
-      const pays: Record<string, any>[] = me.finance.payments;
-      if (!pays.find((p) => p.byopTransactionId === chargeResult.externalTransactionId)) {
-        pays.push({
-          id: "byop_" + chargeResult.externalTransactionId,
-          family: familyName || f.name || "",
-          familyKey: familyKey,
-          amount: Number(amount),
-          date: new Date().toISOString().split("T")[0],
-          method: (processorKey === "cardknox" ? "Sola" : processorKey) + " (online)",
-          reference: chargeResult.externalTransactionId,
-          notes: "Online payment link (" + processorKey + ")",
-          byopTransactionId: chargeResult.externalTransactionId,
-          byopProcessor: processorKey,
-          status: "succeeded",
-          timestamp: Date.now(),
-        });
-      }
-
-      const up = await service.from("camp_state_kv").upsert(
-        { camp_id: campId, key: "campistryMe", value: me, updated_at: new Date().toISOString() },
-        { onConflict: "camp_id,key" },
-      );
-      if (!up.error) saved = true;
-    }
+    const payRes = await service.rpc("append_camp_payment", {
+      p_camp_id: campId,
+      p_payment: {
+        id: "byop_" + chargeResult.externalTransactionId,
+        family: famName,
+        familyKey: familyKey,
+        amount: Number(amount),
+        date: new Date().toISOString().split("T")[0],
+        method: (processorKey === "cardknox" ? "Sola" : processorKey) + " (online)",
+        reference: chargeResult.externalTransactionId,
+        notes: "Online payment link (" + processorKey + ")",
+        byopTransactionId: chargeResult.externalTransactionId,
+        byopProcessor: processorKey,
+        status: "succeeded",
+        timestamp: Date.now(),
+      },
+      p_dedupe_key: chargeResult.externalTransactionId,
+    });
+    const saved = !payRes.error && payRes.data?.success === true;
     if (!saved) {
       return json({ success: false, error: "Payment succeeded (ref " + chargeResult.externalTransactionId + ") but could not be recorded — contact support." }, 500);
     }

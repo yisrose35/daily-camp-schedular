@@ -107,8 +107,21 @@ BEGIN
     END IF;
 
     -- ── find the order ─────────────────────────────────────────────────────
+    -- ── LOCK ORDER: campistryShop -> campistrySnacks -> campistryMe ────────
+    -- Every SELECT below takes FOR UPDATE and holds it to the end of the
+    -- function, because all three writes are read-modify-write on a JSONB blob.
+    -- Without the lock two concurrent settlements — or a settlement racing a
+    -- POS sale or a parent deposit — both read the same ledger, both append
+    -- their own row, and the second write silently discards the first. The
+    -- canteen balance is RECOMPUTED from that ledger, so a lost transaction is
+    -- lost money, not just a lost audit line.
+    --
+    -- The ORDER is load-bearing and matches migration 122's place_shop_order
+    -- (Shop then Snacks). Two functions taking the same two locks in opposite
+    -- orders deadlock; keep any new writer on this order.
     SELECT value INTO v_shop FROM camp_state_kv
-     WHERE camp_id = p_camp_id AND key = 'campistryShop';
+     WHERE camp_id = p_camp_id AND key = 'campistryShop'
+     FOR UPDATE;
     IF v_shop IS NULL THEN
         RETURN jsonb_build_object('success', false, 'error', 'no_shop_data');
     END IF;
@@ -151,7 +164,8 @@ BEGIN
     -- ── canteen ────────────────────────────────────────────────────────────
     IF v_cur_method = 'canteen' OR v_new_method = 'canteen' THEN
         SELECT value INTO v_snacks FROM camp_state_kv
-         WHERE camp_id = p_camp_id AND key = 'campistrySnacks';
+         WHERE camp_id = p_camp_id AND key = 'campistrySnacks'
+         FOR UPDATE;
         IF v_snacks IS NULL THEN v_snacks := '{}'::jsonb; END IF;
         IF v_snacks->'accounts' IS NULL THEN
             v_snacks := jsonb_set(v_snacks, '{accounts}', '{}'::jsonb, true);
@@ -200,7 +214,8 @@ BEGIN
     -- ── camp bill ──────────────────────────────────────────────────────────
     IF v_cur_method = 'bill' OR v_new_method = 'bill' THEN
         SELECT value INTO v_me FROM camp_state_kv
-         WHERE camp_id = p_camp_id AND key = 'campistryMe';
+         WHERE camp_id = p_camp_id AND key = 'campistryMe'
+         FOR UPDATE;
         IF v_me IS NULL THEN v_me := '{}'::jsonb; END IF;
 
         -- Whose family? Resolved here rather than trusted from the client:

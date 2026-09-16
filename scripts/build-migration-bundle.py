@@ -92,6 +92,10 @@ MANIFEST = [
     # Independent of the access chain. Needs the shop order shape from 122.
     ("167_settle_shop_orders",
      "The Camp Shop actually takes the money: canteen debit / camp-bill charge, idempotent"),
+    # Independent. Adds the atomic write path the payment edge functions use;
+    # additive, so a function still on the old path keeps working.
+    ("168_atomic_payment_writes",
+     "Atomic, locking, idempotent payment + family writes (stops lost updates)"),
 ]
 
 HEADER = """-- ═══════════════════════════════════════════════════════════════════════════
@@ -152,6 +156,13 @@ HEADER = """-- ═════════════════════�
 --     with two family records also now see the sum of both rather than one.
 --     Expect some parent balances to DROP when you run this; that is the bug
 --     being fixed, not a new discount.
+--   * Payments stop being lost to a lost update (168). The payment webhooks
+--     used to read the whole campistryMe blob, append, and write it back with
+--     no lock -- so two that overlapped silently discarded one another's
+--     payment, and a retried webhook could credit a family twice. The SQL here
+--     only adds the atomic path; each edge function starts using it when you
+--     redeploy it (see the list in the commit). Functions not yet redeployed
+--     keep working exactly as before.
 --   * !! The Camp Shop starts taking money it never took (167). "Charge to
 --     canteen account" and "Charge to camp bill" were labels on a dropdown
 --     that settled nothing: the order stored the method and the money was
@@ -364,6 +375,10 @@ UNION ALL SELECT 'parent balance counts Zelle/ACH deposits',
 UNION ALL SELECT 'parent balance sums every family the parent belongs to',
        CASE WHEN (SELECT prosrc FROM pg_proc WHERE proname='get_my_balance' LIMIT 1)
                  LIKE '%v_famKeys%'
+            THEN 'OK' ELSE 'MISSING' END
+UNION ALL SELECT 'atomic payment write path',
+       CASE WHEN EXISTS (SELECT 1 FROM pg_proc WHERE proname='append_camp_payment')
+             AND EXISTS (SELECT 1 FROM pg_proc WHERE proname='merge_camp_family_fields')
             THEN 'OK' ELSE 'MISSING' END
 UNION ALL SELECT 'camp shop settles its orders',
        CASE WHEN EXISTS (SELECT 1 FROM pg_proc WHERE proname='settle_shop_order')
