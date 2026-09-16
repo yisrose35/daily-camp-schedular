@@ -373,23 +373,94 @@ a clear error, never silently saved. On success, the camp's
 `payment_processor_key` flips from `stripe` to `banquest` (or `cardknox`)
 and the Dashboard status card updates on next load.
 
-To disconnect a camp back to Stripe, run in the SQL Editor:
+To disconnect a camp, run in the SQL Editor. Note the target is `'none'`, not
+`'stripe'` — since migration 153 Stripe is one choice among several rather
+than the default, so sending a camp back to `'stripe'` would claim it chose
+Stripe and route its tuition through a Connect account it may not have:
 
 ```sql
-UPDATE camps SET payment_processor_key = 'stripe' WHERE id = '<camp id>';
+UPDATE camps SET payment_processor_key = 'none' WHERE id = '<camp id>';
 DELETE FROM camp_processor_credentials WHERE camp_id = '<camp id>';
 -- (the underlying Vault secret is orphaned, not deleted, by this alone —
 --  acceptable for now given how rarely this runs; a follow-up RPC can
 --  clean it up properly if this becomes a frequent action)
 ```
 
+### Per-camp dispute webhook (every non-Stripe processor — required)
+
+This is the one that was missing, and it was missing silently. When a parent
+disputes a charge, the processor pulls the money back out of the camp's bank
+account. Stripe told us (`stripe-webhook` handles `charge.dispute.*`);
+Cardknox and Banquest had nowhere to tell us, so Campistry went on showing
+the payment as collected and the family as paid. Nothing errored — the
+camp's books were just wrong, and stayed wrong.
+
+`byop-dispute-webhook` is one endpoint for every BYOP processor. In the
+camp's own processor dashboard, point the chargeback / dispute notification
+at:
+
+```
+https://<your-project>.supabase.co/functions/v1/byop-dispute-webhook?processor=cardknox
+https://<your-project>.supabase.co/functions/v1/byop-dispute-webhook?processor=banquest
+```
+
+* `?processor=` is **required**. Nothing is guessed from the body — a
+  mis-detected processor would read the wrong fields and post a chargeback
+  against the wrong payment.
+* Add `&camp=<camp id>` when **more than one camp uses that processor**.
+  With one camp the function resolves it from `camp_processor_credentials`;
+  with several it refuses to guess and logs exactly that, because putting a
+  chargeback on the wrong camp's books is worse than not recording it.
+* Optionally set a `BYOP_DISPUTE_SECRET` function secret and have the
+  processor send it as the `x-webhook-secret` header. If the processor can't
+  send custom headers, leave it unset — every write the endpoint makes is
+  idempotent and reversible.
+
+**Send one real test dispute from the processor's dashboard after wiring it
+up.** The field names are taken from each adapter (Cardknox `xRefNum`,
+Banquest `reference_number`) so the reference is right, but neither
+processor's dispute *envelope* could be verified from here — their docs are
+unreachable from the build environment. The function logs the entire body
+when it can't find a reference; read that log line once and tighten the
+mapping in `normalise()` to what actually arrives. Until you've done that
+for a processor, treat its chargeback handling as plumbed but unproven.
+
 ## Adding a new processor later (the "versatile" part)
 
+A processor is not "added" when it can take money. It's added when it can
+also give money back and tell us when someone takes money back. Migration
+176 enforces that: `camp_processor_credentials` has a trigger that **refuses
+to connect a camp** to a processor whose catalog row doesn't declare all
+five required capabilities, and the error names the ones you skipped.
+
 1. Add one row to `payment_processor_catalog` (key, label,
-   credential_fields, capabilities) — no migration needed, a plain INSERT.
+   credential_fields, capabilities) — a plain INSERT, no schema change.
+   `capabilities` must declare all five as boolean `true`:
+   `charge`, `refund`, `tokenization`, `recurring`, `chargeback`. A prose
+   note is **not** a yes — `processor_conformance()` compares against the
+   literal string `true`, deliberately, because Banquest's row carried the
+   note *"not yet wired into charge-due-installments"* long after it had
+   been wired. Don't declare one until it's real; the gate is the point.
 2. Write `supabase/functions/_shared/adapters/<name>_adapter.ts`
    implementing `ProcessorAdapter` (`charge`, `refund`, `testConnection`).
 3. Register it in `processor_adapter.ts`'s `ADAPTERS` map.
-4. Nothing else changes — `payments-charge`, `payments-refund`, and
-   `admin-connect-processor` are already generic over any processor in the
-   catalog with a matching adapter.
+4. Add a branch to `normalise()` in
+   `supabase/functions/byop-dispute-webhook/index.ts`, and add the key to
+   that function's accepted-processor guard. Map the processor's dispute
+   body onto `{disputeId, refs, amount, reason, status, closed, won}`.
+5. Add a branch to `charge-due-installments` if you declared `recurring` —
+   its gateway calls are inlined on purpose (Dashboard-pasted functions
+   can't bundle relative imports), so an adapter alone doesn't make autopay
+   work.
+6. Run `node --test tests/processor_conformance.test.js`. It reads the
+   migrations to work out what each processor *declares*, then reads the
+   edge functions to check something *implements* each claim. The database
+   can only check the declaration; this checks the other half. If you skip
+   step 4 or 5, this is what tells you.
+
+Check any processor from the SQL Editor:
+
+```sql
+SELECT key, processor_conformance(key) FROM payment_processor_catalog WHERE active;
+-- every row should read "ok": true, "missing": []
+```

@@ -151,6 +151,14 @@ MANIFEST = [
     # alerts fire once rather than nightly).
     ("175_chargebacks_and_collection_blocks",
      "A chargeback moves the money back; a plan that cannot collect says so"),
+    # MUST come after 126/127/153 (the catalog and every row in it) and after
+    # 175, because it declares `chargeback` true on the strength of
+    # record_chargeback existing. Its trigger refuses to connect a camp to a
+    # processor that does not declare all five, so running it before the rows
+    # it corrects would leave Banquest unconnectable.
+    ("176_processor_conformance",
+     "A processor cannot be connected until it can charge, refund, tokenize, "
+     "re-charge and report a dispute"),
 ]
 
 HEADER = """-- ═══════════════════════════════════════════════════════════════════════════
@@ -502,6 +510,24 @@ UNION ALL SELECT 'a chargeback moves the money back',
        CASE WHEN EXISTS (SELECT 1 FROM pg_proc WHERE proname='record_chargeback')
              AND EXISTS (SELECT 1 FROM pg_proc WHERE proname='resolve_chargeback')
              AND EXISTS (SELECT 1 FROM pg_proc WHERE proname='flag_plan_collection')
+            THEN 'OK' ELSE 'MISSING' END
+-- A processor is only connectable once it declares everything money needs. The
+-- second half checks the gate is actually attached: the functions existing with
+-- no trigger on camp_processor_credentials is a contract nothing enforces.
+UNION ALL SELECT 'a processor must be able to hand money back',
+       CASE WHEN EXISTS (SELECT 1 FROM pg_proc WHERE proname='processor_conformance')
+             AND EXISTS (SELECT 1 FROM pg_proc WHERE proname='processor_required_capabilities')
+             AND EXISTS (SELECT 1 FROM pg_trigger
+                          WHERE tgname='trg_processor_conformance' AND NOT tgisinternal)
+            THEN 'OK' ELSE 'MISSING' END
+-- And every processor a camp could actually be on must pass it. A row failing
+-- here means that processor can no longer be connected — fix the declaration or
+-- the code, do not remove the gate.
+UNION ALL SELECT 'every live processor conforms',
+       CASE WHEN NOT EXISTS (
+                SELECT 1 FROM payment_processor_catalog
+                 WHERE active AND key <> 'none'
+                   AND NOT COALESCE((processor_conformance(key)->>'ok')::boolean, false))
             THEN 'OK' ELSE 'MISSING' END
 UNION ALL SELECT 'camp shop settles its orders',
        CASE WHEN EXISTS (SELECT 1 FROM pg_proc WHERE proname='settle_shop_order')
