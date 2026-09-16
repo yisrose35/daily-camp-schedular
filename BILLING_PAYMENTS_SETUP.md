@@ -247,12 +247,32 @@ A family paying a deposit has already typed their card into the camp's
 processor. Asking them to type it again in July, to set up a plan or pay an
 instalment, is work nobody needs to do twice.
 
-Picking **Credit Card** or **ACH** now says, where it is picked, exactly what
-will happen — *"When you submit, you will be taken to Stripe's secure checkout
-to enter your card and pay the $250 deposit. Your details never touch this
-form."* — with a tickbox to keep it. On submit they go straight there rather
-than hunting for a second button; the pay step stays on the confirmation screen
-for anyone who comes back.
+Picking **Credit Card** or **ACH** says, where it is picked, exactly what will
+happen — with a tickbox to keep the card. On submit they go straight to the
+payment rather than hunting for a second button; the pay step stays on the
+confirmation screen for anyone who comes back.
+
+**On a Banquest camp the card fields open right there, underneath the choice.**
+The parent types the card, presses **Submit & pay $250**, and the application
+and the payment go together with no redirect at all. The fields are not ours:
+`campistry_card_setup.html` is framed in (`?mode=token&embed=1`), the card
+number lives inside Banquest's own iframe inside *that* page, and all that
+comes back to the form is a single-use nonce plus the last four digits.
+
+**Stripe and Cardknox/Sola camps still redirect**, because those two collect
+cards on their own hosted pages — that page *is* their card form. The note
+under the payment methods says which one is about to open. There is no
+half-built inline form for them: the alternative would mean card numbers
+passing through Campistry's own page, which nothing here does.
+
+Whichever rail, **the amount is never sent from the browser.**
+`registration-deposit-checkout` charges what `_registration_deposit_owed` says
+the camp stamped on that saved application, so a public form cannot name its
+own price in either direction.
+
+A nonce is single-use, so a charge that fails for any reason clears the card
+off the form and the parent enters it again — rather than leaving a button that
+can only fail the same way twice.
 
 Apply **`migrations/186_registration_saved_card.sql`** alongside 185, and
 redeploy the same three functions.

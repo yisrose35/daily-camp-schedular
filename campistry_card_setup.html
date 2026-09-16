@@ -53,6 +53,17 @@
         .icon{width:56px;height:56px;border-radius:50%;display:flex;align-items:center;justify-content:center;margin:0 auto 14px;background:#ECFDF5;color:#0E7C4A}
         .note{margin-top:18px;font-size:.75rem;color:#94A3B8;text-align:center}
 
+        /* Embedded under the Payment section of a registration form
+           (?embed=1). The page is no longer a standalone card on a grey
+           backdrop -- it IS a panel inside someone else's form, so the
+           centring, the min-height, the shadow and the outer padding all have
+           to go or the iframe shows a card floating in a grey box. */
+        body.embed{background:transparent;min-height:0;display:block;padding:0}
+        body.embed .card{border:none;box-shadow:none;border-radius:0;padding:0;max-width:none}
+        body.embed h1,body.embed .sub{display:none}
+        body.embed .sec:first-of-type{margin-top:0}
+        body.embed .trust{margin-top:12px}
+
         @media (max-width:420px){
             .card{padding:26px 20px}
             .row{flex-wrap:wrap}
@@ -85,7 +96,7 @@
     window.__CAMPISTRY_PUBLIC_PAGE__ = true;
     // Bump on every change to this page. Printed on load so a stale cached copy
     // is obvious at a glance instead of being mistaken for a code bug.
-    window.__CARD_PAGE_BUILD__ = '2026-09-15-06';
+    window.__CARD_PAGE_BUILD__ = '2026-09-16-01';
     console.log('[Campistry] card page build', window.__CARD_PAGE_BUILD__);
     </script>
     <script src="config.js"></script>
@@ -111,6 +122,15 @@
         // no amount to charge, the token just has to land on that camper's
         // autoReload block so the reload cron can charge it later.
         var saveMode = params.get('mode') === 'save';
+        // mode=token is the "hand the nonce back and do nothing else" mode:
+        // the registration form embeds this page under its Payment section so
+        // a parent types the card BEFORE pressing Submit. There is no family
+        // and no camper yet -- the application does not exist -- so nothing
+        // here may be saved or charged. It tokenizes and postMessages the
+        // result to whoever embedded it; that page owns what happens next.
+        var tokenMode = params.get('mode') === 'token';
+        var isEmbed = params.get('embed') === '1';
+        if (isEmbed) document.body.classList.add('embed');
         // Presence of `amount` is what flips tuition mode from "save a card
         // for later" into "pay this specific balance now" — the BYOP
         // equivalent of a Stripe Checkout payment link. `amount` is
@@ -158,7 +178,9 @@
             });
         }
 
-        if (!campId || !(familyKey || camperName)) {
+        // Token mode has no subject yet by design -- it is collecting a card
+        // for an application that has not been submitted.
+        if (!campId || !(tokenMode || familyKey || camperName)) {
             renderError('This link is missing information and can\'t be used.');
             return;
         }
@@ -294,12 +316,15 @@
         function renderBanquestForm(tokenizationKey, tokenizationUrl, cardFormFields) {
             // Pay-now leads with the amount (it's the one number that matters);
             // save-mode leads with who the card is for.
-            var title = isPayNow ? (isCanteen ? 'Add canteen funds' : 'Make a payment') : 'Save a payment method';
+            var title = tokenMode ? 'Card details'
+                : isPayNow ? (isCanteen ? 'Add canteen funds' : 'Make a payment') : 'Save a payment method';
             var whoFor = isCanteen ? escapeHtml(camperName) + '\'s canteen account' : escapeHtml(familyName);
-            var sub = isPayNow
+            var sub = tokenMode
+                ? 'Entered directly with the payment processor.'
+                : isPayNow
                 ? ('For ' + whoFor + ' — ' + escapeHtml(payDesc))
                 : ('For ' + whoFor + ' — ' + (isCanteen ? 'used to top up the balance automatically.' : 'used for future camp charges.'));
-            var btnLabel = isPayNow ? ('Pay $' + amount.toFixed(2)) : 'Save Payment Method';
+            var btnLabel = idleBtnLabel();
             var fields = activeBillingFields(cardFormFields);
             var lock = '<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5">' +
                 '<rect x="4" y="11" width="16" height="10" rx="2"/><path d="M8 11V7a4 4 0 0 1 8 0v4"/></svg>';
@@ -428,12 +453,35 @@
             document.head.appendChild(script);
         }
 
+        function idleBtnLabel() {
+            return tokenMode ? 'Use this card'
+                 : isPayNow ? ('Pay $' + amount.toFixed(2))
+                 : 'Save Payment Method';
+        }
+
         function setSaving(saving) {
             var btn = document.getElementById('saveBtn');
             if (!btn) return;
-            var idleLabel = isPayNow ? ('Pay $' + amount.toFixed(2)) : 'Save Payment Method';
             btn.disabled = saving;
-            btn.textContent = saving ? (isPayNow ? 'Processing…' : 'Saving…') : idleLabel;
+            btn.textContent = saving
+                ? (tokenMode ? 'Checking…' : isPayNow ? 'Processing…' : 'Saving…')
+                : idleBtnLabel();
+        }
+
+        // The host page cannot measure across the frame boundary, so the frame
+        // reports its own height. Sent on a timer as well as on load because
+        // the tokenizer mounts its iframe asynchronously and field errors
+        // change the height afterwards.
+        function postHeight() {
+            if (!isEmbed) return;
+            try {
+                var h = Math.ceil(document.body.getBoundingClientRect().height) + 4;
+                if (h > 0) window.parent.postMessage({ type: 'campistry-card-height', height: h }, '*');
+            } catch (e) { /* not framed */ }
+        }
+        if (isEmbed) {
+            window.addEventListener('load', postHeight);
+            setInterval(postHeight, 400);
         }
 
         function setMsg(text, isErr) {
@@ -473,6 +521,30 @@
                 last4: pick('last4', 'last_4'),
                 cardType: pick('cardType', 'card_type')
             } : null;
+
+            // ── token mode: hand it back, charge nothing ──────────────────
+            // Nothing is saved and nothing is charged here. The embedding page
+            // holds the nonce until the parent presses Submit, and the SERVER
+            // decides the amount from what the camp stamped on the saved
+            // application -- a nonce posted from a public page must never
+            // carry its own price.
+            if (tokenMode) {
+                setSaving(false);
+                setMsg('');
+                try {
+                    window.parent.postMessage({
+                        type: 'campistry-card-token',
+                        token: token,
+                        card: card,
+                        billing: billing,
+                        processor: 'banquest'
+                    }, '*');
+                } catch (e) {
+                    setMsg('Could not hand the card back to the form. Reload and try again.', true);
+                }
+                return;
+            }
+
             // Shape only — no nonce, no PAN. An expiry month/year on its own
             // identifies nothing, and without this there's no way to tell a
             // stale cached page from a result whose keys we guessed wrong.

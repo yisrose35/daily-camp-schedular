@@ -19,8 +19,16 @@
 // never from the request body. The page asking is anonymous by design, so it
 // must not be able to name its own figure in either direction.
 //
-// Request:  { campId, enrollmentId, returnUrl }
-// Response: { success, url } | { success:false, error, reason? }
+// TWO WAYS IN. A parent on a Banquest camp types the card into the form
+// itself (campistry_card_setup.html framed in mode=token) and sends the nonce
+// here with the submission -- we charge it and there is no redirect at all.
+// Stripe and Cardknox/Sola camps collect cards on their own hosted pages, so
+// those still get a URL back. The amount is decided the same way in both.
+//
+// Request:  { campId, enrollmentId, returnUrl, saveCard?,
+//             cardToken?, card?, billing? }   <- nonce path (Banquest)
+// Response: { success, url } | { success, paid:true, amount, last4 }
+//         | { success:false, error, reason? }
 //
 // Deploy as its own function in the Supabase Dashboard. Needs the same secrets
 // the other payment functions use: STRIPE_SECRET_KEY for Stripe camps, nothing
@@ -54,11 +62,59 @@ function bqAuth(c: Record<string, string>): string {
   return "Basic " + btoa(`${c.sourceKey}:${c.pin}`);
 }
 
+// ── Banquest billing/card shapes ────────────────────────────────────────────
+// Inlined, not imported: this project deploys an edge function by pasting ONE
+// file into the Supabase Dashboard (no CLI -- see CLAUDE.md), so any relative
+// import fails to bundle. Keep in sync with payments-charge-nonce's copies.
+function bqBillingParts(billing: Record<string, string> | null | undefined): Record<string, unknown> {
+  const b = (billing && typeof billing === "object") ? billing : {};
+  const out: Record<string, unknown> = {};
+  const addr: Record<string, string> = {};
+  const put = (k: string, v: unknown) => { const s = String(v ?? "").trim(); if (s) addr[k] = s; };
+  if (b.name) {
+    const parts = String(b.name).trim().split(/\s+/);
+    put("first_name", parts.shift());
+    put("last_name", parts.join(" "));
+  }
+  put("street", b.street); put("street2", b.street2); put("city", b.city);
+  put("state", b.state); put("zip", b.zip); put("country", b.country); put("phone", b.phone);
+  if (Object.keys(addr).length) out.billing_info = addr;
+  const email = String(b.email ?? "").trim();
+  if (email) out.customer = { email };
+  return out;
+}
+
+function bqCardParts(card: Record<string, any> | null | undefined): Record<string, unknown> {
+  const c = (card && typeof card === "object") ? card : {};
+  const out: Record<string, unknown> = {};
+  if (Number(c.expiryMonth) > 0) out.expiry_month = Number(c.expiryMonth);
+  if (Number(c.expiryYear) > 0) out.expiry_year = Number(c.expiryYear);
+  const zip = String(c.avsZip ?? "").trim();
+  if (zip) out.avs_zip = zip;
+  return out;
+}
+
+// Banquest puts the useful part of a rejection in error_details (an object, or
+// an array of them), so a bare error_message reads "Validation error" and
+// names nothing.
+function bqErrDetail(d: unknown): string {
+  if (d === null || d === undefined) return "";
+  if (typeof d === "string") return d.trim();
+  if (typeof d === "number" || typeof d === "boolean") return String(d);
+  if (Array.isArray(d)) return d.map(bqErrDetail).filter(Boolean).join("; ");
+  if (typeof d === "object") {
+    return Object.entries(d as Record<string, unknown>)
+      .map(([k, v]) => { const s = bqErrDetail(v); return s ? `${k}: ${s}` : k; })
+      .filter(Boolean).join("; ");
+  }
+  return String(d);
+}
+
 serve(async (req) => {
   if (req.method === "OPTIONS") return new Response("ok", { headers: corsHeaders });
 
   try {
-    const { campId, enrollmentId, returnUrl, saveCard } = await req.json();
+    const { campId, enrollmentId, returnUrl, saveCard, cardToken, card, billing } = await req.json();
     if (!campId || !enrollmentId || !returnUrl) {
       return json({ success: false, error: "campId, enrollmentId and returnUrl are required" }, 400);
     }
@@ -100,6 +156,123 @@ serve(async (req) => {
       .eq("id", campId)
       .maybeSingle();
     const processorKey: string | null = camp?.payment_processor_key || null;
+
+    // ── Banquest, card typed on the form itself ─────────────────────────────
+    // The parent entered the card into the panel under the payment methods
+    // (campistry_card_setup.html framed in mode=token) and the nonce came here
+    // with the submission. No redirect, no hosted page -- charge it now and
+    // the parent never leaves the form.
+    //
+    // The nonce is ALL the caller gets to decide. `owed` above is still what
+    // the camp stamped on this application, and that is what we charge; a
+    // caller sending an amount would be ignored, because it is never read.
+    if (processorKey === "banquest" && cardToken) {
+      const { data: credRes } = await service.rpc("_admin_get_processor_credential", { p_camp_id: campId });
+      const creds = (credRes?.credential || credRes) as Record<string, string> | null;
+      if (!creds?.sourceKey || !creds?.pin) {
+        return json({
+          success: false,
+          error: "This camp has not finished setting up online payments.",
+          reason: "banquest_not_configured",
+        }, 200);
+      }
+
+      // Banquest REQUIRES the expiry alongside a nonce source. A cached card
+      // page that predates us sending `card` would omit it and earn an opaque
+      // validation error, so say something a parent can act on.
+      const cardParts = bqCardParts(card);
+      if (cardParts.expiry_month === undefined || cardParts.expiry_year === undefined) {
+        return json({ success: false, error: "The card's expiry didn't come through — please re-enter the card." }, 200);
+      }
+
+      const amountCents = Math.round(owed * 100);
+      const chargeResp = await fetch(`${bqBase(creds)}/transactions/charge`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json", "Authorization": bqAuth(creds) },
+        body: JSON.stringify({
+          amount: Number(owed.toFixed(2)),
+          source: "nonce-" + String(cardToken),
+          transaction_details: { description: label.slice(0, 255) },
+          // Only because the parent ticked the box. A card is never vaulted
+          // quietly, and the charge stands either way if this part fails.
+          ...(saveCard ? { save_card: true } : {}),
+          ...cardParts,
+          ...bqBillingParts(billing),
+        }),
+      });
+      let cd: Record<string, any> = {};
+      try { cd = await chargeResp.json(); } catch { /* non-JSON error body */ }
+
+      const approved = String(cd?.status_code || "").toUpperCase() === "A"
+                    || String(cd?.status || "").toLowerCase() === "approved";
+      const txnId = cd?.reference_number != null ? String(cd.reference_number) : "";
+      if (chargeResp.status < 200 || chargeResp.status >= 300 || !approved || !txnId) {
+        console.error(`[registration-deposit] banquest charge failed camp ${campId}:`, chargeResp.status, JSON.stringify(cd));
+        const detail = bqErrDetail(cd?.error_details) || bqErrDetail(cd?.error_messages);
+        const base = cd?.error_message || cd?.error || cd?.message || cd?.status || `Declined (HTTP ${chargeResp.status})`;
+        return json({ success: false, error: String(detail ? `${base}: ${detail}` : base) }, 200);
+      }
+
+      // What the gateway says it took, never what we asked for.
+      const chargedCents = Number(cd?.auth_amount) > 0 ? Math.round(Number(cd.auth_amount) * 100) : amountCents;
+      const charged = chargedCents / 100;
+      const last4 = cd?.last_4 ? String(cd.last_4) : (card?.last4 ? String(card.last4) : "");
+      const brand = cd?.card_type ? String(cd.card_type) : (card?.cardType ? String(card.cardType) : "");
+
+      // Audit row: useful, but never worth failing a captured charge over.
+      try {
+        await service.rpc("record_processor_transaction", {
+          p_camp_id: campId,
+          p_processor_key: "banquest",
+          p_external_transaction_id: txnId,
+          p_kind: "registration_deposit",
+          p_amount_cents: chargedCents,
+          p_status: "succeeded",
+          p_raw_response: null,
+        });
+      } catch (e) {
+        console.error("[registration-deposit] record_processor_transaction failed (non-fatal):", (e as Error).message);
+      }
+
+      // THIS one matters: money left the parent's card, so the application has
+      // to show it as paid. Idempotent on the gateway's own reference.
+      const { data: markRes, error: markErr } = await service.rpc("_record_registration_deposit", {
+        p_camp_id: campId,
+        p_enroll_id: String(enrollmentId),
+        p_amount: charged,
+        p_reference: txnId,
+      });
+      if (markErr || !markRes?.success) {
+        console.error(`[registration-deposit] captured ${txnId} but could not mark camp ${campId}/${enrollmentId}:`,
+                      markErr?.message || markRes?.error);
+        return json({
+          success: false,
+          error: "Your card was charged but recording it failed — please contact the camp office.",
+        }, 200);
+      }
+
+      // Keeping the card is a bonus, not part of the payment: a vault failure
+      // must not turn a successful charge into an error on the parent's screen.
+      if (saveCard && cd?.card_ref) {
+        try {
+          await service.rpc("_record_registration_card", {
+            p_camp_id: campId,
+            p_enroll_id: String(enrollmentId),
+            p_processor: "banquest",
+            p_customer: String(cd.card_ref),
+            p_method: String(cd.card_ref),
+            p_last4: last4 || null,
+          });
+        } catch (e) {
+          console.error("[registration-deposit] saving the card failed (non-fatal):", (e as Error).message);
+        }
+      } else if (saveCard) {
+        console.log(`[registration-deposit] camp ${campId}: charge ${txnId} approved but no card_ref came back — nothing vaulted`);
+      }
+
+      console.log(`[registration-deposit] banquest inline $${charged} enroll ${enrollmentId} (camp ${campId}) txn ${txnId}`);
+      return json({ success: true, paid: true, amount: charged, last4, brand, processor: "banquest" });
+    }
 
     // ── Banquest: a hosted pay page ─────────────────────────────────────────
     if (processorKey === "banquest") {
