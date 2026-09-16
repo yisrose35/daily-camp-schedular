@@ -169,9 +169,10 @@ test('the office can set it and see who has not paid', () => {
     assert.match(me, /function _dpCardHtml/);
     assert.match(me, /function openDepositPolicy/);
     assert.match(me, /openDepositPolicy:openDepositPolicy/, 'not exposed, so no button reaches it');
-    assert.ok(!/_accCard\('Deposit to Register'/.test(me),
-        'the deposit must not be a card inside the form builder');
-    // One renderer, so the editor cannot drift from whatever hosts it.
+    // Two hosts, one renderer, so they cannot drift: a card in the
+    // Registration form builder, and a standalone editor for changing a
+    // number without opening the whole layout tool.
+    assert.match(me, /_accCard\('Deposit to Register'/);
     assert.match(me, /_dpCardHtml\(enrollSettings\.depositPolicy\)/);
 
     assert.match(me, /markDepositPaid:markDepositPaid/);
@@ -289,4 +290,83 @@ test('a preview that does not load says so', () => {
     assert.match(me, /_fbRetryPreview:_fbRetryPreview/, 'the retry button is not reachable');
     // The timer must not outlive the overlay.
     assert.match(me, /if\(_fbPreviewTimer\)\{clearTimeout\(_fbPreviewTimer\);_fbPreviewTimer=null;\}\n    _fbPreviewWin=null/);
+});
+
+// ── the bug that hung the tab ───────────────────────────────────────────────
+//
+// The form builder watches its panel with a MutationObserver and drives its
+// live preview from the callback. The deposit card sits INSIDE that panel, so
+// every innerHTML write it makes is a subtree mutation. Routing the card's
+// refresh through the same handler fed the observer with its own output: an
+// unbounded microtask loop that starved the event loop and left the tab white.
+//
+// It never threw. Nothing was logged, no exception guard could catch it, and
+// balanced markup / parsing scripts / a stubbed-DOM run all passed while the
+// real browser locked up. So this is tested by SIMULATING the feedback cycle,
+// which is the only thing that would have caught it.
+function extract(...names) {
+    const src = fs.readFileSync(path.join(ROOT, 'campistry_me.js'), 'utf8');
+    return names.map((name) => {
+        const i = src.indexOf('function ' + name + '(');
+        assert.ok(i >= 0, 'missing ' + name);
+        let depth = 0, k = src.indexOf('{', i);
+        for (; k < src.length; k++) {
+            if (src[k] === '{') depth++;
+            else if (src[k] === '}' && --depth === 0) break;
+        }
+        return src.slice(i, k + 1);
+    }).join('\n');
+}
+
+test('refreshing the deposit preview twice writes once', () => {
+    // The loop-breaker. Even if something re-enters the refresh, the second
+    // pass computes the same string and writes nothing, so the mutation that
+    // would feed the next pass never happens.
+    let writes = 0, held = '';
+    const out = { get innerHTML() { return held; }, set innerHTML(v) { writes++; held = v; } };
+    const sandbox = {
+        esc: (s) => String(s == null ? '' : s),
+        fm: (n) => '$' + (Number(n) || 0),
+        enrollSettings: {},
+        sessions: [{ name: 'Full Season', tuition: 1250 }],
+        _depPolicyAPI: () => P,
+        _dpRead: () => ({ enabled: true, basis: 'percent', percent: 25, per: 'camper', timing: 'now' }),
+        document: { getElementById: (id) => (id === 'dpPreview' ? out : null) }
+    };
+    const names = Object.keys(sandbox);
+    const run = new Function(...names, extract('_dpPreview', '_dpSetHtml') + '\nreturn _dpPreview;');
+    const dpPreview = run(...names.map((n) => sandbox[n]));
+
+    dpPreview();
+    assert.strictEqual(writes, 1, 'the first refresh must render');
+    dpPreview();
+    dpPreview();
+    assert.strictEqual(writes, 1, 'an unchanged refresh must not write — a write here is the loop');
+    assert.match(held, /\$312\.50/, 'and it must still be showing the right number');
+});
+
+test('the deposit refresh is not wired to the observer’s handler', () => {
+    // _fbPushPreview is the MutationObserver callback. Anything in it that
+    // writes into the panel feeds the observer its own output.
+    const me = fs.readFileSync(path.join(ROOT, 'campistry_me.js'), 'utf8');
+    const push = me.slice(me.indexOf('function _fbPushPreview()'),
+                          me.indexOf('\nfunction ', me.indexOf('function _fbPushPreview()') + 10));
+    assert.ok(!/_dpRefreshCard|_dpOnPanelEdit/.test(push),
+        'the deposit refresh must not run from the MutationObserver callback');
+    // It gets its own listeners instead, which the observer does not feed.
+    assert.match(me, /panel\.addEventListener\('input',_dpOnPanelEdit\)/);
+    assert.match(me, /panel\.addEventListener\('change',_dpOnPanelEdit\)/);
+    // Bound once, or every re-open stacks another handler.
+    assert.match(me, /if\(!panel\._dpWired\)/);
+});
+
+test('every write the deposit editor makes is compared first', () => {
+    // One missed spot is enough to restart the loop, so no raw assignment is
+    // allowed anywhere in the editor.
+    const me = fs.readFileSync(path.join(ROOT, 'campistry_me.js'), 'utf8');
+    ['_dpPreview', '_dpCheckReach'].forEach((fn) => {
+        const body = extract(fn);
+        assert.ok(!/\.innerHTML\s*=/.test(body),
+            fn + ' assigns innerHTML directly — use _dpSetHtml so an unchanged refresh writes nothing');
+    });
 });

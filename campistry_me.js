@@ -8291,6 +8291,16 @@ function openFormBuilder(kind){
     var panel=document.getElementById('fbPanel');
     panel.innerHTML=isStaff?_buildSfcPanelHtml():isPaf?_buildPafPanelHtml():isPhf?_buildPhfPanelHtml():_buildFcPanelHtml();
     _initOrderDrag(isStaff?'sfc':isPaf?'paf':isPhf?'phf':'fc');
+    // Bound once for the life of the panel element -- openFormBuilder replaces
+    // its innerHTML on every open, but the element itself persists, so adding
+    // these each time would stack duplicate handlers.
+    if(!panel._dpWired){
+        panel._dpWired=true;
+        panel.addEventListener('input',_dpOnPanelEdit);
+        panel.addEventListener('change',_dpOnPanelEdit);
+    }
+    _dpRefreshCard._checked=false;   // one reachability check per open
+    setTimeout(_dpOnPanelEdit,0);
 
     // Live-update the preview on any edit — typing, checkboxes, drag
     // reorder, or a row being added/removed — via one delegated listener
@@ -8494,6 +8504,7 @@ function _buildFcPanelHtml(){
         +'<div id="fcDocList">'+docs.map(_renderDocRow).join('')+'</div>'
         +'<button class="me-btn me-btn--sec me-btn--sm" style="margin-top:4px" onclick="CampistryMe.addDocRow()">+ Add Document</button>';
     h+=_accCard('Required Documents',docsHtml,{badge:docs.length+' set'});
+    h+=_dpBuilderCardHtml();
 
 
     var qHtml='<p style="font-size:.78rem;color:var(--s400);margin:0 0 10px">Standalone questions, shown in an "Additional Information" section. Pick "Show in" to move one inside a built-in section instead (or add it from that section directly, in Sections above).</p>'
@@ -9330,6 +9341,20 @@ function saveFormConfig(){
         promos[code]={label:(labels[i]?.value||'').trim(),pct:parseFloat(pcts[i]?.value)||0,amt:parseFloat(amts[i]?.value)||0};
     }
     enrollSettings.promoCodes=promos;
+
+    // Same arrangement promo codes have: edited in the builder, stored in
+    // enrollSettings so it persists through save() and reaches the public
+    // form. Guarded because a throw here would lose the whole form config the
+    // camp just spent time on -- the deposit is the least important thing in
+    // this function and must not take the rest with it.
+    try{
+        if(_depPolicyAPI()&&document.getElementById('dpOn')){
+            enrollSettings.depositPolicy=_depPolicyAPI().normalize(_dpRead());
+        }
+    }catch(e){
+        console.warn('[Me] deposit policy not saved from the builder:',e&&e.message);
+        toast('Form saved, but the deposit setting did not \u2014 set it from Registration \u2192 Deposit','error');
+    }
 
     save();
     closeFormBuilder();
@@ -15067,15 +15092,52 @@ async function _dpCheckReach(){
         var r=await client.rpc('get_public_form_config',{p_camp_id:cid,p_kind:'registration'});
         if(r&&r.error)throw r.error;
         var d=r&&r.data;
-        out.innerHTML=(d&&Object.prototype.hasOwnProperty.call(d,'depositPolicy'))
+        _dpSetHtml(out,(d&&Object.prototype.hasOwnProperty.call(d,'depositPolicy'))
             ? '<span style="color:var(--ok);font-weight:600">\u2713 Your registration form can see this.</span>'
             : '<span style="color:#B45309;font-weight:600">\u26a0 Your registration form cannot see this yet.</span> '
               +'Apply <code>migrations/164_public_deposit_policy.sql</code> in the Supabase SQL editor \u2014 until then the '
-              +'deposit saves here but parents are never shown it.';
+              +'deposit saves here but parents are never shown it.');
     }catch(e){
-        out.innerHTML='<span style="color:var(--s400)">Could not check whether the public form sees this ('
-            +esc((e&&e.message)||'no connection')+').</span>';
+        _dpSetHtml(out,'<span style="color:var(--s400)">Could not check whether the public form sees this ('
+            +esc((e&&e.message)||'no connection')+').</span>');
     }
+}
+
+/**
+ * The deposit as a card in the Registration builder.
+ *
+ * Wrapped rather than inlined: the panel is built as one string, so a throw
+ * while building the newest thing on it returns an empty builder. This returns
+ * '' instead -- the camp loses the card, not the builder, and the Deposit
+ * button on the Registration page still edits the same policy through the same
+ * renderer.
+ */
+function _dpBuilderCardHtml(){
+    try{
+        var P=_depPolicyAPI();
+        if(!P)return '';
+        var pol=P.normalize(enrollSettings.depositPolicy);
+        var badge=pol.enabled
+            ? (pol.basis==='flat'?fm(pol.amount):pol.basis==='percent'?pol.percent+'%':'per session')
+            : 'off';
+        return _accCard('Deposit to Register',_dpCardHtml(pol),{badge:badge});
+    }catch(e){
+        console.warn('[Me] deposit card failed to render:',e&&e.message);
+        return '';
+    }
+}
+
+/**
+ * Refresh the deposit card on a real edit.
+ *
+ * Deliberately its OWN listener rather than a line inside _fbPushPreview. That
+ * function is also the MutationObserver's callback, and this refresh writes
+ * into the observed panel -- so routing it through there fed the observer with
+ * its own output and hung the tab. _dpSetHtml would now stop the loop on the
+ * second pass regardless; keeping the two apart means it never starts.
+ */
+function _dpOnPanelEdit(){
+    try{ _dpRefreshCard(); }catch(e){ /* a preview line is never worth a broken builder */ }
 }
 
 /** Keep the editor's preview and reachability line current as the camp types. */
@@ -15160,7 +15222,7 @@ function _dpPreview(){
     var P=_depPolicyAPI(),out=document.getElementById('dpPreview');
     if(!P||!out)return;
     var pol=P.normalize(_dpRead());
-    if(!pol.enabled){out.innerHTML='No deposit is required to register.';return}
+    if(!pol.enabled){_dpSetHtml(out,'No deposit is required to register.');return}
     var sample=sessions.filter(function(s){return s&&Number(s.tuition)>0})
                        .sort(function(a,b){return Number(b.tuition)-Number(a.tuition)})[0];
     var h='<div>'+esc(P.explain(pol,null))+'</div>';
@@ -15175,7 +15237,28 @@ function _dpPreview(){
     }else{
         h+='<div style="margin-top:8px;color:var(--s400)">Add a session with a tuition to see what this comes to.</div>';
     }
-    out.innerHTML=h;
+    _dpSetHtml(out,h);
+}
+
+/**
+ * Write only when the content actually changes.
+ *
+ * This editor can sit inside the form builder's panel, which the builder
+ * watches with a MutationObserver to drive its live preview. An innerHTML
+ * assignment there is a subtree mutation, so a refresh that rewrites the same
+ * string re-triggers whatever is listening and can feed itself forever --
+ * which is precisely what happened: an unbounded microtask loop that starved
+ * the event loop and left the tab white. It never threw, so nothing was
+ * logged and no guard against exceptions could have caught it.
+ *
+ * Comparing first makes the refresh idempotent, so even a re-entrant call
+ * terminates after one pass instead of never.
+ */
+function _dpSetHtml(el,html){
+    if(!el)return false;
+    if(el.innerHTML===html)return false;
+    el.innerHTML=html;
+    return true;
 }
 
 
