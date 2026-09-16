@@ -44,6 +44,14 @@ function getStructure() {
 }
 
 function getCamperList() {
+
+// ── Camper display name ────────────────────────────────────────────────────
+// Roster keys are unique but are not always the camper's name: a second camper
+// sharing a name is keyed "Malky Stein #102" (their camperId) — see
+// campistry_camper_identity.js. The suffix is always exactly " #<id>" appended to
+// the plain name, so stripping it needs no roster lookup. Identity — lookups,
+// accounts, ledgers, selection — keeps using the KEY; only humans see this.
+function _lbl(key) { return String(key == null ? '' : key).replace(/\s#\d+$/, ''); }
     const roster = getRoster();
     const structure = getStructure();
     const campers = [];

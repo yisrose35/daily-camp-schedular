@@ -225,3 +225,67 @@ test('the POS shows the label but selects by the key', () => {
     assert.match(src, /\(c\.label \|\| c\.name\)\.toLowerCase\(\)\.includes\(q\)/,
         'searching by the visible name no longer works');
 });
+
+// ── 6. the display sweep ──────────────────────────────────────────────────
+//
+// A screen printing the roster key raw shows "Malky Stein #102". The rule is
+// narrow and worth stating precisely, because getting it backwards is worse than
+// the suffix: IDENTITY keeps the key — option values, data- attributes, account
+// and ledger lookups, onclick arguments — and only VISIBLE TEXT is labelled.
+// Labelling an option value would break the lookup it feeds.
+
+const SWEPT = ['campistry_health.js', 'campistry_live.js', 'campistry_snacks.js',
+               'campistry_snacks_pos.js', 'campistry_go.js', 'campistry_go_luggage.js'];
+
+test('every swept file has the label helper, and it is a pure string function', () => {
+    for (const f of SWEPT) {
+        const src = read(f);
+        assert.match(src, /function _lbl\(key\) \{ return String\(key == null \? '' : key\)\.replace\(\/\\s#\\d\+\$\/, ''\); \}/,
+            f + ' has no label helper, or it is no longer a pure strip — a roster ' +
+            'lookup here would be slower and could disagree with displayName');
+    }
+});
+
+test('the helper strips only a trailing " #<digits>"', () => {
+    assert.strictEqual(I.labelOf({}, 'Malky Stein #102'), 'Malky Stein');
+    // Not a mid-string hash, not a non-numeric suffix.
+    assert.strictEqual(I.labelOf({}, 'Malky #1 Stein'), 'Malky #1 Stein');
+    assert.strictEqual(I.labelOf({}, 'Malky Stein #abc'), 'Malky Stein #abc');
+    // displayName always wins when a record is in scope.
+    assert.strictEqual(I.labelOf({ displayName: 'Bob #5' }, 'Bob #5 #110'), 'Bob #5');
+});
+
+test('an option VALUE keeps the key while its text is labelled', () => {
+    // Labelling the value would point the picker at a camper that does not exist.
+    const live = read('campistry_live.js');
+    assert.match(live, /'<option value="' \+ esc\(n\) \+ '">' \+ esc\(_lbl\(n\)\) \+ '<\/option>'/,
+        'the live picker labels its value or fails to label its text');
+
+    const snacks = read('campistry_snacks.js');
+    assert.match(snacks, /'<option value="' \+ esc\(c\.name\) \+ '">' \+ esc\(c\.label \|\| _lbl\(c\.name\)\)/,
+        'the snacks picker no longer separates value from label');
+
+    const lug = read('campistry_go_luggage.js');
+    assert.match(lug, /value="' \+ esc\(c\.name\) \+ '"/, 'the luggage picker value moved off the key');
+    assert.match(lug, /esc\(_lbl\(c\.name\)\) \+ \(c\.bunk/, 'its visible text is not labelled');
+});
+
+test('identity attributes and click handlers keep the raw key', () => {
+    const live = read('campistry_live.js');
+    assert.match(live, /data-camper="' \+ esc\(name\) \+ '"/,
+        'data-camper was labelled — attendance would be recorded against a name, ' +
+        'not a camper');
+    const snacks = read('campistry_snacks.js');
+    assert.match(snacks, /const jsName = esc\(c\.name\)\.replace/,
+        'the account-history onclick was labelled — it would open the wrong account');
+});
+
+test('the camp name was NOT mistaken for a camper name', () => {
+    // go.js renders esc(cn) in its printed route sheets, and `cn` there is the
+    // CAMP name. Sweeping it as a camper would have mangled the report title.
+    const go = read('campistry_go.js');
+    assert.match(go, /<title>Bus Routes — ' \+ esc\(cn\)/,
+        'the route-sheet title changed — check it is still the camp name, unlabelled');
+    assert.ok(!/esc\(_lbl\(cn\)\)/.test(go),
+        'the camp name is being run through the camper label helper');
+});

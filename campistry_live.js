@@ -43,6 +43,18 @@
         try { return JSON.parse(localStorage.getItem(GLOBAL_KEY) || '{}'); } catch (e) { return {}; }
     }
     function getRoster() { var g = readGlobal(); return (g.app1 && g.app1.camperRoster) || {}; }
+
+// ── Camper display name ────────────────────────────────────────────────────
+// Roster keys are unique but are not always the camper's name: a second camper
+// sharing a name is keyed "Malky Stein #102" (their camperId) and carries
+// displayName — see campistry_camper_identity.js for why the key stays a string
+// rather than becoming the id across ~1,200 call sites at once.
+//
+// The suffix is always exactly " #<id>" appended to the plain name, so stripping
+// it needs no roster lookup and cannot disagree with displayName. Identity —
+// lookups, accounts, ledgers, selection — must keep using the KEY; only humans
+// see this.
+function _lbl(key) { return String(key == null ? '' : key).replace(/\s#\d+$/, ''); }
     function getStructure() { return readGlobal().campStructure || {}; }
     function getCampName() { var g = readGlobal(); return g.camp_name || g.campName || localStorage.getItem('campistry_camp_name') || 'Your Camp'; }
     function getLive() { try { return JSON.parse(localStorage.getItem(LIVE_STORE_KEY) || '{}'); } catch (e) { return {}; } }
@@ -115,9 +127,9 @@ function esc(s) { if (s == null) return ''; var d = document.createElement('div'
             ? '<div class="rc-detail" style="color:var(--live);font-weight:600;">' + esc(RC_REASON_LABEL[absence.reason] || absence.reason || 'Absent') + (absence.time ? ' — ' + esc(absence.time) : '') + '</div>'
             : (state === 'unmarked' ? '<div class="rc-detail rc-unmarked-tag">Not marked yet</div>' : '');
         return '<div class="rc-row ' + state + '" data-camper="' + esc(name) + '" onclick="CampistryLive.toggleByEl(this)">' +
-            '<div class="rc-avatar">' + esc(rcInitials(name)) + '</div>' +
+            '<div class="rc-avatar">' + esc(rcInitials(_lbl(name))) + '</div>' +
             '<div class="rc-info">' +
-            '<div class="rc-name">' + esc(name) + '</div>' +
+            '<div class="rc-name">' + esc(_lbl(name)) + '</div>' +
             (showBunk && c.bunk ? '<div class="rc-detail">' + esc(c.bunk) + (c.division ? ' · ' + esc(c.division) : '') + '</div>' : '') +
             reasonBadge +
             '</div>' +
@@ -618,7 +630,7 @@ function esc(s) { if (s == null) return ''; var d = document.createElement('div'
         const names = Object.keys(roster).sort();
         const sel = document.getElementById(selectId);
         if (!sel) return;
-        sel.innerHTML = '<option value="">— Select —</option>' + names.map(n => '<option value="' + esc(n) + '">' + esc(n) + '</option>').join('');
+        sel.innerHTML = '<option value="">— Select —</option>' + names.map(n => '<option value="' + esc(n) + '">' + esc(_lbl(n)) + '</option>').join('');
     }
 
     function filterCamperSelect(val, selectId) {
@@ -627,7 +639,7 @@ function esc(s) { if (s == null) return ''; var d = document.createElement('div'
         const names = Object.keys(roster).sort().filter(n => !q || n.toLowerCase().includes(q));
         const sel = document.getElementById(selectId);
         if (!sel) return;
-        sel.innerHTML = '<option value="">— Select —</option>' + names.map(n => '<option value="' + esc(n) + '">' + esc(n) + '</option>').join('');
+        sel.innerHTML = '<option value="">— Select —</option>' + names.map(n => '<option value="' + esc(n) + '">' + esc(_lbl(n)) + '</option>').join('');
         if (names.length === 1) sel.value = names[0];
     }
 

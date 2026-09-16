@@ -24,6 +24,14 @@
 // Mounts itself into #tab-luggage when Go shows that tab.
 // =============================================================================
 (function () {
+
+// ── Camper display name ────────────────────────────────────────────────────
+// Roster keys are unique but are not always the camper's name: a second camper
+// sharing a name is keyed "Malky Stein #102" (their camperId) — see
+// campistry_camper_identity.js. The suffix is always exactly " #<id>" appended to
+// the plain name, so stripping it needs no roster lookup. Identity — lookups,
+// accounts, ledgers, selection — keeps using the KEY; only humans see this.
+function _lbl(key) { return String(key == null ? '' : key).replace(/\s#\d+$/, ''); }
 'use strict';
 
 var STORE_KEY = 'campGlobalSettings_v1';
@@ -512,7 +520,7 @@ window.lugEditBooking = function (id) {
         '<select class="ops-select" id="bkCamper" onchange="lugCamperPicked()"><option value="">— Select —</option>' +
         campers.map(function (c) {
             return '<option value="' + esc(c.name) + '"' + (b.camperName === c.name ? ' selected' : '') + '>' +
-                esc(c.name) + (c.bunk ? ' (' + esc(c.bunk) + ')' : '') + '</option>';
+                esc(_lbl(c.name)) + (c.bunk ? ' (' + esc(c.bunk) + ')' : '') + '</option>';
         }).join('') + '</select></div>' +
         '<div class="ops-field"><label>Bunk</label><input class="ops-input" id="bkBunk" value="' + esc(b.bunk || '') + '"></div>' +
         '<div class="ops-field"><label>Division</label><input class="ops-input" id="bkDiv" value="' + esc(b.division || '') + '"></div></div>';

@@ -32,6 +32,18 @@
     // billing/audit history but no longer active) are dropped here so a kid
     // who's left camp never shows up in a live medical/directory list.
     function getRoster()    { var g = readGlobal(), all = (g.app1 && g.app1.camperRoster) || {}, out = {}; Object.keys(all).forEach(function(n){ if(!all[n].unenrolled) out[n] = all[n]; }); return out; }
+
+// ── Camper display name ────────────────────────────────────────────────────
+// Roster keys are unique but are not always the camper's name: a second camper
+// sharing a name is keyed "Malky Stein #102" (their camperId) and carries
+// displayName — see campistry_camper_identity.js for why the key stays a string
+// rather than becoming the id across ~1,200 call sites at once.
+//
+// The suffix is always exactly " #<id>" appended to the plain name, so stripping
+// it needs no roster lookup and cannot disagree with displayName. Identity —
+// lookups, accounts, ledgers, selection — must keep using the KEY; only humans
+// see this.
+function _lbl(key) { return String(key == null ? '' : key).replace(/\s#\d+$/, ''); }
     function getStructure() { return readGlobal().campStructure || {}; }
     function getFamilies()  { var g = readGlobal(); return (g.campistryMe && g.campistryMe.families) || {}; }
     // Hired staff — head counselors, counselors, everyone on payroll — pulled
@@ -111,7 +123,7 @@
                 medCampers.forEach(function(name) {
                     var c = roster[name];
                     (c.medications||'').split(',').map(function(m){return m.trim()}).filter(Boolean).forEach(function(med) {
-                        h += '<div class="med-item upcoming"><div class="med-avatar" style="background:'+avc(name)+'">'+ini(name)+'</div><div class="med-info"><div class="med-name">'+esc(name)+'</div><div class="med-detail">'+esc(med)+' — '+esc(c.bunk||'No bunk')+(c.division?' ('+esc(c.division)+')':'')+'</div></div><div class="med-actions"><button class="btn-give" onclick="CampistryHealth.logDispensing(\''+je(name)+'\',\''+je(med)+'\')">Given</button><button class="btn-skip">Skip</button></div></div>';
+                        h += '<div class="med-item upcoming"><div class="med-avatar" style="background:'+avc(name)+'">'+ini(name)+'</div><div class="med-info"><div class="med-name">'+esc(_lbl(name))+'</div><div class="med-detail">'+esc(med)+' — '+esc(c.bunk||'No bunk')+(c.division?' ('+esc(c.division)+')':'')+'</div></div><div class="med-actions"><button class="btn-give" onclick="CampistryHealth.logDispensing(\''+je(name)+'\',\''+je(med)+'\')">Given</button><button class="btn-skip">Skip</button></div></div>';
                     });
                 });
                 qEl.innerHTML = h;
@@ -140,7 +152,7 @@
                 allergyCampers.forEach(function(name) {
                     var c = roster[name];
                     var sev = (c.allergies||'').toLowerCase().match(/anaphyla|epipen|severe/) ? 'severe' : 'moderate';
-                    ah += '<div class="allergy-card '+sev+'"><div class="allergy-camper">'+esc(name)+' '+bdg(sev==='severe'?'Severe':'Moderate',sev==='severe'?'red':'amber')+'</div><div class="allergy-detail">'+esc(c.allergies)+'</div></div>';
+                    ah += '<div class="allergy-card '+sev+'"><div class="allergy-camper">'+esc(_lbl(name))+' '+bdg(sev==='severe'?'Severe':'Moderate',sev==='severe'?'red':'amber')+'</div><div class="allergy-detail">'+esc(c.allergies)+'</div></div>';
                 });
                 aEl.innerHTML = ah;
             }
@@ -156,7 +168,7 @@
         meds.forEach(function(name) {
             var c = roster[name];
             (c.medications||'').split(',').map(function(m){return m.trim()}).filter(Boolean).forEach(function(med) {
-                h += '<tr><td style="font-weight:700">'+esc(name)+'</td><td>'+esc(med)+'</td><td>'+esc(c.bunk||'—')+'</td><td>'+(c.division?bdg(c.division,'purple'):'—')+'</td><td>'+bdg('Active','green')+'</td><td><button class="btn btn-sm btn-primary" onclick="CampistryHealth.logDispensing(\''+je(name)+'\',\''+je(med)+'\')">Give</button></td></tr>';
+                h += '<tr><td style="font-weight:700">'+esc(_lbl(name))+'</td><td>'+esc(med)+'</td><td>'+esc(c.bunk||'—')+'</td><td>'+(c.division?bdg(c.division,'purple'):'—')+'</td><td>'+bdg('Active','green')+'</td><td><button class="btn btn-sm btn-primary" onclick="CampistryHealth.logDispensing(\''+je(name)+'\',\''+je(med)+'\')">Give</button></td></tr>';
             });
         });
         tbody.innerHTML = h;
@@ -192,10 +204,10 @@
             var c = roster[name];
             if (c.allergies) {
                 var sev = (c.allergies.toLowerCase().match(/anaphyla|epipen|severe/))?'Severe':'Moderate';
-                h += '<tr><td style="font-weight:700">'+esc(name)+'</td><td>'+esc(c.allergies)+'</td><td>'+bdg('Allergy','red')+'</td><td>'+bdg(sev,sev==='Severe'?'red':'amber')+'</td><td>'+esc(c.bunk||'—')+'</td></tr>';
+                h += '<tr><td style="font-weight:700">'+esc(_lbl(name))+'</td><td>'+esc(c.allergies)+'</td><td>'+bdg('Allergy','red')+'</td><td>'+bdg(sev,sev==='Severe'?'red':'amber')+'</td><td>'+esc(c.bunk||'—')+'</td></tr>';
             }
             if (c.dietary) {
-                h += '<tr><td style="font-weight:700">'+esc(name)+'</td><td>'+esc(c.dietary)+'</td><td>'+bdg('Dietary','amber')+'</td><td>'+bdg('—','gray')+'</td><td>'+esc(c.bunk||'—')+'</td></tr>';
+                h += '<tr><td style="font-weight:700">'+esc(_lbl(name))+'</td><td>'+esc(c.dietary)+'</td><td>'+bdg('Dietary','amber')+'</td><td>'+bdg('—','gray')+'</td><td>'+esc(c.bunk||'—')+'</td></tr>';
             }
         });
         tbody.innerHTML = h;
@@ -262,7 +274,7 @@
             }
             var typeBadge = p.type === 'camper' ? bdg('Camper','blue') : bdg('Staff','purple');
             h += '<tr class="click" onclick="CampistryHealth.viewPerson(\''+p.type+'\',\''+je(p.key)+'\')">'
-               + '<td style="font-weight:700">'+esc(name)+'</td>'
+               + '<td style="font-weight:700">'+esc(_lbl(name))+'</td>'
                + '<td>'+typeBadge+'</td>'
                + '<td>'+ageRole+'</td>'
                + '<td>'+divBunk+'</td>'
@@ -394,7 +406,7 @@
             var c=roster[name], f=forms[name]||{status:'not_started'};
             var sb = f.status==='approved'?bdg('Approved','green'):f.status==='flagged'?bdg('Flagged','red'):f.status==='pending'?bdg('Pending','amber'):bdg('Not Started','gray');
             var ab = f.status==='approved'?'<button class="btn btn-sm btn-ghost">View</button>':f.status==='flagged'?'<button class="btn btn-sm btn-danger">Resolve</button>':'<button class="btn btn-sm btn-primary">Review</button>';
-            h+='<tr><td style="font-weight:700">'+esc(name)+'</td><td>'+esc(c.bunk||'—')+'</td><td>'+sb+'</td><td style="font-size:.75rem;color:var(--slate-500)">'+esc(f.notes||'—')+'</td><td>'+ab+'</td></tr>';
+            h+='<tr><td style="font-weight:700">'+esc(_lbl(name))+'</td><td>'+esc(c.bunk||'—')+'</td><td>'+sb+'</td><td style="font-size:.75rem;color:var(--slate-500)">'+esc(f.notes||'—')+'</td><td>'+ab+'</td></tr>';
         });
         tbody.innerHTML=h;
         renderParentDocs();
@@ -579,7 +591,7 @@
             names.slice(0,8).forEach(function(n){
                 var c=roster[n], item=document.createElement('div');
                 item.style.cssText='padding:8px 12px;cursor:pointer;font-size:.82rem;display:flex;justify-content:space-between';
-                item.innerHTML='<span style="font-weight:600">'+esc(n)+'</span><span style="color:var(--slate-400);font-size:.75rem">'+esc(c.bunk||'')+'</span>';
+                item.innerHTML='<span style="font-weight:600">'+esc(_lbl(n))+'</span><span style="color:var(--slate-400);font-size:.75rem">'+esc(c.bunk||'')+'</span>';
                 item.onclick=function(){ input.value=n; dd.remove(); populateMedDrop(n); };
                 item.onmouseenter=function(){item.style.background='var(--health-50)'}; item.onmouseleave=function(){item.style.background=''};
                 dd.appendChild(item);

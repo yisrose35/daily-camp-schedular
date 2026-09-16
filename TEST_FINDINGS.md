@@ -15,10 +15,20 @@
 > are stamped at that moment so the re-key cannot orphan them — safe precisely
 > there, because until that instant the name had only ever belonged to one child.
 >
-> What remains is cosmetic rather than a money risk: `accounts` is still keyed by
-> name, so the archived account shows as `"Malky Stein #101"`. Keying the map by
-> `camperId` throughout would be tidier, but no money can move between two
-> campers any more, which was the actual defect.
+> **Same-name campers now work.** The blocker was not the canteen — `roster` is
+> keyed by name and `saveCamper` refused the second child outright. A duplicate now
+> gets a unique key (`"Malky Stein #102"`, from their camperId) and carries
+> `displayName`; the canteen inherits the fix because its accounts key off the
+> roster key. See `campistry_camper_identity.js`.
+>
+> The display sweep is **partly done**: `_lbl()` labels visible text in health,
+> live, snacks (manager + POS) and luggage, while identity — option values,
+> `data-` attributes, onclick arguments, account and ledger lookups — keeps the raw
+> key. **Not yet swept:** `campistry_me.js` (~22 sites), `campistry_lite.js` (~22),
+> and most of `campistry_go.js`. Those screens will show `Malky Stein #102` for a
+> duplicate until each site is checked — cosmetic, never a wrong balance, and it
+> needs checking site by site because in `go.js` some of the same-looking
+> expressions render the CAMP name, not a camper.
 
 Run against `265127c`. Suite after this pass: **1509 tests, 1495 pass, 14 fail** —
 the 14 are the pre-existing `tests/auto_full_day.test.js` scheduler failures,

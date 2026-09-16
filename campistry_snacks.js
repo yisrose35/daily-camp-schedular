@@ -102,6 +102,14 @@ function getStructure() {
 
 // Build flat camper list from roster: [ { name, division, bunk } ]
 function getCamperList() {
+
+// ── Camper display name ────────────────────────────────────────────────────
+// Roster keys are unique but are not always the camper's name: a second camper
+// sharing a name is keyed "Malky Stein #102" (their camperId) — see
+// campistry_camper_identity.js. The suffix is always exactly " #<id>" appended to
+// the plain name, so stripping it needs no roster lookup. Identity — lookups,
+// accounts, ledgers, selection — keeps using the KEY; only humans see this.
+function _lbl(key) { return String(key == null ? '' : key).replace(/\s#\d+$/, ''); }
     const roster = getRoster();
     const structure = getStructure();
     const campers = [];
@@ -501,7 +509,7 @@ window.rAccounts = function(filter) {
         else st = '<span class="badge badge-green">Active</span>';
         const jsName = esc(c.name).replace(/'/g, '&#39;');
         // Camper name is clickable → opens that camper's full transaction history.
-        return '<tr><td style="font-weight:600"><a href="#" class="acct-name-link" onclick="viewAccountHistory(\'' + jsName + '\');return false;">' + esc(c.name) + '</a></td><td>' + esc(c.division) + '</td><td>' + esc(c.bunk) +
+        return '<tr><td style="font-weight:600"><a href="#" class="acct-name-link" onclick="viewAccountHistory(\'' + jsName + '\');return false;">' + esc(c.label || _lbl(c.name)) + '</a></td><td>' + esc(c.division) + '</td><td>' + esc(c.bunk) +
             '</td><td style="font-weight:700;color:' + (a.balance <= 5 ? 'var(--red-600)' : 'var(--text-primary)') + '">$' + a.balance.toFixed(2) +
             '</td><td>$' + a.dailyLimit.toFixed(2) + '</td><td>$' + a.spentToday.toFixed(2) +
             '</td><td>' + st + '</td><td style="white-space:nowrap">' +
@@ -724,7 +732,7 @@ function rAnalytics() {
     const spenders = camperList.map(c => ({ ...c, spent: getAccount(c.name).spentToday })).filter(c => c.spent > 0).sort((a, b) => b.spent - a.spent);
     document.getElementById('spList').innerHTML = spenders.length ? spenders.map(c =>
         '<div class="spend-row"><div class="spend-avatar">' + c.name.split(' ').map(w => w[0]).join('') +
-        '</div><div class="spend-name">' + esc(c.name) + '<div style="font-size:.7rem;color:var(--text-muted)">' + esc(c.division) +
+        '</div><div class="spend-name">' + esc(c.label || _lbl(c.name)) + '<div style="font-size:.7rem;color:var(--text-muted)">' + esc(c.division) +
         '</div></div><div class="spend-amount">$' + c.spent.toFixed(2) + '</div></div>'
     ).join('') : '<div style="text-align:center;padding:1rem;color:var(--text-muted);font-size:.8rem">No purchases yet today</div>';
 
@@ -1178,7 +1186,7 @@ window.closeM = function(n) { document.getElementById('m-' + n).classList.remove
 
 function popSelects() {
     const opts = '<option value="">— Select —</option>' + camperList.map(c =>
-        '<option value="' + esc(c.name) + '">' + esc(c.name) + ' (' + esc(c.division) + ')</option>'
+        '<option value="' + esc(c.name) + '">' + esc(c.label || _lbl(c.name)) + ' (' + esc(c.division) + ')</option>'
     ).join('');
     ['depCamper', 'limCamper', 'cashCamper', 'refundCamper'].forEach(id => {
         const el = document.getElementById(id);
