@@ -88,7 +88,19 @@ async function stripeCharge(customerId: string, pmId: string | null, amount: num
   // connected Stripe account (see migrations/077_camp_stripe_connect.sql).
   // No Stripe-Account header, no change to the Customer/PaymentMethod used
   // above — only where the money settles. No platform fee.
-  if (destinationAccountId) params["transfer_data[destination]"] = destinationAccountId;
+  // on_behalf_of makes the CAMP the settlement merchant, which is the whole
+  // point: a destination charge without it settles on the platform, so the
+  // cardholder's statement carries the PLATFORM's descriptor. A parent who
+  // pays their camp and finds a charge from a company they have never heard
+  // of disputes it — and a dispute over an unrecognised descriptor is the
+  // single most documented avoidable chargeback there is. With on_behalf_of
+  // the statement uses the connected account's descriptor, i.e. the camp's.
+  // Stripe requires it to EQUAL transfer_data[destination] for card
+  // payments, so the two are always set together, from the same value.
+  if (destinationAccountId) {
+    params["transfer_data[destination]"] = destinationAccountId;
+    params["on_behalf_of"] = destinationAccountId;
+  }
   const resp = await fetch(`${STRIPE_API}/payment_intents`, {
     method: "POST",
     headers: { "Authorization": `Bearer ${STRIPE_SECRET}`, "Content-Type": "application/x-www-form-urlencoded" },
@@ -310,12 +322,19 @@ serve(async (req) => {
   // lookup — this loop can iterate thousands of installments in one run.
   const { data: connectedCamps } = await supabase
     .from("camps")
-    .select("id, stripe_account_id, stripe_charges_enabled")
+    .select("id, stripe_account_id, stripe_charges_enabled, name")
     .not("stripe_account_id", "is", null)
     .eq("stripe_charges_enabled", true);
   const campDestinations = new Map<string, string>();
   for (const c of (connectedCamps || [])) {
     if (c.stripe_account_id) campDestinations.set(c.id, c.stripe_account_id);
+  }
+  // The camp's NAME, from the same round trip. It is what the parent reads on
+  // their statement and receipt; a charge called "Camp payment" tells them
+  // nothing about which camp, and an unrecognised charge is a chargeback.
+  const campNames = new Map<string, string>();
+  for (const c of (connectedCamps || [])) {
+    if (c.name) campNames.set(c.id, String(c.name).trim());
   }
 
   // Which camps are on a non-Stripe processor. Fetched once up front (same
@@ -577,7 +596,7 @@ serve(async (req) => {
           }
           const pi = await stripeCharge(
             f.stripeCustomerId, f.stripePaymentMethodId || null, amount,
-            `Autopay instalment — ${f.name || famKey}`,
+            `${campNames.get(String(row.camp_id)) || "Camp"} — instalment (${f.name || famKey})`,
             { campId: String(row.camp_id), familyKey: famKey, familyName: camperName2,
               planId: String(plan.id || ""), source: "autopay" },
             campDestinations.get(String(row.camp_id)) || null,

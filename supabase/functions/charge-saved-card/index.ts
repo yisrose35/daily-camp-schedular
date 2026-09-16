@@ -54,7 +54,19 @@ async function stripeCharge(customerId: string, pmId: string | null, amountCents
   };
   if (pmId) params["payment_method"] = pmId;
   Object.entries(metadata).forEach(([k, v]) => { params[`metadata[${k}]`] = String(v); });
-  if (destinationAccountId) params["transfer_data[destination]"] = destinationAccountId;
+  // on_behalf_of makes the CAMP the settlement merchant, which is the whole
+  // point: a destination charge without it settles on the platform, so the
+  // cardholder's statement carries the PLATFORM's descriptor. A parent who
+  // pays their camp and finds a charge from a company they have never heard
+  // of disputes it — and a dispute over an unrecognised descriptor is the
+  // single most documented avoidable chargeback there is. With on_behalf_of
+  // the statement uses the connected account's descriptor, i.e. the camp's.
+  // Stripe requires it to EQUAL transfer_data[destination] for card
+  // payments, so the two are always set together, from the same value.
+  if (destinationAccountId) {
+    params["transfer_data[destination]"] = destinationAccountId;
+    params["on_behalf_of"] = destinationAccountId;
+  }
   const resp = await fetch(`${STRIPE_API}/payment_intents`, {
     method: "POST",
     headers: { "Authorization": `Bearer ${STRIPE_SECRET}`, "Content-Type": "application/x-www-form-urlencoded" },
@@ -290,11 +302,13 @@ serve(async (req) => {
         await finishLock("failed", result);
         return json(result, 400);
       }
-      const { data: camp } = await service.from("camps").select("stripe_account_id, stripe_charges_enabled").eq("id", campId).maybeSingle();
+      const { data: camp } = await service.from("camps").select("stripe_account_id, stripe_charges_enabled, name").eq("id", campId).maybeSingle();
       const destinationAccountId = (camp?.stripe_account_id && camp?.stripe_charges_enabled) ? camp.stripe_account_id : null;
+      // Name the camp on the charge — see on_behalf_of in stripeCharge above.
+      const campLabel = String(camp?.name || "").trim() || "Camp";
       const pi = await stripeCharge(
         chargeStripeCustomerId, chargeToken || null, amountCents,
-        (kind === "canteen_deposit" ? "Canteen funds — " + camperName : "Camp payment"),
+        (kind === "canteen_deposit" ? `${campLabel} — canteen funds for ${camperName}` : `${campLabel} — payment`),
         { campId: String(campId), familyKey, kind, idempotencyKey },
         destinationAccountId,
       );

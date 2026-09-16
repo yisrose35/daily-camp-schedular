@@ -14167,12 +14167,47 @@ function _famRefundablePayments(f){
         return Math.round((p.amount-priorRefunded)*100)/100>0;
     });
 }
+// How old a card payment can be and still be refundable through the gateway.
+//
+// Card networks settle a refund against the ORIGINAL authorisation, and that
+// link expires. Every processor documents its own limit and they cluster
+// around four months: past it the gateway simply rejects the refund and the
+// money has to go back as a cheque instead. 120 days is the conservative
+// figure — a refund we allow at 119 days that the gateway takes is fine; one
+// we allow at 200 days fails in front of an office who has already told a
+// family the money is on its way.
+var REFUND_WINDOW_DAYS=120;
+var REFUND_WINDOW_WARN_DAYS=100;
+function _paymentAgeDays(p){
+    var t=p&&(p.timestamp||Date.parse(p.date||''));
+    if(!t||!isFinite(t))return null;
+    return Math.floor((Date.now()-t)/86400000);
+}
+
 // The family's refundable ONLINE charges (Stripe or BYOP), each with the
-// dollar amount still unrefunded on it, oldest-first — the pool an
-// amount-only gateway refund draws from. The office no longer picks a
-// specific charge (mirrors payments-canteen-refund's oldest-first draw for
-// canteen): they enter one amount and this apportions it across charges.
+// dollar amount still unrefunded on it — the pool an amount-only gateway
+// refund draws from. The office no longer picks a specific charge: they enter
+// one amount and this apportions it across charges.
+//
+// NEWEST FIRST, and this is the opposite of the canteen draw on purpose.
+// Applying a PAYMENT to charges runs oldest-first, because the oldest debt
+// should clear first. A REFUND is not that: every payment carries an expiry
+// (REFUND_WINDOW_DAYS), so drawing oldest-first aims the refund squarely at
+// the charges most likely to be rejected — it fails at the gateway precisely
+// when a family is owed money, having already burned some chunks on the
+// younger charges that would have worked. Newest-first spends the refundable
+// window that is actually left.
+//
+// Payments past the window are dropped from the pool entirely, and reported
+// separately via _famRefundExpired so the office is told to send a cheque
+// rather than watching a gateway error it cannot interpret.
 function _famRefundableOnline(f){
+    return _famRefundableOnlineAll(f).filter(function(d){
+        var age=_paymentAgeDays(d.p);
+        return age==null||age<=REFUND_WINDOW_DAYS;
+    });
+}
+function _famRefundableOnlineAll(f){
     return _famRefundablePayments(f)
         .filter(function(p){return !!p.stripePaymentIntentId || !!p.byopTransactionId})
         .map(function(p){
@@ -14182,8 +14217,15 @@ function _famRefundableOnline(f){
         .filter(function(d){return d.remaining>0})
         .sort(function(a,b){
             var ta=a.p.timestamp||Date.parse(a.p.date||'')||0, tb=b.p.timestamp||Date.parse(b.p.date||'')||0;
-            return ta-tb;
+            return tb-ta;   // newest first — see above
         });
+}
+/** Money on this family that is too old to refund to a card. */
+function _famRefundExpired(f){
+    return _famRefundableOnlineAll(f).filter(function(d){
+        var age=_paymentAgeDays(d.p);
+        return age!=null&&age>REFUND_WINDOW_DAYS;
+    });
 }
 function _crFamChanged(){ _crUpdateRefundSummary(); }
 // Three named refund/credit types (mirrors the standard camp-billing
@@ -14225,11 +14267,31 @@ function _crUpdateRefundSummary(){
     if(onlineTotal>0){
         var procs={};
         online.forEach(function(d){procs[d.p.stripePaymentIntentId?'Stripe':(d.p.byopProcessor==='cardknox'?'Sola':(d.p.byopProcessor||'card'))]=1});
-        if(sumEl) sumEl.innerHTML='<strong>'+fm(onlineTotal)+'</strong> refundable to card/bank across '+online.length+' online payment'+(online.length!==1?'s':'')+'. Enter any amount up to that — it draws from the oldest charges first automatically.';
+    // Money that is real and unrefunded but past the gateway's window. It is
+    // reported wherever the pool is reported, because the alternative is an
+    // office promising a family a refund and then reading a raw gateway
+    // rejection with no idea that a cheque is the answer.
+    var expired=_famRefundExpired(f);
+    var expiredTotal=Math.round(expired.reduce(function(s,d){return s+d.remaining},0)*100)/100;
+    var expiredNote=expiredTotal>0
+        ? '<div style="margin-top:6px;padding:7px 10px;border-radius:4px;background:#FFFBEB;border:1px solid #FDE68A;color:#92400E;font-size:.74rem">'
+          +fm(expiredTotal)+' more was paid online but is older than '+REFUND_WINDOW_DAYS+' days. Card networks will not take a refund against a charge that old — send that part back as a check and record it with <strong>Offline Refund</strong>.</div>'
+        : '';
+    // Nearly-expired money: worth saying before it becomes the case above.
+    var soon=online.filter(function(d){var a=_paymentAgeDays(d.p);return a!=null&&a>REFUND_WINDOW_WARN_DAYS});
+    var soonNote=soon.length
+        ? '<div style="margin-top:6px;font-size:.72rem;color:#92400E">'+soon.length+' of these payment'+(soon.length!==1?'s are':' is')
+          +' within days of the '+REFUND_WINDOW_DAYS+'-day refund window closing.</div>'
+        : '';
+        if(sumEl) sumEl.innerHTML='<strong>'+fm(onlineTotal)+'</strong> refundable to card/bank across '+online.length+' online payment'+(online.length!==1?'s':'')+'. Enter any amount up to that — it draws from the most recent charges first, so the refund stays inside the window the card networks allow.'+soonNote+expiredNote;
         if(amtEl){amtEl.setAttribute('max',onlineTotal); if(!amtEl.value) amtEl.value=onlineTotal.toFixed(2);}
-        if(noteEl) noteEl.innerHTML='<div style="font-size:.72rem;color:var(--s400);margin-top:4px">Sends money back to the original card/bank through '+esc(Object.keys(procs).join(' & '))+' — you don\'t pick a charge, Campistry applies it oldest-first. For anything beyond '+fm(onlineTotal)+', use Offline Refund.</div>';
+        if(noteEl) noteEl.innerHTML='<div style="font-size:.72rem;color:var(--s400);margin-top:4px">Sends money back to the original card/bank through '+esc(Object.keys(procs).join(' & '))+' — you don\'t pick a charge, Campistry applies it newest-first. For anything beyond '+fm(onlineTotal)+', use Offline Refund.</div>';
     } else {
-        if(sumEl) sumEl.innerHTML='<span style="color:#DC2626">No online charges on record for this family.</span> Use <strong>Offline Refund</strong> to record a check/cash refund.';
+        var expired0=_famRefundExpired(f);
+        var expiredTotal0=Math.round(expired0.reduce(function(s,d){return s+d.remaining},0)*100)/100;
+        if(sumEl) sumEl.innerHTML=expiredTotal0>0
+            ? '<span style="color:#92400E">'+fm(expiredTotal0)+' was paid online, but every one of those charges is older than '+REFUND_WINDOW_DAYS+' days and the card networks will no longer take a refund against them.</span> Send it back as a check and record it with <strong>Offline Refund</strong>.'
+            : '<span style="color:#DC2626">No online charges on record for this family.</span> Use <strong>Offline Refund</strong> to record a check/cash refund.';
         if(amtEl){amtEl.value='';amtEl.removeAttribute('max')}
         if(noteEl) noteEl.innerHTML='';
     }
@@ -14370,12 +14432,21 @@ function issueCreditForFamily(famKey){
             if(refundAmt<=0){toast('Enter an amount to refund','error');return}
             var chunks=_famRefundableOnline(f);
             var onlineTotal=Math.round(chunks.reduce(function(s,d){return s+d.remaining},0)*100)/100;
-            if(onlineTotal<=0){toast('No online charges on record for this family — use Offline Refund instead','error');return}
+            if(onlineTotal<=0){
+                var _exp=_famRefundExpired(f);
+                var _expT=Math.round(_exp.reduce(function(s,d){return s+d.remaining},0)*100)/100;
+                toast(_expT>0
+                    ? fm(_expT)+' was paid online but every charge is older than '+REFUND_WINDOW_DAYS+' days — card networks will not take a refund that old. Send a check and use Offline Refund.'
+                    : 'No online charges on record for this family — use Offline Refund instead','error');
+                return;
+            }
             if(refundAmt>onlineTotal+0.001){toast('Only '+fm(onlineTotal)+' is refundable to card/bank — lower the amount or use Offline Refund for the rest','error');return}
             var reasonSel=document.getElementById('crRefundReason').value;
             var reasonLabel=_reasonLabels[reasonSel]||reasonSel;
-            // Draw oldest-first across the family's online charges, one gateway
-            // call + one ledger entry per charge. If a chunk fails partway, the
+            // Draw NEWEST-first across the family's online charges, one gateway
+            // call + one ledger entry per charge — see _famRefundableOnline for
+            // why the direction is the opposite of a payment's.
+            // If a chunk fails partway, the
             // chunks before it already moved real money — keep and report them
             // rather than rolling back (same reasoning as payments-canteen-refund).
             var remaining=refundAmt, done=0, failMsg=null;

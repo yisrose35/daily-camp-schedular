@@ -205,9 +205,22 @@ serve(async (req) => {
     }
 
     const cents = String(Math.round(Number(amount) * 100));
+    // The camp's own name leads the label, because this string is what the
+    // parent sees on the Checkout page, in Stripe's receipt and on their card
+    // statement. "Camp payment" names no camp, and a parent who cannot place a
+    // charge disputes it.
+    let campLabel = "";
+    try {
+      if (campId && SUPABASE_URL && SUPABASE_SERVICE_KEY) {
+        const svc = createClient(SUPABASE_URL, SUPABASE_SERVICE_KEY);
+        const { data: c } = await svc.from("camps").select("name").eq("id", campId).maybeSingle();
+        campLabel = String(c?.name || "").trim();
+      }
+    } catch (_) { /* a missing name must never stop a payment */ }
+    const who = campLabel || "Camp";
     const label = description || (isCanteenDeposit
-      ? `Canteen funds — ${camperName}`
-      : `Camp payment${familyName ? " — " + familyName : ""}`);
+      ? `${who} — canteen funds for ${camperName}`
+      : `${who} — payment${familyName ? " (" + familyName + ")" : ""}`);
     const origin = req.headers.get("origin") || "";
     const success = successUrl || `${origin}/campistry_pay_thanks.html?status=success`;
     const cancel = cancelUrl || `${origin}/campistry_pay_thanks.html?status=cancelled`;
@@ -261,7 +274,17 @@ serve(async (req) => {
     }
 
     if (destinationAccountId) {
+      // on_behalf_of makes the CAMP the settlement merchant, which is the whole
+      // point: a destination charge without it settles on the platform, so the
+      // cardholder's statement carries the PLATFORM's descriptor. A parent who
+      // pays their camp and finds a charge from a company they have never heard
+      // of disputes it — and a dispute over an unrecognised descriptor is the
+      // single most documented avoidable chargeback there is. With on_behalf_of
+      // the statement uses the connected account's descriptor, i.e. the camp's.
+      // Stripe requires it to EQUAL transfer_data[destination] for card
+      // payments, so the two are always set together, from the same value.
       params["payment_intent_data[transfer_data][destination]"] = destinationAccountId;
+      params["payment_intent_data[on_behalf_of]"] = destinationAccountId;
     }
 
     const session = await stripePost("/checkout/sessions", params);

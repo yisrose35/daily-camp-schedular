@@ -115,16 +115,25 @@ async function campOwnsCustomer(campId: string | undefined, customerId: string |
   return Object.values(families).some((f: any) => f && f.stripeCustomerId === customerId);
 }
 
-async function lookupCampDestination(campId: string | undefined, customerId: string | undefined): Promise<string | null> {
-  if (!campId || !SUPABASE_URL || !SUPABASE_SERVICE_KEY) return null;
-  if (!(await campOwnsCustomer(campId, customerId))) return null;
+// Returns the camp's connected account AND its name. The name is not a nicety:
+// it is what a parent reads on their statement and in their receipt, and a
+// charge described as "Campistry payment" is a charge from a company the parent
+// has never heard of, for money they gave their camp.
+async function lookupCamp(campId: string | undefined, customerId: string | undefined):
+    Promise<{ destination: string | null; name: string }> {
+  const none = { destination: null, name: "" };
+  if (!campId || !SUPABASE_URL || !SUPABASE_SERVICE_KEY) return none;
+  if (!(await campOwnsCustomer(campId, customerId))) return none;
   const supabase = createClient(SUPABASE_URL, SUPABASE_SERVICE_KEY);
   const { data: camp } = await supabase
     .from("camps")
-    .select("stripe_account_id, stripe_charges_enabled")
+    .select("stripe_account_id, stripe_charges_enabled, name")
     .eq("id", campId)
     .maybeSingle();
-  return (camp?.stripe_account_id && camp.stripe_charges_enabled) ? camp.stripe_account_id : null;
+  return {
+    destination: (camp?.stripe_account_id && camp.stripe_charges_enabled) ? camp.stripe_account_id : null,
+    name: String(camp?.name || "").trim(),
+  };
 }
 
 async function stripePost(endpoint: string, body: Record<string, string>) {
@@ -200,7 +209,7 @@ serve(async (req) => {
       payment_method: pmId,
       off_session: "true",
       confirm: "true", // charge immediately
-      description: description || "Campistry payment",
+      description: description || "Camp payment",
     };
 
     // Add metadata
@@ -210,9 +219,24 @@ serve(async (req) => {
       });
     }
 
-    const destinationAccountId = await lookupCampDestination(authedCampId, customerId);
+    const camp = await lookupCamp(authedCampId, customerId);
+    const destinationAccountId = camp.destination;
+    // Name the camp on the charge, so the parent reading a statement or a
+    // receipt recognises it. Set after the lookup, which is why the params
+    // object above no longer tries to guess a description of its own.
+    if (camp.name) params["description"] = description || (camp.name + " — payment");
     if (destinationAccountId) {
+      // on_behalf_of makes the CAMP the settlement merchant, which is the whole
+      // point: a destination charge without it settles on the platform, so the
+      // cardholder's statement carries the PLATFORM's descriptor. A parent who
+      // pays their camp and finds a charge from a company they have never heard
+      // of disputes it — and a dispute over an unrecognised descriptor is the
+      // single most documented avoidable chargeback there is. With on_behalf_of
+      // the statement uses the connected account's descriptor, i.e. the camp's.
+      // Stripe requires it to EQUAL transfer_data[destination] for card
+      // payments, so the two are always set together, from the same value.
       params["transfer_data[destination]"] = destinationAccountId;
+      params["on_behalf_of"] = destinationAccountId;
     }
 
     const paymentIntent = await stripePost("/payment_intents", params);
