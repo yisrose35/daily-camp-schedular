@@ -1553,7 +1553,14 @@ window.refundAllCanteenDeposits = function() {
     if (!client) { toast('Not signed in', 1); return; }
     if (btn) { btn.disabled = true; btn.textContent = 'Refunding everyone…'; }
     if (resultEl) resultEl.style.display = 'none';
-    client.functions.invoke('stripe-canteen-refund-all', { body: {} })
+    // Route by the camp's processor, the way the per-camper refund already
+    // does. This used to call the Stripe function unconditionally, so a
+    // Cardknox or Banquest camp clicking "refund everyone" hit a function
+    // looking for Stripe charges they never had: it found nothing refundable
+    // and reported success, having returned nobody's money.
+    _getSnacksProcessorKey().then(function(processorKey) {
+    var _fn = processorKey === 'stripe' ? 'stripe-canteen-refund-all' : 'payments-canteen-refund-all';
+    client.functions.invoke(_fn, { body: {} })
         .then(async function(res) {
             var data = res && res.data;
             var hasError = !!(res && res.error) || !!(data && data.error);
@@ -1565,7 +1572,7 @@ window.refundAllCanteenDeposits = function() {
             }
             if (btn) btn.style.display = 'none';
             var msg = 'Refunded $' + Number(data.totalRefunded).toFixed(2) + ' across ' + data.refundedCount + ' camper' + (data.refundedCount === 1 ? '' : 's') + '.';
-            if (data.skippedCount) msg += ' ' + data.skippedCount + ' skipped (no Stripe-paid balance).';
+            if (data.skippedCount) msg += ' ' + data.skippedCount + ' skipped (no online balance to refund).';
             if (data.failedCount) msg += ' ' + data.failedCount + ' hit an error — check with the parent or try that camper individually.';
             if (resultEl) { resultEl.style.display = ''; resultEl.style.color = data.failedCount ? 'var(--red-600)' : '#16A34A'; resultEl.textContent = msg; }
             _refreshSnacksFromCloud();
@@ -1574,6 +1581,13 @@ window.refundAllCanteenDeposits = function() {
             var msg = (e && e.message) || 'Could not process refunds.';
             if (resultEl) { resultEl.style.display = ''; resultEl.style.color = 'var(--red-600)'; resultEl.textContent = msg; }
         });
+    }, function(e) {
+        // Could not even work out which processor the camp is on — refunding
+        // through the wrong one is worse than not starting, so stop here.
+        if (btn) { btn.disabled = false; btn.textContent = 'Try Again'; }
+        var msg = 'Could not read this camp\'s payment processor: ' + ((e && e.message) || 'unknown');
+        if (resultEl) { resultEl.style.display = ''; resultEl.style.color = 'var(--red-600)'; resultEl.textContent = msg; }
+    });
 };
 
 // The refund's balance/transaction change happens server-side (the RPC), not

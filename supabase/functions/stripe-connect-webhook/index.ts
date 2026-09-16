@@ -9,9 +9,11 @@
 // Must be registered TWICE in the Stripe Dashboard, as two separate
 // endpoints pointing at this same URL, because the two event types this
 // function cares about live on two different accounts:
-//   - account.updated fires on the CONNECTED account (the staff member's
-//     Express account) → register with "Listen to events on: Connected
-//     accounts".
+//   - account.updated and payout.failed fire on the CONNECTED account (a staff
+//     member's Express account, or a CAMP's own Connect account) → register
+//     with "Listen to events on: Connected accounts". payout.failed must be
+//     ticked on that endpoint or a camp whose bank details are wrong gets no
+//     warning here at all — see the payout.failed branch below.
 //   - payment_intent.succeeded / payment_intent.payment_failed fire on the
 //     PLATFORM account, because stripe-connect-tip creates the Checkout
 //     Session (and therefore the PaymentIntent) on the platform account and
@@ -420,6 +422,36 @@ serve(async (req) => {
         console.log(`[stripe-connect-webhook] tip payment failed for ${meta.staffName}: ${event.data.object.last_payment_error?.message || "unknown"}`);
       } else if (meta.source === "campistry-link-tip-cart") {
         console.log(`[stripe-connect-webhook] cart tip payment failed for cart ${meta.cartId}: ${event.data.object.last_payment_error?.message || "unknown"}`);
+      }
+    } else if (event.type === "payout.failed") {
+      // The camp's OWN payout, not the platform's. stripe-webhook already
+      // handles payout.failed, but that is Campistry's payout and its alert goes
+      // to Campistry's address — a camp with a closed bank account or a mistyped
+      // routing number saw money collected, saw none arrive, and found nothing
+      // here that explained the gap.
+      //
+      // A connected-account event carries the account id and nothing else about
+      // whose it is, so the RPC resolves the camp from camps.stripe_account_id
+      // and refuses rather than guessing: a payout alert on the wrong camp's
+      // dashboard sends the wrong office to their bank.
+      const po = event.data.object || {};
+      const acct = String(event.account || "");
+      const { data, error } = await supabase.rpc("record_payout_failure", {
+        p_stripe_account_id: acct,
+        p_payout_id: String(po.id || ""),
+        p_amount: po.amount != null ? Number((po.amount / 100).toFixed(2)) : null,
+        p_currency: po.currency || null,
+        p_failure_message: po.failure_message || po.failure_code || null,
+        p_arrival_date: po.arrival_date
+          ? new Date(po.arrival_date * 1000).toISOString().split("T")[0] : null,
+      });
+      if (error || !data?.success) {
+        console.error(`[stripe-connect-webhook] payout ${po.id} for account ${acct} failed and ` +
+          `was NOT recorded (${error?.message || data?.error || "unknown"}) — that camp has ` +
+          `money sitting at Stripe with nothing here to say so.`);
+      } else {
+        console.log(`[stripe-connect-webhook] payout ${po.id} failed for camp ${data.campName} ` +
+          `(${data.campId}) — the camp has been notified`);
       }
     } else {
       console.log(`[stripe-connect-webhook] Unhandled event: ${event.type}`);
