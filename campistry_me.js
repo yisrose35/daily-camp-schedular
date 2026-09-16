@@ -7563,6 +7563,15 @@ async function rescindEnrollment(id){
         e.statusHistory=e.statusHistory||[];
         e.statusHistory.push({from:prev,to:'withdrawn',date:new Date().toISOString(),by:'office',rescinded:true});
     }
+    // PUT THE RECORD BACK. cascadeCamperDelete deletes every enrollment matching
+    // the camper name, so by this point `enrollments[id]` is gone and `e` is a
+    // detached object — the flip above was writing to nothing and save() never
+    // saw it. The dialog above promises "the application stays here marked
+    // Withdrawn for the audit trail", and until now that was simply untrue: the
+    // record vanished from the pipeline entirely. Re-inserting the terminal
+    // 'withdrawn' copy is what makes the promise good, and a terminal status is
+    // already excluded from Billing's charge scan, so it bills nothing.
+    if(!enrollments[id])enrollments[id]=e;
     if(e.session && prev!=='waitlisted') autoPromoteWaitlist(e.session);
     save(); render(curPage); toast(nm+' rescinded — removed from the Campers list');
 }

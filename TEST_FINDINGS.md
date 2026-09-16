@@ -1,5 +1,19 @@
 # Test findings — Part A, plus camper withdrawal
 
+> **STATUS: all five money defects are FIXED and pushed.** D0 (season rollover),
+> D1 (parked-then-re-enrolled), D2 (rescind's audit record), D3 and D4 (the
+> canteen) are closed by `campistry_billing_core.js` plus migrations 171–173, and
+> each defect's test has been rewritten to assert the fix. The findings below are
+> kept as the record of what was wrong and why — read them as history, not as an
+> open list. `BILLING_OUTLIVES_ENROLLMENT_DESIGN.md` has the design;
+> `tests/billing_core.test.js`, `billing_wiring.test.js` and
+> `canteen_identity.test.js` have the proof.
+>
+> Still open, and genuinely so: the canteen `accounts` map is keyed by camper
+> NAME, so two same-named campers cannot coexist there at all. That needs the map
+> re-keyed by `camperId` across the manager, the POS and the parent portal — a
+> data-shape change rather than a logic fix.
+
 Run against `265127c`. Suite after this pass: **1509 tests, 1495 pass, 14 fail** —
 the 14 are the pre-existing `tests/auto_full_day.test.js` scheduler failures,
 unchanged and unrelated (verified by stashing).

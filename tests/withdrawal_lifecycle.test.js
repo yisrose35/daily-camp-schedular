@@ -215,11 +215,12 @@ test('LEGACY PATH ONLY: re-enrolling after a parked spell leaves a gap', () => {
 
 // ── 3. DEFECT: rescindEnrollment promises an audit record it then deletes ──
 
-test('DEFECT: a rescinded application is deleted, not kept as Withdrawn', () => {
-    // The confirm dialog tells the office: "The application stays here marked
-    // Withdrawn for the audit trail." It does not. cascadeCamperDelete deletes
-    // every enrollment matching the camper name, and the status flip that
-    // follows mutates an object already detached from the map.
+test('FIXED: a rescinded application IS kept, marked Withdrawn', () => {
+    // Was D2. The dialog promises "the application stays here marked Withdrawn
+    // for the audit trail" and it did not: cascadeCamperDelete deletes every
+    // enrollment matching the camper name, so the status flip that followed
+    // mutated an object already detached from the map and save() never saw it.
+    // rescindEnrollment now re-inserts the terminal copy.
     const src = read('campistry_me.js');
 
     // The cascade deletes unconditionally. Anchored FORWARD from the cascade —
@@ -245,16 +246,25 @@ test('DEFECT: a rescinded application is deleted, not kept as Withdrawn', () => 
     assert.match(rescind, /application stays here marked <strong>Withdrawn<\/strong>/,
         'the promise text changed — if it was corrected, delete this test');
 
-    // Model it: the flip lands on an orphan.
+    // The re-insert is what makes the promise good.
+    assert.match(rescind, /if\(!enrollments\[id\]\)enrollments\[id\]=e;/,
+        'the withdrawn record is not put back — the audit trail is lost again');
+    const reinsert = rescind.indexOf('if(!enrollments[id])enrollments[id]=e;');
+    assert.ok(reinsert > flipAt, 'the re-insert must come after the status flip');
+
+    // Model it end to end.
     const enrollments = { e1: { camperName: 'Malky Stein', status: 'enrolled' } };
-    const e = enrollments.e1;
-    Object.keys(enrollments).forEach(id => {
-        if (enrollments[id].camperName === 'Malky Stein') delete enrollments[id];
+    const id = 'e1';
+    const e = enrollments[id];
+    Object.keys(enrollments).forEach(k => {          // cascadeCamperDelete
+        if (enrollments[k].camperName === 'Malky Stein') delete enrollments[k];
     });
     e.status = 'withdrawn';
-    assert.deepStrictEqual(Object.keys(enrollments), [],
-        'the audit record the dialog promised is gone from the saved data');
-    assert.strictEqual(e.status, 'withdrawn', 'the flip only touched a detached object');
+    if (!enrollments[id]) enrollments[id] = e;        // the fix
+    assert.deepStrictEqual(Object.keys(enrollments), ['e1'],
+        'the audit record the dialog promises must survive');
+    assert.strictEqual(enrollments.e1.status, 'withdrawn',
+        'and must be terminal, so Billing’s charge scan skips it');
 });
 
 // ── 4. a hard delete drops the family record, and with it the card ─────────

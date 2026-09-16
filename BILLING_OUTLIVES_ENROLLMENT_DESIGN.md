@@ -1,6 +1,9 @@
 # Design: a family's billing outlives their enrollment
 
-**Status:** proposal, no code written. Revision 2.
+**Status:** BUILT AND PUSHED. Revision 2 was the design; this is now what the
+code does. See the commits from `0be2fc1` onwards, and the STATUS banner in
+`TEST_FINDINGS.md`. Kept as the design record — the reasoning is still the
+reference for why it is shaped this way.
 **Problem owner's words:** *"if a parent owes money, they always need to be able
 to access the payment regardless of who they have in camp."*
 
