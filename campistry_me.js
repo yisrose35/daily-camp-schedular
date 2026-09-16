@@ -2356,6 +2356,8 @@ function _renderRegistrationPane(){
         h+='<div class="me-more-wrap"><button class="me-btn me-btn--teal" onclick="CampistryMe._toggleMenu(\'pplFormsMenu\')">Customize Forms ▾</button>'
             +'<div class="me-more-menu" id="pplFormsMenu" style="min-width:210px">'
             +'<button onclick="CampistryMe.openFormConfig()">Registration Form</button><button onclick="CampistryMe.openPostAcceptFormConfig()" title="Sent after a camper is accepted">Post-Acceptance Form</button>'
+            +'<div style="border-top:1px solid var(--s100);margin:4px 0"></div>'
+            +'<button onclick="CampistryMe.openDepositPolicy()" title="Money required to hold a place">Deposit to Register</button>'
             +'</div></div>'
             +'<button class="me-btn me-btn--pri" onclick="CampistryMe.addApplication()">+ Manual Entry</button>';
     }
@@ -2368,6 +2370,24 @@ function _renderRegistrationPane(){
         +'<button onclick="CampistryMe.exportEnrollmentReport()">↓ Export Applications</button>'
         +'</div></div>'
         +'</div></div>';
+
+    // A deposit policy that nobody can see from the page it governs is a
+    // setting somebody turns on once and then cannot find again.
+    var _dp=_depPolicyAPI();
+    if(_dp){
+        var _pol=_dp.normalize(enrollSettings.depositPolicy);
+        if(_pol.enabled){
+            var _owing=list.filter(function(r){
+                var e=enrollments[r.id]||{};
+                return _dp.outstanding(e)>0;
+            }).length;
+            h+='<div style="background:#EFF6FF;border:1px solid #BFDBFE;border-radius:var(--r);padding:10px 14px;'
+                +'margin-bottom:12px;font-size:.82rem;color:#1E40AF;display:flex;gap:12px;align-items:baseline;flex-wrap:wrap">'
+                +'<strong>'+esc(_pol.label)+':</strong><span>'+esc(_dp.explain(_pol,null))+'</span>'
+                +(_owing?'<span style="margin-left:auto;font-weight:700">'+_owing+' unpaid</span>':'')
+                +'<button class="me-btn me-btn--ghost me-btn--sm" onclick="CampistryMe.openDepositPolicy()">Change</button></div>';
+        }
+    }
 
     if(!list.length){
         h+='<div class="me-empty"><h3>Nothing in progress</h3><p>Share your registration link, or add someone manually.</p></div>';
@@ -9268,6 +9288,27 @@ function viewApplication(id){
             b+=sec('Payment');
             b+=row('Session',e.session);
             b+=row('Tuition',e.sessionTuition?fm(e.sessionTuition):'—');
+            // The deposit as it stood when they applied, not as the policy
+            // reads today — a camp that raised it since must not make this
+            // application look short.
+            var _dpA=_depPolicyAPI();
+            if(_dpA&&Number(e.depositRequired)>0){
+                var _out=_dpA.outstanding(e);
+                b+=row(e.depositLabel||'Deposit',
+                    fm(e.depositRequired)+(Number(e.depositPaid)>0&&_out>0?' \u00b7 '+fm(e.depositPaid)+' paid':'')+
+                    ' \u2014 '+(_out>0
+                        ? '<span style="color:var(--err);font-weight:700">'+fm(_out)+' outstanding'+
+                          (e.depositDue?', due '+esc(e.depositDue):'')+'</span>'
+                        : '<span style="color:var(--ok);font-weight:700">paid</span>'));
+                if(_out>0){
+                    b+='<button class="me-btn me-btn--sec me-btn--sm" style="margin-top:6px" onclick="CampistryMe.markDepositPaid(\''+je(id)+'\')">Mark deposit received</button>';
+                }else if(Number(e.depositPaid)>0){
+                    b+='<button class="me-btn me-btn--ghost me-btn--sm" style="margin-top:6px" onclick="CampistryMe.markDepositPaid(\''+je(id)+'\',true)">Undo</button>';
+                }
+                if(e.depositStatus==='awaiting'&&_out>0){
+                    b+='<div style="font-size:.8rem;color:#9A3412;margin-top:6px;line-height:1.6">This camp requires the deposit before a place is held \u2014 the application is <strong>awaiting deposit</strong>, not confirmed.</div>';
+                }
+            }
             b+=row('Payment Method',e.paymentMethod?_payLabel(e.paymentMethod):'Not selected');
             b+=row('Payment Status',e.paymentStatus||'pending');
             if(e.discount&&e.discount.active!==false&&e.discount.code)b+=row('Discount',(e.discount.label||'')+' ('+e.discount.code+')');
@@ -14629,6 +14670,208 @@ function _planCardHtml(l){
     return out;
 }
 
+
+// ═══════════════════════════════════════════════════════════════
+// DEPOSIT TO REGISTER
+//
+// The money a camp requires before it will hold a place. Every camp words
+// this differently — a flat figure, a share of tuition, a number that belongs
+// to the session; once per camper or once per household; payable before the
+// form will submit or inside a fortnight — so the rule is data, and
+// campistry_deposit_policy.js owns the arithmetic every consumer shares.
+//
+// A deposit is a PAYMENT TOWARD TUITION and never an extra charge. Nothing
+// here adds to what a family owes; it says how much of it has to arrive early.
+// ═══════════════════════════════════════════════════════════════
+function _depPolicyAPI(){ return window.CampistryDepositPolicy||null; }
+
+/** The live policy, normalized, or null when the module did not load. */
+function _depPolicy(){
+    var P=_depPolicyAPI();
+    return P?P.normalize(enrollSettings.depositPolicy):null;
+}
+
+/**
+ * What one application owes up front.
+ *
+ * Siblings on a single application are counted where the camp counts them,
+ * which is the whole reason this goes through the policy module rather than
+ * being re-derived per screen.
+ */
+function _depForEnrollment(e){
+    var P=_depPolicyAPI();
+    if(!P||!e)return null;
+    var pol=P.normalize(enrollSettings.depositPolicy);
+    if(!pol.enabled)return null;
+    var sesObj=sessions.find(function(s){return s&&s.name===e.session})||null;
+    var tuition=Number(e.sessionTuition)||(sesObj?Number(sesObj.tuition)||0:0);
+    var campers=[{session:sesObj,tuition:tuition}];
+    (e.siblings||[]).forEach(function(sib){
+        var ss=sessions.find(function(s){return s&&s.name===(sib.session||e.session)})||sesObj;
+        campers.push({session:ss,tuition:Number(sib.sessionTuition)||(ss?Number(ss.tuition)||0:0)});
+    });
+    return P.amountFor(pol,campers);
+}
+
+/**
+ * Record that an application's deposit arrived — or undo that.
+ *
+ * Only ever touches the APPLICATION's deposit fields. The money itself is a
+ * payment like any other and belongs in the family ledger; recording it twice
+ * (once here, once as a payment) would halve the balance. So this marks the
+ * requirement satisfied and points the office at Billing for the money, rather
+ * than quietly inventing a payment row nobody can see or refund.
+ */
+async function markDepositPaid(id,undo){
+    var e=enrollments[id];
+    var P=_depPolicyAPI();
+    if(!e||!P)return;
+    if(undo){
+        var ok=await confirmDialog({title:'Undo deposit?',message:'This marks the deposit as not received. It does not remove any payment you recorded in Billing.',confirmLabel:'Undo',danger:true});
+        if(!ok)return;
+        e.depositPaid=0;
+        if(e.depositStatus==='paid')e.depositStatus='awaiting';
+    }else{
+        e.depositPaid=Number(e.depositRequired)||0;
+        e.depositPaidDate=new Date().toISOString().split('T')[0];
+        e.depositStatus='paid';
+    }
+    save();
+    renderRegistrationPage();
+    toast(undo?'Deposit marked unpaid':'Deposit recorded \u2014 record the money itself in Billing so it counts toward tuition');
+}
+
+function openDepositPolicy(){
+    var P=_depPolicyAPI();
+    if(!P){toast('Deposit settings aren\'t available in this build','error');return}
+    var pol=P.normalize(enrollSettings.depositPolicy);
+
+    var h='<div class="me-modal-form">';
+    h+='<p style="font-size:.86rem;color:var(--s600);line-height:1.65;margin:0 0 14px;max-width:660px">'
+      +'Money a family must put down to hold a place. It counts toward tuition — it is never an extra charge — '
+      +'and it appears on the registration form with a way to pay.</p>';
+
+    h+='<label style="display:flex;gap:9px;align-items:center;font-size:.92rem;font-weight:600;margin-bottom:14px">'
+      +'<input type="checkbox" id="dpOn" '+(pol.enabled?'checked':'')+' onchange="CampistryMe._dpToggle()">'
+      +'Require a deposit to register</label>';
+
+    h+='<div id="dpBody" style="'+(pol.enabled?'':'display:none')+'">';
+
+    h+='<div class="fsec">How much</div>';
+    h+='<div class="fr">'
+      +ff('Based on','dpBasis',pol.basis==='flat'?'A flat amount':pol.basis==='percent'?'A percentage of tuition':"The session's own deposit",
+          'select',['A flat amount','A percentage of tuition',"The session's own deposit"])
+      +ff('Charged','dpPer',pol.per==='family'?'Once per family':'Once per camper','select',['Once per camper','Once per family'])
+      +'</div>';
+    h+='<div class="fr">'
+      +ff('Flat amount ($)','dpAmount',pol.amount||'','number')
+      +ff('Percentage (%)','dpPercent',pol.percent,'number')
+      +'</div>';
+    h+='<p style="font-size:.72rem;color:var(--s400);margin:-4px 0 10px;padding-left:2px">'
+      +'The percentage is also the fallback when a session carries no deposit of its own, so turning this on never asks for $0. '
+      +'A deposit is never more than the tuition it is part of.</p>';
+
+    h+='<div class="fsec">When</div>';
+    h+='<div class="fr">'
+      +ff('Due','dpTiming',pol.timing==='later'?'Can be paid later':'Must be paid to submit the form','select',
+          ['Must be paid to submit the form','Can be paid later'])
+      +ff('Days to pay','dpDueDays',pol.dueDays,'number')
+      +'</div>';
+    h+='<p style="font-size:.72rem;color:var(--s400);margin:-4px 0 10px;padding-left:2px">'
+      +'"Must be paid" holds the application as <strong>awaiting deposit</strong> until the money arrives — the family still '
+      +'fills the form in once, and is taken straight to payment. "Days to pay" applies only to the later option.</p>';
+
+    h+='<div class="fsec">What parents see</div>';
+    h+=ff('Call it','dpLabel',pol.label);
+    h+='<label style="display:flex;gap:9px;align-items:center;font-size:.86rem;margin:8px 0 10px">'
+      +'<input type="checkbox" id="dpRefund" '+(pol.refundable?'checked':'')+'> This deposit is refundable</label>';
+    h+=ff('Note on the form (optional)','dpNote',pol.note,'textarea');
+
+    h+='<div id="dpPreview" style="background:var(--s50);border:1px solid var(--s200);border-radius:var(--r);'
+      +'padding:12px 14px;margin-top:14px;font-size:.84rem;color:var(--s600);line-height:1.6"></div>';
+    h+='</div></div>';
+
+    showModal('Deposit to register',h,function(){ _dpSave(); },{maxWidth:680,saveLabel:'Save deposit policy'});
+    setTimeout(function(){
+        ['dpBasis','dpPer','dpAmount','dpPercent','dpTiming','dpDueDays','dpLabel','dpRefund'].forEach(function(id){
+            var el=document.getElementById(id);
+            if(el){el.addEventListener('change',_dpPreview);el.addEventListener('input',_dpPreview);}
+        });
+        _dpPreview();
+    },0);
+}
+
+function _dpToggle(){
+    var on=document.getElementById('dpOn');
+    var body=document.getElementById('dpBody');
+    if(body)body.style.display=(on&&on.checked)?'':'none';
+}
+
+/** Read the form into a policy object. One reader, used by preview and save. */
+function _dpRead(){
+    function v(id){var el=document.getElementById(id);return el?el.value:''}
+    function ck(id){var el=document.getElementById(id);return !!(el&&el.checked)}
+    var basisLabel=v('dpBasis');
+    return {
+        enabled:ck('dpOn'),
+        basis:basisLabel==='A percentage of tuition'?'percent':basisLabel==="The session's own deposit"?'session':'flat',
+        amount:Number(v('dpAmount'))||0,
+        percent:Number(v('dpPercent'))||0,
+        per:v('dpPer')==='Once per family'?'family':'camper',
+        timing:v('dpTiming')==='Can be paid later'?'later':'now',
+        dueDays:Number(v('dpDueDays'))||0,
+        refundable:ck('dpRefund'),
+        label:v('dpLabel'),
+        note:v('dpNote')
+    };
+}
+
+/**
+ * Show the rule AND what it does to a real session, because "25% per camper"
+ * and "$312.50 due before this form will submit" are different sentences and
+ * only the second one tells a camp whether they meant it.
+ */
+function _dpPreview(){
+    var P=_depPolicyAPI(),out=document.getElementById('dpPreview');
+    if(!P||!out)return;
+    var pol=P.normalize(_dpRead());
+    if(!pol.enabled){out.innerHTML='No deposit is required to register.';return}
+    var sample=sessions.filter(function(s){return s&&Number(s.tuition)>0})
+                       .sort(function(a,b){return Number(b.tuition)-Number(a.tuition)})[0];
+    var h='<div>'+esc(P.explain(pol,null))+'</div>';
+    if(sample){
+        var one=P.amountFor(pol,[{session:sample,tuition:Number(sample.tuition)}]);
+        var two=P.amountFor(pol,[{session:sample,tuition:Number(sample.tuition)},
+                                 {session:sample,tuition:Number(sample.tuition)}]);
+        h+='<div style="margin-top:8px;color:var(--s500)">On <strong>'+esc(sample.name||'your session')+'</strong> ('
+          +fm(sample.tuition)+'): one camper pays <strong>'+P.money(one.total)+'</strong>'
+          +', a family of two pays <strong>'+P.money(two.total)+'</strong>.</div>';
+        h+='<div style="margin-top:8px;color:var(--s500)">Parents read: “'+esc(P.describe(pol,one))+'”</div>';
+    }else{
+        h+='<div style="margin-top:8px;color:var(--s400)">Add a session with a tuition to see what this comes to.</div>';
+    }
+    out.innerHTML=h;
+}
+
+function _dpSave(){
+    var P=_depPolicyAPI();
+    if(!P)return;
+    var pol=P.normalize(_dpRead());
+    // A policy that is on and asks for nothing is a trap: the form would say a
+    // deposit is required and then let anyone through.
+    if(pol.enabled&&pol.basis==='flat'&&!pol.amount){
+        toast('Set a flat amount, or base the deposit on tuition','error');return;
+    }
+    if(pol.enabled&&pol.basis!=='flat'&&!pol.percent&&pol.basis==='percent'){
+        toast('Set a percentage above zero','error');return;
+    }
+    enrollSettings.depositPolicy=pol;
+    save();
+    closeModal('dynModal');
+    renderRegistrationPage();
+    toast(pol.enabled?'Deposit policy saved':'Deposit no longer required');
+}
+
 // ═══════════════════════════════════════════════════════════════
 // BROADCASTS — Full messaging system
 // ═══════════════════════════════════════════════════════════════
@@ -17611,6 +17854,7 @@ window.CampistryMe={
     addDiv:function(){openDivForm(null)},editDiv:function(n){openDivForm(n)},deleteDiv:deleteDiv,
     openCsv:function(){openModal('csvModal')},downloadTemplate:downloadTemplate,
     finReconcileCharges:finReconcileCharges,
+    openDepositPolicy:openDepositPolicy,_dpToggle:_dpToggle,markDepositPaid:markDepositPaid,
     setRosterPage:setRosterPage,setRosterSubTab:setRosterSubTab,setBillingPage:setBillingPage,setAnalyticsInvoicePage:setAnalyticsInvoicePage,setAnalyticsPaymentPage:setAnalyticsPaymentPage,
     _runSetupChecklistAction:_runSetupChecklistAction,dismissSetupChecklist:dismissSetupChecklist,
     bbDrop:bbDrop,autoAssign:autoAssign,autoGenerateBunks:autoGenerateBunks,openBunkGenSettings:openBunkGenSettings,showCamperBunkRequests:showCamperBunkRequests,clearBunks:clearBunks,setBunkCount:setBunkCount,openBunkCountModal:openBunkCountModal,_clearBunkCount:_clearBunkCount,
