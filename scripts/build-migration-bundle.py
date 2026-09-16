@@ -461,12 +461,20 @@ UNION ALL SELECT 'the RLS resolver honours job defaults',
 -- Money parity (166). A parent's balance must include Zelle/ACH deposits, or
 -- a family that paid by bank transfer is settled for the camp and still owing
 -- for the parent, permanently.
+-- These two check get_my_balance_DERIVED, not get_my_balance. 173 renamed 166's
+-- function to that and put a thin wrapper in its place, so the deposit and
+-- multi-family logic moved with the rename while these rows went on reading the
+-- wrapper — and reported MISSING for a behaviour that was working the whole
+-- time. The chain is what matters, so both halves are checked: the logic is in
+-- the derived function, and the wrapper still calls it.
 UNION ALL SELECT 'parent balance counts Zelle/ACH deposits',
-       CASE WHEN (SELECT prosrc FROM pg_proc WHERE proname='get_my_balance' LIMIT 1)
+       CASE WHEN (SELECT prosrc FROM pg_proc WHERE proname='get_my_balance_derived' LIMIT 1)
                  LIKE '%bank_deposits%'
+             AND (SELECT prosrc FROM pg_proc WHERE proname='get_my_balance' LIMIT 1)
+                 LIKE '%get_my_balance_derived%'
             THEN 'OK' ELSE 'MISSING' END
 UNION ALL SELECT 'parent balance sums every family the parent belongs to',
-       CASE WHEN (SELECT prosrc FROM pg_proc WHERE proname='get_my_balance' LIMIT 1)
+       CASE WHEN (SELECT prosrc FROM pg_proc WHERE proname='get_my_balance_derived' LIMIT 1)
                  LIKE '%v_famKeys%'
             THEN 'OK' ELSE 'MISSING' END
 UNION ALL SELECT 'atomic payment write path',
