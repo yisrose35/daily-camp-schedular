@@ -57,7 +57,10 @@ function getCamperList() {
                 });
             });
         }
-        campers.push({ name, division: div, bunk });
+        // See campistry_snacks.js's copy: `name` is the roster key, `label` is
+        // what a human should see.
+        campers.push({ name, division: div, bunk, camperId: data.camperId,
+                       label: (data && data.displayName) || String(name).replace(/\s#\d+$/, '') });
     });
     return campers.sort((a, b) => a.name.localeCompare(b.name));
 }
@@ -278,7 +281,7 @@ setInterval(function() { if (typeof refreshAccountsFromCloud === 'function') ref
 window.renderCampers = function() {
     const q = (document.getElementById('camperSearch').value || '').toLowerCase();
     const list = campers.filter(c =>
-        c.name.toLowerCase().includes(q) &&
+        ((c.label || c.name).toLowerCase().includes(q) || c.name.toLowerCase().includes(q)) &&
         (selectedBunks.size === 0 || (c.bunk && selectedBunks.has(c.bunk)))
     );
     document.getElementById('camperList').innerHTML = list.map(c => {
@@ -288,11 +291,14 @@ window.renderCampers = function() {
         // so rem going negative there must never read as Limit Hit.
         const limitHit = a.dailyLimit > 0 && rem <= 0 && a.balance > 0;
         const cls = a.balance <= 0 ? 'empty' : a.balance <= 5 ? 'low' : '';
-        const initials = c.name.split(' ').map(w => w[0]).join('');
+        // Display uses the label; identity (selection, accounts, ledger) stays
+        // on c.name, the unique roster key.
+        const shown = c.label || c.name;
+        const initials = shown.split(' ').map(w => w[0]).join('');
         return '<div class="camper-item' + (sel === c.name ? ' selected' : '') + (limitHit ? ' limit-hit' : '') +
             '" onclick="pickCamper(\'' + esc(c.name).replace(/'/g, "\\'") + '\')">' +
             '<div class="camper-avatar">' + initials + '</div>' +
-            '<div class="camper-info"><div class="camper-name">' + esc(c.name) + '</div>' +
+            '<div class="camper-info"><div class="camper-name">' + esc(shown) + '</div>' +
             '<div class="camper-meta">' + esc(c.division) + ' · ' + esc(c.bunk) + (limitHit ? ' · Limit hit' : '') + '</div></div>' +
             '<div class="camper-balance ' + cls + '">$' + a.balance.toFixed(2) + '</div></div>';
     }).join('');

@@ -3132,7 +3132,6 @@ function saveCamper(){
     // rename we must update those refs or the camper is silently detached from their
     // family, bunk assignment, and billing.
     if(editingCamper&&editingCamper!==full){cascadeCamperRename(editingCamper,full);delete roster[editingCamper]}
-    if(!editingCamper&&roster[full]){toast('Already exists','error');return}
     // Gather teams
     var teams={};document.querySelectorAll('.ceTeamSel').forEach(function(sel){var lg=sel.dataset.league,v=sel.value;if(lg&&v)teams[lg]=v});
     function _v(id){var el=document.getElementById(id);return el?(el.value||''):'';}
@@ -3149,6 +3148,20 @@ function saveCamper(){
         reservePersonId(existingId);
     }
     if(!existingId){existingId=nextPersonId;nextPersonId++}
+    // A SECOND CAMPER WITH THE SAME NAME used to be refused outright, because
+    // roster keys are names and merging onto the existing record would turn two
+    // children into one. Camps genuinely have two kids called the same thing, so
+    // the duplicate now gets a unique KEY ("Malky Stein #102", from their camperId)
+    // and carries displayName for every screen to show. Existing campers keep the
+    // keys they have — see campistry_camper_identity.js for why the key stays a
+    // string rather than becoming the id everywhere at once.
+    var _dupKey=null;
+    if(!editingCamper&&roster[full]){
+        var _ID=(typeof window!=='undefined'&&window.CamperIdentity)||null;
+        if(!_ID){toast('Already exists','error');return}
+        _dupKey=_ID.uniqueKey(roster,full,existingId);
+        if(!_dupKey||roster[_dupKey]){toast('Already exists','error');return}
+    }
     var _summerSameEl=document.getElementById('ceSummerSame');
     var _summerSame=_summerSameEl?!!_summerSameEl.checked:true;
     var _core={
@@ -3194,30 +3207,32 @@ function saveCamper(){
     };
     // Merge onto the old record so notes, documents, custom fields, scholarships,
     // and history are preserved through an edit (they aren't on this form).
-    roster[full]=Object.assign({},_oldRec,_core);
+    var _key=_dupKey||full;
+    if(_dupKey)_core.displayName=full;
+    roster[_key]=Object.assign({},_oldRec,_core);
     // Change log: diff the tracked fields old→new and append a history entry.
     var _changes=_diffCamperFields(_oldRec,_core);
-    roster[full].history=Array.isArray(_oldRec.history)?_oldRec.history.slice():[];
+    roster[_key].history=Array.isArray(_oldRec.history)?_oldRec.history.slice():[];
     if(!editingCamper){
-        roster[full].history.push({ts:new Date().toISOString(),type:'created',changes:[]});
+        roster[_key].history.push({ts:new Date().toISOString(),type:'created',changes:[]});
     }else if(_changes.length){
-        roster[full].history.push({ts:new Date().toISOString(),type:'edit',changes:_changes});
+        roster[_key].history.push({ts:new Date().toISOString(),type:'edit',changes:_changes});
     }
-    if(roster[full].history.length>200) roster[full].history=roster[full].history.slice(-200);
+    if(roster[_key].history.length>200) roster[_key].history=roster[_key].history.slice(-200);
     // Sync address to Campistry Go format
-    syncAddressToGo(full,roster[full]);
+    syncAddressToGo(full,roster[_key]);
     // Every camper belongs to a family. Join an EXISTING family only when the
     // camper matches it on 3+ of {last name, address, parent email, parent
     // name} — a shared last name alone is NOT enough. Otherwise start a new,
     // uniquely-keyed family for them.
     if(last){
-        var famKey=_resolveFamilyKey(full,_famItem(full,roster[full]));
+        var famKey=_resolveFamilyKey(full,_famItem(full,roster[_key]));
         if(!famKey){
             famKey='fam_'+last.toLowerCase().replace(/[^a-z0-9]/g,'')+'_'+(existingId||Date.now());
-            var p1e={name:roster[full].parent1Name||'',phone:roster[full].parent1Phone||'',email:roster[full].parent1Email||'',relation:'Parent'};
+            var p1e={name:roster[_key].parent1Name||'',phone:roster[_key].parent1Phone||'',email:roster[_key].parent1Email||'',relation:'Parent'};
             families[famKey]={
                 name:last+' Family',
-                households:[{label:'Primary',parents:[p1e],address:[roster[full].street,roster[full].city,roster[full].state,roster[full].zip].filter(Boolean).join(', '),billingContact:true}],
+                households:[{label:'Primary',parents:[p1e],address:[roster[_key].street,roster[_key].city,roster[_key].state,roster[_key].zip].filter(Boolean).join(', '),billingContact:true}],
                 camperIds:[full],
                 balance:0,totalPaid:0,notes:'Added via camper profile'
             };
@@ -3226,14 +3241,14 @@ function saveCamper(){
             if(families[famKey].camperIds.indexOf(full)<0)families[famKey].camperIds.push(full);
             // Backfill parent info if the primary household had none
             var hh0=families[famKey].households&&families[famKey].households[0];
-            if(hh0&&hh0.parents&&hh0.parents[0]&&!hh0.parents[0].name&&roster[full].parent1Name){
-                hh0.parents[0].name=roster[full].parent1Name;
-                hh0.parents[0].email=roster[full].parent1Email||'';
-                hh0.parents[0].phone=roster[full].parent1Phone||'';
+            if(hh0&&hh0.parents&&hh0.parents[0]&&!hh0.parents[0].name&&roster[_key].parent1Name){
+                hh0.parents[0].name=roster[_key].parent1Name;
+                hh0.parents[0].email=roster[_key].parent1Email||'';
+                hh0.parents[0].phone=roster[_key].parent1Phone||'';
             }
             // Update address if family has none
-            if(hh0&&!hh0.address&&roster[full].street){
-                hh0.address=[roster[full].street,roster[full].city,roster[full].state,roster[full].zip].filter(Boolean).join(', ');
+            if(hh0&&!hh0.address&&roster[_key].street){
+                hh0.address=[roster[_key].street,roster[_key].city,roster[_key].state,roster[_key].zip].filter(Boolean).join(', ');
             }
         }
     }
@@ -3259,7 +3274,7 @@ function saveCamper(){
     // Fix (b): the camp changed this parent's email on file → move their existing
     // invite to the new email IN PLACE (keeps the signed-up parent connected +
     // preserves token/code), instead of leaving an orphan for the old email.
-    var _newParentEmail=(roster[full].parent1Email||'').trim();
+    var _newParentEmail=(roster[_key].parent1Email||'').trim();
     if(wasEdit&&_oldParentEmail&&_newParentEmail&&_oldParentEmail.toLowerCase()!==_newParentEmail.toLowerCase()){
         try{
             var _db=window.CampistryDB&&window.CampistryDB.getClient?window.CampistryDB.getClient():null;

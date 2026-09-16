@@ -123,7 +123,13 @@ function getCamperList() {
         // camperId rides along so the canteen can join money to a PERSON rather
         // than to a name — see _reconcileBalances. It may be absent on an
         // older roster entry; ensureAccountsForRoster tolerates that.
-        campers.push({ name, division: div, bunk, camperId: data.camperId });
+        // `name` is the roster KEY, which is unique but is not always the
+        // camper's name: a second camper sharing a name is keyed
+        // "Malky Stein #102" and carries displayName. Accounts and the ledger
+        // key off the KEY (so two same-named campers now get two accounts, which
+        // is the point), while every screen shows `label`.
+        campers.push({ name, division: div, bunk, camperId: data.camperId,
+                       label: (data && data.displayName) || String(name).replace(/\s#\d+$/, '') });
     });
 
     return campers.sort((a, b) => a.name.localeCompare(b.name));

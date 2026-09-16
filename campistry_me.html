@@ -262,6 +262,10 @@ if (window.pdfjsLib) { window.pdfjsLib.GlobalWorkerOptions.workerSrc = 'pdfjs-di
      removed. A posted charge is a fact, so removing a camper can no longer
      erase a debt — see the file header and BILLING_OUTLIVES_ENROLLMENT_DESIGN.md. -->
 <script src="campistry_billing_core.js?v=20260916-01"></script>
+<!-- Two campers may share a name. Roster keys are names, so a duplicate gets a
+     unique key and carries displayName; this resolves one back to the other.
+     Must load before campistry_me.js, which calls it from saveCamper. -->
+<script src="campistry_camper_identity.js?v=20260916-01"></script>
 <!-- Shared catalogue of what counselors may see. Loaded by Me (where the
      policy is set) and by Lite (where it's enforced) — one list, so a field
      can't exist in one place and be forgotten in the other. -->
