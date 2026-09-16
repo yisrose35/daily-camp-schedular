@@ -184,3 +184,38 @@ test('the delete dialog says what happens to an outstanding balance', () => {
     // roster instead, which had the same effect and no warning at all.
     assert.match(body, /confirmLabel:'Delete'/, 'the delete is no longer offered');
 });
+
+// ── 6. the two other places a family record can disappear ─────────────────
+//
+// Found by sweeping for `delete families[` after the main fix was in. Both are
+// bookkeeping actions rather than roster changes, which is exactly why they were
+// easy to miss.
+
+test('merging two families MOVES the other one’s ledger, not just its totals', () => {
+    const body = fnBody(ME, 'function mergeFamiliesReconciled(', 'function mergeFamilies(keyA,keyB)');
+
+    // Summing the legacy scalars was all it used to do. Those are display
+    // figures — and `balance` is clamped at zero, so it is not even the balance —
+    // while the posted entries are the actual record.
+    assert.match(body, /a\.entries=\(Array\.isArray\(a\.entries\)\?a\.entries:\[\]\)\.concat\(b\.entries\)/,
+        'the merged family loses the other one’s entire billing history');
+    assert.match(body, /a\.plans=\(Array\.isArray\(a\.plans\)\?a\.plans:\[\]\)\.concat\(b\.plans\)/,
+        'the merged family silently stops collecting the other one’s plan');
+    assert.match(body, /savedPaymentMethods/, 'the saved cards are dropped on merge');
+
+    // The delete must come AFTER the carry-over, or it takes the data with it.
+    const carry = body.indexOf('a.entries=');
+    const del = body.indexOf('delete families[keyB]');
+    assert.ok(carry > 0 && del > carry, 'keyB is deleted before its ledger is moved');
+});
+
+test('deleting a family says what billing history goes with it', () => {
+    const body = fnBody(ME, 'async function deleteFamily(id){', 'function _fmtMoney');
+    assert.match(body, /billing history of/,
+        'deleting a family no longer warns that it deletes the billing account');
+    assert.match(body, /still owe|are owed/, 'the balance is not mentioned either way');
+    assert.match(body, /unassigning the campers instead/,
+        'the non-destructive alternative is not offered');
+    // Deliberate act, so it is still allowed — warn, do not block.
+    assert.match(body, /confirmLabel:'Delete'/, 'the delete is no longer offered');
+});

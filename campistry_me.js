@@ -1604,6 +1604,34 @@ function mergeFamiliesReconciled(keyA,keyB,reconciled){
     (b.camperIds||[]).forEach(function(n){ if(a.camperIds.indexOf(n)<0)a.camperIds.push(n); });
     a.balance=(a.balance||0)+(b.balance||0);
     a.totalPaid=(a.totalPaid||0)+(b.totalPaid||0);
+    // MOVE B'S LEDGER, don't drop it. Summing the legacy balance/totalPaid
+    // scalars above is not enough and never was: those are display figures (and
+    // `balance` is clamped at zero, so it is not even the balance), while the
+    // posted entries are the actual record of what was charged and paid.
+    // Deleting keyB below without carrying them over would destroy B's entire
+    // billing history — the same defect as deleting a family on a roster change,
+    // in a place that looks like bookkeeping.
+    //
+    // Entries are immutable facts with their own ids and sources, so moving them
+    // is safe: the merged ledger still says exactly who was charged for what.
+    if(Array.isArray(b.entries)&&b.entries.length){
+        a.entries=(Array.isArray(a.entries)?a.entries:[]).concat(b.entries);
+    }
+    // Plans and the card come too, or the merged family silently stops
+    // collecting what B was on a schedule to pay.
+    if(Array.isArray(b.plans)&&b.plans.length){
+        a.plans=(Array.isArray(a.plans)?a.plans:[]).concat(b.plans);
+    }
+    ['byopProcessor','byopCustomerRef','stripeCustomerId','stripePaymentMethodId',
+     'cardOnFile','cardSavedDate','paymentMethodType','paymentMethodLabel'].forEach(function(k){
+        if(a[k]==null&&b[k]!=null)a[k]=b[k];
+    });
+    if(Array.isArray(b.savedPaymentMethods)&&b.savedPaymentMethods.length){
+        var existing=Array.isArray(a.savedPaymentMethods)?a.savedPaymentMethods:[];
+        var tokens={};existing.forEach(function(m){if(m&&m.token)tokens[m.token]=1});
+        a.savedPaymentMethods=existing.concat(
+            b.savedPaymentMethods.filter(function(m){return m&&!tokens[m.token]}));
+    }
     delete families[keyB];
     save();render(curPage);toast(b.name+' merged into '+a.name);
 }
@@ -1827,7 +1855,23 @@ function saveFamily(){
 async function deleteFamily(id){
     if(!id||!families[id])return;
     var nm=families[id].name||'this family';
-    var ok=await confirmDialog({title:'Delete Family?',message:'<strong>'+esc(nm)+'</strong> will be deleted. Its campers will remain in the roster but be unassigned from this family.',confirmLabel:'Delete',danger:true});
+    var _m='<strong>'+esc(nm)+'</strong> will be deleted. Its campers will remain in the roster but be unassigned from this family.';
+    // Deleting a family deletes its BILLING ACCOUNT — the posted ledger, the
+    // plan and the card. Unlike a roster change this is a deliberate act, so it
+    // is allowed, but it must not be silent about what goes with it.
+    var _B=_billingCore();
+    if(_B&&_B.entriesOf(families[id]).length){
+        var _bal=_B.balance(families[id]);
+        _m+='<br><br>⚠ This family has a billing history of '
+          +_B.entriesOf(families[id]).length+' entr'+(_B.entriesOf(families[id]).length===1?'y':'ies')+'.';
+        if(Math.abs(_bal)>0.005){
+            _m+=' They '+(_bal>0?'still owe <strong>'+_fmtMoney(_bal)+'</strong>'
+                                :'are owed <strong>'+_fmtMoney(-_bal)+'</strong> back')
+              +', and deleting this record deletes that.';
+        }
+        _m+=' Consider unassigning the campers instead, which keeps the account.';
+    }
+    var ok=await confirmDialog({title:'Delete Family?',message:_m,confirmLabel:'Delete',danger:true});
     if(!ok)return;
     var captured=families[id];
     var wasOnDetailPage=curPage==='familydetail'&&_familyDetailKey===id;
