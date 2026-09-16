@@ -2147,28 +2147,19 @@ function getSportDurationsValue(sport) {
     const d = parseInt(m.duration, 10);
     return d > 0 ? [d] : [];
 }
-// Accepts a single length, a list, or a "20, 40" string. durations is canonical;
-// the scalar duration mirrors the shortest so older readers keep working.
-function parseSportDurations(input) {
-    const raw = Array.isArray(input) ? input : String(input == null ? '' : input).split(/[,/\s]+/);
-    const seen = new Set();
-    const out = [];
-    raw.forEach(x => {
-        const v = parseInt(x, 10);
-        if (!Number.isFinite(v) || v <= 0) return;
-        const clamped = Math.max(5, Math.min(180, v));
-        if (seen.has(clamped)) return;
-        seen.add(clamped);
-        out.push(clamped);
-    });
-    return out.sort((a, b) => a - b);
-}
+// A sport carries ONE length for now. The storage is an array (and the planner
+// reads it as a dMin/dMax range) but the auto builder's end-of-run invariant
+// requires the placed length to be exactly one of the configured values — so a
+// sport offered as "20 or 40" gets planned at 30 and then wiped to Free. Until
+// the planner picks from the allowed set instead of the range, keep sports to a
+// single value; specials already support several and are enforced.
 function setSportDurationGlobal(sport, mins) {
     if (!sportMetaData[sport]) sportMetaData[sport] = {};
-    const list = parseSportDurations(mins);
-    if (list.length > 0) {
-        sportMetaData[sport].durations = list;
-        sportMetaData[sport].duration = list[0];
+    const v = parseInt(mins, 10);
+    if (Number.isFinite(v) && v > 0) {
+        const clamped = Math.max(5, Math.min(180, v));
+        sportMetaData[sport].durations = [clamped];
+        sportMetaData[sport].duration = clamped;
     } else {
         sportMetaData[sport].durations = [];
         sportMetaData[sport].duration = null;
@@ -2200,7 +2191,7 @@ function renderFieldDurations(f) {
 
     const desc = document.createElement("p");
     desc.style.cssText = "font-size:0.85rem; color:#6B7280; margin:0 0 12px 0;";
-    desc.textContent = "Set the length for any sport this facility hosts. When set, the scheduler keeps that sport to exactly this duration (like a special). Enter several separated by commas (\"20, 40\") and it picks whichever fits the block — a block you marked splittable can then fit two short ones where one long one would go. Leave blank to use the block size. This applies to the sport everywhere it's played.";
+    desc.textContent = "Set a fixed length for any sport this facility hosts. When set, the auto-scheduler keeps that sport to exactly this duration (like a special). Leave blank to use the layer's block size. This length applies to the sport everywhere it's played.";
     box.appendChild(desc);
 
     if (!sports.length) {
@@ -2226,15 +2217,17 @@ function renderFieldDurations(f) {
         row.appendChild(nameEl);
 
         const input = document.createElement("input");
-        input.type = "text";
-        input.inputMode = "numeric";
+        input.type = "number";
+        input.min = "5"; input.max = "180"; input.step = "5";
         input.placeholder = "—";
-        input.value = getSportDurationsValue(sport).join(", ");
-        input.style.cssText = "width:110px; padding:5px 8px; border:1px solid #D1D5DB; border-radius:6px; text-align:center; font-size:0.85rem;";
-        input.title = "Length in minutes for " + sport + ", or several separated by commas (\"20, 40\"). Leave blank to use the block size.";
+        const cur = getSportDurationValue(sport);
+        input.value = cur != null ? cur : "";
+        input.style.cssText = "width:80px; padding:5px 8px; border:1px solid #D1D5DB; border-radius:6px; text-align:center; font-size:0.85rem;";
+        input.title = "Fixed duration in minutes for " + sport + ". Leave blank to use the layer block size.";
         input.onchange = () => {
             setSportDurationGlobal(sport, input.value);
-            input.value = getSportDurationsValue(sport).join(", ");
+            const saved = getSportDurationValue(sport);
+            input.value = saved != null ? saved : "";
             updateSummary();
         };
         row.appendChild(input);

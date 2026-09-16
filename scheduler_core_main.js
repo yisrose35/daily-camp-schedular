@@ -340,11 +340,9 @@
     // BEFORE normalizeGA() collapses "Special Activity" into "General Activity
     // Slot" (it matches the 'activity' substring) and erases the restriction.
     // The solver reads _slotKind to keep the pools separate. 'any' = flexible.
+    // Shared with the grid cut in division_times_system.js — see Utils.slotKindOf.
     function slotKindOf(eventName) {
-        const s = String(eventName || '').toLowerCase().trim();
-        if (s === 'sports slot' || s === 'sport slot') return 'sport';
-        if (s === 'special activity') return 'special';
-        return 'any';
+        return window.SchedulerCoreUtils.slotKindOf(eventName);
     }
 
     function normalizeLeague(name) {
@@ -5459,25 +5457,18 @@ console.log(`[Generation] Rainy Day Mode: ${window.isRainyDay ? 'ACTIVE 🌧️'
         // already runs — so nothing here can place an activity a bunk may not
         // have.
 
-        const _vlAccessOk = (spec, grade, bunk) => {
-            const ar = spec && spec.accessRestrictions;
-            if (!ar || ar.enabled !== true) return true;
-            const divs = ar.divisions || {};
-            const allow = divs[String(grade)] || divs[grade];
-            if (allow === undefined) return false;
-            if (Array.isArray(allow) && allow.length > 0) return allow.map(String).includes(String(bunk));
-            return true;
-        };
-
         // Activities this bunk could receive in a tile of this kind, each with
-        // the lengths it is allowed to run at.
+        // the lengths it is allowed to run at. Eligibility goes through the same
+        // check the auto planner uses, so a bunk is never offered a carving
+        // built on a special it can't actually have.
         const _vlCandidates = (slotKind, divName, bunk) => {
             const out = [];
             if (slotKind !== 'sport') {
                 (masterSpecials || []).forEach(s => {
                     if (!s || !s.name) return;
                     if ((disabledSpecials || []).includes(s.name)) return;
-                    if (!_vlAccessOk(s, divName, bunk)) return;
+                    if (typeof window.isSpecialAvailableForBunk === 'function'
+                        && !window.isSpecialAvailableForBunk(s.name, divName, bunk)) return;
                     out.push({ activity: s.name, durations: Array.isArray(s.durations) ? s.durations : [] });
                 });
             }
@@ -5517,18 +5508,27 @@ console.log(`[Generation] Rainy Day Mode: ${window.isRainyDay ? 'ACTIVE 🌧️'
             });
             if (!plan.split || plan.segments.length < 2) return whole;
 
-            // Map each piece back onto the sub-slots it covers. A piece that
-            // can't be resolved to a slot means the grid and the carving
-            // disagree, so fall back to the whole block rather than guess.
+            // Map each piece back onto the sub-slots it covers. Two pieces must
+            // never claim the same sub-slot: only one entry can live at a
+            // (bunk, slot), so the second activity would be dropped and its
+            // continuation left orphaned. A piece that resolves to nothing, or
+            // to a slot another piece already took, means the grid and the
+            // carving disagree — fall back to the whole block rather than guess.
             const pieces = [];
+            const claimed = new Set();
             for (const seg of plan.segments) {
                 const covered = slots.filter(idx => {
                     const s = window.divisionTimes?.[divName]?.[idx];
                     return s && s.startMin < seg.endMin && s.endMin > seg.startMin;
                 });
                 if (covered.length === 0) return whole;
+                if (covered.some(idx => claimed.has(idx))) return whole;
+                covered.forEach(idx => claimed.add(idx));
                 pieces.push({ startTime: seg.startMin, endTime: seg.endMin, slots: covered });
             }
+            // Every sub-slot must end up owned, or the bunk gets a hole the gap
+            // pass would then fill with something the carving never planned.
+            if (claimed.size !== slots.length) return whole;
             console.log(`[VAR-LEN] ${bunk} "${item.event}" ${sMin}-${eMin} → ${plan.composition.join('+')}min`);
             return pieces;
         };

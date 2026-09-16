@@ -182,6 +182,18 @@ describe('Utils.getScheduleUsageInWindow', () => {
         assert.strictEqual(U.getScheduleUsageInWindow(600, 640, null).count, 0);
     });
 
+    it('does not pass a field name off as an activity', () => {
+        // The same-activity sharing gate reads `activities`. An entry with a
+        // field but no activity name must not contribute the FIELD name there,
+        // or two bunks legitimately sharing a field read as different
+        // activities and the share gets rejected.
+        win.scheduleAssignments.J1[0] = { field: 'Field A', _startMin: 600, _endMin: 640 };
+        const u = U.getScheduleUsageInWindow(600, 640, 'Field A');
+        assert.strictEqual(u.count, 1, 'the bunk is still counted');
+        assert.strictEqual(u.bunks.J1, 'Field A', 'bunks still gets a label');
+        assert.strictEqual(u.activities.size, 0, 'but activities stays empty');
+    });
+
     it('falls back to the grid for an unstamped entry', () => {
         win.scheduleAssignments.J1[1] = { field: 'Field A', _activity: 'Soccer' }; // no _startMin
         assert.strictEqual(U.getScheduleUsageInWindow(640, 680, 'Field A').count, 1, 'grid says slot 1 is 640-680');

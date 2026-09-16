@@ -190,6 +190,20 @@
 
     function _gcd(a, b) { while (b) { var t = b; b = a % b; a = t; } return a; }
 
+    function _slotKindOf(eventName) {
+        if (window.SchedulerCoreUtils && window.SchedulerCoreUtils.slotKindOf) {
+            return window.SchedulerCoreUtils.slotKindOf(eventName);
+        }
+        var s = String(eventName || '').toLowerCase().trim();
+        if (s === 'sports slot' || s === 'sport slot') return 'sport';
+        if (s === 'special activity') return 'special';
+        return 'any';
+    }
+
+    // Only activities that could actually be scheduled today count toward the
+    // cut. A disabled or rainy-only special still sitting in the catalogue would
+    // otherwise drag the GCD down and shatter — or silently block — the cut for
+    // the whole camp, for an activity the carving side never even offers.
     function _configuredDurations(kind) {
         var out = [];
         var push = function (arr) {
@@ -198,32 +212,35 @@
                 if (isFinite(n) && n > 0 && out.indexOf(n) === -1) out.push(n);
             });
         };
+        var disabledSpecials = window.currentDisabledSpecials || [];
+        var disabledFields = window.currentDisabledFields || [];
         try {
             if (kind !== 'sport') {
                 var specials = (typeof window.getAllSpecialActivities === 'function' && window.getAllSpecialActivities())
                     || (typeof window.getGlobalSpecialActivities === 'function' && window.getGlobalSpecialActivities())
                     || [];
-                specials.forEach(function (s) { if (s) push(s.durations); });
+                specials.forEach(function (s) {
+                    if (!s || !s.name) return;
+                    if (s.available === false || s.rainyDayOnly) return;
+                    if (disabledSpecials.indexOf(s.name) !== -1) return;
+                    push(s.durations);
+                });
             }
             if (kind !== 'special') {
                 var meta = (typeof window.getSportMetaData === 'function' && window.getSportMetaData())
                     || window.sportMetaData || {};
-                Object.keys(meta).forEach(function (k) { if (meta[k]) push(meta[k].durations); });
+                Object.keys(meta).forEach(function (k) {
+                    if (!meta[k]) return;
+                    if (disabledFields.indexOf(k) !== -1) return;
+                    push(meta[k].durations);
+                });
             }
         } catch (e) { /* config unreadable → no split */ }
         return out.sort(function (a, b) { return a - b; });
     }
 
-    function _splitKindOf(block) {
-        var e = String((block && block.event) || '').toLowerCase();
-        if (e.indexOf('sport') !== -1) return 'sport';
-        if (e.indexOf('special') !== -1) return 'special';
-        return 'any';
-    }
-
     function expandVariableLengthTiles(blocks, opts) {
         opts = opts || {};
-        var maxGridParts = parseInt(opts.maxGridParts, 10) || 4;
         var minPartMin = parseInt(opts.minPartMin, 10) || 10;
         var expanded = [];
 
@@ -233,8 +250,18 @@
                 return;
             }
 
+            // Never cut finer than the tile is allowed to be carved — extra
+            // sub-slots the carving can never use just inflate the grid.
+            var maxGridParts = parseInt(opts.maxGridParts, 10)
+                || parseInt(block.maxSegments, 10) || 2;
+
             var len = block.endMin - block.startMin;
-            var durations = _configuredDurations(_splitKindOf(block))
+            // Utils is loaded after this file, so resolve at call time; the
+            // fallback must match Utils.slotKindOf exactly, because the carving
+            // side uses Utils and a disagreement carves lengths the grid was
+            // never cut for.
+            var kind = _slotKindOf(block.event);
+            var durations = _configuredDurations(kind)
                 .filter(function (d) { return d < len; });
 
             if (durations.length === 0) { expanded.push(block); return; }

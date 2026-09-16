@@ -167,6 +167,63 @@ describe('expandVariableLengthTiles', () => {
             [[540, 600], [600, 620], [620, 640], [640, 700]]);
     });
 
+    it('never cuts finer than the tile allows — the cap comes from maxSegments', () => {
+        setSpecials(win, [[20]]);
+        // 60-min tile, 20-min specials → 3 pieces. The tile only permits 2
+        // activities, so a 3-piece grid could never be carved and would just
+        // inflate the division's slot count.
+        const capped = E([tile({ allowSplit: true, maxSegments: 2, startMin: 600, endMin: 660 })]);
+        assert.strictEqual(capped.length, 1);
+        const roomy = E([tile({ allowSplit: true, maxSegments: 3, startMin: 600, endMin: 660 })]);
+        assert.strictEqual(roomy.length, 3);
+    });
+
+    it('defaults to a 2-piece cap when the tile says nothing', () => {
+        setSpecials(win, [[20]]);
+        assert.strictEqual(E([tile({ allowSplit: true, startMin: 600, endMin: 660 })]).length, 1);
+        assert.strictEqual(E([tile({ allowSplit: true, startMin: 600, endMin: 640 })]).length, 2);
+    });
+
+    it('ignores specials that cannot be scheduled today', () => {
+        // A disabled 25-min special would drag the GCD to 5 and kill the cut,
+        // for an activity the carving side never even offers.
+        setSpecials(win, [[20], [40], [25]]);
+        win.getAllSpecialActivities = () => ([
+            { name: 'S0', durations: [20] },
+            { name: 'S1', durations: [40] },
+            { name: 'Gone', durations: [25] },
+        ]);
+        win.currentDisabledSpecials = ['Gone'];
+        assert.strictEqual(E([tile({ allowSplit: true })]).length, 2, 'disabled special must not block the cut');
+
+        win.currentDisabledSpecials = [];
+        assert.strictEqual(E([tile({ allowSplit: true })]).length, 1, 'but an ENABLED 25-min special legitimately does');
+    });
+
+    it('ignores rainy-only and unavailable specials', () => {
+        win.getAllSpecialActivities = () => ([
+            { name: 'S0', durations: [20] },
+            { name: 'S1', durations: [40] },
+            { name: 'Rain', durations: [25], rainyDayOnly: true },
+            { name: 'Off', durations: [15], available: false },
+        ]);
+        win.currentDisabledSpecials = [];
+        assert.strictEqual(E([tile({ allowSplit: true })]).length, 2);
+    });
+
+    it('uses the same tile-kind rule as the carving side', () => {
+        // "Sports" is not "Sports Slot" — an exact-match rule calls it flexible,
+        // and a substring rule would call it sport-only and cut for the wrong
+        // duration set.
+        assert.strictEqual(win.SchedulerCoreUtils, undefined, 'fallback path (Utils not loaded here)');
+        setSpecials(win, [[20], [40]]);
+        setSports(win, [[30]]);
+        const exact = E([tile({ allowSplit: true, event: 'Sports Slot', startMin: 600, endMin: 660 })]);
+        assert.strictEqual(exact.length, 2, 'Sports Slot → sport durations only → 2 x 30');
+        const loose = E([tile({ allowSplit: true, event: 'Sports', startMin: 600, endMin: 660 })]);
+        assert.strictEqual(loose.length, 1, '"Sports" is flexible → GCD(20,30,40)=10 → 6 pieces → refused');
+    });
+
     it('is deterministic', () => {
         const args = [tile({ allowSplit: true, startMin: 600, endMin: 660 })];
         setSpecials(win, [[20], [30], [60]]);

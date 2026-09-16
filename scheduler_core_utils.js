@@ -893,6 +893,36 @@
             activityDuration
         } = Utils.getEffectiveTimeRange(block, rules);
 
+        // ★ DURATION FIT: an activity configured to run at set lengths cannot be
+        //   squeezed into a block shorter than its shortest one. The manual path
+        //   never checked this — it only shrank the WRITTEN end time afterwards,
+        //   which silently mislabels a 40-minute special sitting in a 30-minute
+        //   tile. It matters most once a tile is carved up: a 20-minute piece
+        //   must not be filled by something that needs 40.
+        //   An activity with no configured durations is flexible, as before.
+        //   Kill switch: window.__durationFitCheck = false.
+        if (actName && blockStartMin != null && blockEndMin != null && window.__durationFitCheck !== false) {
+            let _durs = null;
+            try {
+                const _spec = window.getSpecialActivityByName?.(actName);
+                if (_spec && Array.isArray(_spec.durations) && _spec.durations.length) {
+                    _durs = _spec.durations;
+                } else {
+                    const _meta = (window.getSportMetaData?.() || window.sportMetaData || {})[actName];
+                    if (_meta && Array.isArray(_meta.durations) && _meta.durations.length) _durs = _meta.durations;
+                }
+            } catch (_) { _durs = null; }
+
+            if (_durs) {
+                const _nums = _durs.map(d => parseInt(d, 10)).filter(d => d > 0);
+                const _shortest = _nums.length ? Math.min(..._nums) : 0;
+                if (_shortest > 0 && _shortest > (blockEndMin - blockStartMin)) {
+                    if (DEBUG_FITS) console.log(`[FIT] ${block.bunk} - ${fieldName}: REJECTED - ${actName} needs ${_shortest}min, block is ${blockEndMin - blockStartMin}min`);
+                    return false;
+                }
+            }
+        }
+
         // Occupancy is read by clock time, not slot index — see the note on the
         // capacity loop below. Kill switch: window.__regenTimeAwareCapacity = false.
         const _timeAware = (window.__regenTimeAwareCapacity !== false
@@ -1735,6 +1765,20 @@
     };
 
     /**
+     * What may a schedulable tile host — sports only, specials only, or either?
+     *
+     * Single source of truth: the grid cut and the per-bunk carving must agree,
+     * or a block gets carved into lengths the grid was never cut for and two
+     * pieces land on the same sub-slot.
+     */
+    Utils.slotKindOf = function (eventName) {
+        const s = String(eventName || '').toLowerCase().trim();
+        if (s === 'sports slot' || s === 'sport slot') return 'sport';
+        if (s === 'special activity') return 'special';
+        return 'any';
+    };
+
+    /**
      * Resolve an assignment's real clock-time range.
      *
      * The entry's own stamp wins over the grid: an activity may sit anywhere
@@ -1808,8 +1852,12 @@
                     const d = Utils.getDivisionForBunk(bunk);
                     if (d) divSet.add(d);
                 }
-                const actName = entry._activity || entry.sport || entryField;
-                result.bunks[bunk] = actName;
+                // `bunks` falls back to the field name so every listed bunk has a
+                // label; `activities` must NOT — the same-activity sharing gate
+                // reads it, and a field name standing in for a missing activity
+                // would read as a different activity and reject a legal share.
+                result.bunks[bunk] = entry._activity || entry.sport || entryField;
+                const actName = entry._activity || entry.sport;
                 if (actName) result.activities.add(String(actName).toLowerCase().trim());
             }
         }
