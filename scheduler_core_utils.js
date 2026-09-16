@@ -893,6 +893,44 @@
             activityDuration
         } = Utils.getEffectiveTimeRange(block, rules);
 
+        // Occupancy is read by clock time, not slot index — see the note on the
+        // capacity loop below. Kill switch: window.__regenTimeAwareCapacity = false.
+        const _timeAware = (window.__regenTimeAwareCapacity !== false
+            && blockStartMin != null && blockEndMin != null);
+
+        const _overlapsBlock = function (bunkName, idx) {
+            try {
+                const _e = (window.scheduleAssignments || {})[bunkName]?.[idx];
+                const _t = Utils.resolveEntryTime(bunkName, idx, _e);
+                if (_t.startMin == null || _t.endMin == null) return true; // unresolvable → keep (conservative)
+                return _t.startMin < blockEndMin && _t.endMin > blockStartMin;
+            } catch (_) { return true; }
+        };
+
+        // One scan per distinct field per canBlockFit call. This runs ~10k times
+        // a generate, and most calls bail out before ever needing it, so it is
+        // computed on demand and reused.
+        const _windowUsageCache = {};
+        const _usageInWindow = function (f) {
+            const k = String(f).toLowerCase().trim();
+            if (!(k in _windowUsageCache)) {
+                _windowUsageCache[k] = Utils.getScheduleUsageInWindow(blockStartMin, blockEndMin, f);
+            }
+            return _windowUsageCache[k];
+        };
+
+        // Is anyone at all on `f` during this block? Used by the combined-field
+        // check, where presence (not capacity) is what rejects.
+        const _anyoneOn = function (f, idx) {
+            const tracked = getFieldUsageAtSlot(idx, f, fieldUsageBySlot);
+            const trackedHit = _timeAware
+                ? (tracked.bunkList || []).some(b => _overlapsBlock(b, idx))
+                : (tracked.bunkList?.length || 0) > 0;
+            if (trackedHit) return true;
+            const sched = _timeAware ? _usageInWindow(f) : getScheduleUsageAtSlot(idx, f);
+            return (sched.bunkList?.length || 0) > 0;
+        };
+
         // =================================================================
         // FIELD RESERVATION CHECK (Skeleton-based)
         // =================================================================
@@ -1060,9 +1098,7 @@
                 if (subs) {
                     for (const subField of subs) {
                         for (const idx of uniqueSlots) {
-                            const subUsage = getFieldUsageAtSlot(idx, subField, fieldUsageBySlot);
-                            const subSched  = getScheduleUsageAtSlot(idx, subField);
-                            if ((subUsage.bunkList?.length || 0) > 0 || (subSched.bunkList?.length || 0) > 0) {
+                            if (_anyoneOn(subField, idx)) {
                                 if (DEBUG_FITS) console.log(`[FIT] ${block.bunk} - ${fieldName}: REJECTED - combined field blocked by sub-field ${subField} at slot ${idx}`);
                                 return false;
                             }
@@ -1074,9 +1110,7 @@
                 const combinedField = comboLookup.subToCombined[normField];
                 if (combinedField) {
                     for (const idx of uniqueSlots) {
-                        const comboUsage = getFieldUsageAtSlot(idx, combinedField, fieldUsageBySlot);
-                        const comboSched  = getScheduleUsageAtSlot(idx, combinedField);
-                        if ((comboUsage.bunkList?.length || 0) > 0 || (comboSched.bunkList?.length || 0) > 0) {
+                        if (_anyoneOn(combinedField, idx)) {
                             if (DEBUG_FITS) console.log(`[FIT] ${block.bunk} - ${fieldName}: REJECTED - sub-field blocked by combined field ${combinedField} at slot ${idx}`);
                             return false;
                         }
@@ -1154,45 +1188,29 @@
             );
         }
 
-        // ★ PARTIAL-REGEN INDEX-COLLISION FIX (2026-07-03): slot indices are
-        //   per-division — slot N is a DIFFERENT wall-clock time in each grade's
-        //   grid. During a partial regen the full preserved schedule of every
-        //   other division sits in scheduleAssignments/fieldUsageBySlot at raw
-        //   indices, so the index-keyed usage scan below counts bunks whose
-        //   entry at index N doesn't even overlap this block's time (e.g. a
-        //   div whose slot 1 is 890-970 "occupying" a field against an 805-870
-        //   query) → false capacity rejections → solver starves → dumb 7.5
-        //   fallback fills the tile. Filter usage to bunks whose entry actually
-        //   overlaps this block's window. Preserved fields stay protected by
-        //   the TIME-aware STEP 1.7/5.6 locks + isFieldLockedByTime.
+        // ★ INDEX-COLLISION FIX: slot indices are per-division — slot N is a
+        //   DIFFERENT wall-clock time in each grade's grid. An index-keyed usage
+        //   scan therefore counts bunks whose entry at index N doesn't overlap
+        //   this block at all (a div whose slot 1 is 890-970 "occupying" a field
+        //   against an 805-870 query → false capacity rejection) AND misses
+        //   bunks that DO overlap from another index. So occupancy is read by
+        //   clock time: the schedule half via getScheduleUsageInWindow (exact,
+        //   queried once for the whole block), the still-index-keyed tracked
+        //   half (fieldUsageBySlot) filtered to real overlaps.
         //   Kill switch: window.__regenTimeAwareCapacity = false.
-        const _regenTimeFilter = (window.__regenSlotScope && window.__regenTimeAwareCapacity !== false
-            && blockStartMin != null && blockEndMin != null)
-            ? function (bunkName, idx) {
-                try {
-                    const _e = (window.scheduleAssignments || {})[bunkName]?.[idx];
-                    let _s = (_e && _e._startMin != null) ? _e._startMin : null;
-                    let _en = (_e && _e._endMin != null) ? _e._endMin : null;
-                    if (_s == null || _en == null) {
-                        const _d = Utils.getDivisionForBunk(bunkName);
-                        const _sl = _d && window.divisionTimes?.[_d]?.[idx];
-                        if (_sl) { _s = _sl.startMin; _en = _sl.endMin; }
-                    }
-                    if (_s == null || _en == null) return true;      // can't resolve → keep (conservative)
-                    return _s < blockEndMin && _en > blockStartMin;   // keep only real time-overlaps
-                } catch (_) { return true; }
-            } : null;
-
         for (const idx of uniqueSlots) {
             const trackedUsage = getFieldUsageAtSlot(idx, fieldName, fieldUsageBySlot);
-            const scheduleUsage = getScheduleUsageAtSlot(idx, fieldName);
+            const scheduleUsage = _timeAware ? _usageInWindow(fieldName) : getScheduleUsageAtSlot(idx, fieldName);
 
             let allBunks = new Set([...trackedUsage.bunkList, ...scheduleUsage.bunkList]);
             let allActivities = new Set([...trackedUsage.activities, ...scheduleUsage.activities]);
             let allDivisions = [...new Set([...trackedUsage.divisions, ...scheduleUsage.divisions])];
 
-            if (_regenTimeFilter) {
-                const _kept = [...allBunks].filter(_b => _regenTimeFilter(_b, idx));
+            if (_timeAware) {
+                // scheduleUsage is already time-exact; only the index-keyed
+                // tracked half can carry a bunk whose slot N is another hour.
+                const _kept = [...allBunks].filter(_b =>
+                    (_b in scheduleUsage.bunks) || _overlapsBlock(_b, idx));
                 if (_kept.length !== allBunks.size) {
                     allBunks = new Set(_kept);
                     allActivities = new Set();
@@ -1714,6 +1732,89 @@
         }
         // No fallback - division/bunk context is required
         return { startMin: null, endMin: null };
+    };
+
+    /**
+     * Resolve an assignment's real clock-time range.
+     *
+     * The entry's own stamp wins over the grid: an activity may sit anywhere
+     * inside its slot (and, once a slot carries several segments, need not match
+     * the slot at all). The grid is only a fallback for entries written before
+     * stamping existed.
+     *
+     * @param {string} bunkName
+     * @param {number} slotIdx
+     * @param {Object} entry - the scheduleAssignments entry (may be null)
+     * @returns {{startMin: number|null, endMin: number|null}}
+     */
+    Utils.resolveEntryTime = function (bunkName, slotIdx, entry) {
+        if (entry && entry._startMin != null && entry._endMin != null) {
+            return { startMin: entry._startMin, endMin: entry._endMin };
+        }
+        if (bunkName != null) {
+            const slot = Utils._resolveSlotArray(bunkName)[slotIdx];
+            if (slot && slot.startMin != null && slot.endMin != null) {
+                return { startMin: slot.startMin, endMin: slot.endMin };
+            }
+        }
+        return { startMin: null, endMin: null };
+    };
+
+    /**
+     * Who is on `fieldName` anywhere in [startMin, endMin)?
+     *
+     * Slot indices are per-division — index N is a different wall-clock time in
+     * each grade — so the older index-keyed scan both counted bunks that did not
+     * overlap the query and missed bunks that did but sat at another index. This
+     * compares real times instead. One bunk counts once however many of its
+     * entries overlap.
+     *
+     * Shape matches getScheduleUsageAtSlot so callers are interchangeable.
+     */
+    Utils.getScheduleUsageInWindow = function (startMin, endMin, fieldName) {
+        const result = { count: 0, bunks: {}, activities: new Set(), bunkList: [], divisions: [] };
+        if (startMin == null || endMin == null || !fieldName) return result;
+
+        const target = String(fieldName).toLowerCase().trim();
+        if (!target) return result;
+
+        const schedules = window.scheduleAssignments || {};
+        const divSet = new Set();
+
+        for (const bunk of Object.keys(schedules)) {
+            const row = schedules[bunk];
+            if (!Array.isArray(row)) continue;
+            for (let i = 0; i < row.length; i++) {
+                const entry = row[i];
+                if (!entry) continue;
+
+                // Reject on time first. This runs ~10k times a generate over every
+                // entry in the camp, and the field comparison allocates strings, so
+                // the cheap numeric test goes first — most entries are in another
+                // part of the day and never pay for the rest.
+                let s = entry._startMin, e = entry._endMin;
+                if (s == null || e == null) {
+                    const t = Utils.resolveEntryTime(bunk, i, entry);
+                    s = t.startMin; e = t.endMin;
+                }
+                if (s == null || e == null || s >= endMin || e <= startMin) continue;
+
+                const entryField = Utils.fieldLabel(entry.field) || entry._activity;
+                if (!entryField || String(entryField).toLowerCase().trim() !== target) continue;
+
+                if (!(bunk in result.bunks)) {
+                    result.bunkList.push(bunk);
+                    result.count++;
+                    const d = Utils.getDivisionForBunk(bunk);
+                    if (d) divSet.add(d);
+                }
+                const actName = entry._activity || entry.sport || entryField;
+                result.bunks[bunk] = actName;
+                if (actName) result.activities.add(String(actName).toLowerCase().trim());
+            }
+        }
+        result.divisions = [...divSet];
+        return result;
     };
 
     /**
