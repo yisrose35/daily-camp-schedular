@@ -2357,6 +2357,7 @@ function _renderRegistrationPane(){
             +'<div class="me-more-menu" id="pplFormsMenu" style="min-width:210px">'
             +'<button onclick="CampistryMe.openFormConfig()">Registration Form</button><button onclick="CampistryMe.openPostAcceptFormConfig()" title="Sent after a camper is accepted">Post-Acceptance Form</button>'
             +'</div></div>'
+            +'<button class="me-btn me-btn--sec me-btn--sm" onclick="CampistryMe.openDepositPolicy()" title="Money required to hold a place">Deposit</button>'
             +'<button class="me-btn me-btn--pri" onclick="CampistryMe.addApplication()">+ Manual Entry</button>';
     }
     h+='<div class="me-more-wrap"><button class="me-btn me-btn--sec me-btn--sm" onclick="CampistryMe._toggleMenu(\'pplLinkMenu\')">🔗 Get Link</button>'
@@ -2383,7 +2384,7 @@ function _renderRegistrationPane(){
                 +'margin-bottom:12px;font-size:.82rem;color:#1E40AF;display:flex;gap:12px;align-items:baseline;flex-wrap:wrap">'
                 +'<strong>'+esc(_pol.label)+':</strong><span>'+esc(_dp.explain(_pol,null))+'</span>'
                 +(_owing?'<span style="margin-left:auto;font-weight:700">'+_owing+' unpaid</span>':'')
-                +'<button class="me-btn me-btn--ghost me-btn--sm" onclick="CampistryMe.openFormConfig()">Change</button></div>';
+                +'<button class="me-btn me-btn--ghost me-btn--sm" onclick="CampistryMe.openDepositPolicy()">Change</button></div>';
         }
     }
 
@@ -8126,9 +8127,6 @@ function _fbOpenPreviewWindow(){
     if(!_fbPreviewWin)toast('Allow pop-ups to preview the form','error');
 }
 function _fbPushPreview(){
-    // The deposit card lives in the Registration panel, so its own preview
-    // line rides the same edit hook the form preview does.
-    try{ _dpRefreshCard(); }catch(_){}
     clearTimeout(_fbPushTimer);
     _fbPushTimer=setTimeout(_fbCollectAndSend,150);
 }
@@ -8205,8 +8203,6 @@ function openFormBuilder(kind){
     var panel=document.getElementById('fbPanel');
     panel.innerHTML=isStaff?_buildSfcPanelHtml():isPaf?_buildPafPanelHtml():isPhf?_buildPhfPanelHtml():_buildFcPanelHtml();
     _initOrderDrag(isStaff?'sfc':isPaf?'paf':isPhf?'phf':'fc');
-    _dpRefreshCard._checked=false;
-    setTimeout(function(){ try{ _dpRefreshCard(); }catch(_){} },0);
 
     // Live-update the preview on any edit — typing, checkboxes, drag
     // reorder, or a row being added/removed — via one delegated listener
@@ -8411,16 +8407,6 @@ function _buildFcPanelHtml(){
         +'<button class="me-btn me-btn--sec me-btn--sm" style="margin-top:4px" onclick="CampistryMe.addDocRow()">+ Add Document</button>';
     h+=_accCard('Required Documents',docsHtml,{badge:docs.length+' set'});
 
-    // The deposit belongs here rather than behind its own menu item: it is a
-    // thing the form ASKS FOR, edited while you are looking at the form, and
-    // its preview is the form itself. Storage stays in enrollSettings (not
-    // formConfig) so it reaches the public page through migration 164 --
-    // same arrangement promo codes already have, read back in saveFormConfig.
-    var _dpPol=_depPolicyAPI()?_depPolicyAPI().normalize(enrollSettings.depositPolicy):null;
-    if(_dpPol){
-        h+=_accCard('Deposit to Register',_dpCardHtml(_dpPol),
-            {badge:_dpPol.enabled?(_dpPol.basis==='flat'?fm(_dpPol.amount):_dpPol.basis==='percent'?_dpPol.percent+'%':'per session'):'off'});
-    }
 
     var qHtml='<p style="font-size:.78rem;color:var(--s400);margin:0 0 10px">Standalone questions, shown in an "Additional Information" section. Pick "Show in" to move one inside a built-in section instead (or add it from that section directly, in Sections above).</p>'
         +'<div id="fcQList">'+fcQSplit.flat.map(function(q,i){return renderCustomQ(q,i,'fc',true);}).join('')+'</div>'
@@ -9256,14 +9242,6 @@ function saveFormConfig(){
         promos[code]={label:(labels[i]?.value||'').trim(),pct:parseFloat(pcts[i]?.value)||0,amt:parseFloat(amts[i]?.value)||0};
     }
     enrollSettings.promoCodes=promos;
-
-    // Same reasoning as promo codes: the deposit lives in enrollSettings so
-    // it persists through save() and reaches the public form, but it is
-    // edited in the builder because that is where a camp is thinking about
-    // what the form asks for.
-    if(_depPolicyAPI()&&document.getElementById('dpOn')){
-        enrollSettings.depositPolicy=_depPolicyAPI().normalize(_dpRead());
-    }
 
     save();
     closeFormBuilder();
@@ -14960,11 +14938,52 @@ async function _dpCheckReach(){
     }
 }
 
-/** Keep the card's preview and reachability line current as the camp types. */
+/** Keep the editor's preview and reachability line current as the camp types. */
 function _dpRefreshCard(){
     if(!document.getElementById('dpPreview'))return;
     _dpPreview();
     if(!_dpRefreshCard._checked){ _dpRefreshCard._checked=true; _dpCheckReach(); }
+}
+
+/**
+ * The deposit editor, on its own.
+ *
+ * It lived briefly inside the Registration form builder, on the reasoning
+ * that it changes what the form asks for. That was wrong for how a camp
+ * actually works: the deposit is a money decision, not a form-layout one, and
+ * burying it in the builder means opening the whole form editor to change a
+ * number. _dpCardHtml is shared, so the two never drift.
+ */
+function openDepositPolicy(){
+    var P=_depPolicyAPI();
+    if(!P){toast('Deposit settings aren\'t available in this build','error');return}
+    showModal('Deposit to register','<div class="me-modal-form">'+_dpCardHtml(enrollSettings.depositPolicy)+'</div>',
+        function(){ _dpSave(); },{maxWidth:680,saveLabel:'Save deposit policy'});
+    setTimeout(function(){
+        var box=document.getElementById('dynModal');
+        if(box){ box.addEventListener('input',_dpRefreshCard); box.addEventListener('change',_dpRefreshCard); }
+        _dpRefreshCard._checked=false;
+        _dpRefreshCard();
+    },0);
+}
+
+function _dpSave(){
+    var P=_depPolicyAPI();
+    if(!P)return;
+    var pol=P.normalize(_dpRead());
+    // A policy that is on and asks for nothing is a trap: the form would say a
+    // deposit is required and then let anyone through.
+    if(pol.enabled&&pol.basis==='flat'&&!pol.amount){
+        toast('Set a flat amount, or base the deposit on tuition','error');return;
+    }
+    if(pol.enabled&&pol.basis==='percent'&&!pol.percent){
+        toast('Set a percentage above zero','error');return;
+    }
+    enrollSettings.depositPolicy=pol;
+    save();
+    closeModal('dynModal');
+    renderRegistrationPage();
+    toast(pol.enabled?'Deposit policy saved':'Deposit no longer required');
 }
 
 function _dpToggle(){
@@ -18003,7 +18022,7 @@ window.CampistryMe={
     addDiv:function(){openDivForm(null)},editDiv:function(n){openDivForm(n)},deleteDiv:deleteDiv,
     openCsv:function(){openModal('csvModal')},downloadTemplate:downloadTemplate,
     finReconcileCharges:finReconcileCharges,
-    _dpToggle:_dpToggle,_fbRetryPreview:_fbRetryPreview,markDepositPaid:markDepositPaid,
+    _dpToggle:_dpToggle,_fbRetryPreview:_fbRetryPreview,openDepositPolicy:openDepositPolicy,markDepositPaid:markDepositPaid,
     setRosterPage:setRosterPage,setRosterSubTab:setRosterSubTab,setBillingPage:setBillingPage,setAnalyticsInvoicePage:setAnalyticsInvoicePage,setAnalyticsPaymentPage:setAnalyticsPaymentPage,
     _runSetupChecklistAction:_runSetupChecklistAction,dismissSetupChecklist:dismissSetupChecklist,
     bbDrop:bbDrop,autoAssign:autoAssign,autoGenerateBunks:autoGenerateBunks,openBunkGenSettings:openBunkGenSettings,showCamperBunkRequests:showCamperBunkRequests,clearBunks:clearBunks,setBunkCount:setBunkCount,openBunkCountModal:openBunkCountModal,_clearBunkCount:_clearBunkCount,

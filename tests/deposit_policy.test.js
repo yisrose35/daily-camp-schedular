@@ -163,18 +163,19 @@ test('the public form is actually told the rule', () => {
 test('the office can set it and see who has not paid', () => {
     const me = fs.readFileSync(path.join(ROOT, 'campistry_me.js'), 'utf8');
 
-    // The deposit is edited inside the Registration form builder, not behind
-    // its own menu item: it changes what the form ASKS FOR, so the builder's
-    // live preview of the form IS its preview.
+    // The deposit is a money decision, not a form-layout one. It has its own
+    // editor on the Registration page — putting it inside the form builder
+    // meant opening the whole form editor to change a number.
     assert.match(me, /function _dpCardHtml/);
-    assert.match(me, /_accCard\('Deposit to Register'/, 'the card is not in the builder');
-    assert.ok(!/openDepositPolicy/.test(me), 'the old standalone modal should be gone');
+    assert.match(me, /function openDepositPolicy/);
+    assert.match(me, /openDepositPolicy:openDepositPolicy/, 'not exposed, so no button reaches it');
+    assert.ok(!/_accCard\('Deposit to Register'/.test(me),
+        'the deposit must not be a card inside the form builder');
+    // One renderer, so the editor cannot drift from whatever hosts it.
+    assert.match(me, /_dpCardHtml\(enrollSettings\.depositPolicy\)/);
 
     assert.match(me, /markDepositPaid:markDepositPaid/);
-    // Storage stays in enrollSettings, like promo codes, so it persists
-    // through save() and reaches the public form through migration 164.
-    assert.match(me, /enrollSettings\.depositPolicy=_depPolicyAPI\(\)\.normalize\(_dpRead\(\)\)/,
-        'the builder Save must write the policy');
+    assert.match(me, /enrollSettings\.depositPolicy=pol/, 'the policy is never saved');
     // A deposit is a payment toward tuition. Recording it here AND in Billing
     // would halve the balance, so this must not invent a payment row.
     const fn = me.slice(me.indexOf('async function markDepositPaid'), me.indexOf('function openDepositPolicy'));
