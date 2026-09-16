@@ -3652,6 +3652,43 @@ function _postTuitionFor(f,eid){
     return !!(res&&res.ok&&!res.alreadyPosted);
 }
 
+/**
+ * Post a credit to the family's LEDGER, once, keyed on the credit's own id.
+ *
+ * Issue Credit and Award Financial Aid both used to write nothing but a row on
+ * `families[fk].credits[]` and then decrement `families[fk].balance`. Both of
+ * those are the DERIVED balance, and buildFamilyLedgers stopped using the
+ * derived balance the moment a family has a posted ledger — which is every
+ * enrolled family, because tuition posts on every render. So the authoritative
+ * number, the one a payment plan charges and a parent sees on their pay link,
+ * never moved. A camp could award a $1,500 scholarship, watch Billing show it,
+ * and still bill the family full tuition.
+ *
+ * The `credits[]` row stays: it is what the statement's Account Activity
+ * renders from, and removing it would take the credit off the printed page. So
+ * both are written, one entry each, and the two views agree — which is also
+ * what stops the ledgerDiff badge firing on every credited family.
+ */
+function _postLedgerCredit(f,o){
+    var B=_billingCore();
+    if(!B||!f||!o)return false;
+    var amt=Math.round((Number(o.amount)||0)*100)/100;
+    if(!(amt>0))return false;
+    var id='le_'+String(o.id||('cr_'+Date.now()));
+    // Idempotent on the credit's own id: this can be reached again by an undo,
+    // a re-render or a replayed save, and a credit posted twice is money given
+    // away twice. B.post does not dedupe, so the check is here.
+    if(B.find(f,id))return false;
+    var res=B.post(f,{
+        id:id,kind:'credit',amount:amt,
+        reason:(B.REASONS.indexOf(o.reason)>=0?o.reason:'goodwill'),
+        date:o.date||undefined,note:o.note||'',
+        by:'office',
+        source:{creditId:String(o.id||''),camperName:o.camperName||''}
+    });
+    return !!(res&&res.ok);
+}
+
 /** Money helpers for the removal warnings. Read-only. */
 function _fmtMoney(n){return '$'+(Math.round((Number(n)||0)*100)/100).toLocaleString('en-US',{minimumFractionDigits:2,maximumFractionDigits:2})}
 function _famNameForCamper(n){
@@ -12269,7 +12306,7 @@ function buildFamilyLedgers(){
 
     var ledgers={}; // famKey → {family, entries[], totalCharges, totalPayments, totalGrossPayments, totalRefunds, totalCredits, balance}
     Object.entries(families).forEach(function([fk,f]){
-        ledgers[fk]={family:f,famKey:fk,entries:[],totalCharges:0,totalPayments:0,totalGrossPayments:0,totalRefunds:0,totalCredits:0,balance:0};
+        ledgers[fk]={family:f,famKey:fk,entries:[],totalCharges:0,totalPayments:0,totalGrossPayments:0,totalRefunds:0,totalCredits:0,balance:0,_seen:{}};
     });
 
     // 1. Tuition charges from enrollments — including 'accepted' applications
@@ -12315,7 +12352,7 @@ function buildFamilyLedgers(){
                     camperIds:[e.camperName],
                     balance:0,totalPaid:0
                 };
-                ledgers[fk]={family:synthFamily,famKey:fk,entries:[],totalCharges:0,totalPayments:0,totalGrossPayments:0,totalRefunds:0,totalCredits:0,balance:0,pendingEnrollment:true};
+                ledgers[fk]={family:synthFamily,famKey:fk,entries:[],totalCharges:0,totalPayments:0,totalGrossPayments:0,totalRefunds:0,totalCredits:0,balance:0,pendingEnrollment:true,_seen:{}};
             }
         }
         if(!ledgers[fk])return;
@@ -12355,10 +12392,12 @@ function buildFamilyLedgers(){
         // balance = charges - payments - credits subtracted every discount
         // TWICE — understating what the family owed by the discount amount.
         ledgers[fk].entries.push({type:'charge',category:'Tuition',desc:esc(e.camperName)+' — '+esc(e.session||''),amount:tuition,date:e.enrolledDate||e.appliedDate||'',ref:eid});
+        ledgers[fk]._seen['t:'+eid]=1;
         ledgers[fk].totalCharges+=tuition;
         if(discAmt>0){
             ledgers[fk].entries.push({type:'credit',category:'Discount',desc:(e.discount.pct?e.discount.pct+'% ':'')+'discount for '+esc(e.camperName),amount:discAmt,date:e.enrolledDate||e.appliedDate||'',ref:eid+'_disc'});
             ledgers[fk].totalCredits+=discAmt;
+            ledgers[fk]._seen['d:'+eid]=1;
         }
         // Installments as sub-entries — the down payment vs. the rest of
         // tuition. Already-enrolled campers have this persisted on
@@ -12382,6 +12421,7 @@ function buildFamilyLedgers(){
         if(!ledgers[fk])return;
         (f.charges||[]).forEach(function(ch){
             ledgers[fk].entries.push({type:'charge',category:ch.category||'Add-On',desc:ch.description||'',amount:Number(ch.amount)||0,date:ch.date||'',ref:ch.id||''});
+            if(ch.id)ledgers[fk]._seen['c:'+ch.id]=1;
             ledgers[fk].totalCharges+=Number(ch.amount)||0;
         });
     });
@@ -12393,6 +12433,7 @@ function buildFamilyLedgers(){
         if(!ledgers[fk])return;
         (f.credits||[]).forEach(function(cr){
             ledgers[fk].entries.push({type:'credit',category:'Credit',desc:cr.reason||'',amount:Number(cr.amount)||0,date:cr.date||'',ref:cr.id||''});
+            if(cr.id)ledgers[fk]._seen['x:'+cr.id]=1;
             ledgers[fk].totalCredits+=Number(cr.amount)||0;
         });
     });
@@ -12427,6 +12468,7 @@ function buildFamilyLedgers(){
         // Label it explicitly instead of routing it through the payment-
         // method catalogue.
         ledgers[fk].entries.push({type:'payment',category:isRefund?'Refund':(_payLabel(p.method)||'Payment'),desc:p.notes||(isRefund?'Refund issued':'Payment received'),amount:amt,date:p.date||'',ref:p.id||'',status:p.status||''});
+        _paymentRefsOf(p).forEach(function(r){ledgers[fk]._seen['p:'+r]=1});
         if(!_notCollected){
             ledgers[fk].totalPayments+=amt;
             if(isRefund) ledgers[fk].totalRefunds+=Math.abs(amt);
@@ -12459,9 +12501,62 @@ function buildFamilyLedgers(){
                     desc:dep.notes||'Bank deposit',
                     amount:amt,date:dep.date||'',ref:dep.id||'',status:''
                 });
+                if(dep.id)ledgers[fk]._seen['p:'+dep.id]=1;
                 ledgers[fk].totalPayments+=amt;
                 if(isReturn) ledgers[fk].totalRefunds+=Math.abs(amt);
                 else ledgers[fk].totalGrossPayments+=amt;
+            });
+        });
+    }
+
+    // 3c. Entries that exist ONLY on the posted ledger.
+    //
+    // Steps 1–3b rebuild the account from live state: enrollments, f.charges,
+    // f.credits, finPayments, bank deposits. A posted entry with no live
+    // counterpart is therefore INVISIBLE here — and the withdrawal credit is
+    // exactly that. Withdraw a camper and BillingCore posts the credit
+    // straight to f.entries; nothing puts it back in this list. So the
+    // statement printed for that family showed the full tuition charge with
+    // nothing against it, and then a Balance Due line taken from the posted
+    // ledger that did not follow from the rows above it — a statement that
+    // visibly does not add up, handed to the family who just withdrew.
+    //
+    // Each derived row above registered what it represents (`_seen`), so a
+    // posted entry is added here only when nothing already stands for it. The
+    // keys are per-KIND, not just per-id, because one enrollment id carries
+    // both a tuition charge and its discount credit.
+    var _BM=_billingCore();
+    if(_BM){
+        Object.values(ledgers).forEach(function(l){
+            _BM.entriesOf(l.family).forEach(function(e){
+                if(!e)return;
+                var src=e.source||{};
+                var key=null;
+                if(e.kind==='charge'&&e.reason==='tuition'&&src.enrollmentId)key='t:'+src.enrollmentId;
+                else if(e.kind==='credit'&&(e.reason==='discount'||e.reason==='sibling')&&src.enrollmentId)key='d:'+src.enrollmentId;
+                else if((e.kind==='payment'||e.kind==='refund')&&src.paymentId)key='p:'+src.paymentId;
+                else if(e.kind==='credit'&&src.creditId)key='x:'+src.creditId;
+                else if(e.kind==='charge'&&src.chargeId)key='c:'+src.chargeId;
+                if(key&&l._seen[key])return;
+                // Reversals are entries in their own right and belong on the
+                // page; there is no derived row for them either.
+                var amt=Number(e.amount)||0;
+                if(!(amt>0))return;
+                var label=(e.reason||'').replace(/^./,function(c){return c.toUpperCase()});
+                if(e.kind==='credit'){
+                    l.entries.push({type:'credit',category:label||'Credit',desc:e.note||'',amount:amt,date:e.date||'',ref:e.id});
+                    l.totalCredits+=amt;
+                }else if(e.kind==='charge'){
+                    l.entries.push({type:'charge',category:label||'Charge',desc:e.note||'',amount:amt,date:e.date||'',ref:e.id});
+                    l.totalCharges+=amt;
+                }else if(e.kind==='refund'){
+                    l.entries.push({type:'payment',category:'Refund',desc:e.note||'Refund issued',amount:-amt,date:e.date||'',ref:e.id,status:''});
+                    l.totalPayments-=amt;l.totalRefunds+=amt;
+                }else{
+                    l.entries.push({type:'payment',category:label||'Payment',desc:e.note||'Payment received',amount:amt,date:e.date||'',ref:e.id,status:''});
+                    l.totalPayments+=amt;l.totalGrossPayments+=amt;
+                }
+                if(key)l._seen[key]=1;
             });
         });
     }
@@ -14363,8 +14458,13 @@ function issueCreditForFamily(famKey){
         var amt=parseFloat(document.getElementById('crAmount').value)||0;
         if(!amt){toast('Enter an amount','error');return}
         if(!f.credits) f.credits=[];
-        f.credits.push({id:'cr_'+Date.now(),reason:document.getElementById('crReason').value.trim(),amount:amt,date:new Date().toISOString().split('T')[0],timestamp:Date.now()});
+        var _crId='cr_'+Date.now();
+        var _crReason=document.getElementById('crReason').value.trim();
+        var _crDate=new Date().toISOString().split('T')[0];
+        f.credits.push({id:_crId,reason:_crReason,amount:amt,date:_crDate,timestamp:Date.now()});
         f.balance=Math.max(0,(f.balance||0)-amt);
+        // …and onto the ledger, which is the balance that actually gets charged.
+        _postLedgerCredit(f,{id:_crId,amount:amt,reason:'goodwill',note:_crReason,date:_crDate});
         save();closeModal('dynModal');if(curPage==='familydetail')renderFamilyDetailPage();else renderBilling();toast('Credit of '+fm(amt)+' issued to '+f.name);
     });
     if(famKey) _crUpdateRefundSummary();
@@ -17463,10 +17563,34 @@ function addScholarship(camperName){
     showModal('Award Financial Aid',h,function(){
         var amt=parseFloat(document.getElementById('aidAmt').value)||0;if(!amt){toast('Enter amount','error');return}
         if(!roster[camperName])return;if(!roster[camperName].scholarships)roster[camperName].scholarships=[];
-        roster[camperName].scholarships.push({type:document.getElementById('aidType').value,amount:amt,source:(document.getElementById('aidSrc').value||'').trim(),notes:(document.getElementById('aidNotes').value||'').trim(),date:new Date().toISOString().split('T')[0]});
+        var aidType=document.getElementById('aidType').value;
+        var aidDate=new Date().toISOString().split('T')[0];
+        roster[camperName].scholarships.push({type:aidType,amount:amt,source:(document.getElementById('aidSrc').value||'').trim(),notes:(document.getElementById('aidNotes').value||'').trim(),date:aidDate});
+        // Awarding aid is what MAKES a camper a financial-aid camper. The
+        // cancellation policy has always carried a "financial aid is credited
+        // in full whatever the calendar says" rule, reading e.financialAid /
+        // f.financialAid — and nothing in this app ever set either flag, so
+        // that rule could not fire for anybody. Awarding the aid sets it.
+        roster[camperName].financialAid=true;
         var famKey=Object.keys(families).find(function(k){return(families[k].camperIds||[]).indexOf(camperName)>=0});
-        if(famKey){if(!families[famKey].credits)families[famKey].credits=[];families[famKey].credits.push({id:'sch_'+Date.now(),reason:document.getElementById('aidType').value+' for '+camperName,amount:amt,date:new Date().toISOString().split('T')[0]});families[famKey].balance=Math.max(0,(families[famKey].balance||0)-amt)}
-        save();closeModal('dynModal');viewCamper(camperName);toast(fm(amt)+' awarded to '+camperName);
+        if(famKey){
+            var _f=families[famKey];
+            var _schId='sch_'+Date.now();
+            var _schReason=aidType+' for '+camperName;
+            if(!_f.credits)_f.credits=[];
+            _f.credits.push({id:_schId,reason:_schReason,amount:amt,date:aidDate});
+            _f.balance=Math.max(0,(_f.balance||0)-amt);
+            _f.financialAid=true;
+            // The award has to reach the LEDGER or it reduces nothing the
+            // family is actually charged — see _postLedgerCredit. Without this
+            // the aid was awarded, shown on screen, and billed for anyway.
+            _postLedgerCredit(_f,{id:_schId,amount:amt,reason:'scholarship',note:_schReason,date:aidDate,camperName:camperName});
+        }
+        save();closeModal('dynModal');viewCamper(camperName);
+        // Aid awarded to a camper who is in no household has no bill to reduce.
+        // Reporting it as awarded anyway is how a camp finds out in August.
+        if(famKey)toast(fm(amt)+' awarded to '+camperName);
+        else toast(fm(amt)+' recorded for '+camperName+', but they are not in a household yet — no bill was reduced','error');
     });
 }
 
