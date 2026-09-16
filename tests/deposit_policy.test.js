@@ -254,3 +254,26 @@ test('required documents default off and carry stable ids', () => {
 // deposit work and drops the rest. Re-land only with the cause in hand and
 // a check that would have caught it; shipping it again on the same evidence
 // would break the form a second time.
+
+test('a preview that does not load says so', () => {
+    // A 404, a frame the browser refused, and a page whose script died on
+    // load are indistinguishable from the builder, and all three leave the
+    // same silent grey box with a broken-document icon. That is what turned a
+    // one-line problem into a day of guessing.
+    const me = fs.readFileSync(path.join(ROOT, 'campistry_me.js'), 'utf8');
+    const html = fs.readFileSync(path.join(ROOT, 'campistry_me.html'), 'utf8');
+    const css = fs.readFileSync(path.join(ROOT, 'campistry_me.css'), 'utf8');
+
+    assert.match(html, /id="fbPreviewFail"/, 'nowhere to report the failure');
+    assert.match(css, /\.fb-preview-fail\{/);
+    assert.match(me, /function _fbWatchPreview/);
+    assert.match(me, /The preview did not load/);
+    // The page announces itself; the absence of that is the only signal that
+    // catches all three causes.
+    assert.match(me, /if\(fromIframe\)_fbPreviewOk\(\)/, 'a loaded preview must clear the warning');
+    // And the office needs a way out that does not depend on the frame.
+    assert.match(me, /Open it in a new tab/);
+    assert.match(me, /_fbRetryPreview:_fbRetryPreview/, 'the retry button is not reachable');
+    // The timer must not outlive the overlay.
+    assert.match(me, /if\(_fbPreviewTimer\)\{clearTimeout\(_fbPreviewTimer\);_fbPreviewTimer=null;\}\n    _fbPreviewWin=null/);
+});

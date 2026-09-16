@@ -264,6 +264,9 @@ select.me-input{cursor:pointer}
 .fb-resizer::after{content:'';position:absolute;top:50%;left:50%;width:3px;height:32px;transform:translate(-50%,-50%);border-radius:2px;background:rgba(255,255,255,.55)}
 .fb-preview{flex:1;min-width:0;background:var(--s100);display:flex;align-items:stretch;justify-content:center;overflow:auto;padding:22px}
 .fb-iframe{width:100%;max-width:760px;height:100%;border:1px solid var(--s200);border-radius:10px;background:#fff;box-shadow:0 4px 24px rgba(0,0,0,.08)}
+.fb-preview-fail{width:100%;max-width:760px;align-self:center;background:#fff;border:1px solid var(--s200);border-radius:10px;padding:28px 26px;font-size:.88rem;color:var(--s600);line-height:1.65}
+.fb-preview-fail h4{margin:0 0 8px;font-size:1rem;font-weight:700;color:var(--s800)}
+.fb-preview-fail code{background:var(--s50);border:1px solid var(--s100);border-radius:5px;padding:1px 6px;font-size:.82rem}
 .fb-savenote{font-size:.72rem;color:var(--s400)}
 @media(max-width:900px){.fb-body{flex-direction:column}.fb-panel{width:100%;border-bottom:1px solid var(--s200);max-height:42vh}.fb-resizer{display:none}.fb-preview{padding:12px}}
 

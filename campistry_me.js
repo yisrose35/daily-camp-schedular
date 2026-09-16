@@ -8230,6 +8230,7 @@ function openFormBuilder(kind){
             var fromIframe=f&&ev.source===f.contentWindow;
             var fromPreviewWin=_fbPreviewWin&&ev.source===_fbPreviewWin;
             if(!fromIframe&&!fromPreviewWin)return;
+            if(fromIframe)_fbPreviewOk();
             _fbCollectAndSend();
         });
     }
@@ -8242,6 +8243,51 @@ function openFormBuilder(kind){
     _fbRestorePanelWidth();
     var frame=document.getElementById('fbPreviewFrame');
     frame.src=_fbPublicPageFile()+'?preview=1';
+    _fbWatchPreview();
+}
+
+// ── did the preview actually load? ───────────────────────────────────────
+//
+// A 404, a frame the browser refused, and a page whose script died on load
+// are indistinguishable from out here, and all three leave the same silent
+// grey box with a broken-document icon in it. The page announces itself with
+// a 'preview-ready' message; no message inside a few seconds means something
+// went wrong, and saying so with a link to open the real page beats leaving
+// somebody to guess which of the three it was.
+var _fbPreviewTimer=null;
+function _fbPreviewOk(){
+    if(_fbPreviewTimer){clearTimeout(_fbPreviewTimer);_fbPreviewTimer=null;}
+    var box=document.getElementById('fbPreviewFail');
+    var frame=document.getElementById('fbPreviewFrame');
+    if(box)box.style.display='none';
+    if(frame)frame.style.display='';
+}
+function _fbWatchPreview(){
+    if(_fbPreviewTimer)clearTimeout(_fbPreviewTimer);
+    _fbPreviewOk();
+    var url=_fbPublicPageFile()+'?preview=1';
+    _fbPreviewTimer=setTimeout(function(){
+        var box=document.getElementById('fbPreviewFail');
+        var frame=document.getElementById('fbPreviewFrame');
+        if(!box)return;
+        if(frame)frame.style.display='none';
+        box.style.display='';
+        box.innerHTML='<h4>The preview did not load</h4>'
+            +'<p style="margin:0 0 10px">Your settings on the left are fine and still save normally \u2014 this is only the '
+            +'preview pane. <code>'+esc(url)+'</code> did not report back.</p>'
+            +'<p style="margin:0 0 12px">Usually one of: the page is still deploying, your browser cached a bad copy, or '
+            +'it is blocked from being shown inside another page.</p>'
+            +'<div style="display:flex;gap:8px;flex-wrap:wrap">'
+            +'<button class="me-btn me-btn--sec me-btn--sm" onclick="CampistryMe._fbRetryPreview()">Try again</button>'
+            +'<a class="me-btn me-btn--ghost me-btn--sm" href="'+esc(url)+'" target="_blank" rel="noopener">Open it in a new tab</a>'
+            +'</div>';
+    },6000);
+}
+function _fbRetryPreview(){
+    var frame=document.getElementById('fbPreviewFrame');
+    if(!frame)return;
+    frame.src=_fbPublicPageFile()+'?preview=1&r='+Date.now();
+    _fbWatchPreview();
 }
 function closeFormBuilder(){
     var panel=document.getElementById('fbPanel');
@@ -8249,6 +8295,7 @@ function closeFormBuilder(){
     document.getElementById('formBuilderOverlay').style.display='none';
     var frame=document.getElementById('fbPreviewFrame');
     if(frame)frame.src='about:blank';
+    if(_fbPreviewTimer){clearTimeout(_fbPreviewTimer);_fbPreviewTimer=null;}
     _fbPreviewWin=null; // stop tracking — a tab the office left open just stops updating, it isn't closed for them
 }
 function _brandingLogoPick(prefix,input){
@@ -17956,7 +18003,7 @@ window.CampistryMe={
     addDiv:function(){openDivForm(null)},editDiv:function(n){openDivForm(n)},deleteDiv:deleteDiv,
     openCsv:function(){openModal('csvModal')},downloadTemplate:downloadTemplate,
     finReconcileCharges:finReconcileCharges,
-    _dpToggle:_dpToggle,markDepositPaid:markDepositPaid,
+    _dpToggle:_dpToggle,_fbRetryPreview:_fbRetryPreview,markDepositPaid:markDepositPaid,
     setRosterPage:setRosterPage,setRosterSubTab:setRosterSubTab,setBillingPage:setBillingPage,setAnalyticsInvoicePage:setAnalyticsInvoicePage,setAnalyticsPaymentPage:setAnalyticsPaymentPage,
     _runSetupChecklistAction:_runSetupChecklistAction,dismissSetupChecklist:dismissSetupChecklist,
     bbDrop:bbDrop,autoAssign:autoAssign,autoGenerateBunks:autoGenerateBunks,openBunkGenSettings:openBunkGenSettings,showCamperBunkRequests:showCamperBunkRequests,clearBunks:clearBunks,setBunkCount:setBunkCount,openBunkCountModal:openBunkCountModal,_clearBunkCount:_clearBunkCount,
