@@ -159,6 +159,11 @@ MANIFEST = [
     ("176_processor_conformance",
      "A processor cannot be connected until it can charge, refund, tokenize, "
      "re-charge and report a dispute"),
+    # MUST come after 175, which it replaces record_chargeback from. Cardknox's
+    # postback carries no amount field at all, so requiring one meant a dispute
+    # we could identify perfectly still went unrecorded.
+    ("177_chargeback_amount_from_payment",
+     "A chargeback can be recorded even when the processor does not say how much"),
 ]
 
 HEADER = """-- ═══════════════════════════════════════════════════════════════════════════
@@ -510,6 +515,14 @@ UNION ALL SELECT 'a chargeback moves the money back',
        CASE WHEN EXISTS (SELECT 1 FROM pg_proc WHERE proname='record_chargeback')
              AND EXISTS (SELECT 1 FROM pg_proc WHERE proname='resolve_chargeback')
              AND EXISTS (SELECT 1 FROM pg_proc WHERE proname='flag_plan_collection')
+            THEN 'OK' ELSE 'MISSING' END
+-- 177 on top of 175: a processor that identifies the transaction but not its
+-- value (Cardknox's postback has no amount field) must still be recordable.
+UNION ALL SELECT 'a chargeback records even without an amount',
+       CASE WHEN (SELECT prosrc FROM pg_proc WHERE proname='record_chargeback' LIMIT 1)
+                 LIKE '%amount_unknown%'
+             AND (SELECT prosrc FROM pg_proc WHERE proname='record_chargeback' LIMIT 1)
+                 NOT LIKE '%bad_amount%'
             THEN 'OK' ELSE 'MISSING' END
 -- A processor is only connectable once it declares everything money needs. The
 -- second half checks the gate is actually attached: the functions existing with

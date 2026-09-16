@@ -28,19 +28,35 @@
 // an office can reverse rather than money.
 //
 // ── WHAT IS VERIFIED AND WHAT IS NOT ───────────────────────────────────────
-// The FIELD NAMES below are taken from each processor's existing adapter in this
-// repo — Cardknox identifies a transaction by xRefNum, Banquest by
-// reference_number — so the reference that identifies the disputed payment is
-// right. What could NOT be verified from here is each processor's exact dispute
-// EVENT NAME and envelope, because their documentation is unreachable from this
-// environment (the egress proxy blocks docs.banquestgateway.com and
-// developers.8am.com).
+// CARDKNOX / SOLA: the field names are verified against the field picker in the
+// portal's own Webhook Settings screen. Two findings from it are load-bearing
+// and are spelled out at the mapper: the postback calls the transaction
+// reference xResponseRefnum / xGatewayRefNum (the API response calls the same
+// value xRefNum), and it carries NO amount field at all.
 //
-// So normalise() is written to be generous: it reads any of several plausible
-// field spellings and logs the whole body when it cannot find what it needs.
-// Send one real test dispute from the processor's dashboard, read the log line,
-// and tighten the mapping to what actually arrives. Until that is done for a
-// given processor, treat its chargeback handling as plumbed but unproven.
+// That picker also strongly suggests this postback is Cardknox's TRANSACTION
+// notification rather than a dispute feed: it offers no chargeback id, no case
+// number and no dispute reason — only xStatus / xStatusReason, which is where a
+// chargeback would have to show up if it shows up at all. Whether Cardknox
+// emits a postback for a chargeback is an open question, and the cheapest way
+// to answer it is to look at this function's logs after a real one.
+//
+// BANQUEST: still unverified. No public webhook documentation could be found,
+// and every relevant domain is unreachable from this environment (the egress
+// proxy blocks docs.banquestgateway.com, banquest.com and developers.8am.com).
+// Its field names below come from banquest_adapter, so the reference is right
+// if the envelope resembles a transaction; the envelope itself is a guess.
+//
+// So normalise() stays generous: it reads several plausible spellings and logs
+// the whole body when it cannot find what it needs. Send one real test dispute
+// from the processor's dashboard, read the log line, and tighten the mapping to
+// what actually arrives. Until that is done for a given processor, treat its
+// chargeback handling as plumbed but unproven.
+//
+// IF A PROCESSOR CANNOT PUSH DISPUTES AT ALL, this endpoint is the wrong shape
+// for it and no amount of field-mapping fixes that. The answer there is to poll
+// — Cardknox has a Reporting API at x1.cardknox.com/report — and feed the same
+// record_chargeback path from a scheduled job instead of from a request.
 // =============================================================================
 import { serve } from "https://deno.land/std@0.168.0/http/server.ts";
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
@@ -80,22 +96,45 @@ const str = (v: unknown) => (v == null ? "" : String(v)).trim();
  */
 function normalise(processor: string, b: Record<string, any>): Dispute | null {
   if (processor === "cardknox") {
-    // Cardknox/Sola identifies every transaction by xRefNum — that is what
-    // cardknox_adapter.charge() returns and what the ledger stores as
-    // byopTransactionId, so it is the reference that will match.
-    const refs = [b.xRefNum, b.xRefnum, b.refNum, b.ReferenceNumber,
+    // These names are VERIFIED against the field picker in the Sola/Cardknox
+    // portal's own Webhook Settings screen, not guessed from documentation.
+    //
+    // Note what is NOT in that picker, because both matter:
+    //
+    //   * xRefNum. The API RESPONSE calls it that — cardknox_adapter.charge()
+    //     returns result.xRefNum and we store it as byopTransactionId — but the
+    //     postback spells the same value xResponseRefnum, with xGatewayRefNum
+    //     alongside it. Reading only xRefNum, as this did first, finds nothing.
+    //   * any amount field at all. The Transaction Fields group has no xAmount;
+    //     the only money fields are xSubtotal/xTip/xTax/xShipAmount under Order
+    //     Details, which are order lines rather than what was captured. So the
+    //     amount is often simply absent, and migration 177 takes it from the
+    //     payment being disputed instead.
+    //
+    // There is also no chargeback id, reason or case number anywhere in the
+    // picker — which is itself the evidence that this postback is Cardknox's
+    // TRANSACTION notification and not a dispute feed. See the header.
+    const refs = [b.xResponseRefnum, b.xResponseRefNum, b.xGatewayRefNum,
+                  b.xRefNum, b.xRefnum, b.refNum, b.ReferenceNumber,
                   b.xOrigRefNum, b.originalRefNum, b.xInvoice]
       .map(str).filter(Boolean);
+    if (!refs.length) return null;
+    // No dispute id in the payload, so derive one from the transaction. It has
+    // to be DETERMINISTIC: it is the idempotency key, and it is what a later
+    // resolution event must produce again to find this chargeback.
     const disputeId = str(b.xChargebackId || b.chargebackId || b.caseId ||
                           b.disputeId || b.id) || ("ck_" + refs[0]);
-    if (!refs.length) return null;
-    const status = str(b.xStatus || b.status || b.chargebackStatus) || null;
+    const status = str(b.xStatus || b.xStatusReason || b.status ||
+                       b.chargebackStatus || b.xGatewayResult) || null;
     const closed = /reversed|won|lost|closed|resolved/i.test(status || "") ||
                    /chargeback[_.]?(reversal|closed|resolved)/i.test(str(b.xCommand || b.event || b.type));
     return {
       disputeId, refs,
+      // 0 when absent, which record_chargeback reads as "use the payment's own
+      // amount" rather than as an error.
       amount: Math.abs(num(b.xAmount ?? b.amount ?? b.chargebackAmount)),
-      reason: str(b.xChargebackReason || b.reason || b.reasonCode) || null,
+      reason: str(b.xStatusReason || b.xChargebackReason || b.reason ||
+                  b.reasonCode || b.xResponseError) || null,
       status, closed,
       won: /reversed|won/i.test(status || ""),
     };
@@ -209,18 +248,22 @@ serve(async (req) => {
       });
       if (error) console.warn(`[byop-dispute] ${processor} close not recorded: ${error.message}`);
     } else {
-      if (!(d.amount > 0)) {
-        console.error(`[byop-dispute] ${processor}: dispute ${d.disputeId} has no amount — not recorded`);
-      } else {
-        const { data, error } = await supabase.rpc("record_chargeback", {
-          p_camp_id: camp, p_dispute_id: d.disputeId, p_refs: d.refs,
-          p_amount: d.amount, p_reason: d.reason, p_status: d.status,
-        });
-        if (error || !data?.success) {
-          console.error(`[byop-dispute] ${processor}: chargeback ${d.disputeId} NOT posted ` +
-            `(${error?.message || data?.error || "unknown"}) — the camp's books now overstate ` +
-            `collected cash until this is reconciled by hand. refs=${d.refs.join(",")}`);
-        }
+      // A missing amount is NOT a reason to refuse. Cardknox's postback has no
+      // amount field at all, so requiring one meant the camp stayed exactly
+      // where it started — money gone from the bank, nothing recorded here.
+      // Passing null tells record_chargeback (migration 177) to use the amount
+      // of the payment being disputed, which is our own record of what was
+      // actually captured. A real amount still wins, because only the processor
+      // knows about a PARTIAL chargeback.
+      const { data, error } = await supabase.rpc("record_chargeback", {
+        p_camp_id: camp, p_dispute_id: d.disputeId, p_refs: d.refs,
+        p_amount: d.amount > 0 ? d.amount : null,
+        p_reason: d.reason, p_status: d.status,
+      });
+      if (error || !data?.success) {
+        console.error(`[byop-dispute] ${processor}: chargeback ${d.disputeId} NOT posted ` +
+          `(${error?.message || data?.error || "unknown"}) — the camp's books now overstate ` +
+          `collected cash until this is reconciled by hand. refs=${d.refs.join(",")}`);
       }
     }
   } catch (e) {

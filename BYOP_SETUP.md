@@ -447,13 +447,49 @@ https://<your-project>.supabase.co/functions/v1/byop-dispute-webhook?processor=b
   idempotent and reversible.
 
 **Send one real test dispute from the processor's dashboard after wiring it
-up.** The field names are taken from each adapter (Cardknox `xRefNum`,
-Banquest `reference_number`) so the reference is right, but neither
-processor's dispute *envelope* could be verified from here — their docs are
-unreachable from the build environment. The function logs the entire body
-when it can't find a reference; read that log line once and tighten the
-mapping in `normalise()` to what actually arrives. Until you've done that
-for a processor, treat its chargeback handling as plumbed but unproven.
+up.** The function logs the entire body when it can't find a reference; read
+that log line once and tighten the mapping in `normalise()` to what actually
+arrives. Until you've done that for a processor, treat its chargeback
+handling as plumbed but unproven.
+
+#### Which fields to tick on Sola/Cardknox's Webhook Settings screen
+
+That screen's field picker is grouped (Billing / Shipping / Transaction /
+Order / Custom / Other). **Do not "Select All"** — it makes the body harder
+to read in the logs without adding anything we use. Tick these:
+
+| Group | Fields | Used for |
+|-------|--------|----------|
+| Transaction | `xResponseRefnum`, `xGatewayRefNum` | **The one that matters.** How we find the payment being disputed. |
+| Transaction | `xInvoice` | Our own reference, a second way to match |
+| Transaction | `xStatus`, `xStatusReason` | Whether this is a chargeback and why |
+| Transaction | `xCommand`, `xResponseError` | Distinguishing event types while we learn the shape |
+| Transaction | `xCardLastFour`, `xAuthCode` | Human reconciliation when a match fails |
+| Order | `xSubtotal` | A rough amount if one is ever needed by hand |
+
+Two things that picker taught us, both now handled in code:
+
+* **The postback does not call the reference `xRefNum`.** The API *response*
+  does — that's what `cardknox_adapter.charge()` returns and what we store —
+  but the postback spells the same value **`xResponseRefnum`**, with
+  `xGatewayRefNum` alongside. The dispute webhook read only `xRefNum` at
+  first and would have matched nothing at all.
+* **There is no amount field anywhere in it.** No `xAmount` under
+  Transaction; only `xSubtotal`/`xTip`/`xTax`/`xShipAmount` under Order,
+  which are order lines rather than what was captured. Migration 177 takes
+  the amount from the payment being disputed instead — our own record of
+  what we actually charged — and a processor-supplied amount still wins when
+  there is one, because only the processor knows about a *partial*
+  chargeback.
+
+**And the thing that picker did not have:** no chargeback id, no case
+number, no dispute reason. That is good evidence this screen is Cardknox's
+**transaction** postback and not a dispute feed — so it may never fire for a
+chargeback at all. The cheapest way to find out is to look at the
+`cardknox-webhook` logs after a real one. If nothing arrives, the answer is
+to poll their Reporting API (`https://x1.cardknox.com/report`) on a schedule
+and feed the same `record_chargeback` path, rather than to keep adjusting
+field names on an endpoint that is never called.
 
 ## Adding a new processor later (the "versatile" part)
 

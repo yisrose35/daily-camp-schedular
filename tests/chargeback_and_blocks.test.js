@@ -23,7 +23,46 @@ const B = require('../campistry_billing_core.js');
 
 const ROOT = path.join(__dirname, '..');
 const read = p => fs.readFileSync(path.join(ROOT, p), 'utf8');
-const SQL = read('migrations/175_chargebacks_and_collection_blocks.sql');
+
+// A later migration can CREATE OR REPLACE any of these functions — 177 replaces
+// record_chargeback so a chargeback with no amount can still be posted. Reading
+// 175's file alone would keep asserting against a definition the database no
+// longer runs, and would go on passing while the live behaviour drifted away
+// from it. So: the newest migration that defines each function wins, exactly as
+// in Postgres.
+const MIGRATIONS = fs.readdirSync(path.join(ROOT, 'migrations'))
+    .filter(f => /^\d+_.*\.sql$/.test(f))
+    .sort((a, b) => parseInt(a, 10) - parseInt(b, 10));
+
+/** The live source of one function: its last definition across all migrations. */
+function liveFunction(name) {
+    let body = '';
+    for (const f of MIGRATIONS) {
+        const sql = read('migrations/' + f);
+        const at = sql.indexOf('FUNCTION public.' + name + '(');
+        if (at < 0) continue;
+        const end = sql.indexOf('\n$$;', at);
+        if (end > at) body = sql.slice(at, end + 4);
+    }
+    return body;
+}
+
+const RECORD_CB = liveFunction('record_chargeback');
+const RESOLVE_CB = liveFunction('resolve_chargeback');
+const FLAG_PLAN = liveFunction('flag_plan_collection');
+// What the assertions below read. Kept as one string so the existing tests are
+// unchanged in meaning: they check the live definitions, whichever file those
+// now live in.
+const SQL = [RECORD_CB, RESOLVE_CB, FLAG_PLAN].join('\n');
+
+test('the live chargeback functions were actually found', () => {
+    // Every assertion in this file is vacuously true against an empty string.
+    for (const [n, src] of [['record_chargeback', RECORD_CB],
+                            ['resolve_chargeback', RESOLVE_CB],
+                            ['flag_plan_collection', FLAG_PLAN]]) {
+        assert.ok(src.length > 400, `${n} was not found in any migration`);
+    }
+});
 
 // ── 1. a chargeback is a reversal of cash received ────────────────────────
 
@@ -164,4 +203,79 @@ test('a dispute with no campId is refused, not guessed', () => {
     const hook = read('supabase/functions/stripe-webhook/index.ts');
     assert.match(hook, /cannot post it to a ledger; reconcile by hand/,
         'a dispute with no camp is silently dropped or guessed at');
+});
+
+// ── a chargeback that does not say how much ─────────────────────────────────
+//
+// 175 required an amount and refused with 'bad_amount' otherwise. The field
+// picker in Sola/Cardknox's own Webhook Settings screen shows that assumption
+// was wrong: its Transaction Fields carry no xAmount at all. Requiring one
+// meant a dispute we could identify perfectly still went unrecorded — leaving
+// the camp exactly where it started, money gone with nothing to show for it.
+
+test('a chargeback with no amount uses the amount of the payment it disputes', () => {
+    // The amount must be resolved AFTER the payment is matched, because the
+    // matched payment is where it comes from. An early guard would refuse the
+    // call before ever looking.
+    const guard = RECORD_CB.indexOf("'bad_amount'");
+    assert.strictEqual(guard, -1,
+        'record_chargeback still refuses outright when no amount is supplied, so a ' +
+        'Cardknox dispute — whose postback has no amount field — is never recorded');
+
+    assert.match(RECORD_CB, /v_matched\s+numeric/,
+        'nothing captures the matched payment’s own amount');
+    assert.match(RECORD_CB, /CASE WHEN COALESCE\(p_amount, 0\) > 0\s*\n?\s*THEN p_amount ELSE COALESCE\(v_matched, 0\) END/,
+        'a supplied amount no longer wins over the matched payment’s — which would ' +
+        'silently turn every PARTIAL chargeback into a full one');
+
+    // Both match paths must supply it, or the ledger path is a silent hole.
+    const ledgerPath = RECORD_CB.slice(RECORD_CB.indexOf('FOR famRec'), RECORD_CB.indexOf('Not in a ledger'));
+    assert.match(ledgerPath, /\(e->>'amount'\)::numeric INTO v_matched/,
+        'a chargeback matched via the LEDGER never picks up an amount');
+    const financePath = RECORD_CB.slice(RECORD_CB.indexOf('Not in a ledger'), RECORD_CB.indexOf('family_not_found'));
+    assert.match(financePath, /\(e->>'amount'\)::numeric/,
+        'a chargeback matched via finance.payments never picks up an amount');
+});
+
+test('matched but still amountless is refused, not posted as $0', () => {
+    // A $0 refund entry reads as "handled" on every screen while moving nothing.
+    assert.match(RECORD_CB, /'error', 'amount_unknown'/,
+        'an unresolvable amount posts a zero entry instead of failing loudly');
+    const at = RECORD_CB.indexOf("'amount_unknown'");
+    const posted = RECORD_CB.indexOf("'kind', 'refund'");
+    assert.ok(at > 0 && posted > at,
+        'the amount check runs after the refund is already posted');
+});
+
+test('where the figure came from is recorded on the entry', () => {
+    // "The processor said $450" and "the payment it disputed was $450" are
+    // different claims, and a camp querying a chargeback deserves to know which.
+    assert.match(RECORD_CB, /'amountSource'/,
+        'nothing records whether the amount came from the processor or from our own payment');
+    assert.match(RECORD_CB, /THEN 'processor' ELSE 'matched_payment' END/);
+});
+
+test('the dispute webhook no longer drops an amountless dispute', () => {
+    const hook = read('supabase/functions/byop-dispute-webhook/index.ts');
+    assert.ok(!/dispute \$\{d\.disputeId\} has no amount — not recorded/.test(hook),
+        'the webhook still refuses a dispute that carries no amount');
+    assert.match(hook, /p_amount: d\.amount > 0 \? d\.amount : null/,
+        'the webhook does not pass null to let the payment supply the amount');
+});
+
+test('the Cardknox mapper reads the names the POSTBACK uses, not the API response', () => {
+    // The API response calls the transaction reference xRefNum; the postback
+    // spells the same value xResponseRefnum, with xGatewayRefNum alongside.
+    // Reading only xRefNum — as this did at first — finds nothing at all, and
+    // the endpoint logs "could not find a transaction reference" forever.
+    const hook = read('supabase/functions/byop-dispute-webhook/index.ts');
+    const ck = hook.slice(hook.indexOf('processor === "cardknox"'),
+                          hook.indexOf('processor === "banquest"'));
+    for (const f of ['xResponseRefnum', 'xGatewayRefNum']) {
+        assert.ok(ck.includes('b.' + f),
+            `the Cardknox mapper does not read ${f}, which is what the postback actually sends`);
+    }
+    assert.ok(ck.includes('b.xRefNum'),
+        'the API-response spelling was dropped — harmless to keep and needed if a ' +
+        'dispute ever arrives shaped like an API response');
 });
