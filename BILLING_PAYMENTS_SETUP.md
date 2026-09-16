@@ -287,6 +287,48 @@ the family first exists, and **never overwrites a card the office already has
 on file**, which was chosen deliberately and may be the one autopay is running
 on.
 
+### Migration 188 — the card is checked before the form is sent
+
+Apply **`migrations/188_registration_card_capture.sql`**, deploy the new
+**`card-capture-start`** function, and redeploy **`stripe-webhook`**,
+**`cardknox-webhook`** and **`registration-deposit-checkout`**.
+
+This changes the order of the whole thing. Before: submit, then meet the
+processor, then find out the card was declined with the application already
+gone. Now:
+
+1. The parent picks Credit Card or ACH.
+2. A button appears under the choice: **Enter card**.
+3. It opens the camp's own processor — framed in for Banquest, a popup for
+   Stripe and Cardknox/Sola.
+4. The processor accepts or refuses the card. **Nothing is charged there** —
+   every rail runs a zero-amount check (`verify` + `save_card`, `cc:save`, a
+   Checkout Session in `setup` mode).
+5. A tick appears next to the method, or a cross with the reason.
+6. **Submit stays disabled until the tick**, and says what is missing:
+   *"Enter your card to submit"*.
+7. On submit, the deposit is charged against that card, for the amount the
+   camp stamped on the now-saved application.
+
+Both forms do this — registration and post-acceptance — through one shared
+module, `campistry_card_capture.js`, so the rule cannot drift between them.
+
+**How the answer gets back.** The popup is on the processor's origin and
+cannot talk to the form, and only some processors redirect back at all (Sola
+answers by webhook and returns nothing to the browser). So there is one
+mechanism for all three: the server mints a reference, every rail writes its
+verdict onto that row, and the form polls it. A closed popup, a refreshed tab
+and a parent who wandered off all behave the same way.
+
+**The form is never told anything it could misuse.** `get_card_capture_status`
+is the only anon-callable piece and it returns a status, a brand and the last
+four digits. The vault references stay server-side.
+
+**It never blocks on a step it cannot run.** No processor connected, the module
+failed to load, no deposit due with the application, or a method that never
+reaches a processor — in all of those the application submits as it always did
+and the camp collects however it already does.
+
 ### Migration 167 — Cardknox / Sola
 
 Apply **`migrations/187_cardknox_registration_deposit.sql`** and redeploy

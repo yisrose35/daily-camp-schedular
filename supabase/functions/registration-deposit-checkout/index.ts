@@ -114,7 +114,7 @@ serve(async (req) => {
   if (req.method === "OPTIONS") return new Response("ok", { headers: corsHeaders });
 
   try {
-    const { campId, enrollmentId, returnUrl, saveCard, cardToken, card, billing } = await req.json();
+    const { campId, enrollmentId, returnUrl, saveCard, captureReference } = await req.json();
     if (!campId || !enrollmentId || !returnUrl) {
       return json({ success: false, error: "campId, enrollmentId and returnUrl are required" }, 400);
     }
@@ -157,73 +157,132 @@ serve(async (req) => {
       .maybeSingle();
     const processorKey: string | null = camp?.payment_processor_key || null;
 
-    // ── Banquest, card typed on the form itself ─────────────────────────────
-    // The parent entered the card into the panel under the payment methods
-    // (campistry_card_setup.html framed in mode=token) and the nonce came here
-    // with the submission. No redirect, no hosted page -- charge it now and
-    // the parent never leaves the form.
+    // ── the card the processor already accepted ─────────────────────────────
+    // The parent settled the card BEFORE this form was submitted
+    // (card-capture-start, migration 188): the processor said yes, the form
+    // showed a tick, and only then would it let them submit. All that is left
+    // is to charge it.
     //
-    // The nonce is ALL the caller gets to decide. `owed` above is still what
-    // the camp stamped on this application, and that is what we charge; a
-    // caller sending an amount would be ignored, because it is never read.
-    if (processorKey === "banquest" && cardToken) {
-      const { data: credRes } = await service.rpc("_admin_get_processor_credential", { p_camp_id: campId });
-      const creds = (credRes?.credential || credRes) as Record<string, string> | null;
-      if (!creds?.sourceKey || !creds?.pin) {
+    // The caller sends a capture reference and nothing else that matters. The
+    // amount is `owed` above -- what the camp stamped on this application --
+    // and the card is whatever _claim_card_capture hands back. A browser
+    // cannot name either.
+    if (captureReference) {
+      const { data: claim, error: claimErr } = await service.rpc("_claim_card_capture", {
+        p_camp_id: campId,
+        p_reference: String(captureReference),
+        p_enroll_id: String(enrollmentId),
+      });
+      if (claimErr || !claim?.success) {
+        const why = claimErr?.message || claim?.error || "unknown";
+        console.error(`[registration-deposit] capture ${captureReference} unusable for ${enrollmentId}: ${why}`);
         return json({
           success: false,
-          error: "This camp has not finished setting up online payments.",
-          reason: "banquest_not_configured",
+          error: claim?.error === "already_claimed"
+            ? "That card has already been used for another application — please enter it again."
+            : "We could not find the card you entered — please enter it again.",
         }, 200);
       }
 
-      // Banquest REQUIRES the expiry alongside a nonce source. A cached card
-      // page that predates us sending `card` would omit it and earn an opaque
-      // validation error, so say something a parent can act on.
-      const cardParts = bqCardParts(card);
-      if (cardParts.expiry_month === undefined || cardParts.expiry_year === undefined) {
-        return json({ success: false, error: "The card's expiry didn't come through — please re-enter the card." }, 200);
-      }
-
       const amountCents = Math.round(owed * 100);
-      const chargeResp = await fetch(`${bqBase(creds)}/transactions/charge`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json", "Authorization": bqAuth(creds) },
-        body: JSON.stringify({
-          amount: Number(owed.toFixed(2)),
-          source: "nonce-" + String(cardToken),
-          transaction_details: { description: label.slice(0, 255) },
-          // Only because the parent ticked the box. A card is never vaulted
-          // quietly, and the charge stands either way if this part fails.
-          ...(saveCard ? { save_card: true } : {}),
-          ...cardParts,
-          ...bqBillingParts(billing),
-        }),
-      });
-      let cd: Record<string, any> = {};
-      try { cd = await chargeResp.json(); } catch { /* non-JSON error body */ }
+      let txnId = "", chargedCents = amountCents, declineMsg = "";
+      const last4 = claim.last4 || null, brand = claim.brand || null;
 
-      const approved = String(cd?.status_code || "").toUpperCase() === "A"
-                    || String(cd?.status || "").toLowerCase() === "approved";
-      const txnId = cd?.reference_number != null ? String(cd.reference_number) : "";
-      if (chargeResp.status < 200 || chargeResp.status >= 300 || !approved || !txnId) {
-        console.error(`[registration-deposit] banquest charge failed camp ${campId}:`, chargeResp.status, JSON.stringify(cd));
-        const detail = bqErrDetail(cd?.error_details) || bqErrDetail(cd?.error_messages);
-        const base = cd?.error_message || cd?.error || cd?.message || cd?.status || `Declined (HTTP ${chargeResp.status})`;
-        return json({ success: false, error: String(detail ? `${base}: ${detail}` : base) }, 200);
+      if (claim.processor === "banquest") {
+        const { data: credRes } = await service.rpc("_admin_get_processor_credential", { p_camp_id: campId });
+        const creds = (credRes?.credentials || credRes?.credential || credRes) as Record<string, string> | null;
+        if (!creds?.sourceKey || !creds?.pin) {
+          return json({ success: false, error: "This camp has not finished setting up online payments." }, 200);
+        }
+        // A saved card is charged as source "tkn-<card_ref>" -- the same shape
+        // charge-due-installments already uses for autopay.
+        const ref = String(claim.method || claim.customer || "");
+        const resp = await fetch(`${bqBase(creds)}/transactions/charge`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json", "Authorization": bqAuth(creds) },
+          body: JSON.stringify({
+            amount: Number(owed.toFixed(2)),
+            source: /^(tkn-|pm-|ref-|nonce-)/.test(ref) ? ref : "tkn-" + ref,
+            transaction_details: { description: label.slice(0, 255) },
+          }),
+        });
+        let d: Record<string, any> = {};
+        try { d = await resp.json(); } catch { /* non-JSON error body */ }
+        const approved = String(d?.status_code || "").toUpperCase() === "A"
+                      || String(d?.status || "").toLowerCase() === "approved";
+        txnId = d?.reference_number != null ? String(d.reference_number) : "";
+        if (resp.status < 200 || resp.status >= 300 || !approved || !txnId) {
+          console.error(`[registration-deposit] banquest saved-card charge failed camp ${campId}:`, resp.status, JSON.stringify(d));
+          const detail = bqErrDetail(d?.error_details) || bqErrDetail(d?.error_messages);
+          const base = d?.error_message || d?.error || d?.message || `Declined (HTTP ${resp.status})`;
+          declineMsg = String(detail ? `${base}: ${detail}` : base);
+        } else if (Number(d?.auth_amount) > 0) {
+          chargedCents = Math.round(Number(d.auth_amount) * 100);
+        }
+      } else if (claim.processor === "cardknox") {
+        const { data: credResult } = await service.rpc("_admin_get_processor_credential", { p_camp_id: campId });
+        const apiKey = credResult?.success ? credResult.credentials?.apiKey : null;
+        if (!apiKey) return json({ success: false, error: "This camp has not finished setting up online payments." }, 200);
+        // The unique xInvoice is load-bearing: Sola blocks a transaction whose
+        // Key+Card+Amount+Invoice match another within 10 minutes.
+        const resp = await fetch("https://x1.cardknox.com/gateway", {
+          method: "POST",
+          headers: { "Content-Type": "application/x-www-form-urlencoded" },
+          body: new URLSearchParams({
+            xKey: apiKey, xVersion: "4.5.9", xSoftwareName: "Campistry", xSoftwareVersion: "1.0",
+            xCommand: "cc:sale",
+            xAmount: (amountCents / 100).toFixed(2),
+            xToken: String(claim.method || claim.customer || ""),
+            xInvoice: "RD-" + Date.now().toString(36) + Math.random().toString(36).slice(2, 6),
+          }).toString(),
+        });
+        const parsed: Record<string, string> = {};
+        new URLSearchParams(await resp.text()).forEach((v, k) => { parsed[k] = v; });
+        if (parsed.xResult !== "A") declineMsg = parsed.xError || "Declined";
+        else txnId = parsed.xRefNum || "";
+      } else if (claim.processor === "stripe") {
+        if (!STRIPE_SECRET_KEY) return json({ success: false, error: "Online payment is not configured." }, 200);
+        const params: Record<string, string> = {
+          amount: String(amountCents), currency: "usd",
+          customer: String(claim.customer || ""),
+          off_session: "true", confirm: "true",
+          description: label,
+          "metadata[source]": "registration_deposit",
+          "metadata[enrollmentId]": String(enrollmentId),
+          "metadata[campId]": String(campId),
+        };
+        if (claim.method) params["payment_method"] = String(claim.method);
+        // Money lands in the camp's own account when they are connected.
+        if (camp?.stripe_charges_enabled && camp?.stripe_account_id) {
+          params["transfer_data[destination]"] = String(camp.stripe_account_id);
+        }
+        const resp = await fetch("https://api.stripe.com/v1/payment_intents", {
+          method: "POST",
+          headers: { "Authorization": `Bearer ${STRIPE_SECRET_KEY}`, "Content-Type": "application/x-www-form-urlencoded" },
+          body: new URLSearchParams(params).toString(),
+        });
+        const pi = await resp.json();
+        if (!resp.ok || pi?.status !== "succeeded") {
+          declineMsg = pi?.error?.message || pi?.last_payment_error?.message || "Declined";
+        } else {
+          txnId = String(pi.id);
+          if (Number(pi.amount_received) > 0) chargedCents = Number(pi.amount_received);
+        }
+      } else {
+        declineMsg = "This camp takes payment another way.";
       }
 
-      // What the gateway says it took, never what we asked for.
-      const chargedCents = Number(cd?.auth_amount) > 0 ? Math.round(Number(cd.auth_amount) * 100) : amountCents;
+      if (declineMsg || !txnId) {
+        return json({ success: false, error: declineMsg || "The card was declined." }, 200);
+      }
+
       const charged = chargedCents / 100;
-      const last4 = cd?.last_4 ? String(cd.last_4) : (card?.last4 ? String(card.last4) : "");
-      const brand = cd?.card_type ? String(cd.card_type) : (card?.cardType ? String(card.cardType) : "");
 
       // Audit row: useful, but never worth failing a captured charge over.
       try {
         await service.rpc("record_processor_transaction", {
           p_camp_id: campId,
-          p_processor_key: "banquest",
+          p_processor_key: String(claim.processor),
           p_external_transaction_id: txnId,
           p_kind: "registration_deposit",
           p_amount_cents: chargedCents,
@@ -235,7 +294,7 @@ serve(async (req) => {
       }
 
       // THIS one matters: money left the parent's card, so the application has
-      // to show it as paid. Idempotent on the gateway's own reference.
+      // to show it as paid. Idempotent on the processor's own reference.
       const { data: markRes, error: markErr } = await service.rpc("_record_registration_deposit", {
         p_camp_id: campId,
         p_enroll_id: String(enrollmentId),
@@ -251,27 +310,24 @@ serve(async (req) => {
         }, 200);
       }
 
-      // Keeping the card is a bonus, not part of the payment: a vault failure
-      // must not turn a successful charge into an error on the parent's screen.
-      if (saveCard && cd?.card_ref) {
-        try {
-          await service.rpc("_record_registration_card", {
-            p_camp_id: campId,
-            p_enroll_id: String(enrollmentId),
-            p_processor: "banquest",
-            p_customer: String(cd.card_ref),
-            p_method: String(cd.card_ref),
-            p_last4: last4 || null,
-          });
-        } catch (e) {
-          console.error("[registration-deposit] saving the card failed (non-fatal):", (e as Error).message);
-        }
-      } else if (saveCard) {
-        console.log(`[registration-deposit] camp ${campId}: charge ${txnId} approved but no card_ref came back — nothing vaulted`);
+      // The card is already vaulted (that is what the capture was), so carry
+      // it onto the application. A failure here costs a convenience, not a
+      // payment, so it must not fail the charge.
+      try {
+        await service.rpc("_record_registration_card", {
+          p_camp_id: campId,
+          p_enroll_id: String(enrollmentId),
+          p_processor: String(claim.processor),
+          p_customer: String(claim.customer || ""),
+          p_method: String(claim.method || ""),
+          p_last4: last4,
+        });
+      } catch (e) {
+        console.error("[registration-deposit] saving the card failed (non-fatal):", (e as Error).message);
       }
 
-      console.log(`[registration-deposit] banquest inline $${charged} enroll ${enrollmentId} (camp ${campId}) txn ${txnId}`);
-      return json({ success: true, paid: true, amount: charged, last4, brand, processor: "banquest" });
+      console.log(`[registration-deposit] ${claim.processor} captured-card $${charged} enroll ${enrollmentId} (camp ${campId}) txn ${txnId}`);
+      return json({ success: true, paid: true, amount: charged, last4, brand, processor: claim.processor });
     }
 
     // ── Banquest: a hosted pay page ─────────────────────────────────────────

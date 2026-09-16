@@ -213,7 +213,8 @@ body{font-family:var(--font);background:var(--s50);color:var(--s800);-webkit-fon
 <!-- The card itself, typed in before Submit rather than after it. The fields
      belong to the processor (campistry_card_setup.html in mode=token, framed),
      so no card number ever reaches this page or this form's submission.
-     Filled in by _regRenderCardInline(). -->
+     Drawn by CampistryCardCapture (campistry_card_capture.js), which is the
+     same module the post-acceptance form uses. -->
 <div id="cardInline" style="display:none"></div>
 </div>
 
@@ -285,6 +286,7 @@ body{font-family:var(--font);background:var(--s50);color:var(--s800);-webkit-fon
 <script src="integration_hooks.js?v=20260915-01" onerror="console.log('[Register] Integration hooks not loaded — local only')"></script>
 <script src="campistry_payments.js?v=20260904-01" onerror="console.log('[Register] Payment policy not loaded — showing the built-in options')"></script>
 <script src="campistry_deposit_policy.js?v=20260916-01" onerror="console.log('[Register] Deposit policy not loaded — the form simply will not mention a deposit')"></script>
+<script src="campistry_card_capture.js?v=20260916-01" onerror="console.log('[Register] Card capture not loaded — the form will fall back to paying after submit')"></script>
 <script src="campistry_sibling_discount.js?v=20260916-01" onerror="console.log('[Register] Sibling discount not loaded — the form will not apply one')"></script>
 <script>
 // Keep the payment options on this form in step with the camp's policy. The
@@ -1035,10 +1037,10 @@ function updatePrice(){
 
 // ─── WHAT PICKING A METHOD MEANS ──────────────────────────────
 //
-// A parent who ticks "Credit Card" reasonably expects to type a card. They
-// cannot type one yet -- there is nothing to charge until the application
-// exists -- so the next best thing is to say exactly what will happen, where
-// they picked it, rather than letting them find out after submitting.
+// A parent who ticks "Credit Card" expects to deal with a card THEN, not to
+// submit an application and find out afterwards whether it was any good. So
+// the note says what the button under it will do, and the card is settled
+// before the form can be sent.
 
 /** Methods that end in a trip to the processor. */
 function _regIsOnlineMethod(m){ return m==='credit_card'||m==='ach'||m==='debit'; }
@@ -1053,9 +1055,6 @@ function _regPayMethodNote(){
     // the figure genuinely is not known yet and inventing one would be worse
     // than naming the thing.
     var sum=(amt!=null)?money(amt):'the deposit';
-    var payBtn='Submit &amp; pay '+((amt!=null)?money(amt):'the deposit');
-
-    _regSyncSubmitLabel(payNow&&_regIsOnlineMethod(selPM),amt);
 
     if(!_regIsOnlineMethod(selPM)){
         box.style.display='none';_regSetHtml(box,'');
@@ -1066,7 +1065,7 @@ function _regPayMethodNote(){
     var details=(selPM==='ach'?'bank details':'card');
     var noun=(selPM==='ach'?'bank account':'card');
     var kind=(selPM==='ach'?'bank transfers':'card payments');
-    var body, saveCard=false;
+    var body;
 
     if(!payNow){
         // A card picked for a later bill. Saying nothing here reads as
@@ -1077,17 +1076,13 @@ function _regPayMethodNote(){
               :_payAbility.processor==='cardknox'?'the camp\u2019s secure checkout page'
               :_payAbility.processor==='stripe'?'Stripe\u2019s secure checkout'
               :'a secure payment page';
-        body=_regInlineCardOk()
-            ? (_cardOnForm
-                ? ('Your card is ready. Press <strong>'+payBtn+'</strong> at the bottom '
-                   +'to send the application and pay the deposit together.')
-                : ('Enter your '+details+' below. Nothing is charged until you press '
-                   +'<strong>'+payBtn+'</strong> at the bottom.'))
-            : ('Finish this form and press <strong>'+payBtn+'</strong> at the bottom. '
-               +'That opens '+esc(who)+' in this window, where you enter your '+details+'. ')
-            ;
+        body=_regCardAccepted()
+            ? ('Your '+noun+' is accepted. '+sum.charAt(0).toUpperCase()+sum.slice(1)
+               +' will be taken when you submit this form.')
+            : ('Enter your '+details+' below — it opens '+esc(who)+'. '
+               +'Nothing is charged there; we only check the '+noun+' is good. '
+               +'You can submit once it is accepted, and '+sum+' is taken then.');
         body+=' Your details never touch this form.';
-        saveCard=true;
     } else if(_payAbility){
         // The camp genuinely cannot take a card here. Better said now than
         // discovered on the confirmation screen.
@@ -1103,32 +1098,12 @@ function _regPayMethodNote(){
     _regSetHtml(box,
         '<div style="background:var(--s50);border:1px solid var(--s200);border-radius:var(--r);padding:11px 13px;margin-top:8px">'
         +'<div style="font-size:.82rem;color:var(--s600);line-height:1.6">'+body+'</div>'
-        +(saveCard?'<label style="display:flex;gap:9px;align-items:flex-start;margin-top:9px;font-size:.82rem;color:var(--s700);cursor:pointer">'
-        +'<input type="checkbox" id="paySaveCard"'+(_saveCard?' checked':'')+' onchange="_regSaveCardToggle(this)" style="accent-color:var(--me);margin-top:2px">'
-        +'<span>Save it for future payments, so you do not have to enter it again</span></label>':'')
         +'</div>');
 
-    // The card fields live directly under this note, so they follow the same
+    // The card step lives directly under this note, so it follows the same
     // decision rather than being worked out twice.
-    try{ _regRenderCardInline(); }catch(e){ console.warn('[Register] card panel:',e&&e.message); }
+    try{ _regRenderCardInline(); }catch(e){ console.warn('[Register] card step:',e&&e.message); }
 }
-
-/**
- * The button at the bottom is the only thing a parent can actually press to
- * reach the processor -- there is nothing to charge until the application
- * exists -- so it says so instead of leaving them hunting for a link.
- */
-function _regSyncSubmitLabel(paying,amount){
-    var b=document.getElementById('submitAppBtn');
-    if(!b||b.disabled)return;
-    var money=function(n){ return window.CampistryDepositPolicy?window.CampistryDepositPolicy.money(n):fm(n); };
-    var want=(paying&&_payAbility&&_payAbility.canPayOnline)
-        ? ('Submit & pay '+(Number(amount)>0?money(amount):'the deposit'))
-        : 'Submit Application';
-    if(b.textContent!==want)b.textContent=want;
-}
-
-window._regSaveCardToggle=function(cb){ _saveCard=!!(cb&&cb.checked); };
 
 // ─── THE CARD, TYPED BEFORE SUBMIT ────────────────────────────
 //
@@ -1152,106 +1127,108 @@ window._regSaveCardToggle=function(cb){ _saveCard=!!(cb&&cb.checked); };
 // on their own hosted pages -- the redirect at submit is their card form, and
 // faking an inline one for them would mean handling card numbers here.
 
-var _cardOnForm=null;   // {token, card:{last4,cardType,...}, billing}
 var _cardDiagSaid=false;
+var _cap=null;          // the live CampistryCardCapture instance, if any
 
+/** Is there a rail behind the button at all? */
 function _regInlineCardOk(){
-    return !!(_payAbility&&_payAbility.canPayOnline&&_payAbility.processor==='banquest');
+    return !!(_payAbility&&_payAbility.canPayOnline);
+}
+
+/** Has the processor actually accepted a card? */
+function _regCardAccepted(){
+    return !!(_cap&&_cap.accepted());
 }
 
 /**
- * Does the camp want money WITH this application?
+ * Does this form need an accepted card before it may be submitted?
  *
- * Deliberately not "do we know the amount yet". _regDepositDue() cannot work
- * one out until a session is picked, and everything used to hang off it -- so
- * a parent who ticked Credit Card before choosing a session got no note, no
- * card fields and a plain Submit button, which is exactly the "still nothing"
- * this was reported as. The camp's rule is known from the moment the form
- * loads; only the figure waits.
+ * Only when the parent chose to pay by card/bank AND the camp wants the
+ * deposit with the application AND there is a rail that can take it. A camp
+ * with no processor still gets the application; holding it hostage over a
+ * payment nobody can make would be worse than no gate at all.
  */
-function _regDepositPending(){
-    var P=window.CampistryDepositPolicy;
-    if(!P||!_depositPolicy)return false;
-    var pol=P.normalize(_depositPolicy);
-    return !!(pol.enabled&&pol.timing!=='later');
-}
-
-/** The amount when it is known, otherwise null. */
-function _regDepositAmount(){
-    var due=_regDepositDue();
-    return (due&&due.total)?due.total:null;
+function _regCardRequired(){
+    return _regIsOnlineMethod(selPM)&&_regDepositPending()&&_regInlineCardOk()&&!!(_resolvedCampId||campIdParam);
 }
 
 function _regRenderCardInline(){
     var box=document.getElementById('cardInline');
     if(!box)return;
     var campId=_resolvedCampId||campIdParam;
-    if(!_regIsOnlineMethod(selPM)||!_regDepositPending()||!_regInlineCardOk()||!campId){
-        box.style.display='none';_regSetHtml(box,'');
-        // Four different reasons for an empty Payment section look identical
+
+    if(!_regCardRequired()){
+        box.style.display='none';
+        if(_cap){ _cap.destroy(); _cap=null; }
+        box.innerHTML='';
+        // Five different reasons for an empty Payment section look identical
         // on screen. Say which one it is where whoever is testing will see it.
         if(!_cardDiagSaid&&_regIsOnlineMethod(selPM)){
             _cardDiagSaid=true;
-            console.log('[Register] no card fields \u2014 '+(
+            console.log('[Register] no card step — '+(
                 !_regDepositPending() ? 'no deposit is due with this application (rule off, or set to "pay later")'
                 : !campId ? 'this page does not know which camp it is for'
-                : !_payAbility ? 'pay ability unknown \u2014 migration 185 may not be applied'
-                : !_payAbility.canPayOnline ? 'this camp cannot take card payments online'
-                : ('this camp is on \''+(_payAbility.processor||'?')+'\', which collects cards on its own hosted page')));
+                : !_payAbility ? 'pay ability unknown — migration 185 may not be applied'
+                : 'this camp cannot take card payments online'));
         }
+        _regSyncSubmitGate();
         return;
     }
+
     box.style.display='';
-
-    if(_cardOnForm){
-        var c=_cardOnForm.card||{};
-        _regSetHtml(box,
-            '<div style="display:flex;justify-content:space-between;align-items:center;gap:12px;flex-wrap:wrap;'
-            +'background:#ECFDF5;border:1px solid #A7F3D0;border-radius:var(--r);padding:12px 14px;margin-top:8px">'
-            +'<div style="font-size:.86rem;color:#065F46;font-weight:700">'
-            +esc(c.cardType||'Card')+' ending '+esc(c.last4||'••••')+' — ready</div>'
-            +'<button type="button" onclick="_regForgetCard()" style="background:none;border:none;padding:0;'
-            +'font:inherit;font-size:.8rem;color:var(--me);text-decoration:underline;cursor:pointer">'
-            +'Use a different card</button></div>');
+    if(!global_CampistryCardCapture()){
+        // The module did not load. Say so rather than showing a button that
+        // cannot do anything, and do NOT gate submit on a step we cannot run.
+        _regSetHtml(box,'<div style="font-size:.82rem;color:var(--s500);margin-top:8px">'
+            +'Card entry could not load. Submit the application and the camp will be in touch about the deposit.</div>');
+        _regSyncSubmitGate();
         return;
     }
 
-    // _regSetHtml compares before it assigns, so the frame is NOT rebuilt on
-    // every re-render -- reloading it would wipe a half-typed card.
-    _regSetHtml(box,
-        '<div style="border:1px solid var(--s200);border-radius:var(--r);padding:13px 14px;margin-top:8px">'
-        +'<iframe id="cardFrame" title="Card details" style="width:100%;height:340px;border:0;display:block"'
-        +' src="campistry_card_setup.html?campId='+encodeURIComponent(campId)+'&mode=token&embed=1"></iframe>'
-        +'</div>');
+    if(!_cap){
+        _cap=global_CampistryCardCapture().create({
+            el:box,
+            campId:campId,
+            method:selPM,
+            returnUrl:window.location.origin+window.location.pathname.replace(/[^/]*$/,'')+'campistry_pay_thanks.html',
+            onChange:function(){ _regSyncSubmitGate(); try{_regPayMethodNote();}catch(e){} }
+        });
+        _cap.render();
+    } else {
+        _cap.setMethod(selPM);
+    }
+    _regSyncSubmitGate();
 }
 
-window._regForgetCard=function(){
-    _cardOnForm=null;
-    try{ _regRenderCardInline(); }catch(e){}
-    try{ _regPayMethodNote(); }catch(e){}
-};
+function global_CampistryCardCapture(){
+    return window.CampistryCardCapture||null;
+}
 
-// Only ever from the frame this page created. A message from anywhere else
-// claiming to carry a payment token is ignored outright.
-window.addEventListener('message',function(ev){
-    var d=ev&&ev.data;
-    if(!d||typeof d!=='object')return;
-    if(d.type!=='campistry-card-token'&&d.type!=='campistry-card-height')return;
-    var frame=document.getElementById('cardFrame');
-    if(!frame||ev.source!==frame.contentWindow)return;
-
-    if(d.type==='campistry-card-height'){
-        var h=Number(d.height)||0;
-        if(h>0)frame.style.height=Math.min(h,900)+'px';
+/**
+ * The button says what is missing, and refuses while it is.
+ *
+ * A disabled button with no explanation is the worst of both worlds, so the
+ * label carries the reason: "Enter your card to submit" is a instruction, not
+ * a dead end.
+ */
+function _regSyncSubmitGate(){
+    var b=document.getElementById('submitAppBtn');
+    // A submit already in flight owns the button; this must not fight it.
+    if(!b||_registerSubmitInFlight)return;
+    var need=_regCardRequired()&&!!global_CampistryCardCapture();
+    var have=_regCardAccepted();
+    if(need&&!have){
+        b.disabled=true;
+        b.style.opacity='.55';
+        b.style.cursor='not-allowed';
+        b.textContent=(selPM==='ach'?'Enter your bank details to submit':'Enter your card to submit');
         return;
     }
-    if(!d.token)return;
-    _cardOnForm={token:String(d.token),card:d.card||null,billing:d.billing||null};
-    try{ _regRenderCardInline(); }catch(e){}
-    try{ _regPayMethodNote(); }catch(e){}
-});
-
-var _saveCard=false;
+    b.disabled=false;
+    b.style.opacity='';
+    b.style.cursor='';
+    b.textContent='Submit Application';
+}
 
 // ─── PAYING THE DEPOSIT ───────────────────────────────────────
 //
@@ -1316,8 +1293,9 @@ async function _regOfferDepositPayment(campId,enrollId,amount,label){
 
 window._regPayDeposit=async function(campId,enrollId){
     var btn=document.getElementById('payNowBtn'), msg=document.getElementById('payNowMsg');
-    var inline=!!(_cardOnForm&&_cardOnForm.token);
-    if(btn){btn.disabled=true;btn.textContent=inline?'Charging your card\u2026':'Opening secure payment\u2026';}
+    // The card the processor already accepted, before this form was sent.
+    var capture=(_cap&&_cap.accepted())?_cap.reference():null;
+    if(btn){btn.disabled=true;btn.textContent=capture?'Charging your card…':'Opening secure payment…';}
     var client=(window.CampistryDB&&window.CampistryDB.getClient)?window.CampistryDB.getClient():window.supabase;
     function fail(t){
         if(btn){btn.disabled=false;btn.textContent='Try again';}
@@ -1326,41 +1304,38 @@ window._regPayDeposit=async function(campId,enrollId){
     if(!client||!client.functions){return fail('Could not reach the payment service. Please try again.');}
     try{
         var r=await client.functions.invoke('registration-deposit-checkout',{
-            body:{campId:campId,enrollmentId:enrollId,saveCard:!!_saveCard,
+            body:{campId:campId,enrollmentId:enrollId,
                   returnUrl:window.location.origin+window.location.pathname,
-                  // Present only when the parent typed a card into the panel
-                  // under the payment methods. The amount is still never sent
-                  // -- the function charges what the camp stamped.
-                  cardToken:inline?_cardOnForm.token:undefined,
-                  card:inline?_cardOnForm.card:undefined,
-                  billing:inline?_cardOnForm.billing:undefined}
+                  // A capture reference, not a card and not an amount. The
+                  // function looks up the card the processor accepted and
+                  // charges what the camp stamped on this application.
+                  captureReference:capture||undefined}
         });
         var d=r&&r.data;
         if(r&&r.error)return fail('Could not start the payment. Please try again.');
         if(d&&d.alreadyPaid){
             if(btn)btn.style.display='none';
-            if(msg){msg.textContent='This deposit is already paid \u2014 thank you.';msg.style.color='var(--ok)';}
+            if(msg){msg.textContent='This deposit is already paid — thank you.';msg.style.color='var(--ok)';}
             return;
         }
-        // Charged right here -- no processor page to send them to.
+        // Charged against the captured card -- no processor page to visit.
         if(d&&d.success&&d.paid){
-            _cardOnForm=null;
             if(btn)btn.style.display='none';
-            if(msg){msg.textContent='Paid '+fm(d.amount||0)+(d.last4?' \u00b7 card ending '+d.last4:'')+' \u2014 thank you.';msg.style.color='var(--ok)';}
+            if(msg){msg.textContent='Paid '+fm(d.amount||0)+(d.last4?' · card ending '+d.last4:'')+' — thank you.';msg.style.color='var(--ok)';}
             return;
         }
         if(!d||!d.success||!d.url){
-            // A nonce is single-use: whatever went wrong, the one they typed
-            // is spent, so make them enter the card again rather than letting
-            // them press a button that can only fail the same way.
-            if(inline){ _cardOnForm=null; try{_regRenderCardInline();}catch(e){} }
+            // The captured card is spent or gone. Clear the tick so a parent
+            // is not staring at a green badge next to a failed payment.
+            if(capture&&_cap){ _cap.reset(); }
             return fail((d&&d.error)||'Could not start the payment. Please try again.');
         }
-        // Leaves this page. The application is already saved, so a parent who
-        // abandons the processor page loses nothing.
+        // A camp with no card capture available still gets the old behaviour:
+        // the application is already saved, so abandoning the processor page
+        // loses nothing.
         window.location.href=d.url;
     }catch(e){
-        if(inline){ _cardOnForm=null; try{_regRenderCardInline();}catch(_){} }
+        if(capture&&_cap){ _cap.reset(); }
         fail('Could not start the payment. Please try again.');
     }
 };
@@ -1458,6 +1433,28 @@ function _regDepositDue(sessObj){
         campers.push({session:so,tuition:Number(so.tuition)||0});
     });
     return P.amountFor(pol,campers);
+}
+
+/**
+ * Does the camp want money WITH this application?
+ *
+ * Deliberately not "do we know the amount yet". _regDepositDue() cannot work
+ * one out until a session is picked, and everything used to hang off it -- so
+ * a parent who ticked Credit Card before choosing a session got no note, no
+ * card step and a plain Submit button. The camp's rule is known from the
+ * moment the form loads; only the figure waits.
+ */
+function _regDepositPending(){
+    var P=window.CampistryDepositPolicy;
+    if(!P||!_depositPolicy)return false;
+    var pol=P.normalize(_depositPolicy);
+    return !!(pol.enabled&&pol.timing!=='later');
+}
+
+/** The amount when it is known, otherwise null. */
+function _regDepositAmount(){
+    var due=_regDepositDue();
+    return (due&&due.total)?due.total:null;
 }
 
 /** Write only when it changes — the same discipline the builder's card needs. */
@@ -1758,6 +1755,21 @@ window.submitApp=async function(){
     if(_registerSubmitInFlight){return showErr('Already submitting…');}
     var rateMsg=checkRateLimit();
     if(rateMsg){return showErr(rateMsg);}
+
+    // The card has to be settled with the processor before the application
+    // goes. Not because the money is due yet -- it is taken a moment later,
+    // against this card -- but because finding out about a declined card AFTER
+    // the form is gone is the failure this whole step exists to remove.
+    //
+    // The button is already disabled while this is true; this is the belt to
+    // that braces, for a keyboard submit or a stale enabled button.
+    if(_regCardRequired()&&window.CampistryCardCapture&&!_regCardAccepted()){
+        try{ document.getElementById('cardInline').scrollIntoView({behavior:'smooth',block:'center'}); }catch(e){}
+        return showErr(selPM==='ach'
+            ? 'Please enter your bank details above — we need them accepted before your application can be sent.'
+            : 'Please enter your card above — we need it accepted before your application can be sent.');
+    }
+
     _registerSubmitInFlight=true;
     setTimeout(function(){_registerSubmitInFlight=false;},5000);
 
@@ -1976,12 +1988,12 @@ window.submitApp=async function(){
         try{
             _regOfferDepositPayment(_resolvedCampId||campIdParam,appIds[0],
                                     _regDepStamp.depositRequired,_regDepStamp.depositLabel);
-            // Somebody who ticked Credit Card or ACH asked to pay by card. Make
-            // them hunt for a second button and a good share of them will not,
-            // so charge the card they already typed -- or, on a processor that
-            // collects cards on its own page, go straight there. Either way
-            // the step stays on screen behind it if they come back.
-            if((_cardOnForm&&_cardOnForm.token)||(_regIsOnlineMethod(selPM)&&_payAbility&&_payAbility.canPayOnline)){
+            // The card was already accepted by the processor before this form
+            // could be sent, so this is just the charge. (A camp with no card
+            // capture available keeps the old behaviour and goes to the
+            // processor's page here instead.) The step stays on screen
+            // behind it either way, for anyone who comes back.
+            if(_regCardAccepted()||(_regIsOnlineMethod(selPM)&&_payAbility&&_payAbility.canPayOnline)){
                 setTimeout(function(){
                     try{ _regPayDeposit(_resolvedCampId||campIdParam,appIds[0]); }catch(e){}
                 },900);

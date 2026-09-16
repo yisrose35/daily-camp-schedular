@@ -214,7 +214,13 @@ serve(async (req) => {
         .gte("created_at", cutoff);
       candidateQuery = amountCents > 0
         ? candidateQuery.eq("amount_cents", amountCents)
-        : candidateQuery.eq("amount_cents", 0).in("kind", ["card_save", "canteen_autoreload_setup"]);
+        // registration_card_capture belongs here for the same reason as the
+        // other two: it is a cc:save, so it carries no amount AND Sola never
+        // echoes xInvoice back. Leave it out and a captured card would never
+        // be matched to anything, the capture row would sit pending forever,
+        // and the parent's tick would never arrive.
+        : candidateQuery.eq("amount_cents", 0)
+                        .in("kind", ["card_save", "canteen_autoreload_setup", "registration_card_capture"]);
       const { data: candidates } = await candidateQuery;
       if (candidates && candidates.length === 1) {
         const row = candidates[0];
@@ -326,6 +332,35 @@ serve(async (req) => {
         amount: paid, what: "Registration deposit", method: "Card",
       });
       console.log(`[cardknox-webhook] registration deposit $${paid} marked on ${enrollId}${(rec as any)?.duplicate ? " (already recorded)" : ""}`);
+      return text("ok", 200);
+    }
+
+    // A registration card CHECK (migration 188). Same cc:save shape as
+    // card_save below and moves no money either, but there is no family yet
+    // to hang the token on -- the parent is still filling in the form. The
+    // token goes onto the capture row, the form's poll flips to a tick, and
+    // the deposit is charged against it once the application exists.
+    if (intent.kind === "registration_card_capture") {
+      const vaultedRef = xToken ? await vaultCardknoxToken(service, campId, xToken) : null;
+      const ok = !!vaultedRef;
+      if (!ok) {
+        console.error(`[cardknox-webhook] card capture ${xInvoice}: ${xToken ? "could not vault token" : "approved but carried no xToken"}`);
+      }
+      // The capture row is what the form is watching, so it is told either
+      // way -- a cross is an answer; a spinner that never stops is not.
+      await service.rpc("complete_card_capture", {
+        p_reference: xInvoice,
+        p_status: ok ? "completed" : "failed",
+        p_customer_ref: vaultedRef ? String(vaultedRef) : null,
+        p_method_ref: vaultedRef ? String(vaultedRef) : null,
+        p_last4: fields.get("xMaskedCardNumber")?.slice(-4) || null,
+        p_brand: fields.get("xCardType") || null,
+        p_error: ok ? null : "The card could not be saved.",
+      });
+      await service.rpc("mark_cardknox_checkout_intent_status", {
+        p_reference: xInvoice, p_status: ok ? "completed" : "failed", p_xref_num: xRefNum || null,
+      });
+      console.log(`[cardknox-webhook] card capture ${xInvoice} ${ok ? "accepted" : "refused"} (camp ${campId})`);
       return text("ok", 200);
     }
 

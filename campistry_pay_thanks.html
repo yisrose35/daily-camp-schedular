@@ -27,7 +27,27 @@
         var payType=params.get('type');
         var isCanteen=payType==='canteen';
         var isLinkPhoto=payType==='link-photo';
+        // type=card is the card CHECK a registration/post-acceptance form
+        // sends a parent out to do before it will let them submit (migration
+        // 188). No money moved here -- the processor was only asked whether
+        // the card is good. The form is watching the capture row and will tick
+        // itself; this page exists so the parent is not dumped on a blank
+        // processor page wondering whether it worked.
+        var isCardCheck=payType==='card';
         var ok=status!=='cancelled';
+        if(isCardCheck){
+            document.getElementById('card').innerHTML= ok
+              ? '<div class="icon ok"><svg width="30" height="30" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><polyline points="20 6 9 17 4 12"/></svg></div>'+
+                '<h1>Card accepted</h1><p>Nothing has been charged. Go back to your application \u2014 it will tick automatically, and you can finish and submit it there.</p>'+
+                '<div class="note">You can close this window.</div>'
+              : '<div class="icon no"><svg width="30" height="30" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg></div>'+
+                '<h1>No card was saved</h1><p>Nothing has been charged. Go back to your application and try again \u2014 you can also pick a different way to pay.</p>'+
+                '<div class="note">You can close this window.</div>';
+            // Opened from the form, so closing itself puts the parent straight
+            // back where they were. Browsers only allow this for a window the
+            // opener actually opened, which is exactly this case.
+            if(ok)setTimeout(function(){try{window.close();}catch(e){}},2500);
+        } else
         document.getElementById('card').innerHTML= ok
           ? '<div class="icon ok"><svg width="30" height="30" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><polyline points="20 6 9 17 4 12"/></svg></div>'+
             '<h1>Thank you!</h1><p>'+(isCanteen

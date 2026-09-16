@@ -701,142 +701,150 @@ test('the form offers paying only when something is behind the button', () => {
 });
 
 // ── going to the processor, and keeping the card ────────────────────────────
+// ── the card is settled BEFORE the form is sent ─────────────────────────────
 test('picking card or ACH always says what happens next', () => {
-    // A parent who ticks "Credit Card" expects to type a card. They cannot yet
-    // — there is nothing to charge until the application exists — so the form
-    // says what will happen, where they picked it, rather than letting them
-    // find out after submitting. The first version of this went SILENT
-    // whenever pay-ability was unknown (an unapplied migration, an offline
-    // load), which looked exactly like a broken form: a parent ticked the card
-    // and nothing appeared at all. Every branch now says something.
+    // A parent who ticks "Credit Card" expects to deal with a card THEN. The
+    // first version of this note went SILENT whenever pay-ability was unknown
+    // (an unapplied migration, an offline load), which looked exactly like a
+    // broken form. Every branch now says something.
     const reg = fs.readFileSync(path.join(ROOT, 'campistry_register.html'), 'utf8');
     assert.match(reg, /function _regIsOnlineMethod/);
     assert.match(reg, /id="payMethodNote"/);
-    // Named by rail, not generically — "Stripe's secure checkout" is a thing a
-    // parent recognises and trusts.
     assert.match(reg, /Stripe\\u2019s secure checkout/);
     assert.match(reg, /camp\\u2019s secure payment page/);
     assert.match(reg, /never touch this form/);
 
     const fn = reg.slice(reg.indexOf('function _regPayMethodNote()'),
-                         reg.indexOf('function _regSyncSubmitLabel('));
-    // The ONLY way out without rendering anything is "this is not an online
-    // method" — every other path falls through to the render at the bottom.
+                         reg.indexOf('window._regSaveCardToggle') > 0
+                            ? reg.indexOf('window._regSaveCardToggle')
+                            : reg.indexOf('// ─── THE CARD'));
     const blanks = fn.match(/_regSetHtml\(box,''\)/g) || [];
     assert.strictEqual(blanks.length, 1,
         'the note may only go blank for a method that never reaches a processor');
-    assert.ok(fn.indexOf("if(!_regIsOnlineMethod(selPM)){") < fn.indexOf("_regSetHtml(box,'')"),
-        'the one blank branch must be the non-online one');
-
-    // Unknown ability is not silence — it is the honest sentence.
-    assert.match(fn, /You will be shown how to pay '\+sum\+' as soon as you submit/);
-    // A camp that cannot take cards says so here, not on the confirmation.
+    assert.match(fn, /You will be shown how to pay/);
     assert.match(fn, /does not take '\+kind\+' through this form/);
-    // A deposit due later still explains why a card was asked for.
     assert.match(fn, /Nothing is charged now/);
-    // Save-the-card is only offered where a card is actually entered.
-    assert.ok(fn.indexOf('saveCard=true') > 0 && /\(saveCard\?/.test(fn),
-        'the save-card tick only appears on the branch that reaches a processor');
+    // And it promises a CHECK, not a charge — nothing is taken on that page.
+    assert.match(fn, /Nothing is charged there/);
 });
 
-test('the card is typed on the form, before submit', () => {
-    // "i want it to open up underneath there this way the parent will first
-    // input their information and then they can push submit". So the
-    // processor's own card fields are framed in right under the payment
-    // choice, and Submit does the charge.
+test('the card is checked by the processor before the form can be sent', () => {
+    // "as soon as I click on credit card it opens up ... the user will go
+    // ahead and put a credit card and when that credit card is considered
+    // accepted by the processor it will take them back ... it'll have a check
+    // or an x. Then once there's a check or an x ... they'll be able to submit
+    // their form."
     const reg = fs.readFileSync(path.join(ROOT, 'campistry_register.html'), 'utf8');
-    const card = fs.readFileSync(path.join(ROOT, 'campistry_card_setup.html'), 'utf8');
+    const cap = fs.readFileSync(path.join(ROOT, 'campistry_card_capture.js'), 'utf8');
 
-    assert.match(reg, /id="cardInline"/);
-    assert.match(reg, /campistry_card_setup\.html\?campId='\+encodeURIComponent\(campId\)\+'&mode=token&embed=1/,
-        'the fields must be the processor’s own, framed — never inputs on this page');
-    // No card input of our own anywhere on the registration form.
-    assert.ok(!/autocomplete="cc-number"/.test(reg) && !/id="cardNumber"/.test(reg),
-        'the registration form must never hold a card number field itself');
+    // A button to press, where the method was picked.
+    assert.match(cap, /data-cc="open"/);
+    assert.match(cap, /'Enter ' \+ noun/);
+    // A tick and a cross.
+    assert.match(cap, /— accepted/);
+    assert.match(cap, /state\.error \|\| 'The card was not accepted\.'/);
+    // The form holds submit until the tick.
+    assert.match(reg, /function _regCardRequired\(\)/);
+    assert.match(reg, /Enter your card to submit/);
+    assert.match(reg, /Enter your bank details to submit/);
+    // Belt as well as braces: a keyboard submit must not slip past.
+    const submit = reg.slice(reg.indexOf('window.submitApp=async function()'));
+    assert.match(submit.slice(0, 2000),
+        /if\(_regCardRequired\(\)&&window\.CampistryCardCapture&&!_regCardAccepted\(\)\)/);
 
-    // Only where the processor can actually be embedded. Stripe and Cardknox
-    // collect cards on their own pages; faking an inline form for them would
-    // mean handling card numbers here.
-    assert.match(reg, /function _regInlineCardOk\(\)/);
-    assert.match(reg, /_payAbility\.processor==='banquest'/);
-
-    // The frame hands back a nonce, never a card number.
-    assert.match(card, /var tokenMode = params\.get\('mode'\) === 'token'/);
-    assert.match(card, /type: 'campistry-card-token'/);
-    const tokenBranch = card.slice(card.indexOf('if (tokenMode) {'), card.indexOf('// Shape only'));
-    assert.ok(!/functions\.invoke/.test(tokenBranch),
-        'token mode must not save or charge anything — it only hands the nonce back');
-
-    // A message from anywhere but our own frame is not a payment token.
-    assert.match(reg, /ev\.source!==frame\.contentWindow/);
+    // Never blocks on a step that cannot run: no processor, no module, no
+    // deposit due, or a method that never reaches a processor.
+    const gate = reg.slice(reg.indexOf('function _regSyncSubmitGate()'));
+    assert.match(gate.slice(0, 900), /var need=_regCardRequired\(\)&&!!global_CampistryCardCapture\(\)/);
 });
 
-test('a nonce is spent whether or not it worked', () => {
-    // A tokenizer nonce is single-use. Leaving a dead one on the form gives a
-    // parent a button that can only fail the same way twice.
-    const reg = fs.readFileSync(path.join(ROOT, 'campistry_register.html'), 'utf8');
-    const pay = reg.slice(reg.indexOf('window._regPayDeposit='), reg.indexOf('// ─── HOW FAMILIES MAY PAY'));
-    const clears = (pay.match(/_cardOnForm=null/g) || []).length;
-    assert.ok(clears >= 3,
-        'the card must be cleared on success, on a failed response and on a thrown error');
-});
+test('the check costs nothing and the amount is still not the browser’s', () => {
+    const fn = fs.readFileSync(path.join(ROOT, 'supabase/functions/card-capture-start/index.ts'), 'utf8');
+    // Zero-amount on every rail: a verify, a cc:save, a setup-mode session.
+    assert.match(fn, /save_card: true/);
+    assert.match(fn, /xCommand=.*cc:save|"cc:save"/);
+    assert.match(fn, /"mode": "setup"/);
+    // No amount reaches any gateway on this path. Checked against the CODE,
+    // not the comments — one of which has to mention xAmount to explain why
+    // cc:save cannot carry it.
+    const code = fn.replace(/\/\/[^\n]*/g, '');
+    assert.ok(!/xAmount:|"amount":|amount:\s*[A-Za-z0-9]/.test(code),
+        'nothing on the capture path may carry an amount');
 
-test('the inline charge still does not name its own price', () => {
-    const fn = fs.readFileSync(path.join(ROOT, 'supabase/functions/registration-deposit-checkout/index.ts'), 'utf8');
-    const branch = fn.slice(fn.indexOf('if (processorKey === "banquest" && cardToken)'),
-                            fn.indexOf('// ── Banquest: a hosted pay page'));
-    assert.ok(branch.length > 500, 'the inline charge branch must exist');
-    // The amount charged comes from `owed` (which _registration_deposit_owed
-    // decided), never from anything in the request body.
-    assert.match(branch, /amount: Number\(owed\.toFixed\(2\)\)/);
-    assert.ok(!/\bamount\b\s*[,}]/.test(branch.slice(0, branch.indexOf('const chargeResp'))),
-        'no client-supplied amount may be read on this path');
-    // What we record is what the gateway says it took.
-    assert.match(branch, /Number\(cd\?\.auth_amount\) > 0/);
-    // Money moved, so marking the application paid is not best-effort.
-    assert.match(branch, /_record_registration_deposit/);
+    // And the charge that follows reads the stamped figure, not the request.
+    const dep = fs.readFileSync(path.join(ROOT, 'supabase/functions/registration-deposit-checkout/index.ts'), 'utf8');
+    const branch = dep.slice(dep.indexOf('if (captureReference) {'),
+                             dep.indexOf('// ── Banquest: a hosted pay page'));
+    assert.ok(branch.length > 500, 'the captured-card charge branch must exist');
+    assert.match(branch, /Math\.round\(owed \* 100\)/);
+    assert.match(branch, /_claim_card_capture/);
+    // One accepted card, one application.
+    assert.match(branch, /already_claimed/);
+    // Money moved, so marking it paid is not best-effort.
     assert.match(branch, /Your card was charged but recording it failed/);
-    // The vault is: a failure there must not fail a captured charge.
-    assert.match(branch, /saving the card failed \(non-fatal\)/);
-    // And a card is only ever kept because the parent asked.
-    assert.match(branch, /\.\.\.\(saveCard \? \{ save_card: true \} : \{\}\)/);
 });
 
-test('the card opens before a session is picked', () => {
-    // The bug behind a second "still nothing": everything -- the note, the
-    // card fields, the submit label -- hung off _regDepositDue(), which
-    // returns null until a session is selected because it cannot work out an
-    // amount without one. A parent who ticked Credit Card first therefore got
-    // an empty Payment section, on a form that was ALREADY showing them a $350
-    // deposit two inches above. The camp's rule is known at load; only the
-    // figure waits.
+test('what the form is allowed to learn about a capture', () => {
+    // The status RPC is anon, so it must hand back nothing that can move
+    // money — a tick, a brand and four digits, which the form prints anyway.
+    const sql = fs.readFileSync(path.join(ROOT, 'migrations/188_registration_card_capture.sql'), 'utf8');
+    const rpc = sql.slice(sql.indexOf('CREATE OR REPLACE FUNCTION public.get_card_capture_status'),
+                          sql.indexOf('CREATE OR REPLACE FUNCTION public._claim_card_capture'));
+    assert.ok(!/customer_ref|method_ref/.test(rpc),
+        'the anon status RPC must never return a vault reference');
+    assert.match(rpc, /GRANT EXECUTE ON FUNCTION public\.get_card_capture_status\(text\) TO anon/);
+    // Everything else is service_role only.
+    for (const f of ['create_card_capture', 'complete_card_capture', '_claim_card_capture']) {
+        assert.match(sql, new RegExp('GRANT EXECUTE ON FUNCTION public\\.' + f + '[\\s\\S]{0,200}?TO service_role'),
+            f + ' must be service_role only');
+        assert.match(sql, new RegExp('REVOKE ALL ON FUNCTION public\\.' + f + '[\\s\\S]{0,200}?anon'),
+            f + ' must be revoked from anon');
+    }
+    // A retried webhook must not turn an accepted card into a refused one.
+    assert.match(sql, /IF v_current = 'completed' THEN/);
+});
+
+test('every rail reports its verdict back to the form', () => {
+    // A spinner that never stops is the worst outcome, so each rail has to
+    // write the answer onto the capture row — including when it is a no.
+    const ck = fs.readFileSync(path.join(ROOT, 'supabase/functions/cardknox-webhook/index.ts'), 'utf8');
+    const st = fs.readFileSync(path.join(ROOT, 'supabase/functions/stripe-webhook/index.ts'), 'utf8');
+    const fn = fs.readFileSync(path.join(ROOT, 'supabase/functions/card-capture-start/index.ts'), 'utf8');
+
+    assert.match(ck, /intent\.kind === "registration_card_capture"/);
+    assert.match(ck, /p_status: ok \? "completed" : "failed"/);
+    // Sola never echoes xInvoice, so a cc:save is matched on amount 0 + kind.
+    // Leaving the new kind out of that list would strand every capture.
+    assert.match(ck, /"card_save", "canteen_autoreload_setup", "registration_card_capture"/);
+
+    assert.match(st, /si\.metadata\?\.source === "registration_card_capture"/);
+    assert.match(st, /async function handleRegistrationCardCapture/);
+    assert.match(st, /p_status: "failed"[\s\S]{0,200}could not be saved/);
+
+    // Banquest answers in the same request, so the function itself records it.
+    assert.match(fn, /p_status: "failed"/);
+    assert.match(fn, /p_status: "completed"/);
+});
+
+test('both forms use the same card step', () => {
+    // "make sure that this is by all forms" — and one copy of the rule, so it
+    // cannot drift between them.
     const reg = fs.readFileSync(path.join(ROOT, 'campistry_register.html'), 'utf8');
-    const pending = reg.slice(reg.indexOf('function _regDepositPending()'),
-                              reg.indexOf('function _regDepositAmount()'));
-    assert.ok(!/_pickerItems|selSess|_regDepositDue\(/.test(pending),
-        'whether a deposit is due must not depend on a session being picked');
-    assert.match(pending, /pol\.enabled&&pol\.timing!=='later'/);
-
-    // Both gates use it, neither uses the amount.
-    assert.match(reg, /if\(!_regIsOnlineMethod\(selPM\)\|\|!_regDepositPending\(\)\|\|!_regInlineCardOk\(\)/,
-        'the card panel must open on the rule, not on the amount');
-    assert.match(reg, /var payNow=_regDepositPending\(\);/);
-
-    // And the amount, when it is not known, is named rather than invented.
-    assert.match(reg, /\(amt!=null\)\?money\(amt\):'the deposit'/);
+    const pa = fs.readFileSync(path.join(ROOT, 'campistry_postaccept.html'), 'utf8');
+    for (const [name, html] of [['register', reg], ['post-acceptance', pa]]) {
+        assert.match(html, /campistry_card_capture\.js/, name + ' must load the shared module');
+        assert.match(html, /id="cardInline"/, name + ' must have somewhere to draw it');
+        assert.match(html, /CampistryCardCapture(\(\))?\.create\(\{/, name + ' must use it');
+        assert.match(html, /to submit'/, name + ' must say what is missing on the button');
+    }
+    // The post-acceptance form charges after it saves, never before.
+    const save = pa.slice(pa.indexOf('async function saveResponse('));
+    const okAt = save.indexOf("showState('successWrap')");
+    const chargeAt = save.indexOf('_paChargeDeposit(');
+    assert.ok(okAt > 0 && chargeAt > okAt,
+        'the form must be saved before the card is charged — a decline must not lose the form');
 });
 
-test('an empty Payment section always says why', () => {
-    // Five different reasons for no card fields look identical on screen, and
-    // the last two rounds of this were spent guessing between them.
-    const reg = fs.readFileSync(path.join(ROOT, 'campistry_register.html'), 'utf8');
-    const diag = reg.slice(reg.indexOf('_cardDiagSaid=true;'), reg.indexOf('_cardDiagSaid=true;') + 900);
-    assert.match(diag, /no deposit is due/);
-    assert.match(diag, /does not know which camp/);
-    assert.match(diag, /migration 185 may not be applied/);
-    assert.match(diag, /cannot take card payments online/);
-    assert.match(diag, /collects cards on its own hosted page/);
-});
 
 test('Payment Plan is offered once, not twice', () => {
     // The catalogue's 'plan' and the row appended for the camp's own
@@ -851,63 +859,25 @@ test('Payment Plan is offered once, not twice', () => {
     assert.match(render, /selPay\(this,\\'payment_plan\\'\)/);
 });
 
-test('the button they press to reach the processor says so', () => {
-    // The complaint that started this: "nothing opens to allow to tell the
-    // user to input or click on this link to open". There is no link to open
-    // before the application is saved — so the submit button itself names the
-    // payment step instead of leaving a parent hunting for one.
-    const reg = fs.readFileSync(path.join(ROOT, 'campistry_register.html'), 'utf8');
-    assert.match(reg, /id="submitAppBtn"/);
-    const fn = reg.slice(reg.indexOf('function _regSyncSubmitLabel('));
-    assert.match(fn.slice(0, 900), /Submit & pay '\+\(Number\(amount\)>0\?money\(amount\):'the deposit'\)/);
-    // Never promises a payment step the camp cannot actually run.
-    assert.match(fn.slice(0, 900), /_payAbility&&_payAbility\.canPayOnline/);
-    // A submit already in flight owns the label; this must not fight it.
-    assert.match(fn.slice(0, 900), /if\(!b\|\|b\.disabled\)return/);
-    // Kept in step with the amount, not set once.
-    assert.ok(/_regSyncSubmitLabel\(payNow&&_regIsOnlineMethod\(selPM\),amt\)/.test(reg),
-        'the label follows the deposit that is actually due');
-});
-
-test('choosing a card takes them there rather than to a second button', () => {
-    const reg = fs.readFileSync(path.join(ROOT, 'campistry_register.html'), 'utf8');
-    // Either the card they already typed, or a trip to the processor's own
-    // page for the rails that collect cards there.
-    assert.match(reg, /if\(\(_cardOnForm&&_cardOnForm\.token\)\|\|\(_regIsOnlineMethod\(selPM\)&&_payAbility&&_payAbility\.canPayOnline\)\)/);
-    assert.match(reg, /_regPayDeposit\(_resolvedCampId\|\|campIdParam,appIds\[0\]\)/);
-    // The step stays on screen behind the redirect, so someone who comes back
-    // has a way to finish.
-    const callAt = reg.indexOf('_regOfferDepositPayment(_resolvedCampId');
-    assert.ok(callAt > 0 && callAt < reg.indexOf('if((_cardOnForm&&_cardOnForm.token)||'),
-        'the pay step must be rendered before the charge or redirect fires');
-});
-
-test('a parent can keep the card they just typed', () => {
+test('an accepted card is kept, because that is how it gets charged', () => {
+    // There is no "save this card?" tick any more, and its absence is the
+    // point: the capture IS a save. The processor vaulted the card in order to
+    // say yes to it, and the deposit is charged against that vault reference a
+    // moment later. A parent cannot opt out of it and still pay by card.
     const reg = fs.readFileSync(path.join(ROOT, 'campistry_register.html'), 'utf8');
     const fn = fs.readFileSync(path.join(ROOT, 'supabase/functions/registration-deposit-checkout/index.ts'), 'utf8');
-    const stripe = fs.readFileSync(path.join(ROOT, 'supabase/functions/stripe-webhook/index.ts'), 'utf8');
-    const hosted = fs.readFileSync(path.join(ROOT, 'supabase/functions/payments-hosted-complete/index.ts'), 'utf8');
     const sql = fs.readFileSync(path.join(ROOT, 'migrations/186_registration_saved_card.sql'), 'utf8');
 
-    assert.match(reg, /id="paySaveCard"/);
-    assert.match(reg, /saveCard:!!_saveCard/, 'the choice never reaches the server');
-
-    // Only ever because the parent asked.
-    assert.match(fn, /if \(saveCard\)/);
-    assert.match(fn, /setup_future_usage/, 'a plan needs a method chargeable off-session');
-    assert.match(fn, /saveCard \? "registration_deposit_save" : "registration_deposit"/);
-    assert.match(hosted, /registration_deposit_save/);
-
-    // Both rails record it; neither treats a failure as fatal, because the
-    // money is already in and a lost card just means typing it again.
-    assert.match(stripe, /_record_registration_card/);
-    assert.match(hosted, /_record_registration_card/);
-    assert.match(stripe, /card not saved for/);
-
-    // Never a card number — only the processor's own references and last four.
-    assert.ok(!/card_number|cardNumber|p_pan/i.test(sql), 'no card number may be stored');
-    assert.match(sql, /savedCardLast4/);
-    assert.match(sql, /jsonb_set/, 'written in place, like the deposit itself');
+    assert.ok(!/id="paySaveCard"/.test(reg),
+        'the save-card tick is gone — a captured card is already saved');
+    // The reference lands on the application, so the office inherits it.
+    const branch = fn.slice(fn.indexOf('if (captureReference) {'),
+                            fn.indexOf('// ── Banquest: a hosted pay page'));
+    assert.match(branch, /_record_registration_card/);
+    // ...and that is best-effort, because losing it costs a convenience while
+    // failing the charge costs the payment.
+    assert.match(branch, /saving the card failed \(non-fatal\)/);
+    assert.match(sql, /_record_registration_card/);
 });
 
 test('the saved card reaches the family when the office accepts', () => {

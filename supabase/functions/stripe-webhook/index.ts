@@ -348,6 +348,65 @@ async function handleLinkPhotoPurchase(
   console.log(`[stripe-webhook] link photo purchase (${meta.kind}) $${(pi.amount || 0) / 100} camp ${campId}: ${error ? "FAILED " + error.message : JSON.stringify(data)}`);
 }
 
+// A card checked on a public registration form (migration 188). The parent is
+// still filling the form in, so there is no family and no application to hang
+// this on -- it lands on the capture row keyed by the reference we minted, the
+// form's poll flips to a tick, and the deposit is charged against it once the
+// application is saved.
+//
+// setup_intent.succeeded is the moment Stripe says the card is usable, which
+// is exactly what the tick is claiming.
+async function handleRegistrationCardCapture(
+  supabase: ReturnType<typeof createClient>,
+  si: Record<string, any>,
+) {
+  const reference = si.metadata?.reference;
+  if (!reference) {
+    console.error(`[stripe-webhook] card capture ${si.id} has no reference in metadata — nothing to flip`);
+    return;
+  }
+  const customerId = si.customer;
+  const paymentMethodId = si.payment_method;
+  if (!customerId || !paymentMethodId) {
+    // Tell the form, rather than leaving it spinning on a capture that will
+    // never arrive.
+    await supabase.rpc("complete_card_capture", {
+      p_reference: String(reference), p_status: "failed",
+      p_customer_ref: null, p_method_ref: null, p_last4: null, p_brand: null,
+      p_error: "The card could not be saved.",
+    });
+    console.error(`[stripe-webhook] card capture ${si.id} missing customer/payment_method`);
+    return;
+  }
+
+  // Brand and last four, purely so the form can print "Visa ending 4242".
+  // Cosmetic: a failure here must not cost the parent an accepted card.
+  let last4: string | null = null, brand: string | null = null;
+  if (STRIPE_SECRET) {
+    try {
+      const resp = await fetch(`${STRIPE_API}/payment_methods/${paymentMethodId}`, {
+        headers: { "Authorization": `Bearer ${STRIPE_SECRET}` },
+      });
+      const pm = await resp.json();
+      if (pm?.card) { last4 = pm.card.last4 || null; brand = pm.card.brand || null; }
+      else if (pm?.us_bank_account) { last4 = pm.us_bank_account.last4 || null; brand = pm.us_bank_account.bank_name || "Bank"; }
+    } catch (e) {
+      console.warn(`[stripe-webhook] could not label card capture ${reference}: ${(e as Error).message}`);
+    }
+  }
+
+  const { data, error } = await supabase.rpc("complete_card_capture", {
+    p_reference: String(reference), p_status: "completed",
+    p_customer_ref: String(customerId), p_method_ref: String(paymentMethodId),
+    p_last4: last4, p_brand: brand, p_error: null,
+  });
+  if (error || !data?.success) {
+    console.error(`[stripe-webhook] card capture ${reference} accepted but not recorded:`, error?.message || data?.error);
+    return;
+  }
+  console.log(`[stripe-webhook] card capture ${reference} accepted (${brand || "card"} ${last4 || ""})`);
+}
+
 // A saved payment method carries no ledger amount, so this doesn't gate on
 // status the way the payment/deposit handlers above do — setup_intent.succeeded
 // only fires once Stripe actually confirms the method is usable.
@@ -842,6 +901,11 @@ serve(async (req) => {
       const si = event.data.object;
       if (si.metadata?.source === "campistry-canteen-autoreload-setup") {
         await handleCanteenAutoReloadSetup(supabase, si);
+      } else if (si.metadata?.source === "registration_card_capture") {
+        // A card checked on a registration form, before the application
+        // exists. There is no family to attach it to yet -- it goes on the
+        // capture row the form is watching (migration 188).
+        await handleRegistrationCardCapture(supabase, si);
       } else {
         await handleAutopaySetup(supabase, si);
       }

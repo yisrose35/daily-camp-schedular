@@ -105,7 +105,13 @@ body{font-family:var(--font);background:var(--s50);color:var(--s800);-webkit-fon
 <label class="po" onclick="selPay(this,'ach')"><input type="radio" name="pm" value="ach"><div><div class="po-l">ACH / Bank Transfer</div><div class="po-d">Direct from bank account</div></div></label>
 <label class="po" onclick="selPay(this,'zelle')"><input type="radio" name="pm" value="zelle"><div><div class="po-l">Zelle</div><div class="po-d">Send directly via Zelle</div></div></label>
 <label class="po" onclick="selPay(this,'check')"><input type="radio" name="pm" value="check"><div><div class="po-l">Check</div><div class="po-d">Mail or drop off</div></div></label>
-</div></div>
+</div>
+<!-- Picking card or bank opens the camp's processor here, before this form
+     can be submitted. Same module the registration form uses, so the rule
+     cannot drift between the two. -->
+<div id="payMethodNote" style="display:none"></div>
+<div id="cardInline" style="display:none"></div>
+</div>
 
 <!-- Camp's own printable packing list — hidden by default, shown when the
      camp writes one in the Post-Acceptance Form Builder. Separate from the
@@ -171,6 +177,7 @@ body{font-family:var(--font);background:var(--s50);color:var(--s800);-webkit-fon
 <script src="config.js?v=20260903-03" onerror="console.log('[PostAccept] Supabase config (config.js) not loaded — local only')"></script>
 <script src="supabase-js@2.js?v=20260903-03" onerror="console.log('[PostAccept] Supabase client not loaded — local only')"></script>
 <script src="campistry_deposit_policy.js?v=20260916-01"></script>
+<script src="campistry_card_capture.js?v=20260916-01" onerror="console.log('[PostAccept] Card capture not loaded — the form will not ask for a card')"></script>
 <script src="supabase_client.js?v=20260903-03" onerror="console.log('[PostAccept] Supabase config not loaded — local only')"></script>
 <script src="local_cache_idb.js?v=20260903-03" onerror="console.log('[PostAccept] LocalCacheIDB not loaded — falling back to localStorage')"></script>
 <script src="campistry_finance_merge.js?v=20260915-01"></script>
@@ -379,7 +386,12 @@ var SEC_MAP={bunk:'bunkCard',logistics:'logisticsCard',consent:'consentCard',doc
 // camp that never asks sees exactly the form it had before.
 var uploads=[],selPM='';
 
-window.selPay=function(el,m){selPM=m;document.querySelectorAll('.po').forEach(function(o){o.classList.remove('sel')});el.classList.add('sel')};
+window.selPay=function(el,m){
+    selPM=m;
+    document.querySelectorAll('.po').forEach(function(o){o.classList.remove('sel')});
+    el.classList.add('sel');
+    try{ _paRenderCardStep(); }catch(e){ console.warn('[PostAccept] card step:',e&&e.message); }
+};
 
 function _paRequiredDocs(){
     var list=(_currentFC&&_currentFC.documents)||[];
@@ -479,6 +491,143 @@ function _paRenderDeposit(){
             : 'Received \u2014 thank you. It counts toward tuition.')
         +'</div></div>';
 }
+// ─── THE CARD, SETTLED BEFORE SUBMIT ─────────────────────────────────────────
+//
+// The same rule as the registration form, through the same module
+// (campistry_card_capture.js): picking Credit Card or ACH opens the camp's
+// processor, the processor accepts or refuses the card, and this form will not
+// submit until it has been accepted. Nothing is charged there -- the deposit
+// still outstanding on this enrollment is taken afterwards, against that card.
+//
+// The difference from registration is that the application already EXISTS
+// here, so the amount is read off the enrollment rather than worked out.
+var _paCap=null, _paCapDiagSaid=false;
+
+function _paOnlineMethod(m){ return m==='credit_card'||m==='ach'||m==='debit'; }
+
+function _paDepositOutstanding(){
+    var P=window.CampistryDepositPolicy, e=_enrollRecord||{};
+    if(!P||!(Number(e.depositRequired)>0))return 0;
+    var out=P.outstanding(e);
+    return out>0?out:0;
+}
+
+function _paCardAccepted(){ return !!(_paCap&&_paCap.accepted()); }
+
+function _paCardRequired(){
+    return _paOnlineMethod(selPM)&&_paDepositOutstanding()>0
+        &&!!(_paPayAbility&&_paPayAbility.canPayOnline)&&!!_paCampId();
+}
+
+function _paCampId(){
+    return (window.CampistryDB&&window.CampistryDB.getCampId&&window.CampistryDB.getCampId())||campIdParam||null;
+}
+
+var _paPayAbility=null;
+async function _paLoadPayAbility(){
+    if(_paPayAbility)return _paPayAbility;
+    var campId=_paCampId();
+    var c=(window.CampistryDB&&window.CampistryDB.getClient)?window.CampistryDB.getClient():window.supabase;
+    if(!campId||!c||!c.rpc)return null;
+    try{
+        var r=await c.rpc('get_public_pay_ability',{p_camp_id:campId});
+        if(r&&!r.error&&r.data)_paPayAbility=r.data;
+    }catch(e){ console.log('[PostAccept] pay ability unknown:',e&&e.message); }
+    try{ _paRenderCardStep(); }catch(e){}
+    return _paPayAbility;
+}
+
+function _paSetHtml(el,html){ if(el&&el.innerHTML!==html)el.innerHTML=html; }
+
+function _paRenderCardStep(){
+    var note=document.getElementById('payMethodNote');
+    var box=document.getElementById('cardInline');
+    if(!note||!box)return;
+    var P=window.CampistryDepositPolicy;
+    var owed=_paDepositOutstanding();
+    var sum=owed>0?(P?P.money(owed):('$'+owed)):'the deposit';
+
+    if(!_paOnlineMethod(selPM)){
+        note.style.display='none';_paSetHtml(note,'');
+        box.style.display='none';
+        if(_paCap){_paCap.destroy();_paCap=null;}
+        box.innerHTML='';
+        _paSyncSubmitGate();
+        return;
+    }
+
+    var noun=selPM==='ach'?'bank account':'card';
+    var details=selPM==='ach'?'bank details':'card';
+    var body;
+    if(owed<=0){
+        body='Nothing is outstanding. The camp will use this '+noun+' when a payment is due.';
+    } else if(_paPayAbility&&_paPayAbility.canPayOnline){
+        body=_paCardAccepted()
+            ? ('Your '+noun+' is accepted. '+sum+' will be taken when you submit this form.')
+            : ('Enter your '+details+' below. Nothing is charged there — we only check the '+noun
+               +' is good. You can submit once it is accepted, and '+sum+' is taken then.');
+        body+=' Your details never touch this form.';
+    } else if(_paPayAbility){
+        body='This camp does not take '+(selPM==='ach'?'bank transfers':'card payments')
+            +' through this form. Submit it and the camp will send you how to pay '+sum+'.';
+    } else {
+        body='You will be shown how to pay '+sum+' as soon as you submit this form.';
+    }
+    note.style.display='';
+    _paSetHtml(note,'<div style="background:var(--s50);border:1px solid var(--s200);border-radius:var(--r);'
+        +'padding:11px 13px;margin-top:8px"><div style="font-size:.82rem;color:var(--s600);line-height:1.6">'
+        +body+'</div></div>');
+
+    if(!_paCardRequired()){
+        box.style.display='none';
+        if(_paCap){_paCap.destroy();_paCap=null;}
+        box.innerHTML='';
+        if(!_paCapDiagSaid){
+            _paCapDiagSaid=true;
+            console.log('[PostAccept] no card step — '+(
+                owed<=0 ? 'nothing is outstanding on this enrollment'
+                : !_paCampId() ? 'this page does not know which camp it is for'
+                : !_paPayAbility ? 'pay ability unknown — migration 185 may not be applied'
+                : 'this camp cannot take card payments online'));
+        }
+        _paSyncSubmitGate();
+        return;
+    }
+
+    box.style.display='';
+    if(!window.CampistryCardCapture){
+        _paSetHtml(box,'<div style="font-size:.82rem;color:var(--s500);margin-top:8px">'
+            +'Card entry could not load. Submit the form and the camp will be in touch about the deposit.</div>');
+        _paSyncSubmitGate();
+        return;
+    }
+    if(!_paCap){
+        _paCap=window.CampistryCardCapture.create({
+            el:box, campId:_paCampId(), method:selPM,
+            returnUrl:window.location.origin+window.location.pathname.replace(/[^/]*$/,'')+'campistry_pay_thanks.html',
+            onChange:function(){ _paSyncSubmitGate(); try{_paRenderCardStep();}catch(e){} }
+        });
+        _paCap.render();
+    } else {
+        _paCap.setMethod(selPM);
+    }
+    _paSyncSubmitGate();
+}
+
+/** The button says what is missing, and refuses while it is. */
+function _paSyncSubmitGate(){
+    var b=document.querySelector('.sub-btn');
+    if(!b||_paSubmitting)return;
+    if(_paCardRequired()&&window.CampistryCardCapture&&!_paCardAccepted()){
+        b.disabled=true;
+        b.textContent=(selPM==='ach'?'Enter your bank details to submit':'Enter your card to submit');
+        return;
+    }
+    b.disabled=false;
+    b.textContent='Submit';
+}
+var _paSubmitting=false;
+
 // Which built-in sections a Custom Question can attach to (mirrors
 // campistry_register.html's CUSTOM_FIELD_SECTIONS) — every PAF section has
 // its own plain field-group markup, so all three qualify here.
@@ -538,7 +687,13 @@ function applyFormConfig(fc){
         sectionsDisabled[key]=!on;
     });
     if(!sectionsDisabled.documents){ _paWireUploads(); _paRenderUploads(); }
-    if(!sectionsDisabled.payment){ _paRenderDeposit(); }
+    if(!sectionsDisabled.payment){
+        _paRenderDeposit();
+        // Whether a card is needed depends on what this camp can take, which
+        // is a round trip; the step redraws itself when the answer lands.
+        _paLoadPayAbility();
+        try{ _paRenderCardStep(); }catch(e){ console.warn('[PostAccept] card step:',e&&e.message); }
+    }
 
     // Custom questions — a question tagged with a built-in section renders
     // inline inside that section's own card; everything else falls into the
@@ -720,6 +875,18 @@ function showState(id){
 window.submitApp=function submitApp(){
     var errEl=document.getElementById('formErr');
     errEl.style.display='none';
+
+    // The card has to be settled with the processor before this form goes.
+    // The button is already disabled while it is not; this is the belt to
+    // that braces, for a keyboard submit or a stale enabled button.
+    if(_paCardRequired()&&window.CampistryCardCapture&&!_paCardAccepted()){
+        try{ document.getElementById('cardInline').scrollIntoView({behavior:'smooth',block:'center'}); }catch(e){}
+        errEl.textContent=(selPM==='ach'
+            ? 'Please enter your bank details above — we need them accepted before this form can be sent.'
+            : 'Please enter your card above — we need it accepted before this form can be sent.');
+        errEl.style.display='block';
+        return;
+    }
     var missingLabel=null;
     for(var _fid in FIELD_ELEMENT_MAP){
         if(missingLabel)break;
@@ -836,7 +1003,9 @@ window.submitApp=function submitApp(){
 // no read-modify-write from this browser, so a stale local snapshot can
 // never clobber another camper's record in the cloud.
 async function saveResponse(rec){
-    var btn=document.querySelector('.sub-btn'); if(btn){btn.disabled=true;btn.textContent='Submitting…';}
+    var btn=document.querySelector('.sub-btn');
+    _paSubmitting=true;   // the gate must not fight the in-flight button
+    if(btn){btn.disabled=true;btn.textContent='Submitting…';}
     var errEl=document.getElementById('formErr');
     try{
         var client=null, campId=_resolvedCampId||campIdParam||null;
@@ -862,10 +1031,61 @@ async function saveResponse(rec){
         }catch(_){}
         showState('successWrap');
         window.scrollTo(0,0);
+        // Now that the form is in, take the deposit against the card the
+        // processor already accepted. After, not before: a decline must not
+        // throw away a form the family just filled in.
+        if(_paCardAccepted()){
+            try{ _paChargeDeposit(client,campId); }catch(e){ console.warn('[PostAccept] deposit charge:',e&&e.message); }
+        }
     }catch(ex){
         errEl.textContent='Could not submit — check your connection and try again.';
         errEl.style.display='block';
+        _paSubmitting=false;
         if(btn){btn.disabled=false;btn.textContent='Submit';}
+        try{ _paSyncSubmitGate(); }catch(e){}
+    }
+}
+
+/**
+ * Charge the outstanding deposit to the captured card.
+ *
+ * Exactly the same endpoint the registration form uses, with the same rule:
+ * we send a capture reference, never an amount. registration-deposit-checkout
+ * reads what is owed on this enrollment and charges that.
+ */
+async function _paChargeDeposit(client,campId){
+    if(!client||!client.functions||!_paCap)return;
+    var seat=document.getElementById('depositBox');
+    try{
+        var r=await client.functions.invoke('registration-deposit-checkout',{
+            body:{campId:campId,enrollmentId:_enrollId,
+                  returnUrl:window.location.origin+window.location.pathname,
+                  captureReference:_paCap.reference()}
+        });
+        var d=r&&r.data;
+        if(d&&d.success&&(d.paid||d.alreadyPaid)){
+            if(seat){
+                seat.style.display='';
+                seat.innerHTML='<div style="background:#ECFDF5;border:1px solid #A7F3D0;border-radius:var(--r);'
+                    +'padding:13px 15px;margin-bottom:12px;font-size:.88rem;color:#065F46;font-weight:700">'
+                    +(d.alreadyPaid?'Deposit already paid \u2014 thank you.'
+                                   :'Paid'+(d.amount?' $'+Number(d.amount).toFixed(2):'')
+                                     +(d.last4?' \u00b7 card ending '+esc(d.last4):'')+' \u2014 thank you.')
+                    +'</div>';
+            }
+            return;
+        }
+        // The form IS in, which is the part that matters. Say what did not
+        // happen rather than implying the whole thing failed.
+        console.warn('[PostAccept] deposit not taken:',(d&&d.error)||'unknown');
+        if(seat){
+            seat.style.display='';
+            seat.innerHTML='<div style="background:#FFF7ED;border:1px solid #FDBA74;border-radius:var(--r);'
+                +'padding:13px 15px;margin-bottom:12px;font-size:.85rem;color:#9A3412;line-height:1.6">'
+                +'Your form is in. We could not take the deposit \u2014 '+esc((d&&d.error)||'please contact the camp office.')+'</div>';
+        }
+    }catch(e){
+        console.warn('[PostAccept] deposit charge failed:',e&&e.message);
     }
 }
 
