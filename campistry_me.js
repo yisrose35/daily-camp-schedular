@@ -3370,7 +3370,7 @@ function _familyHasMoney(f){
     // direction, so the fallback errs towards keeping.
     if(Array.isArray(f.entries)&&f.entries.length)return true;
     if(Array.isArray(f.plans)&&f.plans.length)return true;
-    if(f.plan&&f.plan.installments)return true;
+    if(f.plan&&(f.plan.installments||f.plan.dueDates))return true;
     if(f.cardOnFile||f.byopCustomerRef||f.stripeCustomerId)return true;
     if(Array.isArray(f.savedPaymentMethods)&&f.savedPaymentMethods.length)return true;
     if(Array.isArray(f.charges)&&f.charges.length)return true;
@@ -3497,6 +3497,34 @@ function _postPaymentEntry(f,p){
         source:{paymentId:ref}
     });
     return !!(r&&r.ok);
+}
+
+// A plan's schedule, as rows this page can render.
+//
+// A LEDGER plan (migrations 172/181) stores only dates and a counter: the
+// amount is derived at charge time from what is actually still owed, which is
+// the point — a frozen number is one that disagrees with reality later. So the
+// office view derives it the same way autopay will, or the camp is shown a
+// figure that is not what will be taken.
+//
+// Mirrors plan_due: outstanding / instalments remaining, last one sweeping the
+// remainder. A legacy plan is returned exactly as stored.
+function _planSchedule(plan,balance){
+    if(!plan)return [];
+    if(Array.isArray(plan.installments)&&plan.installments.length)return plan.installments;
+    var dates=Array.isArray(plan.dueDates)?plan.dueDates.slice().sort():[];
+    if(!dates.length)return [];
+    var next=Number(plan.nextIndex)||0;
+    var owed=Math.max(0,Number(balance)||0);
+    var out=[];
+    for(var i=0;i<dates.length;i++){
+        if(i<next){out.push({dueDate:dates[i],amount:null,status:'paid',derived:true});continue}
+        var left=dates.length-i;
+        var amt=left<=1?owed:Math.round((owed/left)*100)/100;
+        out.push({dueDate:dates[i],amount:amt,status:'pending',derived:true});
+        owed=Math.round((owed-amt)*100)/100;
+    }
+    return out;
 }
 
 function _postTuitionFor(f,eid){
@@ -14908,12 +14936,15 @@ async function cancelMonthlyPlan(famKey,planId){
 }
 function _planCardHtml(l){
     var f=families[l.famKey]; if(!f)return'';
-    var plans=_famPlans(f).filter(function(p){return p.installments&&p.installments.length});
+    // A ledger plan has no installments[] at all, so filtering on that made a
+    // parent-built plan invisible to the office entirely.
+    var plans=_famPlans(f).filter(function(p){return _planSchedule(p,l.balance).length});
     if(!plans.length)return'';
     var out=plans.map(function(plan){
-        var pend=plan.installments.filter(function(i){return i.status!=='paid'}).sort(function(a,b){return(a.dueDate||'').localeCompare(b.dueDate||'')});
+        var sched=_planSchedule(plan,l.balance);
+        var pend=sched.filter(function(i){return i.status!=='paid'}).sort(function(a,b){return(a.dueDate||'').localeCompare(b.dueDate||'')});
         var next=pend[0];
-        var table='<div style="background:#fff;border-radius:var(--r);overflow:hidden">'+_installmentTableHtml(plan.installments.map(function(i){return{amount:i.amount,scheduledAmount:i.scheduledAmount,label:i.label,dueDate:i.dueDate,status:i.status};}),'.88rem')+'</div>';
+        var table='<div style="background:#fff;border-radius:var(--r);overflow:hidden">'+_installmentTableHtml(sched.map(function(i){return{amount:i.amount,scheduledAmount:i.scheduledAmount,label:i.label,dueDate:i.dueDate,status:i.status};}),'.88rem')+'</div>';
         // A quick "N x $amount" read at a glance — the installment table
         // below has the full schedule, but a manager scanning this card
         // shouldn't have to add up rows to know the shape of the plan.
@@ -14921,11 +14952,11 @@ function _planCardHtml(l){
         // installments) — an uneven plan (first payment absorbing a
         // remainder, manual edits) would make "8 x $287.50" a lie.
         var summaryLine='';
-        if(plan.installments.length>1){
-            var amts=plan.installments.map(function(i){return Math.round((Number(i.amount)||0)*100)});
+        if(sched.length>1){
+            var amts=sched.map(function(i){return Math.round((Number(i.amount)||0)*100)});
             var allEqual=amts.every(function(a){return a===amts[0]});
             if(allEqual&&amts[0]>0){
-                summaryLine='<div style="font-size:.8rem;color:var(--s500);margin-bottom:6px">'+plan.installments.length+' payments of '+fm(amts[0]/100)+' each</div>';
+                summaryLine='<div style="font-size:.8rem;color:var(--s500);margin-bottom:6px">'+sched.length+' payments of '+fm(amts[0]/100)+' each</div>';
             }
         }
         // Autopay with nothing chargeable behind it is the one state worth

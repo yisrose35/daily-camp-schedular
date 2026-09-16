@@ -1382,7 +1382,35 @@ function _lkToggleDetails(id){
 // at a time, always covering the whole balance; _lkFamPlans just
 // normalizes the legacy singular d.plan shape into an array the rest of
 // this file already expects (still returns 0 or 1 entries).
-function _lkFamPlans(d){ return Array.isArray(d.plans)?d.plans:(d.plan&&Array.isArray(d.plan.installments)&&d.plan.installments.length?[d.plan]:[]); }
+function _lkFamPlans(d){ return Array.isArray(d.plans)?d.plans:((d.plan&&((Array.isArray(d.plan.installments)&&d.plan.installments.length)||(Array.isArray(d.plan.dueDates)&&d.plan.dueDates.length)))?[d.plan]:[]); }
+// What is left to pay on a plan, as a schedule this page can render.
+//
+// A LEDGER plan (migration 172/181) stores only dates and a counter — the
+// amount is derived at charge time from what is actually still owed, which is
+// the whole reason a frozen number is not kept. So the parent's own view has
+// to derive it the same way, or they would be shown a figure that is not what
+// will be taken.
+//
+// Mirrors plan_due (172): outstanding / instalments remaining, with the last
+// one sweeping the remainder so rounding cannot strand a few cents. `balance`
+// is what get_my_balance already returned for this family.
+function _lkPlanSchedule(plan,balance){
+    if(!plan)return [];
+    if(Array.isArray(plan.installments)&&plan.installments.length)return plan.installments;
+    var dates=Array.isArray(plan.dueDates)?plan.dueDates.slice().sort():[];
+    if(!dates.length)return [];
+    var next=Number(plan.nextIndex)||0;
+    var owed=Math.max(0,Number(balance)||0);
+    var out=[];
+    for(var i=0;i<dates.length;i++){
+        if(i<next){ out.push({dueDate:dates[i],amount:null,status:'paid'}); continue; }
+        var left=dates.length-i;
+        var amt=left<=1?owed:Math.round((owed/left)*100)/100;
+        out.push({dueDate:dates[i],amount:amt,status:'pending'});
+        owed=Math.round((owed-amt)*100)/100;
+    }
+    return out;
+}
 function _lkPlanOfferHtml(cid,d){
     if(!d.allowParentPaymentPlans) return '';
     if((Number(d.balance)||0)<=0.005) return '';
@@ -1446,7 +1474,10 @@ function _payCardHtml(cid,campName,d){
 // the result back once Stripe confirms it; next load of this page reflects
 // it via get_my_balance's cardOnFile/paymentMethodType fields.
 function _autopaySectionHtml(cid,d,plan){
-    var insts=(plan&&Array.isArray(plan.installments))?plan.installments:[];
+    // Derived for a ledger plan, verbatim for a legacy one — see
+    // _lkPlanSchedule. Passing the balance is what makes the "next payment"
+    // figure the one that will actually be charged.
+    var insts=_lkPlanSchedule(plan,d&&d.balance);
     if(!insts.length) return '';
     var next=insts.filter(function(i){return i.status==='pending'||i.status==='failed';})
         .sort(function(a,b){return String(a.dueDate||'').localeCompare(String(b.dueDate||''));})[0];
@@ -1464,7 +1495,9 @@ function _autopaySectionHtml(cid,d,plan){
         :'<div style="font-size:.72rem;color:var(--text-muted);margin-bottom:8px;">Set up by the camp office — contact them to change it.</div>';
     if(next){
         body+='<div style="font-size:.75rem;color:var(--text-muted);margin-bottom:2px;">Next payment</div>';
-        body+='<div style="font-size:1.1rem;font-weight:700;margin-bottom:10px;">'+_lkMoney(next.amount)+' due '+String(next.dueDate||'').replace(/[<>&]/g,'')+'</div>';
+        body+='<div style="font-size:1.1rem;font-weight:700;margin-bottom:10px;">'+(next.amount==null?'':_lkMoney(next.amount)+' ')+'due '+String(next.dueDate||'').replace(/[<>&]/g,'')+'</div>';
+        if(plan&&Array.isArray(plan.dueDates))
+            body+='<div style="font-size:.68rem;color:var(--text-muted);margin:-8px 0 10px;">Worked out from what is still owed, so it stays right if you pay extra.</div>';
     }
     if(onFile){
         body+='<div style="font-size:.78rem;color:#0E7C4A;font-weight:600;display:flex;align-items:center;gap:6px;">✓ Autopay is on — charging '+String(methodTxt).replace(/[<>&]/g,'')+' automatically</div>';

@@ -826,6 +826,60 @@ serve(async (req) => {
     }
   }
 
+  // ── tips that never reached the staff member (migration 182) ────────────
+  // A cart tip whose transfer failed left transfer_error set and processed_at
+  // null, and the code that wrote it said a retry would pick it up — "Stripe's
+  // own delivery retries, or a manual resend". Neither existed: that webhook
+  // returns 200 so Stripe never redelivers, and there is no resend in the app.
+  // The money stayed with the platform and the counselor stayed unpaid.
+  //
+  // This is that retry. It runs here for the same reason the card-expiry check
+  // does: this function is already nightly and already has the Stripe key, and
+  // a second cron is a second thing to deploy and a second thing to notice has
+  // stopped. Best-effort — a tip retry must never fail a tuition run.
+  let tipsRetried = 0, tipsStillFailing = 0;
+  try {
+    const { data: pending } = await supabase.rpc("retry_failed_tip_transfers", { p_limit: 50 });
+    for (const t of (pending || [])) {
+      if (!STRIPE_SECRET) break;
+      try {
+        const amountCents = Math.max(0, Number(t.tipCents) - Number(t.feeCents || 0));
+        if (!(amountCents > 0)) continue;
+        const resp = await fetch(`${STRIPE_API}/transfers`, {
+          method: "POST",
+          headers: {
+            Authorization: `Bearer ${STRIPE_SECRET}`,
+            "Content-Type": "application/x-www-form-urlencoded",
+            // Same key every night for the same item, so a retry that actually
+            // went through on a previous run cannot pay the tip twice.
+            "Idempotency-Key": `tip_retry_${t.id}`,
+          },
+          body: new URLSearchParams({
+            amount: String(amountCents),
+            currency: "usd",
+            destination: String(t.staffAccountId),
+            description: `Campistry tip — ${t.staffName || ""} (retry)`,
+          }).toString(),
+        });
+        const tr = await resp.json();
+        if (tr.error) throw new Error(tr.error.message);
+        await supabase.from("link_tip_cart_items")
+          .update({ processed_at: new Date().toISOString(), stripe_transfer_id: tr.id, transfer_error: null })
+          .eq("id", t.id);
+        tipsRetried++;
+        console.log(`[autopay] retried tip ${t.id} -> ${t.staffName}: $${amountCents / 100} (${tr.id})`);
+      } catch (e) {
+        tipsStillFailing++;
+        console.warn(`[autopay] tip ${t.id} for ${t.staffName} still failing: ${(e as Error).message}`);
+      }
+    }
+  } catch (e) {
+    console.warn(`[autopay] tip retry sweep failed: ${(e as Error).message}`);
+  }
+  if (tipsRetried || tipsStillFailing) {
+    console.log(`[autopay] tips — ${tipsRetried} paid on retry, ${tipsStillFailing} still failing`);
+  }
+
   console.log(`[autopay] done — charged ${charged}, failed ${failed}` + (details.length ? `; details=${JSON.stringify(details)}` : "; nothing due"));
   return new Response(
     JSON.stringify({ ok: true, charged, failed, details }),

@@ -87,10 +87,27 @@ serve(async (req) => {
 
     if (pi.error || pi.status !== "succeeded") {
       failed++;
-      await supabase.from("camp_telnyx_provisioning").update({
-        error_message: pi.error?.message || `Monthly charge ${pi.status || "failed"} — number stays active, please update the card on file.`,
-        updated_at: new Date().toISOString(),
-      }).eq("camp_id", row.camp_id);
+      // This used to write error_message and nothing else. The dashboard only
+      // renders error_message when status is 'rejected' or 'failed', and status
+      // stays 'active' here — so the camp saw "active since <date>" and nothing
+      // at all. And next_charge_at was left alone, so the same dead card was
+      // charged on every run, for ever, collecting a decline fee each time.
+      //
+      // The RPC counts the failures, backs the next attempt off (3, 5, 7, then
+      // 14 days — the same schedule as plan dunning in 179) and tells the camp.
+      const { error: failErr } = await supabase.rpc("record_telnyx_charge_failure", {
+        p_camp_id: row.camp_id,
+        p_error: pi.error?.message || `Monthly charge ${pi.status || "failed"}`,
+      });
+      if (failErr) {
+        console.error(`[telnyx-monthly] camp ${row.camp_id}: charge failed AND the failure ` +
+          `could not be recorded (${failErr.message}) — this camp is being billed for a ` +
+          `number nobody is paying for, with nothing to show it.`);
+        await supabase.from("camp_telnyx_provisioning").update({
+          error_message: pi.error?.message || `Monthly charge ${pi.status || "failed"} — number stays active, please update the card on file.`,
+          updated_at: new Date().toISOString(),
+        }).eq("camp_id", row.camp_id);
+      }
       details.push({ camp: row.camp_id, result: "failed", reason: pi.error?.message || pi.status });
     } else {
       charged++;
@@ -98,6 +115,7 @@ serve(async (req) => {
         last_charged_at: new Date().toISOString(),
         next_charge_at: addOneMonth(row.next_charge_at),
         error_message: null,
+        charge_failures: 0,   // collected: stop chasing them
         updated_at: new Date().toISOString(),
       }).eq("camp_id", row.camp_id);
       details.push({ camp: row.camp_id, result: "charged" });

@@ -372,9 +372,24 @@ async function handleTipCartSucceeded(supabase: ReturnType<typeof createClient>,
       // the rest of the cart from paying out. transfer_error is left for
       // manual follow-up; processed_at stays null so a future retry
       // (Stripe's own delivery retries, or a manual resend) picks it up.
-      await supabase.from("link_tip_cart_items")
-        .update({ transfer_error: err.message })
-        .eq("id", item.id);
+      // Recording the reason was never the problem — nothing READ it. The
+      // comment above says a retry picks it up "Stripe's own delivery retries,
+      // or a manual resend", and neither existed: this handler returns 200, so
+      // Stripe considers the event delivered and never retries, and there was
+      // no resend anywhere in the app. So: raise it with the camp, whose staff
+      // member is the one unpaid, and leave it in the queue that
+      // charge-due-installments now drains nightly (migration 182).
+      const { error: recErr } = await supabase.rpc("record_tip_transfer_failure", {
+        p_item_id: item.id, p_error: err.message,
+      });
+      if (recErr) {
+        // Fall back to the bare write so the reason is at least stored.
+        console.error(`[stripe-connect-webhook] could not raise the failed tip for item ` +
+          `${item.id}: ${recErr.message}`);
+        await supabase.from("link_tip_cart_items")
+          .update({ transfer_error: err.message })
+          .eq("id", item.id);
+      }
     }
   }
 }
