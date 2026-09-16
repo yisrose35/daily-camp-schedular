@@ -542,6 +542,13 @@
                         <input type="number" id="sesSibDisc" placeholder="e.g., 10 for 10% off siblings" min="0" max="100" style="width:100%; padding:8px 10px; border-radius:8px; border:1px solid var(--slate-200); font-size:0.88rem;">
                     </div>
                     <div class="form-group">
+                        <label style="display:flex; align-items:flex-start; gap:8px; font-size:0.85rem; color:var(--slate-600);">
+                            <input type="checkbox" id="sesOvernight" style="width:auto; margin:2px 0 0;">
+                            <span><strong>Overnight / sleepaway session</strong><br>
+                            <span style="font-size:0.78rem; color:var(--slate-500);">Campers sleep at camp. Overnight camp is never a qualifying childcare expense, so this session is excluded from the year-end tax statements parents use for IRS Form 2441. Leave unticked for day camp.</span></span>
+                        </label>
+                    </div>
+                    <div class="form-group">
                         <label for="sesPayPlan" style="font-size:0.82rem; font-weight:600; color:var(--slate-600); margin-bottom:4px; display:block;">Payment Plan</label>
                         <select id="sesPayPlan" onchange="document.getElementById('sesDepositWrap').style.display=this.value==='deposit'?'block':'none'" style="width:100%; padding:8px 10px; border-radius:8px; border:1px solid var(--slate-200); font-size:0.88rem;">
                             <option value="full">Full payment required</option>

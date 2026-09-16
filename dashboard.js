@@ -2440,6 +2440,7 @@
         document.getElementById('sesEarly').value = s.earlyBird || '';
         document.getElementById('sesEarlyDate').value = s.earlyBirdDeadline || '';
         document.getElementById('sesSibDisc').value = s.siblingDiscount || '';
+        document.getElementById('sesOvernight').checked = !!s.overnight;
         document.getElementById('sesPayPlan').value = s.paymentPlan || 'full';
         document.getElementById('sesDeposit').value = s.depositAmount || '';
         document.getElementById('sesDepositWrap').style.display = (s.paymentPlan === 'deposit') ? 'block' : 'none';
@@ -2526,6 +2527,10 @@
             earlyBird: parseFloat(document.getElementById('sesEarly').value) || 0,
             earlyBirdDeadline: document.getElementById('sesEarlyDate').value || '',
             siblingDiscount: parseInt(document.getElementById('sesSibDisc').value) || 0,
+            // Day camp unless the camp says otherwise — the common case, and
+            // the safe default: a session wrongly marked overnight silently
+            // strips a family's whole claim off their tax statement.
+            overnight: !!document.getElementById('sesOvernight').checked,
             paymentPlan: document.getElementById('sesPayPlan').value || 'full',
             depositAmount: parseFloat(document.getElementById('sesDeposit').value) || 0,
             notes: (document.getElementById('sesNotes').value || '').trim(),

@@ -13832,6 +13832,15 @@ function renderFamilyDetailPage(){
     moreItems+='<button onclick="CampistryMe.addChargeForFamily(\''+je(l.famKey)+'\')">Add Charge</button>';
     moreItems+='<button onclick="CampistryMe.issueCreditForFamily(\''+je(l.famKey)+'\')">Issue Credit/Refund</button>';
     moreItems+='<button onclick="CampistryMe.printStatement(\''+je(l.famKey)+'\')">Print Statement</button>';
+    // The year-end statement offers the years this family actually paid in,
+    // newest first, rather than assuming "last year" — an office running this
+    // in December for the season that just ended wants THIS year, and one
+    // catching up in February wants the last. Guessing gets it wrong half the
+    // time and silently produces a statement for a year with no money in it.
+    (window.CampistryTaxStatement?window.CampistryTaxStatement.yearsPresent(l.entries):[]).slice(0,3)
+        .forEach(function(y){
+            moreItems+='<button onclick="CampistryMe.printTaxStatement(\''+je(l.famKey)+'\','+y+')">'+y+' Tax Statement</button>';
+        });
     moreItems+='<button onclick="CampistryMe.editFamily(\''+je(l.famKey)+'\')">Edit Household</button>';
     moreItems+='<button onclick="CampistryMe.toggleBillingAccess(\''+je(l.famKey)+'\')">'+(families[l.famKey]?.billingAccessClosed?'Reopen billing access':'Close billing access')+'</button>';
     moreItems+='<button onclick="CampistryMe.deleteFamily(\''+je(l.famKey)+'\')" style="color:var(--err)">Delete Household</button>';
@@ -14420,6 +14429,116 @@ async function printStatement(famKey){
     }
     h+='<div style="margin-top:30px;text-align:center;color:#999;font-size:9pt">Powered by Campistry</div>';
     h+='<button onclick="window.print()" style="margin-top:20px;padding:8px 24px;cursor:pointer">Print</button></body></html>';
+    w.document.write(h);w.document.close();
+}
+
+/* ---------------------------------------------------------------------------
+ * The year-end statement a parent needs for IRS Form 2441.
+ *
+ * Deliberately NOT the same document as printStatement above. That one is an
+ * account history ending in a balance due — what is still owed. This one is
+ * what was PAID in one calendar year, per child, because Form 2441 is filled
+ * in one qualifying person at a time. The arithmetic (payments applied oldest
+ * charge first, prepayment held back for next year, overnight camp excluded)
+ * all lives in campistry_tax_statement.js; this only fetches and prints.
+ * ------------------------------------------------------------------------- */
+async function printTaxStatement(famKey,year){
+    var TS=window.CampistryTaxStatement;
+    if(!TS){toast('Tax statement module not loaded','err');return}
+    var ledgers=buildFamilyLedgers();
+    var l=ledgers[famKey];if(!l)return;
+    year=Number(year)||new Date().getFullYear();
+    var campName='',campAddress='';
+    try{var s=JSON.parse(localStorage.getItem('campGlobalSettings_v1')||'{}');
+        campName=s.camp_name||s.campName||'';campAddress=s.camp_address||s.campAddress||'';}catch(e){}
+    var w=window.open('','_blank');
+    // The EIN is select-locked on `camps` (migration 121); this owner-only RPC
+    // is the only way to read it, and it is fetched fresh rather than cached.
+    //
+    // NOTE the deliberate difference from printStatement: that one honours
+    // show_tax_id_on_statements, because an ordinary account statement does not
+    // need an EIN and a camp may reasonably not want it on one. A statement a
+    // parent files a tax return from is useless without it — suppressing it
+    // here would produce a document that looks complete and cannot be used. So
+    // the flag is not consulted; a missing EIN is reported as missing instead.
+    var campTaxId='';
+    try{
+        var client=window.CampistryDB&&window.CampistryDB.getClient?window.CampistryDB.getClient():window.supabase;
+        var campId=getCampId();
+        if(client&&campId){
+            var res=await client.rpc('get_camp_tax_id',{p_camp_id:campId});
+            var d=res&&res.data;
+            if(d&&d.success)campTaxId=d.tax_id||'';
+        }
+    }catch(e){}
+
+    // A tuition charge carries the enrollment id on `ref` (the discount credit
+    // carries it with a `_disc` suffix), which is what ties money to a child
+    // and to the session that says whether it was overnight. An add-on charge
+    // has no enrollment, so it lands in the account-level bucket and the report
+    // flags it — Form 2441 needs a child against every amount.
+    function resolveCharge(entry){
+        var eid=String(entry&&entry.ref||'').replace(/_disc$/,'');
+        var e=(enrollments||{})[eid];
+        if(!e)return{};
+        var ses=(sessions||[]).find(function(x){return x.name===e.session});
+        return{camperName:e.camperName||'',session:e.session||'',overnight:!!(ses&&ses.overnight)};
+    }
+    var camperDobs={};
+    ((l.family.camperIds)||[]).concat(l.pendingCamperIds||[]).forEach(function(n){
+        var r=(typeof roster!=='undefined'&&roster)?roster[n]:null;
+        if(r&&r.dob)camperDobs[n]={dob:r.dob};
+    });
+
+    var rep=TS.build({year:year,entries:l.entries,resolveCharge:resolveCharge,campers:camperDobs});
+    var ready=TS.readiness(rep,{name:campName,address:campAddress,taxId:campTaxId});
+
+    var h='<!DOCTYPE html><html><head><title>'+year+' Tax Statement — '+esc(l.family.name)+'</title><style>body{font-family:Arial,sans-serif;font-size:10pt;margin:30px;color:#222}h1{font-size:16pt;margin-bottom:4px}h2{font-size:12pt;margin:20px 0 8px}table{width:100%;border-collapse:collapse;margin-bottom:16px}th{background:#f5f5f5;text-align:left;padding:6px;border:1px solid #ddd;font-size:9pt}td{padding:5px 6px;border:1px solid #ddd;font-size:9pt}.right{text-align:right}.bold{font-weight:bold}.muted{color:#666;font-size:9pt}.warn{background:#FFFBEB;border:1px solid #FDE68A;color:#92400E;padding:9px 12px;border-radius:4px;margin-bottom:10px;font-size:9pt}@media print{button,.noprint{display:none}}</style></head><body>';
+    h+='<h1>'+esc(campName||'Camp')+'</h1>';
+    if(campAddress)h+='<p class="muted" style="margin:0 0 3px">'+esc(campAddress)+'</p>';
+    h+='<p class="muted" style="margin:0 0 3px">Provider Tax ID (EIN): <strong>'+(campTaxId?esc(campTaxId):'NOT SET')+'</strong></p>';
+    h+='<h2 style="margin-top:18px">Statement of Payments — '+year+'</h2>';
+    h+='<p class="muted">For <strong>'+esc(l.family.name)+'</strong> · Prepared '+new Date().toLocaleDateString()+'</p>';
+
+    if(!ready.ready){
+        h+='<div class="warn noprint"><strong>Not ready to send.</strong> Missing: '+esc(ready.missing.join('; '))+
+           (ready.missing.length?'. Add it under Camp Profile on the dashboard, then print again.':'')+'</div>';
+    }
+    rep.warnings.forEach(function(msg){h+='<div class="warn">'+esc(msg)+'</div>'});
+
+    h+='<table><thead><tr><th>Child</th><th class="right">Qualifying care paid</th><th class="right">Not qualifying</th><th class="right">Total paid</th></tr></thead><tbody>';
+    if(!rep.byCamper.length){
+        h+='<tr><td colspan="4" class="muted">No payments were applied to charges in '+year+'.</td></tr>';
+    }
+    rep.byCamper.forEach(function(b){
+        h+='<tr><td>'+esc(b.camperName)+(b.notes.length?'<br><span class="muted">'+esc(b.notes.join(' · '))+'</span>':'')+
+           '</td><td class="right bold">'+fm(b.qualifying)+'</td><td class="right">'+fm(b.notQualifying+b.needsReview)+
+           '</td><td class="right">'+fm(b.total)+'</td></tr>';
+    });
+    h+='<tr style="border-top:2px solid #333"><td class="bold">Total</td><td class="right bold">'+fm(rep.qualifying)+
+       '</td><td class="right bold">'+fm(rep.notQualifying+rep.needsReview)+'</td><td class="right bold">'+fm(rep.paid.net)+'</td></tr>';
+    h+='</tbody></table>';
+
+    if(rep.paid.refunds>0.004){
+        h+='<p class="muted">Payments received '+fm(rep.paid.gross)+' · refunded '+fm(rep.paid.refunds)+
+           ' · net paid '+fm(rep.paid.net)+'. Refunds are applied proportionally across the amounts above.</p>';
+    }
+    if(rep.excluded.length||rep.review.length){
+        h+='<h2>Amounts not included as care</h2><table><thead><tr><th>What</th><th class="right">Amount</th></tr></thead><tbody>';
+        rep.excluded.concat(rep.review).forEach(function(x){
+            h+='<tr><td>'+esc(x.label)+'</td><td class="right">'+fm(x.amount)+'</td></tr>';
+        });
+        h+='</tbody></table>';
+    }
+
+    h+='<h2>What this is</h2><p class="muted">This statement shows what was actually paid to '+esc(campName||'the camp')+
+       ' during '+year+', for use with IRS Form 2441 (Child and Dependent Care Expenses). It is not a bill and does not '+
+       'show what is still owed. Payments are applied to the oldest unpaid charge first. Money paid in '+year+' toward '+
+       'camp in a later year is not included, because Publication 503 counts it in the year the care is given. '+
+       'Overnight camp is never a qualifying expense. Whether a child qualifies — age, dependency, and your own '+
+       'circumstances — is a question for you or your preparer, not the camp.</p>';
+    h+='<div style="margin-top:30px;text-align:center;color:#999;font-size:9pt">Powered by Campistry</div>';
+    h+='<button class="noprint" onclick="window.print()" style="margin-top:20px;padding:8px 24px;cursor:pointer">Print</button></body></html>';
     w.document.write(h);w.document.close();
 }
 
@@ -18672,6 +18791,7 @@ window.CampistryMe={
     issueCredit:issueCredit,issueCreditForFamily:issueCreditForFamily,
     _crFamChanged:_crFamChanged,_crToggleType:_crToggleType,_crUpdateRefundSummary:_crUpdateRefundSummary,_crUpdateBalancePreview:_crUpdateBalancePreview,
     setBillFilter:setBillFilter,setBillSearch:setBillSearch,printStatement:printStatement,
+    printTaxStatement:printTaxStatement,
     requestCardSetup:requestCardSetup,chargeStoredCard:chargeStoredCard,batchCharge:batchCharge,
     // Broadcasts
     openBroadcastModal:openBroadcastModal,viewBroadcast:viewBroadcast,removeBroadcast:removeBroadcast,
