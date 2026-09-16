@@ -257,6 +257,11 @@ if (window.pdfjsLib) { window.pdfjsLib.GlobalWorkerOptions.workerSrc = 'pdfjs-di
 <script src="campistry_deposit_teach_pdf.js?v=20260916-01"></script>
 <script src="campistry_deposits_ui.js?v=20260916-01"></script>
 <script src="campistry_payroll_core.js?v=20260907-01"></script>
+<!-- The family billing account: an append-only ledger. Must load BEFORE
+     campistry_me.js, which posts to it whenever a camper is enrolled or
+     removed. A posted charge is a fact, so removing a camper can no longer
+     erase a debt — see the file header and BILLING_OUTLIVES_ENROLLMENT_DESIGN.md. -->
+<script src="campistry_billing_core.js?v=20260916-01"></script>
 <!-- Shared catalogue of what counselors may see. Loaded by Me (where the
      policy is set) and by Lite (where it's enforced) — one list, so a field
      can't exist in one place and be forgotten in the other. -->

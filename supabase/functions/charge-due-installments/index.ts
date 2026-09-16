@@ -26,12 +26,29 @@
 // Auth: requires header  x-cron-secret: <INSTALLMENT_CRON_SECRET>  so only the
 // scheduler can trigger it.
 //
-// WRITES GO THROUGH migrations/169's record_autopay_installment, one call per
-// installment, NOT through a whole-blob upsert at the end of the run. This used
-// to read every camp's campistryMe up front and write it back after the last
-// card was charged, so the blob was stale for the length of the run: anything
-// the office or a webhook saved in between was discarded, and the run's own
-// charges were lost if anyone else saved first. See that migration's header.
+// TWO PLAN MODELS LIVE HERE, and which one a family uses is decided by the
+// shape of its plan:
+//
+//   POSTED LEDGER (migrations 171/172) — plan.dueDates + nextIndex, no
+//     installments[]. The amount is DERIVED at charge time as
+//     outstanding / instalments remaining, read fresh from the database
+//     immediately before the card is charged. There is no per-instalment
+//     `status` field, so nothing can be marked 'paid' on an instalment nobody
+//     charged — which is what used to leave a parked camper's plan reading
+//     settled while $1,500 went uncollected (TEST_FINDINGS.md D1). Outcomes go
+//     into an append-only history that records charged:0 WITH ITS REASON.
+//
+//   LEGACY FROZEN INSTALMENTS — installments[] each with a mutable status. Kept
+//     working unchanged for families not yet converted by
+//     convert_family_ledgers; conversion is how a camp leaves D1 behind.
+//
+// WRITES GO THROUGH an RPC either way — 172's record_autopay_charge for the
+// ledger path, 169's record_autopay_installment for the legacy one — one call
+// per instalment, NOT a whole-blob upsert at the end of the run. This used to
+// read every camp's campistryMe up front and write it back after the last card
+// was charged, so the blob was stale for the length of the run: anything the
+// office or a webhook saved in between was discarded, and the run's own charges
+// were lost if anyone else saved first. See those migrations' headers.
 //
 // If a camp has connected its own Stripe account (camps.stripe_account_id,
 // see stripe-connect-onboard-camp / migrations/077_camp_stripe_connect.sql),
@@ -404,6 +421,154 @@ serve(async (req) => {
         continue;
       }
 
+      // ── POSTED-LEDGER PLANS (migrations 171/172) ─────────────────────────
+      // A converted plan stores WHEN, never HOW MUCH: dueDates + nextIndex, no
+      // installments[]. The amount is DERIVED at charge time from what is
+      // actually still owed, so there is no frozen number to disagree with
+      // reality and — the whole point — no per-instalment `status` to be marked
+      // 'paid' on an instalment nobody charged. That write is what made a parked
+      // camper's plan read settled while $1,500 went uncollected (D1).
+      //
+      // plan_due_for reads the CURRENT blob rather than the snapshot this run
+      // took at the start, because by the time we reach a given family the
+      // snapshot is minutes old and a parent may have paid in the meantime.
+      const ledgerPlans = (Array.isArray(f.plans) ? f.plans : [])
+        .filter((p: Record<string, any>) => p && Array.isArray(p.dueDates));
+      for (const plan of ledgerPlans) {
+        if (!plan.autopay || plan.paused) continue;
+
+        const { data: due, error: dueErr } = await supabase.rpc("plan_due_for", {
+          p_camp_id: row.camp_id, p_family_key: famKey,
+          p_plan_id: String(plan.id || ""), p_as_of: today,
+        });
+        if (dueErr) {
+          console.error(`[autopay] camp ${row.camp_id} family "${f.name}": could not read what is due (${dueErr.message})`);
+          details.push({ camp: row.camp_id, family: f.name, result: "error_reading_due" });
+          continue;
+        }
+        if (!due) continue;                                  // nothing due yet
+
+        // Nothing owed. Record the outcome WITH ITS REASON and move on —
+        // recording is not the same as settling, and this is the line that used
+        // to destroy an instalment.
+        if (!(Number(due.amount) > 0)) {
+          await supabase.rpc("record_autopay_charge", {
+            p_camp_id: row.camp_id, p_family_key: famKey,
+            p_plan_id: String(plan.id || ""), p_index: due.index,
+            p_due_date: due.dueDate, p_amount: 0,
+            p_reason: due.reason || "nothing_owed",
+          });
+          details.push({ camp: row.camp_id, family: f.name, amount: 0,
+                         result: "nothing_owed" });
+          continue;
+        }
+
+        const amount = Number(due.amount);
+        const camperName2 = (Array.isArray(f.camperIds) && f.camperIds[0]) ? f.camperIds[0] : (f.name || "");
+        let txnId = "", ok = false, failWhy = "";
+
+        if (processorKey) {
+          const creds = (processorKey === "cardknox" || processorKey === "banquest")
+            ? await byopCredentials(String(row.camp_id)) : null;
+          const hasCred = processorKey === "cardknox" ? !!creds?.apiKey
+            : processorKey === "banquest" ? (!!creds?.sourceKey && !!creds?.pin) : false;
+          if (!creds || !hasCred) {
+            // Not a decline and not the family's fault. Record NOTHING so the
+            // counter does not advance — the instalment retries next run once
+            // the camp's processor is connected.
+            details.push({ camp: row.camp_id, family: f.name, amount, result: "skipped_no_processor", processor: processorKey });
+            continue;
+          }
+          const res = processorKey === "cardknox"
+            ? await cardknoxCharge(String(creds.apiKey), Math.round(amount * 100), String(f.byopCustomerRef))
+            : await banquestCharge(creds, Math.round(amount * 100), String(f.byopCustomerRef));
+          ok = !!(res.success && res.externalTransactionId);
+          txnId = String(res.externalTransactionId || "");
+          failWhy = res.error || "Declined";
+          if (ok) {
+            await supabase.rpc("record_processor_transaction", {
+              p_camp_id: row.camp_id, p_processor_key: processorKey,
+              p_external_transaction_id: txnId, p_kind: "charge",
+              p_amount_cents: Math.round(amount * 100),
+              p_status: res.status || "unknown",
+              p_raw_response: res.raw ? JSON.parse(JSON.stringify(res.raw)) : null,
+            });
+          }
+        } else {
+          if (!STRIPE_SECRET) {
+            console.warn(`[autopay] camp ${row.camp_id} family "${f.name}": Stripe camp but STRIPE_SECRET not set — skipping`);
+            details.push({ camp: row.camp_id, family: f.name, amount, result: "skipped_no_stripe_key" });
+            continue;
+          }
+          const pi = await stripeCharge(
+            f.stripeCustomerId, f.stripePaymentMethodId || null, amount,
+            `Autopay instalment — ${f.name || famKey}`,
+            { campId: String(row.camp_id), familyKey: famKey, familyName: camperName2,
+              planId: String(plan.id || ""), source: "autopay" },
+            campDestinations.get(String(row.camp_id)) || null,
+          );
+          if (pi.error || pi.status === "requires_action") {
+            failWhy = pi.error?.message || "requires_authentication";
+          } else if (pi.status === "succeeded") {
+            ok = true; txnId = String(pi.id);
+          } else {
+            // Still processing. Record nothing: the counter must not advance on
+            // a charge that has not landed.
+            details.push({ camp: row.camp_id, family: f.name, amount, result: pi.status });
+            continue;
+          }
+        }
+
+        if (!ok) {
+          // A decline advances the counter with charged:0 and the reason, so the
+          // office can see it happened and the plan does not stall for ever on
+          // one bad card. Nothing is recorded as paid.
+          await supabase.rpc("record_autopay_charge", {
+            p_camp_id: row.camp_id, p_family_key: famKey,
+            p_plan_id: String(plan.id || ""), p_index: due.index,
+            p_due_date: due.dueDate, p_amount: 0, p_reason: "declined: " + failWhy,
+          });
+          failed++;
+          details.push({ camp: row.camp_id, family: f.name, amount, result: "failed", reason: failWhy });
+          continue;
+        }
+
+        // The card was charged. The ledger entry, the plan history row and the
+        // Billing receipt land in ONE locked write — split them and a crash
+        // between leaves either money with no record or a skipped instalment.
+        const rec = await supabase.rpc("record_autopay_charge", {
+          p_camp_id: row.camp_id, p_family_key: famKey,
+          p_plan_id: String(plan.id || ""), p_index: due.index,
+          p_due_date: due.dueDate, p_amount: amount,
+          p_payment: {
+            id: (processorKey ? "auto_byop_" : "auto_") + txnId,
+            family: camperName2, familyKey: famKey,
+            amount: amount, date: today, method: "Autopay (card)",
+            reference: txnId,
+            notes: "Autopay instalment " + (due.index + 1) + " of " + plan.dueDates.length,
+            ...(processorKey
+                ? { byopTransactionId: txnId, byopProcessor: processorKey }
+                : { stripePaymentIntentId: txnId }),
+            status: "succeeded", timestamp: Date.now(),
+          },
+          p_dedupe_key: txnId,
+          p_entry_note: "Autopay instalment " + (due.index + 1) + " of " + plan.dueDates.length,
+        });
+        if (rec.error || !rec.data?.success) {
+          console.error(`[autopay] camp ${row.camp_id} family ${famKey}: A CARD WAS CHARGED AND IS NOT RECORDED (${rec.error?.message || rec.data?.error || "unknown"})`);
+        }
+        charged++;
+        details.push({ camp: row.camp_id, family: f.name, amount,
+                       result: (rec.error || !rec.data?.success) ? "charged_not_recorded" : "charged",
+                       balanceAfter: rec.data?.balance });
+      }
+
+      // ── LEGACY FROZEN-INSTALMENT PLANS ───────────────────────────────────
+      // Everything below runs only for plans not yet converted by migration
+      // 171's convert_family_ledgers. It keeps the old behaviour, D1 included,
+      // because changing it would be a second behaviour for the same data —
+      // conversion is how a camp leaves it behind.
+
       // One balance check per family per run, decremented as installments
       // get charged in this same run (several can be due the same day across
       // multiple plans) — see computeFamilyBalance's header comment.
@@ -416,6 +581,10 @@ serve(async (req) => {
       for (let planIndex = 0; planIndex < plans.length; planIndex++) {
         const plan = plans[planIndex];
         if (!plan || !plan.autopay || !Array.isArray(plan.installments)) continue;
+        // A converted plan was already handled above by the derived path; it has
+        // dueDates and no installments, but guard anyway so a half-converted
+        // plan can never be charged twice in one night.
+        if (Array.isArray(plan.dueDates)) continue;
 
         for (const inst of plan.installments) {
           if (inst.status !== "pending") continue;

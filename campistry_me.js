@@ -3262,6 +3262,112 @@ function cascadeCamperRename(oldName,newName){
     try{(payments||[]).forEach(function(p){if(p&&p.camper===oldName)p.camper=newName});}catch(_){}
     try{var raw=localStorage.getItem('campistry_go_data');if(raw){var go=JSON.parse(raw);if(go&&go.addresses&&go.addresses[oldName]){go.addresses[newName]=go.addresses[oldName];delete go.addresses[oldName];localStorage.setItem('campistry_go_data',JSON.stringify(go))}}}catch(_){}
 }
+// ── The family billing account (campistry_billing_core.js) ─────────────────
+// A family record IS a billing account. Roster operations may detach campers
+// from it; they may never delete it while it carries money. These three helpers
+// are the whole of that rule, and they are deliberately tolerant of
+// BillingCore being absent — campistry_me.js is loaded by eight pages and only
+// some of them include the core, so a missing module must degrade to "this
+// family has no ledger" rather than throw in the middle of a delete.
+function _billingCore(){return (typeof window!=='undefined'&&window.BillingCore)||null}
+
+/**
+ * Does this family carry money? The predicate that decides whether its record
+ * may be deleted once the last camper is gone. ANY ledger entry counts, even a
+ * set netting to zero — see the comment in cascadeCamperDelete.
+ */
+function _familyHasMoney(f){
+    if(!f)return false;
+    var B=_billingCore();
+    if(B)return B.hasMoney(f);
+    // Without the core, be conservative: anything that looks like money keeps
+    // the record. Deleting a family we cannot assess is the unrecoverable
+    // direction, so the fallback errs towards keeping.
+    if(Array.isArray(f.entries)&&f.entries.length)return true;
+    if(Array.isArray(f.plans)&&f.plans.length)return true;
+    if(f.plan&&f.plan.installments)return true;
+    if(f.cardOnFile||f.byopCustomerRef||f.stripeCustomerId)return true;
+    if(Array.isArray(f.savedPaymentMethods)&&f.savedPaymentMethods.length)return true;
+    if(Array.isArray(f.charges)&&f.charges.length)return true;
+    return !!(Number(f.balance)||Number(f.totalPaid));
+}
+
+/**
+ * Post a withdrawal credit for every live enrollment belonging to `name` on
+ * this family. Idempotent per enrollment, so calling it from unenroll and again
+ * from a later delete credits once.
+ *
+ * `policy` comes from the camp's refund rule; 'none' (forgive nothing) is the
+ * default because forgiving by accident is the failure that loses money, and
+ * the office can always post a credit afterwards.
+ */
+function _creditWithdrawalsFor(f,name,reason,policy){
+    var B=_billingCore();
+    if(!B||!f)return 0;
+    var n=0;
+    Object.keys(enrollments||{}).forEach(function(eid){
+        var e=enrollments[eid];
+        if(!e||e.camperName!==name)return;
+        if(!B.tuitionEntryFor(f,eid))return;   // nothing posted for it
+        var res=B.creditWithdrawal(f,{
+            enrollmentId:eid,camperName:name,
+            camperId:(roster[name]&&roster[name].camperId)||null,
+            policy:policy==null?'none':policy,
+            note:'Camper '+(reason||'removed')+' — '+name,
+            by:'office'
+        });
+        if(res&&res.ok&&res.entry)n++;
+    });
+    return n;
+}
+
+/**
+ * Post tuition for one enrollment, at most once ever. Safe to call from a
+ * render path: BillingCore.postTuition is keyed on the enrollment id, so it
+ * cannot double-bill however often it runs.
+ */
+function _postTuitionFor(f,eid){
+    var B=_billingCore();
+    if(!B||!f)return false;
+    var e=enrollments&&enrollments[eid];
+    if(!e)return false;
+    if(e.status!=='enrolled'&&e.status!=='accepted')return false;
+    _freshSessions();
+    var live=(sessions||[]).find(function(s){return s&&s.name===e.session});
+    var liveT=live?Number(live.tuition):NaN;
+    var gross=(!isNaN(liveT)&&liveT>0)?liveT:(Number(e.sessionTuition)||0);
+    if(!(gross>0))return false;
+    var disc=0;
+    if(e.discount&&e.discount!==null){
+        disc=(Number(e.discount.amt)||0)+Math.round(gross*(Number(e.discount.pct)||0)/100);
+    }
+    var res=B.postTuition(f,{
+        enrollmentId:eid,camperId:e.camperId!=null?e.camperId:((roster[e.camperName]&&roster[e.camperName].camperId)||null),
+        camperName:e.camperName||'',session:e.session||'',
+        tuition:gross,discount:disc,date:e.date||undefined
+    });
+    return !!(res&&res.ok&&!res.alreadyPosted);
+}
+
+/** Money helpers for the removal warnings. Read-only. */
+function _fmtMoney(n){return '$'+(Math.round((Number(n)||0)*100)/100).toLocaleString('en-US',{minimumFractionDigits:2,maximumFractionDigits:2})}
+function _famNameForCamper(n){
+    var fk=_resolveFamilyKeyExact(n);
+    return (fk&&families[fk]&&families[fk].name)||'This family';
+}
+/**
+ * What the family would still owe AFTER this camper is removed under the
+ * default policy (forgive nothing). With a posted ledger that is simply the
+ * current balance, because removal posts no credit by default — which is
+ * exactly why the number no longer changes when a camper leaves.
+ */
+function _outstandingForCamper(n){
+    var B=_billingCore();
+    var fk=_resolveFamilyKeyExact(n);
+    if(!B||!fk||!families[fk])return 0;
+    return B.balance(families[fk]);
+}
+
 function cascadeCamperDelete(name){
     if(!name)return;
     try{
@@ -3274,8 +3380,26 @@ function cascadeCamperDelete(name){
         Object.keys(families).forEach(function(fk){
             var f=families[fk];
             if(!f||!Array.isArray(f.camperIds))return;
+            // Before the camper's enrollments are deleted below, turn whatever
+            // they still owe into a posted CREDIT against the tuition charge —
+            // not a deletion of the charge. The charge happened; what changes is
+            // how much of it is still owed. Default policy forgives NOTHING, so
+            // a family who owes money still owes it after their child is
+            // removed. That is the whole point: the debt used to vanish with
+            // the enrollment because the balance was re-derived from live
+            // enrollments rather than posted (see campistry_billing_core.js).
+            _creditWithdrawalsFor(f,name,'removed');
             f.camperIds=f.camperIds.filter(function(c){return c!==name});
-            if(f.camperIds.length===0)delete families[fk];
+            // A family with no campers left is deleted ONLY if it carries no
+            // money at all — no ledger, no plan, no card. The deletion exists
+            // to stop an empty $0 record sitting in Billing for ever (see the
+            // comment above), and that reason does not apply to an account with
+            // a history: a family that paid and was credited is a CLOSED
+            // account worth keeping, not an empty one. Keeping it is also what
+            // lets the parent still reach their balance — migration 070 already
+            // keeps their portal login alive, it just had nothing to resolve to.
+            if(f.camperIds.length===0&&!_familyHasMoney(f)){delete families[fk];return}
+            if(f.camperIds.length===0){f.formerCamper=true;f.formerSince=f.formerSince||new Date().toISOString()}
         });
     }catch(_){}
     try{Object.keys(bunkAsgn).forEach(function(b){if(Array.isArray(bunkAsgn[b]))bunkAsgn[b]=bunkAsgn[b].filter(function(c){return c!==name})});}catch(_){}
@@ -3323,7 +3447,24 @@ function cascadeCamperDelete(name){
 }
 async function deleteCamper(n){
     if(!n||!roster[n])return;
-    var ok=await confirmDialog({title:'Delete Camper?',message:'<strong>'+esc(n)+'</strong> will be permanently deleted.',confirmLabel:'Delete',danger:true});
+    // Say what happens to the money. Removing a camper used to erase the
+    // family's debt silently; now the balance is carried, and the office should
+    // be told that rather than discovering it later. Warn, don't block: a hard
+    // block gets worked around by resetting the roster instead, which had the
+    // same effect and no warning at all.
+    var _msg='<strong>'+esc(n)+'</strong> will be permanently deleted.';
+    var _owed=_outstandingForCamper(n);
+    if(_owed>0.005){
+        _msg+='<br><br>⚠ <strong>'+esc(_famNameForCamper(n))+'</strong> still owes '
+            +'<strong>'+_fmtMoney(_owed)+'</strong>. This is kept as an outstanding '
+            +'balance on the family and the parent can still pay it. Their payment '
+            +'history stays on the record.';
+    }else if(_owed<-0.005){
+        _msg+='<br><br>⚠ <strong>'+esc(_famNameForCamper(n))+'</strong> is owed '
+            +'<strong>'+_fmtMoney(-_owed)+'</strong> back. The family record is kept '
+            +'so the refund can still be made.';
+    }
+    var ok=await confirmDialog({title:'Delete Camper?',message:_msg,confirmLabel:'Delete',danger:true});
     if(!ok)return;
     var capturedRoster=roster[n];
     var capturedFamilyLinks=[];
@@ -3398,6 +3539,13 @@ function unenrollCamper(n){
     d._priorBunk=priorBunk;
     d.bunk='';
     if(priorBunk&&bunkAsgn[priorBunk]) bunkAsgn[priorBunk]=bunkAsgn[priorBunk].filter(function(c){return c!==n});
+    // Park the money too. Credit whatever this camper's enrollments still owe,
+    // per the camp's refund policy, BEFORE the statuses flip — the ledger keeps
+    // the original tuition charge either way, so nothing is lost and the office
+    // can reverse the credit if the camper comes back. The Undo below reverses
+    // it for them.
+    var _fkOf=_resolveFamilyKeyExact(n);
+    var _credited=_fkOf?_creditWithdrawalsFor(families[_fkOf],n,'unenrolled'):0;
     var flipped=[];
     Object.keys(enrollments).forEach(function(id){
         var e=enrollments[id];
@@ -3420,6 +3568,10 @@ function unenrollCamper(n){
         d.bunk=priorBunk;
         if(priorBunk){bunkAsgn[priorBunk]=bunkAsgn[priorBunk]||[];if(bunkAsgn[priorBunk].indexOf(n)<0)bunkAsgn[priorBunk].push(n);}
         flipped.forEach(function(f){if(enrollments[f.id])enrollments[f.id].status=f.prev;});
+        // Reverse the withdrawal credits rather than deleting them: the ledger
+        // is append-only, so "credited in March, reversed in March" stays
+        // answerable. _reopenWithdrawals is also what reenrollCamper uses.
+        if(_credited)_reopenWithdrawals(_fkOf,n);
         save();render(curPage);toast(n+' restored to the active roster');
     }});
 }
@@ -3427,6 +3579,34 @@ function unenrollCamper(n){
 // still exists in the current camp structure (a rename/deletion while they
 // were parked leaves them unplaced rather than silently landing in a
 // resurrected bunk name), and reopens the matching application(s).
+/**
+ * The camper is back: the tuition is owed again, so REVERSE the withdrawal
+ * credits instead of deleting them. Reversing is what the ledger is for — the
+ * credit and its reversal both stay on the record, so an office can see the
+ * whole story, and the balance is right again because the ledger got longer.
+ *
+ * This is also the structural answer to D1. The old model marked instalments
+ * 'paid' while the balance was zero and nothing ever reopened them, so a
+ * re-enrolled family was permanently short. There is nothing to reopen here:
+ * the plan never recorded a payment that did not happen, and the balance comes
+ * back on its own.
+ */
+function _reopenWithdrawals(fk,name){
+    var B=_billingCore();
+    if(!B||!fk||!families[fk])return 0;
+    var f=families[fk],n=0;
+    Object.keys(enrollments||{}).forEach(function(eid){
+        var e=enrollments[eid];
+        if(!e||e.camperName!==name)return;
+        var credit=B.withdrawalCreditFor(f,eid);
+        if(!credit||B.isReversed(f,credit.id))return;
+        var res=B.reverse(f,credit.id,{note:'Re-enrolled — '+name,by:'office'});
+        if(res&&res.ok)n++;
+    });
+    if(n)delete f.formerCamper;
+    return n;
+}
+
 function reenrollCamper(n){
     var d=roster[n]; if(!d)return;
     delete d.unenrolled;delete d.unenrolledAt;
@@ -3444,6 +3624,7 @@ function reenrollCamper(n){
         e.statusHistory=e.statusHistory||[];
         e.statusHistory.push({from:'unenrolled',to:'enrolled',date:new Date().toISOString(),by:'office'});
     });
+    _reopenWithdrawals(_resolveFamilyKeyExact(n),n);
     save();render(curPage);
     toast(n+' re-enrolled');
 }
@@ -11469,6 +11650,21 @@ function buildFamilyLedgers(){
     // so the family detail page can show them apart instead of silently
     // netting one against the other — that's what made the numbers hard
     // to follow. totalGrossPayments - totalRefunds === totalPayments.
+    // POST tuition for every live enrollment before rendering anything. This is
+    // what turns a charge from a calculation into a fact: once posted it stays
+    // on the family's ledger whatever later happens to the enrollment, which is
+    // why removing a camper can no longer erase a debt. Safe to run on every
+    // render — BillingCore.postTuition is keyed on the enrollment id and refuses
+    // a second post, so it cannot double-bill (see rule 2 in its header).
+    if(_billingCore()){
+        Object.keys(enrollments||{}).forEach(function(eid){
+            var e=enrollments[eid];
+            if(!e||(e.status!=='enrolled'&&e.status!=='accepted'))return;
+            var fk=_resolveFamilyKeyExact(e.camperName);
+            if(fk&&families[fk])_postTuitionFor(families[fk],eid);
+        });
+    }
+
     var ledgers={}; // famKey → {family, entries[], totalCharges, totalPayments, totalGrossPayments, totalRefunds, totalCredits, balance}
     Object.entries(families).forEach(function([fk,f]){
         ledgers[fk]={family:f,famKey:fk,entries:[],totalCharges:0,totalPayments:0,totalGrossPayments:0,totalRefunds:0,totalCredits:0,balance:0};
@@ -11669,8 +11865,29 @@ function buildFamilyLedgers(){
     }
 
     // 4. Compute balances and sort entries
+    var _B=_billingCore();
     Object.values(ledgers).forEach(function(l){
         l.balance=l.totalCharges-l.totalPayments-l.totalCredits;
+        // THE POSTED LEDGER WINS when the family has one. For an ordinary
+        // enrolled family the two agree — same tuition, same payments — so this
+        // changes nothing. They diverge in exactly the case this whole redesign
+        // is about: a FORMER family, whose enrollments are gone, so the derived
+        // figure above is 0 while the ledger still holds the charge they never
+        // paid. Deriving would erase the debt; the ledger is the fact.
+        if(_B&&_B.hasMoney(l.family)&&_B.entriesOf(l.family).length){
+            var posted=_B.balance(l.family);
+            // A gap means the derived and posted views disagree about a family
+            // that IS enrolled — worth surfacing rather than silently picking
+            // one, because it means something posted that the derived path
+            // cannot see (or the other way round).
+            if(Math.abs(posted-l.balance)>0.005){
+                l.ledgerDiff=Math.round((posted-l.balance)*100)/100;
+            }
+            l.balance=posted;
+            l.ledgerBalance=posted;
+            l.postedSummary=_B.summary(l.family);
+        }
+        l.formerCamper=!!l.family.formerCamper;
         l.entries.sort(function(a,b){return(a.date||'').localeCompare(b.date||'')});
         // Determine status
         var today=new Date().toISOString().split('T')[0];
@@ -16385,7 +16602,25 @@ function importRows(rows,mode){
     // ═══ WIPE EXISTING DATA — CSV is the new source of truth ═══
     roster={};
     structure={};
-    families={};
+    // NOT families={}. This is the annual "clear house for a new summer" path,
+    // and wiping families wholesale destroyed every payment plan, every saved
+    // card and every outstanding balance in the camp — silently, since autopay
+    // then found no families to charge and said nothing. Families that carry
+    // money are KEPT as billing accounts with their camper links cleared; only
+    // genuinely empty ones are dropped. Their ledgers are untouched, so what
+    // each family owes survives the reset exactly.
+    (function(){
+        var kept=0;
+        Object.keys(families).forEach(function(fk){
+            var f=families[fk];
+            if(!f||!_familyHasMoney(f)){delete families[fk];return}
+            f.camperIds=[];
+            f.formerCamper=true;
+            f.formerSince=f.formerSince||new Date().toISOString();
+            kept++;
+        });
+        if(kept)console.log('[Me] Roster reset: kept '+kept+' family billing account'+(kept===1?'':'s')+' that still carry money');
+    })();
     bunkAsgn={};
     // nextPersonId is intentionally NOT reset here — it's shared with Staff
     // ID (see the declaration above), and staff aren't wiped by a camper
@@ -16414,7 +16649,10 @@ function importRows(rows,mode){
         g.app1.camperRoster={};
         g.app1.divisions={};
         if(!g.campistryMe)g.campistryMe={};
-        g.campistryMe.families={};
+        // Mirror the in-memory decision above rather than blanking it: writing
+        // {} here would push the wipe to the cloud and undo everything the
+        // preservation just did on the next hydration.
+        g.campistryMe.families=families;
         g.campistryMe.bunkAssignments={};
         // nextPersonId deliberately left alone here too — see the comment
         // above where roster/structure/families get wiped.

@@ -20,10 +20,15 @@
 //                       rows outright, and deletes the FAMILY record once it
 //                       has no campers left. Payments deliberately stay.
 //
-// Three defects are pinned below, each marked DEFECT. They assert the CURRENT
-// behaviour so the suite stays honest and green — when one is fixed its test
-// fails and gets rewritten. None of them loses money silently on the day a
-// camper leaves; all three lose money or an audit record later.
+// Tests marked FIXED assert the behaviour AFTER migrations 171/172 and the
+// campistry_billing_core.js rewrite: the family record is a billing account, so
+// a debt survives a camper being removed and survives the annual roster reset.
+// Their earlier versions pinned the defect instead; they were rewritten when the
+// fix landed, which is what these files are for.
+//
+// Tests still marked DEFECT are genuinely open — D2 (rescind deletes the audit
+// record it promises) and D3/D4 (the canteen balance, which is the same
+// principle not yet applied to campistrySnacks).
 
 const test = require('node:test');
 const assert = require('node:assert');
@@ -164,7 +169,13 @@ test('a sibling still enrolled keeps being charged', () => {
 // ── 2. DEFECT: parking a camper permanently burns the instalments that
 //       come due while they are parked ──────────────────────────────────────
 
-test('DEFECT: re-enrolling after a parked spell leaves an uncollectable gap', () => {
+test('LEGACY PATH ONLY: re-enrolling after a parked spell leaves a gap', () => {
+    // STILL TRUE for a plan that has not been converted by
+    // convert_family_ledgers, which is why this stays pinned — but it is no
+    // longer how a converted plan behaves. The ledger path derives the amount
+    // from the balance and has no instalment status to write, so the equivalent
+    // scenario collects in full; see "D1 FIXED" in tests/billing_core.test.js.
+    //
     // While the balance is <= 0, every instalment that comes DUE is marked
     // 'paid' with "Covered by an earlier payment — not charged". That is right
     // while the camper is gone. It is not reversible: reenrollCamper() restores
@@ -248,44 +259,46 @@ test('DEFECT: a rescinded application is deleted, not kept as Withdrawn', () => 
 
 // ── 4. a hard delete drops the family record, and with it the card ─────────
 
-test('deleting the last camper deletes the family record', () => {
-    // cascadeCamperDelete deletes a family once camperIds is empty, because
-    // buildFamilyLedgers renders ANY families[] entry and an empty one would
-    // sit there forever as a $0 "Paid" card.
+test('FIXED: deleting the last camper KEEPS a family that owes money', () => {
+    // cascadeCamperDelete used to delete a family the moment camperIds emptied,
+    // because buildFamilyLedgers renders ANY families[] entry and an empty one
+    // would sit in Billing forever as a $0 "Paid" card. That reason does not
+    // apply to an account with a HISTORY, so the delete is now conditional.
     const d = steinDb();
     d.payments.push({ familyKey: 'f1', amount: 500, status: 'succeeded' });
 
-    // cascadeCamperDelete('Malky Stein')
+    // cascadeCamperDelete('Malky Stein'), as it is now
+    const hasMoney = f => !!(f && ((f.plans || []).length || f.cardOnFile ||
+        (f.charges || []).length || (f.entries || []).length ||
+        (f.savedPaymentMethods || []).length));
     Object.keys(d.families).forEach(fk => {
         const f = d.families[fk];
         f.camperIds = f.camperIds.filter(c => c !== 'Malky Stein');
-        if (f.camperIds.length === 0) delete d.families[fk];
+        if (f.camperIds.length === 0 && !hasMoney(f)) { delete d.families[fk]; return; }
+        if (f.camperIds.length === 0) f.formerCamper = true;
     });
     Object.keys(d.enrollments).forEach(id => {
         if (d.enrollments[id].camperName === 'Malky Stein') delete d.enrollments[id];
     });
 
-    assert.deepStrictEqual(Object.keys(d.families), [], 'the family record is gone');
-    // Payments deliberately stay — erasing billing history is worse.
-    assert.strictEqual(d.payments.length, 1, 'the payment record must survive the delete');
-    // But it now belongs to no family, so no ledger renders it.
-    assert.strictEqual(d.families[d.payments[0].familyKey], undefined,
-        'the surviving payment points at a family that no longer exists');
-    // And autopay correctly cannot run.
-    assert.deepStrictEqual(autopayNight(d, 'f1', '2026-02-01'), [],
-        'autopay must not run against a deleted family');
+    assert.ok(d.families.f1,
+        'the family record must survive — it is a billing account, and the ' +
+        'parent still owes money (migration 070 already keeps their portal login ' +
+        'alive; before this it had nothing to resolve to)');
+    assert.strictEqual(d.payments.length, 1, 'the payment record survives too');
+    assert.ok(d.families[d.payments[0].familyKey],
+        'and the payment still points at a family that exists');
 });
 
-test('a hard delete takes the saved card with it', () => {
-    // byopCustomerRef / stripeCustomerId / savedPaymentMethods all live ON the
-    // family record, so deleting it orphans the token at the processor. A
-    // refund by transaction id still works; a refund to the saved method does
-    // not. Worth knowing before deleting a camper who paid by card.
+test('FIXED: a hard delete no longer orphans the saved card', () => {
+    // The token still lives on the family record, which is fine now that the
+    // record is not deleted while it carries money — so a refund to the saved
+    // method keeps working after the camper is gone.
     const d = steinDb();
     assert.ok(d.families.f1.savedPaymentMethods.length, 'card is on the family record');
-    delete d.families.f1;
-    assert.strictEqual(d.families.f1, undefined,
-        'the card-on-file went with the family — nothing else holds the token');
+    const src = read('campistry_me.js');
+    assert.match(src, /if\(f\.camperIds\.length===0&&!_familyHasMoney\(f\)\)/,
+        'the delete is unguarded again — the token would be orphaned');
 });
 
 // ── 5. DEFECT: the canteen balance outlives the camper, by name ────────────
@@ -408,27 +421,43 @@ test('the waiver note does not mention the camper leaving', () => {
 function replaceImportWipe(db) {
     db.roster = {};
     db.structure = {};
-    db.families = {};          // plans, saved cards, charges, credits — all of it
+    // Mirrors campistry_me.js after the fix: a family that carries money is KEPT
+    // as a billing account with its camper links cleared; only an empty one is
+    // dropped. tests/billing_wiring.test.js asserts the real code does this.
+    for (const fk of Object.keys(db.families)) {
+        const f = db.families[fk];
+        const hasMoney = !!(f && ((f.plans || []).length || f.cardOnFile ||
+            (f.charges || []).length || (f.entries || []).length));
+        if (!hasMoney) { delete db.families[fk]; continue; }
+        f.camperIds = [];
+        f.formerCamper = true;
+    }
     db.bunkAsgn = {};
     // NOT wiped: enrollments, finance.payments.
     return db;
 }
 
-test('the Replace wipe is exactly these four, and enrollments is not one', () => {
+test('FIXED: the Replace wipe no longer clears families', () => {
+    // This test used to assert `families={}` was IN the wipe list. It is not any
+    // more: migrations 171/172 made the family record a billing account, and the
+    // reset now keeps any account that carries money (see tests/billing_wiring).
     const src = read('campistry_me.js');
     const wipe = src.slice(src.indexOf('═══ WIPE EXISTING DATA'),
                            src.indexOf('nextPersonId is intentionally NOT reset'));
     assert.ok(wipe.length > 0, 'the wipe block moved — re-check this test');
-    for (const k of ['roster={}', 'structure={}', 'families={}', 'bunkAsgn={}']) {
+    for (const k of ['roster={}', 'structure={}', 'bunkAsgn={}']) {
         assert.ok(wipe.includes(k), `the wipe no longer clears ${k}`);
     }
-    // If enrollments ever joins the wipe, the orphaned-charge behaviour below
-    // changes completely and these tests need rewriting.
+    // Anchored on a STATEMENT, not a substring — the surrounding comment
+    // mentions `families={}` precisely to explain why it is gone, and matching
+    // that comment is what made an earlier version of this test pass wrongly.
+    assert.ok(!/^\s*families=\{\};\s*$/m.test(wipe),
+        'families={} is back — the annual reset destroys every payment plan again');
     assert.ok(!/\benrollments\s*=\s*\{\}/.test(wipe),
         'enrollments is now wiped too — re-derive what Billing shows');
 });
 
-test('CLEARING HOUSE: every payment plan and saved card is destroyed', () => {
+test('FIXED: clearing house KEEPS every plan, card and balance', () => {
     const d = steinDb();
     d.payments.push({ familyKey: 'f1', amount: 1000, status: 'succeeded' });
     assert.ok(d.families.f1.plans[0].installments.some(i => i.status === 'pending'),
@@ -436,13 +465,17 @@ test('CLEARING HOUSE: every payment plan and saved card is destroyed', () => {
 
     replaceImportWipe(d);
 
-    assert.deepStrictEqual(Object.keys(d.families), [],
-        'the plan, the card and the balance all lived on the family record');
-    // The payment history survives — see the next test for why that is load-bearing.
-    assert.strictEqual(d.payments.length, 1);
+    assert.deepStrictEqual(Object.keys(d.families), ['f1'],
+        'a family that carries money must survive the annual reset');
+    assert.ok(d.families.f1.plans.length, 'the payment plan survives');
+    assert.ok(d.families.f1.cardOnFile, 'the saved card survives');
+    assert.deepStrictEqual(d.families.f1.camperIds, [],
+        'its camper links are cleared — it is a billing account now, not a roster row');
+    assert.strictEqual(d.families.f1.formerCamper, true);
+    assert.strictEqual(d.payments.length, 1, 'and the payment history is untouched');
 });
 
-test('CLEARING HOUSE: autopay silently stops for everyone', () => {
+test('FIXED: clearing house does not silently stop autopay', () => {
     // charge-due-installments iterates me.families. After the wipe there are
     // none, so it charges nobody — with no error and no log line, because the
     // loop body simply never runs. Every remaining instalment goes uncollected.
@@ -452,10 +485,13 @@ test('CLEARING HOUSE: autopay silently stops for everyone', () => {
 
     replaceImportWipe(d);
 
-    assert.deepStrictEqual(autopayNight(d, 'f1', '2026-02-01'), [],
-        'autopay is dead — and says nothing');
-    assert.deepStrictEqual(autopayNight(d, 'f1', '2026-06-01'), [],
-        'and stays dead for every remaining instalment');
+    // The family record — and therefore the plan and the card — is still there,
+    // so the runner can still find it. What it charges is now derived from the
+    // posted ledger rather than a frozen instalment (migration 172), which
+    // tests/billing_core.test.js covers directly.
+    assert.ok(d.families.f1, 'the runner has a family to find');
+    assert.ok(d.families.f1.plans[0].autopay, 'and a live plan on it');
+    assert.ok(d.families.f1.cardOnFile, 'and a card to charge');
 });
 
 test('CLEARING HOUSE: the payment HISTORY survives the cloud write', () => {

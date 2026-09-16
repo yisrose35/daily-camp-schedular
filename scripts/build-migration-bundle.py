@@ -111,6 +111,10 @@ MANIFEST = [
     # has one, falls back to the old derived path when it does not.
     ("171_posted_ledger",
      "The family balance becomes a posted ledger (a debt survives a withdrawal)"),
+    # MUST come after 171: record_autopay_charge and plan_due both call
+    # family_ledger_balance, and plan_due_for reads a converted plan's shape.
+    ("172_autopay_posts_to_ledger",
+     "Autopay charges a DERIVED amount and posts it to the ledger (kills D1)"),
 ]
 
 HEADER = """-- ═══════════════════════════════════════════════════════════════════════════
@@ -432,6 +436,11 @@ UNION ALL SELECT 'the family balance is a posted ledger',
        CASE WHEN EXISTS (SELECT 1 FROM pg_proc WHERE proname='family_ledger_balance')
              AND EXISTS (SELECT 1 FROM pg_proc WHERE proname='convert_family_ledgers')
              AND EXISTS (SELECT 1 FROM pg_proc WHERE proname='report_plan_undercollection')
+            THEN 'OK' ELSE 'MISSING' END
+UNION ALL SELECT 'autopay derives the amount and posts to the ledger',
+       CASE WHEN EXISTS (SELECT 1 FROM pg_proc WHERE proname='record_autopay_charge')
+             AND EXISTS (SELECT 1 FROM pg_proc WHERE proname='plan_due')
+             AND EXISTS (SELECT 1 FROM pg_proc WHERE proname='plan_due_for')
             THEN 'OK' ELSE 'MISSING' END
 UNION ALL SELECT 'camp shop settles its orders',
        CASE WHEN EXISTS (SELECT 1 FROM pg_proc WHERE proname='settle_shop_order')
