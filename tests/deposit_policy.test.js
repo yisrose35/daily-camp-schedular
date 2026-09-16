@@ -437,3 +437,45 @@ test('the post-acceptance form carries it too', () => {
     assert.match(fn, /e\.depositRequired/);
     assert.ok(!/amountFor/.test(fn), 'the post-acceptance form must not recompute the amount');
 });
+
+// ── siblings on their own sessions ──────────────────────────────────────────
+test('each camper is priced for the session they picked', () => {
+    // Multiplying one price by the head count was right only while everyone
+    // came for the same weeks. With a sibling on a different session it
+    // quietly over- or under-charged, and the parent could not see which.
+    const reg = fs.readFileSync(path.join(ROOT, 'campistry_register.html'), 'utf8');
+
+    assert.match(reg, /function _sibSessionSelect/, 'siblings have no session picker');
+    assert.match(reg, /Same as Camper 1/, 'the common case must stay zero clicks');
+    assert.match(reg, /class="fs sib-ses"/);
+    assert.match(reg, /siblings\[i\]\.session=el\.value/, 'the choice is never read back');
+
+    // One resolver, so the price, the deposit and the saved application cannot
+    // disagree about which weeks a sibling is coming for.
+    assert.match(reg, /function _sessionFor/);
+    const price = reg.slice(reg.indexOf('function updatePrice('), reg.indexOf('// ─── DEPOSIT TO REGISTER'));
+    assert.match(price, /_sessionFor\(sib\)/, 'the total ignores a sibling’s own session');
+    assert.ok(!/fm\(total\*\(perCamper\)\)/.test(price),
+        'the total must be a sum of what each camper picked, not one price times a head count');
+
+    // And the record has to carry it, or Billing charges for the wrong weeks.
+    assert.match(reg, /var _camSession=_sessionFor\(cam\)/);
+    assert.match(reg, /session:_camSession\.name\|\|selSess/);
+    assert.match(reg, /sessionTuition:Number\(_camSession\.tuition\)\|\|0/);
+
+    // The deposit counts each camper's own session too.
+    const due = reg.slice(reg.indexOf('function _regDepositDue('), reg.indexOf('/** Write only when it changes'));
+    assert.match(due, /_sessionFor\(sib\)/);
+});
+
+test('a missing deposit box says which kind of missing it is', () => {
+    // Configured-but-absent and never-set-up look identical on a parent's
+    // screen, and that ambiguity cost days. Four causes, four messages.
+    const reg = fs.readFileSync(path.join(ROOT, 'campistry_register.html'), 'utf8');
+    assert.match(reg, /did not load/);
+    assert.match(reg, /migration 164 not applied/);
+    assert.match(reg, /switched off/);
+    assert.match(reg, /works out to \$0/);
+    // Once, not once per keystroke — updatePrice runs on every edit.
+    assert.match(reg, /_depDiagSaid/);
+});

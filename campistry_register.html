@@ -867,8 +867,40 @@ function updatePrice(){
         if(discount.amt){total-=discount.amt;lines.push('<div style="color:var(--ok);font-size:.78rem">'+esc(discount.label)+': -'+fm(discount.amt)+'</div>')}
     }
     if(total<0)total=0;
-    var perCamper=1+siblings.length;
-    el.innerHTML='<div style="display:flex;justify-content:space-between;align-items:center;padding:10px 14px;background:var(--s50);border-radius:var(--r);border:1px solid var(--s200)"><div><div style="font-size:.78rem;color:var(--s500)">'+perCamper+' camper'+(perCamper>1?'s':'')+'</div><div style="font-size:1.1rem;font-weight:800;color:var(--me)">'+fm(total*(perCamper))+'</div>'+lines.join('')+'</div><div style="text-align:right;font-size:.75rem;color:var(--s400)">'+fm(total)+' per camper</div></div>';
+
+    // Each camper pays for the session THEY picked. Multiplying one price by
+    // the head count was right only while everyone came for the same weeks;
+    // with a sibling on a different session it quietly overcharged or
+    // undercharged, and the parent had no way to see which.
+    var rows=[{label:'Camper 1',price:total,session:selSess}];
+    var mixed=false;
+    siblings.forEach(function(sib,i){
+        var so=_sessionFor(sib);
+        var ownName=(sib.session||selSess);
+        if(sib.session&&sib.session!==selSess)mixed=true;
+        // A sibling on the primary's session pays the discounted/early-bird
+        // price worked out above; one on a different session pays that
+        // session's own tuition.
+        var price=(!sib.session||sib.session===selSess)?total:(so?Number(so.tuition)||0:0);
+        rows.push({label:'Camper '+(i+2),price:price,session:ownName});
+    });
+    var grand=rows.reduce(function(a,r){return a+r.price},0);
+    var perCamper=rows.length;
+
+    el.innerHTML='<div style="padding:10px 14px;background:var(--s50);border-radius:var(--r);border:1px solid var(--s200)">'
+        +'<div style="display:flex;justify-content:space-between;align-items:center;gap:12px;flex-wrap:wrap">'
+        +'<div><div style="font-size:.78rem;color:var(--s500)">'+perCamper+' camper'+(perCamper>1?'s':'')+'</div>'
+        +'<div style="font-size:1.1rem;font-weight:800;color:var(--me)">'+fm(grand)+'</div>'+lines.join('')+'</div>'
+        +'<div style="text-align:right;font-size:.75rem;color:var(--s400)">'
+        +(mixed?'different sessions':fm(total)+' per camper')+'</div></div>'
+        // Only itemised when it says something a single figure cannot: who is
+        // on which session, and what each of them costs.
+        +(mixed?'<div style="margin-top:8px;border-top:1px solid var(--s200);padding-top:7px">'
+            +rows.map(function(r){
+                return '<div style="display:flex;justify-content:space-between;font-size:.78rem;color:var(--s600);padding:2px 0">'
+                    +'<span>'+esc(r.label)+' \u00b7 '+esc(r.session||'no session')+'</span><span>'+fm(r.price)+'</span></div>';
+            }).join('')+'</div>':'')
+        +'</div>';
     // The deposit can be a share of this, so it moves whenever the price does.
     try{ _regRenderDeposit(); }catch(e){ console.warn('[Register] deposit box:',e&&e.message); }
 }
@@ -880,7 +912,7 @@ function updatePrice(){
 // amount. It deliberately does not gate the submit button: holding an
 // application hostage on a public form is a decision for a later change, and
 // the office already sees "awaiting deposit" on its side.
-var _depositPolicy=null;
+var _depositPolicy=null, _depDiagSaid=false;
 
 function _regDepositDue(sessObj){
     var P=window.CampistryDepositPolicy;
@@ -891,7 +923,10 @@ function _regDepositDue(sessObj){
     if(!sObj)return null;
     var t=Number(sObj.tuition)||0;
     var campers=[{session:sObj,tuition:t}];
-    siblings.forEach(function(){campers.push({session:sObj,tuition:t})});
+    siblings.forEach(function(sib){
+        var so=_sessionFor(sib)||sObj;
+        campers.push({session:so,tuition:Number(so.tuition)||0});
+    });
     return P.amountFor(pol,campers);
 }
 
@@ -906,7 +941,22 @@ function _regRenderDeposit(){
     if(!box)return;
     var P=window.CampistryDepositPolicy;
     var due=_regDepositDue();
-    if(!P||!due||!due.total){box.style.display='none';_regSetHtml(box,'');return}
+    if(!P||!due||!due.total){
+        box.style.display='none';_regSetHtml(box,'');
+        // A deposit that is configured and then silently absent is
+        // indistinguishable from one that was never set up, and there is
+        // nothing on a parent's screen that could tell them apart. Say which
+        // it is where whoever is testing the form will find it.
+        if(!_depDiagSaid){
+            _depDiagSaid=true;
+            console.log('[Register] no deposit shown \u2014 '+(
+                !P ? 'campistry_deposit_policy.js did not load'
+                : !_depositPolicy ? 'this camp sent no deposit rule (migration 164 not applied, or the page is on a cached copy)'
+                : !P.normalize(_depositPolicy).enabled ? 'the camp has a deposit rule but it is switched off'
+                : 'the rule is on but works out to $0 for this session'));
+        }
+        return;
+    }
     var pol=P.normalize(_depositPolicy);
     var soon=pol.timing==='now';
     box.style.display='';
@@ -949,7 +999,9 @@ window.applyPromo=function(){
 // ─── SIBLINGS ────────────────────────────────────────────────
 window.addSibling=function(){
     var id=siblings.length;
-    siblings.push({first:'',last:'',dob:'',gender:'',school:'',schoolGrade:'',teacher:''});
+    // session:'' means "the same one as the first camper" — the common case,
+    // and the one a parent should not have to answer twice.
+    siblings.push({first:'',last:'',dob:'',gender:'',school:'',schoolGrade:'',teacher:'',session:''});
     renderSiblings();updatePrice();
 };
 window.removeSibling=function(i){siblings.splice(i,1);renderSiblings();updatePrice()};
@@ -957,6 +1009,31 @@ var SCHOOL_GRADE_OPTS=['Pre-K','Kindergarten','1st Grade','2nd Grade','3rd Grade
 function schoolGradeSelectHtml(cls,i,current){
     return '<select class="fs '+cls+'" data-i="'+i+'"><option value="">—</option>'+SCHOOL_GRADE_OPTS.map(function(g){return '<option'+(g===current?' selected':'')+'>'+g+'</option>';}).join('')+'</select>';
 }
+/** The session dropdown on a sibling card. Blank means "same as Camper 1". */
+function _sibSessionSelect(i,current){
+    var items=_pickerItems();
+    return '<select class="fs sib-ses" data-i="'+i+'">'
+        +'<option value=""'+(current?'':' selected')+'>Same as Camper 1'+(selSess?' \u2014 '+esc(selSess):'')+'</option>'
+        +items.map(function(it){
+            return '<option value="'+esc(it.name)+'"'+(it.name===current?' selected':'')+'>'+esc(it.name)
+                +(it.tuition?' \u2014 '+fm(it.tuition):'')+'</option>';
+        }).join('')+'</select>';
+}
+
+/**
+ * The session a camper is actually enrolling in.
+ *
+ * One resolver, so the price, the deposit and the saved application cannot
+ * disagree about which weeks a sibling is coming for.
+ */
+function _sessionFor(sib){
+    var items=_pickerItems();
+    var want=(sib&&sib.session)||selSess;
+    return items.find(function(x){return x.name===want})
+        ||items.find(function(x){return x.name===selSess&&x.kind===selSessKind})
+        ||null;
+}
+
 function renderSiblings(){
     var c=document.getElementById('sibList');
     c.innerHTML=siblings.map(function(s,i){
@@ -964,7 +1041,11 @@ function renderSiblings(){
         '<div class="fr"><div class="fg"><label class="fl">First Name<span class="rq">*</span></label><input class="fi sib-f" data-i="'+i+'" value="'+esc(s.first)+'"></div><div class="fg"><label class="fl">Last Name<span class="rq">*</span></label><input class="fi sib-l" data-i="'+i+'" value="'+esc(s.last)+'"></div></div>'+
         '<div class="fr"><div class="fg"><label class="fl">DOB</label><input type="date" class="fi sib-dob" data-i="'+i+'" value="'+esc(s.dob)+'"></div><div class="fg"><label class="fl">Gender</label><select class="fs sib-gen" data-i="'+i+'"><option value="">—</option><option'+(s.gender==='Male'?' selected':'')+'>Male</option><option'+(s.gender==='Female'?' selected':'')+'>Female</option><option'+(s.gender==='Non-binary'?' selected':'')+'>Non-binary</option></select></div></div>'+
         '<div class="fr"><div class="fg"><label class="fl">School</label><input class="fi sib-sch" data-i="'+i+'" value="'+esc(s.school)+'"></div><div class="fg"><label class="fl">Grade</label>'+schoolGradeSelectHtml('sib-gr',i,s.schoolGrade)+'</div></div>'+
-        '<div class="fg"><label class="fl">Teacher</label><input class="fi sib-tch" data-i="'+i+'" value="'+esc(s.teacher)+'"></div></div>';
+        '<div class="fg"><label class="fl">Teacher</label><input class="fi sib-tch" data-i="'+i+'" value="'+esc(s.teacher)+'"></div>'+
+        // Siblings do not always come for the same weeks — one does first half,
+        // another the full summer. Defaulting to the first camper's session
+        // keeps the common case to zero clicks while making the other possible.
+        '<div class="fg"><label class="fl">Session</label>'+_sibSessionSelect(i,s.session)+'</div></div>';
     }).join('');
 }
 
@@ -1130,6 +1211,7 @@ window.submitApp=async function(){
     document.querySelectorAll('.sib-gen').forEach(function(el){var i=parseInt(el.dataset.i);if(siblings[i])siblings[i].gender=el.value});
     document.querySelectorAll('.sib-sch').forEach(function(el){var i=parseInt(el.dataset.i);if(siblings[i])siblings[i].school=el.value.trim()});
     document.querySelectorAll('.sib-gr').forEach(function(el){var i=parseInt(el.dataset.i);if(siblings[i])siblings[i].schoolGrade=el.value.trim()});
+    document.querySelectorAll('.sib-ses').forEach(function(el){var i=parseInt(el.dataset.i);if(siblings[i])siblings[i].session=el.value});
     document.querySelectorAll('.sib-tch').forEach(function(el){var i=parseInt(el.dataset.i);if(siblings[i])siblings[i].teacher=el.value.trim()});
 
     // Validate — data-driven off FIELD_REQUIRED_STATE/FIELD_ENABLED_STATE so a
@@ -1188,6 +1270,9 @@ window.submitApp=async function(){
         allCampers.forEach(function(cam){
             var id='enr_'+Date.now()+'_'+Math.random().toString(36).substr(2,6);
             appIds.push(id);
+            // cam is the primary (no .session key) or a sibling, so the same
+            // resolver the price and the deposit used decides this too.
+            var _camSession=_sessionFor(cam)||sessObj||{};
             // Read custom question answers
             var customAnswers={};
             document.querySelectorAll('.cqInput').forEach(function(el){
@@ -1242,7 +1327,13 @@ window.submitApp=async function(){
                 emergencyName:emN,emergencyPhone:emPh,emergencyRel:v('rEmR'),
                 allergies:v('rAlg'),medications:v('rMed'),dietary:v('rDit'),medicalNotes:v('rMdN'),
                 bunkmate:v('rBnk'),separateFrom:v('rSep'),tshirtSize:v('rShirt'),source:v('rSrc'),notes:v('rNotes'),
-                session:selSess,sessionKind:selSessKind,sessionTuition:sessObj.tuition||0,
+                // The session THIS camper picked. A sibling who chose their own
+                // gets it; one who did not inherits Camper 1's, which is what
+                // "Same as Camper 1" means. Billing reads sessionTuition, so
+                // getting this wrong bills the family for the wrong weeks.
+                session:_camSession.name||selSess,
+                sessionKind:_camSession.kind||selSessKind,
+                sessionTuition:Number(_camSession.tuition)||0,
                 paymentMethod:selPM,paymentStatus:'pending',paymentAmount:0,
                 depositRequired:_regDepStamp.depositRequired||0,
                 depositPaid:0,
