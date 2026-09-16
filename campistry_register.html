@@ -1046,14 +1046,16 @@ function _regIsOnlineMethod(m){ return m==='credit_card'||m==='ach'||m==='debit'
 function _regPayMethodNote(){
     var box=document.getElementById('payMethodNote');
     if(!box)return;
-    var due=_regDepositDue();
-    var owes=!!(due&&due.total);
-    var pol=(window.CampistryDepositPolicy&&_depositPolicy)
-        ? window.CampistryDepositPolicy.normalize(_depositPolicy) : null;
-    var payNow=owes&&pol&&pol.enabled&&pol.timing!=='later';
+    var payNow=_regDepositPending();
+    var amt=_regDepositAmount();
     var money=function(n){ return window.CampistryDepositPolicy?window.CampistryDepositPolicy.money(n):fm(n); };
+    // "$350" once a session is picked; "the deposit" before one is, because
+    // the figure genuinely is not known yet and inventing one would be worse
+    // than naming the thing.
+    var sum=(amt!=null)?money(amt):'the deposit';
+    var payBtn='Submit &amp; pay '+((amt!=null)?money(amt):'the deposit');
 
-    _regSyncSubmitLabel(payNow&&_regIsOnlineMethod(selPM)?due.total:0);
+    _regSyncSubmitLabel(payNow&&_regIsOnlineMethod(selPM),amt);
 
     if(!_regIsOnlineMethod(selPM)){
         box.style.display='none';_regSetHtml(box,'');
@@ -1077,11 +1079,11 @@ function _regPayMethodNote(){
               :'a secure payment page';
         body=_regInlineCardOk()
             ? (_cardOnForm
-                ? ('Your card is ready. Press <strong>Submit &amp; pay '+money(due.total)+'</strong> at the bottom '
+                ? ('Your card is ready. Press <strong>'+payBtn+'</strong> at the bottom '
                    +'to send the application and pay the deposit together.')
                 : ('Enter your '+details+' below. Nothing is charged until you press '
-                   +'<strong>Submit &amp; pay '+money(due.total)+'</strong> at the bottom.'))
-            : ('Finish this form and press <strong>Submit &amp; pay '+money(due.total)+'</strong> at the bottom. '
+                   +'<strong>'+payBtn+'</strong> at the bottom.'))
+            : ('Finish this form and press <strong>'+payBtn+'</strong> at the bottom. '
                +'That opens '+esc(who)+' in this window, where you enter your '+details+'. ')
             ;
         body+=' Your details never touch this form.';
@@ -1090,11 +1092,11 @@ function _regPayMethodNote(){
         // The camp genuinely cannot take a card here. Better said now than
         // discovered on the confirmation screen.
         body='This camp does not take '+kind+' through this form. '
-            +'Submit the application and the camp will send you how to pay the '+money(due.total)+' deposit.';
+            +'Submit the application and the camp will send you how to pay '+sum+'.';
     } else {
         // Ability unknown -- offline, an old database, or the RPC is not
         // there yet. True either way, and never silence.
-        body='You will be shown how to pay the '+money(due.total)+' deposit as soon as you submit this form.';
+        body='You will be shown how to pay '+sum+' as soon as you submit this form.';
     }
 
     box.style.display='';
@@ -1116,12 +1118,12 @@ function _regPayMethodNote(){
  * reach the processor -- there is nothing to charge until the application
  * exists -- so it says so instead of leaving them hunting for a link.
  */
-function _regSyncSubmitLabel(amount){
+function _regSyncSubmitLabel(paying,amount){
     var b=document.getElementById('submitAppBtn');
     if(!b||b.disabled)return;
     var money=function(n){ return window.CampistryDepositPolicy?window.CampistryDepositPolicy.money(n):fm(n); };
-    var want=(Number(amount)>0&&_payAbility&&_payAbility.canPayOnline)
-        ? 'Submit & pay '+money(amount)
+    var want=(paying&&_payAbility&&_payAbility.canPayOnline)
+        ? ('Submit & pay '+(Number(amount)>0?money(amount):'the deposit'))
         : 'Submit Application';
     if(b.textContent!==want)b.textContent=want;
 }
@@ -1151,25 +1153,52 @@ window._regSaveCardToggle=function(cb){ _saveCard=!!(cb&&cb.checked); };
 // faking an inline one for them would mean handling card numbers here.
 
 var _cardOnForm=null;   // {token, card:{last4,cardType,...}, billing}
+var _cardDiagSaid=false;
 
 function _regInlineCardOk(){
     return !!(_payAbility&&_payAbility.canPayOnline&&_payAbility.processor==='banquest');
 }
 
-/** Is a deposit actually due with this application right now? */
-function _regDepositDueNow(){
+/**
+ * Does the camp want money WITH this application?
+ *
+ * Deliberately not "do we know the amount yet". _regDepositDue() cannot work
+ * one out until a session is picked, and everything used to hang off it -- so
+ * a parent who ticked Credit Card before choosing a session got no note, no
+ * card fields and a plain Submit button, which is exactly the "still nothing"
+ * this was reported as. The camp's rule is known from the moment the form
+ * loads; only the figure waits.
+ */
+function _regDepositPending(){
+    var P=window.CampistryDepositPolicy;
+    if(!P||!_depositPolicy)return false;
+    var pol=P.normalize(_depositPolicy);
+    return !!(pol.enabled&&pol.timing!=='later');
+}
+
+/** The amount when it is known, otherwise null. */
+function _regDepositAmount(){
     var due=_regDepositDue();
-    var pol=(window.CampistryDepositPolicy&&_depositPolicy)
-        ? window.CampistryDepositPolicy.normalize(_depositPolicy) : null;
-    return (due&&due.total&&pol&&pol.enabled&&pol.timing!=='later')?due:null;
+    return (due&&due.total)?due.total:null;
 }
 
 function _regRenderCardInline(){
     var box=document.getElementById('cardInline');
     if(!box)return;
     var campId=_resolvedCampId||campIdParam;
-    if(!_regIsOnlineMethod(selPM)||!_regDepositDueNow()||!_regInlineCardOk()||!campId){
+    if(!_regIsOnlineMethod(selPM)||!_regDepositPending()||!_regInlineCardOk()||!campId){
         box.style.display='none';_regSetHtml(box,'');
+        // Four different reasons for an empty Payment section look identical
+        // on screen. Say which one it is where whoever is testing will see it.
+        if(!_cardDiagSaid&&_regIsOnlineMethod(selPM)){
+            _cardDiagSaid=true;
+            console.log('[Register] no card fields \u2014 '+(
+                !_regDepositPending() ? 'no deposit is due with this application (rule off, or set to "pay later")'
+                : !campId ? 'this page does not know which camp it is for'
+                : !_payAbility ? 'pay ability unknown \u2014 migration 185 may not be applied'
+                : !_payAbility.canPayOnline ? 'this camp cannot take card payments online'
+                : ('this camp is on \''+(_payAbility.processor||'?')+'\', which collects cards on its own hosted page')));
+        }
         return;
     }
     box.style.display='';
@@ -1366,6 +1395,12 @@ function _regRenderPayOpts(){
     var chosen=Array.isArray(_payMethods)?_payMethods:null;
     var list=PM.METHODS.filter(function(m){
         if(m.contexts.indexOf('tuition')<0)return false;
+        // The catalogue's 'plan' and the Payment Plan row appended at the
+        // bottom are the same offer, and listing both put "Payment plan" on
+        // this form twice. The appended one wins: it carries the id Billing
+        // reads (payment_plan) and the camp's own allowParentPaymentPlans
+        // switch, which the catalogue entry knows nothing about.
+        if(m.id==='plan')return false;
         return chosen?chosen.indexOf(m.id)>=0:!!m.default;
     });
     // Debit is a separate camp-wide decision, not one of the ticks above.

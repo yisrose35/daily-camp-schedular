@@ -729,7 +729,7 @@ test('picking card or ACH always says what happens next', () => {
         'the one blank branch must be the non-online one');
 
     // Unknown ability is not silence — it is the honest sentence.
-    assert.match(fn, /You will be shown how to pay the/);
+    assert.match(fn, /You will be shown how to pay '\+sum\+' as soon as you submit/);
     // A camp that cannot take cards says so here, not on the confirmation.
     assert.match(fn, /does not take '\+kind\+' through this form/);
     // A deposit due later still explains why a card was asked for.
@@ -802,6 +802,55 @@ test('the inline charge still does not name its own price', () => {
     assert.match(branch, /\.\.\.\(saveCard \? \{ save_card: true \} : \{\}\)/);
 });
 
+test('the card opens before a session is picked', () => {
+    // The bug behind a second "still nothing": everything -- the note, the
+    // card fields, the submit label -- hung off _regDepositDue(), which
+    // returns null until a session is selected because it cannot work out an
+    // amount without one. A parent who ticked Credit Card first therefore got
+    // an empty Payment section, on a form that was ALREADY showing them a $350
+    // deposit two inches above. The camp's rule is known at load; only the
+    // figure waits.
+    const reg = fs.readFileSync(path.join(ROOT, 'campistry_register.html'), 'utf8');
+    const pending = reg.slice(reg.indexOf('function _regDepositPending()'),
+                              reg.indexOf('function _regDepositAmount()'));
+    assert.ok(!/_pickerItems|selSess|_regDepositDue\(/.test(pending),
+        'whether a deposit is due must not depend on a session being picked');
+    assert.match(pending, /pol\.enabled&&pol\.timing!=='later'/);
+
+    // Both gates use it, neither uses the amount.
+    assert.match(reg, /if\(!_regIsOnlineMethod\(selPM\)\|\|!_regDepositPending\(\)\|\|!_regInlineCardOk\(\)/,
+        'the card panel must open on the rule, not on the amount');
+    assert.match(reg, /var payNow=_regDepositPending\(\);/);
+
+    // And the amount, when it is not known, is named rather than invented.
+    assert.match(reg, /\(amt!=null\)\?money\(amt\):'the deposit'/);
+});
+
+test('an empty Payment section always says why', () => {
+    // Five different reasons for no card fields look identical on screen, and
+    // the last two rounds of this were spent guessing between them.
+    const reg = fs.readFileSync(path.join(ROOT, 'campistry_register.html'), 'utf8');
+    const diag = reg.slice(reg.indexOf('_cardDiagSaid=true;'), reg.indexOf('_cardDiagSaid=true;') + 900);
+    assert.match(diag, /no deposit is due/);
+    assert.match(diag, /does not know which camp/);
+    assert.match(diag, /migration 185 may not be applied/);
+    assert.match(diag, /cannot take card payments online/);
+    assert.match(diag, /collects cards on its own hosted page/);
+});
+
+test('Payment Plan is offered once, not twice', () => {
+    // The catalogue's 'plan' and the row appended for the camp's own
+    // allowParentPaymentPlans switch are the same offer, and listing both put
+    // "Payment plan" on the form twice.
+    const reg = fs.readFileSync(path.join(ROOT, 'campistry_register.html'), 'utf8');
+    const render = reg.slice(reg.indexOf('function _regRenderPayOpts()'),
+                             reg.indexOf('// ─── DEPOSIT TO REGISTER'));
+    assert.match(render, /if\(m\.id==='plan'\)return false;/,
+        'the catalogue entry must be dropped in favour of the appended row');
+    // The appended one is the one Billing reads.
+    assert.match(render, /selPay\(this,\\'payment_plan\\'\)/);
+});
+
 test('the button they press to reach the processor says so', () => {
     // The complaint that started this: "nothing opens to allow to tell the
     // user to input or click on this link to open". There is no link to open
@@ -810,13 +859,13 @@ test('the button they press to reach the processor says so', () => {
     const reg = fs.readFileSync(path.join(ROOT, 'campistry_register.html'), 'utf8');
     assert.match(reg, /id="submitAppBtn"/);
     const fn = reg.slice(reg.indexOf('function _regSyncSubmitLabel('));
-    assert.match(fn.slice(0, 900), /Submit & pay '\+money\(amount\)/);
+    assert.match(fn.slice(0, 900), /Submit & pay '\+\(Number\(amount\)>0\?money\(amount\):'the deposit'\)/);
     // Never promises a payment step the camp cannot actually run.
     assert.match(fn.slice(0, 900), /_payAbility&&_payAbility\.canPayOnline/);
     // A submit already in flight owns the label; this must not fight it.
     assert.match(fn.slice(0, 900), /if\(!b\|\|b\.disabled\)return/);
     // Kept in step with the amount, not set once.
-    assert.ok(/_regSyncSubmitLabel\(payNow&&_regIsOnlineMethod\(selPM\)\?due\.total:0\)/.test(reg),
+    assert.ok(/_regSyncSubmitLabel\(payNow&&_regIsOnlineMethod\(selPM\),amt\)/.test(reg),
         'the label follows the deposit that is actually due');
 });
 
