@@ -614,3 +614,88 @@ test('paying and signing are always the last thing on the form', () => {
     assert.match(me, /_ORDER_PINNED_LAST=\{fc:\['payment','signature'\]\}/);
     assert.match(me, /always last/);
 });
+
+// ── taking the deposit on the form ──────────────────────────────────────────
+//
+// Money, on an anonymous page, so the properties that matter are about who
+// decides the amount and what happens when something goes wrong.
+test('the amount charged is never the caller’s to name', () => {
+    const fn = fs.readFileSync(path.join(ROOT, 'supabase/functions/registration-deposit-checkout/index.ts'), 'utf8');
+    const sql = fs.readFileSync(path.join(ROOT, 'migrations/165_registration_deposit.sql'), 'utf8');
+
+    // The page asking is anonymous by design. If it could send an amount it
+    // could name its own price — in either direction.
+    assert.match(fn, /_registration_deposit_owed/);
+    const body = fn.slice(fn.indexOf('const { campId, enrollmentId, returnUrl }'), fn.indexOf('// ── Banquest'));
+    assert.ok(!/\bamount\b\s*[,}]/.test(body.split('await req.json()')[0] || ''),
+        'the request body must not carry an amount');
+    assert.match(fn, /const owed = Number\(owedRes\.owed\)/);
+
+    // The lookup and the write are service-role only — an anonymous caller
+    // must not be able to reach either directly.
+    assert.match(sql, /REVOKE ALL ON FUNCTION public\._registration_deposit_owed[\s\S]*?FROM public, anon, authenticated/);
+    assert.match(sql, /REVOKE ALL ON FUNCTION public\._record_registration_deposit[\s\S]*?FROM public, anon, authenticated/);
+    // Only whether-you-can-pay is public, and it carries no keys or account ids.
+    assert.match(sql, /GRANT EXECUTE ON FUNCTION public\.get_public_pay_ability\(uuid\) TO anon/);
+    const ability = sql.slice(sql.indexOf('get_public_pay_ability'));
+    assert.ok(!/stripe_account_id'|account_id',/.test(ability), 'the public answer must not leak an account id');
+
+    // An open redirect would turn the camp's payment page into a phishing hop.
+    assert.match(fn, /returnUrl must be an https URL/);
+});
+
+test('a deposit is recorded once, and on the application', () => {
+    const sql = fs.readFileSync(path.join(ROOT, 'migrations/165_registration_deposit.sql'), 'utf8');
+
+    // There is no family record yet, so the application is what gets credited.
+    assert.match(sql, /ARRAY\['enrollments', p_enroll_id, 'depositPaid'\]/);
+    assert.match(sql, /'depositStatus'\], to_jsonb\('paid'::text\)/);
+    // jsonb_set, not read-modify-write: a webhook that rewrote the whole
+    // document would lose whatever the office saved while the parent was on
+    // the processor's page — the defect that erased autopay charges.
+    assert.match(sql, /jsonb_set/);
+    assert.ok(!/SELECT value[\s\S]{0,400}UPDATE camp_state_kv\s+SET value = \$?\d/.test(sql),
+        'the whole document must never be written back');
+    // Processors retry webhooks. Crediting twice is real money.
+    assert.match(sql, /depositReference', ''\) = p_reference/);
+    assert.match(sql, /'duplicate', true/);
+});
+
+test('both rails mark it, and neither does so quietly on failure', () => {
+    const hosted = fs.readFileSync(path.join(ROOT, 'supabase/functions/payments-hosted-complete/index.ts'), 'utf8');
+    const stripe = fs.readFileSync(path.join(ROOT, 'supabase/functions/stripe-webhook/index.ts'), 'utf8');
+
+    assert.match(hosted, /pending\.purpose === "registration_deposit"/);
+    assert.match(stripe, /source === "registration_deposit"/);
+    assert.match(stripe, /function handleRegistrationDeposit/);
+
+    // Only settled money holds a place. A processing ACH must not.
+    assert.match(stripe, /if \(status !== "succeeded"\)/);
+
+    // If the money moved and the mark failed, that has to be loud: a silent
+    // success leaves a paid family sitting in a list of unpaid ones.
+    assert.match(hosted, /could not mark it on your application/);
+    assert.match(stripe, /could not mark registration deposit/);
+});
+
+test('the form offers paying only when something is behind the button', () => {
+    const reg = fs.readFileSync(path.join(ROOT, 'campistry_register.html'), 'utf8');
+
+    assert.match(reg, /id="paySeat"/);
+    assert.match(reg, /registration-deposit-checkout/);
+    assert.match(reg, /get_public_pay_ability/);
+    // A camp with no processor still gets the amount stated — a parent told
+    // nothing assumes nothing is owed.
+    assert.match(reg, /The camp will be in touch with how to pay it/);
+    // Pay-later is already tracked as owed; chasing it on the thank-you screen
+    // would be noise.
+    assert.match(reg, /_regDepStamp\.depositTiming!=='later'/);
+    // The application is saved before any of this, so an abandoned payment
+    // costs the family nothing.
+    // Compare against the CALL SITE, not the first mention — the function is
+    // named in a comment near the top of the file.
+    const callAt = reg.indexOf('try{ _regOfferDepositPayment(');
+    assert.ok(callAt > 0, 'the pay step is never offered');
+    assert.ok(reg.indexOf('recordSubmission();') < callAt,
+        'the application must be saved before the parent is sent to pay');
+});

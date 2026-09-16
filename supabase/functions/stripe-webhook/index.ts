@@ -216,6 +216,46 @@ async function handleCanteenDeposit(
 // the charge is final. record_link_photo_purchase (migration 081, widened
 // in 082) is idempotent per (payment_intent, kind, camper/photo), so a
 // webhook retry — or this loop re-running mid-way through a batch — is safe.
+/**
+ * A registration deposit, paid from the public form.
+ *
+ * Marks the application, not the ledger: there is no family to credit until
+ * the office accepts. _record_registration_deposit is idempotent on the
+ * payment intent id, so Stripe retrying this event -- which it does -- cannot
+ * credit the same deposit twice.
+ */
+async function handleRegistrationDeposit(
+  supabase: ReturnType<typeof createClient>,
+  campId: string,
+  pi: Record<string, any>,
+  status: "pending" | "succeeded" | "failed",
+) {
+  const enrollmentId = String(pi.metadata?.enrollmentId || "");
+  if (!enrollmentId) {
+    console.error("[stripe-webhook] registration deposit with no enrollmentId — cannot mark it");
+    return;
+  }
+  // Only settled money counts. A processing ACH or a failed card must not mark
+  // a place as held.
+  if (status !== "succeeded") {
+    console.log(`[stripe-webhook] registration deposit ${status} for ${enrollmentId} — not marking`);
+    return;
+  }
+  const { data, error } = await supabase.rpc("_record_registration_deposit", {
+    p_camp_id: campId,
+    p_enroll_id: enrollmentId,
+    p_amount: (pi.amount || 0) / 100,
+    p_reference: String(pi.id || ""),
+  });
+  if (error || !(data as any)?.success) {
+    // The money moved. Anything other than a loud log here loses a paid
+    // family into a list of unpaid ones.
+    console.error(`[stripe-webhook] could not mark registration deposit for camp ${campId} enrollment ${enrollmentId}: ${error?.message || (data as any)?.error}`);
+    return;
+  }
+  console.log(`[stripe-webhook] registration deposit $${(pi.amount || 0) / 100} marked on ${enrollmentId}${(data as any)?.duplicate ? " (already recorded)" : ""}`);
+}
+
 async function handleLinkPhotoPurchase(
   supabase: ReturnType<typeof createClient>,
   campId: string,
@@ -706,6 +746,12 @@ serve(async (req) => {
       } else if (pi.metadata?.source === "campistry-link-photo-purchase") {
         // Either/or — never lands in campistryMe.finance.payments either.
         await handleLinkPhotoPurchase(supabase, campId, pi, statusFor[event.type]);
+      } else if (pi.metadata?.source === "registration_deposit") {
+        // A deposit paid from the registration form. There is no family record
+        // yet — the office has not accepted anybody — so this marks the
+        // APPLICATION rather than writing a ledger payment. It becomes an
+        // ordinary payment when the office accepts and enrolls.
+        await handleRegistrationDeposit(supabase, campId, pi, statusFor[event.type]);
       } else {
         const ok = await upsertPayment(supabase, campId, pi, statusFor[event.type]);
         console.log(`[stripe-webhook] ledger ${statusFor[event.type]} $${(pi.amount || 0) / 100} camp ${campId}: ${ok ? "ok" : "FAILED"}`);

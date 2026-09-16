@@ -205,6 +205,29 @@ serve(async (req) => {
       return json({ success: true, purpose: "save_card", last4: pmLast4 });
     }
 
+    // ── a registration deposit: mark it on the application ──────────────────
+    // There is no family record yet -- the office has not accepted anybody --
+    // so this credits the APPLICATION, which is what the Registration list and
+    // the post-acceptance form both read. Kept as its own early branch so the
+    // three flows that already work here are untouched.
+    if (pending.purpose === "registration_deposit") {
+      const recRes = await service.rpc("_record_registration_deposit", {
+        p_camp_id: campId,
+        p_enroll_id: String(pending.enrollment_id || ""),
+        p_amount: amount,
+        p_reference: referenceNumber,
+      });
+      const rec = (recRes as any)?.data;
+      if ((recRes as any)?.error || !rec?.success) {
+        // The money HAS moved. Failing loudly is the only honest answer --
+        // a silent success would leave a paid family marked unpaid with
+        // nothing anywhere to say so.
+        console.error(`[payments-hosted-complete] registration deposit not recorded for camp ${campId} enrollment ${pending.enrollment_id}: ${(recRes as any)?.error?.message || rec?.error}`);
+        return json({ success: false, error: "Your payment went through, but we could not mark it on your application. Please contact the camp with this reference: " + referenceNumber }, 200);
+      }
+      return json({ success: true, purpose: "registration_deposit", amount, last4, duplicate: !!rec.duplicate });
+    }
+
     // ── canteen: credit the camper's balance (idempotent on the txn id) ──────
     if (pending.purpose === "canteen") {
       const creditRes = await service.rpc("credit_canteen_balance_from_processor", {

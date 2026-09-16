@@ -182,3 +182,60 @@ suggestion to confirm.
 > `processor_transactions` at all, so a clean result here does not rule out a
 > gap on Stripe — check the Stripe dashboard for the same dates. The tool says
 > this on screen too.
+
+---
+
+## Migration 165 — taking the registration deposit on the form
+
+A camp can require money to hold a place (migration 164). Until now the form
+could only **say** so. This is the paying half.
+
+**Apply `migrations/165_registration_deposit.sql`**, then **deploy the new
+`registration-deposit-checkout` function** (Supabase Dashboard → Edge Functions
+→ Deploy a new function → paste
+`supabase/functions/registration-deposit-checkout/index.ts`), and **redeploy
+`payments-hosted-complete` and `stripe-webhook`**, which now carry the branch
+that marks the application paid.
+
+### The order, and why
+
+The application is saved **first**, then the parent pays against it. A form
+that refused to submit until a card cleared would throw away twenty minutes of
+typing on a declined card — and an unpaid application is a real, correct state
+the office already understands: **awaiting deposit**.
+
+### Which rail
+
+Decided from `camps.payment_processor_key`, the same test autopay uses, so a
+camp cannot be on one processor here and another there:
+
+| Processor | What the parent gets |
+|---|---|
+| Stripe (or none set, with Stripe connected) | Stripe Checkout — card and ACH, with the camp's own account as the destination when connected |
+| Banquest | The camp's hosted pay page |
+| Cardknox, others | No online step. The amount is stated and the camp collects it as it already does. |
+
+The form asks `get_public_pay_ability` before offering a button, so a camp
+without a processor never shows one that cannot work.
+
+### What is guaranteed
+
+- **The amount is never the caller's to name.** The page is anonymous, so the
+  figure comes from `_registration_deposit_owed` — what the camp stamped on
+  that application — and never from the request body.
+- **Recorded once.** `_record_registration_deposit` is idempotent on the
+  processor's reference, because processors retry webhooks and a double credit
+  is real money.
+- **Written with `jsonb_set`, not read-modify-write.** A webhook that rewrote
+  the whole `campistryMe` document would lose whatever the office saved while
+  the parent was on the processor's page — the defect that erased autopay
+  charges.
+- **A failed mark is loud.** If the money moved and the application could not
+  be marked, the parent is given the reference and told to contact the camp,
+  and the failure is logged. A silent success would leave a paid family sitting
+  in a list of unpaid ones.
+
+> **Test it with a card before a real family does.** Put Stripe in test mode (or
+> Banquest in sandbox), submit an application with a deposit required, pay it,
+> and confirm the Registration list flips that application to **paid**. None of
+> this can be verified from the code alone.
