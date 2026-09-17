@@ -30,6 +30,9 @@ function _schoolGradeOptions(current){
 var AV_BG=['#147D91','#6366F1','#0EA5E9','#10B981','#F43F5E','#8B5CF6','#D97706'];
 
 var structure={}, roster={}, families={}, payments=[], broadcasts=[], bunkAsgn={}, bunkManualCounts={}, bunkStaff={}, divisionHeads={};
+// The payer registry: households beyond the camper's own, and organizations —
+// funds, agencies, employers — that pay part of a bill. See campistry_payers.js.
+var payers={};
 // A bunk's second name: "Bunk 6A" is also called "Moshe".
 //
 // Deliberately a map alongside the structure rather than a field inside it.
@@ -405,6 +408,7 @@ function loadData(){
         roster=(s.app1&&s.app1.camperRoster)||{};
         var me=s.campistryMe||{};
         families=me.families||{}; payments=me.payments||[];
+        payers=(window.CampistryPayers?window.CampistryPayers.normalize(me.payers):(me.payers||{}));
         broadcasts=me.broadcasts||[]; bunkAsgn=me.bunkAssignments||{}; bunkManualCounts=me.bunkManualCounts||{};
         bunkCapacity=me.bunkCapacity||{};
         bunkStaff=me.bunkStaff||{};
@@ -611,6 +615,12 @@ function save(){
         // navigates away from Dashboard. Never let an empty in-memory copy
         // override a non-empty one already sitting in the local cache.
         var _savedSessions=(sessions&&sessions.length)?sessions:((g.campistryMe&&Array.isArray(g.campistryMe.sessions))?g.campistryMe.sessions:sessions);
+        // ★ Same guard, same reason: `payers` is a small registry that is empty
+        // until loadData() has run, and a save() fired from an unrelated edit
+        // before hydration would otherwise wipe every organization a camp had
+        // set up. An empty in-memory copy never overrides a populated stored one.
+        var _savedPayers=(payers&&Object.keys(payers).length)?payers
+                         :((g.campistryMe&&g.campistryMe.payers)||payers);
         // ★ Same class of bug as the sessions guard above, for the two records
         // that hold submitted applications: enrollments/staffApplications are
         // module-level vars only populated once loadData() has hydrated real
@@ -675,6 +685,7 @@ function save(){
         g.campistryMe=Object.assign({},(g.campistryMe&&typeof g.campistryMe==='object')?g.campistryMe:{},{
             families:_savedFamilies,
             payments:_savedPayments,
+            payers:_savedPayers,
             broadcasts:broadcasts,
             bunkAssignments:bunkAsgn,
             bunkManualCounts:bunkManualCounts,
@@ -1424,6 +1435,184 @@ function _liveOnlyEdit(section,whatFor){
  *
  * Returns '' in live, so a camp that never uses session planning sees nothing.
  */
+/** The payer rule, or null on a page that did not load it. */
+function _payersAPI(){return (typeof window!=='undefined'&&window.CampistryPayers)||null}
+
+/**
+ * The payer picker's options: the household first, then everyone in the registry.
+ *
+ * The household is always present and always the default, because it is the payer
+ * that absorbs whatever nobody else was assigned — see campistry_payers.js.
+ */
+function _payerOptions(famKey,selected){
+    var f=families[famKey]||{};
+    var h='<option value="'+esc(famKey||'')+'"'+((!selected||selected===famKey)?' selected':'')+'>'
+         +esc(f.name||'Household')+' (household)</option>';
+    Object.keys(payers||{}).sort(function(a,b){
+        return String((payers[a]||{}).name||'').localeCompare(String((payers[b]||{}).name||''));
+    }).forEach(function(id){
+        var p=payers[id]||{};
+        if(p.archived)return;
+        if(id===famKey)return;
+        h+='<option value="'+esc(id)+'"'+(selected===id?' selected':'')+'>'+esc(p.name||id)
+          +(p.kind==='organization'?' (organization)':'')+'</option>';
+    });
+    return h;
+}
+
+/** One editable split row inside the Add Charge form. */
+function _payerRowHtml(famKey,i,share){
+    share=share||{};
+    return '<div class="me-payer-row" data-i="'+i+'" style="display:grid;'
+      +'grid-template-columns:1.6fr .8fr .8fr 1.4fr auto;gap:7px;align-items:end;margin-bottom:7px">'
+      +'<div class="me-field" style="margin:0"><label style="font-size:.72rem">Payer</label>'
+      +'<select class="me-input me-pay-who">'+_payerOptions(famKey,share.payerId)+'</select></div>'
+      +'<div class="me-field" style="margin:0"><label style="font-size:.72rem">Amount</label>'
+      +'<input type="number" class="me-input me-pay-amt" step="0.01" min="0" placeholder="0.00" value="'
+      +(share.amount!=null?esc(share.amount):'')+'"></div>'
+      +'<div class="me-field" style="margin:0"><label style="font-size:.72rem">or %</label>'
+      +'<input type="number" class="me-input me-pay-pct" step="0.01" min="0" max="100" placeholder="%" value="'
+      +(share.pct!=null?esc(share.pct):'')+'"></div>'
+      +'<div class="me-field" style="margin:0"><label style="font-size:.72rem">Note</label>'
+      +'<input type="text" class="me-input me-pay-note" placeholder="approval ref, terms\u2026" value="'
+      +esc(share.note||'')+'"></div>'
+      +'<button type="button" class="me-btn me-btn--ghost me-btn--sm" '
+      +'onclick="this.closest(\'.me-payer-row\').remove();CampistryMe._payerSplitPreview()">\u2715</button>'
+      +'</div>';
+}
+
+/** Read the split rows back out of the form. */
+function _payerSharesFromForm(){
+    var out=[];
+    document.querySelectorAll('.me-payer-row').forEach(function(row){
+        var who=row.querySelector('.me-pay-who'), amt=row.querySelector('.me-pay-amt');
+        var pct=row.querySelector('.me-pay-pct'), note=row.querySelector('.me-pay-note');
+        if(!who||!who.value)return;
+        var a=amt&&amt.value!==''?parseFloat(amt.value):null;
+        var pc=pct&&pct.value!==''?parseFloat(pct.value):null;
+        if(a==null&&pc==null&&!(note&&note.value.trim()))return;
+        var sh={payerId:who.value};
+        if(a!=null)sh.amount=a;
+        if(pc!=null)sh.pct=pc;
+        if(note&&note.value.trim())sh.note=note.value.trim();
+        out.push(sh);
+    });
+    return out;
+}
+
+/** Live arithmetic under the split rows, so a mistake is visible before saving. */
+function _payerSplitPreview(){
+    var box=document.getElementById('chgSplitPreview');
+    if(!box)return;
+    var P=_payersAPI();
+    var amtEl=document.getElementById('chgAmount');
+    var total=amtEl?(parseFloat(amtEl.value)||0):0;
+    var shares=_payerSharesFromForm();
+    if(!P||!shares.length){box.innerHTML='';return}
+    var v=P.validate(total,shares);
+    if(!v.ok){
+        box.innerHTML='<div style="background:#FEF2F2;border:1px solid #FECACA;color:#991B1B;'
+          +'border-radius:8px;padding:7px 10px;font-size:.78rem">'+esc(v.message)+'</div>';
+        return;
+    }
+    var fk=(document.getElementById('chgFamKey')||{}).value||'';
+    var reg=Object.assign({},payers);
+    if(fk&&families[fk])reg[fk]={id:fk,name:families[fk].name||'Household',kind:'household'};
+    var line=P.describe(total,shares,reg,fk);
+    box.innerHTML=line?'<div style="background:#F0FDF4;border:1px solid #BBF7D0;color:#166534;'
+      +'border-radius:8px;padding:7px 10px;font-size:.78rem">'+esc(line)+'</div>':'';
+}
+
+function _addPayerRow(){
+    var wrap=document.getElementById('chgSplitRows');
+    if(!wrap)return;
+    var fk=(document.getElementById('chgFamKey')||{}).value||'';
+    wrap.insertAdjacentHTML('beforeend',_payerRowHtml(fk,wrap.children.length,{}));
+    _payerSplitPreview();
+}
+
+/**
+ * Manage the payers that are not the camper's own household.
+ *
+ * Mostly organizations — a shul fund, an agency, an employer — and occasionally a
+ * second household when parents bill separately. The NOTE is the reason this
+ * screen exists: "approved 2026-03-14, ref #4471" is what an office needs in
+ * August when the cheque has not arrived.
+ */
+function managePayers(){
+    if(!_secEdit('billing','Managing payers'))return;
+    var P=_payersAPI();
+    if(!P){toast('The payer module did not load','error');return}
+    var ids=Object.keys(payers||{}).sort(function(a,b){
+        return String((payers[a]||{}).name||'').localeCompare(String((payers[b]||{}).name||''));
+    });
+    var h='<div class="me-modal-form">';
+    h+='<p style="font-size:.83rem;color:var(--s500);margin:0 0 12px">'
+      +'Anyone other than a camper\u2019s own household who pays part of a bill. '
+      +'The household is always a payer and never needs adding here.</p>';
+    if(!ids.length){
+        h+='<div style="background:#F8FAFC;border:1px dashed var(--s200);border-radius:var(--r);'
+          +'padding:14px;text-align:center;color:var(--s500);font-size:.83rem;margin-bottom:12px">'
+          +'No organizations or extra households yet.</div>';
+    } else {
+        h+='<div style="max-height:260px;overflow:auto;margin-bottom:12px">';
+        ids.forEach(function(id){
+            var p=payers[id]||{};
+            h+='<div style="display:flex;gap:8px;align-items:center;padding:7px 9px;border:1px solid var(--s200);'
+              +'border-radius:8px;margin-bottom:6px;'+(p.archived?'opacity:.55':'')+'">'
+              +'<div style="flex:1;min-width:0"><strong style="font-size:.86rem">'+esc(p.name||id)+'</strong>'
+              +' <span style="font-size:.74rem;color:var(--s500)">'
+              +esc(p.kind==='organization'?'organization':'household')+'</span>'
+              +(p.note?'<div style="font-size:.76rem;color:var(--s500)">'+esc(p.note)+'</div>':'')
+              +(p.contact||p.email||p.phone?'<div style="font-size:.74rem;color:var(--s400)">'
+                 +esc([p.contact,p.email,p.phone].filter(Boolean).join(' \u00b7 '))+'</div>':'')
+              +'</div>'
+              +'<button type="button" class="me-btn me-btn--ghost me-btn--sm" '
+              +'onclick="CampistryMe.togglePayerArchived(\''+je(id)+'\')">'
+              +(p.archived?'Restore':'Archive')+'</button>'
+              +'</div>';
+        });
+        h+='</div>';
+    }
+    h+='<div style="border-top:1px solid var(--s200);padding-top:12px">';
+    h+='<div style="font-size:.82rem;font-weight:600;margin-bottom:8px">Add a payer</div>';
+    h+='<div style="display:grid;grid-template-columns:1.4fr .9fr;gap:9px">';
+    h+='<div class="me-field" style="margin:0"><label>Name</label>'
+      +'<input type="text" id="npName" class="me-input" placeholder="e.g. Tomchei Fund"></div>';
+    h+='<div class="me-field" style="margin:0"><label>Kind</label><select id="npKind" class="me-input">'
+      +'<option value="organization">Organization</option>'
+      +'<option value="household">Household</option></select></div>';
+    h+='</div>';
+    h+='<div style="display:grid;grid-template-columns:1fr 1fr;gap:9px">';
+    h+='<div class="me-field" style="margin:0"><label>Contact / email</label>'
+      +'<input type="text" id="npContact" class="me-input" placeholder="optional"></div>';
+    h+='<div class="me-field" style="margin:0"><label>Note</label>'
+      +'<input type="text" id="npNote" class="me-input" placeholder="approval ref, terms\u2026"></div>';
+    h+='</div>';
+    h+='</div></div>';
+    showModal('Payers & Organizations',h,function(){
+        var name=(document.getElementById('npName').value||'').trim();
+        if(!name){toast('Give the payer a name','error');return}
+        var kind=document.getElementById('npKind').value;
+        var id=P.idFor(name,kind);
+        // A repeated name would otherwise silently overwrite the first one, taking
+        // its note and its history with it.
+        if(payers[id]){toast('A payer called that already exists','error');return}
+        payers[id]={id:id,name:name,kind:kind,
+                    contact:(document.getElementById('npContact').value||'').trim(),
+                    note:(document.getElementById('npNote').value||'').trim()};
+        save();closeModal('dynModal');toast(name+' added as a payer');
+    },'Add payer');
+}
+function togglePayerArchived(id){
+    if(!_secEdit('billing','Managing payers'))return;
+    if(!payers[id])return;
+    // Archived rather than deleted: a payer named on a past charge has to keep
+    // resolving to a name, or last season's statements stop making sense.
+    payers[id].archived=!payers[id].archived;
+    save();closeModal('dynModal');managePayers();
+}
+
 function _liveOnlyNotice(what){
     var ws='';
     try{ if(typeof window.campistryWorkspace==='function')ws=window.campistryWorkspace()||''; }catch(e){}
@@ -13056,7 +13245,9 @@ function buildFamilyLedgers(){
     Object.entries(families).forEach(function([fk,f]){
         if(!ledgers[fk])return;
         (f.charges||[]).forEach(function(ch){
-            ledgers[fk].entries.push({type:'charge',category:ch.category||'Add-On',desc:ch.description||'',amount:Number(ch.amount)||0,date:ch.date||'',ref:ch.id||''});
+            // `payers` rides along so the per-payer view can be derived from the
+            // ledger rather than re-read from families — one source, one answer.
+            ledgers[fk].entries.push({type:'charge',category:ch.category||'Add-On',desc:ch.description||'',amount:Number(ch.amount)||0,date:ch.date||'',ref:ch.id||'',payers:ch.payers||null});
             if(ch.id)ledgers[fk]._seen['c:'+ch.id]=1;
             ledgers[fk].totalCharges+=Number(ch.amount)||0;
         });
@@ -14391,6 +14582,7 @@ function renderBilling(){
         +'<button onclick="CampistryMe.addFamily()">Add Household</button>'
         +'<button onclick="CampistryMe.addCharge()">Add Charge</button>'
         +'<button onclick="CampistryMe.issueCredit()">Issue Credit/Refund</button>'
+        +'<button onclick="CampistryMe.managePayers()">Payers &amp; Organizations</button>'
         +'<button onclick="CampistryMe.openMergeFamiliesTool()">Merge Families</button>'
         // Printing/exporting the household list moved to Reports (a
         // "Family Directory" template, filterable/groupable/printable) —
@@ -14785,6 +14977,23 @@ function addChargeForFamily(famKey){
     h+='<div class="me-field"><label>Amount ($)</label><input type="number" id="chgAmount" class="me-input" placeholder="0.00" step="0.01" min="0"></div>';
     h+='</div>';
     h+='<div class="me-field"><label>Date</label><input type="date" id="chgDate" class="me-input" value="'+today+'"></div>';
+
+    // WHO IS PAYING THIS. Optional and closed by default: a charge with no split
+    // is wholly the household's, which is what every charge before this was.
+    // Opened when a fund covers part of a bill, or two parents split it.
+    if(_payersAPI()){
+        h+='<details style="margin-top:6px;border:1px solid var(--s200);border-radius:var(--r);padding:9px 11px">';
+        h+='<summary style="cursor:pointer;font-size:.82rem;font-weight:600;color:var(--s600)">'
+          +'Split between payers <span style="font-weight:400;color:var(--s500)">'
+          +'\u2014 optional; anything unassigned is the household\u2019s</span></summary>';
+        h+='<div id="chgSplitRows" style="margin-top:9px"></div>';
+        h+='<button type="button" class="me-btn me-btn--sec me-btn--sm" '
+          +'onclick="CampistryMe._addPayerRow()">+ Add payer</button> ';
+        h+='<button type="button" class="me-btn me-btn--ghost me-btn--sm" '
+          +'onclick="CampistryMe.managePayers()">Manage payers\u2026</button>';
+        h+='<div id="chgSplitPreview" style="margin-top:9px"></div>';
+        h+='</details>';
+    }
     h+='</div>';
     showModal('Add Charge',h,function(){
         var fk=document.getElementById('chgFamKey').value;
@@ -14792,8 +15001,20 @@ function addChargeForFamily(famKey){
         if(!fk||!f){toast('Select a family','error');return}
         var amt=parseFloat(document.getElementById('chgAmount').value)||0;
         if(!amt){toast('Enter an amount','error');return}
+        // The split, if one was entered. REFUSED rather than clamped when it
+        // over-allocates: a household shown a negative balance and an organization
+        // billed for money nobody owes is worse than being made to fix the figures.
+        var _P=_payersAPI(), _shares=_P?_payerSharesFromForm():[];
+        if(_P&&_shares.length){
+            var _v=_P.validate(amt,_shares);
+            if(!_v.ok){toast(_v.message,'error');return}
+        }
         if(!f.charges) f.charges=[];
-        f.charges.push({id:'chg_'+Date.now(),category:document.getElementById('chgCategory').value,description:document.getElementById('chgDesc').value.trim(),amount:amt,date:document.getElementById('chgDate').value,timestamp:Date.now()});
+        var _chg={id:'chg_'+Date.now(),category:document.getElementById('chgCategory').value,description:document.getElementById('chgDesc').value.trim(),amount:amt,date:document.getElementById('chgDate').value,timestamp:Date.now()};
+        // Stored only when there IS a split, so an ordinary charge is byte-identical
+        // to one written before this feature existed.
+        if(_shares.length)_chg.payers=_shares;
+        f.charges.push(_chg);
         f.balance=(f.balance||0)+amt;
         save();closeModal('dynModal');if(curPage==='familydetail')renderFamilyDetailPage();else renderBilling();toast('Charge of '+fm(amt)+' added to '+f.name);
     });
@@ -19774,6 +19995,8 @@ window.CampistryMe={
     openCsv:function(){openModal('csvModal')},downloadTemplate:downloadTemplate,
     finReconcileCharges:finReconcileCharges,
     _dpToggle:_dpToggle,_cpToggle:_cpToggle,_cfToggle:_cfToggle,_fbRetryPreview:_fbRetryPreview,markDepositPaid:markDepositPaid,chargeDepositNow:chargeDepositNow,
+    managePayers:managePayers,togglePayerArchived:togglePayerArchived,
+    _addPayerRow:_addPayerRow,_payerSplitPreview:_payerSplitPreview,
     setRosterPage:setRosterPage,setRosterSubTab:setRosterSubTab,setRosterWhen:setRosterWhen,setBillingPage:setBillingPage,setAnalyticsInvoicePage:setAnalyticsInvoicePage,setAnalyticsPaymentPage:setAnalyticsPaymentPage,
     _runSetupChecklistAction:_runSetupChecklistAction,dismissSetupChecklist:dismissSetupChecklist,
     bbDrop:bbDrop,autoAssign:autoAssign,autoGenerateBunks:autoGenerateBunks,openBunkGenSettings:openBunkGenSettings,showCamperBunkRequests:showCamperBunkRequests,clearBunks:clearBunks,setBunkCount:setBunkCount,openBunkCountModal:openBunkCountModal,_clearBunkCount:_clearBunkCount,

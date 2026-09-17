@@ -262,3 +262,114 @@ test('cents never produce a float surprise', () => {
     assert.strictEqual(P.cents(undefined), 0);
     assert.strictEqual(P.dollars(1999), 19.99);
 });
+
+// ───────────────────────────────────────────────────────────────────────────
+// THE WIRING. The rule above is useless until a charge can carry a split, the
+// registry survives a save, and the ledger passes it through.
+// ───────────────────────────────────────────────────────────────────────────
+
+const fs = require('node:fs');
+const ME = fs.readFileSync(path.join(__dirname, '..', 'campistry_me.js'), 'utf8');
+const MEHTML = fs.readFileSync(path.join(__dirname, '..', 'campistry_me.html'), 'utf8');
+
+test('the registry is loaded, normalized, and saved', () => {
+    assert.match(ME, /payers=\(window\.CampistryPayers\?window\.CampistryPayers\.normalize\(me\.payers\)/,
+        'normalized on the way in, so a hand-edited blob cannot break a render');
+    assert.match(ME, /payers:_savedPayers,/, 'and written back out');
+});
+
+test('an empty registry can never wipe a populated one', () => {
+    // The exact bug the sessions guard exists for: save() fires from an unrelated
+    // edit before loadData() has hydrated, and an empty in-memory copy overwrites
+    // every organization the camp set up.
+    assert.match(ME, /var _savedPayers=\(payers&&Object\.keys\(payers\)\.length\)\?payers/);
+    assert.match(ME, /:\(\(g\.campistryMe&&g\.campistryMe\.payers\)\|\|payers\);/);
+});
+
+test('a charge stores a split ONLY when there is one', () => {
+    // An ordinary charge must be byte-identical to one written before this feature,
+    // or every existing ledger row starts differing from every new one.
+    assert.match(ME, /if\(_shares\.length\)_chg\.payers=_shares;/);
+    const fn = ME.slice(ME.indexOf('function addChargeForFamily'));
+    assert.ok(!/payers:_shares/.test(fn.slice(0, 4000)),
+        'the split must not be written unconditionally into the charge literal');
+});
+
+test('an over-allocated split is refused before the charge is written', () => {
+    const fn = ME.slice(ME.indexOf('function addChargeForFamily'));
+    const body = fn.slice(0, 5000);
+
+    // The shares must actually be READ FROM THE FORM. Asserting only that a
+    // validate() call appears somewhere passes happily on a version where _shares
+    // is hardcoded empty and the whole block is unreachable — which is how a
+    // mutation that disabled validation entirely stayed green.
+    assert.match(body, /var _P=_payersAPI\(\), _shares=_P\?_payerSharesFromForm\(\):\[\];/,
+        'the split has to come from the form, not from a constant');
+
+    assert.match(body, /var _v=_P\.validate\(amt,_shares\);/);
+    assert.match(body, /if\(!_v\.ok\)\{toast\(_v\.message,'error'\);return\}/);
+    // And before the push, or a refused split still lands on the ledger.
+    assert.ok(body.indexOf('_P.validate(amt,_shares)') < body.indexOf('f.charges.push'),
+        'validation must precede the write');
+});
+
+test('the ledger carries the split through to the derived entries', () => {
+    // Derived from the ledger rather than re-read from families, so the per-payer
+    // view and the family view cannot come from two different places.
+    assert.match(ME, /payers:ch\.payers\|\|null\}\);/);
+});
+
+test('managing payers is gated like every other money action', () => {
+    ['function managePayers()', 'function togglePayerArchived(id)'].forEach(sig => {
+        const fn = ME.slice(ME.indexOf(sig));
+        assert.match(fn.slice(0, 300), /_secEdit\('billing'/,
+            sig + ' must be gated — it is money, and live-only inside a plan');
+    });
+});
+
+test('a payer is archived, never deleted', () => {
+    // A payer named on a past charge has to keep resolving to a name, or last
+    // season's statements stop making sense.
+    const fn = ME.slice(ME.indexOf('function togglePayerArchived(id)'));
+    assert.match(fn.slice(0, 400), /payers\[id\]\.archived=!payers\[id\]\.archived/);
+    assert.ok(!/delete payers\[/.test(ME), 'nothing may delete a payer outright');
+});
+
+test('a repeated payer name is refused, not silently merged', () => {
+    const fn = ME.slice(ME.indexOf('function managePayers()'));
+    assert.match(fn, /if\(payers\[id\]\)\{toast\('A payer called that already exists','error'\);return\}/);
+});
+
+test('an archived payer is not offered on a new charge', () => {
+    const fn = ME.slice(ME.indexOf('function _payerOptions(famKey,selected)'));
+    assert.match(fn.slice(0, 900), /if\(p\.archived\)return;/);
+    // And the household is always there, always first, always the default.
+    assert.match(fn.slice(0, 900), /\(household\)</);
+    assert.match(fn.slice(0, 900), /\(!selected\|\|selected===famKey\)\?' selected':''/);
+});
+
+test('the household is never listed twice', () => {
+    // It is rendered explicitly as the first option; a registry entry sharing its
+    // key would otherwise appear again and split a charge with itself.
+    const fn = ME.slice(ME.indexOf('function _payerOptions(famKey,selected)'));
+    assert.match(fn.slice(0, 900), /if\(id===famKey\)return;/);
+});
+
+test('the module is loaded before the page that uses it', () => {
+    // Compared as SCRIPT TAGS, not raw indexOf. The page mentions campistry_me.js
+    // in a comment near the top ("Hidden by campistry_me.js"), so a plain string
+    // search finds the prose and reports the order backwards.
+    const tags = [...MEHTML.matchAll(/<script src="([^"?]+)/g)].map(m => m[1]);
+    const iPay = tags.indexOf('campistry_payers.js');
+    const iMe = tags.indexOf('campistry_me.js');
+    assert.ok(iPay >= 0, 'campistry_payers.js must be loaded');
+    assert.ok(iMe >= 0, 'campistry_me.js must be loaded');
+    assert.ok(iPay < iMe,
+        'the rule must load before the page that asks it to validate a split');
+});
+
+test('there is a way in from Billing', () => {
+    assert.match(ME, /CampistryMe\.managePayers\(\)/);
+    assert.match(ME, /managePayers:managePayers,/, 'and it is exported');
+    assert.match(ME, /_addPayerRow:_addPayerRow,_payerSplitPreview:_payerSplitPreview,/);
+});
