@@ -247,6 +247,11 @@
                     return changed();
                 }
                 if (!d.accepted) {
+                    // The server's own words, where whoever is testing the
+                    // form will see them. Guessing between "not applied",
+                    // "two of it" and "actually broken" from one sentence on
+                    // screen cost several rounds; this ends that.
+                    if (d.debug) console.log('[CardCapture] server said:', d.debug);
                     // Not installed is a camp-setup problem, not a bad card.
                     // Retrying fails identically forever, so release the form
                     // instead of holding it on a step that cannot complete.

@@ -849,6 +849,35 @@ test('every rail reports its verdict back to the form', () => {
     assert.match(fn, /p_status: "completed"/);
 });
 
+test('a database that cannot record a capture says so, and lets go', () => {
+    // A parent saw "Your card was accepted but we could not save it — please
+    // try again" and retrying could never work: two complete_card_capture
+    // overloads existed (189's 7-arg and 192's defaulted 8-arg) and PostgREST,
+    // which resolves by NAME, would not choose between them. Migration 194
+    // drops the narrower one.
+    const fn = fs.readFileSync(path.join(ROOT, 'supabase/functions/card-capture-start/index.ts'), 'utf8');
+    const cap = fs.readFileSync(path.join(ROOT, 'campistry_card_capture.js'), 'utf8');
+    const mig = fs.readFileSync(path.join(ROOT, 'migrations/194_one_complete_card_capture.sql'), 'utf8');
+
+    assert.match(mig, /DROP FUNCTION IF EXISTS public\.complete_card_capture\(text, text, text, text, text, text, text\)/);
+    // And it refuses to leave the database with none at all.
+    assert.match(mig, /RAISE EXCEPTION/);
+    assert.match(mig, /apply migration 192/);
+
+    // Both permanent failures are recognised, and neither asks for a retry.
+    assert.match(fn, /PGRST202/);
+    assert.match(fn, /PGRST203|could not choose the best candidate/);
+    assert.match(fn, /isn't finished setting up for this camp/);
+    // The real error text reaches whoever is testing, rather than being
+    // flattened into one sentence that could mean three things.
+    assert.match(fn, /debug: why/);
+    assert.match(cap, /\[CardCapture\] server said:/);
+
+    // A setup problem must release the form, not hold it forever.
+    assert.match(cap, /d\.reason === 'capture_not_installed'/);
+    assert.match(cap, /state\.unavailable = true/);
+});
+
 test('the parent is asked before their card is kept', () => {
     // Keeping someone's card for future charges is a thing to ask, not
     // assume. The processor holds it either way -- that is how the deposit is

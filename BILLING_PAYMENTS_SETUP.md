@@ -315,10 +315,23 @@ module, `campistry_card_capture.js`, so the rule cannot drift between them.
 
 **If you see "Your card was accepted but we could not save it".** The card is
 genuinely fine — that message means `complete_card_capture` could not be
-reached, which is almost always migration 189 not applied yet. The function now
-says so instead ("Online card entry isn't finished setting up for this camp")
-and releases the form rather than telling a parent to retry something that
-cannot succeed.
+reached. Two things cause it, and **both need `migrations/194_one_complete_card_capture.sql`
+applied** (after 189 and 192):
+
+1. **189 was never applied**, so the function does not exist.
+2. **There are two of it.** 192 added an 8-argument form (`p_funding`, with a
+   default) and kept 189's 7-argument one. PostgREST calls RPCs by argument
+   *name*, not position, so a body carrying the original seven names matched
+   both and Postgres refused to choose (`PGRST203`). Every caller broke; the
+   Banquest path is the one a parent sees, because it is the only rail that
+   records the result inside the request they are waiting on. 194 drops the
+   narrower form.
+
+The function now tells these apart, says *"Online card entry isn't finished
+setting up for this camp"* instead of asking for a retry that cannot work, and
+releases Submit. It also returns the database's own error text, which the form
+prints to the browser console as `[CardCapture] server said: …` — check there
+before guessing.
 
 **How the answer gets back.** The popup is on the processor's origin and
 cannot talk to the form, and only some processors redirect back at all (Sola

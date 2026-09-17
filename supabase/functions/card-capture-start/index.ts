@@ -186,13 +186,25 @@ serve(async (req) => {
         // migration 189 not applied yet, so complete_card_capture does not
         // exist. Retrying then fails identically, forever, and the parent has
         // no way to know. Say which failure it is.
-        const missing = /could not find the function|schema cache|does not exist|42883/i.test(why);
+        // Two different database-side problems produce this, and both are
+        // permanent until someone applies a migration -- so neither is worth
+        // telling a parent to retry:
+        //   * the function is missing entirely (189 not applied)
+        //   * there are TWO of it and Postgres will not choose (192 added a
+        //     defaulted 8-arg overload beside 189's 7-arg one; PostgREST
+        //     resolves by NAME, so both matched -- fixed by 194)
+        const missing = /could not find the function|schema cache|does not exist|42883|PGRST202/i.test(why);
+        const ambiguous = /could not choose the best candidate|PGRST203|is not unique|42725/i.test(why);
         return json({
           success: false,
-          reason: missing ? "capture_not_installed" : "capture_not_recorded",
-          error: missing
+          reason: (missing || ambiguous) ? "capture_not_installed" : "capture_not_recorded",
+          error: (missing || ambiguous)
             ? "Online card entry isn't finished setting up for this camp — please contact the office."
             : "Your card was accepted but we could not save it — please try again.",
+          // The gateway's own words, for whoever is testing the form. It is a
+          // Postgres error string, never card data -- and without it, working
+          // out WHICH of these it was costs a round trip of guessing.
+          debug: why,
         }, 200);
       }
 

@@ -361,3 +361,56 @@ test('every migration that widens a CHECK drops it by name first', () => {
     assert.deepStrictEqual(bad, [],
         'add DROP CONSTRAINT IF EXISTS <name> before the ADD:\n  ' + bad.join('\n  '));
 });
+
+// ── PostgREST calls by NAME, so a defaulted overload is ambiguous ────────────
+test('no RPC is left with an overload PostgREST cannot choose between', () => {
+    // Migration 192 added an 8-argument complete_card_capture (7 from 189 plus
+    // p_funding DEFAULT NULL) and kept the 7-argument one, reasoning that a
+    // default-valued 8th parameter "cannot be reached by a positional 7-arg
+    // call". True of SQL, irrelevant here: an edge function sends a JSON object
+    // of NAMED arguments, so a body carrying the original seven names matches
+    // BOTH — and Postgres refuses to choose (PGRST203). Every caller broke,
+    // and a parent saw "your card was accepted but we could not save it".
+    //
+    // So: if a function is created more than once across migrations with
+    // DIFFERENT arities, and the wider form's extra parameters all have
+    // DEFAULTs, the narrower one has to be dropped.
+    const dir = path.join(ROOT, 'migrations');
+    const files = fs.readdirSync(dir).filter(f => /^\d+.*\.sql$/.test(f)).sort();
+
+    const arities = {};   // name -> Set of arities created
+    const dropped = {};   // name -> Set of arities dropped
+    const defaulted = {}; // name -> true if some form has a DEFAULT param
+
+    for (const f of files) {
+        const sql = fs.readFileSync(path.join(dir, f), 'utf8');
+        const creates = sql.match(/CREATE\s+(?:OR\s+REPLACE\s+)?FUNCTION\s+(?:public\.)?([a-z0-9_]+)\s*\(([\s\S]*?)\)\s*\n\s*RETURNS/gi) || [];
+        for (const c of creates) {
+            const m = /FUNCTION\s+(?:public\.)?([a-z0-9_]+)\s*\(([\s\S]*?)\)\s*\n\s*RETURNS/i.exec(c);
+            if (!m) continue;
+            const name = m[1], args = m[2].trim();
+            const n = args ? args.split(',').length : 0;
+            (arities[name] || (arities[name] = new Set())).add(n);
+            if (/\bDEFAULT\b/i.test(args)) defaulted[name] = true;
+        }
+        const drops = sql.match(/DROP\s+FUNCTION\s+(?:IF\s+EXISTS\s+)?(?:public\.)?([a-z0-9_]+)\s*\(([^)]*)\)/gi) || [];
+        for (const d of drops) {
+            const m = /DROP\s+FUNCTION\s+(?:IF\s+EXISTS\s+)?(?:public\.)?([a-z0-9_]+)\s*\(([^)]*)\)/i.exec(d);
+            if (!m) continue;
+            const name = m[1], args = m[2].trim();
+            (dropped[name] || (dropped[name] = new Set())).add(args ? args.split(',').length : 0);
+        }
+    }
+
+    const bad = [];
+    for (const [name, set] of Object.entries(arities)) {
+        if (set.size < 2) continue;                 // one shape, nothing to choose between
+        if (!defaulted[name]) continue;             // no defaults, so no overlap by name
+        const live = [...set].filter(n => !(dropped[name] && dropped[name].has(n)));
+        if (live.length > 1) {
+            bad.push(`${name} still has arities ${live.join(' and ')} — drop the narrower one`);
+        }
+    }
+    assert.deepStrictEqual(bad, [],
+        'PostgREST resolves by argument NAME; a defaulted overload makes both forms candidates:\n  ' + bad.join('\n  '));
+});
