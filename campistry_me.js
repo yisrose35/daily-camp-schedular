@@ -40,6 +40,10 @@ var structure={}, roster={}, families={}, payments=[], broadcasts=[], bunkAsgn={
 var bunkAliases={};
 var bunkCapacity={}; // max campers per bunk (capacity), keyed by bunk name — distinct from bunkManualCounts (headcount override)
 var enrollments={}, sessions=[], enrollSettings={}, formConfig=null;
+// Set when the form builder saves its payment-method ticks; written onto
+// campistryMe by save(), which owns that blob. Null until then, so an
+// unrelated save never invents a policy the camp did not choose.
+var _pendingPaymentPolicy=null;
 var finStaff=[], finExpenses=[], finPayments=[], finBudget={revenue:0,payroll:0,expenses:0}, finIntegrations={};
 // Payroll — its own store, separate from the finance-tab staff list.
 //   staff:      full payroll records (pay, addresses, documents, youthCorps)
@@ -588,6 +592,15 @@ function save(){
         // hydrated (they were scrubbed after load). Writing g back as-is would
         // blank them in the cloud, so put the untouched branches back first.
         try{ if(window.CampistrySections)window.CampistrySections.preserveOnSave(g); }catch(_){}
+        // The camp-wide payment methods, if the builder just set them. Merged
+        // rather than replaced so allowDebit (a separate, deliberate setting)
+        // survives.
+        if(_pendingPaymentPolicy){
+            try{
+                var _prevPP=(g.campistryMe&&g.campistryMe.paymentPolicy)||{};
+                _pendingPaymentPolicy=Object.assign({},_prevPP,_pendingPaymentPolicy);
+            }catch(_){}
+        }
         // ★ sessions is a module-level var only populated once loadData() has
         // run against real hydrated data — if save() fires (e.g. from an
         // unrelated edit) before that first hydration completes, `sessions`
@@ -676,6 +689,10 @@ function save(){
             counselorVisibility:counselorVisibility,
             sessions:_savedSessions,
             enrollSettings:enrollSettings,
+            // Only when the builder actually set it. Spreading `undefined`
+            // here would be harmless; writing {} would not -- it would read as
+            // "this camp accepts nothing".
+            ...(_pendingPaymentPolicy?{paymentPolicy:_pendingPaymentPolicy}:{}),
             formConfig:formConfig,
             staffFormConfig:staffFormConfig,
             postAcceptFormConfig:paFormConfig,
@@ -8475,6 +8492,20 @@ function _collectFormConfigDraft(){
     if(payBoxes.length){
         payMethods=[];
         payBoxes.forEach(function(cb){ if(cb.checked)payMethods.push(cb.value); });
+        // ALSO camp-wide, not just on this form.
+        //
+        // campistry_payments.js has always read campistryMe.paymentPolicy to
+        // decide which methods exist ANYWHERE -- Billing's Record Payment
+        // picker, the post-acceptance form, the shop -- and nothing in the app
+        // ever WROTE it, so that setting sat permanently at its defaults and a
+        // camp that does not take checks was still offered checks everywhere
+        // except the registration form. The one place a camp states this is
+        // here, so it states it once and it holds everywhere.
+        //
+        // TOP LEVEL, deliberately: the reader looks at campistryMe.paymentPolicy,
+        // and enrollSettings is campistryMe.enrollSettings -- one level down,
+        // where nothing would ever have found it.
+        _pendingPaymentPolicy={enabled:payMethods.slice()};
     }
 
     return {
@@ -9966,7 +9997,30 @@ function viewApplication(id){
                           (e.depositDue?', due '+esc(e.depositDue):'')+'</span>'
                         : '<span style="color:var(--ok);font-weight:700">paid</span>'));
                 if(_out>0){
-                    b+='<button class="me-btn me-btn--sec me-btn--sm" style="margin-top:6px" onclick="CampistryMe.markDepositPaid(\''+je(id)+'\')">Mark deposit received</button>';
+                    // A card or bank deposit is COLLECTED, not recorded by
+                    // hand: the parent's card was accepted on the form and the
+                    // deposit charged against it. Leading with "Mark deposit
+                    // received" here invited staff to tick off money that was
+                    // never taken, and hid the fact that something had gone
+                    // wrong with the charge. Manual marking is for the ways
+                    // money actually arrives by hand -- cash, a check, Zelle.
+                    var _online=(e.paymentMethod==='credit_card'||e.paymentMethod==='ach'||e.paymentMethod==='debit');
+                    var _hasCard=!!e.savedCardCustomer;
+                    if(_online){
+                        b+='<div style="font-size:.8rem;color:#9A3412;margin-top:6px;line-height:1.6">'
+                          +'They chose to pay by '+esc(_payLabel(e.paymentMethod)).toLowerCase()+', so this should have been '
+                          +'taken automatically when they applied. It was not \u2014 '
+                          +(_hasCard
+                            ? 'their card is on file, so you can take it now.'
+                            : 'no card reached us, so there is nothing to charge.')
+                          +'</div>';
+                        if(_hasCard){
+                            b+='<button class="me-btn me-btn--pri me-btn--sm" style="margin-top:6px" onclick="CampistryMe.chargeDepositNow(\''+je(id)+'\')">Charge '+fm(_out)+' now</button> ';
+                        }
+                        b+='<button class="me-btn me-btn--ghost me-btn--sm" style="margin-top:6px" onclick="CampistryMe.markDepositPaid(\''+je(id)+'\')">Mark received anyway</button>';
+                    }else{
+                        b+='<button class="me-btn me-btn--sec me-btn--sm" style="margin-top:6px" onclick="CampistryMe.markDepositPaid(\''+je(id)+'\')">Mark deposit received</button>';
+                    }
                 }else if(Number(e.depositPaid)>0){
                     b+='<button class="me-btn me-btn--ghost me-btn--sm" style="margin-top:6px" onclick="CampistryMe.markDepositPaid(\''+je(id)+'\',true)">Undo</button>';
                 }
@@ -9990,7 +10044,15 @@ function viewApplication(id){
                     b+='<div style="font-size:.8rem;color:var(--s500);margin-top:6px;">Accept &amp; enroll this application, then set up a payment plan from Billing.</div>';
                 }
             }else if(e.paymentMethod==='credit_card'||e.paymentMethod==='ach'){
-                b+='<div style="font-size:.8rem;color:var(--s500);margin-top:6px;">Parent can pay directly from their Link portal (card or bank transfer) once invited — no setup needed here.</div>';
+                // Only true once there is nothing outstanding. With a deposit
+                // still owed, "no setup needed here" reads as "all is well",
+                // which is the opposite of what the block above just said.
+                var _depOwed=(_dpA&&Number(e.depositRequired)>0)?_dpA.outstanding(e):0;
+                b+='<div style="font-size:.8rem;color:var(--s500);margin-top:6px;">'
+                  +(_depOwed>0
+                    ? 'Tuition beyond the deposit is paid by the family from their Link portal once invited.'
+                    : 'Parent can pay directly from their Link portal (card or bank transfer) once invited \u2014 no setup needed here.')
+                  +'</div>';
             }else if(e.paymentMethod==='zelle'||e.paymentMethod==='check'){
                 b+='<button class="me-btn me-btn--sec me-btn--sm" style="margin-top:6px;" onclick="CampistryMe._markAppPaymentReceived(\''+je(id)+'\')">'+(e.paymentStatus==='received'?'✓ Marked Received (click to undo)':'Mark as Received')+'</button>';
                 if(famKeyForApp)b+=' <button class="me-btn me-btn--ghost me-btn--sm" style="margin-top:6px;" onclick="CampistryMe.openPaymentForFamily(\''+je(famKeyForApp)+'\')">Record Payment…</button>';
@@ -15795,6 +15857,65 @@ async function markDepositPaid(id,undo){
 }
 
 /**
+ * Take an outstanding card/ACH deposit now, from the office.
+ *
+ * The parent already had this card accepted by the processor when they
+ * applied, and the deposit should have been charged to it there and then. When
+ * it was not -- the charge declined, or the database could not record it --
+ * the office had exactly one button, "Mark deposit received", which ticks off
+ * money nobody took. This takes it instead.
+ *
+ * The AMOUNT is not sent. registration-deposit-checkout reads what is still
+ * owed on this application and charges that, the same way it does from the
+ * form, so the office cannot overcharge by having a stale page open.
+ */
+async function chargeDepositNow(id){
+    var e=enrollments[id];
+    var P=_depPolicyAPI();
+    if(!e||!P)return;
+    var owed=P.outstanding(e);
+    if(!(owed>0))return toast('Nothing outstanding on this deposit');
+    if(!e.savedCardCustomer)return toast('No card on file for this application');
+
+    var ok=await confirmDialog({
+        title:'Charge '+fm(owed)+'?',
+        message:'This charges the card '+esc(e.camperName||'this family')+' entered when they applied'
+               +(e.savedCardLast4?' (ending '+esc(e.savedCardLast4)+')':'')+'. They are not asked again.',
+        confirmLabel:'Charge '+fm(owed)
+    });
+    if(!ok)return;
+
+    var client=(window.CampistryDB&&window.CampistryDB.getClient)?window.CampistryDB.getClient():window.supabase;
+    var campId=localStorage.getItem('campistry_camp_id')||(window.CampistryDB&&window.CampistryDB.getCampId&&window.CampistryDB.getCampId());
+    if(!client||!client.functions||!campId)return toast('Could not reach the payment service');
+
+    toast('Charging…');
+    try{
+        var r=await client.functions.invoke('registration-deposit-checkout',{
+            body:{campId:campId,enrollmentId:id,
+                  returnUrl:window.location.origin+window.location.pathname,
+                  officeCharge:true}
+        });
+        var d=r&&r.data;
+        if(d&&d.success&&(d.paid||d.alreadyPaid)){
+            // The function already recorded it server-side; re-reading is what
+            // makes this page agree with the database rather than guessing.
+            if(d.paid){
+                e.depositPaid=(Number(e.depositPaid)||0)+(Number(d.amount)||owed);
+                e.depositPaidDate=new Date().toISOString().split('T')[0];
+                if(P.outstanding(e)<=0)e.depositStatus='paid';
+                save();
+            }
+            renderRegistrationPage();
+            return toast(d.alreadyPaid?'Already paid':'Charged '+fm(d.amount||owed));
+        }
+        toast((d&&d.error)||'The card was declined');
+    }catch(err){
+        toast('Could not charge the card — '+((err&&err.message)||'try again'));
+    }
+}
+
+/**
  * The deposit editor, as a card in the Registration form builder.
  *
  * It used to be its own menu item and its own modal, which put the one
@@ -16036,10 +16157,22 @@ function _dpCardHtml(pol){
     h+=ff('One deposit per','dpPer',pol.per==='family'?'Family':'Camper','select',['Camper','Family']);
 
     h+='<div class="fsec">When it is due</div>';
-    h+=ff('Timing','dpTiming',pol.timing==='later'?'They can pay after applying':'Before the form can be submitted',
-          'select',['Before the form can be submitted','They can pay after applying']);
+    // "Before the form can be submitted" is what this said, and the form did
+    // not do that -- the application went through and sat as awaiting deposit.
+    // The timing question is now honest about what it does, and the blocking
+    // version is its own deliberate choice below.
+    h+=ff('Timing','dpTiming',pol.timing==='later'?'They can pay after applying':'With the application',
+          'select',['With the application','They can pay after applying']);
     h+='<div id="dpDueWrap" style="'+(pol.timing==='later'?'':'display:none')+'">'
       +ff('Days they have to pay','dpDueDays',pol.dueDays,'number')+'</div>';
+    h+='<div id="dpMandWrap" style="'+(pol.timing==='later'?'display:none':'')+'">'
+      +'<label style="display:flex;gap:9px;align-items:flex-start;font-size:.82rem;margin:2px 0 6px;cursor:pointer">'
+      +'<input type="checkbox" id="dpMandatory" '+(pol.mandatory?'checked':'')
+      +' onchange="CampistryMe._dpToggle()" style="accent-color:var(--me);width:15px;height:15px;margin-top:1px">'
+      +'<span>The form will not submit until it is paid'
+      +'<span style="display:block;color:var(--s400);font-size:.75rem;line-height:1.5;margin-top:1px">'
+      +'Strong: a family who cannot pay right now cannot apply at all. Leave it off and the application '
+      +'arrives marked awaiting deposit, which is what most camps want.</span></span></label></div>';
     h+='<p id="dpTimingNote" style="font-size:.72rem;color:var(--s400);margin:-4px 0 10px;padding-left:2px"></p>';
 
     // Wording matters less often than the number, so it waits to be asked for.
@@ -16194,6 +16327,7 @@ function _dpToggle(){
 
     var later=((document.getElementById('dpTiming')||{}).value||'')==='They can pay after applying';
     show('dpDueWrap',later);
+    show('dpMandWrap',!later);
 
     // Say what a choice does next to the choice, rather than in a paragraph of
     // caveats under everything.
@@ -16202,9 +16336,12 @@ function _dpToggle(){
         ? 'Used for any session with no deposit of its own, so turning this on never asks for $0.'
         : 'A deposit is never more than the tuition it is part of.';
     var tn=document.getElementById('dpTimingNote');
+    var mand=!!(document.getElementById('dpMandatory')||{}).checked;
     if(tn)tn.textContent=later
         ? 'The application goes through straight away and the deposit is tracked as owed.'
-        : 'The application is held as awaiting deposit until the money arrives.';
+        : mand
+            ? 'The form refuses to submit until the deposit is paid \u2014 so a family needs a card or bank account to apply.'
+            : 'The application goes through and is held as awaiting deposit until the money arrives.';
 
     try{ _dpRefreshCard(); }catch(e){}
 }
@@ -16221,6 +16358,7 @@ function _dpRead(){
         percent:Number(v('dpPercent'))||0,
         per:v('dpPer')==='Family'?'family':'camper',
         timing:v('dpTiming')==='They can pay after applying'?'later':'now',
+        mandatory:ck('dpMandatory'),
         dueDays:Number(v('dpDueDays'))||0,
         refundable:ck('dpRefund'),
         countsTowardTuition:ck('dpCounts'),
@@ -19296,7 +19434,7 @@ window.CampistryMe={
     addDiv:function(){openDivForm(null)},editDiv:function(n){openDivForm(n)},deleteDiv:deleteDiv,
     openCsv:function(){openModal('csvModal')},downloadTemplate:downloadTemplate,
     finReconcileCharges:finReconcileCharges,
-    _dpToggle:_dpToggle,_cpToggle:_cpToggle,_cfToggle:_cfToggle,_fbRetryPreview:_fbRetryPreview,markDepositPaid:markDepositPaid,
+    _dpToggle:_dpToggle,_cpToggle:_cpToggle,_cfToggle:_cfToggle,_fbRetryPreview:_fbRetryPreview,markDepositPaid:markDepositPaid,chargeDepositNow:chargeDepositNow,
     setRosterPage:setRosterPage,setRosterSubTab:setRosterSubTab,setRosterWhen:setRosterWhen,setBillingPage:setBillingPage,setAnalyticsInvoicePage:setAnalyticsInvoicePage,setAnalyticsPaymentPage:setAnalyticsPaymentPage,
     _runSetupChecklistAction:_runSetupChecklistAction,dismissSetupChecklist:dismissSetupChecklist,
     bbDrop:bbDrop,autoAssign:autoAssign,autoGenerateBunks:autoGenerateBunks,openBunkGenSettings:openBunkGenSettings,showCamperBunkRequests:showCamperBunkRequests,clearBunks:clearBunks,setBunkCount:setBunkCount,openBunkCountModal:openBunkCountModal,_clearBunkCount:_clearBunkCount,

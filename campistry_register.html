@@ -1520,6 +1520,44 @@ function _regCardBlocks(){
         &&!_regCardUnavailable()&&!_regCardAccepted();
 }
 
+/**
+ * Has the camp said the deposit MUST be paid before the form goes?
+ *
+ * Distinct from the deposit merely being due with the application: that is a
+ * bookkeeping state the office already understands. This one refuses the
+ * application outright, so it is off unless a camp deliberately turns it on.
+ */
+function _regDepositMandatory(){
+    var P=window.CampistryDepositPolicy;
+    if(!P||!_depositPolicy)return false;
+    var pol=P.normalize(_depositPolicy);
+    return !!(pol.enabled&&pol.mandatory&&_regDepositPending());
+}
+
+/**
+ * What stops a mandatory deposit being paid, if anything.
+ *
+ * A camp can switch this on and then have no way to take money -- no
+ * processor, an offline payment method chosen, the card step unavailable. In
+ * every one of those the honest thing is to say why the form will not go,
+ * rather than disabling a button and leaving them to guess.
+ */
+function _regMandatoryBlocker(){
+    if(!_regDepositMandatory())return null;
+    if(_regCardAccepted())return null;
+    if(!_regIsOnlineMethod(selPM)){
+        return 'This camp needs the deposit before an application can be sent, so please choose '
+             + 'Credit card or ACH above — the other ways cannot be paid from this form.';
+    }
+    if(_regCardUnavailable()||!global_CampistryCardCapture()){
+        // The camp asked for something it has not set up. Do NOT hold the
+        // family hostage over the camp's own gap.
+        return null;
+    }
+    return 'This camp needs the deposit before an application can be sent. Enter your card above '
+         + 'and we will take it when you submit.';
+}
+
 function _regRenderCardInline(){
     var box=document.getElementById('cardInline');
     if(!box)return;
@@ -1588,6 +1626,13 @@ function _regSyncSubmitGate(){
         b.style.opacity='.55';
         b.style.cursor='not-allowed';
         b.textContent=(selPM==='ach'?'Enter your bank details to submit':'Enter your card to submit');
+        return;
+    }
+    if(_regMandatoryBlocker()){
+        b.disabled=true;
+        b.style.opacity='.55';
+        b.style.cursor='not-allowed';
+        b.textContent='Deposit required to submit';
         return;
     }
     b.disabled=false;
@@ -2138,6 +2183,15 @@ window.submitApp=async function(){
         return showErr(selPM==='ach'
             ? 'Please enter your bank details above — we need them accepted before your application can be sent.'
             : 'Please enter your card above — we need it accepted before your application can be sent.');
+    }
+
+    // A camp that made the deposit mandatory. The card gate above already
+    // covers the usual case; this catches an offline method being picked
+    // instead, which would otherwise slip a mandatory deposit through unpaid.
+    var _mandStop=_regMandatoryBlocker();
+    if(_mandStop){
+        try{ document.getElementById('payOpts').scrollIntoView({behavior:'smooth',block:'center'}); }catch(e){}
+        return showErr(_mandStop);
     }
 
     _registerSubmitInFlight=true;

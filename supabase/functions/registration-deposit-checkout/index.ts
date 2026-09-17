@@ -114,7 +114,7 @@ serve(async (req) => {
   if (req.method === "OPTIONS") return new Response("ok", { headers: corsHeaders });
 
   try {
-    const { campId, enrollmentId, returnUrl, saveCard, captureReference, keepOnFile } = await req.json();
+    const { campId, enrollmentId, returnUrl, saveCard, captureReference, keepOnFile, officeCharge } = await req.json();
     if (!campId || !enrollmentId || !returnUrl) {
       return json({ success: false, error: "campId, enrollmentId and returnUrl are required" }, 400);
     }
@@ -157,6 +157,39 @@ serve(async (req) => {
       .maybeSingle();
     const processorKey: string | null = camp?.payment_processor_key || null;
 
+    // Filled in only by the office path below, which resolves the card from
+    // the camp's own record instead of a capture row. Everything downstream
+    // then treats the two identically.
+    let claimOverride: Record<string, any> | null = null;
+
+    // ── the office taking it against the card already on the application ────
+    // Same charge as the capture path below, against the card the parent had
+    // accepted when they applied -- just started from the office because the
+    // automatic attempt did not land.
+    //
+    // The card references are read HERE, from what the camp's own record says,
+    // never from the request. An office page cannot name someone else's card
+    // any more than a parent's browser can name its own price.
+    if (officeCharge && !captureReference) {
+      const { data: kv } = await service.from("camp_state_kv").select("value")
+        .eq("camp_id", campId).eq("key", "campistryMe").maybeSingle();
+      const enr = (kv?.value as Record<string, any> | null)?.enrollments?.[String(enrollmentId)];
+      if (!enr) return json({ success: false, error: "We could not find that application." }, 404);
+      if (!enr.savedCardCustomer) {
+        return json({ success: false, error: "There is no card on file for this application." }, 200);
+      }
+      // Hand it to the same code path as a fresh capture by describing the
+      // card the same way _claim_card_capture would.
+      claimOverride = {
+        success: true,
+        processor: String(enr.savedCardProcessor || processorKey || ""),
+        customer: String(enr.savedCardCustomer || ""),
+        method: String(enr.savedCardMethod || enr.savedCardCustomer || ""),
+        last4: enr.savedCardLast4 ? String(enr.savedCardLast4) : null,
+        brand: enr.savedCardBrand ? String(enr.savedCardBrand) : null,
+      };
+    }
+
     // ── the card the processor already accepted ─────────────────────────────
     // The parent settled the card BEFORE this form was submitted
     // (card-capture-start, migration 189): the processor said yes, the form
@@ -167,12 +200,15 @@ serve(async (req) => {
     // amount is `owed` above -- what the camp stamped on this application --
     // and the card is whatever _claim_card_capture hands back. A browser
     // cannot name either.
-    if (captureReference) {
-      const { data: claim, error: claimErr } = await service.rpc("_claim_card_capture", {
-        p_camp_id: campId,
-        p_reference: String(captureReference),
-        p_enroll_id: String(enrollmentId),
-      });
+    if (captureReference || claimOverride) {
+      const { data: claimed, error: claimErr } = claimOverride
+        ? { data: claimOverride, error: null }
+        : await service.rpc("_claim_card_capture", {
+            p_camp_id: campId,
+            p_reference: String(captureReference),
+            p_enroll_id: String(enrollmentId),
+          });
+      const claim = claimed as Record<string, any> | null;
       if (claimErr || !claim?.success) {
         const why = claimErr?.message || claim?.error || "unknown";
         console.error(`[registration-deposit] capture ${captureReference} unusable for ${enrollmentId}: ${why}`);
@@ -318,7 +354,10 @@ serve(async (req) => {
       //
       // A failure here costs a convenience, not a payment, so it must not
       // fail the charge.
-      if (!keepOnFile) {
+      if (claimOverride) {
+        // The office path found this card BY reading it off the application,
+        // so it is already recorded there. Nothing to carry over.
+      } else if (!keepOnFile) {
         console.log(`[registration-deposit] ${enrollmentId}: parent did not ask to keep the card on file`);
       } else {
         try {

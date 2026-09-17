@@ -796,7 +796,7 @@ test('the check costs nothing and the amount is still not the browser’s', () =
 
     // And the charge that follows reads the stamped figure, not the request.
     const dep = fs.readFileSync(path.join(ROOT, 'supabase/functions/registration-deposit-checkout/index.ts'), 'utf8');
-    const branch = dep.slice(dep.indexOf('if (captureReference) {'),
+    const branch = dep.slice(dep.indexOf('if (captureReference || claimOverride) {'),
                              dep.indexOf('// ── Banquest: a hosted pay page'));
     assert.ok(branch.length > 500, 'the captured-card charge branch must exist');
     assert.match(branch, /Math\.round\(owed \* 100\)/);
@@ -953,6 +953,83 @@ test('the four agreements look required, and say which one is missing', () => {
         'the old catch-all message should be gone');
 });
 
+test('a camp can require the deposit, and the form actually enforces it', () => {
+    const P = require(path.join(ROOT, 'campistry_deposit_policy.js'));
+    // Distinct from "due with the application", which is a bookkeeping state.
+    assert.strictEqual(P.normalize({enabled: true, timing: 'now'}).mandatory, false,
+        'off unless a camp deliberately turns it on');
+    assert.strictEqual(P.normalize({enabled: true, timing: 'now', mandatory: true}).mandatory, true);
+    // Pay-later and must-pay-first cannot both be true.
+    assert.strictEqual(P.normalize({enabled: true, timing: 'later', mandatory: true}).mandatory, false);
+
+    // The old wording claimed every timing-'now' policy was "required before
+    // an application can be submitted". It was not — the form went through and
+    // the application sat as awaiting deposit.
+    const soft = P.explain({enabled: true, timing: 'now', basis: 'flat', amount: 350}, null);
+    assert.match(soft, /awaiting deposit/);
+    assert.ok(!/required before an application can be submitted/.test(soft));
+    assert.match(P.explain({enabled: true, timing: 'now', mandatory: true, basis: 'flat', amount: 350}, null),
+        /required before an application can be submitted/);
+
+    const reg = fs.readFileSync(path.join(ROOT, 'campistry_register.html'), 'utf8');
+    assert.match(reg, /function _regMandatoryBlocker\(\)/);
+    assert.match(reg, /Deposit required to submit/);
+    // An offline method must not slip a mandatory deposit through unpaid.
+    assert.match(reg, /please choose '\s*\+\s*'Credit card or ACH above/);
+    // But a camp that turned this on without a way to take money must not
+    // leave families unable to apply at all.
+    const blocker = reg.slice(reg.indexOf('function _regMandatoryBlocker(){'),
+                              reg.indexOf('function _regRenderCardInline('));
+    assert.match(blocker, /_regCardUnavailable\(\)\|\|!global_CampistryCardCapture\(\)/);
+    assert.match(blocker, /return null;/);
+});
+
+test('a card deposit is collected, not ticked off by hand', () => {
+    // The office view offered one button for every method — "Mark deposit
+    // received" — which invited staff to tick off money nobody took, and hid
+    // that the automatic charge had failed.
+    const me = fs.readFileSync(path.join(ROOT, 'campistry_me.js'), 'utf8');
+    const fn = fs.readFileSync(path.join(ROOT, 'supabase/functions/registration-deposit-checkout/index.ts'), 'utf8');
+
+    assert.match(me, /var _online=\(e\.paymentMethod==='credit_card'\|\|e\.paymentMethod==='ach'\|\|e\.paymentMethod==='debit'\)/);
+    assert.match(me, /should have been '\s*\+\s*'taken automatically when they applied/);
+    assert.match(me, /Charge '\+fm\(_out\)\+' now/);
+    // Manual marking survives for an online method, but as the quiet option.
+    assert.match(me, /Mark received anyway/);
+    assert.match(me, /function chargeDepositNow\(id\)/);
+
+    // The office cannot name the amount OR the card: both are read server-side.
+    const office = fn.slice(fn.indexOf('if (officeCharge && !captureReference)'),
+                            fn.indexOf('// ── the card the processor already accepted'));
+    assert.match(office, /from\("camp_state_kv"\)/);
+    assert.match(office, /enr\.savedCardCustomer/);
+    assert.ok(!/body\.(amount|cardToken)/.test(office),
+        'nothing about the charge may come from the request');
+    // It joins the same charge path, so the amount is still `owed`.
+    assert.match(fn, /if \(captureReference \|\| claimOverride\)/);
+});
+
+test('the camp says once how it wants to be paid, and it holds everywhere', () => {
+    // campistry_payments.js has always read campistryMe.paymentPolicy to decide
+    // which methods exist anywhere — Billing's Record Payment picker, the
+    // post-acceptance form, the shop — and nothing ever WROTE it. So the one
+    // place a camp states this only ever changed the registration form.
+    const me = fs.readFileSync(path.join(ROOT, 'campistry_me.js'), 'utf8');
+    assert.match(me, /_pendingPaymentPolicy=\{enabled:payMethods\.slice\(\)\}/);
+    // Top level, where the reader looks — NOT inside enrollSettings, which is
+    // one level down and would never have been found.
+    assert.match(me, /\.\.\.\(_pendingPaymentPolicy\?\{paymentPolicy:_pendingPaymentPolicy\}:\{\}\)/);
+    const assign = me.slice(me.indexOf('g.campistryMe=Object.assign('), me.indexOf('formConfig:formConfig'));
+    assert.match(assign, /paymentPolicy/);
+    // Merged, so allowDebit (a separate deliberate setting) survives.
+    assert.match(me, /Object\.assign\(\{\},_prevPP,_pendingPaymentPolicy\)/);
+
+    // And the reader really does narrow on it.
+    const PM = require(path.join(ROOT, 'campistry_payments.js'));
+    const ids = PM.forContext('tuition', {enabled: ['credit', 'cash']}).map(m => m.id);
+    assert.deepStrictEqual(ids, ['credit', 'cash']);
+});
+
 test('the parent is asked before their card is kept', () => {
     // Keeping someone's card for future charges is a thing to ask, not
     // assume. The processor holds it either way -- that is how the deposit is
@@ -977,7 +1054,7 @@ test('the parent is asked before their card is kept', () => {
         'the change handler must not re-render — it would replace the checkbox mid-click');
 
     // And the server honours it: no tick, no card kept.
-    const branch = fn.slice(fn.indexOf('if (captureReference) {'),
+    const branch = fn.slice(fn.indexOf('if (captureReference || claimOverride) {'),
                             fn.indexOf('// ── Banquest: a hosted pay page'));
     assert.match(branch, /if \(!keepOnFile\)/);
     const keepAt = branch.indexOf('if (!keepOnFile)');
@@ -1064,7 +1141,7 @@ test('an accepted card is kept, because that is how it gets charged', () => {
     assert.ok(!/id="paySaveCard"/.test(reg),
         'the save-card tick is gone — a captured card is already saved');
     // The reference lands on the application, so the office inherits it.
-    const branch = fn.slice(fn.indexOf('if (captureReference) {'),
+    const branch = fn.slice(fn.indexOf('if (captureReference || claimOverride) {'),
                             fn.indexOf('// ── Banquest: a hosted pay page'));
     assert.match(branch, /_record_registration_card/);
     // ...and that is best-effort, because losing it costs a convenience while

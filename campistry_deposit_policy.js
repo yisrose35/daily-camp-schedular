@@ -34,6 +34,15 @@
         percent:    25,     // basis 'percent', and the fallback for 'session'
         per:        'camper',   // or 'family' — one deposit however many siblings
         timing:     'now',      // or 'later'
+        // Does the form REFUSE to submit until the deposit is actually paid?
+        //
+        // Separate from timing on purpose. timing 'now' means "due with the
+        // application", which is a bookkeeping state -- the application goes
+        // through and sits as awaiting deposit. mandatory means the place is
+        // not even applied for until the money is in, which is a much stronger
+        // thing and not what most camps want. Off by default, and only
+        // meaningful with timing 'now'.
+        mandatory:  false,
         dueDays:    14,         // timing 'later': days from applying
         refundable: false,
         // Most camps treat a deposit as the first slice of tuition. Some do
@@ -64,6 +73,9 @@
         out.percent    = Math.min(100, num(r.percent, P.DEFAULTS.percent));
         out.per        = r.per === 'family' ? 'family' : 'camper';
         out.timing     = r.timing === 'later' ? 'later' : 'now';
+        // A deposit that can be paid later cannot also be required up front,
+        // so the two can never disagree.
+        out.mandatory  = out.timing === 'now' && !!r.mandatory;
         out.dueDays    = Math.round(num(r.dueDays, P.DEFAULTS.dueDays));
         out.refundable = !!r.refundable;
         out.countsTowardTuition = r.countsTowardTuition !== false;
@@ -165,9 +177,11 @@
         var s = money(total);
         var who = pol.per === 'family' && (result.each || []).length > 1
             ? ' for the family' : '';
-        var when = pol.timing === 'now'
-            ? ' is due now to complete this application'
-            : ' is due within ' + pol.dueDays + ' day' + (pol.dueDays === 1 ? '' : 's');
+        var when = pol.timing !== 'now'
+            ? ' is due within ' + pol.dueDays + ' day' + (pol.dueDays === 1 ? '' : 's')
+            : pol.mandatory
+                ? ' must be paid to send this application'
+                : ' is due now to complete this application';
         // Said in the order a parent cares about it: does it come off what I
         // owe, and do I get it back.
         var counts = pol.countsTowardTuition
@@ -185,8 +199,12 @@
                   : pol.basis === 'percent' ? pol.percent + '% of tuition'
                   : "the session's own deposit (" + pol.percent + '% where a session has none)';
         return basis + ', ' + (pol.per === 'family' ? 'once per family' : 'per camper') + ', ' +
-               (pol.timing === 'now' ? 'required before an application can be submitted'
-                                     : 'due ' + pol.dueDays + ' days after applying') + '.' +
+               (pol.timing !== 'now' ? 'due ' + pol.dueDays + ' days after applying'
+                : pol.mandatory ? 'required before an application can be submitted'
+                // This was the wording for every timing-'now' policy, and it
+                // was not true: the form went through and the application sat
+                // as awaiting deposit. Only `mandatory` actually blocks.
+                : 'due with the application, which is held as awaiting deposit until it arrives') + '.' +
                ((result && result.total) ? ' This application: ' + money(result.total) + '.' : '');
     };
 
