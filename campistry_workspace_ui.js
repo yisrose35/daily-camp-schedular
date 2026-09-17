@@ -186,6 +186,36 @@
                 var cur = current();
                 var found = (_state.workspaces || []).filter(function (w) { return w.id === cur; })[0];
 
+                // PUSH THE TAB'S CHOICE TO THE SERVER WHEN THEY DISAGREE.
+                //
+                // The tab decides, but it is not the only thing reading that
+                // decision. Schedules and rotation counts are sandboxed in the
+                // DATABASE (migration 195) — their RLS asks
+                // camp_workspace_selection which workspace this user is in, because
+                // 41 query sites across 12 files could never have been routed by
+                // hand without missing one.
+                //
+                // So a fresh browser, which starts in live by design, would be
+                // served the PLAN's schedules if the server still had the old
+                // selection: a live page showing a plan's timetable. Same class of
+                // mismatch as the one "always start in live" removed, arriving from
+                // the other side. Telling the server what this tab decided keeps
+                // the two answers to "which workspace" identical.
+                if (String(d.selected || 'live') !== cur) {
+                    try {
+                        c.rpc('select_workspace', { p_camp_id: id, p_workspace: cur });
+                    } catch (_) {
+                        // Not fatal and not awaited: the bar and the keys are
+                        // already right, and the next refresh tries again. Worth
+                        // saying, because until it lands the schedule table is
+                        // answering for the other workspace.
+                        if (root.console) {
+                            root.console.warn('[Workspace] could not tell the server this tab '
+                                + 'is in "' + cur + '" — schedules may read from the wrong one');
+                        }
+                    }
+                }
+
                 // The one thing the server IS authoritative about: whether the plan
                 // this tab is in still exists. Promoted or deleted from another tab
                 // and it does not — carrying on would write to keys nothing owns.

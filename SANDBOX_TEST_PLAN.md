@@ -34,16 +34,20 @@ sheet that isn't true.
 
 ## Step 0 — Prerequisites (nothing works without these)
 
-### 0a. Run the migration
+### 0a. Run the migrations
 
-The code is pushed; the database function is not. Until this is done the card
+The code is pushed; the database functions are not. Until this is done the card
 either shows an amber "Not switched on yet" notice or nothing at all.
 
-1. Open the **Supabase Dashboard → SQL Editor → New query**.
-2. Paste the **entire** contents of `migrations/193_session_workspaces.sql`.
-3. Run it. It's idempotent — safe to run twice.
+**Two files, in this order** — 195 depends on 193, so don't swap them:
 
-> Only 193. `194_one_complete_card_capture.sql` is a different, unrelated change.
+1. Open the **Supabase Dashboard → SQL Editor → New query**.
+2. Paste the **entire** contents of `migrations/193_session_workspaces.sql`, run it.
+3. New query again. Paste **`migrations/195_workspace_schedules.sql`**, run it.
+
+Both are idempotent — safe to run twice.
+
+> `194_one_complete_card_capture.sql` is a different, unrelated change. Skip it.
 
 Verify it took:
 
@@ -56,6 +60,24 @@ select proname from pg_proc
 ```
 
 **Expect 8 rows.** Fewer means the paste was truncated — re-run the whole file.
+
+Then check 195:
+
+```sql
+-- the column exists on both tables, defaulting to live
+select table_name, column_name, column_default
+  from information_schema.columns
+ where table_name in ('daily_schedules','rotation_counts')
+   and column_name = 'workspace';
+
+-- and every row that already existed is live's
+select 'daily_schedules' src, workspace, count(*) from daily_schedules group by workspace
+union all
+select 'rotation_counts', workspace, count(*) from rotation_counts group by workspace;
+```
+
+**Expect** the column on both with default `'live'`, and every existing row
+reading `live`.
 
 ### 0b. Give your sessions dates
 
@@ -269,6 +291,35 @@ section** rather than reporting it as passed.
 
 ---
 
+### Schedules stay inside the plan
+
+The biggest gap found in review: `daily_schedules` and `rotation_counts` are their
+own tables, so generating inside a plan used to write **real live schedules** for
+those dates and burn live's rotation fairness. It's now fenced in the database, so
+no page had to be rewritten — which also means this is worth actually checking.
+
+| | |
+|---|---|
+| **Do** | In the 2nd Half plan, **generate a schedule**. Switch to live and open the same dates. |
+| **Expect** | Live's schedule for those dates is **unchanged** — empty if it was empty. |
+| **If it fails** | 195 didn't take, or the tab and server disagree about the workspace. Run `select workspace, date_key, count(*) from daily_schedules where camp_id='<uuid>' group by 1,2 order by 1,2` — the new rows must carry the plan's id, not `live`. |
+
+| | |
+|---|---|
+| **Do** | Switch back into the plan and open those dates. |
+| **Expect** | Your generated schedule is there. |
+
+| | |
+|---|---|
+| **Do** | In live, open the rotation/fairness report. |
+| **Expect** | Live's counts **unchanged** by the plan's generation. |
+| **If it fails** | `rotation_counts` RLS in 195. This one matters more than most: it is a guarantee the code claimed in a comment and did not keep. |
+
+| | |
+|---|---|
+| **Do** | Delete a plan that had generated schedules, then query `daily_schedules` for that workspace id. |
+| **Expect** | **0 rows** — a discarded plan leaves no orphans behind. |
+
 ## Step 6 — Making it official
 
 Do this **last**. It changes what live is.
@@ -303,6 +354,12 @@ select key from camp_state_kv
 |---|---|
 | **Do** | Open the archived past session. |
 | **Expect** | The bar comes back naming it, and it shows the **old** bunks and routes — your 1st Half setup, intact. |
+
+| | |
+|---|---|
+| **Do** | Check the schedules came across. In live, open the dates the plan had generated. |
+| **Expect** | They are now live's schedule, and the archive holds what live had before. |
+| **If it fails** | The two `UPDATE … SET workspace` blocks in `promote_workspace` (195). Without them a promotion swaps the bunks in and leaves the schedules behind — the shape of report item 4. |
 
 | | |
 |---|---|

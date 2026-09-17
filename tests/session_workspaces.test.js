@@ -684,7 +684,7 @@ test('the server is still authoritative about whether the plan EXISTS', () => {
     // Promoted or deleted from another tab and the plan is gone. Carrying on
     // would write to keys nothing owns any more.
     const fn = UI.slice(UI.indexOf('U.refresh = async function'));
-    const body = fn.slice(0, 3000);
+    const body = fn.slice(0, fn.indexOf('U.switchTo'));
     assert.match(body, /if \(cur !== 'live' && !found\)/);
     assert.match(body, /campistrySetWorkspace\('live', ''\)/);
     assert.match(body, /root\.location\.reload\(\)/,
@@ -981,4 +981,118 @@ test('a money page says it is live-only before anything is clicked', () => {
     assert.match(fn.slice(0, 600), /if\(!ws\|\|ws==='live'\)return '';/);
     assert.match(ME, /var h=_liveOnlyNotice\('Billing'\)/,
         'Billing must actually render it');
+});
+
+// ───────────────────────────────────────────────────────────────────────────
+// SCHEDULES AND ROTATION COUNTS ARE SANDBOXED IN THE DATABASE.
+//
+// They are their own tables, keyed by date, with no reach from the client's key
+// routing — so generating inside a plan wrote real rows to the live
+// daily_schedules for those dates, and real rotation_counts that burned the live
+// camp's fairness. The rule module states in as many words that the second cannot
+// happen; it was half true, because the kv history was protected and the cloud
+// table was not.
+// ───────────────────────────────────────────────────────────────────────────
+
+const SQL195 = code('migrations/195_workspace_schedules.sql');
+
+test('both tables carry a workspace, defaulting to live', () => {
+    // Every row that exists today IS live's — this feature did not exist when
+    // they were written, so the default is the migration's whole back-compat story.
+    ['daily_schedules', 'rotation_counts'].forEach(t => {
+        assert.match(SQL195, new RegExp('ALTER TABLE public\\.' + t
+            + '\\s*\\n\\s*ADD COLUMN IF NOT EXISTS workspace text NOT NULL DEFAULT \'live\''), t);
+    });
+    // And rotation's uniqueness has to include it, or a plan's count for a date
+    // collides with live's and one overwrites the other.
+    assert.match(SQL195, /PRIMARY KEY \(camp_id, workspace, date_key, bunk, activity\)/);
+});
+
+test('RLS fences every operation on both tables, not just reads', () => {
+    // A read-only fence would stop a plan SEEING live's schedules and still let it
+    // overwrite them.
+    ['daily_schedules', 'rotation_counts'].forEach(t => {
+        ['select', 'insert', 'update', 'delete'].forEach(op => {
+            const m = SQL195.match(new RegExp('CREATE POLICY ' + t + '_' + op
+                + '[\\s\\S]{0,400}?;'));
+            assert.ok(m, t + '_' + op + ' policy is missing');
+            assert.match(m[0], /workspace = public\.current_workspace\(camp_id\)/,
+                t + '_' + op + ' must be fenced by workspace');
+        });
+    });
+});
+
+test('the existing camp and role conditions are kept, not replaced', () => {
+    // The workspace fence is ADDED to 002's and 003's rules. Dropping the role
+    // check while adding a workspace check would let any staff member write
+    // schedules.
+    const ins = SQL195.match(/CREATE POLICY daily_schedules_insert[\s\S]{0,500}?\);/)[0];
+    assert.match(ins, /camp_id = get_user_camp_id\(\)/);
+    assert.match(ins, /'owner'::text, 'admin'::text, 'scheduler'::text/);
+    const del = SQL195.match(/CREATE POLICY daily_schedules_delete[\s\S]{0,500}?\);/)[0];
+    assert.match(del, /'owner'::text, 'admin'::text/);
+    assert.ok(!/scheduler/.test(del), 'delete stays owner/admin, as 003 had it');
+});
+
+test('a write that never heard of workspaces lands in the right one', () => {
+    // This is what makes 41 unrouted call sites CORRECT rather than merely
+    // unbroken: the trigger stamps the row from the writer's own selection.
+    assert.match(SQL195, /CREATE OR REPLACE FUNCTION public\._stamp_workspace\(\)/);
+    const fn = SQL195.slice(SQL195.indexOf('_stamp_workspace()'));
+    assert.match(fn.slice(0, 900), /NEW\.workspace := public\.current_workspace\(NEW\.camp_id\)/);
+    // An explicit non-default is left alone, or promote could not move rows.
+    assert.match(fn.slice(0, 900), /IF NEW\.workspace IS NULL OR NEW\.workspace = 'live' THEN/);
+    ['daily_schedules', 'rotation_counts'].forEach(t =>
+        assert.match(SQL195, new RegExp('CREATE TRIGGER trg_' + t
+            + '_workspace\\s*\\n\\s*BEFORE INSERT ON public\\.' + t), t));
+});
+
+test('promotion moves the schedules, and archives live’s before it does', () => {
+    // Order matters: rename live's rows away FIRST, or the plan's rows collide
+    // with them on (camp, workspace, date, bunk, activity).
+    const fn = SQL195.slice(SQL195.indexOf('FUNCTION public.promote_workspace'));
+    const body = fn.slice(0, fn.indexOf('$$;'));
+    const archive = body.indexOf("SET workspace = v_out_id");
+    const promote = body.indexOf("SET workspace = 'live'");
+    assert.ok(archive > 0 && promote > 0, 'both moves must happen');
+    assert.ok(archive < promote,
+        "live's rows must be renamed away before the plan's are renamed to live");
+    // Both tables, both directions.
+    assert.match(body, /UPDATE public\.daily_schedules SET workspace = v_out_id/);
+    assert.match(body, /UPDATE public\.rotation_counts SET workspace = v_out_id/);
+    assert.match(body, /UPDATE public\.daily_schedules SET workspace = 'live'/);
+    assert.match(body, /UPDATE public\.rotation_counts SET workspace = 'live'/);
+});
+
+test('deleting a plan takes its schedules with it', () => {
+    // Otherwise a discarded plan leaves a season of orphan rows behind, invisible
+    // to everyone and counted by nothing.
+    const fn = SQL195.slice(SQL195.indexOf('FUNCTION public.delete_workspace'));
+    const body = fn.slice(0, fn.indexOf('$$;'));
+    assert.match(body, /DELETE FROM public\.daily_schedules\s*\n\s*WHERE camp_id = p_camp_id AND workspace = p_id/);
+    assert.match(body, /DELETE FROM public\.rotation_counts\s*\n\s*WHERE camp_id = p_camp_id AND workspace = p_id/);
+    assert.match(body, /cannot_delete_live/, 'and live is not deletable');
+});
+
+test('the tab and the server agree on which workspace, in both directions', () => {
+    // The tab decides — but RLS asks camp_workspace_selection, so a fresh browser
+    // starting in live while the server still held a plan would be SERVED the
+    // plan's schedules on a live page. Same mismatch class as before, from the
+    // other side.
+    const fn = UI.slice(UI.indexOf('U.refresh = async function'));
+    const body = fn.slice(0, fn.indexOf('U.switchTo'));
+    assert.match(body, /if \(String\(d\.selected \|\| 'live'\) !== cur\)/);
+    assert.match(body, /c\.rpc\('select_workspace', \{ p_camp_id: id, p_workspace: cur \}\)/,
+        "the TAB's answer is the one pushed, not the server's adopted");
+});
+
+test('the migration is not bundled, and parses', () => {
+    // Migrations from 180 on are pasted by hand, one file at a time.
+    const bundle = read('migrations/APPLY_BUNDLE.sql');
+    assert.ok(!bundle.includes('195_workspace_schedules'),
+        '195 must stay a standalone paste');
+    const { execFileSync } = require('node:child_process');
+    execFileSync('python3', ['-c',
+        'import pglast,sys; pglast.parse_sql(open(sys.argv[1]).read())',
+        path.join(ROOT, 'migrations/195_workspace_schedules.sql')], { encoding: 'utf8' });
 });
