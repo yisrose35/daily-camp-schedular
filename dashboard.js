@@ -541,7 +541,21 @@
             _setSetupTabVisible('checklist', true);
             loadCampSettingsSection();
         }
-        switchSetupTab('profile');
+        // Deep link from the Setup Checklist ("dashboard.html#setup-payment",
+        // etc.) — land on that tab instead of always defaulting to Profile.
+        // Only honoured when the tab's own button is actually visible for this
+        // role: the role gating above already hid Payment/Settings/Team/
+        // Checklist from team members, and switchSetupTab() itself does not
+        // re-check role, so following an unchecked hash would show a team
+        // member a panel their button says they cannot reach.
+        (function () {
+            var requested = (window.location.hash || '').replace(/^#setup-/, '');
+            // Whitelist against known tab keys before it ever reaches a
+            // selector or the DOM — location.hash is attacker-controlled.
+            if (!Object.prototype.hasOwnProperty.call(SETUP_TAB_PANELS, requested)) requested = '';
+            var btn = requested && document.querySelector('.dash-setup-tab[data-tab="' + requested + '"]');
+            switchSetupTab(btn && btn.style.display !== 'none' ? requested : 'profile');
+        })();
 
         // Live notifications (Link messages, Notes reminders) — for every
         // role, not just owners. RLS on `notifications` already scopes reads
