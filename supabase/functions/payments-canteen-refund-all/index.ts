@@ -192,6 +192,7 @@ async function refundOneCamper(
   camperName: string,
   walletAvailable: number,
   transactions: Record<string, any>[],
+  batchKey: string | null,
 ): Promise<{ camperName: string; refunded: number; skipped?: string; error?: string }> {
   const deposits = depositsFor(camperName, transactions, processorKey);
   const processorCapacity = round2(deposits.reduce((sum, d) => sum + d.remaining, 0));
@@ -216,10 +217,39 @@ async function refundOneCamper(
 
     try {
       const chunkCents = Math.round(chunk * 100);
+      // CLAIM BEFORE THE PROCESSOR. This function refunds a whole camp's wallets
+      // in one invocation, so a timeout partway through is the likeliest way it
+      // gets run twice — and without a claim the campers it already reached would
+      // be refunded again. Keyed per camper AND per deposit chunk so a resumed run
+      // skips exactly what it finished.
+      const chunkKey = batchKey
+        ? `${batchKey}:${camperName}:${dep.externalTransactionId}:${chunkCents}` : null;
+      if (chunkKey) {
+        const { data: claim } = await service.rpc("claim_refund_intent", {
+          p_camp_id: campId, p_key: chunkKey, p_amount: chunk,
+          p_payment_ref: String(dep.externalTransactionId),
+        });
+        if (claim && claim.claimed === false) {
+          console.log(`[canteen-refund-all] already settled, skipping: ${chunkKey}`);
+          continue;
+        }
+      }
       const refundResult = processorKey === "cardknox"
         ? await cardknoxRefund(credentials, dep.externalTransactionId, chunkCents)
         : await banquestRefund(credentials, dep.externalTransactionId, chunkCents);
-      if (!refundResult.success) throw new Error(refundResult.error || "Refund failed");
+      if (!refundResult.success) {
+        if (chunkKey) {
+          await service.rpc("release_refund_intent", { p_camp_id: campId, p_key: chunkKey });
+        }
+        throw new Error(refundResult.error || "Refund failed");
+      }
+      if (chunkKey) {
+        await service.rpc("settle_refund_intent", {
+          p_camp_id: campId, p_key: chunkKey,
+          p_result: { success: true, externalTransactionId: refundResult.externalTransactionId,
+                      amount: chunk },
+        });
+      }
 
       await service.rpc("record_processor_transaction", {
         p_camp_id: campId,
@@ -273,6 +303,12 @@ async function mapWithConcurrency<T, R>(items: T[], limit: number, fn: (item: T)
 serve(async (req) => {
   if (req.method === "OPTIONS") return new Response("ok", { headers: corsHeaders });
 
+  // This function has always been callable with no body at all, so a missing or
+  // unparsable one is not an error — it just means no idempotency key, and the run
+  // proceeds unguarded exactly as it did before.
+  let body: Record<string, unknown> = {};
+  try { body = (await req.json()) || {}; } catch { body = {}; }
+
   try {
     const authedCampId = await callerCampId(req);
     if (!authedCampId) return json({ error: "Only camp owners/admins can refund canteen balances." }, 403);
@@ -311,9 +347,15 @@ serve(async (req) => {
       return json({ totalRefunded: 0, refundedCount: 0, skippedCount: 0, failedCount: 0, details: [] });
     }
 
+    // One key for the whole run. Supplied by the caller so a deliberate second
+    // clear-out gets its own key and is allowed, while a retry of the same one
+    // resumes instead of re-refunding what it already finished.
+    const batchKey = (typeof body.idempotencyKey === "string" && body.idempotencyKey.trim())
+      ? (body.idempotencyKey as string).trim() : null;
+
     const results = await mapWithConcurrency(candidates, CONCURRENCY, (c) =>
       refundOneCamper(service, authedCampId, processorKey, credResult.credentials,
-                      c.camperName, c.walletAvailable, transactions)
+                      c.camperName, c.walletAvailable, transactions, batchKey)
     );
 
     let totalRefunded = 0, refundedCount = 0, skippedCount = 0, failedCount = 0;

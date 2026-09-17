@@ -15314,6 +15314,14 @@ function issueCreditForFamily(famKey){
             // If a chunk fails partway, the
             // chunks before it already moved real money — keep and report them
             // rather than rolling back (same reasoning as payments-canteen-refund).
+            // ONE KEY FOR THIS CLICK, reused by every chunk it issues.
+            //
+            // The server claims each chunk against it before calling the processor
+            // (migration 198), so a retry of this same action resumes instead of
+            // refunding twice. A second, deliberate refund is a second click and
+            // gets its own key, which is the distinction only the client can make.
+            var _refundKey='rfnd_'+fk+'_'+Date.now()+'_'
+                          +Math.random().toString(36).slice(2,8);
             var remaining=refundAmt, done=0, failMsg=null;
             toast('Processing refund…');
             for(var ci=0; ci<chunks.length && remaining>0.001; ci++){
@@ -15328,7 +15336,10 @@ function issueCreditForFamily(famKey){
                         var res=await callEdgeFunction('stripe-refund',{paymentIntentId:p.stripePaymentIntentId,amount:chunk,reason:stripeReason,metadata:{campId:getCampId(),family:p.family||''}});
                         refId=res.refundId;
                     } else {
-                        var byopRes=await callEdgeFunctionAuthed('payments-refund',{externalTransactionId:p.byopTransactionId,amount:chunk});
+                        var byopRes=await callEdgeFunctionAuthed('payments-refund',{externalTransactionId:p.byopTransactionId,amount:chunk,idempotencyKey:_refundKey+':'+ci});
+                        // A replayed claim means this chunk already moved money on
+                        // an earlier attempt. Treat it as the success it repeats.
+                        if(byopRes&&byopRes.replayed)console.log('[Me] refund chunk replayed:',ci);
                         refId=byopRes.externalTransactionId;
                     }
                 }catch(err){
