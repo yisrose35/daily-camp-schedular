@@ -52,6 +52,13 @@ test('the phases run in the order the work has to happen', () => {
     before('people.structure', 'schedule.generate'); // the most common wasted afternoon
     before('schedule.facilities', 'schedule.generate');
     before('schedule.generate', 'schedule.print');
+
+    before('money.processor', 'money.card_fees');    // the fee model needs a processor to attach to
+    before('people.staff', 'people.payroll');         // pay rate is entered per staff member
+    before('people.roster', 'snacks.policy');         // the daily limit is set per camper account
+    before('people.families', 'daily.link_invite');   // a portal invite needs a household to land in
+    before('camp.profile', 'daily.link_contact');     // it is a field on the profile card itself
+    before('people.staff', 'daily.link_tips');        // suggested amounts are keyed by staff position
 });
 
 test('forwarding sits with the deposit steps, not on its own', () => {
