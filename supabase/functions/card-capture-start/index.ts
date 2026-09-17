@@ -180,8 +180,20 @@ serve(async (req) => {
       if (doneErr || !doneRes?.success) {
         // The card is fine but we cannot prove it later, so do not show a tick
         // we would not be able to honour at submit.
-        console.error(`[card-capture] banquest accepted ${reference} but could not record it:`, doneErr?.message || doneRes?.error);
-        return json({ success: false, error: "Your card was accepted but we could not save it — please try again." }, 200);
+        const why = doneErr?.message || doneRes?.error || "unknown";
+        console.error(`[card-capture] banquest accepted ${reference} but could not record it: ${why}`);
+        // "Try again" is the wrong advice for the most likely cause by far --
+        // migration 189 not applied yet, so complete_card_capture does not
+        // exist. Retrying then fails identically, forever, and the parent has
+        // no way to know. Say which failure it is.
+        const missing = /could not find the function|schema cache|does not exist|42883/i.test(why);
+        return json({
+          success: false,
+          reason: missing ? "capture_not_installed" : "capture_not_recorded",
+          error: missing
+            ? "Online card entry isn't finished setting up for this camp — please contact the office."
+            : "Your card was accepted but we could not save it — please try again.",
+        }, 200);
       }
 
       console.log(`[card-capture] banquest accepted ${reference} for camp ${campId}`);

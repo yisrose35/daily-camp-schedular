@@ -8195,7 +8195,10 @@ var FC_FIELD_CATALOG={
         // on a form is a promise a parent hears whether or not it was meant.
         {id:'bunkmate',label:'Bunkmate Request',off:true},
         {id:'separate',label:'Separation Request',off:true},
-        {id:'shirt',label:'T-Shirt Size'},
+        // Off by default with the bunk requests. Most camps size shirts after
+        // acceptance, not on the application, and the ones that do want it on
+        // the application can turn it on here.
+        {id:'shirt',label:'T-Shirt Size',off:true},
         {id:'source',label:'How did you hear about us?'},
         {id:'notes',label:'Additional Notes'}
     ],

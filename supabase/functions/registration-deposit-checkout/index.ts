@@ -114,7 +114,7 @@ serve(async (req) => {
   if (req.method === "OPTIONS") return new Response("ok", { headers: corsHeaders });
 
   try {
-    const { campId, enrollmentId, returnUrl, saveCard, captureReference } = await req.json();
+    const { campId, enrollmentId, returnUrl, saveCard, captureReference, keepOnFile } = await req.json();
     if (!campId || !enrollmentId || !returnUrl) {
       return json({ success: false, error: "campId, enrollmentId and returnUrl are required" }, 400);
     }
@@ -310,20 +310,29 @@ serve(async (req) => {
         }, 200);
       }
 
-      // The card is already vaulted (that is what the capture was), so carry
-      // it onto the application. A failure here costs a convenience, not a
-      // payment, so it must not fail the charge.
-      try {
-        await service.rpc("_record_registration_card", {
-          p_camp_id: campId,
-          p_enroll_id: String(enrollmentId),
-          p_processor: String(claim.processor),
-          p_customer: String(claim.customer || ""),
-          p_method: String(claim.method || ""),
-          p_last4: last4,
-        });
-      } catch (e) {
-        console.error("[registration-deposit] saving the card failed (non-fatal):", (e as Error).message);
+      // The card is already vaulted at the processor -- that is what the
+      // capture was, and what this charge just used. Whether it is KEPT, on
+      // the application and so on the family the office creates from it, is
+      // the parent's answer to the tick on the form. Without it, the vault
+      // reference stops here: this charge used it, nothing else will.
+      //
+      // A failure here costs a convenience, not a payment, so it must not
+      // fail the charge.
+      if (!keepOnFile) {
+        console.log(`[registration-deposit] ${enrollmentId}: parent did not ask to keep the card on file`);
+      } else {
+        try {
+          await service.rpc("_record_registration_card", {
+            p_camp_id: campId,
+            p_enroll_id: String(enrollmentId),
+            p_processor: String(claim.processor),
+            p_customer: String(claim.customer || ""),
+            p_method: String(claim.method || ""),
+            p_last4: last4,
+          });
+        } catch (e) {
+          console.error("[registration-deposit] saving the card failed (non-fatal):", (e as Error).message);
+        }
       }
 
       console.log(`[registration-deposit] ${claim.processor} captured-card $${charged} enroll ${enrollmentId} (camp ${campId}) txn ${txnId}`);

@@ -410,6 +410,21 @@ var FIELD_REQUIRED_STATE={
 };
 var FIELD_ENABLED_STATE={};
 
+// Fields this form does NOT show unless the camp turns them on.
+//
+// The builder's catalogue already marks these off (FC_FIELD_CATALOG's
+// `off:true` in campistry_me.js), but that only decided how the checkbox was
+// drawn there -- it became real only once a camp opened the Advanced tab and
+// saved. A camp that never opened it saved no field config at all, and this
+// page defaulted everything to shown, so bunk requests and shirt size were on
+// every application regardless. The default has to live on BOTH sides or it
+// is not a default.
+//
+// Bunk requests belong after acceptance, when the camp is actually building
+// bunks; shirt sizes are usually collected the same way. Keep this in step
+// with FC_FIELD_CATALOG.
+var FIELD_ENABLED_DEFAULT={bunkmate:false,separate:false,shirt:false};
+
 // Which FC_SECTIONS key each catalog field belongs to — when a whole section
 // is turned off, its fields must be treated as not-required (not just
 // visually hidden), or a camp that disables e.g. Camper Info leaves the form
@@ -436,7 +451,11 @@ function applyFieldConfig(fields,sectionsDisabled){
         var fg=input.closest('.fg');
         var cfg=fields[fid];
         var sectionOff=sectionsDisabled[FIELD_TO_SECTION[fid]];
-        var enabled=sectionOff?false:(cfg?(cfg.enabled!==false):true);
+        // An explicit saved choice wins. With nothing saved, the catalogue's
+        // own default decides -- not a blanket "show it".
+        var enabled=sectionOff?false
+            :(cfg&&cfg.enabled!==undefined)?(cfg.enabled!==false)
+            :(FIELD_ENABLED_DEFAULT[fid]!==false);
         FIELD_ENABLED_STATE[fid]=enabled;
         if(!enabled){ if(fg)fg.style.display='none'; return; }
         if(fg)fg.style.display='';
@@ -1441,7 +1460,11 @@ window._regPayDeposit=async function(campId,enrollId){
                   // A capture reference, not a card and not an amount. The
                   // function looks up the card the processor accepted and
                   // charges what the camp stamped on this application.
-                  captureReference:capture||undefined}
+                  captureReference:capture||undefined,
+                  // Only what the parent actually ticked. The card is held by
+                  // the processor either way -- that is how this charge runs
+                  // -- but keeping it on the family afterwards is their call.
+                  keepOnFile:!!(_cap&&_cap.keepOnFile())}
         });
         var d=r&&r.data;
         if(r&&r.error)return fail('Could not start the payment. Please try again.');

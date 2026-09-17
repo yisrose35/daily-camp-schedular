@@ -72,6 +72,16 @@
             // host form uses it to decide whether to hold Submit, rather than
             // guessing from a separate lookup that may not even be deployed.
             unavailable: false,
+            // Does the parent want the card kept for future payments?
+            //
+            // Not the same question as "was it vaulted". The processor has to
+            // hold the card either way -- that is how the deposit is charged a
+            // moment later, and a parent cannot pay by card and opt out of
+            // that. What this decides is whether it is KEPT afterwards, on the
+            // family record, for tuition and anything else the camp bills.
+            // Off unless they say so: keeping someone's card for future
+            // charges is a thing to be asked, not assumed.
+            keepOnFile: false,
             reference: null,
             processor: null,
             mode: null,
@@ -90,6 +100,7 @@
             return {
                 accepted: state.status === 'accepted',
                 unavailable: state.unavailable,
+                keepOnFile: !!state.keepOnFile,
                 status: state.status,
                 reference: state.reference,
                 processor: state.processor,
@@ -226,11 +237,24 @@
             }).then(function (r) {
                 var d = r && r.data;
                 if ((r && r.error) || !d || !d.success) {
+                    if (d && d.reason === 'capture_not_installed') {
+                        state.unavailable = true;
+                        state.error = d.error;
+                        return changed();
+                    }
                     state.status = 'error';
                     state.error = (d && d.error) || 'Could not check the card. Try again.';
                     return changed();
                 }
                 if (!d.accepted) {
+                    // Not installed is a camp-setup problem, not a bad card.
+                    // Retrying fails identically forever, so release the form
+                    // instead of holding it on a step that cannot complete.
+                    if (d.reason === 'capture_not_installed') {
+                        state.unavailable = true;
+                        state.error = d.error;
+                        return changed();
+                    }
                     state.status = 'refused';
                     state.error = d.error || 'The card was not accepted.';
                     return changed();
@@ -249,8 +273,12 @@
 
         function reset() {
             stopPolling();
-            state = { status: 'idle', unavailable: false, reference: null, processor: null,
-                      mode: null, last4: null, brand: null, error: null };
+            // The answer to "keep this on file" survives swapping the card --
+            // it is about the family, not about that particular card, and
+            // re-asking after a typo would be pestering.
+            var keep = state.keepOnFile;
+            state = { status: 'idle', unavailable: false, keepOnFile: keep, reference: null,
+                      processor: null, mode: null, last4: null, brand: null, error: null };
             changed();
         }
 
@@ -264,6 +292,18 @@
             var el = o.el;
             if (!el) return;
             var noun = o.method === 'ach' ? 'bank details' : 'card';
+            var thing = o.method === 'ach' ? 'bank account' : 'card';
+
+            // Asked in the same place whether the card is entered yet or not,
+            // so the answer does not move around under the parent.
+            var keepAsk =
+                '<label style="display:flex;gap:9px;align-items:flex-start;margin-top:10px;' +
+                'font-size:.82rem;color:#334155;line-height:1.5;cursor:pointer">' +
+                '<input type="checkbox" data-cc="keep"' + (state.keepOnFile ? ' checked' : '') +
+                ' style="margin-top:2px;flex:none">' +
+                '<span>Keep this ' + thing + ' on file for future camp payments. ' +
+                '<span style="color:#64748B">Leave this unticked and it is used for the deposit only.</span>' +
+                '</span></label>';
 
             if (state.status === 'accepted') {
                 setHtml(el,
@@ -274,7 +314,8 @@
                     '<polyline points="20 6 9 17 4 12"/></svg>' +
                     esc(state.brand || 'Card') + (state.last4 ? ' ending ' + esc(state.last4) : '') + ' — accepted</div>' +
                     '<button type="button" data-cc="reset" style="background:none;border:none;padding:0;font:inherit;' +
-                    'font-size:.8rem;color:#0E7C4A;text-decoration:underline;cursor:pointer">Use a different ' + noun.split(' ')[0] + '</button></div>');
+                    'font-size:.8rem;color:#0E7C4A;text-decoration:underline;cursor:pointer">Use a different ' + noun.split(' ')[0] + '</button></div>' +
+                    keepAsk);
                 return;
             }
 
@@ -326,18 +367,29 @@
                       '<line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>' +
                       '<span>' + esc(state.error || 'The card was not accepted.') + '</span></div>'
                     : '') +
+                keepAsk +
                 '</div>');
         }
 
         // One delegated listener rather than inline handlers, so this module
         // needs nothing on the host page's global scope.
         if (o.el) {
+            o.el.addEventListener('change', function (ev) {
+                var t = ev.target;
+                if (!t || t.getAttribute('data-cc') !== 'keep') return;
+                state.keepOnFile = !!t.checked;
+                // Deliberately no render(): redrawing the panel would replace
+                // the checkbox the parent just touched. The host is told, and
+                // the next real redraw picks the value up from state.
+                try { if (o.onChange) o.onChange(snapshot()); } catch (e) { /* host's problem */ }
+            });
             o.el.addEventListener('click', function (ev) {
                 var b = ev.target && ev.target.closest && ev.target.closest('[data-cc]');
                 if (!b) return;
                 ev.preventDefault();
-                if (b.getAttribute('data-cc') === 'open') open();
-                else if (b.getAttribute('data-cc') === 'reset') reset();
+                var what = b.getAttribute('data-cc');
+                if (what === 'open') open();
+                else if (what === 'reset') reset();
             });
         }
 
@@ -365,6 +417,7 @@
             render: render,
             state: snapshot,
             accepted: function () { return state.status === 'accepted'; },
+            keepOnFile: function () { return !!state.keepOnFile; },
             reference: function () { return state.reference; },
             setMethod: function (m) { o.method = m; render(); },
             destroy: function () { stopPolling(); if (o.el) o.el.innerHTML = ''; }

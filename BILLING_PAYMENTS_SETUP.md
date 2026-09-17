@@ -313,6 +313,13 @@ gone. Now:
 Both forms do this — registration and post-acceptance — through one shared
 module, `campistry_card_capture.js`, so the rule cannot drift between them.
 
+**If you see "Your card was accepted but we could not save it".** The card is
+genuinely fine — that message means `complete_card_capture` could not be
+reached, which is almost always migration 189 not applied yet. The function now
+says so instead ("Online card entry isn't finished setting up for this camp")
+and releases the form rather than telling a parent to retry something that
+cannot succeed.
+
 **How the answer gets back.** The popup is on the processor's origin and
 cannot talk to the form, and only some processors redirect back at all (Sola
 answers by webhook and returns nothing to the browser). So there is one
@@ -323,6 +330,14 @@ and a parent who wandered off all behave the same way.
 **The form is never told anything it could misuse.** `get_card_capture_status`
 is the only anon-callable piece and it returns a status, a brand and the last
 four digits. The vault references stay server-side.
+
+**The parent is asked whether to keep the card.** A tick under the card step:
+*"Keep this card on file for future camp payments."* Off unless they say so.
+The processor holds the card either way — that is how the deposit is charged a
+moment later, and a parent cannot pay by card and opt out of that — but without
+the tick the vault reference stops there: this charge used it, nothing else
+will. With it, the card lands on the application and so on the family the
+office creates from it.
 
 **It never blocks on a step it cannot run.** No processor connected, the module
 failed to load, no deposit due with the application, or a method that never

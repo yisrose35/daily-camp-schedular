@@ -849,6 +849,70 @@ test('every rail reports its verdict back to the form', () => {
     assert.match(fn, /p_status: "completed"/);
 });
 
+test('the parent is asked before their card is kept', () => {
+    // Keeping someone's card for future charges is a thing to ask, not
+    // assume. The processor holds it either way -- that is how the deposit is
+    // charged -- but whether it stays on the family afterwards is the tick.
+    const cap = fs.readFileSync(path.join(ROOT, 'campistry_card_capture.js'), 'utf8');
+    const fn = fs.readFileSync(path.join(ROOT, 'supabase/functions/registration-deposit-checkout/index.ts'), 'utf8');
+
+    assert.match(cap, /data-cc="keep"/);
+    assert.match(cap, /Keep this ' \+ thing \+ ' on file for future camp payments/);
+    // Opt-in, and the copy says what unticking means rather than leaving it
+    // to be guessed.
+    assert.match(cap, /keepOnFile: false/);
+    assert.match(cap, /used for the deposit only/);
+
+    // Ticking must not redraw the panel out from under the input.
+    // Against the CODE, not the comments — the comment there has to say
+    // "no render()" to explain itself.
+    const onChange = cap.slice(cap.indexOf("o.el.addEventListener('change'"),
+                               cap.indexOf("o.el.addEventListener('click'"))
+                        .replace(/\/\/[^\n]*/g, '');
+    assert.ok(!/render\(\)/.test(onChange),
+        'the change handler must not re-render — it would replace the checkbox mid-click');
+
+    // And the server honours it: no tick, no card kept.
+    const branch = fn.slice(fn.indexOf('if (captureReference) {'),
+                            fn.indexOf('// ── Banquest: a hosted pay page'));
+    assert.match(branch, /if \(!keepOnFile\)/);
+    const keepAt = branch.indexOf('if (!keepOnFile)');
+    const recordAt = branch.indexOf('_record_registration_card');
+    assert.ok(keepAt > 0 && recordAt > keepAt,
+        'the card may only be recorded on the far side of the consent check');
+
+    // Both forms send the answer.
+    for (const f of ['campistry_register.html', 'campistry_postaccept.html']) {
+        assert.match(fs.readFileSync(path.join(ROOT, f), 'utf8'), /keepOnFile:/,
+            f + ' must pass the parent’s answer through');
+    }
+});
+
+test('bunk requests and shirt size are off until a camp asks for them', () => {
+    // The builder's catalogue marked bunkmate/separate off, but that only
+    // decided how the checkbox was DRAWN there — it became real only once a
+    // camp opened the Advanced tab and saved. A camp that never opened it
+    // saved no field config, and the form defaulted everything to shown. A
+    // default that lives on one side only is not a default.
+    const me = fs.readFileSync(path.join(ROOT, 'campistry_me.js'), 'utf8');
+    const reg = fs.readFileSync(path.join(ROOT, 'campistry_register.html'), 'utf8');
+
+    const prefs = me.slice(me.indexOf("{id:'bunkmate'"), me.indexOf("{id:'source'"));
+    for (const id of ['bunkmate', 'separate', 'shirt']) {
+        assert.ok(prefs.includes("{id:'" + id + "',label:") && new RegExp("id:'" + id + "'[^}]*off:true").test(prefs),
+            id + ' must be off in the builder catalogue');
+    }
+    assert.match(reg, /var FIELD_ENABLED_DEFAULT=\{bunkmate:false,separate:false,shirt:false\}/,
+        'the form needs the same default, for a camp that never opened the builder');
+
+    // An explicit saved choice still wins in BOTH directions — a camp that
+    // turned them on must keep them on.
+    const apply = reg.slice(reg.indexOf('function applyFieldConfig('),
+                            reg.indexOf('// Section reordering'));
+    assert.match(apply, /cfg&&cfg\.enabled!==undefined/);
+    assert.match(apply, /FIELD_ENABLED_DEFAULT\[fid\]!==false/);
+});
+
 test('both forms use the same card step', () => {
     // "make sure that this is by all forms" — and one copy of the rule, so it
     // cannot drift between them.

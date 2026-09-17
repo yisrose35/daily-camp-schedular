@@ -1073,7 +1073,8 @@ async function _paChargeDeposit(client,campId){
         var r=await client.functions.invoke('registration-deposit-checkout',{
             body:{campId:campId,enrollmentId:_enrollId,
                   returnUrl:window.location.origin+window.location.pathname,
-                  captureReference:_paCap.reference()}
+                  captureReference:_paCap.reference(),
+                  keepOnFile:!!_paCap.keepOnFile()}
         });
         var d=r&&r.data;
         if(d&&d.success&&(d.paid||d.alreadyPaid)){
