@@ -215,10 +215,14 @@ CREATE POLICY rotation_counts_delete ON public.rotation_counts
 /**
  * Make a sandbox the live camp — now including its schedules and rotation counts.
  *
- * Identical to 193's version except for the two blocks marked below. Replaced
- * whole rather than patched because a promotion that half-ran would leave a camp
- * with one half's bunks and the other half's schedules, and the archive-then-
- * promote order is what makes it safe to re-run.
+ * This is 193's function VERBATIM with two blocks inserted. It is generated from
+ * 193's text rather than retyped, because the first attempt at this was retyped
+ * and quietly lost five things: `updated_at = now()` on both key moves, the loop
+ * that keeps two promotions in the same second from sharing an archive id, the
+ * explicit operational-key list (replaced by a LIKE pattern that an id containing
+ * `_` would over-match, `_` being a LIKE wildcard), the `no_such_workspace` guard,
+ * and the `archived_label` the admin card reads back. Plus a syntax error:
+ * `parse_workspace_key(...)` returns text, so `.key` on it does not parse.
  */
 CREATE OR REPLACE FUNCTION public.promote_workspace(
     p_camp_id  uuid,
@@ -246,6 +250,9 @@ BEGIN
         RETURN jsonb_build_object('success', false, 'error', 'not_owner');
     END IF;
 
+    -- Serialize promotions for this camp. An advisory lock rather than FOR
+    -- UPDATE on the registry: row locks only lock rows that exist, and the whole
+    -- point here is to guard a rename of keys that live in a different table.
     PERFORM pg_advisory_xact_lock(hashtext('campistry_ws:' || p_camp_id::text));
 
     SELECT * INTO v_ws FROM camp_workspaces w
@@ -254,38 +261,43 @@ BEGIN
         RETURN jsonb_build_object('success', false, 'error', 'no_such_workspace');
     END IF;
 
+    -- A unique id for the outgoing live state, so an archive can never land on
+    -- top of an existing one.
     v_out_id  := 'archive_' || to_char(now(), 'YYYYMMDD_HH24MISS');
     v_out_lab := COALESCE(NULLIF(btrim(COALESCE(p_archive_label, '')), ''),
                           'Before ' || v_ws.label);
+    WHILE EXISTS (SELECT 1 FROM camp_workspaces w WHERE w.camp_id = p_camp_id AND w.id = v_out_id) LOOP
+        v_out_id := v_out_id || '_x';
+    END LOOP;
 
-    -- ARCHIVE what is live now: its bare keys become the archive's prefixed ones.
-    INSERT INTO camp_workspaces (camp_id, id, label, session, status,
-                                 created_by, retired_at)
-    VALUES (p_camp_id, v_out_id, v_out_lab, NULL, 'archived', auth.uid(), now())
-    ON CONFLICT (camp_id, id) DO NOTHING;
+    INSERT INTO camp_workspaces (camp_id, id, label, session, status, created_by, retired_at)
+    VALUES (p_camp_id, v_out_id, v_out_lab, NULL, 'archived', auth.uid(), now());
 
+    -- ARCHIVE: the bare (live) keys become the outgoing workspace's keys.
     UPDATE camp_state_kv kv
-       SET key = public.workspace_key(kv.key, v_out_id)
+       SET key = public.workspace_key(kv.key, v_out_id), updated_at = now()
      WHERE kv.camp_id = p_camp_id
        AND kv.key = ANY (public.workspace_operational_keys());
     GET DIAGNOSTICS v_moved = ROW_COUNT;
 
-    -- ── NEW: live's schedules and counts go with it ────────────────────────
-    -- Before the promoted plan's rows are renamed to 'live', or the two sets
-    -- would collide on (camp, workspace, date, bunk, activity).
+    -- The same move for the two things that are NOT in camp_state_kv: schedules
+    -- and rotation counts are their own tables (migration 195). Live's rows go to
+    -- the archive BEFORE the plan's are renamed to live, or the two sets collide
+    -- on rotation_counts' (camp, workspace, date, bunk, activity).
     UPDATE public.daily_schedules SET workspace = v_out_id
      WHERE camp_id = p_camp_id AND workspace = 'live';
     UPDATE public.rotation_counts SET workspace = v_out_id
      WHERE camp_id = p_camp_id AND workspace = 'live';
 
-    -- PROMOTE the sandbox: its prefixed keys become bare.
+    -- PROMOTE: the incoming workspace's keys become the bare (live) keys.
     UPDATE camp_state_kv kv
-       SET key = public.parse_workspace_key(kv.key).key
+       SET key = public.parse_workspace_key(kv.key), updated_at = now()
      WHERE kv.camp_id = p_camp_id
-       AND kv.key LIKE 'ws:' || p_id || '/%';
+       AND kv.key = ANY (SELECT 'ws:' || p_id || '/' || k
+                           FROM unnest(public.workspace_operational_keys()) AS k);
     GET DIAGNOSTICS v_promoted = ROW_COUNT;
 
-    -- ── NEW: and so do the plan's ──────────────────────────────────────────
+    -- And the plan's become live's.
     UPDATE public.daily_schedules SET workspace = 'live'
      WHERE camp_id = p_camp_id AND workspace = p_id;
     GET DIAGNOSTICS v_sched = ROW_COUNT;
@@ -293,28 +305,22 @@ BEGIN
      WHERE camp_id = p_camp_id AND workspace = p_id;
     GET DIAGNOSTICS v_rot = ROW_COUNT;
 
-    -- The promoted sandbox stops existing as one; the outgoing session is now the
-    -- archive, and anybody sitting in the promoted plan is moved to live.
-    DELETE FROM camp_workspaces w
-     WHERE w.camp_id = p_camp_id AND w.id = p_id;
+    -- The promoted workspace no longer exists as a sandbox: it IS live now, and
+    -- live is the absence of a prefix, so its registry row goes.
+    DELETE FROM camp_workspaces w WHERE w.camp_id = p_camp_id AND w.id = p_id;
 
-    UPDATE camp_workspaces w
-       SET promoted_at = now()
-     WHERE w.camp_id = p_camp_id AND w.id = v_out_id;
-
+    -- Anybody sitting in the workspace that just became live belongs in live.
     UPDATE camp_workspace_selection s
        SET workspace = 'live', updated_at = now()
      WHERE s.camp_id = p_camp_id AND s.workspace = p_id;
 
-    RETURN jsonb_build_object(
-        'success', true,
-        'archived_as', v_out_id,
-        'archive_label', v_out_lab,
-        'moved', v_moved,
-        'promoted', v_promoted,
-        'schedules_promoted', v_sched,
-        'rotation_rows_promoted', v_rot);
-END $$;
+    RETURN jsonb_build_object('success', true, 'promoted', p_id,
+                              'archived_as', v_out_id, 'archived_label', v_out_lab,
+                              'keys_archived', v_moved, 'keys_promoted', v_promoted,
+                              'schedules_promoted', v_sched,
+                              'rotation_rows_promoted', v_rot);
+END;
+$$;
 
 REVOKE ALL ON FUNCTION public.promote_workspace(uuid, text, text) FROM public, anon;
 GRANT EXECUTE ON FUNCTION public.promote_workspace(uuid, text, text) TO authenticated;
@@ -330,10 +336,9 @@ LANGUAGE plpgsql
 SECURITY DEFINER
 SET search_path = public, pg_catalog
 AS $$
-DECLARE
-    v_keys  int := 0;
-    v_sched int := 0;
-    v_rot   int := 0;
+DECLARE v_gone int := 0;
+DECLARE v_sched int := 0;
+DECLARE v_rot int := 0;
 BEGIN
     IF auth.uid() IS NULL THEN
         RETURN jsonb_build_object('success', false, 'error', 'not_authenticated');
@@ -341,17 +346,24 @@ BEGIN
     IF NOT public._workspace_is_owner(p_camp_id) THEN
         RETURN jsonb_build_object('success', false, 'error', 'not_owner');
     END IF;
-    IF p_id IS NULL OR btrim(p_id) = '' OR p_id = 'live' THEN
+    IF p_id IS NULL OR p_id = 'live' THEN
+        -- Belt and braces: 'live' has no row, so this could not have matched
+        -- anything, but a delete_workspace(camp,'live') that returned success
+        -- would read as though it had done something.
         RETURN jsonb_build_object('success', false, 'error', 'cannot_delete_live');
     END IF;
-
-    PERFORM pg_advisory_xact_lock(hashtext('campistry_ws:' || p_camp_id::text));
+    IF NOT EXISTS (SELECT 1 FROM camp_workspaces w WHERE w.camp_id = p_camp_id AND w.id = p_id) THEN
+        RETURN jsonb_build_object('success', false, 'error', 'no_such_workspace');
+    END IF;
 
     DELETE FROM camp_state_kv kv
      WHERE kv.camp_id = p_camp_id
-       AND kv.key LIKE 'ws:' || p_id || '/%';
-    GET DIAGNOSTICS v_keys = ROW_COUNT;
+       AND kv.key = ANY (SELECT 'ws:' || p_id || '/' || k
+                           FROM unnest(public.workspace_operational_keys()) AS k);
+    GET DIAGNOSTICS v_gone = ROW_COUNT;
 
+    -- A discarded plan must not leave a season of schedule rows behind, invisible
+    -- to everyone and counted by nothing (migration 195).
     DELETE FROM public.daily_schedules
      WHERE camp_id = p_camp_id AND workspace = p_id;
     GET DIAGNOSTICS v_sched = ROW_COUNT;
@@ -360,17 +372,15 @@ BEGIN
      WHERE camp_id = p_camp_id AND workspace = p_id;
     GET DIAGNOSTICS v_rot = ROW_COUNT;
 
-    -- Anybody sitting in it goes back to live before the row disappears.
-    UPDATE camp_workspace_selection s
-       SET workspace = 'live', updated_at = now()
+    DELETE FROM camp_workspaces w WHERE w.camp_id = p_camp_id AND w.id = p_id;
+    UPDATE camp_workspace_selection s SET workspace = 'live', updated_at = now()
      WHERE s.camp_id = p_camp_id AND s.workspace = p_id;
 
-    DELETE FROM camp_workspaces w
-     WHERE w.camp_id = p_camp_id AND w.id = p_id;
-
-    RETURN jsonb_build_object('success', true, 'keys', v_keys,
-                              'schedules', v_sched, 'rotation_rows', v_rot);
-END $$;
+    RETURN jsonb_build_object('success', true, 'deleted', p_id, 'keys_removed', v_gone,
+                              'schedules_removed', v_sched,
+                              'rotation_rows_removed', v_rot);
+END;
+$$;
 
 REVOKE ALL ON FUNCTION public.delete_workspace(uuid, text) FROM public, anon;
 GRANT EXECUTE ON FUNCTION public.delete_workspace(uuid, text) TO authenticated;

@@ -1096,3 +1096,59 @@ test('the migration is not bundled, and parses', () => {
         'import pglast,sys; pglast.parse_sql(open(sys.argv[1]).read())',
         path.join(ROOT, 'migrations/195_workspace_schedules.sql')], { encoding: 'utf8' });
 });
+
+test('the migrations parse INSIDE their function bodies, not just around them', () => {
+    // The check that was missing. pglast parses a CREATE FUNCTION and treats the
+    // dollar-quoted body as an opaque string, so a file can pass "does this SQL
+    // parse?" while containing a statement Postgres rejects outright — which is
+    // exactly what happened: `parse_workspace_key(kv.key).key` reached the SQL
+    // editor and failed with 42601, because that function returns text and field
+    // selection on it is not valid syntax.
+    //
+    // Scoped to the two files this feature owns. The splitter is naive enough to
+    // cry wolf on older migrations written in other styles, and a checker that
+    // cries wolf is one somebody switches off.
+    const { execFileSync } = require('node:child_process');
+    execFileSync('python3', [
+        path.join(ROOT, 'scripts/check_plpgsql_bodies.py'),
+        path.join(ROOT, 'migrations/193_session_workspaces.sql'),
+        path.join(ROOT, 'migrations/195_workspace_schedules.sql')
+    ], { encoding: 'utf8' });
+});
+
+test('195 does not re-type what 193 already got right', () => {
+    // promote_workspace and delete_workspace are 193's, with blocks inserted.
+    // Re-typing them lost five things at once: `updated_at = now()` on both key
+    // moves (the app sorts on it for newest-wins), the loop that stops two
+    // promotions in the same second sharing an archive id, the explicit
+    // operational-key list, the no_such_workspace guard, and the archived_label
+    // the admin card reads back — plus the syntax error above.
+    const p195 = code('migrations/195_workspace_schedules.sql');
+    const p193 = code('migrations/193_session_workspaces.sql');
+
+    [ // the statements that must be word-for-word identical
+      "SET key = public.workspace_key(kv.key, v_out_id), updated_at = now()",
+      "SET key = public.parse_workspace_key(kv.key), updated_at = now()",
+      "AND kv.key = ANY (SELECT 'ws:' || p_id || '/' || k"
+    ].forEach(stmt => {
+        assert.ok(p193.includes(stmt), '193 should contain: ' + stmt);
+        assert.ok(p195.includes(stmt), '195 must carry 193\'s form of: ' + stmt);
+    });
+
+    // The safety bits that went missing once.
+    assert.match(p195, /WHILE EXISTS \(SELECT 1 FROM camp_workspaces w WHERE w\.camp_id = p_camp_id AND w\.id = v_out_id\) LOOP/,
+        'two promotions in one second must not share an archive id');
+    assert.match(p195, /'archived_label', v_out_lab/,
+        'the admin card reads archived_label');
+    // Anchored to delete_workspace's own body: the string also appears in
+    // promote_workspace, so asserting it exists ANYWHERE passed happily with
+    // delete's copy renamed away.
+    const del = p195.slice(p195.indexOf('FUNCTION public.delete_workspace'));
+    assert.match(del.slice(0, del.indexOf('$$;')), /no_such_workspace/,
+        'deleting a plan that is already gone must say so, not report success');
+
+    // And the id must never be interpolated into a LIKE pattern: idFor allows
+    // underscores, and '_' is a LIKE wildcard, so a plan 'a_b' would match 'axb'.
+    assert.ok(!/LIKE 'ws:' \|\| p_id/.test(p195),
+        'match the operational key list explicitly, not with a LIKE pattern');
+});
