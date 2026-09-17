@@ -333,6 +333,18 @@
                 <div id="telnyxStatusBox" style="font-size:.9rem;color:var(--text-muted,#64748b);">Loading…</div>
             </section>
 
+            <!-- EMAILING CARD — deliberately beside Texting.
+                 Whether the camp can send email is exactly the same KIND of
+                 fact as whether it has a texting number, and a camp that
+                 cannot see it has no way to know why an acceptance letter
+                 never went out. -->
+            <section class="dashboard-card">
+                <div class="card-header">
+                    <h2>Emailing</h2>
+                </div>
+                <div id="emailServiceBox" style="font-size:.9rem;color:var(--text-muted,#64748b);">Loading…</div>
+            </section>
+
             <!-- Texting number request modal -->
             <div id="telnyxRequestOverlay" style="display:none;position:fixed;inset:0;background:rgba(15,23,42,.5);z-index:1000;align-items:center;justify-content:center;">
                 <div style="background:#fff;border-radius:12px;max-width:480px;width:92%;max-height:88vh;overflow-y:auto;padding:24px;">
@@ -1020,18 +1032,28 @@ if (window.location.protocol === 'file:') {
 
             if (_bdayPeople === null) _bdayPeople = _bdayReadPeople();
             var feedsRow = document.querySelector('.dash-feeds-row');
-            // Nobody has a date of birth on file — an empty card would just be
-            // noise, so the whole section stays hidden. The feeds row's grid
-            // has two explicit fixed-width columns, so hiding this child alone
-            // still leaves its column reserved as blank space — collapse the
-            // row to one column too.
-            if (!_bdayPeople.length) {
-                section.style.display = 'none';
-                if (feedsRow) feedsRow.classList.add('dash-feeds-row--single');
-                return;
-            }
+
+            // ALWAYS SHOWN. This used to hide the whole section whenever
+            // nobody had a date of birth on file, which made the card appear
+            // and disappear for reasons no one on the dashboard could see:
+            // most often the roster simply had not hydrated yet, so a card
+            // that was about to have birthdays in it vanished instead, and
+            // came back on the next load. A card that is sometimes there is
+            // worse than an empty one, because you cannot tell "no birthdays"
+            // from "broken".
             section.style.display = '';
             if (feedsRow) feedsRow.classList.remove('dash-feeds-row--single');
+
+            if (!_bdayPeople.length) {
+                list.innerHTML = '<div class="dash-bday-empty">No dates of birth on file yet. ' +
+                    'Add one on a camper or staff record and their birthday shows up here.</div>';
+                // The roster may still be on its way. Re-read a few times
+                // rather than leaving an empty card that a later arrival
+                // never corrects — the cloud-hydrated event below is the
+                // normal path, this is for when it does not fire.
+                _bdayRetry();
+                return;
+            }
 
             var windowDays = parseInt((document.getElementById('dashBdayWindow') || {}).value, 10);
             if (!isFinite(windowDays)) windowDays = 30;
@@ -1063,10 +1085,25 @@ if (window.location.protocol === 'file:') {
             }).join('');
         };
 
+        // Bounded, and stops the moment it finds anybody: a roster that lands
+        // late still fills the card in, and one that is genuinely empty costs
+        // three cheap local reads and then nothing.
+        var _bdayTries = 0, _bdayTimer = null;
+        function _bdayRetry() {
+            if (_bdayTries >= 3 || _bdayTimer) return;
+            _bdayTimer = setTimeout(function() {
+                _bdayTimer = null;
+                _bdayTries++;
+                _bdayPeople = null;
+                renderBirthdays();
+            }, 1500 * (_bdayTries + 1));
+        }
+
         renderBirthdays();
         // The roster arrives after cloud hydration, so re-read then.
         window.addEventListener('campistry-cloud-hydrated', function() {
             _bdayPeople = null;
+            _bdayTries = 0;              // a fresh roster deserves fresh tries
             renderBirthdays();
         });
 

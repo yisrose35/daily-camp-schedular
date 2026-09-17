@@ -910,6 +910,9 @@
         loadStats();
         // SMS sending number — a self-serve request flow, not a manual field.
         if (campData?.id) loadTelnyxStatus(campData.id);
+        // Beside it, and on the same load — not behind a tab, because the
+        // point is that a camp can see at a glance whether email is on.
+        loadEmailServiceStatus();
         // Stripe Connect — where tuition money lands.
         if (campData?.id) {
             loadCampStripeConnectStatus(campData.id);
@@ -1283,6 +1286,50 @@
     };
 
     function escTelnyx(s) { return String(s == null ? '' : s).replace(/[<>&"]/g, function(c) { return { '<': '&lt;', '>': '&gt;', '&': '&amp;', '"': '&quot;' }[c]; }); }
+
+    // ========================================
+    // EMAILING — on or off, said plainly, next to Texting.
+    //
+    // Sending a camp's parents mail costs the platform real money per message,
+    // so it is something a camp has (migration 195), not something it can
+    // switch on. A camp that cannot see whether it HAS it has no way to
+    // understand why an acceptance letter never arrived, which is the whole
+    // reason this sits on the dashboard rather than in a settings screen.
+    // ========================================
+    window.loadEmailServiceStatus = async function() {
+        const box = document.getElementById('emailServiceBox');
+        if (!box) return;
+        const off = function(headline, detail) {
+            box.innerHTML = '<p style="margin:0 0 4px;"><span style="display:inline-block;width:8px;height:8px;border-radius:50%;' +
+                'background:#94a3b8;margin-right:7px;"></span><strong>' + escTelnyx(headline) + '</strong></p>' +
+                '<p style="margin:0;font-size:.82rem;">' + escTelnyx(detail) + '</p>';
+        };
+        try {
+            const { data, error } = await window.supabase.rpc('get_camp_email_service');
+            if (error || !data || !data.success) {
+                // Most likely migration 195 is not applied. Say which, rather
+                // than leaving a camp to read "off" as a billing decision.
+                off('Emailing status unknown',
+                    'We could not check this camp\'s emailing service. If this persists, the office can send emails by hand from each screen.');
+                console.log('[Dashboard] email service check failed:', error && error.message);
+                return;
+            }
+            if (data.enabled) {
+                box.innerHTML = '<p style="margin:0 0 4px;"><span style="display:inline-block;width:8px;height:8px;border-radius:50%;' +
+                    'background:#16a34a;margin-right:7px;"></span><strong>On</strong></p>' +
+                    '<p style="margin:0;font-size:.82rem;">Campistry can email your parents \u2014 acceptance letters, forms and receipts ' +
+                    'go out automatically where you have turned that on.</p>';
+                return;
+            }
+            if (data.reason === 'switched_off') {
+                off('Off', 'Emailing has been switched off for this camp. Nothing is sent automatically; the office can still send each email by hand. Contact Campistry to turn it back on.');
+            } else {
+                off('Not included', 'Your plan does not include emailing, so nothing is sent automatically. The office can still send each email by hand. Contact Campistry to add it.');
+            }
+        } catch (e) {
+            off('Emailing status unknown', 'We could not check this camp\'s emailing service right now.');
+        }
+    };
 
     // ========================================
     // LINK PROGRAMS — per-camp on/off switches for parent-facing Link
