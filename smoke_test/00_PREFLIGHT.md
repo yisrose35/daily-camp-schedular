@@ -78,14 +78,15 @@ missing piece is a **skip**, not a fail. The migrations live in `migrations/`,
 numbered; paste the file's whole contents into a new SQL Editor query and run it.
 They are written to be idempotent.
 
-> **Two migrations share the number 196** — `196_workspace_schedules.sql` and
-> `196_camp_email_service.sql`. That is a numbering collision from two branches
-> landing together, not a duplicate file: they do different things and **both**
-> need running. Run `193_session_workspaces.sql` before `196_workspace_schedules.sql`;
-> the email-service one is independent. Check both took:
+> **Two independent migrations, both needed** — `197_workspace_schedules.sql` and
+> `196_camp_email_service.sql` do different things and neither substitutes for the
+> other. (They used to collide on the number 196 from two branches landing
+> together; workspace-schedules was renumbered to 197 to fix that.) Run
+> `193_session_workspaces.sql` before `197_workspace_schedules.sql`; the
+> email-service one is independent. Check both took:
 >
 > ```sql
-> -- workspaces (196_workspace_schedules)
+> -- workspaces (197_workspace_schedules)
 > select table_name, column_name from information_schema.columns
 >  where table_name in ('daily_schedules','rotation_counts') and column_name='workspace';
 > -- email service (196_camp_email_service)

@@ -1,5 +1,5 @@
 -- ============================================================================
--- 196_workspace_schedules.sql
+-- 197_workspace_schedules.sql
 --
 -- PUT SCHEDULES AND ROTATION COUNTS INSIDE THE SANDBOX.
 --
@@ -281,7 +281,7 @@ BEGIN
     GET DIAGNOSTICS v_moved = ROW_COUNT;
 
     -- The same move for the two things that are NOT in camp_state_kv: schedules
-    -- and rotation counts are their own tables (migration 196). Live's rows go to
+    -- and rotation counts are their own tables (migration 197). Live's rows go to
     -- the archive BEFORE the plan's are renamed to live, or the two sets collide
     -- on rotation_counts' (camp, workspace, date, bunk, activity).
     UPDATE public.daily_schedules SET workspace = v_out_id
@@ -363,7 +363,7 @@ BEGIN
     GET DIAGNOSTICS v_gone = ROW_COUNT;
 
     -- A discarded plan must not leave a season of schedule rows behind, invisible
-    -- to everyone and counted by nothing (migration 196).
+    -- to everyone and counted by nothing (migration 197).
     DELETE FROM public.daily_schedules
      WHERE camp_id = p_camp_id AND workspace = p_id;
     GET DIAGNOSTICS v_sched = ROW_COUNT;
