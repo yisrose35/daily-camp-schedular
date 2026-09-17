@@ -109,6 +109,39 @@
     }
     U.render = render;
 
+    /**
+     * Say something went wrong, without a blocking dialog.
+     *
+     * The bar is on every page and those pages do not share a modal, so this
+     * prefers the app's toast, falls back to a line on the bar itself, and never
+     * uses alert(): a modal browser dialog thrown up by a status bar is both out
+     * of place and, on a phone, hard to get rid of.
+     *
+     * A failed switch is also self-evident — the bar has not changed and you are
+     * still where you were — so this is a nudge, not the primary signal.
+     */
+    function trouble(msg) {
+        try {
+            if (typeof root.toast === 'function') { root.toast(msg, 'error'); return; }
+        } catch (_) {}
+        var bar = doc.getElementById(BAR_ID);
+        if (bar) {
+            var note = doc.getElementById(BAR_ID + '-note');
+            if (!note) {
+                note = doc.createElement('span');
+                note.id = BAR_ID + '-note';
+                note.style.cssText = 'background:#FEF3C7;color:#7F1D1D;border-radius:5px;'
+                    + 'padding:2px 8px;font-weight:700';
+                bar.appendChild(note);
+            }
+            note.textContent = msg;
+            clearTimeout(note._t);
+            note._t = setTimeout(function () { if (note.parentNode) note.remove(); }, 6000);
+            return;
+        }
+        if (root.console) root.console.warn('[Workspace] ' + msg);
+    }
+
     // ── talking to the server ──────────────────────────────────────────────
     U.refresh = async function () {
         var c = client(), id = campId();
@@ -160,11 +193,11 @@
                 var res = await c.rpc('select_workspace', { p_camp_id: id, p_workspace: target });
                 var d = res && res.data;
                 if (d && !d.success) {
-                    alert('Could not switch: ' + (d.error || 'unknown'));
+                    trouble('Could not switch: ' + (d.error || 'unknown'));
                     return;
                 }
             } catch (e) {
-                alert('Could not switch sessions — check your connection and try again.');
+                trouble('Could not switch sessions — check your connection and try again.');
                 return;
             }
         }

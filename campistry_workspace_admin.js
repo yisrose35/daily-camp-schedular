@@ -42,6 +42,109 @@
         if (msg && !bad) setTimeout(function () { if (el.textContent === msg) el.textContent = ''; }, 4000);
     }
 
+    // ── the dialogs ────────────────────────────────────────────────────────
+    // Self-contained, and styled to match the dashboard's own overlays
+    // (.dn-qoverlay), because the dashboard has no shared modal helper — the
+    // app's confirmDialog/showModal live inside campistry_me.js and are not
+    // reachable from here. Hoisting them out of a 19,000-line file to reuse two
+    // dialogs would be a bigger and riskier change than writing the two.
+    //
+    // Both return promises and both resolve rather than reject on cancel, so a
+    // caller that forgets to handle the cancel path does nothing instead of
+    // throwing in the middle of a promotion.
+    function _ensureStyles() {
+        if (doc.getElementById('ws-dialog-styles')) return;
+        var st = doc.createElement('style');
+        st.id = 'ws-dialog-styles';
+        st.textContent = [
+            '.ws-ovl{position:fixed;inset:0;z-index:2147483100;background:rgba(15,23,42,.42);',
+            'backdrop-filter:blur(3px);display:flex;align-items:center;justify-content:center;padding:16px}',
+            '.ws-card{width:min(480px,calc(100vw - 32px));background:#fff;border-radius:16px;',
+            'box-shadow:0 14px 44px rgba(0,0,0,.22);overflow:hidden;font-family:"DM Sans",-apple-system,Segoe UI,Arial,sans-serif;',
+            'animation:ws-in .2s cubic-bezier(.16,1,.3,1)}',
+            '@keyframes ws-in{from{transform:scale(.94) translateY(14px);opacity:0}to{transform:none;opacity:1}}',
+            '.ws-hd{padding:16px 18px 6px;font-size:1.02rem;font-weight:700;color:#0F172A}',
+            '.ws-bd{padding:2px 18px 14px;font-size:.87rem;line-height:1.6;color:#334155}',
+            '.ws-bd input{width:100%;margin-top:10px;padding:9px 11px;border-radius:9px;',
+            'border:1px solid #CBD5E1;font-size:.9rem;font-family:inherit}',
+            '.ws-ft{display:flex;justify-content:flex-end;gap:8px;padding:12px 16px;',
+            'border-top:1px solid #E2E8F0;background:#F8FAFC}',
+            '.ws-ft button{font:inherit;font-size:.86rem;font-weight:600;padding:8px 15px;',
+            'border-radius:9px;cursor:pointer;border:1px solid transparent}',
+            '.ws-ft .ws-no{background:#fff;border-color:#CBD5E1;color:#334155}',
+            '.ws-ft .ws-yes{background:#4F46E5;color:#fff}',
+            '.ws-ft .ws-yes[disabled]{background:#C7D2FE;cursor:not-allowed}',
+            '.ws-ft .ws-danger{background:#DC2626;color:#fff}'
+        ].join('');
+        doc.head.appendChild(st);
+    }
+
+    function _dialog(o) {
+        _ensureStyles();
+        return new Promise(function (resolve) {
+            var ovl = doc.createElement('div');
+            ovl.className = 'ws-ovl';
+            var needsTyping = !!o.confirmWord;
+            ovl.innerHTML =
+                '<div class="ws-card" role="dialog" aria-modal="true">'
+                + '<div class="ws-hd">' + esc(o.title || '') + '</div>'
+                + '<div class="ws-bd">' + (o.bodyHtml || esc(o.body || ''))
+                + (o.input !== undefined
+                    ? '<input id="ws-dlg-input" type="text" value="' + esc(o.input) + '" ' +
+                      'placeholder="' + esc(o.placeholder || '') + '">' : '')
+                + (needsTyping
+                    ? '<input id="ws-dlg-word" type="text" autocomplete="off" placeholder="Type '
+                      + esc(o.confirmWord) + '">' : '')
+                + '</div>'
+                + '<div class="ws-ft">'
+                + '<button type="button" class="ws-no">' + esc(o.cancelText || 'Cancel') + '</button>'
+                + '<button type="button" class="' + (o.danger ? 'ws-danger' : 'ws-yes') + '"'
+                + (needsTyping ? ' disabled' : '') + '>' + esc(o.okText || 'OK') + '</button>'
+                + '</div></div>';
+            doc.body.appendChild(ovl);
+
+            var input = ovl.querySelector('#ws-dlg-input');
+            var word = ovl.querySelector('#ws-dlg-word');
+            var ok = ovl.querySelector('.ws-ft button:last-child');
+            var no = ovl.querySelector('.ws-no');
+
+            function done(val) { ovl.remove(); resolve(val); }
+            if (word) {
+                word.addEventListener('input', function () {
+                    ok.disabled = String(this.value || '').trim().toUpperCase() !== o.confirmWord;
+                });
+            }
+            no.onclick = function () { done(null); };
+            ok.onclick = function () {
+                if (ok.disabled) return;
+                done(input ? String(input.value || '').trim() : true);
+            };
+            // Clicking the backdrop and Escape both cancel, which is what every
+            // other overlay in this app does.
+            ovl.addEventListener('click', function (e) { if (e.target === ovl) done(null); });
+            doc.addEventListener('keydown', function esc_(e) {
+                if (!doc.body.contains(ovl)) { doc.removeEventListener('keydown', esc_); return; }
+                if (e.key === 'Escape') { doc.removeEventListener('keydown', esc_); done(null); }
+            });
+            setTimeout(function () { (word || input || ok).focus(); }, 30);
+        });
+    }
+    /** Ask for a line of text. Resolves to the text, or null on cancel. */
+    function ask(o) { return _dialog(Object.assign({ okText: 'Save', input: '' }, o)); }
+    /** Ask yes/no. Resolves true, or null on cancel. */
+    function confirmBox(o) { return _dialog(Object.assign({ okText: 'Yes' }, o)); }
+
+    /** Is this user the camp owner, per the dashboard's own cached RBAC answer? */
+    function looksLikeOwner() {
+        try {
+            var c = JSON.parse(sessionStorage.getItem('campistry_rbac_cache') || '{}');
+            // isTeamMember false means they own this camp rather than being on
+            // somebody's team. Used ONLY to decide whether to show a setup
+            // message; every real permission is checked server-side.
+            return c && c.isTeamMember === false;
+        } catch (e) { return false; }
+    }
+
     /** The sessions a camp has, to offer as plan names. */
     function sessionNames() {
         try {
@@ -59,11 +162,34 @@
         var c = client(), id = campId();
         if (!c || !id) { card.style.display = 'none'; return; }
 
-        var res, d;
+        var res, d, err = null;
         try {
             res = await c.rpc('list_workspaces', { p_camp_id: id });
             d = res && res.data;
-        } catch (e) { card.style.display = 'none'; return; }
+            err = res && res.error;
+        } catch (e) { err = e; }
+
+        // THE FUNCTION IS NOT THERE YET. Migrations in this project are pasted
+        // into the SQL editor by hand, so "the feature is invisible" is the
+        // expected state between shipping the code and running the SQL — and a
+        // card that simply hides gives an owner no way to work out why. Say it.
+        var missing = err && (
+            err.code === 'PGRST202' ||
+            /Could not find the function|does not exist|schema cache/i.test(String(err.message || '')));
+        if (missing) {
+            if (!looksLikeOwner()) { card.style.display = 'none'; return; }
+            card.style.display = '';
+            var addBtn0 = card.querySelector('.card-header .btn-edit');
+            if (addBtn0) addBtn0.style.display = 'none';
+            list.innerHTML =
+                '<div style="background:#FFFBEB;border:1px solid #FDE68A;color:#92400E;'
+                + 'padding:11px 13px;border-radius:9px;font-size:.85rem;line-height:1.6">'
+                + '<strong>Not switched on yet.</strong> Session planning needs one database '
+                + 'migration. Open your Supabase dashboard → SQL Editor, paste the whole of '
+                + '<code>migrations/193_session_workspaces.sql</code> and run it, then reload '
+                + 'this page.</div>';
+            return;
+        }
 
         if (!d || !d.success) { card.style.display = 'none'; return; }
 
@@ -90,8 +216,17 @@
               + '</div>';
 
         if (!rows.length) {
-            h += '<p style="color:var(--slate-500);font-size:.84rem;margin:6px 0 0">'
-               + 'No plans yet. Make one when you want to start building next session.</p>';
+            // The header's "+ New Plan" is easy to miss next to a card full of
+            // explanatory text, which is exactly what happened. An empty card
+            // gets a real call to action instead of a sentence about one.
+            h += '<div style="text-align:center;padding:16px 10px 6px">'
+               + '<p style="color:var(--slate-500);font-size:.85rem;margin:0 0 12px">'
+               + 'No plans yet. Make one when you want to start building the next session.</p>'
+               + (canManage
+                    ? '<button class="btn-primary" type="button" '
+                      + 'onclick="CampistryWorkspaceAdmin.newSandbox()">Start planning a session</button>'
+                    : '')
+               + '</div>';
         }
 
         rows.forEach(function (w) {
@@ -122,9 +257,18 @@
         var c = client(), id = campId();
         if (!c || !id) return say('Not connected.', true);
         var suggest = sessionNames();
-        var label = root.prompt(
-            'Name this plan.' + (suggest.length ? ' Your sessions are: ' + suggest.join(', ') : ''),
-            suggest[suggest.length - 1] || '2nd Half');
+        var label = await ask({
+            title: 'Name this plan',
+            bodyHtml: 'A plan is a full copy of your bunks, divisions, periods, routes and league '
+                    + 'setup that you can build ahead of time. Nothing in it is live.'
+                    + (suggest.length
+                        ? '<br><br><span style="color:#64748B">Your sessions: '
+                          + esc(suggest.join(', ')) + '</span>'
+                        : ''),
+            input: suggest[suggest.length - 1] || '2nd Half',
+            placeholder: '2nd Half',
+            okText: 'Create plan'
+        });
         if (!label) return;
         label = String(label).trim();
         if (!label) return;
@@ -162,18 +306,29 @@
         // app that changes what every screen, every counsellor's phone and every
         // printed sheet shows, and it is not undoable by a click — the outgoing
         // state is kept, but promoting back is another promotion.
-        if (!root.confirm(
-            'Make "' + label + '" the live camp?\n\n' +
-            'Every bunk list, schedule, bus route and division in Campistry becomes ' +
-            'this plan\'s. What is live now is kept as a past session you can look ' +
-            'back at.\n\n' +
-            'Campers, families and payments are not affected.')) return;
-        var typed = root.prompt('Type MAKE OFFICIAL to confirm.');
-        if (String(typed || '').trim().toUpperCase() !== 'MAKE OFFICIAL') return say('Cancelled.', true);
+        // One dialog, not three. The typed confirmation lives inside it, so the
+        // warning a person is confirming is still on screen while they type.
+        var go = await confirmBox({
+            title: 'Make "' + label + '" the live camp?',
+            bodyHtml: 'Every bunk list, schedule, bus route, period and division in Campistry '
+                    + 'becomes this plan\'s, for everybody \u2014 staff, the counsellor app and '
+                    + 'every printed sheet.<br><br>'
+                    + 'What is live now is <strong>kept</strong> as a past session you can open '
+                    + 'and look back at.<br><br>'
+                    + '<strong>Campers, families and payments are not affected.</strong>',
+            confirmWord: 'MAKE OFFICIAL',
+            okText: 'Make official',
+            danger: true
+        });
+        if (!go) return say('Cancelled.', true);
 
-        var archiveLabel = root.prompt(
-            'What should the session being replaced be called, so you can find it later?',
-            'Before ' + label);
+        var archiveLabel = await ask({
+            title: 'Name the session being replaced',
+            body: 'So you can find it later.',
+            input: 'Before ' + label,
+            okText: 'Switch over'
+        });
+        if (archiveLabel === null) return say('Cancelled.', true);
 
         say('Switching the camp over…');
         try {
@@ -201,8 +356,14 @@
     A.remove = async function (wsId, label) {
         var c = client(), id = campId();
         if (!c || !id) return say('Not connected.', true);
-        if (!root.confirm('Delete the plan "' + label + '"?\n\n' +
-            'Its bunks, routes and schedules are thrown away. The live camp is not touched.')) return;
+        var go = await confirmBox({
+            title: 'Delete the plan "' + label + '"?',
+            bodyHtml: 'Its bunks, routes, periods and schedules are thrown away.<br><br>'
+                    + 'The live camp is not touched.',
+            okText: 'Delete plan',
+            danger: true
+        });
+        if (!go) return;
         try {
             var res = await c.rpc('delete_workspace', { p_camp_id: id, p_id: wsId });
             var d = res && res.data;

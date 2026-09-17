@@ -324,10 +324,87 @@ test('switching reloads, because a half-hydrated page is the whole problem', () 
     assert.match(UI, /flushPendingSettingsSync/, 'queued writes must go before the keys move');
 });
 
-test('promotion is confirmed twice, and the second is typed', () => {
-    assert.match(ADMIN, /root\.confirm\(/);
-    assert.match(ADMIN, /Type MAKE OFFICIAL to confirm/);
-    assert.match(ADMIN, /!== 'MAKE OFFICIAL'/);
+test('promotion needs the words typed, in the same dialog as the warning', () => {
+    // One dialog rather than three, so the thing being confirmed is still on
+    // screen while the words are typed.
+    assert.match(ADMIN, /confirmWord: 'MAKE OFFICIAL'/);
+    assert.match(ADMIN, /danger: true/);
+    const dlg = ADMIN.slice(ADMIN.indexOf('function _dialog'));
+    assert.match(dlg, /ok\.disabled = String\(this\.value \|\| ''\)\.trim\(\)\.toUpperCase\(\) !== o\.confirmWord/,
+        'the confirm button must stay disabled until the words match');
+    assert.match(dlg, /needsTyping \? ' disabled' : ''/, 'and start disabled');
+});
+
+test('no native browser dialogs anywhere in the workspace UI', () => {
+    // The dashboard has no shared modal — confirmDialog/showModal live inside
+    // campistry_me.js — so this file carries its own, styled to match the
+    // dashboard's overlays.
+    const strip = src => src.split('\n').filter(l => !/^\s*(\/\/|\*|\/\*)/.test(l)).join('\n');
+    [['campistry_workspace_admin.js', ADMIN], ['campistry_workspace_ui.js', UI]].forEach(pair => {
+        const code_ = strip(pair[1]);
+        ['root.prompt(', 'root.confirm(', 'window.prompt(', 'window.confirm('].forEach(bad =>
+            assert.ok(!code_.includes(bad), pair[0] + ' still uses ' + bad));
+        assert.ok(!/(^|[^.\w])alert\(/.test(code_), pair[0] + ' still uses alert()');
+    });
+});
+
+test('the dialog cancels on the backdrop and on Escape, like every other overlay', () => {
+    const dlg = ADMIN.slice(ADMIN.indexOf('function _dialog'));
+    assert.match(dlg, /if \(e\.target === ovl\) done\(null\)/);
+    assert.match(dlg, /if \(e\.key === 'Escape'\)/);
+    assert.match(dlg, /resolve\(val\)/, 'cancel must resolve, not reject');
+});
+
+test('the bar reports trouble without a blocking dialog', () => {
+    // A modal thrown up by a status bar is out of place, and on a phone it is
+    // hard to dismiss. Toast if the page has one, otherwise a line on the bar.
+    assert.match(UI, /function trouble\(msg\)/);
+    assert.match(UI, /if \(typeof root\.toast === 'function'\) \{ root\.toast\(msg, 'error'\); return; \}/);
+    assert.match(UI, /BAR_ID \+ '-note'/);
+    assert.match(UI, /trouble\('Could not switch/);
+});
+
+test('an un-run migration explains itself instead of hiding the card', () => {
+    // Migrations here are pasted by hand, so "shipped but not applied" is a real
+    // state — and a card that just hides gives an owner nothing to act on.
+    assert.match(ADMIN, /err\.code === 'PGRST202'/);
+    assert.match(ADMIN, /Could not find the function\|does not exist\|schema cache/);
+
+    // The failure must be CARRIED OUT of the try, not swallowed by a catch that
+    // hides the card — that is the bug this replaced.
+    assert.match(ADMIN, /catch \(e\) \{ err = e; \}/,
+        'a failed list_workspaces must set err, not hide the card');
+
+    // And the notice must actually be gated on that flag. Asserting only that
+    // the words exist passes just as happily when the branch is dead code, which
+    // is exactly how a mutation of the condition slipped through.
+    const flag = ADMIN.indexOf('var missing =');
+    assert.ok(flag > 0, 'the un-run migration must be detected into a named flag');
+    const branch = ADMIN.slice(flag);
+    assert.match(branch.slice(0, 900), /\bif \(missing\) \{/,
+        'the notice must be reached because missing is true');
+    const body = branch.slice(branch.indexOf('if (missing) {'));
+    assert.match(body.slice(0, 1400), /Not switched on yet/,
+        'the notice text must live inside that branch');
+    assert.match(body.slice(0, 1400), /193_session_workspaces\.sql/);
+    // Only the owner is told: a scheduler cannot act on it.
+    assert.match(body.slice(0, 1400),
+        /if \(!looksLikeOwner\(\)\) \{ card\.style\.display = 'none'; return; \}/);
+});
+
+test('the owner hint is a hint, never a permission', () => {
+    const fn = ADMIN.slice(ADMIN.indexOf('function looksLikeOwner'));
+    assert.match(fn.slice(0, 700), /campistry_rbac_cache/);
+    assert.match(fn.slice(0, 700), /every real permission is checked server-side|ONLY to decide/);
+});
+
+test('an empty card has a real call to action, not a sentence about one', () => {
+    // The header's "+ New Plan" was easy to miss next to a card full of
+    // explanatory text, which is exactly what happened.
+    assert.match(ADMIN, /Start planning a session<\/button>/);
+    assert.match(ADMIN, /class="btn-primary"/, 'it should look like the dashboard\'s primary action');
+    const empty = ADMIN.slice(ADMIN.indexOf('if (!rows.length)'));
+    assert.match(empty.slice(0, 800), /canManage/, 'and not be offered to a non-owner');
 });
 
 test('the admin card and the bar both say money is never copied', () => {
