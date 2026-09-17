@@ -112,7 +112,7 @@ expensive thing in this app to get wrong.
 | **Do** | You already created two `Malky Stein`. Open each from the roster. |
 | **Expect** | Both exist. Both are editable. Each shows `Malky Stein` as their display name. |
 | **Verify** | Console: `Object.keys(G.campistryMe.roster).filter(k=>k.startsWith('Malky'))` → two keys, one of them suffixed, e.g. `Malky Stein #102`. Both records carry `displayName: 'Malky Stein'`. |
-| **If it fails** | `campistry_camper_identity.js`, `_disambiguateRosterName` (18422), `saveCamper` (3359). |
+| **If it fails** | `campistry_camper_identity.js`, `_disambiguateRosterName` (18576), `saveCamper` (3359). |
 | **Sev** | S1 |
 
 #### ME-R-10 — The suffix never leaks into the interface
@@ -147,7 +147,7 @@ expensive thing in this app to get wrong.
 | **Expect** | Appears in the roster immediately. Sync badge settles to Synced. |
 | **Verify** | SQL: `select value->'roster'->'<NAME>' from camp_state_kv where camp_id='<UUID>' and key='campistryMe';` |
 | **Side effects to confirm** | (a) an **accepted enrollment** is auto-created so Billing and the pipeline treat them like a real registration; (b) a **canteen account** appears in Snacks; (c) a **parent invite** is provisioned for Link if the parent email is present. |
-| **If it fails** | `saveCamper` (3359), `_autoCreateAcceptedEnrollment` (3537), `_autoProvisionParentInvites` (11144). |
+| **If it fails** | `saveCamper` (3359), `_autoCreateAcceptedEnrollment` (3537), `_autoProvisionParentInvites` (11221). |
 | **Sev** | S2 |
 
 #### ME-R-13 — Required fields and rubbish input
@@ -156,7 +156,7 @@ expensive thing in this app to get wrong.
 |---|---|
 | **Do** | Try to save with: empty name; a name of 300 characters; leading/trailing spaces (` Avi Klein `); an email of `not-an-email`; a date of birth in the future; a date of birth of `1900-01-01`; a phone of `abc`. |
 | **Expect** | Empty name refused. Spaces trimmed (and ` Avi Klein ` must **not** create a second camper). Bad email flagged. A future DOB either refused or flagged — record which. |
-| **If it fails** | `saveCamper` (3359), `_sameCamperSignal` (18411). |
+| **If it fails** | `saveCamper` (3359), `_sameCamperSignal` (18565). |
 | **Sev** | S2 for the whitespace duplicate; S3 otherwise. |
 
 #### ME-R-14 ★ CORE — Rename a camper
@@ -222,7 +222,7 @@ expensive thing in this app to get wrong.
 |---|---|
 | **Do** | Re-enroll an already-enrolled camper (the code notes `reEnrollCamper` has no dedup guard). |
 | **Expect** | State what happens. If a second enrollment record appears for the same camper and session, that is a finding: Billing scans every accepted/enrolled application and may charge twice. |
-| **If it fails** | `reEnrollCamper` (18276), `buildFamilyLedgers` (12731). |
+| **If it fails** | `reEnrollCamper` (18430), `buildFamilyLedgers` (12885). |
 | **Sev** | S1 |
 
 ---
@@ -244,7 +244,7 @@ expensive thing in this app to get wrong.
 |---|---|
 | **Do** | Upload a PDF. Then use **Scan** to photograph a page with the camera. Then upload a 25 MB file, a `.exe` renamed to `.pdf`, and a 0-byte file. |
 | **Expect** | Normal files attach and re-open. The scan produces a real PDF. Oversized/invalid files are refused with a message, not a silent failure or a hung spinner. |
-| **If it fails** | `uploadDocument` (18318), `scanDocument` (18324), `_storeDocumentFile` (18331), `campistry_scan_to_pdf.js`. |
+| **If it fails** | `uploadDocument` (18472), `scanDocument` (18478), `_storeDocumentFile` (18485), `campistry_scan_to_pdf.js`. |
 | **Sev** | S3 |
 
 #### ME-R-23 — Notes, timeline and change history
@@ -253,7 +253,7 @@ expensive thing in this app to get wrong.
 |---|---|
 | **Do** | Add a note. Edit the camper's bunk. Reopen the profile. |
 | **Expect** | The note is timestamped and attributed. The change history shows the bunk change as a before→after diff. |
-| **If it fails** | `addCamperNote` (18205), `renderCamperTimeline` (18214), `_diffCamperFields` (18232). |
+| **If it fails** | `addCamperNote` (18359), `renderCamperTimeline` (18368), `_diffCamperFields` (18386). |
 | **Sev** | S4 |
 
 #### ME-R-24 — Attendance history and person links
@@ -271,7 +271,7 @@ expensive thing in this app to get wrong.
 |---|---|
 | **Do** | Add a custom field. Fill it for one camper. Remove the field. Re-add a field with the same name. |
 | **Expect** | The value saves and shows. Removing the field does not corrupt other campers. Re-adding either recovers the old values or starts empty — state which. |
-| **If it fails** | `manageCustomFields` (18303), `_addCustomField` (18312), `_removeCustomField` (18313). |
+| **If it fails** | `manageCustomFields` (18457), `_addCustomField` (18466), `_removeCustomField` (18467). |
 | **Sev** | S3 |
 
 ---
@@ -519,7 +519,7 @@ expensive thing in this app to get wrong.
 ## 1.11 — CSV / Excel import
 
 **Read this before running any import card:** the importer treats the file as the
-**new source of truth** and wipes existing data first (`campistry_me.js:18714`).
+**new source of truth** and wipes existing data first (`campistry_me.js:18868`).
 Run these on the throwaway camp, and run `archiveCurrentSeason` first if you want
 the old data back.
 
@@ -530,7 +530,7 @@ the old data back.
 | **Do** | **Template** → download it. Fill 20 rows with Name, Division, Grade, Bunk, Team. Import. |
 | **Expect** | A preview before committing. Then: structure built from the file (pass 1), campers created (pass 2), families auto-generated from parent data (pass 3), bunk assignments populated (pass 4), and a report at the end. |
 | **Verify** | Counts in the report match the file. |
-| **If it fails** | `handleCsv` (18428), `importRows` (18708). |
+| **If it fails** | `handleCsv` (18582), `importRows` (18862). |
 | **Sev** | S2 |
 
 #### ME-R-31 — Hostile files
@@ -555,7 +555,7 @@ Run each of these and record what happens. **None of them may corrupt the camp.*
 
 | | |
 |---|---|
-| **If it fails** | `parseCsvLine` (18664), `handleCsv` (18428), `dlCsv` (18044). |
+| **If it fails** | `parseCsvLine` (18818), `handleCsv` (18582), `dlCsv` (18198). |
 | **Sev** | S1 for the formula and the XSS rows; S2 for the rest. |
 
 #### ME-R-32 ★ CORE — Import over an existing camp
@@ -565,7 +565,7 @@ Run each of these and record what happens. **None of them may corrupt the camp.*
 | **Do** | On a camp that already has campers with **canteen balances and billing history**, import a file that omits half of them. |
 | **Expect** | You are warned clearly that this replaces the roster. Afterwards, state precisely: what happened to the omitted campers, their canteen money, and their family ledgers. |
 | **Verify** | `G.campistrySnacks.transactions` — the ledger rows must still be there even if the account is gone. Billing must still show what was owed. |
-| **If it fails** | `importRows` (18708) wipe block at 18714, `archiveCurrentSeason` (18697). |
+| **If it fails** | `importRows` (18862) wipe block at 18868, `archiveCurrentSeason` (18851). |
 | **Sev** | S1 — this is the single most destructive button in Me. |
 
 ---

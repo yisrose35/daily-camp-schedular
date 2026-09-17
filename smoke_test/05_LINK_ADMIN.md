@@ -283,7 +283,7 @@ slowly.
 |---|---|
 | **Do** | Move a camper to a different family in Me. Then click **Sync Parent Portals**. Sign in as each parent. |
 | **Expect** | Each parent sees exactly their own children — **no parent ever sees a child who is not theirs**. This button exists precisely because that went wrong. |
-| **If it fails** | `bulkInviteAll` (4076), `_syncParentInviteSnapshot` (`campistry_me.js:11298`), migration 033. |
+| **If it fails** | `bulkInviteAll` (4076), `_syncParentInviteSnapshot` (`campistry_me.js:11375`), migration 033. |
 | **Sev** | S1 |
 
 #### LK-A-28 ★ CORE — Access requests
@@ -470,7 +470,7 @@ broken" findings are a row of this table being empty.
 
 | Feature | Needs | If not configured, the UI should |
 |---|---|---|
-| Email broadcast | camp contact email + the email service (migration 195) | say so before sending |
+| Email broadcast | camp contact email + the email service (migration `196_camp_email_service.sql`) | say so before sending |
 | SMS broadcast | Telnyx number (075/076) | refuse SMS, not silently drop it |
 | Push notifications | `push_tokens` (054–056, 066) | fall back to in-app |
 | Photos | storage bucket (080) | hide the photo upload |

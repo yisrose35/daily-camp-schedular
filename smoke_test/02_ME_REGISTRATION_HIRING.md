@@ -58,7 +58,7 @@ plus `declined` from anywhere (and `declined → applied` to reopen).
 |---|---|
 | **Do** | **+ Add Application**. Fill camper, parents, session, everything. Save. |
 | **Expect** | Appears at `applied`. Marital-status and "other parent at camp this summer" toggles reveal/hide the right fields. |
-| **If it fails** | `addApplication` (10720), `appMaritalChanged` (10662), `appToggleOtherParentSummer` (10669). |
+| **If it fails** | `addApplication` (10725), `appMaritalChanged` (10667), `appToggleOtherParentSummer` (10674). |
 | **Sev** | S2 |
 
 #### ME-G-03 — Review an application
@@ -77,7 +77,7 @@ plus `declined` from anywhere (and `declined → applied` to reopen).
 | **Do** | Accept an application, then Enroll it. |
 | **Expect, in order** | (1) status → `accepted`; (2) the acceptance letter / parent invite goes out if auto-send is on; (3) status → `enrolled`; (4) **the camper appears on the Roster**; (5) tuition is posted to the family ledger; (6) a canteen account exists in Snacks; (7) the parent can sign in to Link and see the child. |
 | **Verify** | Billing → that family: exactly **one** tuition charge. Snacks → Accounts: the camper is listed. Link → Parents: the family is invite-eligible. |
-| **If it fails** | `updateEnrollStatus` (10918), `enrollCamper` (11615), `_postTuitionFor` (3859), `_autoProvisionParentInvites` (11144). |
+| **If it fails** | `updateEnrollStatus` (10923), `enrollCamper` (11769), `_postTuitionFor` (3859), `_autoProvisionParentInvites` (11221). |
 | **Sev** | S1 |
 
 #### ME-G-05 ★ CORE — Accept the same application twice
@@ -95,7 +95,7 @@ plus `declined` from anywhere (and `declined → applied` to reopen).
 |---|---|
 | **Do** | Tick several applications, use the bulk bar to accept them all. Then tick all with the header checkbox. |
 | **Expect** | The bulk bar shows the count. All change. Nothing outside the selection is touched. |
-| **If it fails** | `toggleAllEnroll` (10965), `_updateRegBulkBar` (10969), `bulkEnrollStatus` (10974). |
+| **If it fails** | `toggleAllEnroll` (10971), `_updateRegBulkBar` (10975), `bulkEnrollStatus` (10980). |
 | **Sev** | S2 |
 
 #### ME-G-07 ★ CORE — Rescind after enrolling
@@ -128,7 +128,7 @@ plus `declined` from anywhere (and `declined → applied` to reopen).
 | **Do** | Set `1st Half` capacity to 2 (Dashboard → Sessions). Accept two campers into it. Now accept a third. |
 | **Expect** | The third is refused or auto-waitlisted with a clear message. |
 | **Verify** | Console: `await CampistryDB.getClient().rpc('session_capacity_state', {p_camp_id: CampistryDB.getCampId()})` |
-| **If it fails** | `_sessionCapacityOf` (11601), `autoPromoteWaitlist` (11576), migration `190_session_capacity.sql`, `tests/session_capacity.test.js`. |
+| **If it fails** | `_sessionCapacityOf` (11755), `autoPromoteWaitlist` (11730), migration `190_session_capacity.sql`, `tests/session_capacity.test.js`. |
 | **Sev** | S2 |
 
 #### ME-G-10 ★ CORE — Waitlist auto-promotion
@@ -153,7 +153,7 @@ plus `declined` from anywhere (and `declined → applied` to reopen).
 |---|---|
 | **Do** | Dashboard → Sessions → **+ Add Bundle**. Make a bundle of both halves with its own price. Register a camper for the bundle. |
 | **Expect** | The public form offers the bundle. Tuition posted is the **bundle price**, not the sum of the two sessions. |
-| **If it fails** | `_dashRenderBundleSessionChecks` (`dashboard.js:2662`), `_freshBundles` (10689), migrations `090`/`114`. |
+| **If it fails** | `_dashRenderBundleSessionChecks` (`dashboard.js:2662`), `_freshBundles` (10694), migrations `090`/`114`. |
 | **Sev** | S1 |
 
 #### ME-G-13 — Overlapping and impossible sessions
@@ -205,7 +205,7 @@ public form** on the right.
 | **Do** | In the builder, tick which payment methods the camp accepts. Note that **debit is deliberately not offered** where a balance can be drawn back out as cash. Configure the registration deposit (flat / percentage / per-session), and whether an application is even looked at before it is paid. |
 | **Expect** | Saved policy shows on the public form, and is what Snacks later allows for canteen deposits. |
 | **Verify** | Console on any page: `window.CampistryPayments && CampistryPayments.readSettings?.()`; and `select * from camp_state_kv where key='campistryMe'` → the payment policy blob. |
-| **If it fails** | `campistry_payments.js`, `campistry_deposit_policy.js`, `_dpCardHtml` (16315), `_pmBuilderCardHtml` (16420). |
+| **If it fails** | `campistry_payments.js`, `campistry_deposit_policy.js`, `_dpCardHtml` (16469), `_pmBuilderCardHtml` (16574). |
 | **Sev** | S2 |
 
 ---
@@ -320,7 +320,7 @@ parent gets — a signed-in tab hides every anon-access bug.
 | **Do** | Enroll a camper with a parent email. Then go to Link → Parents. |
 | **Expect** | The family is already sign-up-eligible **without anyone clicking anything** — the button there is only a backfill. |
 | **Verify** | `select * from link_parent_invites where camp_id='<UUID>';` |
-| **If it fails** | `_autoProvisionParentInvites` (11144), `_scheduleAutoParentInvites` (11120), `upsert_parent_invite` RPC, migrations 008/011/033/034/087. |
+| **If it fails** | `_autoProvisionParentInvites` (11221), `_scheduleAutoParentInvites` (11197), `upsert_parent_invite` RPC, migrations 008/011/033/034/087. |
 | **Sev** | S2 |
 
 #### ME-G-29 ★ CORE — An invite must not hand over the wrong child
@@ -330,7 +330,7 @@ parent gets — a signed-in tab hides every anon-access bug.
 | **Do** | Two families share a parent email by mistake (do this deliberately). Run **Sync Parent Portals** from Link → Parents. Then sign in as that parent. |
 | **Expect** | State exactly which children that parent sees. If they can see a child who is not theirs, that is the worst bug in this plan. |
 | **Verify** | `select * from link_parent_invites where parent_email='<the email>';` |
-| **If it fails** | `_syncParentInviteSnapshot` (11298), `_sweepOrphanedParentInvites` (11134), migration `033_upsert_preserve_claim.sql`. |
+| **If it fails** | `_syncParentInviteSnapshot` (11375), `_sweepOrphanedParentInvites` (11211), migration `033_upsert_preserve_claim.sql`. |
 | **Sev** | S1 |
 
 #### ME-G-30 — Invite after a camper is deleted
@@ -341,16 +341,67 @@ parent gets — a signed-in tab hides every anon-access bug.
 | **Expect** | The child disappears from the parent's portal (migration 124 hides disconnected children) but the parent's login still works and still shows any balance owed (migration 070). |
 | **Sev** | S1 |
 
-#### ME-G-31 — The acceptance letter
+#### ME-G-31 ★ CORE — The acceptance letter
+
+One letter now replaces the bare portal invite, so this card and the five after
+it are worth doing carefully.
 
 | | |
 |---|---|
-| **Do** | Accept a camper with auto-send on. Read the email that arrives. |
-| **Expect** | It carries the camper ID **and** the camp number — the two numbers a parent needs all summer — plus the portal link. Branded per the camp's Link branding. |
-| **If it fails** | `campistry_acceptance_letter.js`, `_inviteEmailFor` (11541), `send-invite-email`, migration `149_camp_number.sql`. |
-| **Sev** | S3 |
+| **Do** | Accept a camper with auto-send on. Read the email that arrives, end to end. |
+| **Expect** | It says how to get into Link, and carries the access code, the **camper ID**, the **camp number**, and the `campNumber-camperId` payment reference that makes a Zelle payment credit itself. Branded per the camp's Link branding. |
+| **If it fails** | `campistry_acceptance_letter.js` (pure, and unit-tested), `_letterExtrasFor` (11691), `_inviteEmailFor` (11658), `send-invite-email`, migrations `149_camp_number.sql`, `088_camp_person_seasons.sql`. |
+| **Sev** | S2 |
 
-#### ME-G-32 — Invite with no camp contact email
+#### ME-G-32 ★ CORE — Every part disappears cleanly
+
+| | |
+|---|---|
+| **Do** | Accept a camper on a camp with **no camp number** set. Then one with no access code yet. Read each letter. |
+| **Expect** | The reference section is simply **absent** — never `Camper ID: undefined` in a letter that has already gone to every family. Each missing fact removes its own section and nothing else. |
+| **Verify** | The builder reports what it could not say; the preview should name it. |
+| **If it fails** | `campistry_acceptance_letter.js` — its `missing` list. |
+| **Sev** | S1 — a malformed letter cannot be unsent. |
+
+#### ME-G-33 ★ CORE — Preview and send are the same letter
+
+| | |
+|---|---|
+| **Do** | Open the invite modal and read the preview. Then send. Compare the two word for word. |
+| **Expect** | Identical. The modal used to carry a **third** hand-written copy of the body, so the office previewed one letter and the parent received another with nothing to say so. The preview now renders from the same builder that sends, and it names anything the letter could not say — while it can still be fixed. |
+| **If it fails** | `_fillInvitePreview` (11609), `_showInviteModal` (11522). |
+| **Sev** | S1 |
+
+#### ME-G-34 ★ CORE — A reference the matcher will accept
+
+| | |
+|---|---|
+| **Do** | Take the `campNumber-camperId` reference out of a real letter and use it as the memo on a Zelle/ACH deposit (Part 3, ME-B-26). |
+| **Expect** | The deposit inbox matches it to that family automatically. The letter must never print a reference shape the matcher does not recognise. |
+| **Verify** | `node --test tests/acceptance_letter.test.js` — it holds the letter's reference rule against `campistry_deposit_match.js`'s. |
+| **Sev** | S1 — a reference nobody can place is the exact problem this letter exists to solve. |
+
+#### ME-G-35 ★ CORE — Automatic sending is gated on paying for email
+
+| | |
+|---|---|
+| **Do** | On a camp whose **email service is off** (or not on its plan), accept a camper. Then switch emailing on and accept another. |
+| **Expect** | With emailing off: **nothing is sent automatically**, and the office is told why in plain language — either "Emailing is switched off for this camp" or "Your plan does not include emailing". Crucially the invite is **still created**: the access code exists and the modal still sends by hand exactly as before. With emailing on: the letter goes automatically. |
+| **Expect also** | The gate covers **both** automatic emails, not only this one — check the post-acceptance form auto-send too. |
+| **Verify** | `select proname from pg_proc where proname like '%email_service%';` (migration `196_camp_email_service.sql`). |
+| **If it fails** | `_emailServiceOn` (11033), `_emailBlockedReason` (11049), `_autoSendParentInvite` (11109), `_autoSendPostAccept` (10550). |
+| **Sev** | S1 — a camp that quietly stops telling families they were accepted will not find out until the families do. |
+
+#### ME-G-36 — Auto-send is on by default
+
+| | |
+|---|---|
+| **Do** | On a camp that has never touched the setting, accept a camper. Then turn auto-send off and accept another. |
+| **Expect** | On by default — accepting a family and telling them nothing is not a state any camp wants. Turning it off leaves the modal working exactly as it did. |
+| **If it fails** | `_autoInviteOn` (11067). |
+| **Sev** | S2 |
+
+#### ME-G-37 — Invite with no camp contact email
 
 | | |
 |---|---|
@@ -413,7 +464,7 @@ parent gets — a signed-in tab hides every anon-access bug.
 |---|---|
 | **Do** | Configure the post-hire form (t-shirt size, arrival date, housing, emergency contact, handbook upload, policy rows). Send it to a hired candidate. Submit it. |
 | **Expect** | Answers land on that staff record. The handbook is downloadable. Policy acknowledgements are recorded individually. |
-| **If it fails** | `openPostHireFormConfig` (9751), `_autoSendPostHire` (10611), `get_posthire_bootstrap`, migration 086, `POST_HIRE_FORM_SETUP.md`. |
+| **If it fails** | `openPostHireFormConfig` (9751), `_autoSendPostHire` (10616), `get_posthire_bootstrap`, migration 086, `POST_HIRE_FORM_SETUP.md`. |
 | **Sev** | S3 |
 
 #### ME-H-07 — Onboarding checklist and references
@@ -459,7 +510,7 @@ parent gets — a signed-in tab hides every anon-access bug.
 |---|---|
 | **Do** | Export staff CSV. Open it in Excel. |
 | **Expect** | Correct columns, and names with commas/apostrophes/newlines are properly quoted. A cell starting `=` must be escaped — see ME-R-31's formula row. |
-| **If it fails** | `exportStaffCSV` (8123), `dlCsv` (18044). |
+| **If it fails** | `exportStaffCSV` (8123), `dlCsv` (18198). |
 | **Sev** | S2 |
 
 ---
@@ -489,7 +540,7 @@ parent gets — a signed-in tab hides every anon-access bug.
 
 | | |
 |---|---|
-| **ME-G-33 Do** | Hard-reload, log out, log back in, open on a second device. |
+| **ME-G-38 Do** | Hard-reload, log out, log back in, open on a second device. |
 | **Expect** | Every application, status, form configuration, contract and onboarding tick is identical everywhere. |
 | **Verify** | `select key, jsonb_array_length(coalesce(value->'…','[]')) from camp_state_kv …` — or simply diff the console blob between the two devices. |
 | **Sev** | S1 |

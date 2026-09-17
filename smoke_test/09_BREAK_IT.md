@@ -478,7 +478,7 @@ console. They test that the database — not the interface — is the boundary.
 |---|---|
 | **Do** | Archive the current season and start fresh. |
 | **Expect** | Historical data is retrievable, money history is intact, and the new season starts clean without inheriting balances that should have closed. |
-| **If it fails** | `archiveCurrentSeason` (`campistry_me.js:18697`); `TEST_FINDINGS.md` defect D0 was a season-rollover bug. |
+| **If it fails** | `archiveCurrentSeason` (`campistry_me.js:18851`); `TEST_FINDINGS.md` defect D0 was a season-rollover bug. |
 | **Sev** | S1 |
 
 ---

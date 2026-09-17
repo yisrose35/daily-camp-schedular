@@ -38,7 +38,7 @@ Fill one row per part.
 |---|---|---|---|---|---|---|---|---|
 | 0 Pre-flight (9) | | | | | | | | |
 | 1 Me roster/structure (53) | | | | | | | | |
-| 2 Me registration/hiring (46) | | | | | | | | |
+| 2 Me registration/hiring (51) | | | | | | | | |
 | 3 Me money (43) | | | | | | | | |
 | 4 Me output (24) | | | | | | | | |
 | 5 Link admin (45) | | | | | | | | |
@@ -46,7 +46,7 @@ Fill one row per part.
 | 7 Snacks (49) | | | | | | | | |
 | 8 Cross-app (40) | | | | | | | | |
 | 9 Break it (50) | | | | | | | | |
-| **Total (423)** | | | | | | | | |
+| **Total (428)** | | | | | | | | |
 
 ---
 
@@ -314,7 +314,7 @@ plan's feet. Re-check these first on any repeat run.
 
 ```
 Plan version:        SMOKE_TEST_ROADMAP.md as of <commit sha>
-Total cards:         423 (151 marked CORE)
+Total cards:         428 (156 marked CORE)
 Cards run:
 S1 findings open:
 Safe to run a real camp on this build?   yes | no | with these caveats:

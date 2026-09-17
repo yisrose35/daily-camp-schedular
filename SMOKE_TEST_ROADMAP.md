@@ -69,7 +69,7 @@ Run them in this order. Later parts assume the data earlier parts created.
 |---|---|---|---|---|
 | **0** | `smoke_test/00_PREFLIGHT.md` | Accounts, migrations, seed data, console tools, known-benign noise | 9 | 45 min |
 | **1** | `smoke_test/01_ME_ROSTER_STRUCTURE.md` | Roster, camper & staff profiles, families, Structure, Bunk Builder, bunk generator, bunk staff, division heads, CSV import | 53 | 2–3 h |
-| **2** | `smoke_test/02_ME_REGISTRATION_HIRING.md` | Registration pipeline, sessions/bundles/capacity/waitlist, form builders, public forms, Hiring, contracts, post-hire, Leads | 46 | 3–4 h |
+| **2** | `smoke_test/02_ME_REGISTRATION_HIRING.md` | Registration pipeline, sessions/bundles/capacity/waitlist, form builders, public forms, Hiring, contracts, post-hire, Leads | 51 | 3–4 h |
 | **3** | `smoke_test/03_ME_MONEY.md` | Billing ledger, charges/credits/refunds, cards on file, pay links, plans & autopay, deposits, card fees, bank deposit inbox, Payroll, Finance | 43 | 4–5 h |
 | **4** | `smoke_test/04_ME_OUTPUT.md` | Analytics, Reports, Report Builder, Print Sheets, Forms & Docs, Broadcasts, notes/custom fields/documents/scholarships | 24 | 2 h |
 | **5** | `smoke_test/05_LINK_ADMIN.md` | Link dashboard, Messages, Compose & delivery, Forms, Lists, Parents, Photos, Tips Setup | 45 | 3–4 h |
@@ -79,10 +79,10 @@ Run them in this order. Later parts assume the data earlier parts created.
 | **9** | `smoke_test/09_BREAK_IT.md` | The adversarial suite — races, concurrency, hostile input, scale, clock, identity collisions | 50 | 3–4 h |
 | **10** | `smoke_test/10_RESULTS.md` | Results template, the SQL verification pack, and the console command reference | — | — |
 
-**423 checks in total, roughly 30 hours of real clicking.** It is meant to be run over several
+**428 checks in total, roughly 30 hours of real clicking.** It is meant to be run over several
 sessions. Each part is self-contained after Part 0, so you can stop between them.
 
-**If you only have one day**, run Part 0, then the 151 cards marked **★ CORE**,
+**If you only have one day**, run Part 0, then the 156 cards marked **★ CORE**,
 then all 50 cards in Part 9. That is the shape of the system's real risk. (Part 9
 uses a bare **★** for its highest-value cards — every card in that part is
 adversarial by design, so none of them are optional.)
