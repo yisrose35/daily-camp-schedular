@@ -83,11 +83,27 @@
         }
 
         try {
+            // WORKSPACES. A sandbox stores its operational keys under a prefix
+            // (`ws:<id>/app1`); live uses the bare key. So the fetch asks for the
+            // ROUTED key list, and each row is mapped back to its logical key
+            // before anything downstream sees it — every consumer keeps reading
+            // `app1` and never learns which workspace it came from.
+            //
+            // With no workspace selected, or no rule module loaded, the routed
+            // list IS the bare list and this is byte-identical to before.
+            var _wsR = window.CampistryWorkspace || null;
+            var _ws = (typeof window.campistryWorkspace === 'function')
+                ? window.campistryWorkspace() : 'live';
+            var _fetchKeys = FETCH_KEYS;
+            if (_wsR && !_wsR.isLive(_ws)) {
+                _fetchKeys = FETCH_KEYS.map(function (k) { return _wsR.keyFor(k, _ws); });
+            }
+
             var result = await client
                 .from('camp_state_kv')
                 .select('key, value')
                 .eq('camp_id', campId)
-                .in('key', FETCH_KEYS);
+                .in('key', _fetchKeys);
 
             if (result.error) {
                 if (result.error.code === '42501') {
@@ -101,6 +117,13 @@
             }
 
             var rows = result.data || [];
+            // Back to logical keys. A malformed prefix resolves to the key as-is,
+            // which is the live reading and the safe one.
+            if (_wsR && !_wsR.isLive(_ws)) {
+                rows = rows.map(function (r) {
+                    return { key: _wsR.parseKey(r.key).key, value: r.value };
+                });
+            }
             if (!rows.length) {
                 console.warn('[CampBootstrap] No camp_state_kv rows for camp', campId,
                     '— Me may not have been set up yet');

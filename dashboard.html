@@ -447,6 +447,28 @@
                 </div>
             </div>
 
+            <!-- SESSION WORKSPACES — plan next half without touching this one.
+                 Owner-only; the card hides itself for anybody else, and the
+                 server refuses create/promote regardless of what the UI shows. -->
+            <div class="dashboard-card" id="workspacesCard" style="display:none;">
+                <div class="card-header">
+                    <h2>Plan a Session</h2>
+                    <button class="btn-edit" type="button" onclick="CampistryWorkspaceAdmin.newSandbox()">+ New Plan</button>
+                </div>
+                <p style="font-size:0.82rem; color:var(--slate-500); line-height:1.6; margin:0 0 12px;">
+                    A plan is a full copy of your bunks, divisions, periods, bus routes, league
+                    setup and rotation history that you can build ahead of time. Nothing in a plan
+                    is live — counsellors and parents never see it. When the session starts, make
+                    it official and it becomes the camp; what it replaces is kept so you can look
+                    back at it.
+                    <br><br>
+                    <strong>Campers, families and payments are never copied.</strong> Those are
+                    always the live ones, in every plan — there is no such thing as a draft payment.
+                </p>
+                <div id="workspacesList" style="font-size:0.88rem;"></div>
+                <div id="workspacesStatus" style="font-size:0.82rem; margin-top:8px;"></div>
+            </div>
+
             <!-- Sessions & Pricing — owner-only, toggled via #sessionsCard.
                  Bundles aren't a separate feature area — they render as
                  rows in the same #sessionsList as sessions (tagged with a
@@ -830,7 +852,11 @@ if (window.location.protocol === 'file:') {
          in the same order campistry_me.html/flow.html already use. -->
     <script src="local_cache_idb.js?v=20260903-03"></script>
     <script src="campistry_finance_merge.js?v=20260915-01"></script>
-    <script src="integration_hooks.js?v=20260915-01"></script>
+    <script src="campistry_workspace.js?v=20260917-01"></script>
+<script src="integration_hooks.js?v=20260915-01"></script>
+<script src="campistry_workspace_ui.js?v=20260917-01"></script>
+<script src="campistry_workspace_admin.js?v=20260917-01"></script>
+
     <script src="cloud_sync_helpers.js?v=20260903-03"></script>
     <script src="dashboard.js?v=20260915-01"></script>
     <script src="campistry_setup_checklist.js?v=20260915-01"></script>

@@ -820,11 +820,15 @@
                     typeof changesToSync[mergeKey] === 'object' &&
                     !Array.isArray(changesToSync[mergeKey])) {
                     try {
+                        // The same workspace-routed key the upsert below will
+                        // write. Merging live's app1 into a sandbox's app1 would
+                        // drag live placement back over planned placement on
+                        // every save.
                         const { data: cur, error: curErr } = await client
                             .from('camp_state_kv')
                             .select('value')
                             .eq('camp_id', campId)
-                            .eq('key', mergeKey)
+                            .eq('key', wsKey(mergeKey))
                             .maybeSingle();
                         if (!curErr && cur && cur.value && typeof cur.value === 'object') {
                             changesToSync[mergeKey] = { ...cur.value, ...changesToSync[mergeKey] };
@@ -904,12 +908,38 @@
                 }
             }
 
-            const rows = keys.map(k => ({
-                camp_id:    campId,
-                key:        k,
-                value:      changesToSync[k] ?? null,
-                updated_at: nowIso
-            }));
+            // Route each key through the current workspace. In live this is the
+            // identity function and these rows are byte-identical to before.
+            //
+            // A write that the workspace rule refuses is DROPPED here and said
+            // out loud rather than silently redirected: the refused keys are the
+            // global ones (families, enrollments, the ledger, payroll, canteen,
+            // shop), and an edit to those made from a screen labelled "sandbox"
+            // is either a mistake or a bug. Quietly sending it to live would
+            // make the two indistinguishable.
+            const _R = _wsRule();
+            const _refused = [];
+            const rows = keys.map(k => {
+                if (_R) {
+                    const ok = _R.canWrite(k, _wsCurrent);
+                    if (!ok.ok) { _refused.push(k); return null; }
+                }
+                return {
+                    camp_id:    campId,
+                    key:        wsKey(k),
+                    value:      changesToSync[k] ?? null,
+                    updated_at: nowIso
+                };
+            }).filter(Boolean);
+            if (_refused.length) {
+                logError('Not saved — these are live-only and this browser is in the "'
+                    + _wsCurrent + '" sandbox: ' + _refused.join(', '));
+                try {
+                    if (typeof window.campistryWorkspaceRefused === 'function') {
+                        window.campistryWorkspaceRefused(_refused, _wsCurrent);
+                    }
+                } catch (_) {}
+            }
 
             if (rows.length === 0) {
                 _isSyncing = false;
@@ -1695,6 +1725,57 @@
     /**
      * loadGlobalSettings - Load settings (from cache or cloud)
      */
+    // ── WORKSPACES ─────────────────────────────────────────────────────────
+    // A sandbox is a named copy of the camp's OPERATIONAL state (bunks,
+    // structure, routes, periods, league setup, rotation history) that an office
+    // can plan next half in without touching the camp that is running.
+    //
+    // It works by prefixing the storage key. THE LIVE WORKSPACE USES THE BARE
+    // KEY — `app1` is `app1` — so every reader in this app keeps working and a
+    // sandbox is physically unable to reach live data. If the workspace layer
+    // failed entirely the worst outcome available is an empty-looking sandbox.
+    //
+    // `_wsCurrent` is the workspace this BROWSER is looking at. It is set from
+    // the server (select_workspace / list_workspaces) and mirrored into
+    // sessionStorage so a page navigation inside the same tab keeps it — but NOT
+    // localStorage, because a sandbox that survives closing the browser is a
+    // sandbox somebody comes back to next week and mistakes for live.
+    var _wsCurrent = 'live';
+    try {
+        var _wsSaved = sessionStorage.getItem('campistry_workspace');
+        if (_wsSaved) _wsCurrent = String(_wsSaved);
+    } catch (_) {}
+
+    function _wsRule() {
+        return (typeof window !== 'undefined' && window.CampistryWorkspace) || null;
+    }
+    /** The stored key to read/write for a logical key, in the current workspace. */
+    function wsKey(key) {
+        var R = _wsRule();
+        // No rule module loaded means no workspaces, which means the bare key —
+        // i.e. exactly today's behaviour.
+        if (!R) return key;
+        return R.keyFor(key, _wsCurrent);
+    }
+    window.campistryWorkspace = function () { return _wsCurrent; };
+    window.campistryWorkspaceIsLive = function () {
+        var R = _wsRule();
+        return R ? R.isLive(_wsCurrent) : true;
+    };
+    /**
+     * Point this browser at a workspace. Does NOT persist the choice server-side
+     * — that is select_workspace's job; this is the local half, called after it.
+     */
+    window.campistrySetWorkspace = function (ws) {
+        _wsCurrent = (ws && String(ws)) || 'live';
+        try {
+            if (_wsCurrent === 'live') sessionStorage.removeItem('campistry_workspace');
+            else sessionStorage.setItem('campistry_workspace', _wsCurrent);
+        } catch (_) {}
+        log('workspace is now ' + _wsCurrent);
+        return _wsCurrent;
+    };
+
     window.loadGlobalSettings = function(key) {
         const settings = getLocalSettings();
         
