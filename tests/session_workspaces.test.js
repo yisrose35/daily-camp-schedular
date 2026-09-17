@@ -326,9 +326,24 @@ test('promotion needs the words typed, in the same dialog as the warning', () =>
     assert.match(ADMIN, /confirmWord: 'MAKE OFFICIAL'/);
     assert.match(ADMIN, /danger: true/);
     const dlg = ADMIN.slice(ADMIN.indexOf('function _dialog'));
-    assert.match(dlg, /ok\.disabled = String\(this\.value \|\| ''\)\.trim\(\)\.toUpperCase\(\) !== o\.confirmWord/,
-        'the confirm button must stay disabled until the words match');
-    assert.match(dlg, /needsTyping \? ' disabled' : ''/, 'and start disabled');
+
+    // EXACT, case-sensitive. This used to upper-case the input before comparing,
+    // so "make official" sailed through — and a typed confirmation exists
+    // precisely so it cannot be got past without reading it.
+    assert.match(dlg, /String\(word && word\.value \|\| ''\)\.trim\(\) === o\.confirmWord/);
+    assert.ok(!/toUpperCase\(\) !== o\.confirmWord/.test(dlg),
+        'upper-casing the input lets the lower-case spelling through');
+
+    assert.match(dlg, /needsTyping \? ' disabled' : ''/, 'and it starts disabled');
+    assert.match(dlg, /if \(ok\.disabled \|\| !wordOk\(\)\) return;/,
+        'and is re-checked on click, so a stray .click() cannot promote a plan');
+
+    // It has to LOOK disabled as well as be disabled. The danger button had no
+    // disabled style at all, so it sat there as a live red button refusing clicks
+    // in silence — which is what got reported as the button working too early.
+    assert.match(ADMIN, /\.ws-ft \.ws-danger\[disabled\]\{/,
+        'the danger button needs a disabled style of its own');
+    assert.match(dlg, /aria-disabled/, 'and it should say so in the accessibility tree');
 });
 
 test('no native browser dialogs anywhere in the workspace UI', () => {
@@ -434,12 +449,19 @@ test('parent-facing pages get NOTHING, so their keys are always bare', () => {
     });
 });
 
-test('the tills get nothing either', () => {
-    // A canteen POS in a sandbox would be a till selling against planned
-    // placement. Money keys are global anyway, but the roster it reads is not.
-    ['campistry_snacks.html', 'campistry_snacks_pos.html'].forEach(page => {
-        assert.ok(!read(page).includes('campistry_workspace.js'), page);
-    });
+test('the REGISTER gets nothing, but the shop admin page does', () => {
+    // This used to cover campistry_snacks.html too, on the reasoning that a till
+    // in a plan would be selling against planned placement. Live testing changed
+    // the call: Snacks is also where the shop and wallets are administered, and in
+    // a plan it was showing no bar and listing today's campers, so an office
+    // setting up next half was looking at the wrong children with nothing saying
+    // so. It is now plan-aware, and a sale inside a plan is refused rather than
+    // silently banked — see the money test below.
+    //
+    // The REGISTER keeps the original reasoning. It is held by somebody serving a
+    // queue, and there is no version of that where the right answer is next half.
+    assert.ok(!read('campistry_snacks_pos.html').includes('campistry_workspace.js'),
+        'the POS must stay live-only');
 });
 
 test('the migration parses as SQL', () => {
@@ -682,22 +704,222 @@ test('the session is re-applied even when the plan id has not changed', () => {
     assert.match(body, /root\.CampistryPresence\.refresh\(\)/);
 });
 
-test('the till, the nurse and the counsellor app are always LIVE', () => {
-    // These pages run the camp that is happening today. They deliberately load
-    // neither the workspace rule nor integration_hooks, so wsKey is never in
-    // play (bare keys = live) and presence cannot see a plan (as-of = today).
-    //
-    // That is coherent only as long as it stays BOTH: add integration_hooks to
-    // the till for sync and it would start filtering campers by a plan's session
-    // while still showing live's data — the exact mismatch this feature exists
-    // to prevent, arriving through a script tag.
-    ['campistry_health.html', 'campistry_snacks.html',
-     'campistry_snacks_pos.html', 'campistry_lite.html'].forEach(page => {
+test('the REGISTER and the counsellor app are always live; the nurse and the shop are not', () => {
+    // Health and Snacks were asked for explicitly after live testing: inside a
+    // plan they showed no bar and listed today's campers, so an office planning
+    // next half's medication sheet was reading the wrong children.
+    ['campistry_health.html', 'campistry_snacks.html'].forEach(page => {
+        const src = read(page);
+        assert.match(src, /campistry_workspace\.js/, page + ' needs the rule');
+        assert.match(src, /integration_hooks\.js/, page + ' needs the routing');
+        assert.match(src, /campistry_workspace_ui\.js/, page + ' needs the bar');
+        // Order is load-bearing on both counts.
+        assert.ok(src.indexOf('campistry_workspace.js') < src.indexOf('campistry_cloud_bootstrap.js'),
+            page + ': the bootstrap routes its fetch through the rule');
+        assert.ok(src.indexOf('integration_hooks.js') < src.indexOf('campistry_presence.js'),
+            page + ': presence asks integration_hooks which plan this browser is in');
+    });
+
+    // The POS and the counsellor app stay out of it deliberately. They are held by
+    // somebody serving a queue or standing in front of a bunk, running the camp
+    // that is happening now; there is no version of that where the right answer is
+    // next half's data. Loading neither the rule nor integration_hooks keeps them
+    // on bare keys (live) with presence answering for today.
+    ['campistry_snacks_pos.html', 'campistry_lite.html'].forEach(page => {
         const src = read(page);
         assert.ok(!/campistry_workspace\.js/.test(src),
-            page + ' must not load the workspace rule');
+            page + ' must not become plan-aware');
         assert.ok(!/integration_hooks\.js/.test(src),
-            page + ' must not load integration_hooks, or presence would see a plan '
-                 + 'while the page still reads live');
+            page + ' must not load integration_hooks, or presence would filter by a '
+                 + 'plan\u2019s session while the page still read live');
     });
+});
+
+test('a plan cannot take money, on the pages that now show a bar', () => {
+    // Consequence of the above, stated so it is a decision and not a surprise:
+    // canteen and shop balances are GLOBAL, so a till inside a plan refuses its
+    // writes rather than banking into a draft. The bar is showing and the refusal
+    // names live, which is the honest outcome — but it does mean the Snacks page
+    // cannot sell while a plan is selected.
+    ['campistrySnacks', 'campistryShop'].forEach(k => {
+        assert.strictEqual(W.canWrite(k, 'second_half').ok, false, k);
+        assert.match(W.canWrite(k, 'second_half').message, /always live/);
+        assert.strictEqual(W.canWrite(k, 'live').ok, true, k + ' must work in live');
+    });
+});
+
+// ───────────────────────────────────────────────────────────────────────────
+// THE LOCAL SNAPSHOT BELONGS TO ONE WORKSPACE.
+//
+// `campGlobalSettings_v1` and the IndexedDB snapshot beside it are ONE cache
+// under ONE name, read raw in 163 places across 40-odd files. Nothing in them
+// said which workspace they came from, so live's bunks and a plan's bunks took
+// turns overwriting each other: open a plan and the cache fills with the plan's
+// app1; go back to live and a page renders the PLAN's bunks until the cloud
+// fetch lands — and the other way round, which is the one that loses work,
+// because a save from that page writes what is on screen.
+//
+// Reported from live testing as "a plan shows live's bunks and divisions instead
+// of its own; edits are saved to ws:<id>/… but don't show when you come back".
+// ───────────────────────────────────────────────────────────────────────────
+
+/**
+ * Run integration_hooks' BOOT-TIME stored-snapshot scrub against a fake
+ * localStorage, and hand back what it left behind.
+ *
+ * The block is extracted and executed rather than pattern-matched, because what
+ * matters is which keys survive — an assertion that the code merely mentions
+ * OPERATIONAL would pass just as happily on a scrub that deleted nothing.
+ */
+function runBootScrub(storedWs, currentWs, state) {
+    const start = HOOKS.indexOf('var _snapRaw = localStorage.getItem(CONFIG.LOCAL_STORAGE_KEY);');
+    assert.ok(start > 0, 'the boot scrub block has moved or gone');
+    const end = HOOKS.indexOf('} catch (_) {', start);
+    const block = HOOKS.slice(start, end);
+
+    const stored = Object.assign({}, state);
+    if (storedWs !== null) stored.__ws = storedWs;
+    const store = { campGlobalSettings_v1: JSON.stringify(stored) };
+
+    const sandbox = {
+        CONFIG: { LOCAL_STORAGE_KEY: 'campGlobalSettings_v1' },
+        _WS_STAMP: '__ws',
+        _wsCurrent: currentWs,
+        _wsRule: () => W,
+        log: () => {},
+        JSON: JSON,
+        localStorage: {
+            getItem: k => (k in store ? store[k] : null),
+            setItem: (k, v) => { store[k] = String(v); }
+        }
+    };
+    const vm = require('node:vm');
+    vm.runInContext(block, vm.createContext(sandbox));
+    return JSON.parse(store.campGlobalSettings_v1);
+}
+
+const SNAP = {
+    app1: { camperRoster: { Eli: {} } },      // operational
+    campStructure: { divisions: ['A'] },      // operational
+    campistryGo: { savedRoutes: [1] },        // operational
+    campistryMe: { families: { f1: {} } },    // GLOBAL — money and identity
+    campistryMeFinance: { ledger: [1, 2] },   // GLOBAL
+    campName: 'Camp Test'                     // GLOBAL
+};
+
+test('a live snapshot is scrubbed of operational keys when a plan is selected', () => {
+    const out = runBootScrub('live', 'second_half', SNAP);
+    ['app1', 'campStructure', 'campistryGo'].forEach(k =>
+        assert.ok(!(k in out), k + " is live's and must not be shown inside a plan"));
+    assert.strictEqual(out.__ws, 'second_half', 'and the snapshot is re-stamped');
+});
+
+test("a plan's snapshot is scrubbed when you go back to live", () => {
+    // This is the direction that loses work: a page rendering the plan's bunks
+    // while labelled live, then saving them over live.
+    const out = runBootScrub('second_half', 'live', SNAP);
+    ['app1', 'campStructure', 'campistryGo'].forEach(k =>
+        assert.ok(!(k in out), k + " is the plan's and must not be shown in live"));
+    assert.strictEqual(out.__ws, 'live');
+});
+
+test('switching between two plans scrubs too', () => {
+    const out = runBootScrub('first_half', 'second_half', SNAP);
+    assert.ok(!('campStructure' in out));
+    assert.strictEqual(out.__ws, 'second_half');
+});
+
+test('money and identity SURVIVE the scrub, in every direction', () => {
+    // They are identical in every workspace. Dropping them would cold-start the
+    // roster and briefly degrade presence to "everyone is here" for no reason.
+    [['live', 'second_half'], ['second_half', 'live'], ['a', 'b']].forEach(([from, to]) => {
+        const out = runBootScrub(from, to, SNAP);
+        assert.deepStrictEqual(out.campistryMe, SNAP.campistryMe, from + '->' + to);
+        assert.deepStrictEqual(out.campistryMeFinance, SNAP.campistryMeFinance, from + '->' + to);
+        assert.strictEqual(out.campName, 'Camp Test', from + '->' + to);
+    });
+});
+
+test('a matching snapshot is left completely alone', () => {
+    const same = runBootScrub('second_half', 'second_half', SNAP);
+    assert.deepStrictEqual(same.app1, SNAP.app1, 'no needless cold start');
+    assert.deepStrictEqual(same.campStructure, SNAP.campStructure);
+
+    const live = runBootScrub('live', 'live', SNAP);
+    assert.deepStrictEqual(live.app1, SNAP.app1);
+    assert.deepStrictEqual(live.campStructure, SNAP.campStructure);
+});
+
+test('an UNSTAMPED snapshot counts as live, because that is what it was', () => {
+    // Every snapshot written before this shipped has no stamp, and every one of
+    // them is live's — this feature did not exist.
+    const out = runBootScrub(null, 'second_half', SNAP);
+    assert.ok(!('app1' in out), 'an unstamped snapshot in a plan must be scrubbed');
+    const stays = runBootScrub(null, 'live', SNAP);
+    assert.deepStrictEqual(stays.app1, SNAP.app1, 'and left alone in live');
+});
+
+test('the snapshot is stamped on the way out, on copies only', () => {
+    // Both storage paths, or the next boot cannot tell whose data it has.
+    assert.match(HOOKS, /lite\[_WS_STAMP\] = _wsNow\(\);/, 'the localStorage snapshot');
+    assert.match(HOOKS, /stamped\[_WS_STAMP\] = _wsNow\(\);/, 'and the IndexedDB one');
+    // On a COPY: `snapshot` is the live state object, and the cloud sync walks its
+    // keys — a stamp written onto it would become a camp_state_kv row of its own.
+    assert.match(HOOKS, /const stamped = Object\.assign\(\{\}, snapshot\);/);
+    assert.match(HOOKS, /if \(k === _WS_STAMP\) return null;/,
+        'and the sync must refuse to make a row of it even so');
+});
+
+test('the in-memory read paths are scrubbed as well as the stored one', () => {
+    // getLocalSettings for the localStorage fallback, preloadFromIdb for the full
+    // state that replaces it a moment later. Miss either and the cache is clean on
+    // disk and dirty in memory.
+    assert.match(HOOKS, /_localCache = _scrubForeignWorkspace\(\s*\n?\s*_migrateAccessRestrictionsKey\(raw \? JSON\.parse\(raw\) : \{\}\)\)/);
+    assert.match(HOOKS, /_localCache = _scrubForeignWorkspace\(\s*\n?\s*_migrateAccessRestrictionsKey\(snap\.state\)\)/);
+});
+
+test('the workspace is readable before its own initialiser runs', () => {
+    // _wsCurrent is assigned ~1300 lines below the scrub that reads it, and var
+    // hoisting means an early caller sees undefined — which would default to live
+    // and scrub a plan's snapshot on the grounds that live is selected.
+    assert.match(HOOKS, /function _wsNow\(\)/);
+    const fn = HOOKS.slice(HOOKS.indexOf('function _wsNow()'));
+    assert.match(fn.slice(0, 420), /typeof _wsCurrent === 'string' && _wsCurrent/);
+    assert.match(fn.slice(0, 420), /sessionStorage\.getItem\('campistry_workspace'\)/,
+        'the fallback must be the same source the initialiser uses, not a guess');
+});
+
+test('the files that talk to camp_state_kv DIRECTLY route their operational keys', () => {
+    // Most of the app reaches the table through saveGlobalSettings and the
+    // bootstrap, both routed. These three went straight to it with a bare key, so
+    // a plan's luggage was saved to live, a plan's league history burned live's,
+    // and the subdivisions picker showed live's divisions inside a plan.
+    assert.match(HOOKS, /window\.campistryWsKey = function \(key\) \{ return wsKey\(key\); \};/,
+        'one exported answer to "what is this key called right now"');
+
+    const cases = [
+        ['campistry_go_luggage.js', /key: _wsK\('campistryLuggage'\)/, 'campistryLuggage'],
+        ['scheduler_core_leagues.js', /key: _wsK\('leagueHistory'\)/, 'leagueHistory'],
+        ['team_subdivisions_ui.js', /_wsK\('campStructure'\)/, 'campStructure']
+    ];
+    cases.forEach(([file, re, key]) => {
+        const src = code(file);
+        assert.match(src, re, file + ' must route ' + key);
+        assert.match(src, /function _wsK\(key\)/, file + ' needs the helper');
+        // And a page without the workspace layer must behave as it always did.
+        const fn = src.slice(src.indexOf('function _wsK(key)'));
+        assert.match(fn.slice(0, 400), /return key;/,
+            file + ': no workspace layer must mean the bare key');
+        // No bare access to that key left behind.
+        assert.ok(!new RegExp("key', '" + key + "'").test(src),
+            file + ' still has a bare ' + key + ' access');
+        assert.ok(!new RegExp("key: '" + key + "'").test(src),
+            file + ' still writes a bare ' + key);
+    });
+
+    // leagueHistory is read AND written — both sides, or a plan reads live's
+    // history and writes its own, which is the worst of both.
+    const lg = code('scheduler_core_leagues.js');
+    assert.ok((lg.match(/_wsK\('leagueHistory'\)/g) || []).length >= 3,
+        'every leagueHistory access must be routed, reads included');
 });

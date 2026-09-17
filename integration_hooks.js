@@ -464,9 +464,64 @@
             const registry = (snapshot.divisions || snapshot.bunks)
                 ? { divisions: snapshot.divisions || {}, bunks: snapshot.bunks || [] }
                 : undefined;
-            window.LocalCacheIDB.write({ state: snapshot, registry })
+            // Stamped on a COPY. `snapshot` is the live state object other code is
+            // still holding, and the cloud sync walks its keys — a stamp written
+            // onto it would become a camp_state_kv row of its own.
+            const stamped = Object.assign({}, snapshot);
+            stamped[_WS_STAMP] = _wsNow();
+            window.LocalCacheIDB.write({ state: stamped, registry })
                 .catch(e => log('IDB write-through failed:', e?.message || e));
         });
+    }
+
+    /**
+     * THE LOCAL SNAPSHOT BELONGS TO ONE WORKSPACE, AND SAYS WHICH.
+     *
+     * `campGlobalSettings_v1` and the IndexedDB snapshot beside it are a single
+     * cache under a single name, read raw by forty-odd files. Nothing in them said
+     * which workspace they came from, so live's bunks and a plan's bunks took
+     * turns overwriting each other: open a plan and the cache fills with the
+     * plan's app1, go back to live and a page renders the PLAN's bunks until the
+     * cloud fetch lands — and the other way round, which is the one that loses
+     * work, because a save from that page writes what is on screen.
+     *
+     * Only the OPERATIONAL keys are scrubbed. The global ones — families, money,
+     * the presence index — are identical in every workspace, and dropping them
+     * would cold-start the roster and briefly degrade presence to "everyone is
+     * here" for no reason.
+     *
+     * Scrubbing rather than key-per-workspace because the cache is read raw in 163
+     * places: fixing the data fixes all of them, and renaming the key would fix
+     * only the callers somebody remembered.
+     */
+    const _WS_STAMP = '__ws';
+    /**
+     * The current workspace, safe to call at ANY point in this file's execution.
+     *
+     * `_wsCurrent` is initialised ~1300 lines below this, and `var` hoisting means
+     * a caller that runs before that point reads `undefined` — which would default
+     * to "live" and scrub a plan's snapshot on the grounds that live is selected.
+     * So fall back to the same sessionStorage the initialiser uses, rather than to
+     * a guess.
+     */
+    function _wsNow() {
+        if (typeof _wsCurrent === 'string' && _wsCurrent) return _wsCurrent;
+        try { return String(sessionStorage.getItem('campistry_workspace') || 'live'); }
+        catch (_) { return 'live'; }
+    }
+
+    function _scrubForeignWorkspace(state) {
+        if (!state || typeof state !== 'object') return state;
+        const R = _wsRule();
+        if (!R) return state;                        // no workspaces in play at all
+        const mine = String(state[_WS_STAMP] || 'live');
+        const now = _wsNow();
+        if (mine === now) return state;
+        (R.OPERATIONAL || []).forEach(k => { delete state[k]; });
+        state[_WS_STAMP] = now;
+        log('local snapshot was "' + mine + '", now in "' + now
+            + '" — dropped its operational keys rather than showing them here');
+        return state;
     }
 
     async function preloadFromIdb() {
@@ -477,7 +532,8 @@
             if (snap && snap.state && typeof snap.state === 'object') {
                 // IDB has the FULL state (heavy keys included). Overwrite
                 // whatever sync-fallback we read from localStorage at boot.
-                _localCache = _migrateAccessRestrictionsKey(snap.state);
+                _localCache = _scrubForeignWorkspace(
+                    _migrateAccessRestrictionsKey(snap.state));
                 _idbPreloadSucceeded = true;
                 log('Preloaded full state from IndexedDB');
                 // Clear the stale localStorage-failure marker — IDB has the
@@ -500,7 +556,8 @@
         // overwrites _localCache with the full IDB state.
         try {
             const raw = localStorage.getItem(CONFIG.LOCAL_STORAGE_KEY);
-            _localCache = _migrateAccessRestrictionsKey(raw ? JSON.parse(raw) : {});
+            _localCache = _scrubForeignWorkspace(
+                _migrateAccessRestrictionsKey(raw ? JSON.parse(raw) : {}));
             return _localCache;
         } catch (e) {
             logError('Failed to read local settings:', e);
@@ -601,6 +658,11 @@
             // fallback for the next page load.
             delete lite.campistryMePayroll;
             delete lite.campistryMeFinance;
+
+            // Which workspace this snapshot is OF. Without it the next page load
+            // cannot tell a plan's bunks from live's, and renders whichever was
+            // written last — see _scrubForeignWorkspace.
+            lite[_WS_STAMP] = _wsNow();
 
             try {
                 const json = JSON.stringify(lite);
@@ -920,6 +982,11 @@
             const _R = _wsRule();
             const _refused = [];
             const rows = keys.map(k => {
+                // The local snapshot's own workspace stamp is not camp state and
+                // must never become a row. Belt and braces: it is written onto
+                // copies, but a future edit that stamps the live object would
+                // otherwise start syncing it silently.
+                if (k === _WS_STAMP) return null;
                 if (_R) {
                     const ok = _R.canWrite(k, _wsCurrent);
                     if (!ok.ok) { _refused.push(k); return null; }
@@ -1754,6 +1821,38 @@
         if (_wsSaved) _wsCurrent = String(_wsSaved);
     } catch (_) {}
 
+    // SCRUB THE STORED SNAPSHOT, NOT JUST THE ONE IN MEMORY.
+    //
+    // _scrubForeignWorkspace cleans what getLocalSettings hands back, which covers
+    // every caller that goes through loadGlobalSettings(). It does not cover the
+    // forty-odd files that read `campGlobalSettings_v1` straight out of
+    // localStorage — Live, the calendar, Go's luggage tab, the solver — and those
+    // would still render the other workspace's bunks.
+    //
+    // So the stored copy is rewritten once, here, before any of them run. This
+    // file is loaded before them on every page, which is what makes "once, at
+    // boot" a real guarantee rather than a hope.
+    try {
+        var _snapRaw = localStorage.getItem(CONFIG.LOCAL_STORAGE_KEY);
+        if (_snapRaw) {
+            var _snap = JSON.parse(_snapRaw);
+            var _snapWs = String((_snap && _snap[_WS_STAMP]) || 'live');
+            if (_snapWs !== _wsCurrent) {
+                var _R0 = _wsRule();
+                if (_R0) {
+                    (_R0.OPERATIONAL || []).forEach(function (k) { delete _snap[k]; });
+                    _snap[_WS_STAMP] = _wsCurrent;
+                    localStorage.setItem(CONFIG.LOCAL_STORAGE_KEY, JSON.stringify(_snap));
+                    log('stored snapshot belonged to "' + _snapWs + '", now in "' + _wsCurrent
+                        + '" — dropped its operational keys so no page renders them here');
+                }
+            }
+        }
+    } catch (_) {
+        // A snapshot we cannot parse is one nothing can trust anyway; the cloud
+        // fetch is the source of truth and will replace it.
+    }
+
     // The SESSION the current sandbox plans for ('2nd Half'), when it has one.
     //
     // This rides along with the workspace id rather than being looked up when
@@ -1781,6 +1880,20 @@
         return R.keyFor(key, _wsCurrent);
     }
     window.campistryWorkspace = function () { return _wsCurrent; };
+    /**
+     * The stored key to use for a logical key, for code OUTSIDE this file.
+     *
+     * Most of the app reaches camp_state_kv through saveGlobalSettings and the
+     * bootstrap, both of which route already. A handful of files talk to the table
+     * directly — Go's luggage tab, league history, the subdivisions picker — and
+     * those were reading and writing bare keys, which means a plan's luggage went
+     * to live and a plan showed live's divisions.
+     *
+     * Exposed rather than duplicated so there is one answer to "what is this key
+     * called right now". A page without this file gets the bare key, which is
+     * exactly what it did before workspaces existed.
+     */
+    window.campistryWsKey = function (key) { return wsKey(key); };
     window.campistryWorkspaceIsLive = function () {
         var R = _wsRule();
         return R ? R.isLive(_wsCurrent) : true;

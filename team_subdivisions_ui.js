@@ -1,3 +1,14 @@
+/**
+ * The stored key for a logical key: 'campistryLuggage' in live, and
+ * 'ws:<plan>/campistryLuggage' inside a plan. Falls back to the bare key on a
+ * page that never loaded the workspace layer, which is pre-workspaces behaviour.
+ */
+function _wsK(key) {
+    try { if (typeof window.campistryWsKey === 'function') return window.campistryWsKey(key); }
+    catch (e) {}
+    return key;
+}
+
 // ============================================================================
 // team_subdivisions_ui.js — Team & Divisions Management UI v2.1
 // ============================================================================
@@ -97,7 +108,7 @@
         try {
             const campId = localStorage.getItem('campistry_camp_id') || localStorage.getItem('campistry_user_id');
             if (campId && window.supabase) {
-                const { data: kvRow } = await window.supabase.from('camp_state_kv').select('value').eq('camp_id', campId).eq('key', 'campStructure').maybeSingle();
+                const { data: kvRow } = await window.supabase.from('camp_state_kv').select('value').eq('camp_id', campId).eq('key', _wsK('campStructure')).maybeSingle();
                 if (kvRow?.value) { _meDivisionsCache = kvRow.value; return _meDivisionsCache; }
                 const { data } = await window.supabase.from('camp_state').select('state').eq('camp_id', campId).maybeSingle();
                 if (data?.state?.campStructure) { _meDivisionsCache = data.state.campStructure; return _meDivisionsCache; }

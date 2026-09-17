@@ -1,3 +1,14 @@
+/**
+ * The stored key for a logical key: 'campistryLuggage' in live, and
+ * 'ws:<plan>/campistryLuggage' inside a plan. Falls back to the bare key on a
+ * page that never loaded the workspace layer, which is pre-workspaces behaviour.
+ */
+function _wsK(key) {
+    try { if (typeof window.campistryWsKey === 'function') return window.campistryWsKey(key); }
+    catch (e) {}
+    return key;
+}
+
 // ============================================================================
 // scheduler_core_leagues.js (FIXED v7 - CHRONOLOGICAL DATE ORDERING)
 //
@@ -425,14 +436,14 @@
                         let payload = history;
                         try {
                             const r = await sb.from('camp_state_kv').select('value')
-                                .eq('camp_id', campId).eq('key', 'leagueHistory').maybeSingle();
+                                .eq('camp_id', campId).eq('key', _wsK('leagueHistory')).maybeSingle();
                             const cur = r && !r.error && r.data && r.data.value;
                             if (cur && typeof cur === 'object' && (cur.gameLog || cur.gamesPerDate)) {
                                 payload = mergeLeagueHistories(history, cur);
                             }
                         } catch (_e) {}
                         const res = await sb.from('camp_state_kv').upsert({
-                            camp_id: campId, key: 'leagueHistory', value: payload,
+                            camp_id: campId, key: _wsK('leagueHistory'), value: payload,
                             updated_at: new Date().toISOString()
                         }, { onConflict: 'camp_id,key' });
                         const err = res && res.error;
@@ -509,7 +520,7 @@
             const sb = (typeof window !== 'undefined') && window.supabase;
             const campId = (typeof window !== 'undefined') && window.CampistryDB && window.CampistryDB.getCampId && window.CampistryDB.getCampId();
             if (!sb || !campId) { console.log('[RegularLeagues] cloud refresh skipped (no client/camp)'); return false; }
-            const q = sb.from('camp_state_kv').select('value').eq('camp_id', campId).eq('key', 'leagueHistory').maybeSingle();
+            const q = sb.from('camp_state_kv').select('value').eq('camp_id', campId).eq('key', _wsK('leagueHistory')).maybeSingle();
             const timeout = new Promise(function (res) { setTimeout(function () { res({ _timedOut: true }); }, 6000); });
             const r = await Promise.race([q, timeout]);
             if (r && r._timedOut) { console.warn('[RegularLeagues] cloud history refresh timed out — using existing copy'); return false; }

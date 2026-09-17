@@ -74,7 +74,14 @@
             '.ws-ft .ws-no{background:#fff;border-color:#CBD5E1;color:#334155}',
             '.ws-ft .ws-yes{background:#4F46E5;color:#fff}',
             '.ws-ft .ws-yes[disabled]{background:#C7D2FE;cursor:not-allowed}',
-            '.ws-ft .ws-danger{background:#DC2626;color:#fff}'
+            '.ws-ft .ws-danger{background:#DC2626;color:#fff}',
+            // The danger button had no disabled style at all, so "Make official"
+            // sat there looking like a live red button while being unclickable.
+            // Reported from testing as the button working before the confirmation
+            // was typed: it was refusing clicks and saying nothing about it, which
+            // is indistinguishable from being broken.
+            '.ws-ft .ws-danger[disabled]{background:#FCA5A5;color:#7F1D1D;cursor:not-allowed}',
+            '.ws-ft button[disabled]{opacity:.85;box-shadow:none}'
         ].join('');
         doc.head.appendChild(st);
     }
@@ -125,14 +132,41 @@
             var no = ovl.querySelector('.ws-no');
 
             function done(val) { ovl.remove(); resolve(val); }
+
+            /**
+             * Does the typed confirmation match, EXACTLY?
+             *
+             * Case-sensitive on purpose. This used to upper-case the input before
+             * comparing, which meant "make official" passed — and the whole point
+             * of a typed confirmation is that it cannot be got through without
+             * reading it. A reflex like that is worth making slightly awkward.
+             */
+            function wordOk() {
+                if (!needsTyping) return true;
+                return String(word && word.value || '').trim() === o.confirmWord;
+            }
+            function syncOk() {
+                var bad = !wordOk();
+                ok.disabled = bad;
+                // Said in the accessibility tree too, not only in the colour.
+                ok.setAttribute('aria-disabled', bad ? 'true' : 'false');
+            }
             if (word) {
-                word.addEventListener('input', function () {
-                    ok.disabled = String(this.value || '').trim().toUpperCase() !== o.confirmWord;
+                word.addEventListener('input', syncOk);
+                word.addEventListener('paste', function () { setTimeout(syncOk, 0); });
+                // Enter in the box is the same as clicking, but only once it would
+                // be allowed to.
+                word.addEventListener('keydown', function (e) {
+                    if (e.key === 'Enter' && wordOk()) ok.click();
                 });
+                syncOk();
             }
             no.onclick = function () { done(null); };
             ok.onclick = function () {
-                if (ok.disabled) return;
+                // Checked again here rather than trusting the attribute: a stray
+                // .click(), an extension, or a devtools poke at `disabled` must not
+                // be able to promote a plan without the words being typed.
+                if (ok.disabled || !wordOk()) return;
                 // With a select, the answer is two things, so it comes back as an
                 // object. Without one it stays a plain string, because every other
                 // caller reads it as one.

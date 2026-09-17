@@ -76,10 +76,21 @@ function save() {
         var campId = db && db.getCampId && db.getCampId();
         if (!db || !db.client || !campId) return;
         db.client.from('camp_state_kv')
-            .upsert({ camp_id: campId, key: 'campistryLuggage', value: lug, updated_at: new Date().toISOString() },
+            .upsert({ camp_id: campId, key: _wsK('campistryLuggage'), value: lug, updated_at: new Date().toISOString() },
                     { onConflict: 'camp_id,key' })
             .then(function (r) { if (r.error) console.warn('[Luggage] Cloud save failed:', r.error.message); });
     } catch (e) { console.warn('[Luggage] Cloud save error:', e); }
+}
+
+/**
+ * The stored key for a logical key: 'campistryLuggage' in live, and
+ * 'ws:<plan>/campistryLuggage' inside a plan. Falls back to the bare key on a
+ * page that never loaded the workspace layer, which is pre-workspaces behaviour.
+ */
+function _wsK(key) {
+    try { if (typeof window.campistryWsKey === 'function') return window.campistryWsKey(key); }
+    catch (e) {}
+    return key;
 }
 
 function camperList() {
