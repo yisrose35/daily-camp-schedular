@@ -314,18 +314,6 @@ test('the bar measures its own height rather than guessing', () => {
     assert.match(UI, /doc\.body\.style\.paddingTop = h \+ 'px';/);
 });
 
-test('the server decides which workspace a tab is in, not the tab', () => {
-    assert.match(UI, /var serverWs = d\.selected \|\| 'live';/);
-    // The tab adopts the server's answer unconditionally. This used to be gated
-    // on the id having changed, which was fine for the id and wrong for the
-    // SESSION riding along with it — a plan re-pointed at a different session
-    // would have kept showing the old half's campers. Adopting it every time is
-    // strictly stronger than the guard it replaced.
-    const fn = UI.slice(UI.indexOf('U.refresh = async function'));
-    assert.match(fn.slice(0, 2000), /campistrySetWorkspace\(serverWs, _state\.session\)/);
-    assert.doesNotMatch(fn.slice(0, 2000), /if \(serverWs !== current\(\)\)/,
-        'adopting the server answer must not be conditional');
-});
 
 test('switching reloads, because a half-hydrated page is the whole problem', () => {
     assert.match(UI, /root\.location\.reload\(\)/);
@@ -527,15 +515,6 @@ test('switching plans carries the new plan’s session across the reload', () =>
         'otherwise the page comes back showing the wrong half on its first render');
 });
 
-test('the session is re-applied even when the plan id has not changed', () => {
-    // A plan can be re-pointed at a different session. Guarding the call on the
-    // id changing would leave presence answering for the old one.
-    const fn = UI.slice(UI.indexOf('U.refresh = async function'));
-    const body = fn.slice(0, 2000);
-    assert.match(body, /campistrySetWorkspace\(serverWs, _state\.session\)/);
-    assert.doesNotMatch(body, /serverWs !== current\(\)[^]*?campistrySetWorkspace/,
-        'the call must not be gated on the id changing');
-});
 
 test('creating a plan ASKS which session, it does not guess from the name', () => {
     // It used to infer this from the plan's label: call it exactly what you call
@@ -632,40 +611,7 @@ test('the files this feature touches are loaded at ONE version everywhere', () =
     });
 });
 
-test('a tab that booted on the wrong workspace reloads instead of mislabelling itself', () => {
-    // The selection is per user ON THE SERVER, but a tab reads it from
-    // sessionStorage, which a brand new browser has none of. So opening the app
-    // fresh while the server has you in a plan boots the page on LIVE's keys and
-    // then draws the plan's bar over it — and a save from there writes live's
-    // bunks into the plan. Worse than showing the wrong data, because it is
-    // labelled as the right data.
-    const fn = UI.slice(UI.indexOf('U.refresh = async function'));
-    const body = fn.slice(0, 4200);
-    assert.match(body, /var bootWs = current\(\);/,
-        'it has to know what the tab actually loaded, captured before it is overwritten');
-    assert.match(body, /if \(serverWs !== bootWs && !_reloadedForWs\)/);
-    assert.match(body, /root\.location\.reload\(\)/,
-        'nothing short of a reload re-reads state hydrated at boot');
 
-    // Captured BEFORE campistrySetWorkspace overwrites it, or it compares a value
-    // with itself and never fires.
-    assert.ok(body.indexOf('var bootWs = current();')
-              < body.indexOf('root.campistrySetWorkspace(serverWs, _state.session)'),
-        'bootWs must be read before the workspace is reassigned');
-});
-
-test('the reload can never become a loop', () => {
-    const fn = UI.slice(UI.indexOf('U.refresh = async function'));
-    const body = fn.slice(0, 4200);
-    // Where sessionStorage does not persist — private windows, blocked site data —
-    // the reload would come back in the same state forever.
-    assert.match(body, /sessionStorage\.getItem\('campistry_workspace'\)/);
-    assert.match(body, /if \(stuck\)/);
-    assert.match(body, /catch \(_\) \{ stuck = true; \}/,
-        'an unreadable sessionStorage must count as stuck, not as persisted');
-    assert.match(body, /_reloadedForWs = true;/);
-    assert.match(UI, /var _reloadedForWs = false;/);
-});
 
 test('a plan called "live" is accepted under a different id, not refused', () => {
     // 'live' is the absence of a prefix, so the NAME is harmless but the id must
@@ -687,4 +633,71 @@ test('the selection outlives the browser, and the bar is what prevents the mista
     // Which is only safe because the bar is unmissable and on every page.
     assert.match(UI, /position:fixed/);
     assert.match(UI, /PLANNING: /);
+});
+
+// ── which plan a tab is in ─────────────────────────────────────────────────
+
+test('a browser that was just opened is in LIVE, always', () => {
+    // The one way this feature could damage a running camp with nobody doing
+    // anything wrong: being quietly returned to a plan you were in last week and
+    // editing it believing it was the camp. So the tab's workspace comes from
+    // sessionStorage and NOWHERE else, and a fresh browser has none.
+    const fn = HOOKS.slice(HOOKS.indexOf("var _wsCurrent = 'live';"));
+    assert.match(fn.slice(0, 400), /sessionStorage\.getItem\('campistry_workspace'\)/);
+    assert.ok(!/localStorage\.getItem\('campistry_workspace'\)/.test(HOOKS),
+        'localStorage would survive closing the browser, which is the thing to avoid');
+
+    // And refresh() must not put it back by reading the server's record.
+    const r = UI.slice(UI.indexOf('U.refresh = async function'));
+    const body = r.slice(0, 3000);
+    assert.match(body, /var cur = current\(\);/,
+        'the tab decides, from its own stored value');
+    assert.doesNotMatch(body, /campistrySetWorkspace\(serverWs/,
+        'adopting the server selection is what used to drag a fresh browser into a plan');
+    assert.doesNotMatch(body, /var serverWs = d\.selected/,
+        'the server record is a record, not an instruction');
+});
+
+test('the server is still authoritative about whether the plan EXISTS', () => {
+    // Promoted or deleted from another tab and the plan is gone. Carrying on
+    // would write to keys nothing owns any more.
+    const fn = UI.slice(UI.indexOf('U.refresh = async function'));
+    const body = fn.slice(0, 3000);
+    assert.match(body, /if \(cur !== 'live' && !found\)/);
+    assert.match(body, /campistrySetWorkspace\('live', ''\)/);
+    assert.match(body, /root\.location\.reload\(\)/,
+        'the page is still holding the vanished plan\u2019s data');
+    assert.match(body, /_reloadedForWs/, 'and it must not be able to loop');
+    assert.match(UI, /var _reloadedForWs = false;/);
+});
+
+test('the session is re-applied even when the plan id has not changed', () => {
+    // A plan can be re-pointed at a different session. Presence reads the
+    // session, not the id, so skipping this would keep answering for the old one.
+    const fn = UI.slice(UI.indexOf('U.refresh = async function'));
+    const body = fn.slice(0, fn.indexOf('U.switchTo'));
+    assert.match(body, /campistrySetWorkspace\(cur, _state\.session\)/);
+    // And presence memoizes its as-of date, so it has to be told.
+    assert.match(body, /if \(wasSession !== _state\.session\)/);
+    assert.match(body, /root\.CampistryPresence\.refresh\(\)/);
+});
+
+test('the till, the nurse and the counsellor app are always LIVE', () => {
+    // These pages run the camp that is happening today. They deliberately load
+    // neither the workspace rule nor integration_hooks, so wsKey is never in
+    // play (bare keys = live) and presence cannot see a plan (as-of = today).
+    //
+    // That is coherent only as long as it stays BOTH: add integration_hooks to
+    // the till for sync and it would start filtering campers by a plan's session
+    // while still showing live's data — the exact mismatch this feature exists
+    // to prevent, arriving through a script tag.
+    ['campistry_health.html', 'campistry_snacks.html',
+     'campistry_snacks_pos.html', 'campistry_lite.html'].forEach(page => {
+        const src = read(page);
+        assert.ok(!/campistry_workspace\.js/.test(src),
+            page + ' must not load the workspace rule');
+        assert.ok(!/integration_hooks\.js/.test(src),
+            page + ' must not load integration_hooks, or presence would see a plan '
+                 + 'while the page still reads live');
+    });
 });

@@ -356,35 +356,30 @@ These are the edge cases worth deliberately trying.
 | **Expect** | Live's rotation counts are **unchanged**. Generating writes rotation history as a side effect, which is why that history is sandboxed. |
 | **If it fails** | The rotation keys in `OPERATIONAL` in `campistry_workspace.js`. |
 
-### The fresh-browser case — test this one carefully
-
-This found a real bug, now fixed. It's the most valuable check in this file.
+### You always start in live — test this one carefully
 
 | | |
 |---|---|
-| **Do** | While in a plan, **close the browser entirely** (not just the tab). Reopen it and go to the dashboard. Watch what happens for the first few seconds. |
-| **Expect** | You end up **back in the plan**, with the bar. The page may reload itself once on the way — that is the fix working, not a glitch. |
-| **If it fails** | The failure to look for is specific and quiet: **the plan's bar sitting on top of live's data.** If the bar says `PLANNING: …` but the bunks and routes on screen are live's, that's the bug. `U.refresh` in `campistry_workspace_ui.js`. |
-
-Why: the selection is stored **per user on the server**, so it outlives the
-browser — but a tab reads it from `sessionStorage`, which a fresh browser hasn't
-got. So the page used to boot on **live's** keys and then get the plan's bar
-drawn over it, and a save from that page would have written live's bunks into the
-plan. It now reloads once so the data matches the label.
-
-**Verify it did not just loop:** the page should reload **exactly once**, not
-repeatedly. If it reload-loops, say so immediately.
+| **Do** | While in a plan, **close the browser entirely** (not just the tab). Reopen it and go to the dashboard. |
+| **Expect** | You are in **live** — no bar, live's bunks and routes. Every time, no exceptions. |
+| **If it fails** | If you come back into the plan, `U.refresh` in `campistry_workspace_ui.js` is reading the server's selection as an instruction again. |
 
 | | |
 |---|---|
-| **Do** | Repeat the above in a **private/incognito window**, where site data may be blocked. |
-| **Expect** | No reload loop. You may get a toast saying you're seeing the wrong session's data and should reload — that's the deliberate degraded path, not a failure. |
+| **Do** | Open a **brand new tab** to the dashboard while another tab sits inside a plan. |
+| **Expect** | The new tab is in **live**. The old tab stays in its plan. Two tabs in different workspaces is fine and intended. |
 
-> **A design question for you, not a test.** Coming back into the plan you left
-> is one reasonable behaviour; landing in live every time is the other. Right now
-> it returns you to the plan, and the bar is what stops you mistaking it for
-> live. If you'd rather a fresh browser always started in live, say so — it's a
-> small change to `select_workspace`.
+The failure to watch for in both cases is specific and quiet: **a plan's bar
+sitting on top of live's data**, or the reverse. If the bar says `PLANNING: …`
+but the bunks on screen are live's — or there's no bar but the bunks are the
+plan's — stop and report it. That mismatch is worse than either wrong screen on
+its own, because it is wrong data under the right name.
+
+| | |
+|---|---|
+| **Do** | Be inside a plan in tab A. In tab B, **delete that plan**. Go back to tab A and interact with it. |
+| **Expect** | Tab A reloads itself **once** and lands in live. It must not keep writing to a plan that no longer exists. |
+| **If it fails** | The `cur !== 'live' && !found` branch in `U.refresh`. If it reload-**loops**, report immediately — the `_reloadedForWs` guard has gone. |
 
 ---
 

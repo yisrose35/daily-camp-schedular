@@ -170,57 +170,57 @@
             if (d && d.success) {
                 _state.workspaces = d.workspaces || [];
                 _state.loaded = true;
-                // The SERVER decides what this user is looking at. If it says
-                // live — because the sandbox was promoted or deleted while this
-                // tab sat open — the tab moves to live rather than carrying on
-                // writing to keys nothing owns any more.
-                var serverWs = d.selected || 'live';
-                // What this tab actually LOADED ITS DATA WITH, captured before we
-                // overwrite it below.
-                var bootWs = current();
-                var found = (_state.workspaces || []).filter(function (w) { return w.id === serverWs; })[0];
-                _state.selected = serverWs;
-                _state.label = found ? found.label : '';
-                _state.session = (found && found.session) || '';
-                // Set the workspace even when the id has not changed: the SESSION
-                // may have (a plan can be pointed at a different one), and presence
-                // reads the session, not the id.
-                if (typeof root.campistrySetWorkspace === 'function') {
-                    root.campistrySetWorkspace(serverWs, _state.session);
-                }
 
-                // THE TAB BOOTED ON THE WRONG WORKSPACE'S DATA.
+                // YOU ALWAYS START IN LIVE.
                 //
-                // The selection is kept per user ON THE SERVER, but this tab reads
-                // it out of sessionStorage, which a brand new browser does not have.
-                // So opening the app fresh while the server has you in a plan boots
-                // the whole page on LIVE's keys, and then this function puts the
-                // plan's bar on top of it — a page reading live, labelled as a plan.
-                // Saving from there would write live's bunks into the plan.
+                // Which plan this TAB is in comes from sessionStorage and nowhere
+                // else, so a browser that was just opened — which has none — is in
+                // live, every time. Being quietly returned to a plan you were in
+                // last week is the one way this feature could damage a running camp
+                // without anybody doing anything wrong.
                 //
-                // Same cure as switchTo's: reload, because every page hydrates its
-                // operational state once at boot and nothing short of a reload
-                // re-reads it.
-                if (serverWs !== bootWs && !_reloadedForWs) {
-                    // Only if the choice actually persisted. Where sessionStorage is
-                    // unavailable — private windows, blocked site data — the reload
-                    // would come back in exactly the same state and loop forever, so
-                    // there we stay put and say so. The bar is still correct; it is
-                    // the page under it that is stale.
-                    var stuck = false;
-                    try { stuck = (sessionStorage.getItem('campistry_workspace') || 'live') !== serverWs; }
-                    catch (_) { stuck = true; }
-                    if (stuck) {
-                        if (root.console) {
-                            root.console.warn('[Workspace] this tab loaded "' + bootWs + '" but the '
-                                + 'server has you in "' + serverWs + '", and the choice will not '
-                                + 'persist here — reload manually to see the right data.');
-                        }
-                        trouble('Showing the wrong session’s data — please reload.');
-                    } else {
+                // The server still records the choice (select_workspace), but as a
+                // record, not an instruction: reading it back as authority is what
+                // used to boot a fresh browser on live's keys and then hang a
+                // plan's bar over them.
+                var cur = current();
+                var found = (_state.workspaces || []).filter(function (w) { return w.id === cur; })[0];
+
+                // The one thing the server IS authoritative about: whether the plan
+                // this tab is in still exists. Promoted or deleted from another tab
+                // and it does not — carrying on would write to keys nothing owns.
+                if (cur !== 'live' && !found) {
+                    if (typeof root.campistrySetWorkspace === 'function') {
+                        root.campistrySetWorkspace('live', '');
+                    }
+                    if (!_reloadedForWs) {
                         _reloadedForWs = true;
+                        // Reload for the same reason switchTo does: this page is
+                        // still holding the vanished plan's data.
                         setTimeout(function () { root.location.reload(); }, 40);
                         return _state;
+                    }
+                    _state.selected = 'live'; _state.label = ''; _state.session = '';
+                } else {
+                    _state.selected = cur;
+                    _state.label = found ? found.label : '';
+                    var wasSession = _state.session;
+                    _state.session = (found && found.session) || '';
+                    // Re-applied even when the id has not changed: a plan can be
+                    // pointed at a different session, and presence reads the
+                    // session, not the id.
+                    if (typeof root.campistrySetWorkspace === 'function') {
+                        root.campistrySetWorkspace(cur, _state.session);
+                    }
+                    // Presence memoizes its as-of date, so a session that changed
+                    // under us has to be told, or lists keep answering for the old
+                    // one until the memo happens to expire.
+                    if (wasSession !== _state.session) {
+                        try {
+                            if (root.CampistryPresence && root.CampistryPresence.refresh) {
+                                root.CampistryPresence.refresh();
+                            }
+                        } catch (_) {}
                     }
                 }
             }
