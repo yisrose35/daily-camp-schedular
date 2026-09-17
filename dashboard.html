@@ -448,8 +448,11 @@
             </div>
 
             <!-- SESSION WORKSPACES — plan next half without touching this one.
-                 Owner-only; the card hides itself for anybody else, and the
-                 server refuses create/promote regardless of what the UI shows. -->
+                 The LIST is staff-level, because a scheduler has to be able to see
+                 which session they are in. The MANAGEMENT buttons are owner-only
+                 and are hidden for anybody else (list_workspaces returns
+                 is_owner); the server refuses create/promote/delete regardless of
+                 what the UI shows. -->
             <div class="dashboard-card" id="workspacesCard" style="display:none;">
                 <div class="card-header">
                     <h2>Plan a Session</h2>

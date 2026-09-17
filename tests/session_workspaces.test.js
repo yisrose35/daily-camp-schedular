@@ -254,6 +254,25 @@ test('create, promote and delete are owner-only; listing is staff', () => {
     });
 });
 
+test('the client is told whether it may manage, and hides the buttons if not', () => {
+    // Reading the list is staff-level; creating, promoting and deleting are
+    // owner-only. A button that comes back "not_owner" teaches people to
+    // distrust the screen.
+    assert.match(SQL, /'is_owner', public\._workspace_is_owner\(p_camp_id\),/);
+    assert.match(ADMIN, /var canManage = \(d\.is_owner === true\);/);
+    assert.match(ADMIN, /if \(addBtn\) addBtn\.style\.display = canManage \? '' : 'none';/);
+    // The per-row Make official / Delete pair is behind the same flag.
+    assert.match(ADMIN, /\(canManage\s*\n?\s*\? '<button[^']*promote\(/);
+    assert.match(ADMIN, /: ''\)\s*\n\s*\+ '<\/div>';/);
+});
+
+test('a non-owner still sees which session they are in', () => {
+    // The list itself is not hidden — that is the one thing a scheduler needs.
+    const fn = ADMIN.slice(ADMIN.indexOf('var canManage'));
+    assert.match(fn.slice(0, 260), /card\.style\.display = '';/,
+        'the card must still show for staff');
+});
+
 test('live can never be deleted', () => {
     const fn = SQL.slice(SQL.indexOf('FUNCTION public.delete_workspace'));
     assert.match(fn, /IF p_id IS NULL OR p_id = 'live' THEN[\s\S]{0,400}'cannot_delete_live'/);

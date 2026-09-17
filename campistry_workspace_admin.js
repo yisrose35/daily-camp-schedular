@@ -65,10 +65,17 @@
             d = res && res.data;
         } catch (e) { card.style.display = 'none'; return; }
 
-        // not_authorized / not_owner: the card simply is not there. The server
-        // refuses the writes anyway, so this is tidiness rather than security.
         if (!d || !d.success) { card.style.display = 'none'; return; }
+
+        // Reading the list is staff-level, because a scheduler has to be able to
+        // see which session they are in. MANAGING workspaces is owner-only, and
+        // the server enforces that — so a non-owner who got this far is shown the
+        // list and none of the buttons. Offering a button that comes back
+        // "not_owner" teaches people to distrust the screen.
+        var canManage = (d.is_owner === true);
         card.style.display = '';
+        var addBtn = card.querySelector('.card-header .btn-edit');
+        if (addBtn) addBtn.style.display = canManage ? '' : 'none';
 
         var current = (typeof root.campistryWorkspace === 'function') ? root.campistryWorkspace() : 'live';
         var rows = d.workspaces || [];
@@ -101,8 +108,10 @@
                // Making a PAST session official again is legitimate — it is how
                // you undo a promotion you did a day early — so it is offered,
                // with the same confirmation.
-               + '<button class="btn-edit" type="button" onclick="CampistryWorkspaceAdmin.promote(\'' + esc(w.id) + '\',\'' + esc(w.label) + '\')">Make official</button>'
-               + '<button class="btn-edit" type="button" style="color:#dc2626" onclick="CampistryWorkspaceAdmin.remove(\'' + esc(w.id) + '\',\'' + esc(w.label) + '\')">Delete</button>'
+               + (canManage
+                    ? '<button class="btn-edit" type="button" onclick="CampistryWorkspaceAdmin.promote(\'' + esc(w.id) + '\',\'' + esc(w.label) + '\')">Make official</button>'
+                    + '<button class="btn-edit" type="button" style="color:#dc2626" onclick="CampistryWorkspaceAdmin.remove(\'' + esc(w.id) + '\',\'' + esc(w.label) + '\')">Delete</button>'
+                    : '')
                + '</div>';
         });
 

@@ -351,6 +351,11 @@ BEGIN
 
     RETURN jsonb_build_object('success', true,
         'workspaces', v_rows,
+        -- Whether this caller may CREATE, PROMOTE or DELETE. Reading the list is
+        -- staff-level (a scheduler has to know which session they are in), but
+        -- managing workspaces is owner-only, and the client needs to be told
+        -- which so it does not offer buttons that will be refused.
+        'is_owner', public._workspace_is_owner(p_camp_id),
         -- A selection pointing at a workspace that no longer exists (promoted,
         -- or deleted) resolves to live rather than to nothing.
         'selected', CASE
