@@ -1386,7 +1386,60 @@ function getLeagues(){
 // A 'view' section renders but must refuse writes. campistry_access_sections.js
 // disables controls broadly; these are the explicit checks on the handlers that
 // actually move money, so a stale DOM can't get through.
+/**
+ * Which Me sections write MONEY OR IDENTITY, and are therefore live-only.
+ *
+ * These map onto the keys campistry_workspace.js calls GLOBAL: families, the
+ * ledger, payroll, canteen and shop balances are facts about the world, shared by
+ * every workspace, and there is no such thing as a draft payment.
+ */
+var _LIVE_ONLY_SECTIONS={billing:1,payroll:1,campers:1,families:1,registration:1,
+                         snacks:1,shop:1,deposits:1};
+/**
+ * Refuse a money edit made from inside a plan, BEFORE the form opens.
+ *
+ * The sync layer already refuses the write, so nothing could ever have been
+ * banked into a draft — but it refused it at the end, after somebody had filled
+ * in an amount and pressed Record Payment and been given no reason to think it
+ * had not worked. Reported from live testing as Add Charge, Record Payment and
+ * Issue Credit staying enabled inside a plan with no live-only message.
+ *
+ * Stopping at the door says the same thing at the moment it is useful.
+ */
+function _liveOnlyEdit(section,whatFor){
+    if(!_LIVE_ONLY_SECTIONS[section])return true;
+    var ws='';
+    try{ if(typeof window.campistryWorkspace==='function')ws=window.campistryWorkspace()||''; }catch(e){}
+    if(!ws||ws==='live')return true;
+    var label=(whatFor||'That')+' is always live';
+    var msg=label+' — campers, families and payments are never part of a plan. '
+           +'Switch back to the live camp from the bar at the top of the page.';
+    try{ if(typeof toast==='function'){toast(msg,'error');return false;} }catch(e){}
+    try{ if(typeof showModal==='function'){showModal('Live only','<p style="margin:0">'+esc(msg)+'</p>');return false;} }catch(e){}
+    if(window.console)window.console.warn('[Me] '+msg);
+    return false;
+}
+/**
+ * An amber strip for a money page being viewed from inside a plan.
+ *
+ * Returns '' in live, so a camp that never uses session planning sees nothing.
+ */
+function _liveOnlyNotice(what){
+    var ws='';
+    try{ if(typeof window.campistryWorkspace==='function')ws=window.campistryWorkspace()||''; }catch(e){}
+    if(!ws||ws==='live')return '';
+    return '<div style="background:#FFFBEB;border:1px solid #FDE68A;color:#92400E;'
+         +'padding:10px 13px;border-radius:9px;font-size:.85rem;line-height:1.55;'
+         +'margin-bottom:14px"><strong>'+esc(what||'This')+' is always the live camp.</strong> '
+         +'Campers, families and payments are never part of a plan, so nothing here can '
+         +'be changed while you are in one. Switch back to the live camp from the bar at '
+         +'the top of the page.</div>';
+}
 function _secEdit(section,whatFor){
+    // The workspace check comes FIRST. A person in a plan who also lacks the
+    // permission should hear the reason they can act on, and switching to live is
+    // the one they can.
+    if(!_liveOnlyEdit(section,whatFor))return false;
     var S=window.CampistrySections;
     if(!S)return true;
     return S.requireEdit(section,whatFor);
@@ -14171,7 +14224,11 @@ function renderBilling(){
     var _depPending=_dep?_dep.totalPending():0;
     var _depPendingAmt=_dep?_dep.pendingAmount():0;
     var billMoreId='billHdMoreMenu';
-    var h='<div class="sec-hd"><div><h2 class="sec-title">Billing & Payments</h2><p class="sec-desc">'+famList.length+' account'+(famList.length!==1?'s':'')+' · '+cardsOnFile+' card'+(cardsOnFile!==1?'s':'')+' on file · '+finPayments.length+' payment'+(finPayments.length!==1?'s':'')+'</p></div><div class="sec-actions">'
+    // SAID BEFORE ANYTHING IS CLICKED. Every action here refuses inside a plan,
+    // but a refusal arrives after somebody has filled in an amount; this is the
+    // same fact delivered while it can still save them the trouble.
+    var h=_liveOnlyNotice('Billing')
+        +'<div class="sec-hd"><div><h2 class="sec-title">Billing & Payments</h2><p class="sec-desc">'+famList.length+' account'+(famList.length!==1?'s':'')+' · '+cardsOnFile+' card'+(cardsOnFile!==1?'s':'')+' on file · '+finPayments.length+' payment'+(finPayments.length!==1?'s':'')+'</p></div><div class="sec-actions">'
         +'<button class="me-btn me-btn--pri" onclick="CampistryMe.openPaymentModal()">Record Payment</button>'
         +(cardsOnFile>0?'<button class="me-btn me-btn--sec" onclick="CampistryMe.batchCharge()">Batch Charge</button>':'')
         +'<button class="me-btn me-btn--sec" onclick="CampistryMe.openDepositInbox()">Bank Deposits'+(_depPending>0?' ('+_depPending+')':'')+'</button>'
@@ -14552,6 +14609,9 @@ function addCharge(){
     if(!_secEdit('billing','Adding a charge'))return;
 addChargeForFamily(null)}
 function addChargeForFamily(famKey){
+    // Gated HERE and not only in addCharge(): the per-family More menu calls this
+    // one directly, so the sibling's check never ran for it. Cheap to repeat.
+    if(!_secEdit('billing','Adding a charge'))return;
     var famOpts='';
     if(famKey){
         var f=families[famKey];
@@ -14820,6 +14880,7 @@ function openUnmatchedPaymentsModal(){
 }
 function issueCredit(){issueCreditForFamily(null)}
 function issueCreditForFamily(famKey){
+    if(!_secEdit('billing','Issuing a credit or refund'))return;
     var famOpts='';
     if(famKey){
         var f=families[famKey];

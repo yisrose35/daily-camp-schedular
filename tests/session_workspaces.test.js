@@ -923,3 +923,62 @@ test('the files that talk to camp_state_kv DIRECTLY route their operational keys
     assert.ok((lg.match(/_wsK\('leagueHistory'\)/g) || []).length >= 3,
         'every leagueHistory access must be routed, reads included');
 });
+
+// ───────────────────────────────────────────────────────────────────────────
+// MONEY ACTIONS REFUSE AT THE DOOR, NOT AFTER THE FORM.
+//
+// The sync layer always refused these writes, so nothing could be banked into a
+// draft — but it refused at the END, after somebody had filled in an amount and
+// pressed Record Payment and been given no reason to think it had not worked.
+// Reported from live testing as Add Charge, Record Payment and Issue Credit
+// staying enabled inside a plan with no live-only message.
+// ───────────────────────────────────────────────────────────────────────────
+
+test('every money action in Me is gated, including the ones called direct', () => {
+    const ME = read('campistry_me.js');
+
+    // The guard lives in _secEdit, which every gated action already funnels
+    // through — one place rather than one per button.
+    assert.match(ME, /function _liveOnlyEdit\(section,whatFor\)/);
+    const se = ME.slice(ME.indexOf('function _secEdit(section,whatFor){'));
+    assert.match(se.slice(0, 500), /if\(!_liveOnlyEdit\(section,whatFor\)\)return false;/,
+        'the workspace check must run before the permission check');
+
+    // Every entry point, including the two the per-family More menu calls
+    // DIRECTLY — those skipped the check their no-argument siblings applied,
+    // which was a permission hole as much as a workspace one.
+    const lines = ME.split('\n');
+    ['finAddPayment', 'openPaymentForFamily', 'addCharge', 'addChargeForFamily',
+     'issueCreditForFamily'].forEach(fn => {
+        const i = lines.findIndex(l => new RegExp('^function ' + fn + '\\s*\\(').test(l));
+        assert.ok(i >= 0, fn + ' has gone');
+        assert.match(lines.slice(i, i + 5).join('\n'), /_secEdit\(/,
+            fn + ' must gate before it opens anything');
+    });
+});
+
+test('the money sections are exactly the global keys', () => {
+    // If these two lists drift, either a plan can open a money form it will then
+    // be refused, or an operational edit gets blocked for no reason.
+    const ME = read('campistry_me.js');
+    const m = ME.match(/var _LIVE_ONLY_SECTIONS=\{([^}]*)\}/);
+    assert.ok(m, 'the live-only section list has gone');
+    ['billing', 'payroll', 'campers', 'families', 'registration',
+     'snacks', 'shop'].forEach(sec =>
+        assert.match(m[1], new RegExp(sec + ':1'), sec + ' writes money or identity'));
+    // And an operational section must NOT be in there — planning is the point.
+    ['bunks', 'divisions', 'fields', 'schedule', 'periods'].forEach(sec =>
+        assert.ok(!new RegExp(sec + ':1').test(m[1]),
+            sec + ' is operational and must stay editable inside a plan'));
+});
+
+test('a money page says it is live-only before anything is clicked', () => {
+    const ME = read('campistry_me.js');
+    assert.match(ME, /function _liveOnlyNotice\(what\)/);
+    const fn = ME.slice(ME.indexOf('function _liveOnlyNotice(what)'));
+    // Nothing at all in live: a camp that never plans a session must not be able
+    // to tell this feature exists.
+    assert.match(fn.slice(0, 600), /if\(!ws\|\|ws==='live'\)return '';/);
+    assert.match(ME, /var h=_liveOnlyNotice\('Billing'\)/,
+        'Billing must actually render it');
+});
