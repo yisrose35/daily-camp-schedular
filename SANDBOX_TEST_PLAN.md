@@ -107,6 +107,131 @@ still be running the old files.
 
 ---
 
+## Round 2 — retest these first
+
+A first pass of this plan found real bugs. They are fixed; **these are the checks
+that prove it**, and they are worth doing before the rest of the file because two
+of them were root causes with knock-on effects.
+
+Everything below needs Step 0 done, including **both** migrations.
+
+### R1. A plan remembers it is a plan, across reloads
+
+The root cause was the local cache, not startup: `campGlobalSettings_v1` and the
+IndexedDB snapshot beside it are one cache under one name, read raw in 163 places,
+and nothing in them recorded which workspace they held. So a plan's bunks and
+live's took turns overwriting each other.
+
+| | |
+|---|---|
+| **Do** | In a plan, add a division. Reload the page. Reload a second page. |
+| **Expect** | The division is still there, every time. |
+
+| | |
+|---|---|
+| **Do** | Switch to live. |
+| **Expect** | The division is **not** there, and live's own divisions are intact. |
+
+| | |
+|---|---|
+| **Do** | Switch back into the plan. |
+| **Expect** | The division is back. |
+
+| | |
+|---|---|
+| **Do** | Watch the browser console while switching. |
+| **Expect** | A line like *"stored snapshot belonged to X, now in Y — dropped its operational keys"*. That is the fix working out loud. |
+| **If it fails** | `_scrubForeignWorkspace` and the boot scrub in `integration_hooks.js`. |
+
+### R2. Money refuses before the form, not after
+
+| | |
+|---|---|
+| **Do** | In a plan, open **Me → Billing**. |
+| **Expect** | An amber strip saying Billing is always the live camp. |
+
+| | |
+|---|---|
+| **Do** | Click **Add Charge**, then **Record Payment**, then **Issue Credit/Refund**. |
+| **Expect** | Each one refuses immediately with a live-only message. **No form opens.** |
+
+| | |
+|---|---|
+| **Do** | Open a single family's row and use its **⋯ → Add Charge** and **⋯ → Issue Credit/Refund**. |
+| **Expect** | Refused too. These were reachable directly and skipped the check entirely — a permission hole as well as a workspace one, so it is worth testing both routes. |
+
+| | |
+|---|---|
+| **Do** | Switch to live and try all five again. |
+| **Expect** | All work normally. No strip, no refusal. |
+
+### R3. Make official looks as disabled as it is
+
+The button was always unclickable; it just had no disabled style, so it sat there
+as a live red button silently ignoring clicks.
+
+| | |
+|---|---|
+| **Do** | Open **Make official**. Look at the button before typing. |
+| **Expect** | Visibly **greyed/muted and not clickable** — not full red. |
+
+| | |
+|---|---|
+| **Do** | Type `make official` in lower case. |
+| **Expect** | Still disabled. The comparison is case-sensitive on purpose: a typed confirmation exists so it cannot be got past without reading it. |
+
+| | |
+|---|---|
+| **Do** | Type `MAKE OFFICIAL`. |
+| **Expect** | It becomes clickable, and the warning text is still on screen while you type. |
+
+### R4. Health and Snacks know which session they are in
+
+| | |
+|---|---|
+| **Do** | In a 2nd Half plan, open **Health** and then **Snacks**. |
+| **Expect** | The planning bar is on both, and only 2nd Half's campers are listed. |
+
+| | |
+|---|---|
+| **Do** | In the plan, try to take a canteen payment or record a shop order on Snacks. |
+| **Expect** | **Refused**, naming live. This is intended, not a bug: canteen and shop balances are real money and shared by every workspace. A till cannot sell from inside a plan — switch to live. |
+
+| | |
+|---|---|
+| **Do** | Open the **register** (`campistry_snacks_pos.html`) while a plan is selected. |
+| **Expect** | **No bar**, today's campers, and selling works normally. It is deliberately live-only — it is held by somebody serving a queue. |
+
+### R5. Schedules and rotation counts stay in the plan
+
+Needs migration **195**. Nothing in the client changed to make this visible, so it
+has to be checked directly.
+
+| | |
+|---|---|
+| **Do** | In the plan, **generate a schedule**. Switch to live, open the same dates. |
+| **Expect** | Live's schedule for those dates is **unchanged**. |
+
+| | |
+|---|---|
+| **Do** | Run `select workspace, date_key, count(*) from daily_schedules where camp_id='<uuid>' group by 1,2 order by 1,2;` |
+| **Expect** | The generated rows carry the **plan's id**, not `live`. |
+
+| | |
+|---|---|
+| **Do** | In live, open the rotation/fairness report. |
+| **Expect** | Unchanged by the plan's generation. This one matters most of the five — it is a guarantee the code stated in a comment and did not keep. |
+
+### R6. The retest the first round asked for
+
+| | |
+|---|---|
+| **Do** | In a plan, add a division. Reload a couple of pages. **Make it official.** |
+| **Expect** | Live has the division, and still has it after a reload. The archive holds what live had before. |
+| **If it fails** | `promote_workspace` in migration 195. Worth knowing: that function had five regressions from being retyped rather than copied, all now fixed, so a failure here is new information rather than the same bug. |
+
+---
+
 ## Step 1 — The card appears, and only for the right people
 
 | | |
