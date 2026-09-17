@@ -1737,9 +1737,17 @@
     //
     // `_wsCurrent` is the workspace this BROWSER is looking at. It is set from
     // the server (select_workspace / list_workspaces) and mirrored into
-    // sessionStorage so a page navigation inside the same tab keeps it — but NOT
-    // localStorage, because a sandbox that survives closing the browser is a
-    // sandbox somebody comes back to next week and mistakes for live.
+    // sessionStorage so a page navigation inside the same tab keeps it.
+    //
+    // sessionStorage rather than localStorage because this is a per-TAB cache of a
+    // per-user choice, and a tab is the unit that hydrates its data once at boot.
+    // It is NOT what stops somebody mistaking a plan for live — the choice is kept
+    // per user on the server and does outlive the browser, so opening the app
+    // fresh puts you back in the plan you were last in. What prevents the mistake
+    // is the bar, which is on every page and impossible to miss. The one thing
+    // this cache must not do is disagree with the server about which keys the page
+    // already loaded; campistry_workspace_ui's refresh() reloads the tab when it
+    // catches exactly that.
     var _wsCurrent = 'live';
     try {
         var _wsSaved = sessionStorage.getItem('campistry_workspace');

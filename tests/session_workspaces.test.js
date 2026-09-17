@@ -599,3 +599,92 @@ test('Go loads the presence modules it now depends on, in order', () => {
     assert.ok(GO.indexOf('campistry_enrollment_window.js') < GO.indexOf('campistry_presence.js'));
     assert.ok(GO.indexOf('campistry_presence.js') < GO.indexOf('campistry_go.js'));
 });
+
+test('the files this feature touches are loaded at ONE version everywhere', () => {
+    // Browsers cache by URL. Changing a file without changing its ?v= means some
+    // pages keep serving the old one, and the symptom is the feature working on
+    // one page and not another — which reads exactly like a logic bug and is not.
+    //
+    // Deliberately scoped to the files this feature touches. Version drift is a
+    // pre-existing, repo-wide condition across ~28 files; fixing all of it is a
+    // separate job, and a test that failed on every one of them would be turned
+    // off rather than fixed.
+    const glob = require('node:fs').readdirSync(ROOT).filter(f => f.endsWith('.html'));
+    const MINE = ['campistry_presence.js', 'campistry_enrollment_window.js',
+                  'integration_hooks.js', 'campistry_me.js', 'campistry_go.js',
+                  'campistry_workspace_ui.js', 'campistry_workspace_admin.js'];
+    const seen = {};
+    glob.forEach(page => {
+        const src = read(page);
+        MINE.forEach(f => {
+            const re = new RegExp('src="' + f.replace(/\./g, '\\.') + '\\?v=([0-9a-z-]+)"', 'g');
+            let m;
+            while ((m = re.exec(src)) !== null) {
+                (seen[f] = seen[f] || {})[m[1]] = (seen[f][m[1]] || []).concat(page);
+            }
+        });
+    });
+    Object.keys(seen).forEach(f => {
+        const versions = Object.keys(seen[f]);
+        assert.strictEqual(versions.length, 1,
+            f + ' is loaded at ' + versions.length + ' different versions: '
+            + versions.map(v => v + ' (' + seen[f][v].join(', ') + ')').join(' vs '));
+    });
+});
+
+test('a tab that booted on the wrong workspace reloads instead of mislabelling itself', () => {
+    // The selection is per user ON THE SERVER, but a tab reads it from
+    // sessionStorage, which a brand new browser has none of. So opening the app
+    // fresh while the server has you in a plan boots the page on LIVE's keys and
+    // then draws the plan's bar over it — and a save from there writes live's
+    // bunks into the plan. Worse than showing the wrong data, because it is
+    // labelled as the right data.
+    const fn = UI.slice(UI.indexOf('U.refresh = async function'));
+    const body = fn.slice(0, 4200);
+    assert.match(body, /var bootWs = current\(\);/,
+        'it has to know what the tab actually loaded, captured before it is overwritten');
+    assert.match(body, /if \(serverWs !== bootWs && !_reloadedForWs\)/);
+    assert.match(body, /root\.location\.reload\(\)/,
+        'nothing short of a reload re-reads state hydrated at boot');
+
+    // Captured BEFORE campistrySetWorkspace overwrites it, or it compares a value
+    // with itself and never fires.
+    assert.ok(body.indexOf('var bootWs = current();')
+              < body.indexOf('root.campistrySetWorkspace(serverWs, _state.session)'),
+        'bootWs must be read before the workspace is reassigned');
+});
+
+test('the reload can never become a loop', () => {
+    const fn = UI.slice(UI.indexOf('U.refresh = async function'));
+    const body = fn.slice(0, 4200);
+    // Where sessionStorage does not persist — private windows, blocked site data —
+    // the reload would come back in the same state forever.
+    assert.match(body, /sessionStorage\.getItem\('campistry_workspace'\)/);
+    assert.match(body, /if \(stuck\)/);
+    assert.match(body, /catch \(_\) \{ stuck = true; \}/,
+        'an unreadable sessionStorage must count as stuck, not as persisted');
+    assert.match(body, /_reloadedForWs = true;/);
+    assert.match(UI, /var _reloadedForWs = false;/);
+});
+
+test('a plan called "live" is accepted under a different id, not refused', () => {
+    // 'live' is the absence of a prefix, so the NAME is harmless but the id must
+    // not collide. idFor renames it rather than rejecting it, which is why the
+    // CHECK constraint is a backstop and not the mechanism.
+    assert.strictEqual(W.idFor('live'), 'ws_live');
+    assert.strictEqual(W.idFor('LIVE'), 'ws_live');
+    assert.notStrictEqual(W.idFor('live'), 'live');
+    // And the key built from it is a real sandbox key.
+    assert.strictEqual(W.keyFor('app1', W.idFor('live')), 'ws:ws_live/app1');
+});
+
+test('the selection outlives the browser, and the bar is what prevents the mistake', () => {
+    // Documented because the opposite is the intuitive guess, and the test plan
+    // asserted the wrong thing until this was checked: select_workspace stores the
+    // choice per user server-side, so reopening the app returns you to the plan.
+    assert.match(SQL, /INSERT INTO camp_workspace_selection \(camp_id, user_id, workspace, updated_at\)/);
+    assert.match(SQL, /ON CONFLICT \(camp_id, user_id\) DO UPDATE/);
+    // Which is only safe because the bar is unmissable and on every page.
+    assert.match(UI, /position:fixed/);
+    assert.match(UI, /PLANNING: /);
+});

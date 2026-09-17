@@ -26,6 +26,11 @@
     var BAR_ID = 'campistry-workspace-bar';
     var _state = { workspaces: [], selected: 'live', label: '', session: '',
                    loaded: false, canManage: false };
+    // Set once, so a reload to pick up the server's workspace can never become a
+    // loop. It does not survive the reload it triggers, which is the point: after
+    // that reload sessionStorage agrees with the server and the branch is not
+    // reached again.
+    var _reloadedForWs = false;
 
     function rule() { return root.CampistryWorkspace || null; }
     function current() {
@@ -170,6 +175,9 @@
                 // tab sat open — the tab moves to live rather than carrying on
                 // writing to keys nothing owns any more.
                 var serverWs = d.selected || 'live';
+                // What this tab actually LOADED ITS DATA WITH, captured before we
+                // overwrite it below.
+                var bootWs = current();
                 var found = (_state.workspaces || []).filter(function (w) { return w.id === serverWs; })[0];
                 _state.selected = serverWs;
                 _state.label = found ? found.label : '';
@@ -179,6 +187,41 @@
                 // reads the session, not the id.
                 if (typeof root.campistrySetWorkspace === 'function') {
                     root.campistrySetWorkspace(serverWs, _state.session);
+                }
+
+                // THE TAB BOOTED ON THE WRONG WORKSPACE'S DATA.
+                //
+                // The selection is kept per user ON THE SERVER, but this tab reads
+                // it out of sessionStorage, which a brand new browser does not have.
+                // So opening the app fresh while the server has you in a plan boots
+                // the whole page on LIVE's keys, and then this function puts the
+                // plan's bar on top of it — a page reading live, labelled as a plan.
+                // Saving from there would write live's bunks into the plan.
+                //
+                // Same cure as switchTo's: reload, because every page hydrates its
+                // operational state once at boot and nothing short of a reload
+                // re-reads it.
+                if (serverWs !== bootWs && !_reloadedForWs) {
+                    // Only if the choice actually persisted. Where sessionStorage is
+                    // unavailable — private windows, blocked site data — the reload
+                    // would come back in exactly the same state and loop forever, so
+                    // there we stay put and say so. The bar is still correct; it is
+                    // the page under it that is stale.
+                    var stuck = false;
+                    try { stuck = (sessionStorage.getItem('campistry_workspace') || 'live') !== serverWs; }
+                    catch (_) { stuck = true; }
+                    if (stuck) {
+                        if (root.console) {
+                            root.console.warn('[Workspace] this tab loaded "' + bootWs + '" but the '
+                                + 'server has you in "' + serverWs + '", and the choice will not '
+                                + 'persist here — reload manually to see the right data.');
+                        }
+                        trouble('Showing the wrong session’s data — please reload.');
+                    } else {
+                        _reloadedForWs = true;
+                        setTimeout(function () { root.location.reload(); }, 40);
+                        return _state;
+                    }
                 }
             }
         } catch (e) {
