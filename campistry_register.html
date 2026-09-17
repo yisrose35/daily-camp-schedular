@@ -235,10 +235,15 @@ body{font-family:var(--font);background:var(--s50);color:var(--s800);-webkit-fon
 
 <!-- Signature -->
 <div class="cd" id="sigCard"><div class="ct"><svg viewBox="0 0 24 24"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/></svg>Agreement & Signature</div>
-<div class="ck"><input type="checkbox" id="ag1"><label for="ag1">I certify that all information provided is accurate and complete.</label></div>
-<div class="ck"><input type="checkbox" id="ag2"><label for="ag2">I understand this is an application and does not guarantee enrollment.</label></div>
-<div class="ck"><input type="checkbox" id="ag3"><label for="ag3">I authorize emergency medical treatment if I cannot be reached.</label></div>
-<div class="ck"><input type="checkbox" id="ag4"><label for="ag4">I have read and agree to the camp's policies, rules, and liability terms.</label></div>
+<!-- All four are required and always were, but nothing on screen said so:
+     a parent met "Please agree to all terms" only after pressing Submit, with
+     no idea which one they had missed. Marked, and named individually on the
+     error below. -->
+<p style="font-size:.78rem;color:var(--s500);margin:-2px 0 9px">All four are required.</p>
+<div class="ck"><input type="checkbox" id="ag1"><label for="ag1">I certify that all information provided is accurate and complete.<span class="rq">*</span></label></div>
+<div class="ck"><input type="checkbox" id="ag2"><label for="ag2">I understand this is an application and does not guarantee enrollment.<span class="rq">*</span></label></div>
+<div class="ck"><input type="checkbox" id="ag3"><label for="ag3">I authorize emergency medical treatment if I cannot be reached.<span class="rq">*</span></label></div>
+<div class="ck"><input type="checkbox" id="ag4"><label for="ag4">I have read and agree to the camp's policies, rules, and liability terms.<span class="rq">*</span></label></div>
 <div class="fg" style="margin-top:10px"><label class="fl">Parent/Guardian Signature<span class="rq">*</span></label>
 <div class="sig-wrap" id="sigWrap"><canvas id="sigCanvas"></canvas><div class="sig-line"></div><div class="sig-label">Sign above</div><button class="sig-clear" onclick="clearSig()">Clear</button></div>
 </div></div>
@@ -932,7 +937,217 @@ async function _loadFromCloud(campId){
         applyFormConfig(d.formConfig||{});
         _applySchoolGradeOptions(d.schoolGrades);
         renderSessions();
+        // Last, on purpose: restoring before the sessions exist would drop a
+        // saved session choice, and restoring before applyFormConfig would
+        // write into fields the camp has since switched off.
+        try{ _regDraftInit(campId); }catch(e){ console.warn('[Register] draft:',e&&e.message); }
     }catch(e){ console.warn('[Register] Cloud bootstrap failed:',e&&e.message); }
+}
+
+// ─── KEEPING WHAT THEY TYPED ──────────────────────────────────────────
+//
+// This form is long, and a reload used to throw all of it away. A parent who
+// went to find an insurance card, or whose phone killed the tab, started again
+// from the top. So it saves itself, on their own device, and offers it back.
+//
+// WHAT IS DELIBERATELY NOT SAVED
+//   * The signature, and the agreement ticks. Those are things a person does,
+//     and restoring them would mean the form claiming someone agreed in a
+//     session where they never saw the words. They re-tick and re-sign; it is
+//     four taps, and it is the part that has to be true.
+//   * Uploaded documents. They are base64 in memory and would blow the ~5MB
+//     localStorage budget on one photo of an immunisation record. The banner
+//     says so, rather than letting a parent think they are still attached.
+//   * Anything to do with a card. This page never holds card data at all --
+//     the processor does -- so there is nothing here to save or leak.
+//
+// Storage is per camp and per browser. It survives a reload, a crash and
+// closing the tab; it does not survive clearing site data, which is the
+// parent's own "forget me" and should keep working as one.
+
+var DRAFT_VERSION = 1;
+var _draftKey = null, _draftTimer = null, _draftRestoring = false;
+
+/** Ticks and signatures are re-done, not restored. */
+var DRAFT_SKIP_IDS = {ag1:1, ag2:1, ag3:1, ag4:1, agSmsEmail:1, sigCanvas:1, promoCode:1};
+
+function _regDraftKeyFor(campId){
+    return 'campistry_reg_draft_v' + DRAFT_VERSION + ':' + (campId || 'default');
+}
+
+/** Every field the parent can type into, by id. */
+function _regDraftFields(){
+    var out = {};
+    var wrap = document.getElementById('formWrap');
+    if(!wrap) return out;
+    wrap.querySelectorAll('input,select,textarea').forEach(function(el){
+        if(!el.id || DRAFT_SKIP_IDS[el.id]) return;
+        if(el.type === 'file' || el.type === 'password' || el.type === 'button' || el.type === 'submit') return;
+        if(el.type === 'checkbox' || el.type === 'radio'){
+            // Radios are the payment picker, which is saved as selPM below.
+            if(el.type === 'checkbox') out[el.id] = !!el.checked;
+            return;
+        }
+        if(el.value !== '') out[el.id] = el.value;
+    });
+    return out;
+}
+
+function _regDraftSaveNow(){
+    if(_draftRestoring || !_draftKey) return;
+    try{
+        var body = {
+            at: Date.now(),
+            fields: _regDraftFields(),
+            // Siblings carry their own typed values, which renderSiblings
+            // rebuilds from this array rather than from the DOM.
+            siblings: siblings,
+            selSess: selSess, selSessKind: selSessKind, selPM: selPM
+        };
+        localStorage.setItem(_draftKey, JSON.stringify(body));
+    }catch(e){
+        // A full or blocked store is not worth a word to the parent -- the
+        // form still works, they just do not get the safety net.
+        console.log('[Register] could not keep a draft:', e && e.message);
+    }
+}
+
+/** Typing should not hit localStorage on every keystroke. */
+function _regDraftSave(){
+    if(_draftRestoring || !_draftKey) return;
+    if(_draftTimer) clearTimeout(_draftTimer);
+    _draftTimer = setTimeout(_regDraftSaveNow, 600);
+}
+
+function _regDraftClear(){
+    try{ if(_draftKey) localStorage.removeItem(_draftKey); }catch(e){}
+}
+
+function _regDraftRead(){
+    try{
+        var raw = _draftKey && localStorage.getItem(_draftKey);
+        if(!raw) return null;
+        var d = JSON.parse(raw);
+        return (d && d.fields) ? d : null;
+    }catch(e){ return null; }
+}
+
+function _regDraftAgo(ts){
+    var m = Math.round((Date.now() - Number(ts || 0)) / 60000);
+    if(!(m >= 0)) return 'earlier';
+    if(m < 1) return 'a moment ago';
+    if(m < 60) return m + (m === 1 ? ' minute ago' : ' minutes ago');
+    var h = Math.round(m / 60);
+    if(h < 24) return h + (h === 1 ? ' hour ago' : ' hours ago');
+    var dys = Math.round(h / 24);
+    return dys + (dys === 1 ? ' day ago' : ' days ago');
+}
+
+/**
+ * Put it back.
+ *
+ * _draftRestoring guards the whole thing: every setter below fires the input
+ * events that would otherwise save a half-restored draft over the real one.
+ */
+function _regDraftRestore(d){
+    if(!d) return;
+    _draftRestoring = true;
+    try{
+        Object.keys(d.fields || {}).forEach(function(id){
+            var el = document.getElementById(id);
+            if(!el || DRAFT_SKIP_IDS[id]) return;
+            if(el.type === 'checkbox') el.checked = !!d.fields[id];
+            else el.value = d.fields[id];
+        });
+        if(Array.isArray(d.siblings) && d.siblings.length){
+            siblings = d.siblings;
+            try{ renderSiblings(); }catch(e){}
+            // renderSiblings rebuilds the rows from `siblings`, so their
+            // typed values come back with them rather than from the ids above.
+        }
+        if(d.selSess){
+            selSess = d.selSess;
+            selSessKind = d.selSessKind || 'session';
+            var items = _pickerItems();
+            var at = items.findIndex(function(x){ return x.name === selSess && x.kind === selSessKind; });
+            // A session the camp has since removed must not stay selected.
+            if(at < 0){ selSess = ''; selSessKind = 'session'; }
+            else document.querySelectorAll('.ss').forEach(function(c, j){ c.classList.toggle('sel', j === at); });
+        }
+        if(d.selPM){
+            var radio = document.querySelector('#payOpts input[value="' + d.selPM + '"]');
+            if(radio){
+                selPM = d.selPM;
+                radio.checked = true;
+                var po = radio.closest('.po');
+                document.querySelectorAll('.po').forEach(function(o){ o.classList.remove('sel'); });
+                if(po) po.classList.add('sel');
+            }
+        }
+    }catch(e){ console.warn('[Register] could not restore the draft:', e && e.message); }
+    _draftRestoring = false;
+
+    try{ updatePrice(); }catch(e){}
+    try{ _regPayMethodNote(); }catch(e){}
+}
+
+window._regDraftDiscard = function(){
+    _regDraftClear();
+    // A reload is the honest way to get a clean form: it re-runs the same
+    // bootstrap a first-time visitor gets, rather than us trying to unset
+    // every field by hand and missing one.
+    window.location.reload();
+};
+
+function _regDraftBanner(d){
+    var wrap = document.getElementById('formWrap');
+    if(!wrap || !d) return;
+    var bar = document.getElementById('draftBar');
+    if(!bar){
+        bar = document.createElement('div');
+        bar.id = 'draftBar';
+        wrap.insertBefore(bar, wrap.firstChild);
+    }
+    bar.innerHTML =
+        '<div style="display:flex;justify-content:space-between;align-items:center;gap:12px;flex-wrap:wrap;' +
+        'background:#EFF6FF;border:1px solid #BFDBFE;border-radius:var(--r);padding:11px 14px;margin-bottom:14px">' +
+        '<div style="font-size:.85rem;color:#1E40AF;line-height:1.5">' +
+        '<strong>We kept what you started</strong> — saved ' + esc(_regDraftAgo(d.at)) + ' on this device.' +
+        '<div style="font-size:.78rem;color:#475569;margin-top:2px">' +
+        'You will need to re-attach any documents, re-tick the agreements and sign again.</div></div>' +
+        '<button type="button" onclick="_regDraftDiscard()" style="background:none;border:1px solid #BFDBFE;' +
+        'border-radius:6px;padding:7px 11px;font:inherit;font-size:.8rem;color:#1E40AF;cursor:pointer;white-space:nowrap">' +
+        'Start fresh</button></div>';
+}
+
+/**
+ * Turn all of this on, once the form is built and the sessions are drawn.
+ *
+ * Not in the preview iframe (the builder's draft config is not a parent's
+ * application) and not on the status screen.
+ */
+function _regDraftInit(campId){
+    var q = new URLSearchParams(window.location.search);
+    if(q.get('preview') === '1' || q.get('status')) return;
+    _draftKey = _regDraftKeyFor(campId);
+
+    var existing = _regDraftRead();
+    if(existing){
+        _regDraftRestore(existing);
+        _regDraftBanner(existing);
+    }
+
+    var wrap = document.getElementById('formWrap');
+    if(wrap){
+        wrap.addEventListener('input', _regDraftSave);
+        wrap.addEventListener('change', _regDraftSave);
+    }
+    // A tab being closed or hidden is the moment most likely to lose typing,
+    // and it is too late for a debounce then.
+    window.addEventListener('pagehide', _regDraftSaveNow);
+    document.addEventListener('visibilitychange', function(){
+        if(document.visibilityState === 'hidden') _regDraftSaveNow();
+    });
 }
 
 // ─── LIVE PREVIEW MODE (embedded in the Me "Form Builder") ────────────
@@ -1968,7 +2183,21 @@ window.submitApp=async function(){
     // preference — always required, never gated by a section toggle.
     if(!document.getElementById('agSmsEmail').checked)return showErr('Please agree to receive text messages and emails to continue.');
     if(signatureOn){
-        if(!document.getElementById('ag1').checked||!document.getElementById('ag2').checked||!document.getElementById('ag3').checked||!document.getElementById('ag4').checked)return showErr('Please agree to all terms.');
+        // "Please agree to all terms" sent a parent hunting through four
+        // near-identical lines for the one they missed. Name it.
+        var AGREEMENTS=[
+            ['ag1','certify the information is accurate'],
+            ['ag2','understand this does not guarantee enrollment'],
+            ['ag3','authorize emergency medical treatment'],
+            ['ag4','agree to the camp\u2019s policies and liability terms']
+        ];
+        for(var ai=0;ai<AGREEMENTS.length;ai++){
+            var box=document.getElementById(AGREEMENTS[ai][0]);
+            if(box&&!box.checked){
+                try{ box.closest('.ck').scrollIntoView({behavior:'smooth',block:'center'}); }catch(e){}
+                return showErr('Please tick the box to '+AGREEMENTS[ai][1]+' \u2014 it is required.');
+            }
+        }
         if(!sigHasData)return showErr('Please sign the form.');
     }
 
@@ -2126,6 +2355,11 @@ window.submitApp=async function(){
     recordSubmission();
     _registerSubmitInFlight=false;
 
+    // In, and confirmed. The draft has done its job -- keeping it would
+    // re-offer a filled form to the next person who opens the link on a
+    // shared device.
+    try{ _regDraftClear(); }catch(e){}
+
     // Show success — cloudRes.ok is already confirmed true at this point.
     document.getElementById('formWrap').style.display='none';
     document.getElementById('successWrap').style.display='block';
@@ -2260,6 +2494,10 @@ _loadFromLocalCache();
 // from an old test setup done before real sessions were configured).
 var _bootCampId=campIdParam||(window.CampistryDB&&window.CampistryDB.getCampId&&window.CampistryDB.getCampId())||localStorage.getItem('campistry_camp_id');
 if(_bootCampId)_loadFromCloud(_bootCampId);
+// _loadFromCloud starts the draft once it has drawn the sessions. With no
+// camp id it never runs at all, and a parent on such a page would silently
+// lose the one thing this is for -- so start it here instead.
+else setTimeout(function(){ try{ _regDraftInit(null); }catch(e){} }, 0);
 })();
 </script>
 </body>

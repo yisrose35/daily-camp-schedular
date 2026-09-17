@@ -391,8 +391,14 @@
             o.el.addEventListener('click', function (ev) {
                 var b = ev.target && ev.target.closest && ev.target.closest('[data-cc]');
                 if (!b) return;
-                ev.preventDefault();
                 var what = b.getAttribute('data-cc');
+                // The keep-on-file tick is a data-cc element too, and it is
+                // the ONE that must not be preventDefault()ed: cancelling its
+                // click is cancelling the tick, so the box refused to check
+                // and the change handler below never fired. Let the browser
+                // do what a checkbox does; 'change' picks it up.
+                if (what === 'keep') return;
+                ev.preventDefault();
                 if (what === 'open') open();
                 else if (what === 'reset') reset();
             });

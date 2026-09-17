@@ -878,6 +878,81 @@ test('a database that cannot record a capture says so, and lets go', () => {
     assert.match(cap, /state\.unavailable = true/);
 });
 
+test('the keep-on-file tick can actually be ticked', () => {
+    // It could not be. The delegated click handler matched ANY [data-cc]
+    // element and called preventDefault() on it — and the tick is a data-cc
+    // element, so its default action (checking the box) was cancelled, and
+    // the change handler that records the answer never fired.
+    //
+    // My own test for this passed, because it called the change handler
+    // directly and never went through the click. That is the bug in the test,
+    // not just in the code.
+    const cap = fs.readFileSync(path.join(ROOT, 'campistry_card_capture.js'), 'utf8');
+    const click = cap.slice(cap.indexOf("o.el.addEventListener('click'"),
+                            cap.indexOf('// The framed card page'));
+    const guardAt = click.indexOf("if (what === 'keep') return;");
+    const preventAt = click.indexOf('ev.preventDefault();');
+    assert.ok(guardAt > 0, 'the tick must be let through the click handler');
+    assert.ok(guardAt < preventAt,
+        'it has to be let through BEFORE preventDefault, or the box still cannot be ticked');
+    // The buttons do still need it.
+    assert.ok(preventAt > 0 && /what === 'open'/.test(click));
+});
+
+test('a reload does not throw the application away', () => {
+    const reg = fs.readFileSync(path.join(ROOT, 'campistry_register.html'), 'utf8');
+    const draft = reg.slice(reg.indexOf('// ─── KEEPING WHAT THEY TYPED'),
+                            reg.indexOf('// ─── LIVE PREVIEW MODE'));
+    assert.ok(draft.length > 1000, 'the draft block must exist');
+
+    // Things a person DOES are not restored — a form must never claim someone
+    // agreed in a session where they never saw the words.
+    assert.match(draft, /var DRAFT_SKIP_IDS = \{ag1:1, ag2:1, ag3:1, ag4:1, agSmsEmail:1, sigCanvas:1/);
+    // Nor anything to do with a card: this page never holds card data at all.
+    assert.ok(!/cardToken|cardNumber|_cap\b/.test(draft),
+        'the draft must not reach anywhere near card data');
+    // File inputs are skipped — one photo of an immunisation record would
+    // blow the whole localStorage budget.
+    assert.match(draft, /el\.type === 'file'/);
+
+    // Restoring must not save over itself on the way in.
+    assert.match(draft, /_draftRestoring/);
+    const restore = draft.slice(draft.indexOf('function _regDraftRestore('));
+    assert.match(restore.slice(0, 200), /_draftRestoring = true/);
+
+    // Per camp, so two camps on one device do not share a form.
+    assert.match(draft, /'campistry_reg_draft_v' \+ DRAFT_VERSION \+ ':' \+ \(campId \|\| 'default'\)/);
+    // The builder's preview iframe is not a parent's application.
+    assert.match(draft, /q\.get\('preview'\) === '1'/);
+    // A closing tab is the likeliest moment to lose typing, and too late for
+    // a debounce.
+    assert.match(draft, /pagehide/);
+    assert.match(draft, /visibilitychange/);
+
+    // Cleared once the application is really in — otherwise the next person
+    // to open the link on a shared device is handed a filled form.
+    const submit = reg.slice(reg.indexOf('recordSubmission();'));
+    const clearAt = submit.indexOf('_regDraftClear()');
+    const showAt = submit.indexOf("getElementById('successWrap')");
+    assert.ok(clearAt > 0 && clearAt < showAt, 'the draft must be cleared on a confirmed submit');
+});
+
+test('the four agreements look required, and say which one is missing', () => {
+    const reg = fs.readFileSync(path.join(ROOT, 'campistry_register.html'), 'utf8');
+    // They always WERE enforced; nothing on screen said so.
+    for (const id of ['ag1', 'ag2', 'ag3', 'ag4']) {
+        assert.match(reg, new RegExp('for="' + id + '">[^<]*<span class="rq">[*]</span>'),
+            id + ' must be marked required');
+    }
+    assert.match(reg, /All four are required\./);
+    // And the error names the one they missed rather than sending them
+    // hunting through four near-identical lines.
+    assert.match(reg, /var AGREEMENTS=\[/);
+    assert.match(reg, /Please tick the box to '\+AGREEMENTS\[ai\]\[1\]/);
+    assert.ok(!/return showErr\('Please agree to all terms\.'\)/.test(reg),
+        'the old catch-all message should be gone');
+});
+
 test('the parent is asked before their card is kept', () => {
     // Keeping someone's card for future charges is a thing to ask, not
     // assume. The processor holds it either way -- that is how the deposit is
