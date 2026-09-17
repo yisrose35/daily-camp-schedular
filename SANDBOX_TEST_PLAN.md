@@ -39,11 +39,11 @@ sheet that isn't true.
 The code is pushed; the database functions are not. Until this is done the card
 either shows an amber "Not switched on yet" notice or nothing at all.
 
-**Two files, in this order** — 196 depends on 193, so don't swap them:
+**Two files, in this order** — 197 depends on 193, so don't swap them:
 
 1. Open the **Supabase Dashboard → SQL Editor → New query**.
 2. Paste the **entire** contents of `migrations/193_session_workspaces.sql`, run it.
-3. New query again. Paste **`migrations/196_workspace_schedules.sql`**, run it.
+3. New query again. Paste **`migrations/197_workspace_schedules.sql`**, run it.
 
 Both are idempotent — safe to run twice.
 
@@ -61,7 +61,7 @@ select proname from pg_proc
 
 **Expect 8 rows.** Fewer means the paste was truncated — re-run the whole file.
 
-Then check 196:
+Then check 197:
 
 ```sql
 -- the column exists on both tables, defaulting to live
@@ -204,7 +204,7 @@ as a live red button silently ignoring clicks.
 
 ### R5. Schedules and rotation counts stay in the plan
 
-Needs migration **196**. Nothing in the client changed to make this visible, so it
+Needs migration **197**. Nothing in the client changed to make this visible, so it
 has to be checked directly.
 
 | | |
@@ -228,7 +228,7 @@ has to be checked directly.
 |---|---|
 | **Do** | In a plan, add a division. Reload a couple of pages. **Make it official.** |
 | **Expect** | Live has the division, and still has it after a reload. The archive holds what live had before. |
-| **If it fails** | `promote_workspace` in migration 196. Worth knowing: that function had five regressions from being retyped rather than copied, all now fixed, so a failure here is new information rather than the same bug. |
+| **If it fails** | `promote_workspace` in migration 197. Worth knowing: that function had five regressions from being retyped rather than copied, all now fixed, so a failure here is new information rather than the same bug. |
 
 ---
 
@@ -427,7 +427,7 @@ no page had to be rewritten — which also means this is worth actually checking
 |---|---|
 | **Do** | In the 2nd Half plan, **generate a schedule**. Switch to live and open the same dates. |
 | **Expect** | Live's schedule for those dates is **unchanged** — empty if it was empty. |
-| **If it fails** | 196 didn't take, or the tab and server disagree about the workspace. Run `select workspace, date_key, count(*) from daily_schedules where camp_id='<uuid>' group by 1,2 order by 1,2` — the new rows must carry the plan's id, not `live`. |
+| **If it fails** | 197 didn't take, or the tab and server disagree about the workspace. Run `select workspace, date_key, count(*) from daily_schedules where camp_id='<uuid>' group by 1,2 order by 1,2` — the new rows must carry the plan's id, not `live`. |
 
 | | |
 |---|---|
@@ -438,7 +438,7 @@ no page had to be rewritten — which also means this is worth actually checking
 |---|---|
 | **Do** | In live, open the rotation/fairness report. |
 | **Expect** | Live's counts **unchanged** by the plan's generation. |
-| **If it fails** | `rotation_counts` RLS in 196. This one matters more than most: it is a guarantee the code claimed in a comment and did not keep. |
+| **If it fails** | `rotation_counts` RLS in 197. This one matters more than most: it is a guarantee the code claimed in a comment and did not keep. |
 
 | | |
 |---|---|
@@ -484,7 +484,7 @@ select key from camp_state_kv
 |---|---|
 | **Do** | Check the schedules came across. In live, open the dates the plan had generated. |
 | **Expect** | They are now live's schedule, and the archive holds what live had before. |
-| **If it fails** | The two `UPDATE … SET workspace` blocks in `promote_workspace` (196). Without them a promotion swaps the bunks in and leaves the schedules behind — the shape of report item 4. |
+| **If it fails** | The two `UPDATE … SET workspace` blocks in `promote_workspace` (197). Without them a promotion swaps the bunks in and leaves the schedules behind — the shape of report item 4. |
 
 | | |
 |---|---|

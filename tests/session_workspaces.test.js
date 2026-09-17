@@ -994,18 +994,18 @@ test('a money page says it is live-only before anything is clicked', () => {
 // table was not.
 // ───────────────────────────────────────────────────────────────────────────
 
-const SQL196 = code('migrations/196_workspace_schedules.sql');
+const SQL197 = code('migrations/197_workspace_schedules.sql');
 
 test('both tables carry a workspace, defaulting to live', () => {
     // Every row that exists today IS live's — this feature did not exist when
     // they were written, so the default is the migration's whole back-compat story.
     ['daily_schedules', 'rotation_counts'].forEach(t => {
-        assert.match(SQL196, new RegExp('ALTER TABLE public\\.' + t
+        assert.match(SQL197, new RegExp('ALTER TABLE public\\.' + t
             + '\\s*\\n\\s*ADD COLUMN IF NOT EXISTS workspace text NOT NULL DEFAULT \'live\''), t);
     });
     // And rotation's uniqueness has to include it, or a plan's count for a date
     // collides with live's and one overwrites the other.
-    assert.match(SQL196, /PRIMARY KEY \(camp_id, workspace, date_key, bunk, activity\)/);
+    assert.match(SQL197, /PRIMARY KEY \(camp_id, workspace, date_key, bunk, activity\)/);
 });
 
 test('RLS fences every operation on both tables, not just reads', () => {
@@ -1013,7 +1013,7 @@ test('RLS fences every operation on both tables, not just reads', () => {
     // overwrite them.
     ['daily_schedules', 'rotation_counts'].forEach(t => {
         ['select', 'insert', 'update', 'delete'].forEach(op => {
-            const m = SQL196.match(new RegExp('CREATE POLICY ' + t + '_' + op
+            const m = SQL197.match(new RegExp('CREATE POLICY ' + t + '_' + op
                 + '[\\s\\S]{0,400}?;'));
             assert.ok(m, t + '_' + op + ' policy is missing');
             assert.match(m[0], /workspace = public\.current_workspace\(camp_id\)/,
@@ -1026,10 +1026,10 @@ test('the existing camp and role conditions are kept, not replaced', () => {
     // The workspace fence is ADDED to 002's and 003's rules. Dropping the role
     // check while adding a workspace check would let any staff member write
     // schedules.
-    const ins = SQL196.match(/CREATE POLICY daily_schedules_insert[\s\S]{0,500}?\);/)[0];
+    const ins = SQL197.match(/CREATE POLICY daily_schedules_insert[\s\S]{0,500}?\);/)[0];
     assert.match(ins, /camp_id = get_user_camp_id\(\)/);
     assert.match(ins, /'owner'::text, 'admin'::text, 'scheduler'::text/);
-    const del = SQL196.match(/CREATE POLICY daily_schedules_delete[\s\S]{0,500}?\);/)[0];
+    const del = SQL197.match(/CREATE POLICY daily_schedules_delete[\s\S]{0,500}?\);/)[0];
     assert.match(del, /'owner'::text, 'admin'::text/);
     assert.ok(!/scheduler/.test(del), 'delete stays owner/admin, as 003 had it');
 });
@@ -1037,20 +1037,20 @@ test('the existing camp and role conditions are kept, not replaced', () => {
 test('a write that never heard of workspaces lands in the right one', () => {
     // This is what makes 41 unrouted call sites CORRECT rather than merely
     // unbroken: the trigger stamps the row from the writer's own selection.
-    assert.match(SQL196, /CREATE OR REPLACE FUNCTION public\._stamp_workspace\(\)/);
-    const fn = SQL196.slice(SQL196.indexOf('_stamp_workspace()'));
+    assert.match(SQL197, /CREATE OR REPLACE FUNCTION public\._stamp_workspace\(\)/);
+    const fn = SQL197.slice(SQL197.indexOf('_stamp_workspace()'));
     assert.match(fn.slice(0, 900), /NEW\.workspace := public\.current_workspace\(NEW\.camp_id\)/);
     // An explicit non-default is left alone, or promote could not move rows.
     assert.match(fn.slice(0, 900), /IF NEW\.workspace IS NULL OR NEW\.workspace = 'live' THEN/);
     ['daily_schedules', 'rotation_counts'].forEach(t =>
-        assert.match(SQL196, new RegExp('CREATE TRIGGER trg_' + t
+        assert.match(SQL197, new RegExp('CREATE TRIGGER trg_' + t
             + '_workspace\\s*\\n\\s*BEFORE INSERT ON public\\.' + t), t));
 });
 
 test('promotion moves the schedules, and archives live’s before it does', () => {
     // Order matters: rename live's rows away FIRST, or the plan's rows collide
     // with them on (camp, workspace, date, bunk, activity).
-    const fn = SQL196.slice(SQL196.indexOf('FUNCTION public.promote_workspace'));
+    const fn = SQL197.slice(SQL197.indexOf('FUNCTION public.promote_workspace'));
     const body = fn.slice(0, fn.indexOf('$$;'));
     const archive = body.indexOf("SET workspace = v_out_id");
     const promote = body.indexOf("SET workspace = 'live'");
@@ -1067,7 +1067,7 @@ test('promotion moves the schedules, and archives live’s before it does', () =
 test('deleting a plan takes its schedules with it', () => {
     // Otherwise a discarded plan leaves a season of orphan rows behind, invisible
     // to everyone and counted by nothing.
-    const fn = SQL196.slice(SQL196.indexOf('FUNCTION public.delete_workspace'));
+    const fn = SQL197.slice(SQL197.indexOf('FUNCTION public.delete_workspace'));
     const body = fn.slice(0, fn.indexOf('$$;'));
     assert.match(body, /DELETE FROM public\.daily_schedules\s*\n\s*WHERE camp_id = p_camp_id AND workspace = p_id/);
     assert.match(body, /DELETE FROM public\.rotation_counts\s*\n\s*WHERE camp_id = p_camp_id AND workspace = p_id/);
@@ -1089,12 +1089,12 @@ test('the tab and the server agree on which workspace, in both directions', () =
 test('the migration is not bundled, and parses', () => {
     // Migrations from 180 on are pasted by hand, one file at a time.
     const bundle = read('migrations/APPLY_BUNDLE.sql');
-    assert.ok(!bundle.includes('196_workspace_schedules'),
-        '196 must stay a standalone paste');
+    assert.ok(!bundle.includes('197_workspace_schedules'),
+        '197 must stay a standalone paste');
     const { execFileSync } = require('node:child_process');
     execFileSync('python3', ['-c',
         'import pglast,sys; pglast.parse_sql(open(sys.argv[1]).read())',
-        path.join(ROOT, 'migrations/196_workspace_schedules.sql')], { encoding: 'utf8' });
+        path.join(ROOT, 'migrations/197_workspace_schedules.sql')], { encoding: 'utf8' });
 });
 
 test('the migrations parse INSIDE their function bodies, not just around them', () => {
@@ -1112,18 +1112,18 @@ test('the migrations parse INSIDE their function bodies, not just around them', 
     execFileSync('python3', [
         path.join(ROOT, 'scripts/check_plpgsql_bodies.py'),
         path.join(ROOT, 'migrations/193_session_workspaces.sql'),
-        path.join(ROOT, 'migrations/196_workspace_schedules.sql')
+        path.join(ROOT, 'migrations/197_workspace_schedules.sql')
     ], { encoding: 'utf8' });
 });
 
-test('196 does not re-type what 193 already got right', () => {
+test('197 does not re-type what 193 already got right', () => {
     // promote_workspace and delete_workspace are 193's, with blocks inserted.
     // Re-typing them lost five things at once: `updated_at = now()` on both key
     // moves (the app sorts on it for newest-wins), the loop that stops two
     // promotions in the same second sharing an archive id, the explicit
     // operational-key list, the no_such_workspace guard, and the archived_label
     // the admin card reads back — plus the syntax error above.
-    const p196 = code('migrations/196_workspace_schedules.sql');
+    const p197 = code('migrations/197_workspace_schedules.sql');
     const p193 = code('migrations/193_session_workspaces.sql');
 
     [ // the statements that must be word-for-word identical
@@ -1132,23 +1132,23 @@ test('196 does not re-type what 193 already got right', () => {
       "AND kv.key = ANY (SELECT 'ws:' || p_id || '/' || k"
     ].forEach(stmt => {
         assert.ok(p193.includes(stmt), '193 should contain: ' + stmt);
-        assert.ok(p196.includes(stmt), '196 must carry 193\'s form of: ' + stmt);
+        assert.ok(p197.includes(stmt), '197 must carry 193\'s form of: ' + stmt);
     });
 
     // The safety bits that went missing once.
-    assert.match(p196, /WHILE EXISTS \(SELECT 1 FROM camp_workspaces w WHERE w\.camp_id = p_camp_id AND w\.id = v_out_id\) LOOP/,
+    assert.match(p197, /WHILE EXISTS \(SELECT 1 FROM camp_workspaces w WHERE w\.camp_id = p_camp_id AND w\.id = v_out_id\) LOOP/,
         'two promotions in one second must not share an archive id');
-    assert.match(p196, /'archived_label', v_out_lab/,
+    assert.match(p197, /'archived_label', v_out_lab/,
         'the admin card reads archived_label');
     // Anchored to delete_workspace's own body: the string also appears in
     // promote_workspace, so asserting it exists ANYWHERE passed happily with
     // delete's copy renamed away.
-    const del = p196.slice(p196.indexOf('FUNCTION public.delete_workspace'));
+    const del = p197.slice(p197.indexOf('FUNCTION public.delete_workspace'));
     assert.match(del.slice(0, del.indexOf('$$;')), /no_such_workspace/,
         'deleting a plan that is already gone must say so, not report success');
 
     // And the id must never be interpolated into a LIKE pattern: idFor allows
     // underscores, and '_' is a LIKE wildcard, so a plan 'a_b' would match 'axb'.
-    assert.ok(!/LIKE 'ws:' \|\| p_id/.test(p196),
+    assert.ok(!/LIKE 'ws:' \|\| p_id/.test(p197),
         'match the operational key list explicitly, not with a LIKE pattern');
 });
