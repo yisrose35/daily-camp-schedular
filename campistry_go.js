@@ -1375,6 +1375,27 @@ let _toastTimer = null;
     // Go's own standalone roster — used when Me has no campers
     let _goStandaloneRoster = {};
 
+    /**
+     * Keep only the campers who are actually at camp on the date in question.
+     *
+     * Applied to the ME-DERIVED roster only. Go's own rosters — a CSV import in
+     * standalone mode, or campers typed straight into Go — have no enrollments
+     * behind them, so there is nothing to be present or absent for, and Go
+     * standalone is deliberately its own world.
+     *
+     * In live that date is today. In a plan for 2nd Half it is 2nd Half's start,
+     * which is the point: bus routes are the clearest case for planning ahead, and
+     * routing this half's children onto next half's buses is exactly the mistake
+     * a planning copy is supposed to prevent.
+     */
+    function _presentOnly(all) {
+        const P = window.CampistryPresence;
+        if (!P || !P.hasDates()) return all;
+        const out = {};
+        Object.keys(all).forEach(n => { if (P.isHere(n)) out[n] = all[n]; });
+        return out;
+    }
+
     function getRoster() {
 
 // ── Camper display name ────────────────────────────────────────────────────
@@ -1406,7 +1427,10 @@ function _lbl(key) { return String(key == null ? '' : key).replace(/\s#\d+$/, ''
                 if (needsSave) {
                     try { const raw = localStorage.getItem('campGlobalSettings_v1'); if (raw) { const data = JSON.parse(raw); data.app1.camperRoster = meRoster; if (!data.campistryMe) data.campistryMe = {}; data.campistryMe.nextPersonId = nextId; localStorage.setItem('campGlobalSettings_v1', JSON.stringify(data)); } } catch (e) {}
                 }
-                return meRoster;
+                // Filtered only on the way OUT. The camperId backfill above is
+                // identity work on the whole roster, not a view of it, and must
+                // not skip a child who happens to be on the other half.
+                return _presentOnly(meRoster);
             }
         }
         // 2. Fall back to Go's standalone roster (from CSV import)

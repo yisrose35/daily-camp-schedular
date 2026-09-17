@@ -316,7 +316,15 @@ test('the bar measures its own height rather than guessing', () => {
 
 test('the server decides which workspace a tab is in, not the tab', () => {
     assert.match(UI, /var serverWs = d\.selected \|\| 'live';/);
-    assert.match(UI, /if \(serverWs !== current\(\)[\s\S]{0,120}campistrySetWorkspace\(serverWs\)/);
+    // The tab adopts the server's answer unconditionally. This used to be gated
+    // on the id having changed, which was fine for the id and wrong for the
+    // SESSION riding along with it — a plan re-pointed at a different session
+    // would have kept showing the old half's campers. Adopting it every time is
+    // strictly stronger than the guard it replaced.
+    const fn = UI.slice(UI.indexOf('U.refresh = async function'));
+    assert.match(fn.slice(0, 2000), /campistrySetWorkspace\(serverWs, _state\.session\)/);
+    assert.doesNotMatch(fn.slice(0, 2000), /if \(serverWs !== current\(\)\)/,
+        'adopting the server answer must not be conditional');
 });
 
 test('switching reloads, because a half-hydrated page is the whole problem', () => {
@@ -458,4 +466,136 @@ test('the migration parses as SQL', () => {
         throw e;
     }
     assert.match(out, /ok/);
+});
+
+// ───────────────────────────────────────────────────────────────────────────
+// WHICH CAMPERS A PLAN SHOWS.
+//
+// A plan copies the operational state and deliberately does NOT copy the roster,
+// because campers and money are facts about the world. That leaves one question
+// the copy cannot answer by itself: a plan for 2nd Half reads the same live
+// roster as live, so without help it shows whoever is at camp today — 1st Half's
+// children — to an office building 2nd Half's bunks and buses.
+//
+// The answer is to move the DATE, not the data: a plan records the session it is
+// for, and presence reads the live roster as of that session. Nothing is
+// duplicated, so nothing can drift.
+// ───────────────────────────────────────────────────────────────────────────
+
+test('a plan records the session it is for, all the way to the client', () => {
+    // The column and the argument already existed; what was missing was anything
+    // reading them.
+    assert.match(SQL, /session\s+text/, 'camp_workspaces needs the column');
+    assert.match(SQL, /'session', w\.session/, 'list_workspaces must return it');
+
+    // Carried in sessionStorage beside the plan id, because presence is asked
+    // synchronously during a render that may beat the server round trip.
+    assert.match(HOOKS, /window\.campistryWorkspaceSession = function/);
+    assert.match(HOOKS, /window\.campistrySetWorkspace = function \(ws, session\)/);
+
+    // Both HALVES of that, separately. Switching plans works by reloading the
+    // page, so a session that is read at boot but never written is a session that
+    // is gone by the time anything asks — and asserting the key name alone passes
+    // on the read reference by itself.
+    assert.match(HOOKS, /sessionStorage\.getItem\('campistry_workspace_session'\)/,
+        'the session must be read back at boot');
+    assert.match(HOOKS, /sessionStorage\.setItem\('campistry_workspace_session', _wsSession\)/,
+        'and written, or it cannot survive the reload that switching does');
+    assert.match(HOOKS, /sessionStorage\.removeItem\('campistry_workspace_session'\)/,
+        'and cleared, or live inherits the last plan’s session');
+});
+
+test('live never carries a session — live means now', () => {
+    const fn = HOOKS.slice(HOOKS.indexOf('window.campistrySetWorkspace = function'));
+    assert.match(fn.slice(0, 700), /_wsCurrent === 'live'\) \? '' :/,
+        'switching to live must clear the session, not keep the last one');
+    const getter = HOOKS.slice(HOOKS.indexOf('window.campistryWorkspaceSession = function'));
+    assert.match(getter.slice(0, 300), /_wsCurrent === 'live'\) \? '' : _wsSession/,
+        'and reading it in live must answer empty whatever is stored');
+});
+
+test('the bar names whose campers you are looking at', () => {
+    // The roster is the one thing a plan does NOT copy, so the bar has to say
+    // which half's children it is showing or the copy is misleading.
+    assert.match(UI, /Campers: '\s*\n?\s*\+ esc\(_state\.session\)/);
+    assert.match(UI, /_state\.session = \(found && found\.session\) \|\| ''/);
+});
+
+test('switching plans carries the new plan’s session across the reload', () => {
+    const fn = UI.slice(UI.indexOf('U.switchTo = async function'));
+    assert.match(fn.slice(0, 1600), /campistrySetWorkspace\(target, \(tgt && tgt\.session\) \|\| ''\)/,
+        'otherwise the page comes back showing the wrong half on its first render');
+});
+
+test('the session is re-applied even when the plan id has not changed', () => {
+    // A plan can be re-pointed at a different session. Guarding the call on the
+    // id changing would leave presence answering for the old one.
+    const fn = UI.slice(UI.indexOf('U.refresh = async function'));
+    const body = fn.slice(0, 2000);
+    assert.match(body, /campistrySetWorkspace\(serverWs, _state\.session\)/);
+    assert.doesNotMatch(body, /serverWs !== current\(\)[^]*?campistrySetWorkspace/,
+        'the call must not be gated on the id changing');
+});
+
+test('creating a plan ASKS which session, it does not guess from the name', () => {
+    // It used to infer this from the plan's label: call it exactly what you call
+    // the session and it was linked, call it "2nd Half Draft" and it silently was
+    // not. That guess decided which children the plan showed.
+    assert.match(ADMIN, /p_session: forSession \|\| null/);
+    assert.doesNotMatch(ADMIN, /p_session: suggest\.indexOf\(label\)/,
+        'the naming-coincidence guess must be gone');
+    assert.match(ADMIN, /label: 'This plan is for'/);
+    assert.match(ADMIN, /Not tied to a session/, 'not tying it to one must stay possible');
+});
+
+test('an undated session cannot be picked, and says why', () => {
+    // Pointing a plan at a session with no dates would silently do nothing, since
+    // there is no date to read the roster as of.
+    assert.match(ADMIN, /dated: !!win\.from/);
+    assert.match(ADMIN, /disabled: !x\.dated/);
+    assert.match(ADMIN, /give[^]{0,80}them start and end dates/,
+        'and it must say how to fix it');
+});
+
+test('every plan row says whose campers it shows', () => {
+    const rows = ADMIN.slice(ADMIN.indexOf('rows.forEach'));
+    assert.match(rows.slice(0, 2500), /w\.session/);
+    assert.match(rows.slice(0, 2500), /today\\u2019s campers|today’s campers/,
+        'including the plans not tied to a session');
+});
+
+test('the roster picker stops vanishing without explanation', () => {
+    // It is drawn only when a session has dates, which is correct — but a camp
+    // that wants "just this half's kids" was given no way to discover that the
+    // answer is two dates.
+    const ME = read('campistry_me.js');
+    const at = ME.indexOf('THE SESSION PICKER');
+    assert.ok(at > 0);
+    const block = ME.slice(at, at + 2600);
+    assert.match(block, /else if\(\(sessions\|\|\[\]\)\.length>1\)/,
+        'a camp with sessions but no dates must be told');
+    assert.match(block, /start and end dates/);
+});
+
+test('the Me roster opens on the plan’s session, and still lets you change it', () => {
+    const ME = read('campistry_me.js');
+    assert.match(ME, /function _rosterWhenDefault\(\)/);
+    assert.match(ME, /if\(_rosterWhenTouched\)return _rosterWhen/,
+        'an explicit choice must win over the plan');
+    assert.match(ME, /_rosterWhenTouched=true/);
+    assert.match(ME, /info\.reason==='sandbox_session'/);
+    // Every READ goes through the resolver, or the picker and the list disagree.
+    const reads = ME.match(/_rosterWhen(?!Touched|Default|=)/g) || [];
+    assert.ok(reads.length <= 4,
+        'unrouted _rosterWhen reads left: ' + reads.length + ' (expected only the resolver\'s own)');
+});
+
+test('Go loads the presence modules it now depends on, in order', () => {
+    const GO = read('campistry_go.html');
+    assert.match(GO, /campistry_enrollment_window\.js/);
+    assert.match(GO, /campistry_presence\.js/);
+    assert.ok(GO.indexOf('integration_hooks.js') < GO.indexOf('campistry_presence.js'),
+        'presence asks integration_hooks which plan this browser is in');
+    assert.ok(GO.indexOf('campistry_enrollment_window.js') < GO.indexOf('campistry_presence.js'));
+    assert.ok(GO.indexOf('campistry_presence.js') < GO.indexOf('campistry_go.js'));
 });

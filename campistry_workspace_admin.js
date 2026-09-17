@@ -92,6 +92,21 @@
                 + (o.input !== undefined
                     ? '<input id="ws-dlg-input" type="text" value="' + esc(o.input) + '" ' +
                       'placeholder="' + esc(o.placeholder || '') + '">' : '')
+                + (o.select
+                    ? '<label style="display:block;font-size:.8rem;font-weight:600;'
+                      + 'color:#475569;margin:14px 0 5px">' + esc(o.select.label || '') + '</label>'
+                      + '<select id="ws-dlg-select">'
+                      + (o.select.options || []).map(function (op) {
+                            return '<option value="' + esc(op.value) + '"'
+                                + (op.value === o.select.value ? ' selected' : '')
+                                + (op.disabled ? ' disabled' : '') + '>' + esc(op.label) + '</option>';
+                        }).join('')
+                      + '</select>'
+                      + (o.select.note
+                            ? '<div style="font-size:.76rem;color:#64748B;margin-top:6px">'
+                              + o.select.note + '</div>'
+                            : '')
+                    : '')
                 + (needsTyping
                     ? '<input id="ws-dlg-word" type="text" autocomplete="off" placeholder="Type '
                       + esc(o.confirmWord) + '">' : '')
@@ -104,6 +119,7 @@
             doc.body.appendChild(ovl);
 
             var input = ovl.querySelector('#ws-dlg-input');
+            var sel = ovl.querySelector('#ws-dlg-select');
             var word = ovl.querySelector('#ws-dlg-word');
             var ok = ovl.querySelector('.ws-ft button:last-child');
             var no = ovl.querySelector('.ws-no');
@@ -117,6 +133,13 @@
             no.onclick = function () { done(null); };
             ok.onclick = function () {
                 if (ok.disabled) return;
+                // With a select, the answer is two things, so it comes back as an
+                // object. Without one it stays a plain string, because every other
+                // caller reads it as one.
+                if (sel) {
+                    done({ text: input ? String(input.value || '').trim() : '', choice: sel.value });
+                    return;
+                }
                 done(input ? String(input.value || '').trim() : true);
             };
             // Clicking the backdrop and Escape both cancel, which is what every
@@ -145,12 +168,25 @@
         } catch (e) { return false; }
     }
 
-    /** The sessions a camp has, to offer as plan names. */
-    function sessionNames() {
+    /**
+     * The camp's sessions, with whether each one carries dates.
+     *
+     * The dates matter as much as the names: pointing a plan at a session is what
+     * makes its camper lists show that half's children, and that works by reading
+     * the live roster as of the session's start date. A session with no dates
+     * cannot move the date, so the picker says so rather than offering a choice
+     * that quietly does nothing.
+     */
+    function sessionList() {
         try {
             var s = (typeof root.loadGlobalSettings === 'function') ? root.loadGlobalSettings() : {};
             var list = (s.campistryMe && s.campistryMe.sessions) || [];
-            return list.map(function (x) { return x && x.name; }).filter(Boolean);
+            var W = root.CampistryEnrollmentWindow || null;
+            return list.map(function (x) {
+                if (!x || !x.name) return null;
+                var win = W ? W.sessionWindow(x) : { from: x.startDate || '', to: x.endDate || '' };
+                return { name: x.name, from: win.from || '', to: win.to || '', dated: !!win.from };
+            }).filter(Boolean);
         } catch (e) { return []; }
     }
 
@@ -237,6 +273,14 @@
                + 'background:' + (here ? '#FFFBEB' : '#fff') + '">'
                + '<strong style="flex:1;min-width:130px">' + esc(w.label)
                + (archived ? ' <span style="font-weight:400;color:var(--slate-500);font-size:.8rem">· past session</span>' : '')
+               // Which children this plan shows. Worth a line on every row: it is
+               // the difference between placing the campers who will be there and
+               // placing the ones who are there now.
+               + (w.session
+                    ? '<span style="display:block;font-weight:400;color:var(--slate-500);'
+                      + 'font-size:.78rem;margin-top:2px">' + esc(w.session) + '’s campers</span>'
+                    : '<span style="display:block;font-weight:400;color:var(--slate-500);'
+                      + 'font-size:.78rem;margin-top:2px">today’s campers</span>')
                + '</strong>'
                + (here ? '<span style="font-size:.78rem;color:#92400E;font-weight:700">You are here</span>'
                        : '<button class="btn-edit" type="button" onclick="CampistryWorkspaceAdmin.go(\'' + esc(w.id) + '\')">Open</button>')
@@ -256,21 +300,50 @@
     A.newSandbox = async function () {
         var c = client(), id = campId();
         if (!c || !id) return say('Not connected.', true);
-        var suggest = sessionNames();
-        var label = await ask({
+        var sessions = sessionList();
+        var suggest = sessions.map(function (x) { return x.name; });
+        var undated = sessions.filter(function (x) { return !x.dated; }).length;
+
+        // WHICH SESSION, ASKED OUT LOUD. This used to be inferred from the plan's
+        // name — if you happened to call the plan exactly what you call the
+        // session, it was linked; "2nd Half Draft" silently was not. That guess
+        // decided which children the plan showed, which is far too much to hang on
+        // a naming coincidence.
+        var opts = [{ value: '', label: 'Not tied to a session — show today\'s campers' }];
+        sessions.forEach(function (x) {
+            opts.push({
+                value: x.name,
+                label: x.name + (x.dated ? ' (' + x.from + (x.to ? ' → ' + x.to : '') + ')'
+                                         : ' — no dates set'),
+                disabled: !x.dated
+            });
+        });
+
+        var answer = await ask({
             title: 'Name this plan',
             bodyHtml: 'A plan is a full copy of your bunks, divisions, periods, routes and league '
-                    + 'setup that you can build ahead of time. Nothing in it is live.'
-                    + (suggest.length
-                        ? '<br><br><span style="color:#64748B">Your sessions: '
-                          + esc(suggest.join(', ')) + '</span>'
-                        : ''),
+                    + 'setup that you can build ahead of time. Nothing in it is live.',
             input: suggest[suggest.length - 1] || '2nd Half',
             placeholder: '2nd Half',
-            okText: 'Create plan'
+            okText: 'Create plan',
+            select: {
+                label: 'This plan is for',
+                value: (sessions.filter(function (x) { return x.dated; })
+                                .slice(-1)[0] || {}).name || '',
+                options: opts,
+                note: 'Campers, families and payments are never copied — a plan tied to a '
+                    + 'session shows the same live roster <strong>as it will be</strong> then, so '
+                    + 'you place the children who will actually be there.'
+                    + (undated
+                        ? '<br><span style="color:#92400E">' + undated + ' session'
+                          + (undated === 1 ? '' : 's') + ' can’t be picked yet — give '
+                          + 'them start and end dates on the Me page first.</span>'
+                        : '')
+            }
         });
-        if (!label) return;
-        label = String(label).trim();
+        if (!answer) return;
+        var label = String(answer.text || '').trim();
+        var forSession = String(answer.choice || '').trim();
         if (!label) return;
 
         var R = root.CampistryWorkspace;
@@ -279,7 +352,7 @@
         try {
             var res = await c.rpc('create_workspace', {
                 p_camp_id: id, p_id: wsId, p_label: label,
-                p_session: suggest.indexOf(label) >= 0 ? label : null
+                p_session: forSession || null
             });
             var d = res && res.data;
             if (!d || !d.success) {
@@ -287,7 +360,9 @@
                     ? 'A plan called that already exists.'
                     : 'Could not create the plan' + (d && d.error ? ': ' + d.error : '.'), true);
             }
-            say('"' + label + '" created — ' + (d.copied || 0) + ' things copied. Open it to start planning.');
+            say('"' + label + '" created — ' + (d.copied || 0) + ' things copied'
+                + (forSession ? ', showing ' + forSession + '’s campers' : '')
+                + '. Open it to start planning.');
             A.render();
         } catch (e) {
             say('Could not create the plan — ' + (e && e.message ? e.message : 'unknown error'), true);

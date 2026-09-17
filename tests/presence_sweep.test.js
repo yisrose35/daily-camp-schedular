@@ -349,3 +349,161 @@ test('the adapter loads AFTER the rule on every page', () => {
             page + ' loads the adapter before the rule');
     });
 });
+
+// ───────────────────────────────────────────────────────────────────────────
+// AS OF WHEN. A plan for 2nd Half shares the one live roster with live, because
+// campers are never copied into a plan — so without this it would show whoever
+// is at camp TODAY to an office building next half's bunks and bus routes. The
+// date moves instead of the data.
+// ───────────────────────────────────────────────────────────────────────────
+
+/** The adapter, in a sandbox that is inside a plan. */
+function loadInPlan(workspace, session) {
+    const s = loadAdapter();
+    s.campistryWorkspace = () => workspace;
+    s.campistryWorkspaceSession = () => session;
+    s.CampistryPresence.refresh();
+    return s;
+}
+
+test('in live, the as-of date is really today', () => {
+    const s = loadInPlan('live', '');
+    const p = s.CampistryPresence;
+    p.provide({ roster: {}, enrollments: ENR, sessions: SESSIONS });
+    const info = p.asOfInfo();
+    assert.strictEqual(info.reason, 'live');
+    assert.strictEqual(info.session, '');
+    assert.strictEqual(info.on, p.today());
+});
+
+test('a plan for 2nd Half shows 2nd Half’s campers, not today’s', () => {
+    // The whole point. Eli is 1st Half only, Mia is 2nd Half only.
+    const s = loadInPlan('second_half', '2nd Half');
+    const p = s.CampistryPresence;
+    p.provide({ roster: { Eli: {}, Mia: {} }, enrollments: ENR, sessions: SESSIONS });
+
+    const info = p.asOfInfo();
+    assert.strictEqual(info.reason, 'sandbox_session');
+    assert.strictEqual(info.session, '2nd Half');
+    assert.strictEqual(info.on, '2026-07-26', 'it reads as of the session start');
+
+    // And the defaults follow it, with no date passed by the caller.
+    assert.strictEqual(p.isHere('Mia'), true);
+    assert.strictEqual(p.isHere('Eli'), false, '1st-half-only must not be in a 2nd-half plan');
+    assert.strictEqual(p.filter(['Eli', 'Mia']).join(','), 'Mia');
+});
+
+test('a plan for 1st Half still shows 1st Half in the middle of the summer', () => {
+    // The other direction, which is the "look back at what we did" case.
+    const s = loadInPlan('archive_20260726_090000', '1st Half');
+    const p = s.CampistryPresence;
+    p.provide({ roster: { Eli: {}, Mia: {} }, enrollments: ENR, sessions: SESSIONS });
+    assert.strictEqual(p.asOfInfo().on, '2026-06-28');
+    assert.strictEqual(p.filter(['Eli', 'Mia']).join(','), 'Eli');
+});
+
+test('a camper on BOTH halves is in every plan', () => {
+    const s = loadInPlan('second_half', '2nd Half');
+    const p = s.CampistryPresence;
+    p.provide({
+        roster: { Eli: {}, Mia: {}, Both: {} },
+        enrollments: Object.assign({}, ENR, {
+            c: { camperName: 'Both', session: '1st Half', status: 'enrolled' },
+            d: { camperName: 'Both', session: '2nd Half', status: 'enrolled' }
+        }),
+        sessions: SESSIONS
+    });
+    assert.strictEqual(p.isHere('Both'), true);
+    assert.strictEqual(p.filter(['Eli', 'Mia', 'Both']).join(','), 'Mia,Both');
+});
+
+test('an explicit date still wins over the plan', () => {
+    // Callers that pass a date mean it — the picker on the Roster page is one.
+    const s = loadInPlan('second_half', '2nd Half');
+    const p = s.CampistryPresence;
+    p.provide({ roster: {}, enrollments: ENR, sessions: SESSIONS });
+    assert.deepStrictEqual(p.filter(['Eli', 'Mia'], '2026-07-05'), ['Eli']);
+});
+
+test('every way of not knowing falls back to today, never to an empty list', () => {
+    // The safety property, restated for the new code path: each of these is a
+    // plan we cannot resolve a date for, and each must show a real roster.
+    const cases = [
+        ['a plan with no session on it', 'second_half', '', 'sandbox_no_session'],
+        ['a session that is not in the camp state', 'second_half', 'Ghost', 'session_not_found']
+    ];
+    cases.forEach(([why, ws, ses, reason]) => {
+        const s = loadInPlan(ws, ses);
+        const p = s.CampistryPresence;
+        p.provide({ roster: { Eli: {}, Mia: {} }, enrollments: ENR, sessions: SESSIONS });
+        const info = p.asOfInfo();
+        assert.strictEqual(info.reason, reason, why);
+        assert.strictEqual(info.on, p.today(), why + ' must read as of today');
+    });
+
+    // A session that exists but carries no dates cannot move the date either.
+    const s = loadInPlan('third', 'Undated');
+    const p = s.CampistryPresence;
+    p.provide({
+        roster: { Eli: {} }, enrollments: ENR,
+        sessions: SESSIONS.concat([{ name: 'Undated', startDate: '', endDate: '' }])
+    });
+    assert.strictEqual(p.asOfInfo().reason, 'session_undated');
+    assert.strictEqual(p.asOfInfo().on, p.today());
+});
+
+test('a page with no workspace layer at all behaves exactly as before', () => {
+    // Most pages do not load integration_hooks' workspace helpers. Asking for
+    // them must not throw, and must not gate.
+    const s = loadAdapter();                    // no campistryWorkspace defined
+    const p = s.CampistryPresence;
+    p.provide({ roster: { Eli: {} }, enrollments: ENR, sessions: SESSIONS });
+    assert.strictEqual(p.asOfInfo().reason, 'live');
+    assert.strictEqual(p.asOfInfo().on, p.today());
+});
+
+test('refresh() drops the as-of date, not just the state', () => {
+    // Re-dating a session, or switching plans in the same page, must not keep
+    // answering for the old one.
+    const s = loadAdapter();
+    const p = s.CampistryPresence;
+    let ws = 'live', ses = '';
+    s.campistryWorkspace = () => ws;
+    s.campistryWorkspaceSession = () => ses;
+    p.provide({ roster: {}, enrollments: ENR, sessions: SESSIONS });
+    assert.strictEqual(p.asOfInfo().on, p.today());
+
+    ws = 'second_half'; ses = '2nd Half';
+    p.refresh();
+    assert.strictEqual(p.asOfInfo().on, '2026-07-26', 'refresh must recompute the as-of date');
+});
+
+test('the summary says which session it is talking about', () => {
+    // "3 already finished" invites "finished by when?" — in a plan the answer is
+    // the session being planned, not today.
+    const s = loadInPlan('second_half', '2nd Half');
+    const p = s.CampistryPresence;
+    p.provide({ roster: { Eli: {}, Mia: {} }, enrollments: ENR, sessions: SESSIONS });
+    const line = p.summary(['Eli', 'Mia']);
+    assert.match(line, /already finished/, 'Eli is done before 2nd Half starts');
+    assert.match(line, /as of 2nd Half/);
+    // Not added when the caller named its own date — it would be a lie.
+    assert.doesNotMatch(p.summary(['Eli', 'Mia'], '2026-07-05'), /as of/);
+});
+
+test('Go filters its Me-derived roster, and only that one', () => {
+    const GO = code('campistry_go.js');
+    assert.match(GO, /function _presentOnly\(all\)/, 'Go needs the filter');
+    assert.match(GO, /return _presentOnly\(meRoster\)/,
+        'the Me-derived roster must be filtered on the way out');
+    // Go standalone is deliberately its own world: a CSV import has no
+    // enrollments behind it, so there is nothing to be absent from.
+    assert.match(GO, /if \(Object\.keys\(_goStandaloneRoster\)\.length > 0\) return _goStandaloneRoster;/,
+        'the standalone roster must NOT be presence-filtered');
+    // The camperId backfill runs over everyone, filtered or not.
+    const fn = GO.slice(GO.indexOf('function getRoster()'));
+    const backfill = fn.indexOf('c.camperId = nextId');
+    const ret = fn.indexOf('return _presentOnly(meRoster)');
+    assert.ok(backfill > 0 && ret > backfill,
+        'ids must be backfilled before the roster is narrowed');
+});

@@ -330,7 +330,17 @@ test('the roster filters by the picker and says how many it is hiding', () => {
     const body = fn.slice(0, fn.indexOf('\nfunction '));
     // Anchored on the GUARD, not just the call: a call sitting inside a
     // disabled branch is not a filter.
-    assert.match(body, /if\(_pres&&_W&&_rosterWhen!=='all'\)\{[\s\S]{0,400}_W\.filterNames\(_rosterWhen,/);
+    //
+    // The slice is read through _rosterWhenDefault() rather than off the variable
+    // directly, so that a plan for 2nd Half opens the roster on 2nd Half. Both the
+    // guard and the call must use that SAME resolved value — reading one from the
+    // resolver and the other from the raw variable is how a picker ends up naming
+    // one session and listing another.
+    assert.match(body, /var _whenNow=_rosterWhenDefault\(\);/,
+        'the slice must be resolved once, into a local');
+    assert.match(body, /if\(_pres&&_W&&_whenNow!=='all'\)\{[\s\S]{0,400}_W\.filterNames\(_whenNow,/);
+    assert.doesNotMatch(body, /_W\.filterNames\(_rosterWhen,/,
+        'the filter must not read the raw variable past the resolver');
     assert.match(body, /enrolledEntries=enrolledEntries\.filter\(function\(pair\)\{return !!_keep\[pair\[0\]\]\}\)/,
         'the filtered list has to replace the one that gets rendered');
     assert.match(body, /_hiddenByWhen=_before-enrolledEntries\.length/);

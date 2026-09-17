@@ -24,7 +24,8 @@
     var U = {};
 
     var BAR_ID = 'campistry-workspace-bar';
-    var _state = { workspaces: [], selected: 'live', label: '', loaded: false, canManage: false };
+    var _state = { workspaces: [], selected: 'live', label: '', session: '',
+                   loaded: false, canManage: false };
 
     function rule() { return root.CampistryWorkspace || null; }
     function current() {
@@ -83,9 +84,21 @@
                  + esc(w.label) + (w.status === 'archived' ? ' (past)' : '') + '</option>';
         });
 
+        // Which campers this sandbox is showing. Said out loud because it is the
+        // one thing that is NOT a copy: the roster is live, and what a sandbox
+        // changes is the DATE it is read at. An office building 2nd Half's bunks
+        // needs to know it is looking at 2nd Half's children and not today's.
+        var who = '';
+        if (_state.session) {
+            who = '<span style="background:#451A03;border:1px solid rgba(254,243,199,.45);'
+                + 'border-radius:5px;padding:2px 8px;white-space:nowrap">Campers: '
+                + esc(_state.session) + '</span>';
+        }
+
         bar.innerHTML =
             '<strong style="font-weight:700;letter-spacing:.02em">PLANNING: '
                 + esc(_state.label || ws).toUpperCase() + '</strong>'
+            + who
             + '<span style="opacity:.92;flex:1;min-width:220px">' + esc(info.detail) + '</span>'
             + '<select id="' + BAR_ID + '-pick" style="font:inherit;padding:3px 7px;border-radius:5px;'
                 + 'border:1px solid rgba(254,243,199,.5);background:#451A03;color:#FEF3C7">'
@@ -157,12 +170,16 @@
                 // tab sat open — the tab moves to live rather than carrying on
                 // writing to keys nothing owns any more.
                 var serverWs = d.selected || 'live';
-                if (serverWs !== current() && typeof root.campistrySetWorkspace === 'function') {
-                    root.campistrySetWorkspace(serverWs);
-                }
                 var found = (_state.workspaces || []).filter(function (w) { return w.id === serverWs; })[0];
                 _state.selected = serverWs;
                 _state.label = found ? found.label : '';
+                _state.session = (found && found.session) || '';
+                // Set the workspace even when the id has not changed: the SESSION
+                // may have (a plan can be pointed at a different one), and presence
+                // reads the session, not the id.
+                if (typeof root.campistrySetWorkspace === 'function') {
+                    root.campistrySetWorkspace(serverWs, _state.session);
+                }
             }
         } catch (e) {
             // A failed refresh must never leave a sandbox bar up for a workspace
@@ -201,7 +218,12 @@
                 return;
             }
         }
-        if (typeof root.campistrySetWorkspace === 'function') root.campistrySetWorkspace(target);
+        // Carry the target's session across the reload, so the page that comes
+        // back already shows the right half's campers on its first render.
+        var tgt = (_state.workspaces || []).filter(function (w) { return w.id === target; })[0];
+        if (typeof root.campistrySetWorkspace === 'function') {
+            root.campistrySetWorkspace(target, (tgt && tgt.session) || '');
+        }
         // Flush anything queued before the keys move under us.
         try { if (typeof root.flushPendingSettingsSync === 'function') root.flushPendingSettingsSync(); } catch (_) {}
         setTimeout(function () { root.location.reload(); }, 60);

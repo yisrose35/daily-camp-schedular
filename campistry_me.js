@@ -71,6 +71,28 @@ var _rosterSubTab='enrolled';  // Roster page's own top tab: enrolled | unenroll
 // head count, bunk list and print-out was wrong by however many had not
 // arrived.
 var _rosterWhen='today';
+// Whether the person has actually picked a slice. Until they have, a sandbox
+// tied to a session gets to choose the opening one — see _rosterWhenDefault().
+var _rosterWhenTouched=false;
+/**
+ * In a plan for 2nd Half, open the roster on 2nd Half.
+ *
+ * Everything else in the app already does this (presence resolves its date from
+ * the plan's session), and a Me page that alone opened on today's children while
+ * the rest of the app showed next half's would be the one inconsistency a person
+ * would have to hold in their head. The picker is right there and still says what
+ * it is showing, so this changes the default, not the choice.
+ */
+function _rosterWhenDefault(){
+    if(_rosterWhenTouched)return _rosterWhen;
+    try{
+        var P=(typeof window!=='undefined'&&window.CampistryPresence)||null;
+        if(!P||typeof P.asOfInfo!=='function')return _rosterWhen;
+        var info=P.asOfInfo();
+        if(info&&info.reason==='sandbox_session'&&info.session)return 'session:'+info.session;
+    }catch(e){}
+    return _rosterWhen;
+}
 // Slice an array to one page. Clamps pageNum into range so a stale page
 // number (filter shrank the result set) never renders an empty page.
 function _paginate(array,pageSize,pageNum){
@@ -96,7 +118,7 @@ function _pagerHtml(total,pageSize,pageNum,onChangeFnName){
 }
 function setRosterPage(n){_rosterPage=n;var inp=document.getElementById('globalSearch');renderCampers(inp?inp.value.trim():'');}
 function setRosterSubTab(t){_rosterSubTab=t;_rosterPage=1;var inp=document.getElementById('globalSearch');renderCampers(inp?inp.value.trim():'');}
-function setRosterWhen(v){_rosterWhen=v||'today';_rosterPage=1;var inp=document.getElementById('globalSearch');renderCampers(inp?inp.value.trim():'');}
+function setRosterWhen(v){_rosterWhen=v||'today';_rosterWhenTouched=true;_rosterPage=1;var inp=document.getElementById('globalSearch');renderCampers(inp?inp.value.trim():'');}
 /** The shared presence rule, or null when the module has not loaded. */
 function _presenceAPI(){return (typeof window!=='undefined'&&window.CampistryEnrollmentWindow)||null}
 // The adapter (campistry_presence.js) reads the synced snapshot on every
@@ -146,8 +168,9 @@ function _rosterOn(){
     var W=_presenceAPI();
     if(!W)return '';
     _freshSessions();
-    if(_rosterWhen.indexOf('session:')===0){
-        var nm=_rosterWhen.slice('session:'.length);
+    var _w=_rosterWhenDefault();
+    if(_w.indexOf('session:')===0){
+        var nm=_w.slice('session:'.length);
         var ses=(sessions||[]).find(function(x){return x&&x.name===nm});
         var w=W.sessionWindow(ses);
         if(w.from)return w.from;
@@ -2614,9 +2637,10 @@ function renderCampers(filter){
     var _W=_presenceAPI();
     var _pres=showUnenrolled?null:_rosterPresence();
     var _hiddenByWhen=0;
-    if(_pres&&_W&&_rosterWhen!=='all'){
+    var _whenNow=_rosterWhenDefault();
+    if(_pres&&_W&&_whenNow!=='all'){
         var _keep={};
-        _W.filterNames(_rosterWhen,{camperNames:enrolledEntries.map(function(p){return p[0]}),
+        _W.filterNames(_whenNow,{camperNames:enrolledEntries.map(function(p){return p[0]}),
                                     enrollments:enrollments,sessions:sessions,roster:roster,
                                     on:_pres.on}).forEach(function(n){_keep[n]=1});
         var _before=enrolledEntries.length;
@@ -2639,8 +2663,8 @@ function renderCampers(filter){
     // — one entry point instead of two parallel ones that created a camper
     // two different ways (Roster wrote straight to roster[], Registration
     // staged an application). No "+ Add Camper" button here anymore.
-    var _sliceLabel=(showUnenrolled||_rosterWhen==='all')?''
-        :(_rosterWhen==='today'?' in camp today':' on '+_rosterWhen.replace(/^session:/,''));
+    var _sliceLabel=(showUnenrolled||_whenNow==='all')?''
+        :(_whenNow==='today'?' in camp today':' on '+_whenNow.replace(/^session:/,''));
     var h='<div class="sec-hd"><div><h2 class="sec-title">Roster</h2><p class="sec-desc">'+enrolledEntries.length+' camper'+(enrolledEntries.length!==1?'s':'')+_sliceLabel+(canStaff?' · '+allStaffRows.length+' staff':'')+(unenrolledEntries.length?' · '+unenrolledEntries.length+' unenrolled':'')+'</p></div><div class="sec-actions"><button class="me-btn me-btn--ghost me-btn--sm" onclick="CampistryMe.manageCustomFields()" title="Define custom fields">⚙ Custom Fields</button><button class="me-btn me-btn--sec me-btn--sm" onclick="CampistryMe.downloadTemplate()">Template</button><button class="me-btn me-btn--sec me-btn--sm" onclick="CampistryMe.openCsv()">Import</button></div></div>';
     h+=_setupChecklistHtml();
 
@@ -2663,7 +2687,7 @@ function renderCampers(filter){
             h+='<label style="font-size:.78rem;color:var(--s500);font-weight:600">Showing</label>';
             h+='<select onchange="CampistryMe.setRosterWhen(this.value)" style="padding:6px 9px;border:1px solid var(--s200);border-radius:var(--r);font-size:.8rem;font-family:inherit;background:#fff">';
             _opts.forEach(function(o){
-                h+='<option value="'+esc(o.value)+'"'+(o.value===_rosterWhen?' selected':'')+'>'+esc(o.label)+'</option>';
+                h+='<option value="'+esc(o.value)+'"'+(o.value===_whenNow?' selected':'')+'>'+esc(o.label)+'</option>';
             });
             h+='</select>';
             if(_hiddenByWhen>0){
@@ -2674,6 +2698,18 @@ function renderCampers(filter){
                   +'switch to <strong>Everyone enrolled</strong> to see '+(_hiddenByWhen===1?'them':'all of them')+'</span>';
             }
             h+='</div>';
+        }
+        else if((sessions||[]).length>1){
+            // MORE THAN ONE SESSION AND NO DATES ON ANY OF THEM. The picker can do
+            // nothing, so it is right not to draw it — but staying silent means a
+            // camp that wants "just show me 2nd half's kids" has no way to find out
+            // that the answer is two dates on the Me page. So say it, once, here,
+            // where they went looking for the control.
+            h+='<div style="font-size:.78rem;color:#92400E;background:#FFFBEB;'
+              +'border:1px solid #FDE68A;border-radius:8px;padding:8px 11px;margin-bottom:12px">'
+              +'Want to see only one session’s campers? Give your sessions '
+              +'<strong>start and end dates</strong> below and a <strong>Showing</strong> '
+              +'picker appears here.</div>';
         }
     }
 

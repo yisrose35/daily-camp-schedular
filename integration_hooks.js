@@ -1746,6 +1746,21 @@
         if (_wsSaved) _wsCurrent = String(_wsSaved);
     } catch (_) {}
 
+    // The SESSION the current sandbox plans for ('2nd Half'), when it has one.
+    //
+    // This rides along with the workspace id rather than being looked up when
+    // needed, because the thing that needs it — presence, deciding which campers
+    // to show — is asked synchronously, hundreds of times per render, on pages
+    // that boot before the workspace bar has finished talking to the server. A
+    // lookup would answer "no session" for the first render and something else
+    // for the second, and a bunk list that changes length on its own is worse
+    // than one that is simply late.
+    var _wsSession = '';
+    try {
+        var _wsSesSaved = sessionStorage.getItem('campistry_workspace_session');
+        if (_wsSesSaved) _wsSession = String(_wsSesSaved);
+    } catch (_) {}
+
     function _wsRule() {
         return (typeof window !== 'undefined' && window.CampistryWorkspace) || null;
     }
@@ -1766,14 +1781,22 @@
      * Point this browser at a workspace. Does NOT persist the choice server-side
      * — that is select_workspace's job; this is the local half, called after it.
      */
-    window.campistrySetWorkspace = function (ws) {
+    window.campistrySetWorkspace = function (ws, session) {
         _wsCurrent = (ws && String(ws)) || 'live';
+        // Live has no session of its own: live means "now", and now is today.
+        _wsSession = (_wsCurrent === 'live') ? '' : ((session && String(session)) || '');
         try {
             if (_wsCurrent === 'live') sessionStorage.removeItem('campistry_workspace');
             else sessionStorage.setItem('campistry_workspace', _wsCurrent);
+            if (_wsSession) sessionStorage.setItem('campistry_workspace_session', _wsSession);
+            else sessionStorage.removeItem('campistry_workspace_session');
         } catch (_) {}
-        log('workspace is now ' + _wsCurrent);
+        log('workspace is now ' + _wsCurrent + (_wsSession ? ' (session: ' + _wsSession + ')' : ''));
         return _wsCurrent;
+    };
+    /** The session the current sandbox plans for, or '' in live / when unset. */
+    window.campistryWorkspaceSession = function () {
+        return (_wsCurrent === 'live') ? '' : _wsSession;
     };
 
     window.loadGlobalSettings = function(key) {

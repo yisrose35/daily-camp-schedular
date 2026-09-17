@@ -126,7 +126,14 @@
     }
 
     /** Drop the cache. Call after anything that changes enrollments or sessions. */
-    P.refresh = function () { _cache = null; _cacheAt = 0; return P; };
+    P.refresh = function () {
+        _cache = null; _cacheAt = 0;
+        // The as-of date too: it is derived from the sessions in that same state,
+        // so leaving it behind would answer for a session that has just been
+        // re-dated, or for a plan the page is no longer in.
+        _asOf = null; _asOfAt = 0;
+        return P;
+    };
 
     /**
      * Hand the state in directly.
@@ -171,13 +178,88 @@
         return false;
     };
 
-    /** Today, in the app's own date format. */
+    /** Today, the real calendar one. Never shifted by a sandbox. */
     P.today = function () {
         var w = W();
         if (w) return w.today();
         var d = new Date();
         return new Date(d.getTime() - d.getTimezoneOffset() * 60000).toISOString().slice(0, 10);
     };
+
+    /**
+     * THE DATE EVERY LIST ANSWERS FOR — today in live, the session's own dates in
+     * a sandbox.
+     *
+     * This is the join between session planning and presence, and it is the whole
+     * reason a sandbox is useful for anything involving children. A sandbox copies
+     * the OPERATIONAL state — bunks, routes, periods — and deliberately does not
+     * copy the roster, because campers, families and money are facts about the
+     * world and there is no such thing as a sandbox camper. So a 2nd Half sandbox
+     * shares the one live roster with live... and would therefore show whoever is
+     * at camp TODAY, in the middle of 1st Half, to an office trying to build 2nd
+     * Half's bunks. They would place children who go home before that half starts
+     * and leave out every child who has not arrived yet.
+     *
+     * The fix is not to copy anything. It is to move the date: a sandbox for a
+     * session reads the same live roster AS OF that session. Nothing is
+     * duplicated, nothing can drift, and every list in the app that already asks
+     * "who is here" gets the right answer without knowing this feature exists.
+     *
+     * Falls back to today whenever it cannot do better — no sandbox, no session on
+     * it, or a session with no dates. That direction is deliberate: today's roster
+     * is a real roster, so the failure shows too many children rather than too few.
+     */
+    P.asOfInfo = function () {
+        // Memoized for the same reason the state read is: isHere() is called once
+        // per camper inside page loops, and this walks the session list.
+        var now = Date.now();
+        if (_asOf && (now - _asOfAt) < CACHE_MS) return _asOf;
+        _asOf = _asOfCompute();
+        _asOfAt = now;
+        return _asOf;
+    };
+
+    var _asOf = null, _asOfAt = 0;
+
+    function _asOfCompute() {
+        var out = { on: P.today(), session: '', sandbox: '', reason: 'live' };
+        var w = W();
+        if (!w) { out.reason = 'rule_not_loaded'; return out; }
+
+        var ws = '';
+        try {
+            if (typeof root.campistryWorkspace === 'function') ws = root.campistryWorkspace() || '';
+        } catch (_) {}
+        if (!ws || ws === 'live') return out;
+        out.sandbox = ws;
+
+        var name = '';
+        try {
+            if (typeof root.campistryWorkspaceSession === 'function') {
+                name = root.campistryWorkspaceSession() || '';
+            }
+        } catch (_) {}
+        // A sandbox that is not pointed at a session is a general scratch copy,
+        // and the honest date for it is today.
+        if (!name) { out.reason = 'sandbox_no_session'; return out; }
+        out.session = name;
+
+        var s = state();
+        var ses = (s.ok ? (s.sessions || []) : []).filter(function (x) {
+            return x && x.name === name;
+        })[0];
+        if (!ses) { out.reason = 'session_not_found'; return out; }
+
+        var win = w.sessionWindow(ses);
+        if (!win.from) { out.reason = 'session_undated'; return out; }
+
+        out.on = win.from;
+        out.reason = 'sandbox_session';
+        return out;
+    }
+
+    /** Just the date — what every default below filters against. */
+    P.asOf = function () { return P.asOfInfo().on; };
 
     /**
      * The full verdict for one camper: {state, reason, session, from, to}.
@@ -193,7 +275,7 @@
         if (!s.ok) return { state: 'active', reason: 'no_camp_state', session: '', from: null, to: null };
         return w.presenceOf({
             camperName: name, enrollments: s.enrollments, sessions: s.sessions,
-            roster: s.roster, on: on || P.today()
+            roster: s.roster, on: on || P.asOf()
         });
     };
 
@@ -209,7 +291,7 @@
      */
     P.filter = function (list, on) {
         if (!Array.isArray(list)) return list;
-        var day = on || P.today();
+        var day = on || P.asOf();
         return list.filter(function (item) {
             var name = Array.isArray(item) ? item[0] : item;
             return P.isHere(name, day);
@@ -219,7 +301,7 @@
     /** Who is NOT here, and why — for the "3 not in this slice" notices. */
     P.absent = function (list, on) {
         if (!Array.isArray(list)) return [];
-        var day = on || P.today();
+        var day = on || P.asOf();
         var out = [];
         list.forEach(function (item) {
             var name = Array.isArray(item) ? item[0] : item;
@@ -245,6 +327,13 @@
         if (done) bits.push(done + ' already finished');
         var other = absent.length - up - done;
         if (other) bits.push(other + ' not enrolled');
+        if (!bits.length) return '';
+        // In a sandbox, "3 already finished" invites the question "finished by
+        // when?" — the answer is the session being planned, not today, so say it.
+        var info = P.asOfInfo();
+        if (!on && info.reason === 'sandbox_session' && info.session) {
+            bits.push('as of ' + info.session);
+        }
         return bits.join(' · ');
     };
 
