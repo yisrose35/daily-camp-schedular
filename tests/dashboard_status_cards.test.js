@@ -31,7 +31,7 @@ test('emailing sits beside texting, and says on or off', () => {
 });
 
 test('a camp cannot switch its own emailing on', () => {
-    const sql = fs.readFileSync(path.join(ROOT, 'migrations/195_camp_email_service.sql'), 'utf8');
+    const sql = fs.readFileSync(path.join(ROOT, 'migrations/196_camp_email_service.sql'), 'utf8');
     assert.match(sql, /ALTER TABLE camp_email_service ENABLE ROW LEVEL SECURITY/);
     assert.ok(!/CREATE POLICY[\s\S]*camp_email_service/.test(sql),
         'no client-facing policy: RLS on with no policy is what makes it service-role only');

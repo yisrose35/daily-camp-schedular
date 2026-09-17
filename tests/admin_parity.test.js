@@ -70,3 +70,41 @@ test('the capability layer already agreed, and still does', () => {
     assert.ok(entAt > 0 && entAt < bypassAt,
         'the entitlement check must stay above the owner/admin bypass');
 });
+
+test('an admin can reach the forms and the messages', () => {
+    // The two things reported as missing. Both resolve to full access for an
+    // admin already — the capability layer has always said so — but nothing
+    // held it there, and it is exactly the kind of thing a later `role ===
+    // "owner"` shortcut takes away without anyone noticing.
+    //
+    // me.enrollment is where the POST-ACCEPTANCE FORM lives: the Customize
+    // Forms menu is drawn behind _pplCanEdit('me.enrollment'), and the builder
+    // itself has no gate of its own.
+    global.window = {};
+    delete require.cache[require.resolve(path.join(ROOT, 'campistry_capabilities.js'))];
+    require(path.join(ROOT, 'campistry_capabilities.js'));
+    const C = global.window.CampistryCapabilities;
+    assert.ok(C, 'the capability registry must load');
+
+    const MUST_HAVE = ['me.enrollment', 'link.messages', 'live.messages', 'me.campers', 'me.billing'];
+    for (const key of MUST_HAVE) {
+        assert.strictEqual(C.resolve(key, { role: 'admin', entitlements: {} }), 'edit',
+            'an admin must keep full access to ' + key);
+    }
+
+    // The post-acceptance builder really is behind that one capability and
+    // nothing stricter, so the assertion above is worth something.
+    const me = fs.readFileSync(path.join(ROOT, 'campistry_me.js'), 'utf8');
+    assert.match(me, /var editReg=_pplCanEdit\('me\.enrollment'\);/);
+    const menu = me.slice(me.indexOf("var editReg=_pplCanEdit('me.enrollment');"),
+                          me.indexOf("var editReg=_pplCanEdit('me.enrollment');") + 1400);
+    assert.match(menu, /openPostAcceptFormConfig\(\)/,
+        'the Post-Acceptance Form entry must sit behind editReg, not an owner check');
+    const opener = me.slice(me.indexOf('function openFormBuilder(kind){'),
+                            me.indexOf('function openFormBuilder(kind){') + 900);
+    assert.ok(!/'owner'/.test(opener), 'the form builder must not gate on owner');
+
+    // And a camp that did not buy the app still cannot reach it, admin or not.
+    assert.strictEqual(C.resolve('me.enrollment', { role: 'admin', entitlements: { link: '*' } }), 'none',
+        'entitlements still outrank the admin bypass');
+});

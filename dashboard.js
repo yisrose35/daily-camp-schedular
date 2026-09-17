@@ -1291,7 +1291,7 @@
     // EMAILING — on or off, said plainly, next to Texting.
     //
     // Sending a camp's parents mail costs the platform real money per message,
-    // so it is something a camp has (migration 195), not something it can
+    // so it is something a camp has (migration 196), not something it can
     // switch on. A camp that cannot see whether it HAS it has no way to
     // understand why an acceptance letter never arrived, which is the whole
     // reason this sits on the dashboard rather than in a settings screen.
@@ -1307,7 +1307,7 @@
         try {
             const { data, error } = await window.supabase.rpc('get_camp_email_service');
             if (error || !data || !data.success) {
-                // Most likely migration 195 is not applied. Say which, rather
+                // Most likely migration 196 is not applied. Say which, rather
                 // than leaving a camp to read "off" as a billing decision.
                 off('Emailing status unknown',
                     'We could not check this camp\'s emailing service. If this persists, the office can send emails by hand from each screen.');

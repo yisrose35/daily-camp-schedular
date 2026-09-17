@@ -10549,6 +10549,11 @@ async function _sendPostAcceptNow(id){
 // since the office already opted into hands-off sending.
 async function _autoSendPostAccept(id){
     var e=enrollments[id]; if(!e||!e.parentEmail)return;
+    var svc=await _emailServiceOn();
+    if(!svc.enabled){
+        toast(_emailBlockedReason(svc)+' Send the post-acceptance form from the applicant\u2019s Review panel.','error');
+        return;
+    }
     var url=_postAcceptUrl(id);
     var campName='';try{var ss=JSON.parse(localStorage.getItem('campGlobalSettings_v1')||'{}');campName=ss.campName||ss.camp_name||'Camp';}catch(ex){}
     var subject='A few more choices for '+(e.camperName||'your camper');
@@ -10943,8 +10948,9 @@ function updateEnrollStatus(id,status,opts){
             if(!r)return;
             save();
             if(opts.silent)return;   // the bulk caller reports for the whole batch
-            if(r.sent)toast('Portal invite emailed to '+r.sent+' parent'+(r.sent>1?'s':''));
-            else if(r.failed)toast('Accepted, but the invite email failed: '+(r.error||'unknown')+' — send it from the row.','error');
+            if(r.blocked)toast(r.blocked+' The access code is ready — send it from the row.','error');
+            else if(r.sent)toast('Acceptance letter emailed to '+r.sent+' parent'+(r.sent>1?'s':''));
+            else if(r.failed)toast('Accepted, but the letter failed to send: '+(r.error||'unknown')+' — send it from the row.','error');
         });
     }else if(!opts.silent && firstAccept){
         generateParentInvite(id);
@@ -10983,6 +10989,68 @@ async function bulkEnrollStatus(status){
     save(); _refreshPplIfActive();
     toast(verb+' '+ids.length+' application'+(ids.length>1?'s':'')
         +(status==='accepted'&&_autoInviteOn()?' — emailing portal invites…':''));
+}
+
+// ─── WHAT THE ACCEPTANCE LETTER NEEDS TO KNOW ────────────────────────────────
+
+/**
+ * The camp's own number, for the campNumber-camperId payment reference.
+ *
+ * Lives in deposit settings (the bank-memo matcher owns it), which is a round
+ * trip away -- so it is fetched once and cached. A camp that has not set one
+ * gets a letter with no reference section rather than a blank line, which is
+ * what _acceptanceLetterFor's builder already handles.
+ */
+var _campNumberCache=null;
+async function _campNumber(){
+    if(_campNumberCache!==null)return _campNumberCache;
+    _campNumberCache='';
+    try{
+        var client=(window.CampistryDB&&window.CampistryDB.getClient)?window.CampistryDB.getClient():window.supabase;
+        var cid=getCampId();
+        if(client&&client.rpc&&cid){
+            var r=await client.rpc('get_camp_deposit_settings',{p_camp_id:cid});
+            if(r&&!r.error&&r.data&&r.data.success)_campNumberCache=String(r.data.campNumber||'');
+        }
+    }catch(e){ console.log('[Me] camp number unknown:',e&&e.message); }
+    return _campNumberCache;
+}
+
+/**
+ * Has this camp paid for the emailing service? (migration 196)
+ *
+ * Cached for the page's life: it is a billing fact, it does not change while
+ * somebody is accepting applications, and asking once per acceptance would put
+ * a round trip in front of every batch.
+ *
+ * UNKNOWN IS TREATED AS ALLOWED, deliberately. The RPC is missing until 196 is
+ * applied, and failing closed there would silently stop every camp emailing
+ * the moment this ships -- the exact regression the migration grandfathers
+ * every existing camp to avoid. The real gate is the server's; this is so the
+ * office can be told why nothing went out.
+ */
+var _emailServiceCache=null;
+async function _emailServiceOn(){
+    if(_emailServiceCache!==null)return _emailServiceCache;
+    _emailServiceCache={enabled:true,reason:'unknown'};
+    try{
+        var client=(window.CampistryDB&&window.CampistryDB.getClient)?window.CampistryDB.getClient():window.supabase;
+        if(client&&client.rpc){
+            var r=await client.rpc('get_camp_email_service');
+            if(r&&!r.error&&r.data&&r.data.success){
+                _emailServiceCache={enabled:!!r.data.enabled,reason:r.data.reason||''};
+            }
+        }
+    }catch(e){ console.log('[Me] email service unknown:',e&&e.message); }
+    return _emailServiceCache;
+}
+
+/** Why an automatic email did not go, in words an office can act on. */
+function _emailBlockedReason(svc){
+    if(!svc||svc.enabled)return '';
+    return svc.reason==='switched_off'
+        ? 'Emailing is switched off for this camp, so nothing was sent automatically.'
+        : 'Your plan does not include emailing, so nothing was sent automatically.';
 }
 
 // ─── PARENT PORTAL INVITE ────────────────────────────────────────────────────
@@ -11040,6 +11108,14 @@ function generateParentInvite(enrollId){
  */
 async function _autoSendParentInvite(enrollId){
     var e=enrollments[enrollId]; if(!e)return {sent:0,failed:0};
+    // Automatic emailing is something the camp pays for (migration 196). The
+    // invite is still CREATED -- the access code exists either way and the
+    // office can send it by hand from the row -- only the sending waits.
+    var svc=await _emailServiceOn();
+    if(!svc.enabled){
+        generateParentInvite(enrollId);
+        return {sent:0,failed:0,blocked:_emailBlockedReason(svc)};
+    }
     var camperFirst=(e.camperName||'your camper').split(' ')[0];
     var results;
     try{
@@ -11050,11 +11126,12 @@ async function _autoSendParentInvite(enrollId){
     }
     if(!results||!results.length)return {sent:0,failed:0};
 
+    var extras=await _letterExtrasFor(enrollId);
     var sent=0,failed=0,lastErr='';
     for(var i=0;i<results.length;i++){
         var p=results[i];
         if(!p||p.error||!p.email)continue;
-        var mail=_inviteEmailFor(p,camperFirst);
+        var mail=_inviteEmailFor(p,camperFirst,extras);
         try{
             await callEdgeFunctionAuthed('send-broadcast',{campId:getCampId(),
                 to:[{email:p.email,name:p.name||''}],subject:mail.subject,body:mail.body,
@@ -11484,17 +11561,17 @@ function _showInviteModal(enrollId,primary,secondary){
             h+='</div></div>';
         }
 
+        // THE REAL LETTER, not a description of it.
+        //
+        // This used to be a third hand-written copy of the email body, so the
+        // office previewed one thing and the parent received another -- and
+        // nothing would ever have told anyone. It is filled in by
+        // _fillInvitePreview below from the same builder that does the
+        // sending, which is the only way the two can be guaranteed to agree.
         h+='<details style="margin-bottom:14px;">';
         h+='<summary style="font-size:.8rem;font-weight:600;color:var(--s600);cursor:pointer;user-select:none;">Preview email message</summary>';
-        h+='<div style="margin-top:10px;background:#fff;border:1px solid var(--s200);border-radius:8px;padding:14px;font-size:.82rem;line-height:1.7;color:var(--s700);white-space:pre-wrap;">';
-        h+='Dear '+esc(pFirst)+',\n\nWe\'re excited to let you know that <strong>'+esc(firstName)+'</strong> has been accepted to camp!\n\n';
-        if(p.accessCode){
-            h+='Your access code for the Campistry Link parent portal is: <strong>'+esc(p.accessCode)+'</strong>\n\nGo to the portal, create your account, and enter this code to get started.';
-        }else{
-            h+='Click the link below to get started:\n\n<a href="'+esc(p.url)+'" style="color:#3B82F6;">'+esc(p.url)+'</a>';
-        }
-        h+='\n\nWe look forward to a wonderful summer!\n\nCamp Office';
-        h+='</div></details>';
+        h+='<div id="invitePreview'+which+'" style="margin-top:10px;background:#fff;border:1px solid var(--s200);border-radius:8px;padding:14px;font-size:.82rem;line-height:1.7;color:var(--s700);white-space:pre-wrap;">Loading the letter\u2026</div>';
+        h+='</details>';
 
         if(p.email){
             h+='<div style="display:flex;align-items:center;justify-content:space-between;gap:10px;">';
@@ -11523,6 +11600,36 @@ function _showInviteModal(enrollId,primary,secondary){
 
     h+='</div>';
     showModal('Parent Portal Invite',h);
+    // The letter needs the camp number, which is a round trip, so the modal
+    // opens first and the preview fills itself in.
+    _fillInvitePreview(enrollId,firstName,primary,secondary);
+}
+
+/** Put the REAL letter into the preview boxes the modal just drew. */
+async function _fillInvitePreview(enrollId,camperFirst,primary,secondary){
+    var extras;
+    try{ extras=await _letterExtrasFor(enrollId); }catch(e){ extras={}; }
+    [[1,primary],[2,secondary]].forEach(function(pair){
+        var box=document.getElementById('invitePreview'+pair[0]);
+        if(!box||!pair[1])return;
+        try{
+            var mail=_inviteEmailFor(pair[1],camperFirst,extras);
+            box.textContent=mail.body;
+            // What the letter could not say. Worth showing the office HERE,
+            // where they can still fix it, rather than after it has gone.
+            if(mail.missing&&mail.missing.length){
+                var warn=document.createElement('div');
+                warn.style.cssText='margin-top:10px;padding:8px 10px;background:#FFF7ED;border:1px solid #FDBA74;'
+                    +'border-radius:6px;font-size:.76rem;color:#9A3412;white-space:normal;line-height:1.5';
+                warn.textContent='Not in this letter: '+mail.missing.join(', ')
+                    +'. Fill those in and the letter carries them automatically.';
+                box.appendChild(warn);
+            }
+        }catch(e){
+            box.textContent='Could not build the preview.';
+            console.warn('[Me] invite preview failed:',e&&e.message);
+        }
+    });
 }
 // Fires the actual email for one parent from the Parent Portal Invite modal
 // (window._inviteModalCtx, stashed by _showInviteModal) — mirrors
@@ -11532,33 +11639,80 @@ function _campNameForEmail(){
 }
 
 /**
- * The invite email itself.
+ * The acceptance letter.
  *
- * One builder, used by the modal's Send button AND by the automatic send on
- * acceptance -- two copies of this would drift, and the parent would get a
- * different email depending on which way the office happened to accept them.
+ * ONE email, replacing the bare portal invite that used to carry an access
+ * code and nothing else. A family now gets the two numbers they need all
+ * summer -- the camper ID and the camp number -- in the same message that
+ * tells them how to get in, so the first time either matters is not a payment
+ * arriving with no reference that nobody can place.
+ *
+ * One builder, used by the modal's Send button AND the automatic send, so a
+ * parent cannot get a different letter depending on how the office happened to
+ * accept them. The wording itself lives in campistry_acceptance_letter.js,
+ * which is pure and therefore testable; this only gathers the facts.
+ *
+ * `extras` carries what only the caller knows: the enrollment (for the camper
+ * ID, session and post-acceptance link) and the camp number.
  */
-function _inviteEmailFor(p,camperFirst){
-    var pFirst=(p.name||p.email||'Parent').split(' ')[0];
+function _inviteEmailFor(p,camperFirst,extras){
     var campName=_campNameForEmail();
-    var body='Dear '+pFirst+',\n\nWe\'re excited to let you know that '+camperFirst+' has been accepted to camp!\n\n';
-    if(p.accessCode){
-        body+='Your access code for the Campistry Link parent portal is: '+p.accessCode+'\n\nGo to the portal, create your account, and enter this code to get started.';
-    }else{
-        body+='Click the link below to get started:\n\n'+p.url;
+    var A=window.CampistryAcceptanceLetter;
+    var x=extras||{};
+    if(!A){
+        // The module did not load. A plain letter is far better than none --
+        // and better than a broken one, so it says only what it is sure of.
+        var body='Dear '+((p.name||p.email||'Parent').split(' ')[0])+',\n\n'
+            +camperFirst+' has been accepted to '+(campName||'camp')+'.\n\n'
+            +(p.accessCode
+                ? 'Your Campistry Link access code is: '+p.accessCode+'\n\nGo to the portal, create your account, and enter this code.'
+                : 'Get started here:\n\n'+p.url)
+            +'\n\nWe look forward to a wonderful summer.\n\n'+(campName||'Camp')+' Office';
+        console.warn('[Me] acceptance letter module missing — sent the short version');
+        return {subject:camperFirst+' is accepted \u2014 welcome to '+(campName||'camp'),body:body,campName:campName,missing:[]};
     }
-    body+='\n\nWe look forward to a wonderful summer!\n\n'+(campName||'Camp')+' Office';
+    var letter=A.build({
+        camperName:x.camperName||camperFirst,
+        camperId:x.camperId||'',
+        parentName:p.name||p.email||'',
+        campName:campName,
+        session:x.session||'',
+        accessCode:p.accessCode||'',
+        portalUrl:p.url||'',
+        campNumber:x.campNumber||'',
+        postAcceptUrl:x.postAcceptUrl||'',
+        officeEmail:x.officeEmail||'',
+        officePhone:x.officePhone||''
+    });
+    return {subject:letter.subject,body:letter.body,campName:campName,missing:letter.missing};
+}
+
+/** Everything the letter needs about one application, gathered in one place. */
+async function _letterExtrasFor(enrollId){
+    var e=enrollments[enrollId]||{};
+    var r=roster[e.camperName]||{};
+    var settings={};
+    try{ settings=JSON.parse(localStorage.getItem('campGlobalSettings_v1')||'{}'); }catch(ex){}
+    var me=settings.campistryMe||{};
     return {
-        subject:'Welcome to '+(campName||'Camp')+' \u2014 '+camperFirst+'\'s Parent Portal',
-        body:body,
-        campName:campName
+        camperName:e.camperName||'',
+        camperId:r.camperId||e.camperId||'',
+        session:e.session||'',
+        campNumber:await _campNumber(),
+        // Only when the camp actually has a post-acceptance form turned on --
+        // pointing a parent at a form nobody configured is worse than silence.
+        postAcceptUrl:(function(){
+            try{ return getPostAcceptFormConfig()?_postAcceptUrl(enrollId):''; }catch(ex){ return ''; }
+        })(),
+        officeEmail:me.officeEmail||settings.officeEmail||'',
+        officePhone:me.officePhone||settings.officePhone||''
     };
 }
 
 async function _sendInviteEmailNow(which,btnEl){
     var ctx=window._inviteModalCtx; if(!ctx)return;
     var p=which===2?ctx.secondary:ctx.primary; if(!p||!p.email)return;
-    var mail=_inviteEmailFor(p,ctx.camperFirst);
+    var mail=_inviteEmailFor(p,ctx.camperFirst,await _letterExtrasFor(ctx.enrollId));
     var subject=mail.subject, body=mail.body, campName=mail.campName;
     var btn=btnEl||document.getElementById('inviteSendBtn'+which);
     var origLabel=btn?btn.textContent:'';

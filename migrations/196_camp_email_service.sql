@@ -1,5 +1,5 @@
 -- =============================================================================
--- Migration 195: the emailing service, as a thing a camp pays for.
+-- Migration 196: the emailing service, as a thing a camp pays for.
 --
 -- Campistry can send a camp's parents mail (acceptance letters, the
 -- post-acceptance form, receipts, broadcasts) and that costs the platform real
@@ -45,7 +45,7 @@ ALTER TABLE camp_email_service ENABLE ROW LEVEL SECURITY;
 -- ON CONFLICT DO NOTHING so re-running never re-grants a camp that was
 -- deliberately switched off afterwards.
 INSERT INTO camp_email_service (camp_id, enabled, note)
-SELECT c.id, true, 'granted automatically when the email gate was introduced (195)'
+SELECT c.id, true, 'granted automatically when the email gate was introduced (196)'
   FROM camps c
 ON CONFLICT (camp_id) DO NOTHING;
 
