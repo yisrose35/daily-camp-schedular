@@ -377,8 +377,9 @@
             return;
         }
 
-        // Only show team management for owners
-        if (window.AccessControl?.getCurrentRole() === 'owner') {
+        // Owners and admins — same reasoning as the dashboard's Team tab.
+        const _tmRole = window.AccessControl?.getCurrentRole();
+        if (_tmRole === 'owner' || _tmRole === 'admin') {
             // Create subdivisions card
             let subdivisionsCard = document.getElementById('subdivisions-card');
             if (!subdivisionsCard) {
@@ -431,7 +432,7 @@
             showGenerateButton: role !== 'viewer',
             showClearButton: role !== 'viewer',
             showEditButtons: role !== 'viewer',
-            showTeamSection: role === 'owner',
+            showTeamSection: role === 'owner' || role === 'admin',
             showSubdivisionsSection: role === 'owner' || role === 'admin',
             canDragDrop: role !== 'viewer',
             canInlineEdit: role !== 'viewer'

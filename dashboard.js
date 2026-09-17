@@ -525,8 +525,9 @@
                 _setSetupTabVisible('dates', false);
             }
 
-        } else if (userRole === 'owner') {
-            // Owner sees everything
+        } else if (userRole === 'owner' || userRole === 'admin') {
+            // Owner and admin see everything here. The gates that really are
+            // the owner's alone live where the irreversible thing happens.
             checkAccessControl();
             _setSetupTabVisible('dates', true);
             _setSessionsCardVisible(true);
@@ -931,8 +932,12 @@
     // CHECK ACCESS CONTROL (RBAC)
     // ========================================
     async function checkAccessControl() {
-        // Only show team section for owners
-        if (userRole !== 'owner') {
+        // Owners AND admins. An admin who cannot open Team & Access cannot add
+        // a counselor, fix a permission or see who has what -- which is most
+        // of what an office admin is for. The things that genuinely belong to
+        // the owner alone (erasing the camp, connecting the payout account)
+        // are gated where they happen, not by hiding the whole section.
+        if (userRole !== 'owner' && userRole !== 'admin') {
             _setSetupTabVisible('team', false);
             return;
         }
@@ -947,7 +952,7 @@
                     const role = window.AccessControl.getCurrentRole();
                     console.log('Current user role:', role);
 
-                    if (role === 'owner') {
+                    if (role === 'owner' || role === 'admin') {
                         if (teamAccessSection) {
                             _setSetupTabVisible('team', true);
 
@@ -968,7 +973,7 @@
         await checkRole();
 
         document.addEventListener('campistry-access-loaded', async (e) => {
-            if (e.detail.role === 'owner') {
+            if (e.detail.role === 'owner' || e.detail.role === 'admin') {
                 _setSetupTabVisible('team', true);
                 if (window.TeamSubdivisionsUI) {
                     document.getElementById('team-access-summary-placeholder')?.remove();
@@ -1509,8 +1514,12 @@
                 return;
             }
 
+            // Deliberately still owner-only, and the one on this screen that
+            // stays that way: connecting Stripe decides which bank account the
+            // camp's money lands in. That is an ownership decision, not an
+            // office one, however much else an admin can do.
             const canConnect = userRole === 'owner';
-            const ownerNote = canConnect ? '' : '<p style="margin:6px 0 0;font-size:0.78rem;color:var(--slate-400);">Only the camp owner can connect Stripe.</p>';
+            const ownerNote = canConnect ? '' : '<p style="margin:6px 0 0;font-size:0.78rem;color:var(--slate-400);">Only the camp owner can connect Stripe — it decides where the camp\'s money is paid out.</p>';
 
             const disconnectBtn = canConnect
                 ? '<button type="button" class="btn-secondary" style="margin-left:8px;" onclick="disconnectCampStripe(this)">Disconnect</button>' : '';
@@ -2179,7 +2188,8 @@
         // hydration still happens — just safely, against the real numbers.
         if (document.getElementById('sessionsList')) {
             loadSessionsSection();
-            if (userRole === 'owner') loadCampDates(false);
+            // Camp dates are ordinary configuration, not an ownership decision.
+            if (userRole === 'owner' || userRole === 'admin') loadCampDates(false);
         }
     });
     // Safety fallback — a camp with no cloud config, or a failed/unusually

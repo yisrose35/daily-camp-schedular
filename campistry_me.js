@@ -8563,6 +8563,10 @@ function _collectPostAcceptFormConfigDraft(){
         fields:_readAdvFields('paf',PAF_FIELD_CATALOG),
         sectionOrder:_readSectionOrder('paf'),
         autoSend:!!(document.getElementById('pafAutoSend')&&document.getElementById('pafAutoSend').checked),
+        // Read here because this is where the tick lives, but it is a camp
+        // setting rather than part of this form's config -- _paSaveInviteAuto
+        // puts it on enrollSettings where _autoInviteOn looks for it.
+        _inviteAuto:!!(document.getElementById('paInviteAutoSend')&&document.getElementById('paInviteAutoSend').checked),
         attachedListIds:Array.prototype.map.call(document.querySelectorAll('.pafListAttach:checked'),function(cb){return cb.value;}),
         printableList:{
             name:(document.getElementById('pafPkName')?.value||'').trim(),
@@ -9509,6 +9513,13 @@ function _buildPafPanelHtml(){
         +'<input type="checkbox" id="pafAutoSend" '+(fc.autoSend?'checked':'')+' style="accent-color:var(--me);flex-shrink:0;width:16px;height:16px">'
         +'<div><div style="font-size:.85rem;font-weight:600;color:var(--s800)">Send automatically on acceptance</div>'
         +'<div style="font-size:.72rem;color:var(--s400)">When on, this form is emailed the moment an applicant is marked Accepted. When off, send it yourself from the applicant\'s Review panel whenever you\'re ready.</div></div></label>';
+    // The portal invite is a separate email with its own switch, but it is the
+    // same question asked at the same moment, so it belongs beside it rather
+    // than in a settings screen nobody would think to open.
+    sendHtml+='<label style="display:flex;align-items:center;gap:10px;padding:8px 0 4px;cursor:pointer;border-top:1px solid var(--s100);margin-top:8px">'
+        +'<input type="checkbox" id="paInviteAutoSend" '+(_autoInviteOn()?'checked':'')+' style="accent-color:var(--me);flex-shrink:0;width:16px;height:16px">'
+        +'<div><div style="font-size:.85rem;font-weight:600;color:var(--s800)">Email the parent portal invite on acceptance</div>'
+        +'<div style="font-size:.72rem;color:var(--s400)">Accepting a family creates their portal access code. With this on, the code is emailed to them straight away \u2014 including when you accept a batch at once. With it off, nothing is sent until you press Send in the invite window.</div></div></label>';
     h+=_accCard('Sending',sendHtml,{open:true});
 
     var pafQSplit=_customQuestionsSplit('paf',fc.customQuestions);
@@ -9591,6 +9602,15 @@ function addPafCustomQ(){ addCustomQ('paf'); }
 
 function savePostAcceptFormConfig(){
     paFormConfig=_collectPostAcceptFormConfigDraft();
+    // The invite switch rides in on this draft because that is where its tick
+    // lives, but it is a camp setting, not part of this form -- so it is moved
+    // onto enrollSettings and taken back off the config before either is
+    // stored. Leaving it on paFormConfig would put a camp-wide rule somewhere
+    // nothing reads it.
+    if(paFormConfig&&Object.prototype.hasOwnProperty.call(paFormConfig,'_inviteAuto')){
+        enrollSettings.autoSendParentInvite=!!paFormConfig._inviteAuto;
+        delete paFormConfig._inviteAuto;
+    }
     save();
     closeFormBuilder();
     toast('Post-acceptance form configuration saved');
@@ -10858,9 +10878,22 @@ function updateEnrollStatus(id,status,opts){
     // Bulk callers pass silent:true and do one save/render/toast for the whole batch.
     if(!opts.silent){ save();_refreshPplIfActive();toast('Status updated to '+status); }
 
-    // On first acceptance, generate a parent portal invite link (skipped in bulk
-    // to avoid a burst of invite generation; the office can invite from the row).
-    if(!opts.silent && status==='accepted'&&prev!=='accepted'&&prev!=='enrolled'){
+    // On first acceptance, generate a parent portal invite link.
+    //
+    // Bulk accept passes silent:true and used to skip this entirely, so a
+    // batch of families were accepted, given nothing, and never told. It now
+    // creates and SENDS for them too when the camp has auto-send on -- that
+    // is the case the office most needs it for.
+    var firstAccept=(status==='accepted'&&prev!=='accepted'&&prev!=='enrolled');
+    if(firstAccept&&_autoInviteOn()){
+        _autoSendParentInvite(id).then(function(r){
+            if(!r)return;
+            save();
+            if(opts.silent)return;   // the bulk caller reports for the whole batch
+            if(r.sent)toast('Portal invite emailed to '+r.sent+' parent'+(r.sent>1?'s':''));
+            else if(r.failed)toast('Accepted, but the invite email failed: '+(r.error||'unknown')+' — send it from the row.','error');
+        });
+    }else if(!opts.silent && firstAccept){
         generateParentInvite(id);
         // Post-acceptance form: only fires if the camp turned "Send automatically
         // on acceptance" on in that form's builder — otherwise the office sends
@@ -10894,10 +10927,25 @@ async function bulkEnrollStatus(status){
         if(!okDecline)return;
     }
     ids.forEach(function(id){ updateEnrollStatus(id,status,{silent:true}); });
-    save(); _refreshPplIfActive(); toast(verb+' '+ids.length+' application'+(ids.length>1?'s':''));
+    save(); _refreshPplIfActive();
+    toast(verb+' '+ids.length+' application'+(ids.length>1?'s':'')
+        +(status==='accepted'&&_autoInviteOn()?' — emailing portal invites…':''));
 }
 
 // ─── PARENT PORTAL INVITE ────────────────────────────────────────────────────
+
+/**
+ * Does this camp email the portal invite the moment someone is accepted?
+ *
+ * ON by default, deliberately. Accepting a family and telling them nothing is
+ * not a state any camp wants; the old behaviour -- mint an access code, show a
+ * modal, and rely on somebody pressing Send for each parent -- was an opt-out
+ * dressed as a default. A camp that would rather send invites by hand can turn
+ * it off, and the modal still works exactly as it did.
+ */
+function _autoInviteOn(){
+    return (enrollSettings&&enrollSettings.autoSendParentInvite!==false);
+}
 
 function _genToken(){
     var arr=new Uint8Array(32);
@@ -10923,6 +10971,51 @@ function _parentPortalUrl(token){
 
 function generateParentInvite(enrollId){
     _syncParentInviteSnapshot(enrollId,false);
+}
+
+/**
+ * Create the invite AND email it, with no modal and nobody to press Send.
+ *
+ * Accepting an applicant used to mint a portal access code and then stop:
+ * the code existed, the email did not, and the only way to send it was a
+ * button inside a modal the office had to notice and press -- per parent.
+ * Bulk accept did not even get that far, because it skips invite generation
+ * entirely. So families were accepted and never told.
+ *
+ * This is the same email the modal sends, built by the same function, so the
+ * two cannot drift.
+ */
+async function _autoSendParentInvite(enrollId){
+    var e=enrollments[enrollId]; if(!e)return {sent:0,failed:0};
+    var camperFirst=(e.camperName||'your camper').split(' ')[0];
+    var results;
+    try{
+        results=await _syncParentInviteSnapshot(enrollId,false,{returnOnly:true});
+    }catch(err){
+        console.error('[Me] auto invite: could not create the invite:',err&&err.message);
+        return {sent:0,failed:1,error:(err&&err.message)||'could not create the invite'};
+    }
+    if(!results||!results.length)return {sent:0,failed:0};
+
+    var sent=0,failed=0,lastErr='';
+    for(var i=0;i<results.length;i++){
+        var p=results[i];
+        if(!p||p.error||!p.email)continue;
+        var mail=_inviteEmailFor(p,camperFirst);
+        try{
+            await callEdgeFunctionAuthed('send-broadcast',{campId:getCampId(),
+                to:[{email:p.email,name:p.name||''}],subject:mail.subject,body:mail.body,
+                method:'email',campName:mail.campName});
+            sent++;
+            // Stamped so the office can see it went, and so a second accept
+            // does not quietly send it twice.
+            e.inviteEmailedDate=new Date().toISOString();
+        }catch(err){
+            failed++; lastErr=(err&&err.message)||'unknown error';
+            console.error('[Me] auto invite email failed for',p.email,lastErr);
+        }
+    }
+    return {sent:sent,failed:failed,error:lastErr};
 }
 
 // Shared by saveCamper() (after any roster edit) and bunk-staff add/remove —
@@ -11149,7 +11242,8 @@ function _syncInvitesForBunk(bunkName){
 //   silent=true  — background resync only. NEVER creates a brand-new
 //     invite/access-code the admin never asked for — it only refreshes an
 //     invite that's already active, and never shows any UI.
-function _syncParentInviteSnapshot(enrollId,silent){
+function _syncParentInviteSnapshot(enrollId,silent,opts){
+    opts=opts||{};
     var e=enrollments[enrollId]; if(!e)return;
     var parentEmail=e.parentEmail||e.parent1Email||'';
     var r0=roster[e.camperName]||{};
@@ -11256,7 +11350,17 @@ function _syncParentInviteSnapshot(enrollId,silent){
     }
 
     if(!silent){
-        Promise.all([doUpsert(parentEmail,parentName),doUpsert(parent2Email,parent2Name)]).then(function(results){
+        var work=Promise.all([doUpsert(parentEmail,parentName),doUpsert(parent2Email,parent2Name)]);
+        // returnOnly: the caller is sending the email itself and does not want
+        // a modal in the way. Same creation, different ending.
+        if(opts.returnOnly){
+            return work.then(function(results){
+                var primary=results[0];
+                if(!primary||primary.error)throw new Error((primary&&primary.error)||'invite failed');
+                return results.filter(function(r){ return r && !r.error && r.email; });
+            });
+        }
+        work.then(function(results){
             var primary=results[0],secondary=results[1];
             if(!primary||primary.error){toast('Could not save invite'+(primary&&primary.error?': '+primary.error:'')+'. Run migration 011 in Supabase.');return;}
             if(secondary&&secondary.error){console.error('[Me] Second parent invite failed:',secondary.error);secondary=null;}
@@ -11370,19 +11474,39 @@ function _showInviteModal(enrollId,primary,secondary){
 // Fires the actual email for one parent from the Parent Portal Invite modal
 // (window._inviteModalCtx, stashed by _showInviteModal) — mirrors
 // _sendContractOfferNow's real-send-vs-toast-and-fall-back-to-copy shape.
-async function _sendInviteEmailNow(which,btnEl){
-    var ctx=window._inviteModalCtx; if(!ctx)return;
-    var p=which===2?ctx.secondary:ctx.primary; if(!p||!p.email)return;
+function _campNameForEmail(){
+    try{var ss=JSON.parse(localStorage.getItem('campGlobalSettings_v1')||'{}');return ss.campName||ss.camp_name||'Camp';}catch(ex){return 'Camp';}
+}
+
+/**
+ * The invite email itself.
+ *
+ * One builder, used by the modal's Send button AND by the automatic send on
+ * acceptance -- two copies of this would drift, and the parent would get a
+ * different email depending on which way the office happened to accept them.
+ */
+function _inviteEmailFor(p,camperFirst){
     var pFirst=(p.name||p.email||'Parent').split(' ')[0];
-    var campName='';try{var ss=JSON.parse(localStorage.getItem('campGlobalSettings_v1')||'{}');campName=ss.campName||ss.camp_name||'Camp';}catch(ex){}
-    var subject='Welcome to '+(campName||'Camp')+' — '+ctx.camperFirst+'\'s Parent Portal';
-    var body='Dear '+pFirst+',\n\nWe\'re excited to let you know that '+ctx.camperFirst+' has been accepted to camp!\n\n';
+    var campName=_campNameForEmail();
+    var body='Dear '+pFirst+',\n\nWe\'re excited to let you know that '+camperFirst+' has been accepted to camp!\n\n';
     if(p.accessCode){
         body+='Your access code for the Campistry Link parent portal is: '+p.accessCode+'\n\nGo to the portal, create your account, and enter this code to get started.';
     }else{
         body+='Click the link below to get started:\n\n'+p.url;
     }
     body+='\n\nWe look forward to a wonderful summer!\n\n'+(campName||'Camp')+' Office';
+    return {
+        subject:'Welcome to '+(campName||'Camp')+' \u2014 '+camperFirst+'\'s Parent Portal',
+        body:body,
+        campName:campName
+    };
+}
+
+async function _sendInviteEmailNow(which,btnEl){
+    var ctx=window._inviteModalCtx; if(!ctx)return;
+    var p=which===2?ctx.secondary:ctx.primary; if(!p||!p.email)return;
+    var mail=_inviteEmailFor(p,ctx.camperFirst);
+    var subject=mail.subject, body=mail.body, campName=mail.campName;
     var btn=btnEl||document.getElementById('inviteSendBtn'+which);
     var origLabel=btn?btn.textContent:'';
     if(btn){btn.disabled=true;btn.textContent='Sending…';}
