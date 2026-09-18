@@ -16029,6 +16029,17 @@ function renderBilling(){
             var statusBadge=l.status==='unbilled'?_flatStatus('Not Billed'):l.status==='paid'?_flatStatus('Paid','ok'):l.status==='overdue'?_flatStatus('Overdue','err'):l.status==='partial'?_flatStatus('Partial','warn'):_flatStatus('Pending','warn');
             var camperNames=(l.family.camperIds||[]).concat((l.pendingCamperIds||[]).map(function(n){return n+' (pending)'})).join(', ');
 
+            // Autopay indicator — folded into the same descriptive line as
+            // status, shown only when a plan is actively on autopay (a positive
+            // "this account collects itself" signal). Families without it stay
+            // uncluttered rather than every row carrying an "off" tag. Read
+            // straight off the canonical family record (same shape the family
+            // detail page's autopay pill reads via _famPlans) without mutating
+            // it during render.
+            var _billFam=families[l.famKey]||l.family||{};
+            var _billPlans=_billFam.plans||((_billFam.plan&&_billFam.plan.installments&&_billFam.plan.installments.length)?[_billFam.plan]:[]);
+            var _autopayOn=_billPlans.some(function(p){return p&&p.autopay});
+
             // A quick "N x $amount" tag when this family is on an even
             // installment plan — so a plan's shape is scannable from the
             // list without opening the family, same as the family-detail
@@ -16041,7 +16052,7 @@ function renderBilling(){
             // only needs to answer "who, and how much."
             h+='<div class="me-card" id="billfam-'+je(l.famKey)+'" style="margin-bottom:10px;cursor:pointer" onclick="CampistryMe.viewFamily(\''+je(l.famKey)+'\')">';
             h+='<div style="display:flex;align-items:center;gap:12px">';
-            h+='<div style="flex:1;min-width:0"><h3 style="margin:0;font-size:.95rem;font-weight:700;color:var(--s800)">'+esc(l.family.name||'')+'</h3><span style="font-size:.75rem;color:var(--s400)">'+esc(camperNames)+'</span> · '+statusBadge+(l.pendingEnrollment?' · '+_flatStatus('Accepted — pending enrollment','warn'):'')+_collectionWarning(l)+'</div>';
+            h+='<div style="flex:1;min-width:0"><h3 style="margin:0;font-size:.95rem;font-weight:700;color:var(--s800)">'+esc(l.family.name||'')+'</h3><span style="font-size:.75rem;color:var(--s400)">'+esc(camperNames)+'</span> · '+statusBadge+(l.pendingEnrollment?' · '+_flatStatus('Accepted — pending enrollment','warn'):'')+(_autopayOn?' · '+_flatStatus('Autopay on','ok'):'')+_collectionWarning(l)+'</div>';
             h+='<div style="display:flex;align-items:center;gap:10px;flex-shrink:0">';
             h+='<span style="font-size:1rem;font-weight:800;color:'+(l.balance>0?'var(--err)':'var(--ok)')+'">'+fm(l.balance)+'</span>';
             h+='<span style="font-size:1rem;color:var(--s300)">›</span></div>';
