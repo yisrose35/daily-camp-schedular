@@ -1896,6 +1896,107 @@ function _closeoutPreview(famKey){
     box.innerHTML=h;
 }
 
+/**
+ * PUT A CARD SURCHARGE ON A FAMILY'S BILL.
+ *
+ * The policy, the 3% brand cap, the credit-only rule and the state bans have existed
+ * since campistry_card_fees.js and migration 192 — but nothing ever applied one. A
+ * camp could configure surcharging in full and collect nothing.
+ *
+ * The fee is computed by F.quote rather than here, which is what keeps the cap and
+ * the bans in ONE place. Three things it refuses outright, because each of them is a
+ * merchant-account problem rather than a preference:
+ *
+ *   * surcharging switched off — configure it first, in Card Fees
+ *   * a state that bans it on the date being charged
+ *   * anything the quote marks not permitted, whatever the reason
+ *
+ * And the DISCLOSURE goes on the charge description. The card brands require the
+ * family to be told; a surcharge line reading only "Card fee" is the version that
+ * gets a camp in trouble.
+ */
+function addCardSurcharge(famKey){
+    if(!_secEdit('billing','Adding a card surcharge'))return;
+    var F=_cfAPI();
+    if(!F){toast('The card-fee module did not load','error');return}
+    var f=families[famKey];
+    if(!f){toast('Family not found','error');return}
+
+    var pol=F.normalize(enrollSettings.cardFeePolicy);
+    if(pol.mode==='off'){
+        showModal('Card fees are switched off',
+            '<p style="margin:0 0 10px;font-size:.86rem">Nothing is set up to charge. '
+            +'Open <strong>Card Fees</strong> in settings and choose how you pass card '
+            +'costs on \u2014 surcharge, convenience fee, or a cash discount.</p>'
+            +'<p style="margin:0;font-size:.8rem;color:var(--s500)">Each has different '
+            +'rules, which is why this will not guess one for you.</p>');
+        return;
+    }
+    var x=F.explain(pol);
+    if(x&&x.blockers&&x.blockers.length){
+        showModal('Not chargeable yet',
+            '<p style="margin:0 0 8px;font-size:.86rem">This has to be sorted out first:</p>'
+            +'<ul style="margin:0;padding-left:18px;font-size:.83rem;line-height:1.7">'
+            +x.blockers.map(function(b){return '<li>'+esc(b)+'</li>'}).join('')+'</ul>');
+        return;
+    }
+
+    // Default to what they owe: the surcharge is normally on the amount about to be
+    // paid by card, and the outstanding balance is the best guess at that.
+    var owed=Math.max(0,Number(f.balance)||0);
+    var h='<div class="me-modal-form">';
+    h+='<div class="me-field"><label>Amount being paid by card ($)</label>'
+      +'<input type="number" id="csBase" class="me-input" step="0.01" min="0" value="'
+      +(owed>0?owed.toFixed(2):'')+'" placeholder="0.00" '
+      +'oninput="CampistryMe._surchargePreview()"></div>';
+    h+='<div id="csPreview" style="margin-top:4px"></div>';
+    h+='<p style="font-size:.78rem;color:var(--s400);margin:12px 0 0;line-height:1.6">'
+      +esc(F.disclosure(pol,{fmt:fm}))+'</p>';
+    h+='</div>';
+
+    showModal('Add card surcharge',h,function(){
+        var base=parseFloat((document.getElementById('csBase')||{}).value)||0;
+        if(!(base>0)){toast('Enter the amount being paid by card','error');return}
+        var q=F.quote(pol,{amount:base,method:'card',funding:'credit',channel:'online'});
+        if(!q||!q.permitted){
+            toast((q&&q.label)||'That fee is not permitted \u2014 see Card Fees','error');return;
+        }
+        if(!(q.fee>0)){toast('That works out to no fee','error');return}
+        if(!f.charges)f.charges=[];
+        f.charges.push({id:'sur_'+Date.now(),category:'Card Fee',
+            // The disclosure IS the description. A line reading only "Card fee" is
+            // the version that gets a camp in trouble with the brands.
+            description:F.disclosure(pol,{fmt:fm})||'Card fee',
+            amount:Math.round(q.fee*100)/100,date:today(),timestamp:Date.now(),
+            cardFee:{mode:q.mode,base:Math.round(base*100)/100,reason:q.reason}});
+        f.balance=(f.balance||0)+Math.round(q.fee*100)/100;
+        save();closeModal('dynModal');
+        if(curPage==='familydetail')renderFamilyDetailPage();else renderBilling();
+        toast('Card fee of '+fm(q.fee)+' added to '+(f.name||'the account'));
+    },'Add fee');
+    _surchargePreview();
+}
+
+/** Live figure under the amount, so the office sees the fee before agreeing. */
+function _surchargePreview(){
+    var box=document.getElementById('csPreview');
+    if(!box)return;
+    var F=_cfAPI(); if(!F)return;
+    var base=parseFloat((document.getElementById('csBase')||{}).value)||0;
+    if(!(base>0)){box.innerHTML='';return}
+    var pol=F.normalize(enrollSettings.cardFeePolicy);
+    var q=F.quote(pol,{amount:base,method:'card',funding:'credit',channel:'online'});
+    if(!q||!q.permitted||!(q.fee>0)){
+        box.innerHTML='<div style="background:#FEF2F2;border:1px solid #FECACA;color:#991B1B;'
+          +'border-radius:8px;padding:7px 10px;font-size:.78rem">'
+          +esc((q&&q.label)||'No fee applies to that amount.')+'</div>';
+        return;
+    }
+    box.innerHTML='<div style="background:#F0FDF4;border:1px solid #BBF7D0;color:#166534;'
+      +'border-radius:8px;padding:7px 10px;font-size:.79rem">Fee <strong>'+fm(q.fee)
+      +'</strong> \u2014 total with fee '+fm(Math.round((base+q.fee)*100)/100)+'</div>';
+}
+
 function _liveOnlyNotice(what){
     var ws='';
     try{ if(typeof window.campistryWorkspace==='function')ws=window.campistryWorkspace()||''; }catch(e){}
@@ -15058,6 +15159,7 @@ function renderFamilyDetailPage(){
     else if(l.balance>0.005) moreItems+='<button onclick="CampistryMe.monthlyPlan(\''+je(l.famKey)+'\')">Set up Payment Plan</button>';
     moreItems+=hasCard?'<button onclick="CampistryMe.requestCardSetup(\''+je(l.famKey)+'\')">Replace payment method</button>':'<button onclick="CampistryMe.requestCardSetup(\''+je(l.famKey)+'\')">Set up payment method</button>';
     moreItems+='<button onclick="CampistryMe.addChargeForFamily(\''+je(l.famKey)+'\')">Add Charge</button>';
+    moreItems+='<button onclick="CampistryMe.addCardSurcharge(\''+je(l.famKey)+'\')">Add card surcharge\u2026</button>';
     moreItems+='<button onclick="CampistryMe.closeOutFamily(\''+je(l.famKey)+'\')">Close out\u2026</button>';
     moreItems+='<button onclick="CampistryMe.issueCreditForFamily(\''+je(l.famKey)+'\')">Issue Credit/Refund</button>';
     moreItems+='<button onclick="CampistryMe.printStatement(\''+je(l.famKey)+'\')">Print Statement</button>';
@@ -20311,6 +20413,7 @@ window.CampistryMe={
     managePayers:managePayers,togglePayerArchived:togglePayerArchived,
     managePaymentMethods:managePaymentMethods,
     closeOutFamily:closeOutFamily,_closeoutPreview:_closeoutPreview,
+    addCardSurcharge:addCardSurcharge,_surchargePreview:_surchargePreview,
     _addPayerRow:_addPayerRow,_payerSplitPreview:_payerSplitPreview,
     setRosterPage:setRosterPage,setRosterSubTab:setRosterSubTab,setRosterWhen:setRosterWhen,setBillingPage:setBillingPage,setAnalyticsInvoicePage:setAnalyticsInvoicePage,setAnalyticsPaymentPage:setAnalyticsPaymentPage,
     _runSetupChecklistAction:_runSetupChecklistAction,dismissSetupChecklist:dismissSetupChecklist,

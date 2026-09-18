@@ -403,3 +403,77 @@ test('the migration parses as SQL', () => {
     }
     assert.match(out, /ok/);
 });
+
+// ───────────────────────────────────────────────────────────────────────────
+// AND IT CAN NOW REACH A BILL.
+//
+// The policy, the 3% brand cap, the credit-only rule and the state bans have existed
+// since this module and migration 192 — but nothing applied one. A camp could
+// configure surcharging in full and collect nothing.
+// ───────────────────────────────────────────────────────────────────────────
+
+const _fs = require('node:fs');
+const ME_SUR = _fs.readFileSync(
+    require('node:path').join(__dirname, '..', 'campistry_me.js'), 'utf8');
+
+test('the fee is computed by the RULE, never recalculated at the call site', () => {
+    // The cap and the state bans live in quote(). A second arithmetic path would be a
+    // second place for the 3% ceiling to be got wrong.
+    const fn = ME_SUR.slice(ME_SUR.indexOf('function addCardSurcharge(famKey)'));
+    const body = fn.slice(0, 4200);
+    assert.match(body, /F\.quote\(pol,\{amount:base,method:'card',funding:'credit'/);
+    assert.ok(!/\*\s*0?\.?03|\/\s*100\s*\*\s*base|base\s*\*\s*pct/.test(body),
+        'no percentage arithmetic may happen here');
+});
+
+test('three things refuse the charge outright', () => {
+    const fn = ME_SUR.slice(ME_SUR.indexOf('function addCardSurcharge(famKey)'));
+    const body = fn.slice(0, 4200);
+    // Off: configure it first rather than guessing a mode.
+    assert.match(body, /if\(pol\.mode==='off'\)\{/);
+    assert.match(body, /Card fees are switched off/);
+    // Anything the rule reports as blocking — a state ban, a missing requirement.
+    assert.match(body, /if\(x&&x\.blockers&&x\.blockers\.length\)\{/);
+    // And a quote that says not permitted, whatever the reason.
+    assert.match(body, /if\(!q\|\|!q\.permitted\)\{/);
+});
+
+test('the disclosure IS the charge description', () => {
+    // The brands require the family to be told. A surcharge line reading only
+    // "Card fee" is the version that gets a camp in trouble.
+    const fn = ME_SUR.slice(ME_SUR.indexOf('function addCardSurcharge(famKey)'));
+    assert.match(fn.slice(0, 4200), /description:F\.disclosure\(pol,\{fmt:fm\}\)\|\|'Card fee'/);
+});
+
+test('a zero fee is not posted as a charge', () => {
+    const fn = ME_SUR.slice(ME_SUR.indexOf('function addCardSurcharge(famKey)'));
+    assert.match(fn.slice(0, 4200), /if\(!\(q\.fee>0\)\)\{toast\('That works out to no fee'/);
+});
+
+test('the charge records what it was a fee ON, and increases the balance', () => {
+    // Without the base, a 3% line on a statement cannot be checked by anyone. And the
+    // sign: a fee the family owes must raise the balance, not lower it.
+    const fn = ME_SUR.slice(ME_SUR.indexOf('function addCardSurcharge(famKey)'));
+    const body = fn.slice(0, 4200);
+    assert.match(body, /cardFee:\{mode:q\.mode,base:Math\.round\(base\*100\)\/100,reason:q\.reason\}/);
+    assert.match(body, /f\.balance=\(f\.balance\|\|0\)\+Math\.round\(q\.fee\*100\)\/100;/);
+    assert.ok(!/f\.balance=\(f\.balance\|\|0\)-Math\.round\(q\.fee/.test(body),
+        'a fee the family owes must not reduce what they owe');
+});
+
+test('surcharging is gated and reachable', () => {
+    const fn = ME_SUR.slice(ME_SUR.indexOf('function addCardSurcharge(famKey)'));
+    assert.match(fn.slice(0, 400), /_secEdit\('billing'/);
+    assert.match(ME_SUR, /addCardSurcharge:addCardSurcharge,_surchargePreview:_surchargePreview,/);
+    assert.match(ME_SUR, /CampistryMe\.addCardSurcharge\(/);
+});
+
+test('the office sees the fee before agreeing to it', () => {
+    assert.match(ME_SUR, /function _surchargePreview\(\)/);
+    const fn = ME_SUR.slice(ME_SUR.indexOf('function _surchargePreview()'));
+    const body = fn.slice(0, 1600);
+    assert.match(body, /F\.quote\(pol,/, 'the preview must use the same rule as the save');
+    assert.match(body, /total with fee/);
+    // A refused quote shows why rather than an empty box.
+    assert.match(body, /!q\.permitted\|\|!\(q\.fee>0\)/);
+});
