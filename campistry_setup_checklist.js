@@ -8,7 +8,7 @@
 // turned on automatic deposits before the bank was sending alerts anywhere, and
 // built a schedule before there were bunks to schedule.
 //
-// This is that order, written down once. Five phases, each item naming exactly
+// This is that order, written down once. Six phases, each item naming exactly
 // where it is done and why it comes where it does. Checking a box is a note to
 // the camp's own team -- several people share one camp, and "did anyone do the
 // forwarding rule?" is a real question -- so the state is camp-wide and carries
@@ -64,10 +64,17 @@
                 },
                 {
                     id: 'team',
-                    title: 'Invite your team and set access',
-                    detail: 'Owners, admins, schedulers. Do this early: a scheduler only sees their own divisions, so inviting them after the structure exists saves explaining why half the camp is missing.',
+                    title: 'Invite your team',
+                    detail: 'Owners, admins, schedulers. A scheduler with no Division Group checked can generate for zero divisions — but groups cannot be built until Camp Structure exists, so invite now and come back to tick theirs once bunks are in.',
                     where: 'Dashboard → Camp Setup → Team & Access',
                     href: 'team_access_setup.html'
+                },
+                {
+                    id: 'access',
+                    title: 'Set per-section access',
+                    detail: 'A separate screen from inviting: which apps and sections a role or person can actually open, not just their job title — a bookkeeper who sees Billing but not Payroll, say. Skip it and everyone keeps full edit access to every app they were given.',
+                    where: 'Dashboard → Camp Setup → Team & Access → What each job can open',
+                    href: 'campistry_team_access.html'
                 }
             ]
         },
@@ -103,6 +110,13 @@
                     detail: 'Applications, hires and staff IDs. Staff draw from the same ID sequence as campers, so hiring before you hand out camper numbers keeps both tidy.',
                     where: 'Me → Hiring',
                     href: 'campistry_me.html#hiring'
+                },
+                {
+                    id: 'payroll',
+                    title: 'Payroll and Youth Corps',
+                    detail: 'Pay type and rate are entered per staff member, so nothing here blocks anything else. Running a Youth Corps or SYEP program: fill in its Program Setup — worksite, supervisor, hour caps, timesheet days — or the compliance checklist has nothing to check against.',
+                    where: 'Me → Payroll',
+                    href: 'campistry_me.html#payroll'
                 }
             ]
         },
@@ -114,16 +128,23 @@
                 {
                     id: 'processor',
                     title: 'Card payments',
-                    detail: 'Connect Stripe, or your own processor, and choose where tuition lands.',
+                    detail: 'Connect Stripe, or your own processor, and choose where tuition lands. Optional and owner-only — leave it untouched and charges pool into Campistry’s shared account instead, nothing breaks.',
                     where: 'Dashboard → Camp Setup → Payment',
                     href: 'dashboard.html#setup-payment'
                 },
                 {
                     id: 'plans',
                     title: 'Payment policy and plans',
-                    detail: 'Deposits, instalments, late fees, sibling discounts. One camp-wide catalogue, used by registration, Billing, Snacks and Shop alike.',
-                    where: 'Me → Billing → Payment policy',
-                    href: 'campistry_me.html#billing'
+                    detail: 'Deposits (and whether one is mandatory), instalments, late fees, sibling discounts, which payment methods you accept, and the cancellation/refund policy — one accordion, used by registration, Billing, Snacks and Shop alike.',
+                    where: 'Me → Registration → Customize Forms',
+                    href: 'campistry_me.html#registration'
+                },
+                {
+                    id: 'card_fees',
+                    title: 'Passing card costs to parents (optional)',
+                    detail: 'Surcharge, convenience fee, cash discount, or none — pick one model before you go live. Surcharging needs 30 days’ written notice to your processor on record first, and is capped or banned in several states.',
+                    where: 'Me → Registration → Customize Forms → Card Fees',
+                    href: 'campistry_me.html#registration'
                 },
                 {
                     id: 'dep_address',
@@ -166,6 +187,41 @@
                     detail: 'Last, not first. Run Manual for the first week of real payments so you can see what it would have done; switch once the matches look right. Automatic applies on arrival — turning it on does not reach back over deposits already waiting.',
                     where: 'Me → Billing → Bank Deposits → Settings',
                     href: 'campistry_me.html#billing'
+                }
+            ]
+        },
+        {
+            id: 'snacks',
+            title: 'Snacks and the canteen',
+            blurb: 'Needs your roster — canteen accounts are created from it automatically, there is no manual account-creation step. Skip this whole phase if you do not run a canteen.',
+            items: [
+                {
+                    id: 'menu',
+                    title: 'Add your menu items',
+                    detail: 'Name, category and price for everything the canteen sells. The register cannot ring up an item that does not exist here yet — a bulk-upload template is there for long lists.',
+                    where: 'Snacks → Menu Items',
+                    href: 'campistry_snacks.html'
+                },
+                {
+                    id: 'policy',
+                    title: 'Canteen policy — limits and cash-out',
+                    detail: 'One camp-wide daily spend limit, cash-out cap, and which payment methods the register accepts, applied to every camper account. Ships with working defaults — confirm them before real money starts moving.',
+                    where: 'Snacks → Settings',
+                    href: 'campistry_snacks.html'
+                },
+                {
+                    id: 'pin',
+                    title: 'Set the register PIN',
+                    detail: 'The register runs on its own address with no Campistry login carried over — with no PIN set here it fails closed, and nobody can open it on any device.',
+                    where: 'Snacks → Settings → Register PIN',
+                    href: 'campistry_snacks.html'
+                },
+                {
+                    id: 'shop',
+                    title: 'Camp Shop products (optional)',
+                    detail: 'Only if you sell swag through Link. Name and price for each item — sizes, colors and a photo are optional. Nothing shows on the parent-facing shop until at least one product exists.',
+                    where: 'Snacks → Camp Shop → Catalogue',
+                    href: 'campistry_snacks.html'
                 }
             ]
         },
@@ -219,16 +275,51 @@
                 {
                     id: 'lite',
                     title: 'Campistry Lite for staff phones',
-                    detail: 'Head counsellors see the day and mark attendance from a phone. Add a texting number if you want to reach staff by SMS.',
-                    where: 'Dashboard → Texting Number, and Lite',
+                    detail: 'Head counsellors see the day and mark attendance from a phone — nothing to configure, it reads the schedule and roster you already built.',
+                    where: 'Lite',
                     href: 'campistry_lite.html'
                 },
                 {
-                    id: 'link',
-                    title: 'Campistry Link for parents',
-                    detail: 'Balances, photos, messages and forms. Turn on only the programs you actually want parents to see.',
-                    where: 'Dashboard → Camp Setup → Link Programs',
+                    id: 'link_programs',
+                    title: 'Choose which Link programs are on',
+                    detail: 'Photos, Canteen, Camp Shop, Tips, Camper Mail, Pickup & Arrival all default ON — parents see every one until you turn off what you do not run this year. Off hides it from their nav AND blocks the request server-side, so it is safe to leave off.',
+                    where: 'Dashboard → Camp Setup → Camp Settings → Link Programs',
                     href: 'dashboard.html#setup-settings'
+                },
+                {
+                    id: 'link_invite',
+                    title: 'Invite families and sync parent portals',
+                    detail: 'A parent whose email matches the roster connects automatically, but will not know Link exists unless told — generate invites, or copy the mail-merge CSV or announcement email. Re-run Sync Parent Portals after any camper-to-family move in Me; skip it and a parent can end up seeing a child who is not theirs.',
+                    where: 'Link Admin → Parents tab',
+                    href: 'campistry_link_admin.html'
+                },
+                {
+                    id: 'link_contact',
+                    title: 'Camp contact email, for parent replies',
+                    detail: 'One field on the Camp Profile card, easy to miss: it is the Reply-To on every Link email, and the address beside it is the legally-required postal footer on every broadcast. Leave either blank and replies go nowhere, or the footer is empty.',
+                    where: 'Dashboard → Camp Setup → Profile & Account',
+                    href: 'dashboard.html#setup-profile'
+                },
+                {
+                    id: 'link_texting',
+                    title: 'A dedicated number for texting parents (optional)',
+                    detail: 'SMS broadcasts already go out on Campistry’s shared number — this buys your own, so another camp’s spam complaints can never hurt your delivery. Parent-texting only; staff SMS is not available in Lite right now.',
+                    where: 'Dashboard → Camp Setup → Profile & Account → Texting Number',
+                    href: 'dashboard.html#setup-profile'
+                },
+                {
+                    id: 'link_branding',
+                    title: 'Logo, color and footer for parent messages',
+                    detail: 'Every broadcast email and in-app message uses this — logo, brand color, footer, an optional watermark. Skip it and messages still send, just in generic Campistry green with no camp identity.',
+                    where: 'Link Admin → Messages → Compose → Branding',
+                    href: 'campistry_link_admin.html'
+                },
+                {
+                    id: 'link_tips',
+                    title: 'Suggested tip amounts by role (optional)',
+                    detail: 'A suggested dollar figure per staff role, so parents see a number instead of a blank box. Needs staff positions to exist first. Staff connect their own payout method themselves in Lite — nothing more for the office to do.',
+                    where: 'Link Admin → Tips Setup',
+                    href: 'campistry_link_admin.html'
                 },
                 {
                     id: 'go',

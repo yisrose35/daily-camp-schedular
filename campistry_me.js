@@ -320,7 +320,17 @@ function init(){
     var cs=getCampSettings();
     if(cs.rtl) document.documentElement.setAttribute('dir','rtl');
     syncAllAddressesToGo();
-    nav('campers');
+    // Deep link (e.g. from the Setup Checklist, "campistry_me.html#billing")
+    // — land on that sidebar page instead of always defaulting to Roster.
+    // Whitelisted against the sidebar's own data-page values before it ever
+    // reaches nav(), since location.hash is attacker-controlled and most of
+    // nav()'s other targets (camperdetail, familydetail, ...) expect a
+    // selected record that doesn't exist this early.
+    (function(){
+        var SIDEBAR_PAGES={analytics:1,billing:1,campers:1,finance:1,hiring:1,payroll:1,registration:1,reports:1,structure:1};
+        var requested=(window.location.hash||'').replace(/^#/,'');
+        nav(Object.prototype.hasOwnProperty.call(SIDEBAR_PAGES,requested)?requested:'campers');
+    })();
     console.log('📋 Me ready:',Object.keys(roster).length,'campers');
 
     // Returning from Stripe Connect onboarding (started from Payroll → Tip

@@ -109,7 +109,14 @@ function check(label, cond, detail) {
 
 (async function main() {
   const server = await serve();
-  const browser = await chromium.launch();
+  // Some sandboxes pin a Playwright version newer than the browser build
+  // that's pre-fetched at this fixed path, so the default launch() (which
+  // wants chromium_headless_shell) can't find a binary there. Prefer the
+  // known-good one when present; a normal dev machine with its own
+  // `npx playwright install chromium` has no such directory and just uses
+  // the default resolution.
+  const pinned = '/opt/pw-browsers/chromium';
+  const browser = await chromium.launch(fs.existsSync(pinned) ? { executablePath: pinned } : {});
   const page = await browser.newPage();
   const errors = [];
   page.on('pageerror', (e) => errors.push(String(e)));
