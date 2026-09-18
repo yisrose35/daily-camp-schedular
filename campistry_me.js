@@ -87,22 +87,41 @@ var _rosterWhen='today';
 // tied to a session gets to choose the opening one — see _rosterWhenDefault().
 var _rosterWhenTouched=false;
 /**
- * In a plan for 2nd Half, open the roster on 2nd Half.
+ * OPEN THE ROSTER ON WHATEVER SESSION THE PROGRAM IS SHOWING.
  *
- * Everything else in the app already does this (presence resolves its date from
- * the plan's session), and a Me page that alone opened on today's children while
- * the rest of the app showed next half's would be the one inconsistency a person
- * would have to hold in their head. The picker is right there and still says what
- * it is showing, so this changes the default, not the choice.
+ * This used to look only at a planning sandbox. That made the Me page the one place
+ * where "which session are we in" had a different answer from everywhere else: a camp
+ * pinned to 2nd Half, or a person peeking at it, saw next half's children on every
+ * other page and today's here.
+ *
+ * It now asks the master key (campistry_session_scope.js via campistrySessionScope),
+ * which resolves a sandbox, a pin, a peek and the plain calendar in one place. The
+ * sandbox read is kept as the fallback for a page without the scope, which is exactly
+ * what this did before.
+ *
+ * Only the DEFAULT. The picker is right there, still says what it is showing, and a
+ * person who touches it is obeyed from then on.
  */
 function _rosterWhenDefault(){
     if(_rosterWhenTouched)return _rosterWhen;
+    try{
+        if(typeof window!=='undefined'&&typeof window.campistrySessionScope==='function'){
+            var sc=window.campistrySessionScope();
+            // 'none' means no session covers today, and the honest opening view for
+            // that is the one this page has always had. A camp between halves should
+            // not be shown an empty roster.
+            if(sc&&!sc.ruleMissing&&sc.session&&sc.source!=='none'){
+                return 'session:'+sc.session;
+            }
+            if(sc&&!sc.ruleMissing)return _rosterWhen;
+        }
+    }catch(e){}
     try{
         var P=(typeof window!=='undefined'&&window.CampistryPresence)||null;
         if(!P||typeof P.asOfInfo!=='function')return _rosterWhen;
         var info=P.asOfInfo();
         if(info&&info.reason==='sandbox_session'&&info.session)return 'session:'+info.session;
-    }catch(e){}
+    }catch(e2){}
     return _rosterWhen;
 }
 // Slice an array to one page. Clamps pageNum into range so a stale page

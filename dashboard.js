@@ -1961,6 +1961,10 @@
         } catch (e) {
             console.warn('Could not load camp dates:', e);
         }
+        // The master key's default is DERIVED from the dates just loaded, so it is
+        // drawn here rather than on its own schedule. loadCampDates re-runs after
+        // cloud hydration, which is also when the pin and the session list arrive.
+        try { window.renderCurrentSession(); } catch (_e) {}
     }
 
     function buildWeekMap(startDate, endDate) {
@@ -2131,6 +2135,157 @@
             if (status) { status.textContent = 'Error archiving — try again.'; status.style.color = '#dc2626'; }
         } finally {
             if (btn) btn.disabled = false;
+        }
+    };
+
+    // ═══════════════════════════════════════════════════════════════
+    // THE MASTER KEY — which session the whole program is showing.
+    //
+    // The DEFAULT is not stored. It is derived from the dates in the Summer Schedule
+    // card: whichever session today falls in. That is the same reasoning that made us
+    // delete migrations 035/039's stamped per-camper windows — a derived answer cannot
+    // drift out of step with the calendar, and a stored one always eventually does.
+    //
+    // Saving "Follow the calendar" therefore CLEARS the stored value rather than
+    // writing today's answer into it. Writing the answer would freeze it, which is
+    // the whole failure this avoids.
+    // ═══════════════════════════════════════════════════════════════
+
+    function _scopeRuleD() { return window.CampistrySessionScope || null; }
+
+    function _dashScope() {
+        try {
+            return (typeof window.campistrySessionScope === 'function')
+                ? window.campistrySessionScope() : null;
+        } catch (e) { return null; }
+    }
+
+    /** The sessions the picker offers — the same list Sessions & Pricing edits. */
+    function _dashScopeSessions() {
+        if (Array.isArray(_dashSessions) && _dashSessions.length) return _dashSessions;
+        try {
+            var gs = window.loadGlobalSettings ? (window.loadGlobalSettings() || {}) : {};
+            var me = gs.campistryMe;
+            return (me && Array.isArray(me.sessions)) ? me.sessions : [];
+        } catch (e) { return []; }
+    }
+
+    window.renderCurrentSession = function () {
+        var card = document.getElementById('currentSessionCard');
+        if (!card) return;
+        var R = _scopeRuleD();
+        var pick = document.getElementById('currentSessionPick');
+        var explain = document.getElementById('currentSessionExplain');
+        var actions = document.getElementById('currentSessionActions');
+        var list = _dashScopeSessions();
+        var named = list.filter(function (x) { return x && String(x.name || '').trim(); });
+
+        if (!R) {
+            // The rule is what knows the precedence and the expiry. Without it there
+            // is nothing honest to show, so the card goes away rather than offering a
+            // control that would not take effect anywhere.
+            card.style.display = 'none';
+            return;
+        }
+        card.style.display = '';
+
+        if (named.length < 2) {
+            // Nothing to choose between. Said in words rather than as an empty
+            // dropdown, because an empty control reads as something being broken.
+            if (pick) pick.style.display = 'none';
+            if (actions) actions.style.display = 'none';
+            if (explain) {
+                explain.innerHTML = named.length === 1
+                    ? 'This camp has one session (<strong>' + _dashEsc(named[0].name)
+                      + '</strong>), so there is nothing to choose — everything shows it.'
+                    : 'Add your sessions below and this is where you pick which one the '
+                      + 'camp is working on.';
+            }
+            return;
+        }
+        if (pick) pick.style.display = '';
+        if (actions) actions.style.display = isTeamMember ? 'none' : '';
+
+        var sc = _dashScope();
+        var opts = R.optionsFor({ sessions: list });
+        if (pick) {
+            var cur = (sc && sc.pin && !sc.pinDropped) ? sc.pin : 'auto';
+            pick.innerHTML = opts.map(function (o) {
+                return '<option value="' + _dashEsc(o.value) + '"'
+                    + (o.value === cur ? ' selected' : '') + '>' + _dashEsc(o.label)
+                    // Said on the option itself: the one thing somebody wants to know
+                    // before pinning backwards is that it will not stick.
+                    + (o.expired ? ' (ended)' : '') + '</option>';
+            }).join('');
+            pick.disabled = !!isTeamMember;
+        }
+
+        if (explain) {
+            var bits = [];
+            if (sc && sc.pinDropped) {
+                bits.push('<strong style="color:#991B1B">' + _dashEsc(R.droppedNotice(sc))
+                        + '</strong>');
+            }
+            if (sc && sc.session) {
+                bits.push('Right now the camp is showing <strong>' + _dashEsc(sc.session)
+                    + '</strong>'
+                    + (sc.source === 'pin' ? ' because it is pinned here'
+                       : (sc.source === 'calendar' ? ' because that is what the calendar says'
+                          : ''))
+                    + '.');
+                if (!sc.coversToday && sc.from) {
+                    bits.push('Rosters are read as of <strong>' + _dashEsc(sc.from)
+                        + '</strong>, that session’s first day — so you see the '
+                        + 'children who will be here then, not the ones here today.');
+                }
+            } else {
+                bits.push('No session covers today, so every list shows everyone.');
+            }
+            if (isTeamMember) bits.push('Only the camp owner can change this.');
+            explain.innerHTML = bits.join('<br>');
+        }
+    };
+
+    window.saveCurrentSession = async function () {
+        var status = document.getElementById('currentSessionStatus');
+        // Owner-only, for the same reason camp dates are: this moves what every
+        // person in the camp sees, including the front desk checking children in.
+        if (isTeamMember) {
+            if (status) { status.textContent = 'Only camp owners can change the current session.'; status.style.color = '#dc2626'; }
+            return;
+        }
+        var pick = document.getElementById('currentSessionPick');
+        var chosen = (pick && pick.value) || 'auto';
+        // 'auto' stores NOTHING. See the block comment above: writing today's answer
+        // into the pin is exactly the freezing this design avoids.
+        var value = (chosen === 'auto') ? { session: '' } : { session: chosen };
+
+        try {
+            var campId = localStorage.getItem('campistry_camp_id') || localStorage.getItem('campistry_user_id') || currentUser.id;
+            var { error } = await window.supabase
+                .from('camp_state_kv')
+                .upsert({ camp_id: campId, key: 'campSession', value: value, updated_at: new Date().toISOString() },
+                         { onConflict: 'camp_id,key' });
+            if (error) throw error;
+            if (window.saveGlobalSettings) window.saveGlobalSettings('campSession', value);
+            // The resolver memoizes, and presence memoizes its own as-of date on top
+            // of that. Both have to be told, or this page keeps describing the old
+            // answer until something else happens to clear them.
+            if (typeof window.campistrySessionScopeRefresh === 'function') {
+                window.campistrySessionScopeRefresh();
+            }
+            try { if (window.CampistryPresence && window.CampistryPresence.refresh) window.CampistryPresence.refresh(); } catch (e2) {}
+            try { window.dispatchEvent(new CustomEvent('campistry-session-scope', { detail: _dashScope() })); } catch (e3) {}
+            window.renderCurrentSession();
+            if (status) {
+                status.textContent = chosen === 'auto'
+                    ? 'Following the calendar.' : 'The camp is now showing ' + chosen + '.';
+                status.style.color = '#059669';
+                setTimeout(function () { status.textContent = ''; }, 4000);
+            }
+        } catch (e) {
+            console.error('Error saving current session:', e);
+            if (status) { status.textContent = 'Error saving.'; status.style.color = '#dc2626'; }
         }
     };
 

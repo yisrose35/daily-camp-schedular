@@ -425,6 +425,39 @@
              same as before. -->
         <div id="camp-dates-section" class="dash-setup-panel" style="display: none;">
           <div class="dashboard-grid">
+
+            <!-- ===== THE MASTER KEY =====
+                 Which session the WHOLE program is showing. Its default is derived
+                 from the dates in the card below, not stored — the same principle
+                 that made us delete migrations 035/039's stamped date windows. A
+                 stored answer always eventually drifts; a derived one cannot.
+
+                 The pin is for the case derivation gets wrong ("we are all working
+                 on 2nd Half now, even though 1st Half is still running"). It stops
+                 applying the day its session ends, because a forgotten session scope
+                 is the one failure that makes people stop trusting every list in the
+                 app. See campistry_session_scope.js. -->
+            <div class="dashboard-card" id="currentSessionCard">
+                <div class="card-header">
+                    <h2>Current Session</h2>
+                </div>
+                <div style="display:flex; flex-direction:column; gap:12px;">
+                    <p style="margin:0; font-size:0.82rem; color:var(--slate-600); line-height:1.6;">
+                        Everything in Campistry &mdash; rosters, bunk sheets, attendance, the
+                        canteen, Health, Go and every printout &mdash; shows this session.
+                    </p>
+                    <div class="form-group" style="margin:0;">
+                        <label for="currentSessionPick" style="font-size:0.82rem; font-weight:600; color:var(--slate-600); margin-bottom:4px; display:block;">The camp is showing</label>
+                        <select id="currentSessionPick" style="width:100%; padding:8px 10px; border-radius:8px; border:1px solid var(--slate-200); font-size:0.88rem;"></select>
+                    </div>
+                    <div id="currentSessionExplain" style="background:var(--slate-50); border-radius:8px; padding:12px 14px; font-size:0.82rem; color:var(--slate-600); line-height:1.6;"></div>
+                    <div id="currentSessionActions" style="display:flex; gap:10px; align-items:center;">
+                        <button type="button" id="saveCurrentSessionBtn" onclick="saveCurrentSession()" class="btn-primary" style="padding:8px 20px; font-size:0.85rem;">Save</button>
+                        <span id="currentSessionStatus" style="font-size:0.82rem; color:var(--slate-400);"></span>
+                    </div>
+                </div>
+            </div>
+
             <div class="dashboard-card">
                 <div class="card-header">
                     <h2>Summer Schedule</h2>
@@ -868,15 +901,19 @@ if (window.location.protocol === 'file:') {
     <script src="local_cache_idb.js?v=20260903-03"></script>
     <script src="campistry_finance_merge.js?v=20260915-01"></script>
     <script src="campistry_workspace.js?v=20260917-01"></script>
-<script src="integration_hooks.js?v=20260917-02"></script>
+<script src="integration_hooks.js?v=20260918-05"></script>
 <script src="campistry_workspace_ui.js?v=20260917-02"></script>
 <script src="campistry_workspace_admin.js?v=20260917-02"></script>
 
     <script src="cloud_sync_helpers.js?v=20260903-03"></script>
-    <script src="dashboard.js?v=20260917-01"></script>
-    <script src="campistry_setup_checklist.js?v=20260917-01"></script>
+    <script src="dashboard.js?v=20260918-05"></script>
+    <script src="campistry_setup_checklist.js?v=20260918-05"></script>
     <script src="campistry_enrollment_window.js?v=20260917-02"></script>
-<script src="campistry_presence.js?v=20260917-02"></script>
+<script src="campistry_presence.js?v=20260918-05"></script>
+<!-- The master key: which session the whole program is showing. Pure rule;
+     the runtime half lives in integration_hooks.js. -->
+<script src="campistry_session_scope.js?v=20260918-01"></script>
+<script src="campistry_session_bar.js?v=20260918-01"></script>
 <script src="campistry_birthdays.js?v=20260903-03"></script>
     <script src="badges.js?v=20260903-03"></script>
     <script src="access_control.js?v=20260903-03"></script>

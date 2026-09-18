@@ -1920,6 +1920,137 @@
         return (_wsCurrent === 'live') ? '' : _wsSession;
     };
 
+    // ── THE MASTER KEY: WHICH SESSION IS THE PROGRAM SHOWING ─────────────────
+    //
+    // One answer, read by every page. campistry_session_scope.js owns the rules
+    // (precedence, the pin expiring, which date the roster is read at); this is only
+    // the part that knows where the three inputs live:
+    //
+    //   the pin   camp-wide, set on the dashboard, stored under `campSession`
+    //   the peek  this person, this tab, in sessionStorage — it dies with the tab,
+    //             which is the whole point of a peek
+    //   the plan  campistryWorkspaceSession(), already resolved above
+    //
+    // MEMOIZED for the same reason _wsSession rides along rather than being looked
+    // up: presence asks this once per camper inside page loops, and resolving walks
+    // the session list. Cleared by campistrySetPeekSession and by a settings write.
+    var _scopeCache = null, _scopeAt = 0, _SCOPE_MS = 2000;
+    var _peekSession = '';
+    try {
+        var _peekSaved = sessionStorage.getItem('campistry_peek_session');
+        if (_peekSaved) _peekSession = String(_peekSaved);
+    } catch (_) {}
+
+    function _scopeRule() {
+        return (typeof window !== 'undefined' && window.CampistrySessionScope) || null;
+    }
+
+    /**
+     * The camp-wide pin. Read from the same settings blob everything else uses, so
+     * it arrives with the rest of the state and needs no extra round trip.
+     *
+     * Deliberately NOT stored inside `campDates`: the camp's calendar and "what are
+     * we looking at" are different facts, and merging them would mean every edit to
+     * one rewrote the other.
+     */
+    function _pinnedSession() {
+        try {
+            var st = getLocalSettings() || {};
+            var cs = st.campSession;
+            if (cs && typeof cs === 'object') return String(cs.session || '');
+            return String(cs || '');
+        } catch (_) { return ''; }
+    }
+
+    function _scopeSessions() {
+        try {
+            var st = getLocalSettings() || {};
+            var me = st.campistryMe;
+            return (me && Array.isArray(me.sessions)) ? me.sessions : [];
+        } catch (_) { return []; }
+    }
+
+    /**
+     * The resolved scope: { session, on, source, shared, ... }. See
+     * campistry_session_scope.js for the full shape.
+     *
+     * With the rule module absent this answers "no session, as of today", which is
+     * exactly how every page behaved before the master key existed. A page that does
+     * not load the rule therefore loses the feature and nothing else.
+     */
+    window.campistrySessionScope = function (opts) {
+        var R = _scopeRule();
+        if (!R) {
+            var today = new Date();
+            return {
+                session: '', on: new Date(today.getTime() - today.getTimezoneOffset() * 60000)
+                    .toISOString().slice(0, 10),
+                source: 'none', shared: true, sessionObj: null, from: null, to: null,
+                coversToday: true, pin: '', pinDropped: false, droppedPin: '', peek: '',
+                label: '', detail: '', ruleMissing: true
+            };
+        }
+        if (!opts) {
+            var now = Date.now();
+            if (_scopeCache && (now - _scopeAt) < _SCOPE_MS) return _scopeCache;
+        }
+        var r = R.resolve({
+            sessions: _scopeSessions(),
+            pin: _pinnedSession(),
+            peek: _peekSession,
+            workspaceSession: window.campistryWorkspaceSession
+                ? window.campistryWorkspaceSession() : '',
+            today: opts && opts.today
+        });
+        if (!opts) { _scopeCache = r; _scopeAt = Date.now(); }
+        return r;
+    };
+
+    /** Just the session name, for the many callers that want only that. */
+    window.campistrySession = function () {
+        return window.campistrySessionScope().session;
+    };
+    /** Just the date the live roster should be read at. */
+    window.campistrySessionAsOf = function () {
+        return window.campistrySessionScope().on;
+    };
+    /** Throw the memo away — after a settings write, or a peek change. */
+    window.campistrySessionScopeRefresh = function () {
+        _scopeCache = null; _scopeAt = 0;
+        return window.campistrySessionScope();
+    };
+
+    /**
+     * Look at another session, in this tab only.
+     *
+     * Per-tab and non-persistent on purpose. A peek that survived a reload would
+     * become a second, invisible pin — and the reason the pin expires at all is that
+     * a forgotten session scope is the one failure that makes people stop trusting
+     * every list in the app.
+     */
+    window.campistrySetPeekSession = function (name) {
+        _peekSession = (name && String(name)) || '';
+        try {
+            if (_peekSession) sessionStorage.setItem('campistry_peek_session', _peekSession);
+            else sessionStorage.removeItem('campistry_peek_session');
+        } catch (_) {}
+        _scopeCache = null; _scopeAt = 0;
+        // Presence memoizes its own as-of date, so it has to be told too or the
+        // first render after a peek shows the previous session's campers.
+        try {
+            if (window.CampistryPresence && window.CampistryPresence.refresh) {
+                window.CampistryPresence.refresh();
+            }
+        } catch (_) {}
+        log('session peek is now ' + (_peekSession || '(off)'));
+        try {
+            window.dispatchEvent(new CustomEvent('campistry-session-scope',
+                { detail: window.campistrySessionScope() }));
+        } catch (_) {}
+        return _peekSession;
+    };
+    window.campistryPeekSession = function () { return _peekSession; };
+
     window.loadGlobalSettings = function(key) {
         const settings = getLocalSettings();
         

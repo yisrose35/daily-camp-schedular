@@ -1,0 +1,375 @@
+/* =============================================================================
+ * campistry_session_scope.js — WHICH SESSION IS THE PROGRAM SHOWING?
+ *
+ * THE PROBLEM. A camp runs 1st Half and 2nd Half. Every list in the app answers
+ * "who is here" — the roster, the bunk sheets, Live's attendance, the canteen till,
+ * Health's medication list, Go's bus manifests, the print centre. Until now each of
+ * them answered it for TODAY, and only a planning sandbox could be pointed at a
+ * different session. So an office in late June preparing 2nd Half had no way to say
+ * so: they either looked at 1st Half's children and manually ignored them, or they
+ * built a sandbox, which is a heavier thing than "show me the other half".
+ *
+ * Worse, the one page that DID have a session picker (the camper roster) kept its
+ * choice in a page variable. Navigate away and it forgot. Open a second tab and the
+ * two disagreed. Nothing else on any page knew the choice had been made at all.
+ *
+ * ── THE MASTER KEY ─────────────────────────────────────────────────────────
+ *
+ * One camp-wide answer, set on the dashboard, that every page reads. Its default is
+ * NOT a stored value: it is DERIVED from the camp's dates — whichever session today
+ * falls in. That is the same principle that made us delete migrations 035/039's
+ * stamped date windows: a derived answer cannot drift, and a stored one always
+ * eventually does.
+ *
+ * An owner may PIN a session when derivation is not what they want ("we are all
+ * working on 2nd Half now, even though 1st Half is still running"), and the whole
+ * program follows. Separately, one person may PEEK at another session in their own
+ * tab, clearly marked, without changing what anybody else sees.
+ *
+ * ── WHY A PIN SNAPS BACK ───────────────────────────────────────────────────
+ *
+ * The failure that kills a feature like this is not a bug, it is a Tuesday in
+ * August: somebody pinned 1st Half in June, nobody remembers, and the front desk is
+ * checking in children against a roster that ended five weeks ago. A banner does not
+ * save you — a banner people see every day becomes furniture.
+ *
+ * So a pin whose session has ENDED stops applying. The app returns to following the
+ * calendar and says it has done so. A pin FORWARD — to a session that has not
+ * started — is left alone, because that is the legitimate case the pin exists for,
+ * and it expires by itself the moment that session ends.
+ *
+ * ── PRECEDENCE, MOST SPECIFIC FIRST ────────────────────────────────────────
+ *
+ *   workspace   you are inside a planning sandbox built for a session. Already
+ *               stated in the amber bar, and the most specific reality there is.
+ *   peek        this person, this tab, deliberately looking elsewhere right now.
+ *   pin         the camp-wide pin, if it has not expired.
+ *   calendar    the session today falls in. The normal answer.
+ *   only        the camp has exactly one session, so there was never a choice.
+ *   none        no sessions, or today falls between them. NOTHING is scoped, and
+ *               the app behaves exactly as it did before this file existed.
+ *
+ * ── AND THE DATE, WHICH IS THE PART THAT ACTUALLY DOES THE WORK ────────────
+ *
+ * Scoping to a session does not copy or filter anything. It moves the DATE the live
+ * roster is read at: 2nd Half's roster is the live roster as of 2nd Half's first
+ * day. Nothing is duplicated, nothing can drift, and every list that already asks
+ * "who is here on this date" gets the right answer without knowing this file exists.
+ *
+ * When the scoped session covers today, the date IS today — you are in it, and
+ * today's roster is the right one.
+ *
+ * Pure. It resolves and describes; it reads no storage and writes nothing.
+ * ========================================================================== */
+(function (root) {
+    'use strict';
+    var S = {};
+
+    function str(s) { return String(s == null ? '' : s).trim(); }
+    function ymd(d) { return str(d).slice(0, 10); }
+    function isDate(s) { return /^\d{4}-\d{2}-\d{2}$/.test(s); }
+
+    /** Every way the answer can have been arrived at, and what each one means. */
+    S.SOURCES = {
+        workspace: 'A planning sandbox built for this session',
+        peek:      'You are looking at this session; nobody else is',
+        pin:       'The camp is pinned to this session',
+        calendar:  'The session running today',
+        only:      'The camp’s only session',
+        none:      'No session — showing everyone, as of today'
+    };
+
+    /** Sources that everybody in the camp shares. A peek and a sandbox do not. */
+    S.SHARED = { pin: 1, calendar: 1, only: 1, none: 1 };
+
+    /** Today, in the app's own date strings. Callers may override it. */
+    S.today = function (now) {
+        var d = (now instanceof Date) ? now : new Date();
+        return new Date(d.getTime() - d.getTimezoneOffset() * 60000)
+            .toISOString().slice(0, 10);
+    };
+
+    /**
+     * The enrollment-window rule, which already owns "what dates does this session
+     * cover". Injectable for the same reason every other rule here is: this file is
+     * a global in the browser and a require() in tests.
+     *
+     * Its absence is not fatal — the fallback below reads startDate/endDate the same
+     * way — but the rule is preferred so there is one answer to the question,
+     * including its handling of a start date after an end date.
+     */
+    var _win = null;
+    S.useWindowRule = function (W) { _win = W || null; return S; };
+    function windowRule(given) {
+        if (given && typeof given.sessionWindow === 'function') return given;
+        if (_win && typeof _win.sessionWindow === 'function') return _win;
+        try {
+            var W = (typeof root !== 'undefined' && root && root.CampistryEnrollmentWindow) || null;
+            if (W && typeof W.sessionWindow === 'function') return W;
+        } catch (e) {}
+        return null;
+    }
+
+    /** {from, to} for one session, via the rule when it is loaded. */
+    S.windowOf = function (session, rule) {
+        var W = windowRule(rule);
+        if (W) return W.sessionWindow(session);
+        if (!session || typeof session !== 'object') return { from: null, to: null };
+        var a = ymd(session.startDate), b = ymd(session.endDate);
+        var from = isDate(a) ? a : null, to = isDate(b) ? b : null;
+        // A start after an end is a typo, not a window. Same call the rule makes.
+        if (from && to && from > to) return { from: null, to: null, unusable: true };
+        return { from: from, to: to };
+    };
+
+    /** Does this session cover `on`? An undated session covers everything. */
+    S.covers = function (session, on, rule) {
+        var w = S.windowOf(session, rule);
+        var day = ymd(on);
+        if (!isDate(day)) return true;
+        if (w.from && day < w.from) return false;
+        if (w.to && day > w.to) return false;
+        return true;
+    };
+
+    function find(sessions, name) {
+        var want = str(name);
+        if (!want) return null;
+        return (Array.isArray(sessions) ? sessions : []).filter(function (s) {
+            return s && str(s.name) === want;
+        })[0] || null;
+    }
+
+    /** Sessions in date order, undated last. The order a picker should show. */
+    S.ordered = function (sessions, rule) {
+        return (Array.isArray(sessions) ? sessions : [])
+            .filter(function (s) { return s && str(s.name); })
+            .map(function (s, i) { return { s: s, i: i, w: S.windowOf(s, rule) }; })
+            .sort(function (a, b) {
+                // Undated sorts last: a session with no dates is not evidence of
+                // being the earliest, and putting it first would make it the
+                // calendar's answer for a camp that simply has not filled in dates.
+                if (!a.w.from !== !b.w.from) return a.w.from ? -1 : 1;
+                if (a.w.from && b.w.from && a.w.from !== b.w.from) {
+                    return a.w.from < b.w.from ? -1 : 1;
+                }
+                return a.i - b.i;
+            })
+            .map(function (x) { return x.s; });
+    };
+
+    /**
+     * Which session the calendar says we are in. '' when it cannot tell.
+     *
+     * Only a DATED session can be the calendar's answer. An undated one covers every
+     * day, so treating it as today's session would make a camp that has not entered
+     * any dates permanently "in" whichever session was typed first — an answer that
+     * looks authoritative and means nothing.
+     */
+    S.calendarSession = function (sessions, on, rule) {
+        var day = ymd(on) || S.today();
+        var hit = S.ordered(sessions, rule).filter(function (s) {
+            var w = S.windowOf(s, rule);
+            if (!w.from && !w.to) return false;
+            return S.covers(s, day, rule);
+        })[0];
+        return hit ? str(hit.name) : '';
+    };
+
+    /**
+     * Has a pin expired? True only once the session's END has passed.
+     *
+     * Forward is fine — pinning to a session that has not started is the whole point
+     * of a pin, and it retires itself when that session ends. An undated session can
+     * never expire, matching how an undated session is treated everywhere else.
+     */
+    S.pinExpired = function (session, on, rule) {
+        var w = S.windowOf(session, rule);
+        var day = ymd(on) || S.today();
+        if (!w.to) return false;
+        return day > w.to;
+    };
+
+    /**
+     * THE MASTER KEY.
+     *
+     * o = {
+     *   sessions:         [{name, startDate, endDate}],
+     *   pin:              camp-wide pinned session name, or '' for automatic
+     *   peek:             this person's temporary session, or ''
+     *   workspaceSession: the session a planning sandbox is built for, or ''
+     *   today:            override for testing
+     *   windowRule:       override for testing
+     * }
+     *
+     * Returns everything a caller could need, so nobody has to re-derive any of it:
+     *
+     *   { session, on, source, shared, sessionObj, from, to, coversToday,
+     *     pin, pinDropped, droppedPin, peek, label, detail }
+     *
+     * Plus, when a peek is in force, `campSession` and `campSource`: what everybody
+     * else is seeing, so the way back can be labelled with where it goes.
+     */
+    S.resolve = function (o) {
+        o = o || {};
+        var rule = o.windowRule || null;
+        var sessions = Array.isArray(o.sessions) ? o.sessions : [];
+        var today = ymd(o.today) || S.today();
+        var out = {
+            session: '', on: today, source: 'none', shared: true, sessionObj: null,
+            from: null, to: null, coversToday: true,
+            pin: str(o.pin), pinDropped: false, droppedPin: '', peek: str(o.peek),
+            label: '', detail: ''
+        };
+
+        // 1. A sandbox built for a session. Most specific, and already shouted about
+        //    by the amber planning bar, so nothing here may override it.
+        var wsName = str(o.workspaceSession);
+        if (wsName && find(sessions, wsName)) {
+            return decorate(out, 'workspace', find(sessions, wsName), today, rule);
+        }
+
+        // 2. This person, this tab. Deliberate and temporary.
+        var peekObj = find(sessions, out.peek);
+        if (peekObj) {
+            var r = decorate(out, 'peek', peekObj, today, rule);
+            // WHAT THE CAMP WOULD SHOW IF THIS PERSON WERE NOT PEEKING. Needed so the
+            // way back out can be labelled with the session it returns you to — "Back
+            // to 1st Half" when 1st Half is what you are already looking at is the
+            // kind of button nobody trusts twice.
+            //
+            // One level deep and it cannot recurse: peek is '' on the way in.
+            var camp = S.resolve({
+                sessions: sessions, pin: out.pin, peek: '',
+                workspaceSession: '', today: today, windowRule: rule
+            });
+            r.campSession = camp.session;
+            r.campSource = camp.source;
+            // A peek does not get to hide that the camp's own pin has expired.
+            r.pinDropped = camp.pinDropped;
+            r.droppedPin = camp.droppedPin;
+            return r;
+        }
+        // A peek naming a session that no longer exists is not an error worth
+        // stopping for — it silently stops applying, which is the same thing that
+        // happens when the tab closes.
+        if (out.peek) out.peek = '';
+
+        // 3. The camp-wide pin, if it is still meaningful.
+        var pinObj = find(sessions, out.pin);
+        if (out.pin && !pinObj) {
+            // Pinned to a session somebody has since deleted or renamed. There is
+            // nothing to show, so fall through to the calendar and say so.
+            out.pinDropped = true;
+            out.droppedPin = out.pin;
+        } else if (pinObj) {
+            if (S.pinExpired(pinObj, today, rule)) {
+                // THE TUESDAY IN AUGUST. See the header: a pin does not get to
+                // outlive its session, whoever forgot about it.
+                out.pinDropped = true;
+                out.droppedPin = out.pin;
+            } else {
+                return decorate(out, 'pin', pinObj, today, rule);
+            }
+        }
+
+        // 4. Whatever is running today.
+        var calName = S.calendarSession(sessions, today, rule);
+        if (calName) return decorate(out, 'calendar', find(sessions, calName), today, rule);
+
+        // 5. Exactly one session: there was never a choice to make.
+        var named = sessions.filter(function (s) { return s && str(s.name); });
+        if (named.length === 1) return decorate(out, 'only', named[0], today, rule);
+
+        // 6. Nothing to scope by. The app behaves exactly as it did before.
+        return decorate(out, 'none', null, today, rule);
+    };
+
+    function decorate(out, source, sessionObj, today, rule) {
+        out.source = source;
+        out.shared = !!S.SHARED[source];
+        out.sessionObj = sessionObj || null;
+        out.session = sessionObj ? str(sessionObj.name) : '';
+
+        if (!sessionObj) {
+            out.on = today;
+            out.coversToday = true;
+            out.from = out.to = null;
+            out.label = 'Everyone, as of today';
+            out.detail = S.SOURCES.none;
+            return out;
+        }
+
+        var w = S.windowOf(sessionObj, rule);
+        out.from = w.from || null;
+        out.to = w.to || null;
+        out.coversToday = S.covers(sessionObj, today, rule);
+        // THE DATE IS THE WHOLE MECHANISM. In the session, today is the honest date.
+        // Outside it, read the live roster as of the session's first day — which is
+        // what makes "show me 2nd Half" work without copying a roster.
+        out.on = out.coversToday ? today : (w.from || today);
+
+        out.label = out.session;
+        out.detail = S.SOURCES[source] || '';
+        return out;
+    }
+
+    /**
+     * The dashboard picker. 'auto' first, and it NAMES what automatic currently
+     * resolves to — "Follow the calendar" alone asks somebody to trust a black box,
+     * and the commonest reason to reach for the pin is not believing it.
+     */
+    S.optionsFor = function (o) {
+        o = o || {};
+        var rule = o.windowRule || null;
+        var today = ymd(o.today) || S.today();
+        var cal = S.calendarSession(o.sessions, today, rule);
+        var opts = [{
+            value: 'auto',
+            label: 'Follow the calendar' + (cal ? ' — ' + cal + ' now' : ''),
+            auto: true, resolves: cal
+        }];
+        S.ordered(o.sessions, rule).forEach(function (s) {
+            var w = S.windowOf(s, rule);
+            opts.push({
+                value: str(s.name), label: str(s.name), session: str(s.name),
+                from: w.from || '', to: w.to || '',
+                // Said on the option itself, because the one thing somebody wants to
+                // know before pinning backwards is that it will not stick.
+                expired: S.pinExpired(s, today, rule)
+            });
+        });
+        return opts;
+    };
+
+    /**
+     * One line for the bar every page carries. Empty when there is nothing to say —
+     * an unscoped camp must not be given a banner about it.
+     */
+    S.describe = function (r) {
+        if (!r || !r.session) return '';
+        if (r.source === 'workspace') return '';   // the planning bar already says it
+        var bits = [r.session];
+        if (r.source === 'peek') bits.push('just you');
+        else if (r.source === 'pin') bits.push('pinned');
+        else if (r.source === 'calendar') bits.push('automatic');
+        if (!r.coversToday && r.from) bits.push('roster as of ' + r.from);
+        return bits.join(' · ');
+    };
+
+    /**
+     * What to tell somebody when a pin was dropped. This is the only message in the
+     * feature that must be impossible to miss, so it names the session that was
+     * dropped rather than saying "a session".
+     */
+    S.droppedNotice = function (r) {
+        if (!r || !r.pinDropped) return '';
+        var was = r.droppedPin || 'a session';
+        return 'The camp was pinned to ' + was + ', which has ended. '
+             + 'Everything is back to following the calendar'
+             + (r.session ? ' — showing ' + r.session + '.' : '.');
+    };
+
+    if (typeof module !== 'undefined' && module.exports) module.exports = S;
+    if (root) root.CampistrySessionScope = S;
+})(typeof window !== 'undefined' ? window : null);
