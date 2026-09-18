@@ -47,6 +47,11 @@ var enrollments={}, sessions=[], enrollSettings={}, formConfig=null;
 // campistryMe by save(), which owns that blob. Null until then, so an
 // unrelated save never invents a policy the camp did not choose.
 var _pendingPaymentPolicy=null;
+// Camp-wide billing rules that are neither a payment method nor a price: the
+// late-fee policy, and the keys of the late fees already charged. The applied
+// keys live here rather than being derived, because "have we charged this fee
+// before?" is not answerable from a charge list that a camp can edit.
+var billingRules={};
 var finStaff=[], finExpenses=[], finPayments=[], finBudget={revenue:0,payroll:0,expenses:0}, finIntegrations={};
 // Payroll — its own store, separate from the finance-tab staff list.
 //   staff:      full payroll records (pay, addresses, documents, youthCorps)
@@ -415,6 +420,7 @@ function loadData(){
         bunkAliases=me.bunkAliases||{};
         divisionHeads=me.divisionHeads||{};
         enrollments=me.enrollments||{}; sessions=me.sessions||[]; enrollSettings=me.enrollSettings||{};
+        billingRules=(me.billingRules&&typeof me.billingRules==='object')?me.billingRules:{};
         staffApplications=me.staffApplications||{};
         leads=me.leads||{};
         counselorVisibility=(me.counselorVisibility&&typeof me.counselorVisibility==='object')?me.counselorVisibility:null;
@@ -700,6 +706,7 @@ function save(){
             counselorVisibility:counselorVisibility,
             sessions:_savedSessions,
             enrollSettings:enrollSettings,
+            billingRules:billingRules,
             // Only when the builder actually set it. Spreading `undefined`
             // here would be harmless; writing {} would not -- it would read as
             // "this camp accepts nothing".
@@ -2193,6 +2200,551 @@ function _arAgingHtml(ledgers){
     });
     h+='</tbody></table></div>';
     return h;
+}
+
+/** The bulk rule, or null on a page that did not load it. */
+function _bulkAPI(){return (typeof window!=='undefined'&&window.CampistryBulk)||null}
+
+/**
+ * WHICH FAMILY OWNS WHICH ENROLLMENT — asked of the ledger, not re-derived.
+ *
+ * buildFamilyLedgers() posts a Tuition charge for every enrolled and accepted
+ * enrollment, carrying the enrollment id as its ref, and it is the one thing that
+ * knows the whole attribution cascade (exact membership, a fuzzy match for an
+ * accepted applicant, an ephemeral `pending_` ledger for a camper no family owns
+ * yet). Reading that back is how a bulk run reaches exactly the accounts Billing
+ * shows, with no second copy of the cascade to drift.
+ */
+function _famKeyByEnrollment(ledgers){
+    var map={};
+    Object.keys(ledgers||{}).forEach(function(fk){
+        (((ledgers[fk]||{}).entries)||[]).forEach(function(en){
+            if(en&&en.type==='charge'&&en.category==='Tuition'&&en.ref)map[String(en.ref)]=fk;
+        });
+    });
+    return map;
+}
+
+/** Every enrollment carrying a payment plan, with the family it belongs to. */
+function _planRows(ledgers){
+    var byEid=_famKeyByEnrollment(ledgers);
+    var out=[];
+    Object.keys(enrollments||{}).forEach(function(eid){
+        var e=enrollments[eid];
+        if(!e||!Array.isArray(e.installments)||!e.installments.length)return;
+        var fk=byEid[eid];
+        if(!fk||!ledgers[fk])return;
+        out.push({
+            key:fk+'|'+eid, famKey:fk, eid:eid,
+            famName:((ledgers[fk].family||{}).name)||fk,
+            camperName:_camperLabel(e.camperName||''),
+            name:(((ledgers[fk].family||{}).name)||fk)+' \u2014 '+_camperLabel(e.camperName||''),
+            schedule:e.installments
+        });
+    });
+    out.sort(function(a,b){return a.name.localeCompare(b.name)});
+    return out;
+}
+
+/**
+ * RUN AN INSTALLMENT — the half that was missing.
+ *
+ * campistry_installments.js made invoicing the event that advances a family's plan,
+ * and until now nothing in the app ever invoiced anybody: every schedule sat
+ * `pending` for ever, the aging report had nothing to age, and a camp on a payment
+ * plan had a plan that never asked for anything.
+ *
+ * An office runs an installment; every family in the run advances by exactly one.
+ * Nobody advances because a date passed, which is why two families on the same plan
+ * can legitimately sit on different installments.
+ */
+function runInstallments(){
+    if(!_secEdit('billing','Running an installment'))return;
+    var B=_bulkAPI();
+    if(!B){toast('The bulk rule did not load','error');return}
+    var ledgers=buildFamilyLedgers();
+    var rows=_planRows(ledgers);
+    if(!rows.length){
+        toast('Nobody is on a payment plan yet','error');return;
+    }
+    var preview=B.planInvoiceRun({families:rows});
+    var byKey={};
+    preview.run.forEach(function(r){byKey[r.key]=r});
+    var runnable=rows.filter(function(r){return byKey[r.key]});
+    if(!runnable.length){
+        // Said plainly rather than shown as an empty list: "every plan is fully
+        // invoiced" and "nobody is on a plan" are different facts and an office
+        // needs to know which one it is looking at.
+        toast('Every payment plan has already been fully invoiced','error');return;
+    }
+    var A=_arAPI();
+    var terms=(A&&A.DEFAULT_TERMS_DAYS)||30;
+    var today=new Date().toISOString().slice(0,10);
+    var due=(A&&A.addDays)?A.addDays(today,terms):today;
+
+    var h='<div class="me-modal-form">';
+    h+='<p style="font-size:.83rem;color:var(--s600);margin:0 0 4px">Each family below '
+      +'advances by <strong>one</strong> installment. Nobody advances because a date '
+      +'passed \u2014 being invoiced is the event.</p>';
+    h+='<div style="display:grid;grid-template-columns:1fr 1fr;gap:10px">';
+    h+='<div class="me-field"><label>Invoiced on</label>'
+      +'<input type="date" id="riOn" class="me-input" value="'+today+'"></div>';
+    h+='<div class="me-field"><label>Payment due by</label>'
+      +'<input type="date" id="riDue" class="me-input" value="'+esc(due)+'"></div>';
+    h+='</div>';
+    h+='<label style="display:inline-flex;align-items:center;gap:6px;font-size:.83rem;'
+      +'margin-bottom:8px"><input type="checkbox" id="riAll" checked '
+      +'onchange="CampistryMe._riToggleAll(this.checked)"> Everyone below</label>';
+    h+='<div style="max-height:260px;overflow-y:auto;border:1px solid var(--s200);'
+      +'border-radius:var(--r);margin-bottom:10px">';
+    runnable.forEach(function(r){
+        var nx=byKey[r.key];
+        h+='<label style="display:flex;justify-content:space-between;gap:10px;align-items:center;'
+          +'padding:7px 11px;border-bottom:1px solid var(--s100);font-size:.81rem;cursor:pointer">'
+          +'<span style="display:flex;gap:7px;align-items:center">'
+          +'<input type="checkbox" class="riChk" value="'+esc(r.key)+'" checked '
+          +'onchange="CampistryMe._riPreview()">'
+          +'<span><strong>'+esc(r.famName)+'</strong> \u00b7 '+esc(r.camperName)
+          +'<span style="color:var(--s500)"> \u2014 '+esc(nx.label)+'</span></span></span>'
+          +'<span style="font-weight:700">'+fm(nx.amount)+'</span></label>';
+    });
+    h+='</div>';
+    if(preview.skipped.length){
+        h+='<details style="margin-bottom:10px"><summary style="cursor:pointer;font-size:.8rem;'
+          +'color:var(--s500)">'+preview.skipped.length+' not included</summary>'
+          +'<div style="font-size:.78rem;color:var(--s500);padding:7px 2px 0">';
+        preview.skipped.forEach(function(sk){
+            h+='<div>'+esc(sk.name||sk.key)+' \u2014 '+esc(sk.message||sk.reason)+'</div>';
+        });
+        h+='</div></details>';
+    }
+    h+='<div id="riPreview"></div></div>';
+
+    showModal('Run an installment',h,function(){
+        var picked={};
+        document.querySelectorAll('.riChk:checked').forEach(function(cb){picked[cb.value]=1});
+        var chosen=runnable.filter(function(r){return picked[r.key]});
+        if(!chosen.length){toast('Nobody is selected','error');return}
+        var on=(document.getElementById('riOn')||{}).value||today;
+        var dueBy=(document.getElementById('riDue')||{}).value||'';
+        // PLANNED AGAIN, on the selection actually chosen. The preview above was
+        // computed over everybody, and invoicing whoever the preview happened to
+        // include is exactly how a bulk action bills the wrong people.
+        var plan=B.planInvoiceRun({families:chosen,on:on,dueDate:dueBy});
+        if(!plan.count){toast('Nothing to invoice','error');return}
+        plan.run.forEach(function(r){
+            var eid=String(r.key).split('|')[1];
+            if(enrollments[eid])enrollments[eid].installments=r.schedule;
+        });
+        save();closeModal('dynModal');renderBilling();
+        toast('Invoiced '+plan.count+' installment'+(plan.count===1?'':'s')+' \u00b7 '
+              +fm(plan.total));
+    },{saveLabel:'Invoice them'});
+    _riPreview();
+}
+function _riToggleAll(on){
+    document.querySelectorAll('.riChk').forEach(function(cb){cb.checked=!!on});
+    _riPreview();
+}
+function _riPreview(){
+    var box=document.getElementById('riPreview'); if(!box)return;
+    var n=0,total=0;
+    var B=_bulkAPI();
+    var ledgers=buildFamilyLedgers();
+    var rows=_planRows(ledgers), byKey={};
+    if(B)B.planInvoiceRun({families:rows}).run.forEach(function(r){byKey[r.key]=r});
+    document.querySelectorAll('.riChk:checked').forEach(function(cb){
+        var r=byKey[cb.value]; if(!r)return;
+        n++; total+=r.amount;
+    });
+    box.innerHTML=n
+        ? '<div style="background:#F0FDF4;border:1px solid #BBF7D0;color:#166534;'
+          +'border-radius:8px;padding:8px 11px;font-size:.81rem">Invoicing <strong>'+n
+          +'</strong> famil'+(n===1?'y':'ies')+' for <strong>'
+          +fm(Math.round(total*100)/100)+'</strong></div>'
+        : '<div style="font-size:.81rem;color:var(--s500)">Nobody selected.</div>';
+}
+
+/**
+ * A BULK CREDIT OR CHARGE. Either the same amount to each account, or one total
+ * split between them — the split lands in cents and sums to exactly what was asked
+ * for, so a scholarship pot reconciles with what was granted.
+ */
+var _baKind='credit';
+function bulkAdjust(kind){
+    if(!_secEdit('billing',kind==='charge'?'Adding charges in bulk':'Issuing credits in bulk'))return;
+    var B=_bulkAPI();
+    if(!B){toast('The bulk rule did not load','error');return}
+    kind=kind==='charge'?'charge':'credit';
+    // Remembered rather than read back off the modal's title. A credit and a charge
+    // are opposites, and deriving the direction from display text is how a preview
+    // ends up describing the reverse of what the button will do.
+    _baKind=kind;
+    var ledgers=buildFamilyLedgers();
+    var list=Object.keys(ledgers).map(function(fk){
+        return {key:fk,name:((ledgers[fk].family||{}).name)||fk,balance:ledgers[fk].balance||0};
+    }).sort(function(a,b){return a.name.localeCompare(b.name)});
+    if(!list.length){toast('There are no accounts yet','error');return}
+
+    var h='<div class="me-modal-form">';
+    h+='<p style="font-size:.83rem;color:var(--s600);margin:0 0 10px">'
+      +(kind==='charge'
+         ? 'A charge is added to each selected account and shows on their next bill.'
+         : 'A credit comes off what each selected family owes. No money leaves the camp.')
+      +'</p>';
+    h+='<div style="display:grid;grid-template-columns:1fr 1fr;gap:10px">';
+    h+='<div class="me-field"><label>How</label><select id="baMode" class="me-input" '
+      +'onchange="CampistryMe._baPreview()">'
+      +(B.MODES||[]).map(function(m){
+          return '<option value="'+esc(m.id)+'">'+esc(m.label)+'</option>'}).join('')
+      +'</select></div>';
+    h+='<div class="me-field"><label>Amount ($)</label><input type="number" id="baAmt" '
+      +'class="me-input" step="0.01" min="0" oninput="CampistryMe._baPreview()"></div>';
+    h+='</div>';
+    h+='<div class="me-field"><label>What is this for?</label><input type="text" id="baReason" '
+      +'class="me-input" placeholder="'+(kind==='charge'?'e.g. Trip fee':'e.g. Scholarship')+'"></div>';
+    h+='<div style="display:flex;gap:12px;flex-wrap:wrap;margin-bottom:6px;font-size:.81rem">'
+      +'<label style="display:inline-flex;align-items:center;gap:6px"><input type="checkbox" '
+      +'id="baAll" checked onchange="CampistryMe._baToggleAll(this.checked)"> Everyone</label>'
+      +'<button type="button" class="me-btn me-btn--ghost me-btn--sm" '
+      +'onclick="CampistryMe._baOnlyOwing()">Only those with a balance</button></div>';
+    h+='<div style="max-height:220px;overflow-y:auto;border:1px solid var(--s200);'
+      +'border-radius:var(--r);margin-bottom:10px">';
+    list.forEach(function(x){
+        h+='<label style="display:flex;justify-content:space-between;gap:10px;align-items:center;'
+          +'padding:6px 11px;border-bottom:1px solid var(--s100);font-size:.81rem;cursor:pointer">'
+          +'<span style="display:flex;gap:7px;align-items:center"><input type="checkbox" '
+          +'class="baChk" value="'+esc(x.key)+'" data-owing="'+(x.balance>0?'1':'0')+'" checked '
+          +'onchange="CampistryMe._baPreview()"> '+esc(x.name)+'</span>'
+          +'<span style="color:var(--s500)">'+fm(x.balance)+'</span></label>';
+    });
+    h+='</div><div id="baPreview"></div></div>';
+
+    showModal(kind==='charge'?'Charge several accounts':'Credit several accounts',h,function(){
+        // The CLOSURE's kind, not the module's: this handler belongs to the modal
+        // that was opened with it, and _baKind only exists for the live preview.
+        var plan=_baPlan(kind);
+        if(!plan||!plan.ok){toast((plan&&plan.message)||'Nothing to post','error');return}
+        var today=new Date().toISOString().slice(0,10);
+        var stamp=Date.now(), posted=0;
+        plan.entries.forEach(function(en,i){
+            var f=families[en.key];
+            // A synthesized `pending_` ledger is not a family record, so there is
+            // nowhere to write to. Skipped rather than crashing the run half way
+            // through, and counted honestly in the toast below.
+            if(!f)return;
+            var id=(kind==='charge'?'bchg_':'bcr_')+stamp+'_'+i;
+            if(kind==='charge'){
+                if(!f.charges)f.charges=[];
+                f.charges.push({id:id,category:'Other',description:en.reason,
+                                amount:en.amount,date:today,timestamp:stamp});
+                f.balance=(f.balance||0)+en.amount;
+            }else{
+                if(!f.credits)f.credits=[];
+                f.credits.push({id:id,reason:en.reason,amount:en.amount,date:today,
+                                timestamp:stamp});
+                f.balance=Math.max(0,(f.balance||0)-en.amount);
+                _postLedgerCredit(f,{id:id,amount:en.amount,reason:'goodwill',
+                                     note:en.reason,date:today});
+            }
+            posted++;
+        });
+        save();closeModal('dynModal');renderBilling();
+        toast((kind==='charge'?'Charged ':'Credited ')+posted+' account'
+              +(posted===1?'':'s')+' \u00b7 '+fm(plan.total)
+              +(posted<plan.count?' \u2014 '+(plan.count-posted)
+                 +' had no household record yet':''));
+    },{saveLabel:kind==='charge'?'Post the charges':'Post the credits'});
+    _baPreview();
+}
+function _baToggleAll(on){
+    document.querySelectorAll('.baChk').forEach(function(cb){cb.checked=!!on});
+    _baPreview();
+}
+function _baOnlyOwing(){
+    var all=document.getElementById('baAll'); if(all)all.checked=false;
+    document.querySelectorAll('.baChk').forEach(function(cb){
+        cb.checked=cb.getAttribute('data-owing')==='1';
+    });
+    _baPreview();
+}
+function _baPlan(kind){
+    var B=_bulkAPI(); if(!B)return null;
+    var targets=[];
+    document.querySelectorAll('.baChk:checked').forEach(function(cb){
+        targets.push({key:cb.value,name:(cb.parentNode&&cb.parentNode.textContent||'').trim()});
+    });
+    return B.planBulkEntry({
+        targets:targets, kind:kind,
+        mode:((document.getElementById('baMode')||{}).value)||'each',
+        amount:parseFloat((document.getElementById('baAmt')||{}).value)||0,
+        reason:((document.getElementById('baReason')||{}).value||'').trim()
+    });
+}
+function _baPreview(){
+    var box=document.getElementById('baPreview'); if(!box)return;
+    var plan=_baPlan(_baKind);
+    var B=_bulkAPI();
+    if(!plan||!plan.ok){
+        box.innerHTML='<div style="font-size:.81rem;color:var(--s500)">'
+          +esc((plan&&plan.message)||'Fill in an amount and a reason.')+'</div>';
+        return;
+    }
+    var each=plan.mode==='split'
+        ? ' \u00b7 '+fm(plan.entries[0].amount)+' each'
+          +(plan.entries.length>1&&plan.entries[0].amount!==plan.entries[1].amount
+             ? ' (the odd pennies ride on the first)':'')
+        : '';
+    box.innerHTML='<div style="background:#F0FDF4;border:1px solid #BBF7D0;color:#166534;'
+      +'border-radius:8px;padding:8px 11px;font-size:.81rem">'
+      +esc(B.describeBulk(plan))+esc(each)+'</div>';
+}
+
+/**
+ * CREDITS COVERING WHAT WAS ASKED FOR.
+ *
+ * A family with money on account being invoiced for a deposit is the app failing at
+ * arithmetic in public. This settles invoiced installments out of a credit balance
+ * the family has already given us — deposits and registration first, because those
+ * are the ones that BLOCK something.
+ *
+ * It posts no money and no ledger entry, deliberately: the credit is already on the
+ * ledger and already in the balance. What changes is that the installment stops
+ * asking. Posting anything here would count the same credit twice.
+ */
+function applyCreditsToOwed(){
+    if(!_secEdit('billing','Applying credits'))return;
+    var B=_bulkAPI();
+    if(!B){toast('The bulk rule did not load','error');return}
+    var ledgers=buildFamilyLedgers();
+    var rows=_planRows(ledgers);
+    var plans=[];
+    rows.forEach(function(r){
+        var l=ledgers[r.famKey]||{};
+        var avail=Math.round(Math.max(0,-(l.balance||0))*100)/100;
+        if(!(avail>0))return;
+        var obs=[];
+        (r.schedule||[]).forEach(function(inst,i){
+            if(!inst||String(inst.status||'')!=='invoiced')return;
+            var label=String(inst.label||'');
+            obs.push({
+                id:r.eid+'_inst'+i, label:label||('Payment '+(i+1)),
+                kind:/down ?payment|deposit/i.test(label)?'deposit'
+                    :(/registration/i.test(label)?'registration':'installment'),
+                amount:Number(inst.amount)||0, paid:0,
+                dueDate:inst.invoiceDueDate||inst.dueDate||''
+            });
+        });
+        if(!obs.length)return;
+        var cov=B.planCoverage({credit:avail,obligations:obs});
+        // Only what the credit covers IN FULL. An installment cannot be half
+        // settled — a family half-asked is a family who gets a confusing bill —
+        // so a partial cover is reported and left alone.
+        var full=cov.applications.filter(function(a){return a.full});
+        if(!full.length)return;
+        plans.push({row:r,cov:cov,full:full,
+                    total:full.reduce(function(n,a){return n+a.amount},0)});
+    });
+
+    if(!plans.length){
+        toast('No family has credit sitting against an invoice right now');return;
+    }
+    var grand=Math.round(plans.reduce(function(n,p){return n+p.total},0)*100)/100;
+    var h='<div class="me-modal-form">';
+    h+='<p style="font-size:.83rem;color:var(--s600);margin:0 0 10px">These families have '
+      +'already given the camp this money. Settling the invoice out of their credit stops '
+      +'them being asked for it twice. <strong>No money moves and nothing is posted</strong> '
+      +'\u2014 the credit is already on their ledger.</p>';
+    h+='<div style="max-height:260px;overflow-y:auto;border:1px solid var(--s200);'
+      +'border-radius:var(--r);margin-bottom:10px">';
+    plans.forEach(function(pl){
+        h+='<div style="padding:7px 11px;border-bottom:1px solid var(--s100);font-size:.81rem">'
+          +'<div style="display:flex;justify-content:space-between;gap:10px">'
+          +'<span><strong>'+esc(pl.row.famName)+'</strong> \u00b7 '+esc(pl.row.camperName)+'</span>'
+          +'<span style="font-weight:700">'+fm(Math.round(pl.total*100)/100)+'</span></div>'
+          +'<div style="color:var(--s500)">'+pl.full.map(function(a){
+              return esc(a.label)+' '+fm(a.amount)}).join(' \u00b7 ')+'</div>';
+        if(pl.cov.partial){
+            h+='<div style="color:#92400E">Not enough credit to settle '
+              +esc((pl.cov.applications.filter(function(a){return !a.full})[0]||{}).label||'')
+              +' in full \u2014 left as it is.</div>';
+        }
+        h+='</div>';
+    });
+    h+='</div>';
+    h+='<div style="background:#F0FDF4;border:1px solid #BBF7D0;color:#166534;border-radius:8px;'
+      +'padding:8px 11px;font-size:.81rem">Settling <strong>'+fm(grand)+'</strong> across '
+      +plans.length+' plan'+(plans.length===1?'':'s')+'</div></div>';
+
+    showModal('Settle invoices from credit',h,function(){
+        var today=new Date().toISOString().slice(0,10);
+        var n=0;
+        plans.forEach(function(pl){
+            var e=enrollments[pl.row.eid];
+            if(!e||!Array.isArray(e.installments))return;
+            pl.full.forEach(function(a){
+                var i=parseInt(String(a.id).split('_inst')[1],10);
+                var inst=e.installments[i];
+                if(!inst||String(inst.status||'')!=='invoiced')return;
+                inst.status='paid';
+                inst.paidAt=today;
+                // WHY it is settled, so a statement does not read as a payment that
+                // never arrived in the bank.
+                inst.paidFrom='credit';
+                n++;
+            });
+        });
+        save();closeModal('dynModal');renderBilling();
+        toast('Settled '+n+' installment'+(n===1?'':'s')+' from credit \u00b7 '+fm(grand));
+    },{saveLabel:'Settle them'});
+}
+
+/**
+ * LATE FEES. Off until a camp turns them on, and never charged twice.
+ *
+ * campistry_ar.js proposes fees and stamps each proposal with a key carrying the
+ * invoice and the period number. That key is only worth anything if somebody checks
+ * it, so the applied keys are stored on the camp and checked on every run: running
+ * the month twice charges nothing the second time.
+ */
+function manageLateFees(){
+    if(!_secEdit('billing','Changing the late-fee policy'))return;
+    var A=_arAPI();
+    if(!A){toast('The billing rule did not load','error');return}
+    var pol=A.normalizeLateFeePolicy((billingRules||{}).lateFee);
+    var h='<div class="me-modal-form">';
+    h+='<p style="font-size:.83rem;color:var(--s600);margin:0 0 10px">Nobody is charged a '
+      +'late fee unless you switch this on. A fee only ever applies to an invoice the '
+      +'family was actually sent \u2014 not to a date in a schedule that passed while the '
+      +'office was busy.</p>';
+    h+='<div class="me-field"><label>Late fee</label><select id="lfMode" class="me-input">'
+      +'<option value="off"'+(pol.mode==='off'?' selected':'')+'>Off</option>'
+      +'<option value="flat"'+(pol.mode==='flat'?' selected':'')+'>A flat amount</option>'
+      +'<option value="percent"'+(pol.mode==='percent'?' selected':'')+'>A percentage of what is owed</option>'
+      +'</select></div>';
+    h+='<div style="display:grid;grid-template-columns:1fr 1fr;gap:10px">';
+    h+='<div class="me-field"><label>Flat amount ($)</label><input type="number" id="lfFlat" '
+      +'class="me-input" step="0.01" min="0" value="'+(pol.flat||'')+'"></div>';
+    h+='<div class="me-field"><label>Percent (%)</label><input type="number" id="lfPct" '
+      +'class="me-input" step="0.01" min="0" max="100" value="'+(pol.percent||'')+'"></div>';
+    h+='<div class="me-field"><label>Grace days</label><input type="number" id="lfGrace" '
+      +'class="me-input" min="0" value="'+(pol.graceDays||0)+'"></div>';
+    h+='<div class="me-field"><label>How often</label><select id="lfFreq" class="me-input">'
+      +'<option value="once"'+(pol.frequency==='once'?' selected':'')+'>Once per invoice</option>'
+      +'<option value="monthly"'+(pol.frequency==='monthly'?' selected':'')+'>Every month it stays late</option>'
+      +'</select></div>';
+    h+='<div class="me-field"><label>Only above ($)</label><input type="number" id="lfMin" '
+      +'class="me-input" step="0.01" min="0" value="'+(pol.minBalance||'')+'"></div>';
+    h+='<div class="me-field"><label>Cap per invoice ($)</label><input type="number" id="lfCap" '
+      +'class="me-input" step="0.01" min="0" value="'+(pol.maxPerInvoice||'')+'"></div>';
+    h+='</div>';
+    h+='<p style="font-size:.78rem;color:var(--s400);margin:4px 0 0">A monthly percentage is '
+      +'the one that can run away, which is what the cap is for.</p>';
+    h+='</div>';
+    showModal('Late fees',h,function(){
+        var next={
+            mode:((document.getElementById('lfMode')||{}).value)||'off',
+            flat:parseFloat((document.getElementById('lfFlat')||{}).value)||0,
+            percent:parseFloat((document.getElementById('lfPct')||{}).value)||0,
+            graceDays:parseInt((document.getElementById('lfGrace')||{}).value,10)||0,
+            frequency:((document.getElementById('lfFreq')||{}).value)||'once',
+            minBalance:parseFloat((document.getElementById('lfMin')||{}).value)||0,
+            maxPerInvoice:parseFloat((document.getElementById('lfCap')||{}).value)||0
+        };
+        var norm=A.normalizeLateFeePolicy(next);
+        if(norm.mode==='flat'&&!(norm.flat>0)){
+            toast('Enter the flat amount, or switch late fees off','error');return;
+        }
+        if(norm.mode==='percent'&&!(norm.percent>0)){
+            toast('Enter the percentage, or switch late fees off','error');return;
+        }
+        billingRules=Object.assign({},billingRules||{},{lateFee:norm});
+        save();closeModal('dynModal');
+        toast(norm.mode==='off'?'Late fees are off':'Late fees saved');
+    });
+}
+
+/** Charge the late fees that are due and have not been charged before. */
+function assessLateFees(){
+    if(!_secEdit('billing','Charging late fees'))return;
+    var A=_arAPI(), B=_bulkAPI();
+    if(!A||!B){toast('The billing rules did not load','error');return}
+    var pol=A.normalizeLateFeePolicy((billingRules||{}).lateFee);
+    if(pol.mode==='off'){
+        toast('Late fees are switched off \u2014 set them up first','error');
+        manageLateFees();return;
+    }
+    var ledgers=buildFamilyLedgers();
+    var asOf=new Date().toISOString().slice(0,10);
+    var applied=((billingRules||{}).lateFeesApplied)||{};
+    var perFam=[];
+    Object.keys(ledgers).forEach(function(fk){
+        var docs=_arDocsFor(ledgers[fk]);
+        if(!docs.length)return;
+        var proposed=A.assessLateFees({docs:docs,policy:pol,asOf:asOf});
+        var plan=B.planLateFees({proposals:proposed,applied:applied});
+        if(!plan.count&&!plan.alreadyApplied.length)return;
+        perFam.push({famKey:fk,name:((ledgers[fk].family||{}).name)||fk,plan:plan});
+    });
+    var toCharge=perFam.filter(function(x){return x.plan.count});
+    if(!toCharge.length){
+        var seen=perFam.reduce(function(n,x){return n+x.plan.alreadyApplied.length},0);
+        toast(seen?'Every late fee due has already been charged'
+                  :'Nothing is late enough to charge a fee on');
+        return;
+    }
+    var grand=Math.round(toCharge.reduce(function(n,x){return n+x.plan.total},0)*100)/100;
+    var dupes=perFam.reduce(function(n,x){return n+x.plan.alreadyApplied.length},0);
+
+    var h='<div class="me-modal-form">';
+    h+='<p style="font-size:.83rem;color:var(--s600);margin:0 0 10px">'
+      +esc(pol.mode==='percent'?(pol.percent+'% of what is still owed'):('A flat '+fm(pol.flat)))
+      +(pol.frequency==='monthly'?', every month an invoice stays late':', once per invoice')
+      +(pol.graceDays?', after '+pol.graceDays+' grace day'+(pol.graceDays===1?'':'s'):'')
+      +'.</p>';
+    h+='<div style="max-height:250px;overflow-y:auto;border:1px solid var(--s200);'
+      +'border-radius:var(--r);margin-bottom:10px">';
+    toCharge.forEach(function(x){
+        x.plan.toApply.forEach(function(p){
+            h+='<div style="display:flex;justify-content:space-between;gap:10px;padding:7px 11px;'
+              +'border-bottom:1px solid var(--s100);font-size:.81rem">'
+              +'<span><strong>'+esc(x.name)+'</strong><span style="color:var(--s500)"> \u2014 '
+              +esc(p.note||'')+' ('+p.daysLate+'d late)</span></span>'
+              +'<span style="font-weight:700">'+fm(p.amount)+'</span></div>';
+        });
+    });
+    h+='</div>';
+    h+='<div style="background:#FFFBEB;border:1px solid #FDE68A;color:#92400E;border-radius:8px;'
+      +'padding:8px 11px;font-size:.81rem">Charging <strong>'+fm(grand)+'</strong> to '
+      +toCharge.length+' famil'+(toCharge.length===1?'y':'ies')
+      +(dupes?'. '+dupes+' fee'+(dupes===1?' was':'s were')+' already charged and '
+        +(dupes===1?'is':'are')+' not included.':'')
+      +'</div></div>';
+
+    showModal('Charge late fees',h,function(){
+        var stamp=Date.now(), nextApplied=applied, n=0, total=0;
+        toCharge.forEach(function(x){
+            var f=families[x.famKey];
+            if(!f)return;
+            if(!f.charges)f.charges=[];
+            x.plan.toApply.forEach(function(p){
+                // The proposal's own key is the charge id, so the ledger's per-charge
+                // dedupe and the late-fee dedupe are the same fact in two places
+                // rather than two facts that can disagree.
+                var id='lf_'+String(p.key).replace(/^lf_/,'');
+                if(f.charges.some(function(c){return c&&c.id===id}))return;
+                f.charges.push({id:id,category:'Late Fee',description:p.note||'Late fee',
+                                amount:p.amount,date:asOf,timestamp:stamp});
+                f.balance=(f.balance||0)+p.amount;
+                n++;total+=p.amount;
+            });
+            nextApplied=B.recordLateFees(nextApplied,x.plan,asOf);
+        });
+        billingRules=Object.assign({},billingRules||{},{lateFeesApplied:nextApplied});
+        save();closeModal('dynModal');renderBilling();
+        toast('Charged '+n+' late fee'+(n===1?'':'s')+' \u00b7 '
+              +fm(Math.round(total*100)/100));
+    },{saveLabel:'Charge them'});
 }
 
 function _liveOnlyNotice(what){
@@ -15188,6 +15740,14 @@ function renderBilling(){
         +'<div class="me-more-menu" id="'+billMoreId+'">'
         +'<button onclick="CampistryMe.addFamily()">Add Household</button>'
         +'<button onclick="CampistryMe.addCharge()">Add Charge</button>'
+        // The bulk actions. Run an installment is the one that makes a payment
+        // plan actually ask for money — without it a schedule sits pending for ever.
+        +'<button onclick="CampistryMe.runInstallments()">Run an installment\u2026</button>'
+        +'<button onclick="CampistryMe.bulkAdjust(\'credit\')">Credit several accounts\u2026</button>'
+        +'<button onclick="CampistryMe.bulkAdjust(\'charge\')">Charge several accounts\u2026</button>'
+        +'<button onclick="CampistryMe.applyCreditsToOwed()">Settle invoices from credit\u2026</button>'
+        +'<button onclick="CampistryMe.assessLateFees()">Charge late fees\u2026</button>'
+        +'<button onclick="CampistryMe.manageLateFees()">Late-fee policy\u2026</button>'
         +'<button onclick="CampistryMe.issueCredit()">Issue Credit/Refund</button>'
         +'<button onclick="CampistryMe.managePaymentMethods()">Accepted payments</button>'
         +'<button onclick="CampistryMe.managePayers()">Payers &amp; Organizations</button>'
@@ -20623,6 +21183,16 @@ window.CampistryMe={
     managePayers:managePayers,togglePayerArchived:togglePayerArchived,
     managePaymentMethods:managePaymentMethods,setArQuery:setArQuery,
     toggleAging:toggleAging,
+    runInstallments:runInstallments,
+    _riToggleAll:_riToggleAll,
+    _riPreview:_riPreview,
+    bulkAdjust:bulkAdjust,
+    _baToggleAll:_baToggleAll,
+    _baOnlyOwing:_baOnlyOwing,
+    _baPreview:_baPreview,
+    applyCreditsToOwed:applyCreditsToOwed,
+    manageLateFees:manageLateFees,
+    assessLateFees:assessLateFees,
     closeOutFamily:closeOutFamily,_closeoutPreview:_closeoutPreview,
     addCardSurcharge:addCardSurcharge,_surchargePreview:_surchargePreview,
     _addPayerRow:_addPayerRow,_payerSplitPreview:_payerSplitPreview,
