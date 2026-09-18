@@ -16039,33 +16039,40 @@ function renderBilling(){
         h+='<div class="me-empty"><h3>No accounts match this filter</h3></div>';
     } else {
         var billPaged=_paginate(filtered,PAGE_SIZE,_billingPage);
+        // A clean table (same .me-t style used across the app — Roster,
+        // Payroll) rather than a stack of cards, so Billing reads
+        // consistently. Each row clicks through to the full-page family/
+        // billing detail (renderFamilyDetailPage).
+        h+='<div class="me-card"><div class="me-tw"><table class="me-t"><thead><tr>'
+            +'<th>Family</th><th>Campers</th><th>Status</th><th>Autopay</th><th style="text-align:right">Balance</th><th></th>'
+            +'</tr></thead><tbody>';
         billPaged.items.forEach(function(l){
-            // A single scannable row per family — click anywhere on it to open
-            // the full-page family/billing detail (renderFamilyDetailPage),
-            // same click-through pattern Roster uses for a camper. This used
-            // to expand inline into the household + ledger + 8 action buttons
-            // right here, which is what made the list feel crowded.
-            var statusBadge=l.status==='unbilled'?_flatStatus('Not Billed'):l.status==='paid'?_flatStatus('Paid','ok'):l.status==='overdue'?_flatStatus('Overdue','err'):l.status==='partial'?_flatStatus('Partial','warn'):_flatStatus('Pending','warn');
+            // Status as a pill badge (bdg) to match the app's table look.
+            var stMap={paid:['Paid','ok'],overdue:['Overdue','err'],partial:['Partial','warn'],unbilled:['Not Billed','gray']};
+            var st=stMap[l.status]||['Pending','warn'];
+            var statusCell=bdg(st[0],st[1])
+                +(l.pendingEnrollment?' '+bdg('Pending enrollment','warn'):'')
+                +_collectionWarning(l);
             var camperNames=(l.family.camperIds||[]).concat((l.pendingCamperIds||[]).map(function(n){return n+' (pending)'})).join(', ');
 
-            // A quick "N x $amount" tag when this family is on an even
-            // installment plan — so a plan's shape is scannable from the
-            // list without opening the family, same as the family-detail
-            // page's Payment Plan card.
-            // One clean row: name + campers + status on the left (status
-            // folded into the descriptive line instead of its own pill),
-            // balance + a chevron on the right. The plan's "N x $amount"
-            // shape used to also live here — dropped from the list view,
-            // it's still on the family's own Payment Plan card, this row
-            // only needs to answer "who, and how much."
-            h+='<div class="me-card" id="billfam-'+je(l.famKey)+'" style="margin-bottom:10px;cursor:pointer" onclick="CampistryMe.viewFamily(\''+je(l.famKey)+'\')">';
-            h+='<div style="display:flex;align-items:center;gap:12px">';
-            h+='<div style="flex:1;min-width:0"><h3 style="margin:0;font-size:.95rem;font-weight:700;color:var(--s800)">'+esc(l.family.name||'')+'</h3><span style="font-size:.75rem;color:var(--s400)">'+esc(camperNames)+'</span> · '+statusBadge+(l.pendingEnrollment?' · '+_flatStatus('Accepted — pending enrollment','warn'):'')+_collectionWarning(l)+'</div>';
-            h+='<div style="display:flex;align-items:center;gap:10px;flex-shrink:0">';
-            h+='<span style="font-size:1rem;font-weight:800;color:'+(l.balance>0?'var(--err)':'var(--ok)')+'">'+fm(l.balance)+'</span>';
-            h+='<span style="font-size:1rem;color:var(--s300)">›</span></div>';
-            h+='</div></div>';
+            // Autopay — shown only when a plan is actively on autopay. Read
+            // straight off the canonical family record (same shape the family
+            // detail page's autopay pill reads via _famPlans) without mutating
+            // it during render.
+            var _billFam=families[l.famKey]||l.family||{};
+            var _billPlans=_billFam.plans||((_billFam.plan&&_billFam.plan.installments&&_billFam.plan.installments.length)?[_billFam.plan]:[]);
+            var _autopayOn=_billPlans.some(function(p){return p&&p.autopay});
+
+            h+='<tr class="click" id="billfam-'+je(l.famKey)+'" onclick="CampistryMe.viewFamily(\''+je(l.famKey)+'\')">'
+                +'<td class="bold">'+esc(l.family.name||'')+'</td>'
+                +'<td style="color:var(--s500)">'+(camperNames?esc(camperNames):'<span style="color:var(--s300)">—</span>')+'</td>'
+                +'<td>'+statusCell+'</td>'
+                +'<td>'+(_autopayOn?bdg('On','ok'):'<span style="color:var(--s300)">—</span>')+'</td>'
+                +'<td style="text-align:right;font-weight:800;color:'+(l.balance>0?'var(--err)':'var(--ok)')+'">'+fm(l.balance)+'</td>'
+                +'<td style="text-align:right;color:var(--me);font-weight:600">View</td>'
+                +'</tr>';
         });
+        h+='</tbody></table></div></div>';
         h+=_pagerHtml(filtered.length,PAGE_SIZE,_billingPage,'setBillingPage');
     }
 
