@@ -15301,12 +15301,8 @@ function _prStaffTab(){
         return _prEmpty('No payroll records yet.',
             '<button class="me-btn me-btn--pri me-btn--sm" onclick="CampistryMe.prEditStaff()">+ Add Staff</button>');
     }
-    // Card grid (same visual engine as the Bunk/Roster board) instead of a
-    // table, so Payroll reads like the rest of the app. Each card shows the
-    // important data at a glance (name, pay, role, method, Youth Corps state,
-    // docs) and clicks through to the full staff editor (prEditStaff).
-    var h='<div class="me-card-head" style="padding:0 2px 8px"><h3>Payroll Roster</h3><span style="font-size:.75rem;color:var(--s400)">'+payroll.staff.length+' people</span></div>';
-    h+='<div class="card-grid">';
+    var h='<div class="me-card"><div class="me-card-head"><h3>Payroll Roster</h3><span style="font-size:.75rem;color:var(--s400)">'+payroll.staff.length+' people</span></div>';
+    h+='<div class="me-tw"><table class="me-t"><thead><tr><th>Name</th><th>Role</th><th>Age</th><th>Pay</th><th>Paid by</th><th>Youth Corps</th><th>Docs</th><th></th></tr></thead><tbody>';
     payroll.staff.slice().sort(function(a,b){return String(a.name||'').localeCompare(String(b.name||''))}).forEach(function(s){
         var age=core.ageOn(s.dob,today);
         var pt=core.PAY_TYPES.filter(function(p){return p.id===(s.payType||'hourly')})[0];
@@ -15319,32 +15315,21 @@ function _prStaffTab(){
             corps=r.blockers.length?bdg(r.blockers.length+' blocking','err')
                  :r.warnings.length?bdg(r.warnings.length+' to chase','warn')
                  :bdg('Cleared','ok');
-        }
+        }else corps='<span style="color:var(--s300)">—</span>';
         var docs=[];
         if(s.i9OnFile)docs.push('I-9'); if(s.w4OnFile)docs.push('W-4');
         if(s.youthCorps&&s.youthCorps.workingPapers)docs.push('Papers');
-
-        // payStr sits on the sub line (not the header's top-right amount slot)
-        // so it doesn't collide with the absolute remove ✕ in the corner.
-        var subBits=['<span style="font-weight:700;color:var(--s700)">'+esc(payStr)+'</span>'];
-        if(s.role)subBits.push(esc(s.role));
-        subBits.push(esc(pay));
-        if(age!=null)subBits.push(age<18?'<span style="color:var(--me);font-weight:600">age '+age+'</span>':'age '+age);
-
-        var metaBits=[];
-        var pm=core.payMethodLabel(s.paymentMethod);
-        if(pm)metaBits.push('<span style="color:var(--s500)">'+esc(pm)+'</span>');
-        if(corps)metaBits.push(corps);
-        if(docs.length)metaBits.push('<span style="color:var(--s500)">'+esc(docs.join(' · '))+'</span>');
-
-        h+='<div class="grid-card" style="padding-right:34px" onclick="CampistryMe.prEditStaff('+s.id+')">';
-        h+='<div class="grid-card-hd"><span class="grid-card-nm">'+esc(s.name||'')+'</span></div>';
-        h+='<div class="grid-card-sub">'+subBits.join(' · ')+'</div>';
-        if(metaBits.length)h+='<div class="grid-card-meta">'+metaBits.join('<span style="color:var(--s300)">·</span>')+'</div>';
-        h+='<button class="grid-card-x me-btn me-btn--ghost me-btn--sm" style="color:var(--err)" title="Remove" onclick="event.stopPropagation();CampistryMe.prRemoveStaff('+s.id+')">✕</button>';
-        h+='</div>';
+        h+='<tr class="click" onclick="CampistryMe.prEditStaff('+s.id+')">'+
+            '<td class="bold">'+esc(s.name||'')+'</td>'+
+            '<td>'+esc(s.role||'')+'</td>'+
+            '<td>'+(age==null?'<span style="color:var(--s300)">—</span>':(age<18?'<span style="color:var(--me);font-weight:600">'+age+'</span>':age))+'</td>'+
+            '<td>'+esc(pay)+'<div style="font-size:.72rem;color:var(--s400)">'+payStr+'</div></td>'+
+            '<td style="font-size:.78rem">'+esc(core.payMethodLabel(s.paymentMethod))+'</td>'+
+            '<td>'+corps+'</td>'+
+            '<td style="font-size:.74rem;color:var(--s500)">'+(docs.length?esc(docs.join(' · ')):'—')+'</td>'+
+            '<td style="text-align:right" onclick="event.stopPropagation()"><button class="me-btn me-btn--ghost me-btn--sm" style="color:var(--err)" onclick="CampistryMe.prRemoveStaff('+s.id+')">✕</button></td></tr>';
     });
-    h+='</div>';
+    h+='</tbody></table></div></div>';
     return h;
 }
 
@@ -16035,38 +16020,44 @@ function renderBilling(){
         h+='<div class="me-empty"><h3>No accounts match this filter</h3></div>';
     } else {
         var billPaged=_paginate(filtered,PAGE_SIZE,_billingPage);
-        // Card grid (same visual engine as the Bunk/Roster board) instead of a
-        // single-column stack, so Billing reads like the rest of the app. Each
-        // card answers "who, how much, and what's the state" at a glance and
-        // clicks through to the full-page family/billing detail
-        // (renderFamilyDetailPage) — same click-through pattern Roster uses.
-        h+='<div class="card-grid">';
         billPaged.items.forEach(function(l){
+            // A single scannable row per family — click anywhere on it to open
+            // the full-page family/billing detail (renderFamilyDetailPage),
+            // same click-through pattern Roster uses for a camper. This used
+            // to expand inline into the household + ledger + 8 action buttons
+            // right here, which is what made the list feel crowded.
             var statusBadge=l.status==='unbilled'?_flatStatus('Not Billed'):l.status==='paid'?_flatStatus('Paid','ok'):l.status==='overdue'?_flatStatus('Overdue','err'):l.status==='partial'?_flatStatus('Partial','warn'):_flatStatus('Pending','warn');
             var camperNames=(l.family.camperIds||[]).concat((l.pendingCamperIds||[]).map(function(n){return n+' (pending)'})).join(', ');
 
-            // Autopay indicator — shown only when a plan is actively on autopay
-            // (a positive "this account collects itself" signal). Families
-            // without it stay uncluttered rather than every card carrying an
-            // "off" tag. Read straight off the canonical family record (same
-            // shape the family detail page's autopay pill reads via _famPlans)
-            // without mutating it during render.
+            // Autopay indicator — folded into the same descriptive line as
+            // status, shown only when a plan is actively on autopay (a positive
+            // "this account collects itself" signal). Families without it stay
+            // uncluttered rather than every row carrying an "off" tag. Read
+            // straight off the canonical family record (same shape the family
+            // detail page's autopay pill reads via _famPlans) without mutating
+            // it during render.
             var _billFam=families[l.famKey]||l.family||{};
             var _billPlans=_billFam.plans||((_billFam.plan&&_billFam.plan.installments&&_billFam.plan.installments.length)?[_billFam.plan]:[]);
             var _autopayOn=_billPlans.some(function(p){return p&&p.autopay});
 
-            var metaBits=[statusBadge];
-            if(l.pendingEnrollment)metaBits.push(_flatStatus('Accepted — pending enrollment','warn'));
-            if(_autopayOn)metaBits.push(_flatStatus('Autopay on','ok'));
-            var warn=_collectionWarning(l);
-
-            h+='<div class="grid-card" id="billfam-'+je(l.famKey)+'" onclick="CampistryMe.viewFamily(\''+je(l.famKey)+'\')">';
-            h+='<div class="grid-card-hd"><span class="grid-card-nm">'+esc(l.family.name||'')+'</span><span class="grid-card-amt" style="color:'+(l.balance>0?'var(--err)':'var(--ok)')+'">'+fm(l.balance)+'</span></div>';
-            if(camperNames)h+='<div class="grid-card-sub">'+esc(camperNames)+'</div>';
-            h+='<div class="grid-card-meta">'+metaBits.join('<span style="color:var(--s300)">·</span>')+warn+'</div>';
-            h+='</div>';
+            // A quick "N x $amount" tag when this family is on an even
+            // installment plan — so a plan's shape is scannable from the
+            // list without opening the family, same as the family-detail
+            // page's Payment Plan card.
+            // One clean row: name + campers + status on the left (status
+            // folded into the descriptive line instead of its own pill),
+            // balance + a chevron on the right. The plan's "N x $amount"
+            // shape used to also live here — dropped from the list view,
+            // it's still on the family's own Payment Plan card, this row
+            // only needs to answer "who, and how much."
+            h+='<div class="me-card" id="billfam-'+je(l.famKey)+'" style="margin-bottom:10px;cursor:pointer" onclick="CampistryMe.viewFamily(\''+je(l.famKey)+'\')">';
+            h+='<div style="display:flex;align-items:center;gap:12px">';
+            h+='<div style="flex:1;min-width:0"><h3 style="margin:0;font-size:.95rem;font-weight:700;color:var(--s800)">'+esc(l.family.name||'')+'</h3><span style="font-size:.75rem;color:var(--s400)">'+esc(camperNames)+'</span> · '+statusBadge+(l.pendingEnrollment?' · '+_flatStatus('Accepted — pending enrollment','warn'):'')+(_autopayOn?' · '+_flatStatus('Autopay on','ok'):'')+_collectionWarning(l)+'</div>';
+            h+='<div style="display:flex;align-items:center;gap:10px;flex-shrink:0">';
+            h+='<span style="font-size:1rem;font-weight:800;color:'+(l.balance>0?'var(--err)':'var(--ok)')+'">'+fm(l.balance)+'</span>';
+            h+='<span style="font-size:1rem;color:var(--s300)">›</span></div>';
+            h+='</div></div>';
         });
-        h+='</div>';
         h+=_pagerHtml(filtered.length,PAGE_SIZE,_billingPage,'setBillingPage');
     }
 
