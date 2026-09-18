@@ -78,17 +78,20 @@
             +'<svg class="qs-caret" width="10" height="10" viewBox="0 0 10 10" aria-hidden="true"><path d="M2 3.5L5 6.5L8 3.5" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"></path></svg>'
             +'</button>';
         html+='<div class="qs-pop" role="menu" aria-hidden="true">';
-        // Dashboard sits at the top of the same dropdown as the app toggles,
-        // so the header no longer needs a separate "← Dashboard" link.
+        // The dropdown holds exactly two things: the Dashboard button, then the
+        // original straight-line logo strip (the same .quick-switch-link/
+        // -active logos the header used to show in a row), nothing else.
         html+='<a href="dashboard.html" class="qs-pop-dash" role="menuitem" title="Dashboard (Ctrl+Shift+D)"><span class="qs-dash-arrow">&larr;</span> Dashboard</a>';
-        html+='<div class="qs-pop-grid">';
+        html+='<div class="qs-pop-strip">';
         APPS.forEach(function(a){
             var isActive=a.key===activeKey;
             var sc=shortcutFor(a.key);
-            html+='<a href="'+a.href+'" class="qs-pop-item'+(isActive?' is-active':'')+'" data-app="'+a.key+'" role="menuitem" title="'+esc(a.title)+(sc?' ('+sc+')':'')+'"'+(isActive?' aria-current="page"':'')+'>'
-                +'<img src="'+a.img+'" alt="'+esc(a.name)+'">'
-                +'<span>'+esc(shortName(a.name))+'</span>'
-                +'</a>';
+            var tt=esc(a.title)+(sc?' ('+sc+')':'');
+            if(isActive){
+                html+='<div class="quick-switch-active" data-app="'+a.key+'" title="'+tt+'" aria-current="page"><img src="'+a.img+'" alt="'+esc(a.name)+'"></div>';
+            }else{
+                html+='<a href="'+a.href+'" class="quick-switch-link" data-app="'+a.key+'" role="menuitem" title="'+tt+'"><img src="'+a.img+'" alt="'+esc(a.name)+'"></a>';
+            }
         });
         html+='</div></div></div>';
         return html;
