@@ -69,10 +69,14 @@
             +'<rect x="1" y="1" width="4" height="4" rx="1"></rect><rect x="6" y="1" width="4" height="4" rx="1"></rect><rect x="11" y="1" width="4" height="4" rx="1"></rect>'
             +'<rect x="1" y="6" width="4" height="4" rx="1"></rect><rect x="6" y="6" width="4" height="4" rx="1"></rect><rect x="11" y="6" width="4" height="4" rx="1"></rect>'
             +'<rect x="1" y="11" width="4" height="4" rx="1"></rect><rect x="6" y="11" width="4" height="4" rx="1"></rect><rect x="11" y="11" width="4" height="4" rx="1"></rect>'
-            +'</svg><span class="qs-trigger-label">Apps</span>'
+            +'</svg><span class="qs-trigger-label">Menu</span>'
             +'<svg class="qs-caret" width="10" height="10" viewBox="0 0 10 10" aria-hidden="true"><path d="M2 3.5L5 6.5L8 3.5" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"></path></svg>'
             +'</button>';
-        html+='<div class="qs-pop" role="menu" aria-hidden="true"><div class="qs-pop-grid">';
+        html+='<div class="qs-pop" role="menu" aria-hidden="true">';
+        // Dashboard sits at the top of the same dropdown as the app toggles,
+        // so the header no longer needs a separate "← Dashboard" link.
+        html+='<a href="dashboard.html" class="qs-pop-dash" role="menuitem"><span class="qs-dash-arrow">&larr;</span> Dashboard</a>';
+        html+='<div class="qs-pop-grid">';
         APPS.forEach(function(a){
             var isActive=a.key===activeKey;
             var sc=shortcutFor(a.key);
