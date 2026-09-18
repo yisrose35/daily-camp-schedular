@@ -258,12 +258,10 @@ body {
     background: var(--bg-card);
     border: 1px solid var(--border-subtle);
     border-radius: var(--radius-lg);
-    box-shadow: var(--shadow-xs);
     overflow: hidden;
-    transition: box-shadow var(--duration-base) var(--ease-out),
-                border-color var(--duration-base);
+    transition: border-color var(--duration-base);
 }
-.c-card:hover { box-shadow: var(--shadow-sm); }
+.c-card:hover { border-color: var(--border-strong, #cbd5e1); }
 .c-card-header {
     padding: var(--space-4) var(--space-6);
     display: flex; align-items: center; justify-content: space-between;

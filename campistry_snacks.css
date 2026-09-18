@@ -210,9 +210,9 @@ body.sidebar-open .sidebar { transform: translateX(0); }
     background: var(--bg-secondary); border: 1px solid var(--border-light);
     border-radius: var(--radius-lg); padding: 1.15rem 1.25rem;
     display: flex; align-items: center; gap: 1rem;
-    transition: all .2s; box-shadow: var(--shadow-sm);
+    transition: border-color .2s;
 }
-.stat-card:hover { border-color: var(--border-medium); box-shadow: var(--shadow-md); transform: translateY(-1px); }
+.stat-card:hover { border-color: var(--border-medium); }
 .stat-icon {
     width: 44px; height: 44px;
     border-radius: var(--radius-md); display: flex; align-items: center;
@@ -230,7 +230,6 @@ body.sidebar-open .sidebar { transform: translateX(0); }
 .card {
     background: var(--bg-secondary); border: 1px solid var(--border-light);
     border-radius: var(--radius-lg); overflow: hidden; margin-bottom: 1.25rem;
-    box-shadow: var(--shadow-sm);
 }
 .card-header {
     padding: 1rem 1.25rem; display: flex; align-items: center;
@@ -324,7 +323,7 @@ body.sidebar-open .sidebar { transform: translateX(0); }
 /* ==================== ANALYTICS ==================== */
 .analytics-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 1.25rem; margin-bottom: 1.25rem; }
 .metric-row { display: grid; grid-template-columns: repeat(auto-fill, minmax(160px, 1fr)); gap: 1rem; margin-bottom: 1.25rem; }
-.metric-card { background: white; border: 1px solid var(--border-light); border-radius: var(--radius-md); padding: 1rem 1.15rem; box-shadow: var(--shadow-sm); }
+.metric-card { background: white; border: 1px solid var(--border-light); border-radius: var(--radius-md); padding: 1rem 1.15rem; }
 .metric-card-label { font-size: .7rem; color: var(--text-muted); text-transform: uppercase; letter-spacing: .05em; font-weight: 600; margin-bottom: .25rem; }
 .metric-card-value { font-size: 1.35rem; font-weight: 700; font-family: var(--font-display); }
 .metric-card-sub { font-size: .7rem; color: var(--text-muted); margin-top: .15rem; }
