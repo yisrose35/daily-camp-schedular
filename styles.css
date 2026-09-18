@@ -164,7 +164,8 @@ textarea:focus {
    the whole content area edge-to-edge with a single internal scroller. */
 #master-scheduler.tab-content,
 #daily-adjustments.tab-content,
-#print.tab-content {
+#print.tab-content,
+#setup.tab-content {
   background: transparent;
   border: none;
   box-shadow: none;

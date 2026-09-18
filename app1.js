@@ -614,7 +614,7 @@
             .builder-mode-wrapper {
                 display: flex;
                 justify-content: center;
-                margin: 10px 0 24px 0;
+                margin: 0 0 18px 0;
             }
             .builder-mode-slider {
                 display: flex;
