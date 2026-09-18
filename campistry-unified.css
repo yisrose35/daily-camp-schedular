@@ -575,32 +575,29 @@ body {
    position:fixed (coords computed in JS from the trigger) so the header
    centre column's overflow:hidden can't clip it. */
 .quick-switch { position: relative; display: inline-flex; }
+/* Plain "Menu" with the caret stacked underneath — no box/pill, so the header
+   reads continuous. */
 .qs-trigger {
-    display: inline-flex; align-items: center; gap: 6px;
-    padding: 6px 12px; border-radius: 999px;
-    background: rgba(255,255,255,0.7); border: 1px solid rgba(0,0,0,0.08);
-    box-shadow: 0 1px 3px rgba(0,0,0,0.05);
-    color: var(--slate-600,#475569); font-family: inherit; font-size: .8rem; font-weight: 600;
-    cursor: pointer; transition: background .15s, border-color .15s, box-shadow .15s;
-    -webkit-backdrop-filter: blur(12px); backdrop-filter: blur(12px);
+    display: inline-flex; flex-direction: column; align-items: center; gap: 0;
+    padding: 2px 8px; background: transparent; border: none; box-shadow: none;
+    color: var(--slate-600,#475569); font-family: inherit; font-size: .82rem; font-weight: 600;
+    line-height: 1.05; cursor: pointer; transition: color .15s;
 }
-.qs-trigger:hover { background: #fff; border-color: rgba(0,0,0,0.14); box-shadow: 0 2px 8px rgba(0,0,0,0.08); }
-.qs-grid-icon { flex-shrink: 0; }
-.qs-grid-icon rect { fill: currentColor; }
+.qs-trigger:hover, .quick-switch.open .qs-trigger { color: var(--slate-900,#0F172A); background: transparent; }
 .qs-trigger-label { white-space: nowrap; }
-.qs-caret { flex-shrink: 0; transition: transform .18s ease; }
+.qs-caret { flex-shrink: 0; transition: transform .18s ease; margin-top: 1px; }
 .quick-switch.open .qs-caret { transform: rotate(180deg); }
-.quick-switch.open .qs-trigger { background: #fff; border-color: rgba(0,0,0,0.14); }
 
 .qs-pop {
     position: fixed; z-index: 1200;
+    display: flex; align-items: center; gap: 10px;
     background: #fff; border: 1px solid var(--slate-200,#E2E8F0); border-radius: 16px;
-    box-shadow: 0 12px 32px rgba(0,0,0,0.14); padding: 10px;
+    box-shadow: 0 12px 32px rgba(0,0,0,0.14); padding: 10px 12px;
     opacity: 0; visibility: hidden; transform: translateY(-6px); pointer-events: none;
     transition: opacity .16s ease, transform .16s ease, visibility .16s;
 }
 .quick-switch.open .qs-pop { opacity: 1; visibility: visible; transform: translateY(0); pointer-events: auto; }
-.qs-pop-dash { display: flex; align-items: center; gap: 6px; padding: 8px 10px; margin-bottom: 6px; border-radius: 10px; text-decoration: none; font-size: .8rem; font-weight: 600; color: var(--slate-700,#334155); background: var(--slate-50,#F8FAFC); border: 1px solid var(--slate-200,#E2E8F0); }
+.qs-pop-dash { display: inline-flex; align-items: center; gap: 6px; padding: 8px 12px; border-radius: 10px; text-decoration: none; font-size: .8rem; font-weight: 600; white-space: nowrap; flex-shrink: 0; color: var(--slate-700,#334155); background: var(--slate-50,#F8FAFC); border: 1px solid var(--slate-200,#E2E8F0); }
 .qs-pop-dash:hover { background: var(--slate-100,#F1F5F9); }
 .qs-dash-arrow { font-size: .95rem; line-height: 1; }
 /* Straight-line logo strip inside the dropdown (the original header row of
@@ -661,9 +658,8 @@ body {
 .hoverbar-tab:hover { opacity: 1; color: var(--product-500,#147D91); }
 .hoverbar.hoverbar-open .hoverbar-tab { opacity: 0; pointer-events: none; }
 @media (max-width: 768px) {
-    .qs-trigger-label { display: none; }
-    .qs-trigger { padding: 7px 9px; }
-    .qs-pop-grid { grid-template-columns: repeat(3, 72px); }
+    /* Keep the "Menu" label; let the dropdown's logo strip scroll if narrow. */
+    .qs-pop { flex-wrap: wrap; max-width: 92vw; }
 }
 
 /* Glassmorphic floating pill bar for switching between Me / Flow / Go */

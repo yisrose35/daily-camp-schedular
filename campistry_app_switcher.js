@@ -69,13 +69,11 @@
     // to name the active app.
     function renderAppSwitcher(activeKey){
         var html='<div class="quick-switch" data-active="'+esc(activeKey)+'">';
-        html+='<button type="button" class="qs-trigger" aria-haspopup="true" aria-expanded="false" title="Switch apps">'
-            +'<svg class="qs-grid-icon" width="16" height="16" viewBox="0 0 16 16" aria-hidden="true">'
-            +'<rect x="1" y="1" width="4" height="4" rx="1"></rect><rect x="6" y="1" width="4" height="4" rx="1"></rect><rect x="11" y="1" width="4" height="4" rx="1"></rect>'
-            +'<rect x="1" y="6" width="4" height="4" rx="1"></rect><rect x="6" y="6" width="4" height="4" rx="1"></rect><rect x="11" y="6" width="4" height="4" rx="1"></rect>'
-            +'<rect x="1" y="11" width="4" height="4" rx="1"></rect><rect x="6" y="11" width="4" height="4" rx="1"></rect><rect x="11" y="11" width="4" height="4" rx="1"></rect>'
-            +'</svg><span class="qs-trigger-label">Menu</span>'
-            +'<svg class="qs-caret" width="10" height="10" viewBox="0 0 10 10" aria-hidden="true"><path d="M2 3.5L5 6.5L8 3.5" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"></path></svg>'
+        // Plain "Menu" with a down-arrow underneath — no box/pill, so the top of
+        // the page reads continuous. Hovering it opens the dropdown.
+        html+='<button type="button" class="qs-trigger" aria-haspopup="true" aria-expanded="false" title="Menu">'
+            +'<span class="qs-trigger-label">Menu</span>'
+            +'<svg class="qs-caret" width="11" height="11" viewBox="0 0 10 10" aria-hidden="true"><path d="M2 3.5L5 6.5L8 3.5" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"></path></svg>'
             +'</button>';
         html+='<div class="qs-pop" role="menu" aria-hidden="true">';
         // The dropdown holds exactly two things: the Dashboard button, then the
@@ -149,34 +147,30 @@
         if(!(e.target.closest && e.target.closest('.qs-pop'))) closeAll();
     }
 
-    // Reveal the dropdown when the pointer is anywhere along the top strip of
-    // the screen — not only over the Menu button. A short dwell avoids opening
-    // on a quick pass; leaving both the top strip and the popover closes it.
-    // The header itself is never hidden (hamburger, search, date pickers stay
-    // on screen); only this dropdown appears/disappears.
-    var TOP_REVEAL_PX=64, _revealT=null, _hideT=null;
+    // Hovering the Menu opens the dropdown; leaving it (and the popover) closes
+    // it after a short grace period. The header itself is never hidden — only
+    // this dropdown slides open/closed.
+    var _hideT=null;
     function _overSwitch(el){ return !!(el&&el.closest&&(el.closest('.qs-pop')||el.closest('.quick-switch'))); }
-    function onTopHover(e){
-        var container=document.querySelector('.quick-switch'); if(!container) return;
-        var active=(e.clientY<=TOP_REVEAL_PX)||_overSwitch(e.target);
-        if(active){
-            if(_hideT){ clearTimeout(_hideT); _hideT=null; }
-            if(!container.classList.contains('open')&&!_revealT){
-                _revealT=setTimeout(function(){ _revealT=null; openPop(container); }, 300);
-            }
-        }else{
-            if(_revealT){ clearTimeout(_revealT); _revealT=null; }
-            if(container.classList.contains('open')&&!_hideT){
-                _hideT=setTimeout(function(){ _hideT=null; closeAll(); }, 260);
-            }
-        }
+    function onSwitchOver(e){
+        var c=e.target.closest&&e.target.closest('.quick-switch');
+        if(!c)return;
+        if(_hideT){ clearTimeout(_hideT); _hideT=null; }
+        if(!c.classList.contains('open')) openPop(c);
+    }
+    function onSwitchOut(e){
+        if(!(e.target.closest&&e.target.closest('.quick-switch')))return;
+        if(_overSwitch(e.relatedTarget))return; // moved within the trigger/popover
+        if(_hideT)clearTimeout(_hideT);
+        _hideT=setTimeout(function(){ _hideT=null; closeAll(); }, 220);
     }
 
     var _wired=false;
     function wireGlobalHandlers(){
         if(_wired) return; _wired=true;
         document.addEventListener('click', onDocClick);
-        document.addEventListener('mousemove', onTopHover);
+        document.addEventListener('mouseover', onSwitchOver);
+        document.addEventListener('mouseout', onSwitchOut);
         document.addEventListener('keydown', function(e){
             if(e.key==='Escape'){ closeAll(); return; }
             // Ctrl+Shift+<key> jump (ignore when Alt/Meta also held). Works on

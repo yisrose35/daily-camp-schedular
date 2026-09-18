@@ -29,7 +29,9 @@ a{color:inherit;text-decoration:none}button{font-family:inherit;cursor:pointer;b
    item's own min-width:0 + the quick-switch-bar's overflow-x:auto let it
    shrink and internally scroll — rather than overlap anything — the
    moment the header runs out of room. */
-.app-header{display:flex;align-items:center;height:56px;padding:0 16px;background:#fff;border-bottom:1px solid var(--s200);position:sticky;top:0;z-index:30}
+/* Continuous with the page: same background as the content area, no divider,
+   so the top of the page reads as one surface rather than a separate bar. */
+.app-header{display:flex;align-items:center;height:56px;padding:0 16px;background:var(--s50);border-bottom:none;position:sticky;top:0;z-index:30}
 .header-left{display:flex;align-items:center;gap:12px;flex:0 0 auto;justify-content:flex-start}
 .header-right{display:flex;align-items:center;gap:10px;min-width:0;flex:0 1 auto;justify-content:flex-end;overflow:hidden}
 .app-header-center{display:flex;justify-content:center;min-width:0;overflow:hidden;flex:1 1 auto}
