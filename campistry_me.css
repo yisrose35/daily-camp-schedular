@@ -452,19 +452,33 @@ select.me-input{cursor:pointer}
 .rb-advanced>summary::before{content:'▸ ';color:var(--s400)}
 .rb-advanced[open]>summary::before{content:'▾ '}
 
-/* ── Inline nav: header controls moved into the page title row ──────────────
-   Set by campistry_inline_nav.js (body.inline-nav). Hides the standalone
-   .app-header and styles the small control cluster injected into each page's
-   title row (.sec-hd), plus the fixed search/sync overlay. */
-.inline-nav .app-header{display:none}
-.inav-cluster{display:inline-flex;align-items:center;gap:8px;margin-right:12px;flex-shrink:0}
-.inav-ham{display:flex;flex-direction:column;justify-content:center;gap:4px;width:34px;height:34px;padding:8px;border:1px solid var(--s200);border-radius:var(--r);background:#fff;cursor:pointer}
-.inav-ham span{display:block;height:2px;background:var(--s700);border-radius:1px}
-.inav-ham:hover{border-color:var(--me);background:var(--me-bg)}
-.inav-search-btn{display:flex;align-items:center;justify-content:center;width:34px;height:34px;border:1px solid var(--s200);border-radius:var(--r);background:#fff;color:var(--s500);cursor:pointer}
-.inav-search-btn:hover{border-color:var(--me);background:var(--me-bg);color:var(--me)}
-.inav-search-pop{position:fixed;z-index:1200;background:#fff;border:1px solid var(--s200);border-radius:var(--r2);box-shadow:0 12px 32px rgba(0,0,0,.14);padding:10px;display:flex;align-items:center;gap:10px}
-.inav-search-pop[hidden]{display:none}
-.inav-search-pop .me-search-wrap{max-width:280px;flex:1 1 auto}
-.inline-nav .app-main{min-height:100vh}
-.inline-nav .sidebar{top:0}
+/* ── Auto-hide header: slides down only on top-edge hover ───────────────────
+   Set by campistry_inline_nav.js (body.hoverbar). The header is hidden off the
+   top of the screen by default, reclaiming its whole row; resting the mouse at
+   the very top for ~1.5s (or hovering the bar) slides it down. Content and the
+   sidebar no longer reserve the old 56px header height. */
+.hoverbar .app-header{
+    position:fixed; left:0; right:0; top:0;
+    transform:translateY(-100%);
+    transition:transform .28s var(--ease);
+    z-index:60;
+    box-shadow:0 6px 18px rgba(0,0,0,.10);
+    will-change:transform;
+}
+.hoverbar.hoverbar-open .app-header{transform:translateY(0)}
+.hoverbar .app-main{min-height:100vh}
+.hoverbar .sidebar{top:0}
+/* Invisible trigger strip pinned to the very top edge of the viewport. */
+.hoverbar-hotzone{position:fixed;top:0;left:0;right:0;height:6px;z-index:59}
+/* A subtle always-visible handle so users can discover the hidden bar. */
+.hoverbar-tab{
+    position:fixed;top:0;left:50%;transform:translateX(-50%);
+    z-index:58;display:flex;align-items:center;gap:6px;
+    padding:2px 14px 4px;border-radius:0 0 10px 10px;
+    background:rgba(255,255,255,.9);border:1px solid var(--s200);border-top:none;
+    box-shadow:0 2px 6px rgba(0,0,0,.06);
+    font-size:.66rem;font-weight:700;letter-spacing:.04em;text-transform:uppercase;color:var(--s400);
+    cursor:pointer;opacity:.8;transition:opacity .15s,color .15s;
+}
+.hoverbar-tab:hover{opacity:1;color:var(--me)}
+.hoverbar.hoverbar-open .hoverbar-tab{opacity:0;pointer-events:none}

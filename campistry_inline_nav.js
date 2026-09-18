@@ -1,110 +1,70 @@
 // =============================================================================
-// campistry_inline_nav.js — moves the top header controls INTO the page's own
-// title row so the standalone header bar no longer eats a whole row.
+// campistry_inline_nav.js — auto-hiding top header for Campistry Me.
 //
-// Why a script (and not just markup): each page/tab rebuilds its title row
-// (.sec-hd) via innerHTML on every render, which would wipe any controls placed
-// there. So we:
-//   • hide the original .app-header (its real nodes stay in the DOM, listeners
-//     intact — nothing is destroyed),
-//   • keep the REAL search box + sync badge alive in a stable fixed overlay
-//     (moved once out of the header) revealed by a search icon,
-//   • re-inject a small, self-contained control cluster (hamburger + Menu
-//     dropdown + search icon) at the start of the active page's .sec-hd after
-//     every render, via a MutationObserver.
+// The standalone header bar (Dashboard, Menu/app-switcher, search, sync) is
+// hidden off the top of the screen by default so it stops eating a whole row.
+// It slides down when the user rests the mouse at the very top edge of the
+// viewport for ~1.5s, or hovers the bar itself, and slides back up shortly
+// after the mouse leaves. A small always-visible handle at the top-center hints
+// that the bar is there.
 //
-// The cluster's controls are self-contained (the hamburger just toggles the
-// sidebar body class; the Menu is the shared app-switcher, driven by its own
-// delegated handlers), so it's safe for them to be thrown away and rebuilt on
-// each render. Scoped to Campistry Me only (included from campistry_me.html).
+// Nothing about the header's contents changes — it's the real .app-header with
+// its real controls and listeners, just shown on demand. Scoped to Campistry
+// Me (included from campistry_me.html); other apps are unchanged for now.
 // =============================================================================
 (function(){
     'use strict';
 
-    var overlay=null, searchBtnRef=null, scheduled=false;
-
-    function magnifierSvg(){
-        return '<svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg>';
-    }
-
-    function buildClusterHtml(){
-        var menu = window.CampistryAppSwitcher ? window.CampistryAppSwitcher.render('me') : '';
-        return '<div class="inav-cluster">'
-            + '<button type="button" class="inav-ham" aria-label="Menu" title="Menu"><span></span><span></span><span></span></button>'
-            + menu
-            + '<button type="button" class="inav-search-btn" aria-label="Search" title="Search">'+magnifierSvg()+'</button>'
-            + '</div>';
-    }
-
-    function ensureCluster(){
-        var pg=document.querySelector('.me-page.active');
-        if(!pg) return;
-        if(pg.querySelector('.inav-cluster')) return; // already placed
-        var host=pg.querySelector('.sec-hd') || pg; // prefer the title row; fall back to page top
-        var tmp=document.createElement('div');
-        tmp.innerHTML=buildClusterHtml();
-        var cluster=tmp.firstChild;
-        host.insertBefore(cluster, host.firstChild);
-    }
-
-    function scheduleEnsure(){
-        if(scheduled) return; scheduled=true;
-        (window.requestAnimationFrame||window.setTimeout)(function(){ scheduled=false; try{ ensureCluster(); }catch(e){} });
-    }
-
-    function positionSearch(){
-        if(!overlay||!searchBtnRef||overlay.hasAttribute('hidden')) return;
-        var r=searchBtnRef.getBoundingClientRect();
-        overlay.style.top=(r.bottom+8)+'px';
-        var w=overlay.offsetWidth||300;
-        var left=Math.min(r.left, window.innerWidth-w-8);
-        overlay.style.left=Math.max(8,left)+'px';
-    }
-    function showSearch(btn){
-        if(!overlay) return;
-        searchBtnRef=btn;
-        overlay.removeAttribute('hidden');
-        positionSearch();
-        var inp=document.getElementById('globalSearch');
-        if(inp){ try{ inp.focus(); }catch(e){} }
-    }
-    function hideSearch(){ if(overlay) overlay.setAttribute('hidden',''); }
-
-    function onClick(e){
-        var sb=e.target.closest && e.target.closest('.inav-search-btn');
-        if(sb){ e.preventDefault(); if(overlay&&overlay.hasAttribute('hidden')) showSearch(sb); else hideSearch(); return; }
-        var ham=e.target.closest && e.target.closest('.inav-ham');
-        if(ham){ e.preventDefault(); document.body.classList.toggle('sidebar-open'); return; }
-        // click outside the search overlay closes it
-        if(overlay && !overlay.hasAttribute('hidden')
-            && !(e.target.closest && (e.target.closest('.inav-search-pop')||e.target.closest('.inav-search-btn')))){
-            hideSearch();
-        }
-    }
+    var REVEAL_DELAY=1500;  // ms the mouse must rest at the top edge
+    var HIDE_DELAY=450;     // grace period before hiding after mouse leaves
 
     function init(){
         var header=document.querySelector('.app-header');
-        if(!header){ return; }
-        document.body.classList.add('inline-nav'); // CSS hides .app-header
+        if(!header) return;
+        document.body.classList.add('hoverbar');
 
-        // Move the real search box + sync badge into a stable overlay so their
-        // listeners / live update targets survive (they're never re-rendered).
-        overlay=document.createElement('div');
-        overlay.className='inav-search-pop';
-        overlay.setAttribute('hidden','');
-        var sw=header.querySelector('.me-search-wrap'); if(sw) overlay.appendChild(sw);
-        var sync=header.querySelector('.sync-badge'); if(sync) overlay.appendChild(sync);
-        document.body.appendChild(overlay);
+        // Invisible strip along the very top edge that arms the reveal timer.
+        var zone=document.createElement('div');
+        zone.className='hoverbar-hotzone';
+        document.body.appendChild(zone);
 
-        var content=document.querySelector('.app-content')||document.body;
-        var mo=new MutationObserver(scheduleEnsure);
-        mo.observe(content,{childList:true,subtree:true});
-        ensureCluster();
+        // Small visible handle so the hidden bar is discoverable + clickable.
+        var tab=document.createElement('button');
+        tab.type='button';
+        tab.className='hoverbar-tab';
+        tab.setAttribute('aria-label','Show menu bar');
+        tab.innerHTML='<span aria-hidden="true">&#9662;</span> Menu';
+        document.body.appendChild(tab);
 
-        document.addEventListener('click', onClick);
-        document.addEventListener('keydown', function(e){ if(e.key==='Escape') hideSearch(); });
-        window.addEventListener('resize', function(){ hideSearch(); });
-        window.addEventListener('scroll', function(){ hideSearch(); }, true);
+        var openTimer=null, hideTimer=null;
+
+        function open(){ clearTimeout(hideTimer); document.body.classList.add('hoverbar-open'); }
+        function close(){ document.body.classList.remove('hoverbar-open'); }
+        function armOpen(){ clearTimeout(openTimer); openTimer=setTimeout(open, REVEAL_DELAY); }
+        function cancelOpen(){ clearTimeout(openTimer); }
+        // Don't hide while the Menu (app-switcher) popover is open — its items
+        // render visually below the bar, so the pointer leaving the header
+        // shouldn't yank the menu away mid-click. Recheck until it closes.
+        function tryClose(){
+            if(document.querySelector('.quick-switch.open')){ armHide(); return; }
+            close();
+        }
+        function armHide(){ clearTimeout(hideTimer); hideTimer=setTimeout(tryClose, HIDE_DELAY); }
+
+        zone.addEventListener('mouseenter', armOpen);
+        zone.addEventListener('mouseleave', cancelOpen);
+
+        // The handle reveals instantly on hover/click (no 1.5s wait) since it's
+        // an explicit affordance.
+        tab.addEventListener('mouseenter', open);
+        tab.addEventListener('click', function(e){ e.preventDefault(); open(); });
+
+        // Keep it open while the pointer is on the bar; hide shortly after it
+        // leaves. Cancel any pending reveal timer once it's already open.
+        header.addEventListener('mouseenter', function(){ cancelOpen(); open(); });
+        header.addEventListener('mouseleave', armHide);
+
+        document.addEventListener('keydown', function(e){ if(e.key==='Escape') close(); });
     }
 
     if(document.readyState==='loading'){

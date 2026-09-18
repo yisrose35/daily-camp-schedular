@@ -42,6 +42,11 @@
     // and sometimes Ctrl+Shift+S. Those apps are still reachable via the Apps
     // popover; the shortcut is best-effort.
     var SHORTCUTS={KeyF:'flow',KeyG:'go',KeyM:'me',KeyH:'health',KeyV:'live',KeyS:'snacks',KeyL:'link',KeyN:'notes'};
+    // Extra Ctrl+Shift targets that aren't in the app grid: Dashboard, the Help
+    // Center, and Campistry Lite. Help uses '/' (the ? key) because H is taken
+    // by Health. Values are page hrefs. Ctrl+Shift+T (Lite) is often reserved by
+    // the browser for "reopen closed tab" and may not reach the page.
+    var EXTRA_NAV={KeyD:'dashboard.html', Slash:'campistry_help.html', KeyT:'campistry_lite.html'};
     function shortcutFor(appKey){
         for(var code in SHORTCUTS){ if(SHORTCUTS[code]===appKey) return 'Ctrl+Shift+'+code.replace('Key',''); }
         return '';
@@ -75,7 +80,7 @@
         html+='<div class="qs-pop" role="menu" aria-hidden="true">';
         // Dashboard sits at the top of the same dropdown as the app toggles,
         // so the header no longer needs a separate "← Dashboard" link.
-        html+='<a href="dashboard.html" class="qs-pop-dash" role="menuitem"><span class="qs-dash-arrow">&larr;</span> Dashboard</a>';
+        html+='<a href="dashboard.html" class="qs-pop-dash" role="menuitem" title="Dashboard (Ctrl+Shift+D)"><span class="qs-dash-arrow">&larr;</span> Dashboard</a>';
         html+='<div class="qs-pop-grid">';
         APPS.forEach(function(a){
             var isActive=a.key===activeKey;
@@ -147,16 +152,20 @@
         document.addEventListener('click', onDocClick);
         document.addEventListener('keydown', function(e){
             if(e.key==='Escape'){ closeAll(); return; }
-            // Ctrl+Shift+<letter> app-jump (ignore when Alt/Meta also held).
+            // Ctrl+Shift+<key> jump (ignore when Alt/Meta also held). Works on
+            // any page that loads this script, including the Dashboard.
             if(e.ctrlKey && e.shiftKey && !e.altKey && !e.metaKey){
+                var href=null;
                 var appKey=SHORTCUTS[e.code];
-                if(!appKey) return;
-                var app=null;
-                for(var i=0;i<APPS.length;i++){ if(APPS[i].key===appKey){ app=APPS[i]; break; } }
-                if(!app) return;
+                if(appKey){
+                    for(var i=0;i<APPS.length;i++){ if(APPS[i].key===appKey){ href=APPS[i].href; break; } }
+                }else if(EXTRA_NAV[e.code]){
+                    href=EXTRA_NAV[e.code];
+                }
+                if(!href) return;
                 e.preventDefault();
-                // Don't reload if we're already on that app's page.
-                if(window.location.pathname.split('/').pop()!==app.href) window.location.href=app.href;
+                // Don't reload if we're already on that page.
+                if(window.location.pathname.split('/').pop()!==href) window.location.href=href;
             }
         });
         // A fixed popover would drift if the page scrolls or resizes under it;
@@ -174,7 +183,9 @@
             tmp.innerHTML=renderAppSwitcher(key);
             el.replaceWith(tmp.firstChild);
         }
-        if(nodes.length) wireGlobalHandlers();
+        // Always wire shortcuts — they should work on every page that loads
+        // this script, even ones with no switcher mount (e.g. the Dashboard).
+        wireGlobalHandlers();
     }
 
     if(document.readyState==='loading'){
