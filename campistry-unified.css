@@ -569,6 +569,54 @@ body {
 }
 .nav-back:hover { color: var(--slate-700); }
 
+/* ── Collapsed app switcher: launcher button + popover grid ──────────────
+   Replaces the always-on row of app icons with a single "Apps" button that
+   opens a popover grid on demand, freeing the header. The popover is
+   position:fixed (coords computed in JS from the trigger) so the header
+   centre column's overflow:hidden can't clip it. */
+.quick-switch { position: relative; display: inline-flex; }
+.qs-trigger {
+    display: inline-flex; align-items: center; gap: 6px;
+    padding: 6px 12px; border-radius: 999px;
+    background: rgba(255,255,255,0.7); border: 1px solid rgba(0,0,0,0.08);
+    box-shadow: 0 1px 3px rgba(0,0,0,0.05);
+    color: var(--slate-600,#475569); font-family: inherit; font-size: .8rem; font-weight: 600;
+    cursor: pointer; transition: background .15s, border-color .15s, box-shadow .15s;
+    -webkit-backdrop-filter: blur(12px); backdrop-filter: blur(12px);
+}
+.qs-trigger:hover { background: #fff; border-color: rgba(0,0,0,0.14); box-shadow: 0 2px 8px rgba(0,0,0,0.08); }
+.qs-grid-icon { flex-shrink: 0; }
+.qs-grid-icon rect { fill: currentColor; }
+.qs-trigger-label { white-space: nowrap; }
+.qs-caret { flex-shrink: 0; transition: transform .18s ease; }
+.quick-switch.open .qs-caret { transform: rotate(180deg); }
+.quick-switch.open .qs-trigger { background: #fff; border-color: rgba(0,0,0,0.14); }
+
+.qs-pop {
+    position: fixed; z-index: 1200;
+    background: #fff; border: 1px solid var(--slate-200,#E2E8F0); border-radius: 16px;
+    box-shadow: 0 12px 32px rgba(0,0,0,0.14); padding: 10px;
+    opacity: 0; visibility: hidden; transform: translateY(-6px); pointer-events: none;
+    transition: opacity .16s ease, transform .16s ease, visibility .16s;
+}
+.quick-switch.open .qs-pop { opacity: 1; visibility: visible; transform: translateY(0); pointer-events: auto; }
+.qs-pop-grid { display: grid; grid-template-columns: repeat(4, 72px); gap: 4px; }
+.qs-pop-item {
+    display: flex; flex-direction: column; align-items: center; gap: 5px;
+    padding: 10px 6px; border-radius: 12px; text-decoration: none;
+    color: var(--slate-600,#475569); transition: background .12s;
+}
+.qs-pop-item img { height: 34px; width: auto; object-fit: contain; }
+.qs-pop-item span { font-size: .72rem; font-weight: 600; text-align: center; line-height: 1.15; }
+.qs-pop-item:hover { background: var(--slate-50,#F8FAFC); }
+.qs-pop-item.is-active { background: rgba(0,0,0,0.05); }
+.qs-pop-item.is-active span { color: var(--slate-900,#0F172A); }
+@media (max-width: 768px) {
+    .qs-trigger-label { display: none; }
+    .qs-trigger { padding: 7px 9px; }
+    .qs-pop-grid { grid-template-columns: repeat(3, 72px); }
+}
+
 /* Glassmorphic floating pill bar for switching between Me / Flow / Go */
 
 .quick-switch-bar {
