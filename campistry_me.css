@@ -451,3 +451,20 @@ select.me-input{cursor:pointer}
 .rb-advanced>summary::-webkit-details-marker{display:none}
 .rb-advanced>summary::before{content:'▸ ';color:var(--s400)}
 .rb-advanced[open]>summary::before{content:'▾ '}
+
+/* ── Inline nav: header controls moved into the page title row ──────────────
+   Set by campistry_inline_nav.js (body.inline-nav). Hides the standalone
+   .app-header and styles the small control cluster injected into each page's
+   title row (.sec-hd), plus the fixed search/sync overlay. */
+.inline-nav .app-header{display:none}
+.inav-cluster{display:inline-flex;align-items:center;gap:8px;margin-right:12px;flex-shrink:0}
+.inav-ham{display:flex;flex-direction:column;justify-content:center;gap:4px;width:34px;height:34px;padding:8px;border:1px solid var(--s200);border-radius:var(--r);background:#fff;cursor:pointer}
+.inav-ham span{display:block;height:2px;background:var(--s700);border-radius:1px}
+.inav-ham:hover{border-color:var(--me);background:var(--me-bg)}
+.inav-search-btn{display:flex;align-items:center;justify-content:center;width:34px;height:34px;border:1px solid var(--s200);border-radius:var(--r);background:#fff;color:var(--s500);cursor:pointer}
+.inav-search-btn:hover{border-color:var(--me);background:var(--me-bg);color:var(--me)}
+.inav-search-pop{position:fixed;z-index:1200;background:#fff;border:1px solid var(--s200);border-radius:var(--r2);box-shadow:0 12px 32px rgba(0,0,0,.14);padding:10px;display:flex;align-items:center;gap:10px}
+.inav-search-pop[hidden]{display:none}
+.inav-search-pop .me-search-wrap{max-width:280px;flex:1 1 auto}
+.inline-nav .app-main{min-height:100vh}
+.inline-nav .sidebar{top:0}
