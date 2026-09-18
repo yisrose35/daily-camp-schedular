@@ -574,16 +574,19 @@ body {
    opens a popover grid on demand, freeing the header. The popover is
    position:fixed (coords computed in JS from the trigger) so the header
    centre column's overflow:hidden can't clip it. */
-.quick-switch { position: relative; display: inline-flex; }
-/* Plain "Menu" with the caret stacked underneath — no box/pill, so the header
-   reads continuous. */
+/* Fixed to the top-center of the screen so it's always truly centered and
+   reads as a little tab cut out of the top edge (rounded bottom corners, no
+   top border, a soft shadow — it "hangs" from the top). */
+.quick-switch { position: fixed; top: 0; left: 50%; transform: translateX(-50%); z-index: 55; display: inline-flex; }
 .qs-trigger {
     display: inline-flex; flex-direction: column; align-items: center; gap: 0;
-    padding: 2px 8px; background: transparent; border: none; box-shadow: none;
+    padding: 5px 24px 7px;
+    background: #fff; border: 1px solid var(--slate-200,#E2E8F0); border-top: none;
+    border-radius: 0 0 14px 14px; box-shadow: 0 3px 10px rgba(15,23,42,.07);
     color: var(--slate-600,#475569); font-family: inherit; font-size: .82rem; font-weight: 600;
-    line-height: 1.05; cursor: pointer; transition: color .15s;
+    line-height: 1.05; cursor: pointer; transition: color .15s, box-shadow .15s;
 }
-.qs-trigger:hover, .quick-switch.open .qs-trigger { color: var(--slate-900,#0F172A); background: transparent; }
+.qs-trigger:hover, .quick-switch.open .qs-trigger { color: var(--slate-900,#0F172A); box-shadow: 0 5px 16px rgba(15,23,42,.11); }
 .qs-trigger-label { white-space: nowrap; }
 .qs-caret { flex-shrink: 0; transition: transform .18s ease; margin-top: 1px; }
 .quick-switch.open .qs-caret { transform: rotate(180deg); }
