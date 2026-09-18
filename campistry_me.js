@@ -465,6 +465,10 @@ function loadData(){
         billingRules=(me.billingRules&&typeof me.billingRules==='object')?me.billingRules:{};
         deletedIds=(me.deletedIds&&typeof me.deletedIds==='object')?me.deletedIds:{};
         staffApplications=me.staffApplications||{};
+        // The submissions that arrived as ROWS rather than into the blob
+        // (migration 200). Fired and not awaited: hydration must not wait on a
+        // network call, and the drain re-renders when it finds anything.
+        try{ _drainApplications(); }catch(_){}
         leads=me.leads||{};
         counselorVisibility=(me.counselorVisibility&&typeof me.counselorVisibility==='object')?me.counselorVisibility:null;
         _setupChecklistDismissed=!!me.setupChecklistDismissed;
@@ -2244,6 +2248,70 @@ function _arAgingHtml(ledgers){
     });
     h+='</tbody></table></div>';
     return h;
+}
+
+/**
+ * DRAIN THE APPLICATIONS TABLE INTO enrollments / staffApplications.
+ *
+ * Migration 200 moved public submissions out of the campistryMe blob and into
+ * camp_applications, one row each — so a registration burst no longer serialises
+ * on the camp's single row and no longer rewrites megabytes per family. The
+ * office's working copy stays where every page already reads it, which is why
+ * this exists: the rows have to arrive in `enrollments`.
+ *
+ * It reuses campistry_finance_merge.js's mergePublicSubmissions rather than a
+ * second merge of its own. That function already answers the two questions that
+ * matter — local wins on an id we hold, a tombstoned id stays deleted — and having
+ * one answer is the point. Shape the RPC's reply like a cloud blob and hand it over.
+ *
+ * Async and best-effort. A camp whose migration has not been applied gets a
+ * function-missing error and behaves exactly as it did before, because the blob
+ * still holds everything 200's backfill copied out of it.
+ */
+async function _drainApplications(){
+    var M=(typeof window!=='undefined'&&window.CampistryFinanceMerge)||null;
+    if(!M||typeof M.mergePublicSubmissions!=='function')return 0;
+    var client=window.CampistryDB&&window.CampistryDB.getClient?window.CampistryDB.getClient():window.supabase;
+    var campId=window.CampistryDB&&window.CampistryDB.getCampId?window.CampistryDB.getCampId():(window.getCampId?window.getCampId():null);
+    if(!client||typeof client.rpc!=='function'||!campId)return 0;
+
+    // The rule's own closed list, not a second copy of it. Two lists of "which
+    // branches are public submissions" is two chances to disagree, and the merge
+    // would silently skip whichever one this file forgot.
+    var kinds=(M.PUBLIC_KINDS||[]).slice();
+    var restored=0;
+    for(var i=0;i<kinds.length;i++){
+        var kind=kinds[i];
+        try{
+            var res=await client.rpc('get_camp_applications',{p_camp_id:campId,p_kind:kind});
+            if(res&&res.error){
+                // A camp that has not pasted 200 yet. Not an error worth showing:
+                // the blob still has everything, which is what it had before.
+                console.log('[Me] applications table unavailable ('+kind+'):',res.error.message);
+                continue;
+            }
+            var d=res&&res.data;
+            if(!d||d.success===false||!d.entries)continue;
+            var local={};
+            local[kind]=(kind==='enrollments')?enrollments:staffApplications;
+            local.deletedIds=deletedIds;
+            var cloud={};
+            cloud[kind]=d.entries;
+            var rep=M.mergePublicSubmissions(local,cloud);
+            restored+=(rep&&rep.restored)||0;
+        }catch(e){
+            console.warn('[Me] application drain failed for '+kind+':',e&&e.message);
+        }
+    }
+    if(restored){
+        console.log('[Me] drained',restored,'submission(s) from camp_applications');
+        // NOT saved from here. A save would push the whole blob back up, which is
+        // the write this migration exists to avoid doing once per application —
+        // and the next ordinary save carries them anyway. Rendering is what the
+        // office actually needs.
+        try{ render(curPage); }catch(_){}
+    }
+    return restored;
 }
 
 /**
@@ -12253,8 +12321,19 @@ async function _sendLinkNow(isStaff){
     var btn=document.getElementById('slSendBtn');
     if(btn){btn.disabled=true;btn.textContent='Sending…';}
     try{
-        await callEdgeFunctionAuthed('send-broadcast',{campId:getCampId(),to:recipients,subject:subject,body:body,method:'email',campName:campName});
-        toast('Sent to '+recipients.length+' recipient'+(recipients.length!==1?'s':''));
+        // eventKey added so this can resume when the send outgrows one
+        // invocation — without it, a second pass would email everyone twice.
+        // One key per click, so re-opening the modal and sending again is a
+        // genuinely new send rather than a no-op.
+        var r=await sendBroadcastComplete({campId:getCampId(),to:recipients,subject:subject,body:body,method:'email',campName:campName,eventKey:'me-sendlink:'+Date.now()})||{};
+        // Report what was actually sent. This used to announce
+        // recipients.length regardless, so a send that reached 180 of 400
+        // families still said "Sent to 400".
+        var sent=Number(r.emailSent||0),failed=Number(r.emailFailed||0);
+        toast('Sent to '+sent+' recipient'+(sent!==1?'s':'')
+            +(failed?' — '+failed+' could not be delivered':'')
+            +(r.truncated?' (still more to go — send again to continue)':''),
+            failed||r.truncated?'error':undefined);
         closeModal('sendLinkModal');
     }catch(err){
         toast('Send failed: '+(err&&err.message||'unknown error'),'error');
@@ -17283,6 +17362,43 @@ async function callEdgeFunctionAuthed(fnName,body){
     return data;
 }
 
+// A broadcast to a whole camp does not fit in one edge-function invocation.
+//
+// send-broadcast paces itself against the email/SMS providers' rate limits and
+// stops before the platform's wall-clock limit, answering `done:false` with the
+// number it did not reach. Left at one call, a send to several hundred families
+// simply stopped part way through and reported whatever it had managed — which
+// looked like a successful send of a fraction of the list.
+//
+// Calling again with the SAME eventKey and the SAME recipients resumes exactly
+// where it stopped: the function claims each recipient in the notifications
+// table before sending and releases every claim it could not honour, so an
+// already-messaged family is skipped and an unsent one is picked up. THE
+// eventKey IS WHAT MAKES THAT SAFE — without one there are no claims, and a
+// second pass would message everyone again. So this refuses to resume without
+// it rather than risk double-sending.
+//
+// Returns the summed counts across every pass, plus `truncated:true` if it hit
+// the pass limit with work still outstanding.
+async function sendBroadcastComplete(body){
+    var COUNTS=['emailSent','emailFailed','emailSkipped','smsSent','smsFailed','smsSkipped'];
+    var totals=null,pass=0;
+    for(;;){
+        var d=await callEdgeFunctionAuthed('send-broadcast',body)||{};
+        if(!totals) totals=d;
+        else{
+            COUNTS.forEach(function(k){ totals[k]=(totals[k]||0)+(d[k]||0); });
+            totals.done=d.done; totals.remaining=d.remaining;
+        }
+        // An older deployment of the function sends no `done` at all — treat
+        // that as complete rather than looping for a field it will never send.
+        if(d.done!==false) break;
+        if(!body.eventKey){ totals.truncated=true; break; }
+        if(++pass>=20){ totals.truncated=true; break; }
+    }
+    return totals;
+}
+
 // Office-side fallback for getting a payment method on file — e.g. a family
 // with no Link portal access, or a parent on the phone. This does NOT collect
 // card/bank details on Campistry's own page: it opens a real Stripe-hosted
@@ -20169,7 +20285,7 @@ async function sendBroadcastNow(broadcast){
     // consent (smsEmailConsent, captured on the registration/staff-apply
     // forms) — a recipient added before that consent flow existed is
     // correctly skipped rather than texted/emailed without consent on file.
-    try{return await callEdgeFunctionAuthed('send-broadcast',{campId:getCampId(),to:recipients,subject:broadcast.subject||'',body:broadcast.body||'',method:broadcast.method||'Email',campName:campName,branding:_getLinkBranding(),eventKey:'me-broadcast:'+(broadcast.timestamp||Date.now())})}
+    try{return await sendBroadcastComplete({campId:getCampId(),to:recipients,subject:broadcast.subject||'',body:broadcast.body||'',method:broadcast.method||'Email',campName:campName,branding:_getLinkBranding(),eventKey:'me-broadcast:'+(broadcast.timestamp||Date.now())})}
     catch(err){toast('Send failed: '+err.message,'error');return{sent:0,failed:0}}
 }
 

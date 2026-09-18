@@ -1046,6 +1046,64 @@ var _navHistory=['home'];
 // (stripe-checkout) that offers every method the camp enabled, and it records
 // itself in the office ledger via stripe-webhook.
 var _balByCamp={};
+
+// ── ONE get_my_balance per camp, even while the first is still in flight ────
+//
+// get_my_balance is the most expensive RPC the parent portal calls: it runs the
+// derived calculation, re-reads the camp's state, and checks every recorded
+// payment against the family's ledger. _balByCamp caches the ANSWER, which
+// deduplicates every call after one lands — and none of the calls before it.
+//
+// Four places fetch it independently (the Payments pre-warm at boot, Cards,
+// the canteen charge-card gate, and canteen auto-reload), and the gate runs per
+// canteen child. A family with three campers who opens Canteen while the boot
+// pre-warm is still running fires four reads of the same value. Multiply by
+// every family with the portal open and the app's heaviest query is the one it
+// repeats most needlessly.
+//
+// _balInFlight caches the PROMISE, so concurrent callers share one round trip.
+//
+// _balGen is the other half, and it is a correctness fix rather than a saving.
+// Every fetch site wrote `_balByCamp[cid] = d` unconditionally on resolve, so a
+// read that started BEFORE a payment could land after it and put the
+// pre-payment balance back on screen — the parent pays, the number goes right,
+// then flicks back to what they owed. A read only publishes its answer if no
+// invalidation happened while it was in flight.
+var _balInFlight={};
+var _balGen={};
+
+/** Forget a camp's balance: it changed, so nothing older may be published. */
+function _invalidateBalance(cid){
+    if(!cid) return;
+    delete _balByCamp[cid];
+    delete _balInFlight[cid];
+    _balGen[cid]=(_balGen[cid]||0)+1;
+}
+
+/** The family's balance for one camp. Resolves to the data, or null. */
+function _getBalance(cid, opts){
+    if(!cid) return Promise.resolve(null);
+    if(opts&&opts.force) _invalidateBalance(cid);
+    else if(_balByCamp[cid]!==undefined) return Promise.resolve(_balByCamp[cid]);
+    if(_balInFlight[cid]) return _balInFlight[cid];
+    var db=window._parentDB; if(!db) return Promise.resolve(null);
+    var gen=(_balGen[cid]=(_balGen[cid]||0));
+    var call=window._pRpc?window._pRpc('get_my_balance',{},cid):db.rpc('get_my_balance',{p_camp_id:cid});
+    var p=Promise.resolve(call).then(function(res){
+        var d=(res&&res.data&&res.data.success)?res.data:null;
+        if(_balGen[cid]!==gen){
+            // Invalidated mid-flight. This answer predates the change.
+            return _balByCamp[cid]!==undefined?_balByCamp[cid]:null;
+        }
+        if(d) _balByCamp[cid]=d;
+        return d;
+    }).catch(function(){ return null; }).then(function(d){
+        if(_balInFlight[cid]===p) delete _balInFlight[cid];
+        return d;
+    });
+    _balInFlight[cid]=p;
+    return p;
+}
 function _lkSupa(){ return window.__CAMPISTRY_SUPABASE__||{}; }
 function _lkMoney(n){ n=Number(n)||0; var neg=n<0; n=Math.abs(n); return (neg?'-$':'$')+n.toLocaleString(undefined,{minimumFractionDigits:2,maximumFractionDigits:2}); }
 async function _lkCheckout(body){
@@ -1172,7 +1230,7 @@ async function _handleBanquestReturn(){
         var data=await _lkCallEdge('payments-hosted-complete',{key:key,campId:meta.campId||undefined});
         var msgs={save_card:'Card saved!',pay_now:'Payment received — thank you!',canteen:'Funds are on their way to the canteen account.'};
         toast(msgs[data.purpose]||'Done!');
-        if(meta.campId){ delete _balByCamp[meta.campId]; }
+        if(meta.campId){ _invalidateBalance(meta.campId); }
         var page=meta.navPage||({save_card:'payments',pay_now:'payments',canteen:'canteen'})[data.purpose];
         if(page) nav(page);
     }catch(err){
@@ -1223,11 +1281,7 @@ function loadPayments(){
     host.innerHTML='<div class="lk-card" style="padding:18px;text-align:center;color:var(--text-muted);">Loading your balance…</div>';
     var done=0;
     ids.forEach(function(cid){
-        var call=window._pRpc?window._pRpc('get_my_balance',{},cid):(window._parentDB&&window._parentDB.rpc('get_my_balance',{p_camp_id:cid}));
-        Promise.resolve(call).then(function(res){
-            var d=(res&&res.data)?res.data:null;
-            if(d&&d.success) _balByCamp[cid]=d;
-        }).catch(function(){}).then(function(){
+        _getBalance(cid).then(function(){
             done++; if(done===ids.length){
                 _paintPaymentsHomeSub();
                 var owedIds=ids.filter(function(id){ var d=_balByCamp[id]; return d && Number(d.balance)>0.005; });
@@ -1310,9 +1364,8 @@ async function _addSavedCard(cid){
         // _balByCamp may not have resolved for this camp yet (Cards can be
         // opened before Payments ever loads) — fetch it directly rather
         // than blocking on a page the parent hasn't visited.
-        var db=window._parentDB; if(!db){ toast('Please sign in again.'); return; }
-        var call=window._pRpc?window._pRpc('get_my_balance',{},cid):db.rpc('get_my_balance',{p_camp_id:cid});
-        try{ var res=await call; if(res&&res.data&&res.data.success){ d=res.data; _balByCamp[cid]=d; } }catch(e){}
+        if(!window._parentDB){ toast('Please sign in again.'); return; }
+        d=await _getBalance(cid);
     }
     if(!d||!d.familyKey){ toast('Could not find your family record — contact the camp office.'); return; }
     var status=await _getCampProcessorInfo(cid);
@@ -1337,7 +1390,7 @@ async function _setDefaultCard(cid,methodId){
         var res=await call;
         if(res.error||!res.data||!res.data.success){ toast('Could not set default: '+(res.error?res.error.message:((res.data||{}).error||'error'))); return; }
         toast('Default card updated');
-        delete _balByCamp[cid]; // the family's default token changed — force a fresh read next time it's needed
+        _invalidateBalance(cid); // the family's default token changed — force a fresh read next time it's needed
         _showCardsCamp(cid);
     }catch(err){ console.error('[Parent] set default card error:',err); toast('Could not set default card'); }
 }
@@ -1354,7 +1407,7 @@ async function _doRemoveSavedCard(cid,methodId){
         var res=await call;
         if(res.error||!res.data||!res.data.success){ toast('Could not remove card: '+(res.error?res.error.message:((res.data||{}).error||'error'))); return; }
         toast('Card removed');
-        delete _balByCamp[cid];
+        _invalidateBalance(cid);
         _showCardsCamp(cid);
     }catch(err){ console.error('[Parent] remove saved card error:',err); toast('Could not remove card'); }
 }
@@ -2340,14 +2393,11 @@ function _applyCanteenStripeGate(connected){
 function _applyCanteenChargeSavedGate(c){
     var d=_balByCamp[c.campId];
     if(d!==undefined){ _renderCanteenChargeSavedRow(d); return; }
-    var db=window._parentDB; if(!db) return;
-    var call=window._pRpc?window._pRpc('get_my_balance',{},c.campId):db.rpc('get_my_balance',{p_camp_id:c.campId});
-    Promise.resolve(call).then(function(res){
-        var dd=(res&&res.data)?res.data:null;
-        if(dd&&dd.success) _balByCamp[c.campId]=dd;
+    if(!window._parentDB) return;
+    _getBalance(c.campId).then(function(){
         var active=_activeCanteenChild();
         if(active&&active.campId===c.campId) _renderCanteenChargeSavedRow(_balByCamp[c.campId]);
-    }).catch(function(){});
+    });
 }
 function _renderCanteenChargeSavedRow(d){
     var row=document.getElementById('canteenChargeSavedRow'), lbl=document.getElementById('canteenChargeSavedLabel');
@@ -2761,13 +2811,7 @@ async function startCanteenAutoReloadSetup(){
     // directly rather than trusting a maybe-still-empty cache (same
     // reasoning as _applyCanteenChargeSavedGate's lazy fetch above).
     var bal=_balByCamp[c.campId];
-    if(bal===undefined){
-        var db0=window._parentDB;
-        if(db0){
-            var call0=window._pRpc?window._pRpc('get_my_balance',{},c.campId):db0.rpc('get_my_balance',{p_camp_id:c.campId});
-            try{ var res0=await call0; if(res0&&res0.data&&res0.data.success){ bal=res0.data; _balByCamp[c.campId]=bal; } }catch(e0){}
-        }
-    }
+    if(bal===undefined && window._parentDB) bal=await _getBalance(c.campId);
     if(bal&&bal.chargeable){
         arCardChoice(bal.cardLabel,
             function(){ _useFamilyCardForAutoReload(c); },
@@ -4463,6 +4507,22 @@ function _writeLinkStore(s){try{localStorage.setItem(LINK_STORE_KEY,JSON.stringi
 // sent by the admin, or a reply sent from a different device, could never
 // show up here. Merges into the same local store _loadMessages() already
 // reads, keyed off id so nothing gets duplicated on repeat syncs.
+//
+// ONE sync is one RPC PER CAMP the parent belongs to (get_my_messages) plus
+// one get_camp_broadcasts. That is fine on the 30s poll and NOT fine once
+// realtime drives it: the office sending a threaded reply, or a broadcast
+// fanning out to every family, delivers a burst of row events, and firing a
+// full re-read per event multiplies the camp's one action by every connected
+// parent. _syncMessagesSoon coalesces a burst into a single read — the same
+// thing campistry_live.html's _debouncedSync does for the office side.
+var _msgSyncDebTimer = null;
+function _syncMessagesSoon(){
+    if (_msgSyncDebTimer) clearTimeout(_msgSyncDebTimer);
+    _msgSyncDebTimer = setTimeout(function(){
+        _msgSyncDebTimer = null;
+        _syncMessagesFromCloud();
+    }, 400);
+}
 function _syncMessagesFromCloud(){
     if(typeof window._loadMyMessagesCloud==='function'){
         window._loadMyMessagesCloud(function(){
@@ -4756,10 +4816,21 @@ function reportDroppedOff(reqId) {
 // (ppr_parent_read, migration 025) already scopes the read to rows tied to
 // this parent's invite, so a plain select is safe here.
 function pollPickupStatuses() {
-    if (!pickupRequests.some(function(r){ return r.cloudId && r.status === 'Pending'; })) return;
+    // Only the rows this parent is actually waiting on. This used to select the
+    // whole camp's parent_pickup_requests and filter client-side: RLS still cut
+    // the response down to this family's rows, so it read correctly, but the
+    // server had to walk every request the camp had ever taken and run the
+    // policy's per-row invite subquery on each one — per parent, every 30
+    // seconds. An `in` on the handful of ids we are waiting for is a primary-key
+    // probe instead, and it stops the cost growing with the camp's history.
+    var waiting = pickupRequests
+        .filter(function(r){ return r.cloudId && r.status === 'Pending'; })
+        .map(function(r){ return r.cloudId; });
+    if (!waiting.length) return;
     var db = window._parentDB; if (!db) return;
     var cid = (typeof parent!=='undefined'&&parent)?parent.campId:null;
-    db.from('parent_pickup_requests').select('id,status,office_message').eq('camp_id', cid)
+    db.from('parent_pickup_requests').select('id,status,office_message')
+        .eq('camp_id', cid).in('id', waiting)
         .then(function(res){
             if (res.error || !res.data) return;
             var byId = {}; res.data.forEach(function(r){ byId[r.id] = r; });
@@ -5399,14 +5470,7 @@ if (window.pdfjsLib) { window.pdfjsLib.GlobalWorkerOptions.workerSrc = 'pdfjs-di
         // email, so RLS limits the stream to their messages). New camp messages
         // appear instantly. A slow 30s poll + focus-sync stay as a safety net if
         // the socket drops.
-        try {
-            if (typeof db !== 'undefined' && db && db.channel) {
-                if (window._parentMsgChannel) { try { db.removeChannel(window._parentMsgChannel); } catch(_){} }
-                window._parentMsgChannel = db.channel('parent-msgs')
-                    .on('postgres_changes', { event: '*', schema: 'public', table: 'link_messages' }, function(){ _syncMessagesFromCloud(); })
-                    .subscribe();
-            }
-        } catch (e) { console.warn('[Parent] realtime subscribe failed, falling back to poll', e); }
+        _subscribeParentMsgs([d.camp_id]);
         if(!window._msgPollTimer){
             window._msgPollTimer=setInterval(function(){ if(document.visibilityState!=='hidden') _syncMessagesFromCloud(); }, 30000);
         }
@@ -5543,6 +5607,55 @@ if (window.pdfjsLib) { window.pdfjsLib.GlobalWorkerOptions.workerSrc = 'pdfjs-di
         }).catch(function(e){ console.warn('[Parent] _augmentOtherCamps failed — other camps/campers will not be merged in:', e); });
     }
 
+    // Subscribe to this parent's message rows — ONE `.on()` PER CAMP, each
+    // filtered to that camp_id.
+    //
+    // This used to be a single unfiltered subscription to link_messages. RLS
+    // still kept the parent from SEEING anyone else's row, so it looked
+    // correct, and it is correct — it just doesn't scale. postgres_changes
+    // evaluates the row's RLS policy once per subscriber per change, so an
+    // unfiltered subscription asks the realtime worker "may this parent see
+    // it?" for every link_messages row written anywhere in the database, for
+    // every connected parent. The cost is worst at the exact moment the camp
+    // most needs it to work: a broadcast to 400 families inserts 400 rows
+    // while 400 parents are connected, which is 160,000 policy evaluations for
+    // 400 useful deliveries. A camp_id filter drops the candidate set to one
+    // camp before RLS runs, and is what campistry_link_admin.html already does
+    // on the office side of the same table.
+    //
+    // Per camp rather than one filter because a parent can have children at
+    // more than one camp, and Realtime allows exactly one filter per `.on()`.
+    // Filtering on the parent's email instead would be narrower still, but
+    // link_messages stores whatever case the sender typed and the RLS policy
+    // compares with lower() on both sides — an `eq` filter would silently miss
+    // a row written as Parent@Example.com. camp_id has no such hazard.
+    function _subscribeParentMsgs(campIds) {
+        try {
+            if (typeof db === 'undefined' || !db || !db.channel) return;
+            var ids = (campIds || []).filter(function(v){ return !!v; });
+            // Dedupe: _augmentOtherCamps can hand back the primary camp again.
+            var seen = {}, uniq = [];
+            ids.forEach(function(id){ var k = String(id); if (!seen[k]) { seen[k] = true; uniq.push(k); } });
+            if (!uniq.length) return;
+            // Nothing to do if we are already listening to exactly these camps —
+            // otherwise the post-merge call would tear down a working socket and
+            // rebuild it for no reason.
+            if (window._parentMsgChannel && window._parentMsgCamps === uniq.join(',')) return;
+            if (window._parentMsgChannel) { try { db.removeChannel(window._parentMsgChannel); } catch(_){} }
+            var ch = db.channel('parent-msgs');
+            uniq.forEach(function(id){
+                ch = ch.on('postgres_changes',
+                    { event: '*', schema: 'public', table: 'link_messages', filter: 'camp_id=eq.' + id },
+                    function(){ if (typeof _syncMessagesSoon === 'function') _syncMessagesSoon();
+                                else if (typeof _syncMessagesFromCloud === 'function') _syncMessagesFromCloud(); });
+            });
+            window._parentMsgChannel = ch.subscribe();
+            window._parentMsgCamps = uniq.join(',');
+        } catch (e) {
+            console.warn('[Parent] realtime subscribe failed, falling back to poll', e);
+        }
+    }
+
     // init() (re-run after the multi-camp merge) rebuilds the page shell and
     // resets the cloud-backed sections to their empty state. Re-run the loaders
     // so forms / lists / health / photos / messages / mail / tips reappear with
@@ -5564,6 +5677,13 @@ if (window.pdfjsLib) { window.pdfjsLib.GlobalWorkerOptions.workerSrc = 'pdfjs-di
             if (typeof _loadParentPhotos === 'function') _loadParentPhotos();
             if (typeof _loadCamperFaceStatus === 'function') _loadCamperFaceStatus();
             if (typeof _syncMessagesFromCloud === 'function') _syncMessagesFromCloud();
+            // The first subscription (in _applyData) could only know the primary
+            // camp — parent.camps is resolved later, by _augmentOtherCamps. Now
+            // that it is known, widen the subscription so a message from a
+            // SECOND camp arrives live too instead of waiting for the 30s poll.
+            if (parent && parent.camps && parent.camps.length) {
+                _subscribeParentMsgs(parent.camps.map(function(cp){ return cp.camp_id || cp.campId; }));
+            }
             if (typeof _loadMyMail === 'function') _loadMyMail();
             if (typeof _loadMyTips === 'function') _loadMyTips();
         } catch (e) { console.warn('[Parent] _afterMergeReloadCloud', e); }
