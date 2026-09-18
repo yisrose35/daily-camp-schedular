@@ -159,6 +159,11 @@ body.sidebar-open .sidebar{transform:translateX(0)}
 .me-t tbody tr:hover td{background:var(--s50)}
 .me-t tbody tr.click{cursor:pointer}
 .me-t .bold{font-weight:600;color:var(--s800)}
+/* Cleaner edges: generous side gutters and no trailing divider under the last
+   row (matches the calm, roomy table feel across Billing/Payroll/Roster). */
+.me-t th:first-child,.me-t td:first-child{padding-left:16px}
+.me-t th:last-child,.me-t td:last-child{padding-right:16px}
+.me-t tbody tr:last-child td{border-bottom:none}
 
 /* ── BADGES ─────────────────────────── */
 .badge{display:inline-flex;align-items:center;padding:2px 8px;border-radius:999px;font-size:.7rem;font-weight:600}
