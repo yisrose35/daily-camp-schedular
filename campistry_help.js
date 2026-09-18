@@ -415,15 +415,35 @@
         }
     });
 
-    // Mobile "Contents" drawer
+    // Contents toggle — same button and hamburger icon at every width, but
+    // what it does depends on how much room there is: on a narrow screen
+    // the sidebar has nowhere to live, so it opens as a full overlay; on a
+    // wide desktop screen there's plenty of room, so it just collapses the
+    // sidebar and lets .hc-main reclaim its width. The desktop choice is
+    // remembered so it doesn't reset on every visit.
     var tocToggle = document.getElementById('hcTocToggle');
     var toc = document.getElementById('hcToc');
+    var DESKTOP_MIN = 981;
+
+    if (toc) {
+        try {
+            if (window.innerWidth >= DESKTOP_MIN && localStorage.getItem('hc_toc_collapsed') === '1') {
+                toc.classList.add('hc-toc-collapsed');
+            }
+        } catch (e) { /* localStorage unavailable — default to expanded */ }
+    }
+
     if (tocToggle && toc) {
         tocToggle.addEventListener('click', function () {
-            toc.classList.toggle('hc-toc-open');
+            if (window.innerWidth >= DESKTOP_MIN) {
+                var collapsed = toc.classList.toggle('hc-toc-collapsed');
+                try { localStorage.setItem('hc_toc_collapsed', collapsed ? '1' : '0'); } catch (e) { /* ignore */ }
+            } else {
+                toc.classList.toggle('hc-toc-open');
+            }
         });
         toc.addEventListener('click', function (e) {
-            if (e.target.closest('a')) toc.classList.remove('hc-toc-open');
+            if (e.target.closest('a') && window.innerWidth < DESKTOP_MIN) toc.classList.remove('hc-toc-open');
         });
     }
 
