@@ -103,6 +103,7 @@
     var _hideT=null, _openedAt=0;
     function openBar(){
         if(_hideT){ clearTimeout(_hideT); _hideT=null; }
+        if(typeof _cancelDwell==='function') _cancelDwell();
         if(!document.body.classList.contains('qs-open')) _openedAt=Date.now();
         document.body.classList.add('qs-open');
         var t=document.querySelector('.qs-trigger'); if(t) t.setAttribute('aria-expanded','true');
@@ -132,31 +133,45 @@
         if(!_inSwitch(e.target)) closeBar();
     }
 
-    // Hover-to-open only on devices that actually hover. On touch, a tap fires a
-    // synthetic mouseover AND a click — if hover opened it, the click would
-    // immediately toggle it back shut (looks like "nothing happens"). Gating
-    // hover to (hover:hover) leaves the click/tap as the sole opener on phones.
+    // Hover-to-open only on devices that actually hover; on touch the tap opens
+    // it (see onDocClick). Opening requires the cursor to DWELL near the top of
+    // the screen for HOLD_MS — anywhere along the top, not only over the Menu —
+    // but NOT while it's over a real control up there (hamburger, search, date
+    // picker, avatars, sync badge, links). Those are excluded so brushing past
+    // them never triggers the menu.
     var HOVER_CAPABLE = !!(window.matchMedia && window.matchMedia('(hover: hover)').matches);
-    function onSwitchOver(e){
-        if(!HOVER_CAPABLE)return;
-        if(!_inSwitch(e.target))return;
-        if(_hideT){ clearTimeout(_hideT); _hideT=null; }
-        openBar();
+    var TOP_ZONE = 56;     // px from the top that counts as "the top"
+    var HOLD_MS = 1350;    // required dwell before it opens
+    var _dwellT = null;
+    function _isExcluded(el){
+        if(!el || !el.closest) return false;
+        if(el.closest('.quick-switch') || el.closest('.qs-bar')) return false; // the menu itself is never excluded
+        return !!el.closest('a,button,input,select,textarea,label,[role="button"],[contenteditable="true"],.me-search-wrap,.sync-badge,.nav-user,.nt-avatar,.hc-toc-toggle,.snacks-user-name');
     }
-    function onSwitchOut(e){
-        if(!HOVER_CAPABLE)return;
-        if(!_inSwitch(e.target))return;
-        if(_inSwitch(e.relatedTarget))return; // moved within the tab/bar
-        if(_hideT)clearTimeout(_hideT);
-        _hideT=setTimeout(closeBar, 220);
+    function _cancelDwell(){ if(_dwellT){ clearTimeout(_dwellT); _dwellT=null; } }
+    function onTopMove(e){
+        if(!HOVER_CAPABLE) return;
+        var overSwitch = _inSwitch(e.target);
+        var atTop = e.clientY <= TOP_ZONE;
+        if(isOpen()){
+            // Keep open while at the top or over the tab/bar; otherwise close.
+            if(atTop || overSwitch){ if(_hideT){ clearTimeout(_hideT); _hideT=null; } }
+            else if(!_hideT){ _hideT=setTimeout(closeBar, 260); }
+            return;
+        }
+        // Closed: dwell near the top (and not over an excluded control) to open.
+        if(atTop && !_isExcluded(e.target)){
+            if(!_dwellT) _dwellT=setTimeout(function(){ _dwellT=null; openBar(); }, HOLD_MS);
+        } else {
+            _cancelDwell();
+        }
     }
 
     var _wired=false;
     function wireGlobalHandlers(){
         if(_wired) return; _wired=true;
         document.addEventListener('click', onDocClick);
-        document.addEventListener('mouseover', onSwitchOver);
-        document.addEventListener('mouseout', onSwitchOut);
+        document.addEventListener('mousemove', onTopMove);
         document.addEventListener('keydown', function(e){
             if(e.key==='Escape'){ closeBar(); return; }
             // Ctrl+Shift+<key> jump (ignore when Alt/Meta also held). Works on
