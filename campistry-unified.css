@@ -580,19 +580,31 @@ body {
    the centering transform makes .quick-switch its own stacking context, so its
    z-index is what actually clears the headers (which go up to z-index 100). */
 .quick-switch { position: fixed; top: 0; left: 50%; transform: translateX(-50%); z-index: 1000; display: inline-flex; }
-/* Slightly angled (trapezoid) sides so it stands out as its own little tab,
-   with a soft drop-shadow (a filter, not box-shadow, so it follows the angled
-   shape). */
+/* A gentle tab: barely-angled sides (3px) with softened, chamfered bottom
+   corners so the edges read rounded, not sharp. Drop-shadow (a filter, so it
+   follows the shape) makes it stand out from the top. */
 .qs-trigger {
     display: inline-flex; flex-direction: column; align-items: center; gap: 0;
     padding: 5px 26px 7px;
     background: #fff; border: none; border-radius: 0;
-    clip-path: polygon(0 0, 100% 0, calc(100% - 7px) 100%, 7px 100%);
+    clip-path: polygon(0 0, 100% 0, calc(100% - 3px) calc(100% - 8px), calc(100% - 11px) 100%, 11px 100%, 3px calc(100% - 8px));
     filter: drop-shadow(0 3px 5px rgba(15,23,42,.12));
     color: var(--slate-600,#475569); font-family: inherit; font-size: .82rem; font-weight: 600;
     line-height: 1.05; cursor: pointer; transition: color .15s, filter .15s;
 }
 .qs-trigger:hover, .quick-switch.open .qs-trigger { color: var(--slate-900,#0F172A); filter: drop-shadow(0 4px 8px rgba(15,23,42,.16)); }
+/* When the bar is open the tab hides — the bar becomes the header. */
+body.qs-open .quick-switch { opacity: 0; pointer-events: none; transition: opacity .12s ease; }
+
+/* Full-width dropdown that becomes a header row and pushes the page down. */
+.qs-bar { width: 100%; overflow: hidden; max-height: 0; background: #fff; border-bottom: 1px solid var(--slate-200,#E2E8F0); transition: max-height .26s ease; }
+body.qs-open .qs-bar { max-height: 84px; box-shadow: 0 4px 12px rgba(15,23,42,.06); }
+.qs-bar-inner { position: relative; display: flex; align-items: center; justify-content: center; height: 64px; padding: 0 16px; }
+.qs-bar-dash { position: absolute; left: 16px; top: 50%; transform: translateY(-50%); display: inline-flex; align-items: center; gap: 6px; padding: 8px 14px; border-radius: 10px; text-decoration: none; font-size: .8rem; font-weight: 600; white-space: nowrap; color: var(--slate-700,#334155); background: var(--slate-50,#F8FAFC); border: 1px solid var(--slate-200,#E2E8F0); }
+.qs-bar-dash:hover { background: var(--slate-100,#F1F5F9); }
+.qs-bar-strip { display: flex; align-items: center; gap: 2px; overflow-x: auto; max-width: min(760px, calc(100% - 260px)); }
+.qs-bar-strip::-webkit-scrollbar { display: none; }
+@media (max-width: 640px) { .qs-bar-strip { max-width: calc(100% - 120px); } .qs-bar-dash { padding: 6px 10px; } }
 .qs-trigger-label { white-space: nowrap; }
 .qs-caret { flex-shrink: 0; transition: transform .18s ease; margin-top: 1px; }
 .quick-switch.open .qs-caret { transform: rotate(180deg); }
