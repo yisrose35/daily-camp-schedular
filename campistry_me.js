@@ -3439,16 +3439,18 @@ function mergeCampers(keyA,keyB){
     if(curPage==='camperdetail'&&_camperDetailName===keyB)nav('campers');else render(curPage);
     toast(_lbl(keyB)+' merged into '+_lbl(keyA));
 }
-function openMergeCampersTool(){
+function openMergeCampersTool(preKeep,preDrop){
     var keys=Object.keys(roster).sort(function(x,y){return _lbl(x).localeCompare(_lbl(y))});
     if(keys.length<2){toast('Need at least two campers to merge','error');return}
+    var keepSel=(preKeep&&roster[preKeep])?preKeep:keys[0];
+    var dropSel=(preDrop&&roster[preDrop]&&preDrop!==keepSel)?preDrop:(keys.filter(function(k){return k!==keepSel})[0]||keys[1]);
     var opts=function(sel){return keys.map(function(k){return '<option value="'+esc(k)+'"'+(k===sel?' selected':'')+'>'+esc(_lbl(k))+'</option>'}).join('')};
     var body=''
         +'<p style="font-size:.85rem;color:var(--s600);margin:0 0 12px">Combine two duplicate camper records into one. The camper you <strong>keep</strong> stays; the <strong>duplicate</strong> is removed and its family, bunk, enrollments, billing and history move onto the kept record.</p>'
         +'<label style="font-size:.75rem;font-weight:600;color:var(--s600)">Keep this camper</label>'
-        +'<select id="mcKeep" class="me-input" style="width:100%;margin:4px 0 12px;box-sizing:border-box">'+opts(keys[0])+'</select>'
+        +'<select id="mcKeep" class="me-input" style="width:100%;margin:4px 0 12px;box-sizing:border-box">'+opts(keepSel)+'</select>'
         +'<label style="font-size:.75rem;font-weight:600;color:var(--s600)">Merge &amp; remove this duplicate</label>'
-        +'<select id="mcDrop" class="me-input" style="width:100%;margin:4px 0 4px;box-sizing:border-box">'+opts(keys[1])+'</select>'
+        +'<select id="mcDrop" class="me-input" style="width:100%;margin:4px 0 4px;box-sizing:border-box">'+opts(dropSel)+'</select>'
         +'<p style="font-size:.72rem;color:var(--s400);margin-top:10px">Blank fields on the kept camper are filled in from the duplicate; fields it already has are left as-is. This cannot be undone. Health documents and photos uploaded under the duplicate should be reviewed on the kept camper afterward.</p>';
     showModal('Merge Campers',body,function(){
         var a=document.getElementById('mcKeep').value, b=document.getElementById('mcDrop').value;
@@ -3456,6 +3458,58 @@ function openMergeCampersTool(){
         mergeCampers(a,b);
     },{maxWidth:480});
     var sb=document.getElementById('dynModalSave'); if(sb)sb.textContent='Merge';
+}
+// Family key that lists this camper, or '' — used by duplicate detection.
+function _famKeyOfCamper(name){
+    var hit='';
+    Object.keys(families).some(function(fk){
+        var f=families[fk];
+        if(f&&Array.isArray(f.camperIds)&&f.camperIds.indexOf(name)>=0){hit=fk;return true;}
+        return false;
+    });
+    return hit;
+}
+// Silent duplicate detection. Two roster records are a likely duplicate only
+// when they share the SAME display name AND corroborating evidence they're the
+// same child — the same family, the same date of birth, or the same camper id.
+// Name alone is not enough: this app deliberately supports two DIFFERENT campers
+// with the same name (keyed "Name #id"), so those must NOT be flagged. Returns
+// an array of [keyA,keyB] pairs. High precision by design; runs automatically,
+// no button.
+function _detectDuplicateCampers(){
+    var keys=Object.keys(roster);
+    var byName={};
+    keys.forEach(function(k){ var nm=_lbl(k).trim().toLowerCase(); if(!nm)return; (byName[nm]=byName[nm]||[]).push(k); });
+    var pairs=[], seen={};
+    Object.keys(byName).forEach(function(nm){
+        var grp=byName[nm]; if(grp.length<2)return;
+        for(var i=0;i<grp.length;i++){
+            for(var j=i+1;j<grp.length;j++){
+                var a=roster[grp[i]]||{}, b=roster[grp[j]]||{};
+                var sameFam=(function(){var fa=_famKeyOfCamper(grp[i]),fb=_famKeyOfCamper(grp[j]);return fa&&fb&&fa===fb;})();
+                var sameDob=a.dob&&b.dob&&String(a.dob).trim()===String(b.dob).trim();
+                var sameId=a.camperId&&b.camperId&&normalizePersonId(a.camperId)===normalizePersonId(b.camperId);
+                if(sameFam||sameDob||sameId){
+                    var sig=grp[i]+'|'+grp[j];
+                    if(!seen[sig]){seen[sig]=1;pairs.push([grp[i],grp[j]]);}
+                }
+            }
+        }
+    });
+    return pairs;
+}
+// A quiet, dismissible warning banner for the Roster when likely duplicates are
+// found. Clicking it opens the merge tool pre-filled with the first pair — the
+// only entry point to merging, so there's no standing "Merge" button.
+function _dupCamperBannerHtml(){
+    var pairs=_detectDuplicateCampers();
+    if(!pairs.length)return '';
+    var first=pairs[0];
+    var names=pairs.slice(0,3).map(function(p){return esc(_lbl(p[0]))}).join(', ');
+    return '<div style="background:#FFFBEB;border:1px solid #FDE68A;padding:10px 13px;border-radius:var(--r);margin-bottom:12px;font-size:.85rem;color:#92400E;cursor:pointer;display:flex;gap:10px;align-items:center;justify-content:space-between;flex-wrap:wrap" '
+        +'onclick="CampistryMe.openMergeCampersTool(\''+je(first[0])+'\',\''+je(first[1])+'\')">'
+        +'<span>⚠ <strong>'+pairs.length+'</strong> possible duplicate camper'+(pairs.length===1?'':'s')+' — '+names+(pairs.length>3?'…':'')+' look like the same child (same name and family, birth date, or ID).</span>'
+        +'<span style="font-weight:700;white-space:nowrap">Review &amp; merge &rarr;</span></div>';
 }
 
 // Guided side-by-side merge tool — an on-demand entry point (Billing's
@@ -4388,7 +4442,10 @@ function renderCampers(filter){
     // staged an application). No "+ Add Camper" button here anymore.
     var _sliceLabel=(showUnenrolled||_whenNow==='all')?''
         :(_whenNow==='today'?' in camp today':' on '+_whenNow.replace(/^session:/,''));
-    var h='<div class="sec-hd"><div><h2 class="sec-title">Roster</h2><p class="sec-desc">'+enrolledEntries.length+' camper'+(enrolledEntries.length!==1?'s':'')+_sliceLabel+(canStaff?' · '+allStaffRows.length+' staff':'')+(unenrolledEntries.length?' · '+unenrolledEntries.length+' unenrolled':'')+'</p></div><div class="sec-actions"><button class="me-btn me-btn--ghost me-btn--sm" onclick="CampistryMe.manageCustomFields()" title="Define custom fields">⚙ Custom Fields</button><button class="me-btn me-btn--sec me-btn--sm" onclick="CampistryMe.downloadTemplate()">Template</button><button class="me-btn me-btn--sec me-btn--sm" onclick="CampistryMe.openCsv()">Import</button><button class="me-btn me-btn--sec me-btn--sm" onclick="CampistryMe.openMergeCampersTool()" title="Merge two duplicate camper records">Merge</button></div></div>';
+    var h='<div class="sec-hd"><div><h2 class="sec-title">Roster</h2><p class="sec-desc">'+enrolledEntries.length+' camper'+(enrolledEntries.length!==1?'s':'')+_sliceLabel+(canStaff?' · '+allStaffRows.length+' staff':'')+(unenrolledEntries.length?' · '+unenrolledEntries.length+' unenrolled':'')+'</p></div><div class="sec-actions"><button class="me-btn me-btn--ghost me-btn--sm" onclick="CampistryMe.manageCustomFields()" title="Define custom fields">⚙ Custom Fields</button><button class="me-btn me-btn--sec me-btn--sm" onclick="CampistryMe.downloadTemplate()">Template</button><button class="me-btn me-btn--sec me-btn--sm" onclick="CampistryMe.openCsv()">Import</button></div></div>';
+    // Silent duplicate detection: a quiet warning banner appears here only when
+    // likely-duplicate camper records are found (no button triggers it).
+    h+=_dupCamperBannerHtml();
     h+=_setupChecklistHtml();
 
     var unplaced=(canStaff&&!showUnenrolled)?hiredStaff().filter(function(a){return !String(a.email||'').trim()||!bunksForStaffEmail(a.email).length;}):[];
