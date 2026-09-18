@@ -1,0 +1,431 @@
+// node --test tests/session_scope_wiring.test.js
+//
+// campistry_session_scope.js is proved by tests/session_scope.test.js. This file
+// proves the master key actually turns something — that the pin is read and written,
+// that presence follows it (which is what carries the scope to every list in the app
+// without touching those pages), that the bar is on the pages it should be on, and
+// that it is deliberately NOT on the two where "now" is the only correct answer.
+//
+// The runtime helpers run for real in a vm. The rest is asserted against the source,
+// anchored so that `if(false)` cannot satisfy it.
+
+const test = require('node:test');
+const assert = require('node:assert');
+const fs = require('node:fs');
+const path = require('node:path');
+const vm = require('node:vm');
+
+const ROOT = path.join(__dirname, '..');
+const read = p => fs.readFileSync(path.join(ROOT, p), 'utf8');
+const HOOKS = read('integration_hooks.js');
+const PRESENCE = read('campistry_presence.js');
+const BAR = read('campistry_session_bar.js');
+const DASH = read('dashboard.js');
+const DASH_HTML = read('dashboard.html');
+const ME = read('campistry_me.js');
+const S = require(path.join(ROOT, 'campistry_session_scope.js'));
+const W = require(path.join(ROOT, 'campistry_enrollment_window.js'));
+
+S.useWindowRule(W);
+
+const H1 = { name: '1st Half', startDate: '2026-06-28', endDate: '2026-07-19' };
+const H2 = { name: '2nd Half', startDate: '2026-07-20', endDate: '2026-08-09' };
+
+// ── the runtime resolver, run for real ────────────────────────────────────
+
+/**
+ * The block of integration_hooks.js that owns the pin, the peek and the memo,
+ * executed against a fake window and a fake sessionStorage.
+ */
+function loadRuntime(opts) {
+    opts = opts || {};
+    const from = HOOKS.indexOf('    var _scopeCache = null, _scopeAt = 0');
+    const to = HOOKS.indexOf('    window.loadGlobalSettings = function(key) {', from);
+    assert.ok(from > 0, 'cannot find the scope runtime — re-anchor this test');
+    assert.ok(to > from);
+
+    const store = Object.assign({}, opts.sessionStorage || {});
+    const settings = {
+        campistryMe: { sessions: opts.sessions || [H1, H2] }
+    };
+    if (opts.pin !== undefined) settings.campSession = opts.pin;
+
+    const win = {};
+    const box = {
+        console,
+        window: win,
+        sessionStorage: {
+            getItem: k => (k in store ? store[k] : null),
+            setItem: (k, v) => { store[k] = String(v); },
+            removeItem: k => { delete store[k]; }
+        },
+        getLocalSettings: () => settings,
+        log: () => {},
+        CustomEvent: function (name, init) { this.type = name; this.detail = init && init.detail; },
+        // A stand-in for the workspace global defined earlier in the same file.
+        __ws: opts.workspaceSession || ''
+    };
+    box.window = box;                    // the file says `window.x = ...` on itself
+    box.CampistrySessionScope = opts.noRule ? undefined : S;
+    box.campistryWorkspaceSession = () => box.__ws;
+    box.campistryWorkspace = () => (box.__ws ? 'ws_plan' : 'live');
+    box.dispatchEvent = () => {};
+    box.addEventListener = () => {};
+    box.CampistryPresence = { refresh: () => { box.__presenceRefreshed = true; } };
+
+    vm.runInContext(HOOKS.slice(from, to), vm.createContext(box));
+    box.__store = store;
+    return box;
+}
+
+test('with nothing stored, the runtime follows the calendar', () => {
+    const w = loadRuntime({});
+    const sc = w.campistrySessionScope({ today: '2026-08-01' });
+    assert.strictEqual(sc.session, '2nd Half');
+    assert.strictEqual(sc.source, 'calendar');
+});
+
+test('the pin is read from campSession, as an object OR a bare string', () => {
+    // It is written as {session}, but a hand-edited row or an older shape should not
+    // silently mean "no pin" — that would look exactly like the pin being ignored.
+    assert.strictEqual(loadRuntime({ pin: { session: '2nd Half' } })
+        .campistrySessionScope({ today: '2026-07-01' }).source, 'pin');
+    assert.strictEqual(loadRuntime({ pin: '2nd Half' })
+        .campistrySessionScope({ today: '2026-07-01' }).source, 'pin');
+    assert.strictEqual(loadRuntime({ pin: { session: '' } })
+        .campistrySessionScope({ today: '2026-07-01' }).source, 'calendar');
+});
+
+test('the peek is read from sessionStorage at load, so a reload keeps it', () => {
+    // Per-tab, not per-page: navigating between Me and Live must not silently drop
+    // what you are looking at.
+    const w = loadRuntime({ sessionStorage: { campistry_peek_session: '1st Half' } });
+    const sc = w.campistrySessionScope({ today: '2026-08-01' });
+    assert.strictEqual(sc.source, 'peek');
+    assert.strictEqual(sc.session, '1st Half');
+});
+
+test('setting a peek writes sessionStorage, and clearing it removes the key', () => {
+    // Removed rather than set to '': a lingering empty key would survive as a
+    // second, invisible piece of state nobody looks at.
+    const w = loadRuntime({});
+    w.campistrySetPeekSession('1st Half');
+    assert.strictEqual(w.__store.campistry_peek_session, '1st Half');
+    w.campistrySetPeekSession('');
+    assert.ok(!('campistry_peek_session' in w.__store));
+});
+
+test('setting a peek tells presence, which memoizes its own date', () => {
+    // Without this the first render after a peek shows the previous session's
+    // campers — the exact bug the whole feature exists to prevent.
+    const w = loadRuntime({});
+    w.campistrySetPeekSession('1st Half');
+    assert.strictEqual(w.__presenceRefreshed, true);
+});
+
+test('a planning sandbox still wins over the pin at runtime', () => {
+    const w = loadRuntime({ pin: { session: '1st Half' }, workspaceSession: '2nd Half' });
+    const sc = w.campistrySessionScope({ today: '2026-07-01' });
+    assert.strictEqual(sc.source, 'workspace');
+    assert.strictEqual(sc.session, '2nd Half');
+});
+
+test('the answer is memoized, and the refresh throws the memo away', () => {
+    // Presence asks this once per camper inside page loops; resolving walks the
+    // session list. But a memo nobody can clear is a stale answer forever.
+    const w = loadRuntime({});
+    const a = w.campistrySessionScope();
+    const b = w.campistrySessionScope();
+    assert.strictEqual(a, b, 'the same object should come back');
+    const c = w.campistrySessionScopeRefresh();
+    assert.notStrictEqual(a, c, 'the refresh must recompute');
+});
+
+test('passing an explicit today bypasses the memo', () => {
+    // Otherwise a caller asking about a specific date would get whatever was cached
+    // for a different one.
+    const w = loadRuntime({});
+    w.campistrySessionScope();
+    assert.strictEqual(w.campistrySessionScope({ today: '2026-07-01' }).session, '1st Half');
+    assert.strictEqual(w.campistrySessionScope({ today: '2026-08-01' }).session, '2nd Half');
+});
+
+test('without the rule module it answers "no session, as of today" and says so', () => {
+    // A page that does not load the rule must lose the feature and nothing else.
+    const w = loadRuntime({ noRule: true });
+    const sc = w.campistrySessionScope();
+    assert.strictEqual(sc.session, '');
+    assert.strictEqual(sc.source, 'none');
+    assert.strictEqual(sc.ruleMissing, true, 'callers need to tell this apart from a real answer');
+    assert.ok(/^\d{4}-\d{2}-\d{2}$/.test(sc.on), 'the date must still be usable');
+});
+
+test('the short helpers agree with the full answer', () => {
+    const w = loadRuntime({ pin: { session: '2nd Half' } });
+    const sc = w.campistrySessionScope();
+    assert.strictEqual(w.campistrySession(), sc.session);
+    assert.strictEqual(w.campistrySessionAsOf(), sc.on);
+});
+
+test('a broken settings blob resolves to unscoped rather than throwing', () => {
+    const from = HOOKS.indexOf('    var _scopeCache = null, _scopeAt = 0');
+    const to = HOOKS.indexOf('    window.loadGlobalSettings = function(key) {', from);
+    const box = { console, log: () => {}, CampistrySessionScope: S };
+    box.window = box;
+    box.sessionStorage = { getItem: () => { throw new Error('blocked'); },
+                           setItem: () => {}, removeItem: () => {} };
+    box.getLocalSettings = () => { throw new Error('not hydrated'); };
+    box.campistryWorkspaceSession = () => '';
+    vm.runInContext(HOOKS.slice(from, to), vm.createContext(box));
+    const sc = box.campistrySessionScope({ today: '2026-08-01' });
+    assert.strictEqual(sc.source, 'none');
+    assert.ok(/^\d{4}-\d{2}-\d{2}$/.test(sc.on));
+});
+
+// ── presence follows it, which carries the scope everywhere ───────────────
+
+test('presence asks the master key FIRST, before its own sandbox logic', () => {
+    // This is the multiplier. Every list in the app already goes through isHere() /
+    // filter() / asOf(), so routing the date here scopes the canteen, Health, Go,
+    // Live and the print centre without editing any of them.
+    const a = PRESENCE.indexOf('function _asOfCompute()');
+    const body = PRESENCE.slice(a, PRESENCE.indexOf('P.asOf =', a));
+    const scope = body.indexOf("typeof root.campistrySessionScope === 'function'");
+    const sandbox = body.indexOf('root.campistryWorkspace === ');
+    assert.ok(scope > 0, 'presence does not consult the master key at all');
+    assert.ok(sandbox > scope, 'the sandbox fallback must come AFTER the master key');
+    assert.match(body, /out\.on = sc\.on \|\| out\.on;/,
+        'the resolved date is not used, so nothing would actually move');
+});
+
+test('presence records WHICH source moved the date', () => {
+    // A caller logging this wants to know whether the date moved because of a plan, a
+    // pin, a peek or the calendar — four different conversations.
+    const a = PRESENCE.indexOf('function _asOfCompute()');
+    const body = PRESENCE.slice(a, PRESENCE.indexOf('P.asOf =', a));
+    assert.match(body, /out\.reason = 'scope_' \+ \(sc\.source \|\| 'none'\)/);
+});
+
+test('presence keeps the sandbox path for a page without the scope', () => {
+    const a = PRESENCE.indexOf('function _asOfCompute()');
+    const body = PRESENCE.slice(a, PRESENCE.indexOf('P.asOf =', a));
+    assert.match(body, /out\.reason = 'sandbox_session';/,
+        'the old path is gone — a page without the scope would lose sandbox scoping');
+    assert.match(body, /if \(sc && !sc\.ruleMissing\)/,
+        'a ruleMissing answer must fall through, not be taken as the truth');
+});
+
+test('presence still exposes the REAL today, unshifted', () => {
+    // A till and a counsellor's phone need "now" whatever the office is planning.
+    assert.match(PRESENCE, /P\.today = function \(\) \{/);
+    const a = PRESENCE.indexOf('P.today = function ()');
+    const body = PRESENCE.slice(a, a + 300);
+    assert.ok(!/campistrySessionScope|asOf/.test(body),
+        'today() must not be routed through the scope');
+});
+
+// ── the dashboard sets it ────────────────────────────────────────────────
+
+test('the dashboard has the master-key card, and it is the first one', () => {
+    const card = DASH_HTML.indexOf('id="currentSessionCard"');
+    const dates = DASH_HTML.indexOf('id="campDatesForm"');
+    assert.ok(card > 0, 'there is no master-key card');
+    assert.ok(card < dates, 'it belongs above the dates it is derived from');
+    ['currentSessionPick', 'currentSessionExplain', 'currentSessionActions',
+     'currentSessionStatus', 'saveCurrentSessionBtn'].forEach(id => {
+        assert.ok(DASH_HTML.indexOf('id="' + id + '"') > 0, id + ' is missing');
+    });
+    assert.match(DASH_HTML, /onclick="saveCurrentSession\(\)"/);
+});
+
+test('saving "Follow the calendar" stores NOTHING, not today’s answer', () => {
+    // Writing the derived answer into the pin would freeze it, which is the entire
+    // failure this design exists to avoid — the same reasoning that deleted
+    // migrations 035/039's stamped date windows.
+    const a = DASH.indexOf('window.saveCurrentSession = async function');
+    const body = DASH.slice(a, DASH.indexOf('window.clearCampDates', a));
+    assert.match(body, /var value = \(chosen === 'auto'\) \? \{ session: '' \} : \{ session: chosen \};/,
+        'auto must clear the pin, never write a session name into it');
+});
+
+test('the pin is owner-only, at the writer and not just in the UI', () => {
+    // This moves what every person in the camp sees, including the front desk
+    // checking children in. A disabled dropdown is not a permission.
+    const a = DASH.indexOf('window.saveCurrentSession = async function');
+    const body = DASH.slice(a, DASH.indexOf('window.clearCampDates', a));
+    assert.match(body, /if \(isTeamMember\) \{/);
+    assert.match(body, /Only camp owners can change the current session/);
+    const guard = body.indexOf('if (isTeamMember)');
+    const write = body.indexOf('camp_state_kv');
+    assert.ok(guard < write, 'the guard must come before the write');
+});
+
+test('the pin goes to camp_state_kv AND the local cache', () => {
+    // Cloud alone would leave this page and every other tab describing the old
+    // answer until the next hydration.
+    const a = DASH.indexOf('window.saveCurrentSession = async function');
+    const body = DASH.slice(a, DASH.indexOf('window.clearCampDates', a));
+    assert.match(body, /key: 'campSession', value: value/);
+    assert.match(body, /saveGlobalSettings\('campSession', value\)/);
+    assert.match(body, /campistrySessionScopeRefresh\(\)/, 'the memo would keep the old answer');
+    assert.match(body, /CampistryPresence\.refresh\(\)/, 'presence memoizes its own date');
+});
+
+test('the card is drawn from the dates it derives from', () => {
+    const a = DASH.indexOf('async function loadCampDates(');
+    const body = DASH.slice(a, DASH.indexOf('function buildWeekMap(', a));
+    assert.match(body, /\n        try \{ window\.renderCurrentSession\(\); \} catch \(_e\) \{\}/,
+        'the card would keep naming whichever session used to cover today');
+});
+
+test('a camp with fewer than two sessions is told in words, not given an empty picker', () => {
+    const a = DASH.indexOf('window.renderCurrentSession = function');
+    const body = DASH.slice(a, DASH.indexOf('window.saveCurrentSession', a));
+    assert.match(body, /if \(named\.length < 2\) \{/);
+    assert.match(body, /there is nothing to choose/);
+    assert.ok(!/options/.test(body.slice(body.indexOf('if (named.length < 2)'),
+        body.indexOf('if (pick) pick.style.display = \'\';'))),
+        'no picker is built for a camp with nothing to pick');
+});
+
+test('the card hides itself when the rule did not load', () => {
+    // Rather than offering a control that would not take effect anywhere.
+    const a = DASH.indexOf('window.renderCurrentSession = function');
+    const body = DASH.slice(a, DASH.indexOf('window.saveCurrentSession', a));
+    assert.match(body, /if \(!R\) \{[\s\S]{0,400}card\.style\.display = 'none';/);
+});
+
+// ── the bar makes it visible ──────────────────────────────────────────────
+
+test('the bar renders nothing inside a planning sandbox', () => {
+    // The amber planning bar already says which session that plan is for, and two
+    // bars saying the same thing in different colours is how a person learns to read
+    // neither.
+    assert.match(BAR, /if \(sc\.source === 'workspace'\) return drop\(\);/);
+});
+
+test('the bar renders nothing when there is no choice to make', () => {
+    assert.match(BAR, /if \(!hasChoice\(list\) && !sc\.pinDropped\) return drop\(\);/,
+        'a camp with one session would get a picker with one option in it');
+});
+
+test('a dropped pin is reported even on a camp with one session', () => {
+    // Somebody pinned something and needs to know it stopped applying, whatever the
+    // session list looks like now.
+    const a = BAR.indexOf('if (!hasChoice(list)');
+    assert.match(BAR.slice(a, a + 120), /!sc\.pinDropped/);
+});
+
+test('the ordinary case is quiet — no colour, no border', () => {
+    // A page that shouts every day teaches people to stop reading it, which is what
+    // would make it useless on the day it matters.
+    const a = BAR.indexOf('var skin = {');
+    const body = BAR.slice(a, a + 400);
+    assert.match(body, /'':\s*\{ bg: 'transparent', bd: 'transparent'/);
+    assert.match(BAR, /var loud = sc\.pinDropped \? 'drop' : \(sc\.source === 'peek' \? 'peek'/);
+});
+
+test('a peek carries the way back, labelled with where it goes', () => {
+    // "Back to 1st Half" when 1st Half is what you are already looking at is the kind
+    // of button nobody trusts twice — so it uses campSession, not session.
+    assert.match(BAR, /Back to '\s*\n?\s*\+ esc\(sc\.campSession \|\| 'the camp'\)/);
+    assert.match(BAR, /if \(back\) back\.onclick = function \(\) \{ U\.peek\(''\); \};/);
+});
+
+test('changing the session reloads, because there is no registry of what to redraw', () => {
+    const a = BAR.indexOf('U.peek = function');
+    const body = BAR.slice(a, a + 700);
+    assert.match(body, /campistrySetPeekSession\(after\)/);
+    assert.match(body, /root\.location\.reload\(\)/);
+    assert.match(body, /if \(before === after\) return;/,
+        'picking the session you are already on must not reload the page');
+});
+
+test('the bar re-renders on events that actually exist', () => {
+    // A listener for an event nothing dispatches is dead code that looks like
+    // coverage. These three are all dispatched by integration_hooks.js.
+    ['campistry-session-scope', 'campistry-cloud-hydrated', 'campistry-remote-change']
+        .forEach(ev => {
+            assert.ok(BAR.indexOf("'" + ev + "'") > 0, ev + ' is not listened for');
+            assert.ok(HOOKS.indexOf("'" + ev + "'") > 0,
+                ev + ' is listened for but never dispatched');
+        });
+});
+
+test('a remote change to an unrelated key does not re-render', () => {
+    const a = BAR.indexOf("'campistry-remote-change'");
+    const body = BAR.slice(a, a + 300);
+    assert.match(body, /k === 'campSession' \|\| k === 'campistryMe' \|\| k === 'campDates'/);
+});
+
+// ── which pages get it ───────────────────────────────────────────────────
+
+const OFFICE = ['campistry_live.html', 'flow.html', 'campistry_snacks.html',
+                'campistry_me.html', 'campistry_health.html', 'campistry_go.html',
+                'dashboard.html'];
+// A till and a counsellor's phone answer "who is in front of me RIGHT NOW". That is
+// not the same question as "what session is the office working on", and following a
+// planning pin there would gate a real child's snack on a roster for next month.
+const NOW_ONLY = ['campistry_snacks_pos.html', 'campistry_lite.html'];
+
+test('every office page loads the rule and the bar, rule first', () => {
+    OFFICE.forEach(p => {
+        const h = read(p);
+        const rule = h.indexOf('src="campistry_session_scope.js');
+        const bar = h.indexOf('src="campistry_session_bar.js');
+        assert.ok(rule > 0, p + ' does not load the rule');
+        assert.ok(bar > rule, p + ' loads the bar before the rule');
+        assert.match(h.slice(rule, rule + 60), /\?v=/, p + ' needs a cache-bust');
+        assert.match(h.slice(bar, bar + 60), /\?v=/, p + ' needs a cache-bust');
+    });
+});
+
+test('the rule loads after the window rule it delegates to', () => {
+    OFFICE.forEach(p => {
+        const h = read(p);
+        const win = h.indexOf('src="campistry_enrollment_window.js');
+        const rule = h.indexOf('src="campistry_session_scope.js');
+        assert.ok(win > 0, p + ' does not load the window rule');
+        assert.ok(win < rule, p + ': the window rule must load first');
+    });
+});
+
+test('the till and the phone are deliberately left on "now"', () => {
+    NOW_ONLY.forEach(p => {
+        const h = read(p);
+        assert.ok(h.indexOf('campistry_session_bar.js') < 0,
+            p + ' should not carry the session bar — it answers for right now');
+        assert.ok(h.indexOf('campistry_session_scope.js') < 0,
+            p + ' should not follow a planning pin');
+    });
+});
+
+// ── the Me roster defaults from it ────────────────────────────────────────
+
+test('the roster opens on whatever session the program is showing', () => {
+    // This was the one place with a session picker, and it used to consult only a
+    // sandbox — so a camp pinned to 2nd Half saw next half everywhere and today here.
+    const a = ME.indexOf('function _rosterWhenDefault(){');
+    const body = ME.slice(a, ME.indexOf('function _paginate(', a));
+    assert.match(body, /window\.campistrySessionScope==='function'/);
+    assert.match(body, /return 'session:'\+sc\.session;/);
+    const scope = body.indexOf('campistrySessionScope');
+    const sandbox = body.indexOf('asOfInfo');
+    assert.ok(sandbox > scope, 'the sandbox read must be the fallback, not the first answer');
+});
+
+test('an unscoped camp keeps the roster default it always had', () => {
+    // A camp between halves must not be shown an empty roster.
+    const a = ME.indexOf('function _rosterWhenDefault(){');
+    const body = ME.slice(a, ME.indexOf('function _paginate(', a));
+    assert.match(body, /sc\.source!=='none'/);
+});
+
+test('a person who touches the picker is still obeyed', () => {
+    const a = ME.indexOf('function _rosterWhenDefault(){');
+    const body = ME.slice(a, ME.indexOf('function _paginate(', a));
+    assert.match(body, /if\(_rosterWhenTouched\)return _rosterWhen;/,
+        'the default must never override an explicit choice');
+    assert.ok(body.indexOf('if(_rosterWhenTouched)') < body.indexOf('campistrySessionScope'),
+        'the touched check comes first');
+});
