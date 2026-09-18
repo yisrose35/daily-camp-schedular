@@ -146,10 +146,34 @@
         if(!(e.target.closest && e.target.closest('.qs-pop'))) closeAll();
     }
 
+    // Reveal the dropdown when the pointer is anywhere along the top strip of
+    // the screen — not only over the Menu button. A short dwell avoids opening
+    // on a quick pass; leaving both the top strip and the popover closes it.
+    // The header itself is never hidden (hamburger, search, date pickers stay
+    // on screen); only this dropdown appears/disappears.
+    var TOP_REVEAL_PX=64, _revealT=null, _hideT=null;
+    function _overSwitch(el){ return !!(el&&el.closest&&(el.closest('.qs-pop')||el.closest('.quick-switch'))); }
+    function onTopHover(e){
+        var container=document.querySelector('.quick-switch'); if(!container) return;
+        var active=(e.clientY<=TOP_REVEAL_PX)||_overSwitch(e.target);
+        if(active){
+            if(_hideT){ clearTimeout(_hideT); _hideT=null; }
+            if(!container.classList.contains('open')&&!_revealT){
+                _revealT=setTimeout(function(){ _revealT=null; openPop(container); }, 300);
+            }
+        }else{
+            if(_revealT){ clearTimeout(_revealT); _revealT=null; }
+            if(container.classList.contains('open')&&!_hideT){
+                _hideT=setTimeout(function(){ _hideT=null; closeAll(); }, 260);
+            }
+        }
+    }
+
     var _wired=false;
     function wireGlobalHandlers(){
         if(_wired) return; _wired=true;
         document.addEventListener('click', onDocClick);
+        document.addEventListener('mousemove', onTopHover);
         document.addEventListener('keydown', function(e){
             if(e.key==='Escape'){ closeAll(); return; }
             // Ctrl+Shift+<key> jump (ignore when Alt/Meta also held). Works on
