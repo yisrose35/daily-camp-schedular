@@ -427,3 +427,70 @@ test('a page without the presence rule prints what it always printed', () => {
     assert.match(body, /if\(_W&&typeof _W\.filterNames==='function'\)\{/,
         'without the rule the sheet must fall back to the whole roster, not to nobody');
 });
+
+// ── a session out of its own dates is choosable, and said out loud ────────
+
+test('the runtime honours a pin to a session that is over', () => {
+    // The end-to-end shape of the case the first version broke: a camp in September
+    // tidying up 2nd Half. Run for real, through the settings blob, not asserted
+    // against the rule in isolation.
+    const w = loadRuntime({ pin: { session: '2nd Half' } });
+    const sc = w.campistrySessionScope({ today: '2026-09-30' });
+    assert.strictEqual(sc.source, 'pin');
+    assert.strictEqual(sc.session, '2nd Half');
+    assert.strictEqual(sc.pinDropped, false);
+    assert.strictEqual(sc.outOfSeason, true);
+    assert.strictEqual(sc.ended, true);
+    // And the date that every list keys off is that session's, not today's.
+    assert.strictEqual(w.campistrySessionAsOf(), sc.on);
+    assert.strictEqual(sc.on, '2026-07-20');
+});
+
+test('the runtime honours a pin before the summer starts', () => {
+    const w = loadRuntime({ pin: { session: '1st Half' } });
+    const sc = w.campistrySessionScope({ today: '2026-05-01' });
+    assert.strictEqual(sc.source, 'pin');
+    assert.strictEqual(sc.on, '2026-06-28');
+    assert.strictEqual(sc.ended, false);
+});
+
+test('nothing in the dashboard picker marks a session as a mistake', () => {
+    // An option tagged "(ended)" is an option nobody picks, and picking a finished
+    // session is the whole point of being able to tidy one up.
+    const a = DASH.indexOf('window.renderCurrentSession = function');
+    const body = DASH.slice(a, DASH.indexOf('window.saveCurrentSession', a));
+    assert.ok(!/\(ended\)/.test(body), 'the discouraging tag is back');
+    assert.ok(!/o\.expired/.test(body), 'the picker still reads a field the rule dropped');
+    // It shows the dates instead, which is information.
+    assert.match(body, /_dashFmtShort\(o\.from\)/);
+    assert.match(body, /o\.to \? ' to ' \+ _dashFmtShort\(o\.to\)/);
+});
+
+test('the dashboard states it when the shown session is not today’s', () => {
+    const a = DASH.indexOf('window.renderCurrentSession = function');
+    const body = DASH.slice(a, DASH.indexOf('window.saveCurrentSession', a));
+    assert.match(body, /R\.outOfSeasonNotice\(sc, _dashFmtShort\)/,
+        'nothing tells the office it is looking at another session, or the notice ' +
+        'prints raw ISO dates beside a dropdown that does not');
+    // Worded by the rule, not re-worded here — only it knows which way round it is.
+    assert.ok(!/first day/.test(body),
+        'the hand-written version is back, and it only covered the forward case');
+});
+
+test('the option dates are formatted from LOCAL parts', () => {
+    // toISOString rolls the day back one in every positive-UTC-offset timezone, which
+    // is CB-97 in this same file. A dropdown that says "Jun 24 to Jul 24" for a
+    // Jun 25–Jul 25 session is a bug report waiting to happen.
+    const a = DASH.indexOf('function _dashFmtShort(');
+    const body = DASH.slice(a, a + 420);
+    assert.match(body, /new Date\(ymd \+ 'T00:00:00'\)/);
+    assert.ok(!/toISOString/.test(body));
+    assert.match(body, /month: 'short', day: 'numeric'/);
+});
+
+test('nothing anywhere still calls the removed expiry', () => {
+    ['campistry_session_scope.js', 'integration_hooks.js', 'dashboard.js',
+     'campistry_presence.js', 'campistry_me.js'].forEach(f => {
+        assert.ok(read(f).indexOf('pinExpired') < 0, f + ' still refers to pinExpired');
+    });
+});

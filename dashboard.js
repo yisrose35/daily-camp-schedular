@@ -2152,6 +2152,15 @@
     // the whole failure this avoids.
     // ═══════════════════════════════════════════════════════════════
 
+    /** '2026-07-20' -> 'Jul 20'. Built from LOCAL parts, never toISOString, which
+     *  rolls the day back one in every positive-UTC-offset timezone (see CB-97). */
+    function _dashFmtShort(ymd) {
+        if (!/^\d{4}-\d{2}-\d{2}$/.test(String(ymd || ''))) return String(ymd || '');
+        var d = new Date(ymd + 'T00:00:00');
+        if (isNaN(d.getTime())) return String(ymd);
+        return d.toLocaleDateString('en-US', { month: 'short', day: 'numeric' });
+    }
+
     function _scopeRuleD() { return window.CampistrySessionScope || null; }
 
     function _dashScope() {
@@ -2212,11 +2221,18 @@
         if (pick) {
             var cur = (sc && sc.pin && !sc.pinDropped) ? sc.pin : 'auto';
             pick.innerHTML = opts.map(function (o) {
+                // The dates, not a warning. Picking a session that is over is how you
+                // tidy it up after the summer, and picking one that has not started is
+                // how you get set up before it \u2014 an option tagged as a mistake is
+                // an option nobody picks.
+                var when = '';
+                if (!o.auto && o.from) {
+                    when = ' \u2014 ' + _dashFmtShort(o.from)
+                         + (o.to ? ' to ' + _dashFmtShort(o.to) : '');
+                }
                 return '<option value="' + _dashEsc(o.value) + '"'
-                    + (o.value === cur ? ' selected' : '') + '>' + _dashEsc(o.label)
-                    // Said on the option itself: the one thing somebody wants to know
-                    // before pinning backwards is that it will not stick.
-                    + (o.expired ? ' (ended)' : '') + '</option>';
+                    + (o.value === cur ? ' selected' : '') + '>'
+                    + _dashEsc(o.label + when) + '</option>';
             }).join('');
             pick.disabled = !!isTeamMember;
         }
@@ -2234,11 +2250,12 @@
                        : (sc.source === 'calendar' ? ' because that is what the calendar says'
                           : ''))
                     + '.');
-                if (!sc.coversToday && sc.from) {
-                    bits.push('Rosters are read as of <strong>' + _dashEsc(sc.from)
-                        + '</strong>, that session’s first day — so you see the '
-                        + 'children who will be here then, not the ones here today.');
-                }
+                // Said plainly rather than left to be inferred from a roster that
+                // looks wrong. The rule words it, because "has not started" and "is
+                // over" lead to completely different next actions and only it knows
+                // which way round this is.
+                var oos = R.outOfSeasonNotice(sc, _dashFmtShort);
+                if (oos) bits.push(_dashEsc(oos));
             } else {
                 bits.push('No session covers today, so every list shows everyone.');
             }

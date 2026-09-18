@@ -108,25 +108,95 @@ test('a changeover day with two dated sessions is unscoped, not guessed', () => 
     assert.strictEqual(r.session, '');
 });
 
-// ── the pin snapping back ────────────────────────────────────────────────
+// ── a pin is honoured whatever the dates say ─────────────────────────────
 
-test('a pin to an ENDED session stops applying', () => {
-    // The Tuesday in August: somebody pinned 1st Half in June, nobody remembers, and
-    // the front desk is checking children against a roster that ended weeks ago.
+test('a pin to a session that has ENDED still applies', () => {
+    // THE CASE THE FIRST VERSION BROKE. "We are finished with 1st Half, let us tidy it
+    // up" is ordinary work, and refusing it meant a camp in September could not scope
+    // to a finished session at all.
     const r = S.resolve({ sessions: BOTH, pin: '1st Half', today: '2026-07-25' });
-    assert.strictEqual(r.source, 'calendar', 'it must return to following the calendar');
+    assert.strictEqual(r.source, 'pin');
+    assert.strictEqual(r.session, '1st Half');
+    assert.strictEqual(r.pinDropped, false, 'a deliberate choice must not be overruled');
+    assert.strictEqual(r.outOfSeason, true, 'but it must be reported');
+    assert.strictEqual(r.ended, true);
+});
+
+test('a pin still applies after the whole summer is over', () => {
+    const r = S.resolve({ sessions: BOTH, pin: '2nd Half', today: '2026-09-30' });
+    assert.strictEqual(r.source, 'pin');
     assert.strictEqual(r.session, '2nd Half');
-    assert.strictEqual(r.pinDropped, true);
-    assert.strictEqual(r.droppedPin, '1st Half');
+    assert.strictEqual(r.on, '2026-07-20', 'the roster is read as of that session');
+    assert.strictEqual(r.ended, true);
 });
 
-test('the dropped pin is announced by name, not as "a session"', () => {
-    const r = S.resolve({ sessions: BOTH, pin: '1st Half', today: '2026-07-25' });
-    const msg = S.droppedNotice(r);
-    assert.match(msg, /pinned to 1st Half, which has ended/);
-    assert.match(msg, /back to following the calendar/);
-    assert.match(msg, /showing 2nd Half/);
+test('a pin BEFORE the summer applies too, which is how a camp gets set up', () => {
+    // Nothing covers today, so the calendar has no answer and every list would show
+    // everyone. This half always worked; it is asserted so it stays working.
+    const r = S.resolve({ sessions: BOTH, pin: '1st Half', today: '2026-05-01' });
+    assert.strictEqual(r.source, 'pin');
+    assert.strictEqual(r.on, '2026-06-28');
+    assert.strictEqual(r.outOfSeason, true);
+    assert.strictEqual(r.ended, false, 'not started is not the same as over');
 });
+
+test('the notice says WHICH WAY ROUND it is', () => {
+    // "2nd Half has not started" and "1st Half is over" lead to completely different
+    // next actions, and a notice that says only "out of season" helps with neither.
+    const ahead = S.resolve({ sessions: BOTH, pin: '2nd Half', today: '2026-07-01' });
+    assert.match(S.outOfSeasonNotice(ahead), /^2nd Half starts on 2026-07-20\./);
+    const over = S.resolve({ sessions: BOTH, pin: '1st Half', today: '2026-08-01' });
+    assert.match(S.outOfSeasonNotice(over), /^1st Half ended on 2026-07-19\./);
+    // And both say what it means for the lists.
+    [ahead, over].forEach(r => assert.match(S.outOfSeasonNotice(r),
+        /not the ones at camp today/));
+});
+
+test('a session that IS running gets no out-of-season notice', () => {
+    // Otherwise this becomes the banner everybody learns to ignore.
+    const r = S.resolve({ sessions: BOTH, pin: '2nd Half', today: '2026-08-01' });
+    assert.strictEqual(r.outOfSeason, false);
+    assert.strictEqual(r.ended, false);
+    assert.strictEqual(S.outOfSeasonNotice(r), '');
+    // Nor does the ordinary calendar answer.
+    assert.strictEqual(S.outOfSeasonNotice(
+        S.resolve({ sessions: BOTH, today: '2026-08-01' })), '');
+    assert.strictEqual(S.outOfSeasonNotice(null), '');
+});
+
+test('an undated session is never out of season and never ended', () => {
+    const und = { name: 'Summer' };
+    assert.strictEqual(S.hasEnded(und, '2030-01-01'), false);
+    assert.strictEqual(S.isCurrent(und, '2030-01-01'), true);
+    const r = S.resolve({ sessions: [und, H1], pin: 'Summer', today: '2030-01-01' });
+    assert.strictEqual(r.outOfSeason, false);
+    assert.strictEqual(S.outOfSeasonNotice(r), '');
+});
+
+test('hasEnded turns over the day AFTER the last day', () => {
+    assert.strictEqual(S.hasEnded(H1, '2026-07-19'), false, 'the last day is still in it');
+    assert.strictEqual(S.hasEnded(H1, '2026-07-20'), true);
+    assert.strictEqual(S.isCurrent(H1, '2026-07-19'), true);
+    assert.strictEqual(S.isCurrent(H1, '2026-07-20'), false);
+});
+
+test('every session is offered, in date order, with its dates and state', () => {
+    // Reported, not discouraged: an option tagged as a mistake is an option nobody
+    // picks, and picking a finished session is how you tidy it up.
+    const opts = S.optionsFor({ sessions: BOTH, today: '2026-07-25' });
+    assert.strictEqual(opts.map(o => o.value).join(','), 'auto,1st Half,2nd Half');
+    assert.strictEqual(opts[1].from, '2026-06-28');
+    assert.strictEqual(opts[1].to, '2026-07-19');
+    assert.strictEqual(opts[1].ended, true);
+    assert.strictEqual(opts[1].current, false);
+    assert.strictEqual(opts[2].ended, false);
+    assert.strictEqual(opts[2].current, true);
+    // No option carries anything that reads as a refusal.
+    opts.forEach(o => assert.strictEqual('expired' in o, false,
+        'nothing may mark an option as expired any more'));
+});
+
+// ── the pin dropping, which is now ONE case ──────────────────────────────
 
 test('a pin FORWARD is left alone — that is what the pin is for', () => {
     // An office in early July working on 2nd Half. Pinning forward is the legitimate
@@ -136,32 +206,22 @@ test('a pin FORWARD is left alone — that is what the pin is for', () => {
     assert.strictEqual(r.pinDropped, false);
 });
 
-test('a pin expires the day AFTER its session ends, not on the last day', () => {
-    assert.strictEqual(S.pinExpired(H1, '2026-07-19'), false, 'the last day is still in it');
-    assert.strictEqual(S.pinExpired(H1, '2026-07-20'), true);
-});
-
-test('a pin to an UNDATED session never expires', () => {
-    // Consistent with every other place in the app: an undated session covers
-    // everything, so there is no date on which it has ended.
-    const und = { name: 'Summer' };
-    assert.strictEqual(S.pinExpired(und, '2030-01-01'), false);
-    const r = S.resolve({ sessions: [und, H1], pin: 'Summer', today: '2030-01-01' });
-    assert.strictEqual(r.source, 'pin');
-    assert.strictEqual(r.pinDropped, false);
-});
-
 test('a pin to a session that was deleted or renamed is dropped and reported', () => {
+    // The ONLY case left. There is nothing to show, so falling back to the calendar is
+    // the only option — unlike an ended session, which still has a roster.
     const r = S.resolve({ sessions: BOTH, pin: 'Third Half', today: '2026-07-01' });
     assert.strictEqual(r.source, 'calendar');
     assert.strictEqual(r.pinDropped, true);
     assert.strictEqual(r.droppedPin, 'Third Half');
+    const msg = S.droppedNotice(r);
+    assert.match(msg, /pinned to Third Half, which no longer exists/);
+    assert.ok(!/has ended/.test(msg), 'an ended session is no longer why a pin drops');
 });
 
-test('a dropped pin with nothing to fall back to leaves the camp unscoped', () => {
-    const r = S.resolve({ sessions: BOTH, pin: '1st Half', today: '2026-09-30' });
+test('a dropped pin outside any season leaves the camp unscoped', () => {
+    const r = S.resolve({ sessions: BOTH, pin: 'Gone', today: '2026-09-30' });
     assert.strictEqual(r.pinDropped, true);
-    assert.strictEqual(r.source, 'none', 'the season is over — nothing is current');
+    assert.strictEqual(r.source, 'none');
     assert.strictEqual(r.session, '');
 });
 
@@ -225,7 +285,7 @@ test('a session with only an end date covers everything before it', () => {
     const upto = { name: 'Early', endDate: '2026-07-10' };
     assert.strictEqual(S.covers(upto, '2026-06-01'), true);
     assert.strictEqual(S.covers(upto, '2026-07-11'), false);
-    assert.strictEqual(S.pinExpired(upto, '2026-07-11'), true);
+    assert.strictEqual(S.hasEnded(upto, '2026-07-11'), true);
 });
 
 // ── what the UI is told ──────────────────────────────────────────────────
@@ -243,15 +303,6 @@ test('automatic says nothing extra when it resolves to nothing', () => {
     const opts = S.optionsFor({ sessions: BOTH, today: '2026-09-30' });
     assert.strictEqual(opts[0].label, 'Follow the calendar');
     assert.strictEqual(opts[0].resolves, '');
-});
-
-test('every session is offered, in date order, with expiry marked', () => {
-    const opts = S.optionsFor({ sessions: BOTH, today: '2026-07-25' });
-    assert.strictEqual(opts.map(o => o.value).join(','), 'auto,1st Half,2nd Half');
-    assert.strictEqual(opts[1].expired, true, 'pinning to it would not stick, so say so');
-    assert.strictEqual(opts[2].expired, false);
-    assert.strictEqual(opts[1].from, '2026-06-28');
-    assert.strictEqual(opts[1].to, '2026-07-19');
 });
 
 test('droppedNotice is empty when no pin was dropped', () => {
@@ -280,8 +331,8 @@ test('without the window rule it reads the dates itself and agrees', () => {
     const w = fresh.windowOf(typo);
     assert.strictEqual(w.from, null, 'a backwards window must be reported as no window');
     assert.strictEqual(w.to, null);
-    assert.strictEqual(fresh.pinExpired(typo, '2026-07-01'), false,
-        'a typo must not silently retire a pin');
+    assert.strictEqual(fresh.hasEnded(typo, '2026-07-01'), false,
+        'a typo must not read as a finished session');
     assert.strictEqual(fresh.calendarSession([typo], '2026-07-01'), '');
 });
 
@@ -305,3 +356,18 @@ test('names are trimmed, so a stray space cannot break a pin', () => {
 
 // ── the way back out of a peek ────────────────────────────────────────────
 
+
+test('the notice can be handed the page’s own date format', () => {
+    // Otherwise it reads '2026-08-26' beside a dropdown saying 'Aug 26', which is the
+    // kind of mismatch that makes a page feel unfinished. The WORDING stays in the
+    // rule — only the rule knows whether this is ahead or over.
+    const r = S.resolve({ sessions: BOTH, pin: '1st Half', today: '2026-08-01' });
+    const short = d => ({ '2026-06-28': 'Jun 28', '2026-07-19': 'Jul 19' }[d] || d);
+    assert.strictEqual(S.outOfSeasonNotice(r, short),
+        '1st Half ended on Jul 19. Lists show the children on it, as of Jun 28, ' +
+        'not the ones at camp today.');
+    // No formatter, and it is still readable rather than blank.
+    assert.match(S.outOfSeasonNotice(r), /ended on 2026-07-19/);
+    // A formatter that is not a function is ignored, not called.
+    assert.match(S.outOfSeasonNotice(r, 'nope'), /ended on 2026-07-19/);
+});

@@ -31,23 +31,35 @@
  * defect this codebase keeps turning up. The per-page roster picker still does that
  * job where it is actually wanted, without leaking across pages.
  *
- * ── WHY A PIN SNAPS BACK ───────────────────────────────────────────────────
+ * ── A PIN IS HONOURED WHATEVER THE DATES SAY ───────────────────────────────
  *
- * The failure that kills a feature like this is not a bug, it is a Tuesday in
- * August: somebody pinned 1st Half in June, nobody remembers, and the front desk is
- * checking in children against a roster that ended five weeks ago. A banner does not
- * save you — a banner people see every day becomes furniture.
+ * This file first refused a pin to a session that had ENDED, on the grounds that
+ * somebody pins 1st Half in June, forgets, and in August the office is working
+ * against a roster that finished five weeks ago.
  *
- * So a pin whose session has ENDED stops applying. The app returns to following the
- * calendar and says it has done so. A pin FORWARD — to a session that has not
- * started — is left alone, because that is the legitimate case the pin exists for,
- * and it expires by itself the moment that session ends.
+ * That was wrong, and it broke the two times of year a camp most needs this:
+ *
+ *   BEFORE THE SUMMER  nothing covers today, so the calendar has no answer and every
+ *                      list shows everyone. Pinning 1st Half in May is how an office
+ *                      gets set up. (This half always worked — a pin forward was
+ *                      allowed.)
+ *   AFTER A SESSION    "we are finished with 1st Half, let us tidy it up" is ordinary
+ *                      work, and it is exactly what the refusal made impossible. In
+ *                      September a camp could not scope to 2nd Half at all.
+ *
+ * The dates of a session say nothing about whether somebody MEANT to pin it. Refusing
+ * a deliberate choice to guard against a forgotten one is the wrong trade, so a pin
+ * now applies for as long as it is set, and the app says plainly when the pinned
+ * session is not the one running today (`outOfSeason`, and outOfSeasonNotice below).
+ *
+ * A pin is still dropped in one case: when it names a session that no longer exists,
+ * because there is then nothing to show at all.
  *
  * ── PRECEDENCE, MOST SPECIFIC FIRST ────────────────────────────────────────
  *
  *   workspace   you are inside a planning sandbox built for a session. Already
  *               stated in the amber bar, and the most specific reality there is.
- *   pin         the camp-wide pin, if it has not expired.
+ *   pin         the camp-wide pin, whatever its dates.
  *   calendar    the session today falls in. The normal answer.
  *   only        the camp has exactly one session, so there was never a choice.
  *   none        no sessions, or today falls between them. NOTHING is scoped, and
@@ -177,16 +189,24 @@
     };
 
     /**
-     * Has a pin expired? True only once the session's END has passed.
+     * Is this session the one running on `on`? Reported, never enforced.
      *
-     * Forward is fine — pinning to a session that has not started is the whole point
-     * of a pin, and it retires itself when that session ends. An undated session can
-     * never expire, matching how an undated session is treated everywhere else.
+     * A pin to a session that is over is a normal thing to want — tidying up 1st Half
+     * in August, closing out the summer in September — so nothing here refuses it.
+     * What this answers is whether to SAY so, which is a different job.
+     *
+     * Its own function rather than inlined because the picker, the resolver and the
+     * notice all need the same answer, and three copies of a date comparison is three
+     * chances to disagree about the last day of a session.
      */
-    S.pinExpired = function (session, on, rule) {
+    S.isCurrent = function (session, on, rule) {
+        return S.covers(session, ymd(on) || S.today(), rule);
+    };
+    /** Has this session finished? Used for wording, never for refusing. */
+    S.hasEnded = function (session, on, rule) {
         var w = S.windowOf(session, rule);
         var day = ymd(on) || S.today();
-        if (!w.to) return false;
+        if (!w.to) return false;          // an undated session never ends
         return day > w.to;
     };
 
@@ -204,7 +224,11 @@
      * Returns everything a caller could need, so nobody has to re-derive any of it:
      *
      *   { session, on, source, sessionObj, from, to, coversToday,
-     *     pin, pinDropped, droppedPin, label, detail }
+     *     pin, pinDropped, droppedPin, outOfSeason, ended, label, detail }
+     *
+     * `outOfSeason` is true when the session being shown is not the one running
+     * today — pinned ahead, or pinned to one that is over. It is information for the
+     * UI, never a refusal.
      */
     S.resolve = function (o) {
         o = o || {};
@@ -215,6 +239,7 @@
             session: '', on: today, source: 'none', sessionObj: null,
             from: null, to: null, coversToday: true,
             pin: str(o.pin), pinDropped: false, droppedPin: '',
+            outOfSeason: false, ended: false,
             label: '', detail: ''
         };
 
@@ -233,14 +258,10 @@
             out.pinDropped = true;
             out.droppedPin = out.pin;
         } else if (pinObj) {
-            if (S.pinExpired(pinObj, today, rule)) {
-                // THE TUESDAY IN AUGUST. See the header: a pin does not get to
-                // outlive its session, whoever forgot about it.
-                out.pinDropped = true;
-                out.droppedPin = out.pin;
-            } else {
-                return decorate(out, 'pin', pinObj, today, rule);
-            }
+            // HONOURED WHATEVER THE DATES SAY. See the header: before the summer and
+            // after a session are the two times a camp most needs this, and both were
+            // refused while a pin had to fall inside its own window.
+            return decorate(out, 'pin', pinObj, today, rule);
         }
 
         // 3. Whatever is running today.
@@ -278,6 +299,11 @@
         // what makes "show me 2nd Half" work without copying a roster.
         out.on = out.coversToday ? today : (w.from || today);
 
+        // SAID, NOT ENFORCED. A pinned session that is not today's is the whole point
+        // of the pin; the UI needs to be able to state it so nobody has to work it out
+        // from a roster that looks wrong.
+        out.outOfSeason = !out.coversToday;
+        out.ended = S.hasEnded(sessionObj, today, rule);
         out.label = out.session;
         out.detail = S.SOURCES[source] || '';
         return out;
@@ -303,9 +329,11 @@
             opts.push({
                 value: str(s.name), label: str(s.name), session: str(s.name),
                 from: w.from || '', to: w.to || '',
-                // Said on the option itself, because the one thing somebody wants to
-                // know before pinning backwards is that it will not stick.
-                expired: S.pinExpired(s, today, rule)
+                // The option reports its dates and whether it has finished. It does
+                // NOT discourage: picking a session that is over is how you tidy it
+                // up, and an option tagged as a mistake is an option nobody picks.
+                ended: S.hasEnded(s, today, rule),
+                current: S.isCurrent(s, today, rule)
             });
         });
         return opts;
@@ -319,9 +347,32 @@
     S.droppedNotice = function (r) {
         if (!r || !r.pinDropped) return '';
         var was = r.droppedPin || 'a session';
-        return 'The camp was pinned to ' + was + ', which has ended. '
+        return 'The camp was pinned to ' + was + ', which no longer exists. '
              + 'Everything is back to following the calendar'
              + (r.session ? ' — showing ' + r.session + '.' : '.');
+    };
+
+    /**
+     * What to tell somebody working on a session that is not today's.
+     *
+     * Empty in the ordinary case, so this cannot become the banner everybody learns
+     * to ignore. When it does appear it says which way round it is, because "2nd Half
+     * has not started" and "1st Half is over" lead to completely different next
+     * actions.
+     */
+    S.outOfSeasonNotice = function (r, fmt) {
+        if (!r || !r.session || !r.outOfSeason) return '';
+        // `fmt` lets the caller print the date the way the rest of its page does. The
+        // WORDING stays here, because which way round this is — ahead or over — is
+        // something only the rule knows; the caller only decides what a date looks
+        // like. Without it the notice reads '2026-08-26' next to a dropdown saying
+        // 'Aug 26', which is the kind of mismatch that makes a page feel unfinished.
+        var d = (typeof fmt === 'function') ? fmt : function (x) { return String(x); };
+        var when = r.ended
+            ? (r.to ? 'ended on ' + d(r.to) : 'is over')
+            : (r.from ? 'starts on ' + d(r.from) : 'has not started yet');
+        return r.session + ' ' + when + '. Lists show the children on it'
+             + (r.from ? ', as of ' + d(r.from) : '') + ', not the ones at camp today.';
     };
 
     if (typeof module !== 'undefined' && module.exports) module.exports = S;
