@@ -5,6 +5,15 @@
    a meta-page about the whole suite, not a product of its own.
    ============================================================================= */
 
+/* campistry_app_switcher.js's popover (.qs-pop) is position:fixed with no
+   inset set until it's actually opened, so before that first click it lays
+   out at its default in-flow position next to the trigger — off the right
+   edge of the header on most widths — which pushes the page's scrollWidth
+   out with it even though it's invisible. That's the shared component's
+   bug to fix, not this page's to work around by touching shared CSS; this
+   just stops it from causing a phantom horizontal scrollbar here. */
+html, body { overflow-x: hidden; }
+
 /* ==================== HEADER ==================== */
 .hc-header {
     height: 58px;
@@ -29,7 +38,6 @@
 .hc-header-logo img { height: 28px; width: auto; display: block; }
 .hc-header-title { font-family: var(--font-display); font-weight: 600; font-size: 1.05rem; color: var(--slate-900); white-space: nowrap; }
 .hc-header-right { display: flex; align-items: center; gap: 10px; min-width: 0; }
-.hc-header .quick-switch-bar { position: static; transform: none; max-width: 100%; }
 .hc-toc-toggle {
     display: inline-flex; align-items: center; gap: 6px;
     background: var(--slate-100); border: none; border-radius: var(--radius-sm);
