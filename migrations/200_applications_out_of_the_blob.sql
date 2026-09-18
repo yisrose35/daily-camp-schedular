@@ -391,6 +391,34 @@ GRANT EXECUTE ON FUNCTION public.session_capacity_state(uuid) TO anon, authentic
 --
 -- ON CONFLICT DO NOTHING: re-running this file must not overwrite a row a
 -- family has submitted since, which would undo a status the office set.
+--
+-- SCOPED TO CAMPS THAT STILL EXIST. camp_state_kv has no foreign key, so
+-- deleting a camp leaves its state rows behind, and the first run of this
+-- backfill hit exactly that: one orphaned campistryMe row violated this
+-- table's FK to camps and — the whole paste being one transaction — rolled
+-- back the entire migration. The EXISTS below is the fix, and it is the right
+-- scope on its own terms: submit_public_application has refused camps with no
+-- camps row since migration 184, so a deleted camp's leftover applications are
+-- history, not data to resurrect.
+--
+-- TOLERANT OF A BAD TIMESTAMP for the same reason. The orphan proved this
+-- table's inputs carry leftovers nobody curates; a single unparseable
+-- appliedTime in one old blob must cost that one fallback, not the migration.
+CREATE OR REPLACE FUNCTION public._ts_or_null(p text)
+RETURNS timestamptz
+LANGUAGE plpgsql
+IMMUTABLE
+SET search_path = public, pg_catalog
+AS $$
+BEGIN
+    RETURN p::timestamptz;
+EXCEPTION WHEN OTHERS THEN
+    RETURN NULL;
+END;
+$$;
+REVOKE ALL ON FUNCTION public._ts_or_null(text) FROM public, anon;
+GRANT EXECUTE ON FUNCTION public._ts_or_null(text) TO authenticated, service_role;
+
 INSERT INTO public.camp_applications
     (camp_id, kind, entry_id, payload, session, status, submitted_at, updated_at)
 SELECT kv.camp_id,
@@ -402,8 +430,8 @@ SELECT kv.camp_id,
        -- The client stamps appliedTime; fall back to the row's own age rather
        -- than to now(), so a backfilled application does not read as submitted
        -- the moment the migration ran.
-       COALESCE((e.value ->> 'appliedTime')::timestamptz,
-                (e.value ->> 'appliedDate')::timestamptz,
+       COALESCE(public._ts_or_null(e.value ->> 'appliedTime'),
+                public._ts_or_null(e.value ->> 'appliedDate'),
                 kv.updated_at,
                 now()),
        now()
@@ -411,6 +439,7 @@ SELECT kv.camp_id,
  CROSS JOIN (VALUES ('enrollments'), ('staffApplications')) AS k(kind)
  CROSS JOIN LATERAL jsonb_each(coalesce(kv.value -> k.kind, '{}'::jsonb)) AS e(key, value)
  WHERE kv.key = 'campistryMe'
+   AND EXISTS (SELECT 1 FROM camps c WHERE c.id = kv.camp_id)
    AND jsonb_typeof(e.value) = 'object'
    AND length(e.key) > 0
 ON CONFLICT (camp_id, kind, entry_id) DO NOTHING;

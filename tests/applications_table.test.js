@@ -242,8 +242,31 @@ test('everything already in a blob becomes a row', () => {
 test('a backfilled application keeps its own age', () => {
     // now() would make every historical application read as submitted the moment
     // the migration ran, which breaks submission order — and a waitlist IS an order.
-    assert.match(SQL, /COALESCE\(\(e\.value ->> 'appliedTime'\)::timestamptz,/);
-    assert.match(SQL, /\(e\.value ->> 'appliedDate'\)::timestamptz,\s*\n\s*kv\.updated_at,/);
+    assert.match(SQL, /COALESCE\(public\._ts_or_null\(e\.value ->> 'appliedTime'\),/);
+    assert.match(SQL, /public\._ts_or_null\(e\.value ->> 'appliedDate'\),\s*\n\s*kv\.updated_at,/);
+});
+
+test('the backfill only copies camps that still exist', () => {
+    // The first paste of this file failed in production on exactly this:
+    // camp_state_kv has no foreign key, so a deleted camp leaves its state rows
+    // behind, and one orphaned campistryMe row violated the new table's FK to
+    // camps — rolling back the whole migration, since the paste is one
+    // transaction. The scope is also correct in itself: the live path
+    // (submit_public_application, since 184) refuses camps with no camps row,
+    // so a deleted camp's leftover applications are history, not data.
+    assert.match(SQL, /WHERE kv\.key = 'campistryMe'\s*\n\s*AND EXISTS \(SELECT 1 FROM camps c WHERE c\.id = kv\.camp_id\)/);
+});
+
+test('a bad timestamp in one old blob costs a fallback, not the migration', () => {
+    // A bare ::timestamptz cast THROWS on a malformed value, and one throw rolls
+    // back the whole paste. _ts_or_null turns that into NULL, which COALESCE
+    // then replaces with the row's own updated_at.
+    assert.match(SQL, /CREATE OR REPLACE FUNCTION public\._ts_or_null\(p text\)/);
+    assert.match(SQL, /RETURN p::timestamptz;\s*\nEXCEPTION WHEN OTHERS THEN\s*\n\s*RETURN NULL;/);
+    // and the backfill must not cast directly anywhere.
+    const backfill = SQL.slice(SQL.indexOf('INSERT INTO public.camp_applications'));
+    assert.ok(!/'appliedTime'\)::timestamptz/.test(backfill), 'a direct cast can still throw');
+    assert.ok(!/'appliedDate'\)::timestamptz/.test(backfill), 'a direct cast can still throw');
 });
 
 test('the file says it is standalone and idempotent', () => {
