@@ -18,8 +18,17 @@
     var REVEAL_DELAY=1500;  // ms the mouse must rest at the top edge
     var HIDE_DELAY=450;     // grace period before hiding after mouse leaves
 
+    // Each app names its top header differently; try the specific classes
+    // first and fall back to the generic .nav (Go) last so a non-header .nav
+    // elsewhere can't win.
+    function findHeader(){
+        var sels=['.app-header','.lk-header','.nt-header','.hc-header','.nav'];
+        for(var i=0;i<sels.length;i++){ var el=document.querySelector(sels[i]); if(el) return el; }
+        return null;
+    }
+
     function init(){
-        var header=document.querySelector('.app-header');
+        var header=findHeader();
         if(!header) return;
         document.body.classList.add('hoverbar');
 
