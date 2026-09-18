@@ -21036,10 +21036,47 @@ function _psStaffAsRow(s){
         emergencyName:s.parentName||'',emergencyPhone:s.parentPhone||'',emergencyRel:s.parentRelation||''
     }];
 }
+/**
+ * WHICH CAMPERS A PRINT SHEET IS FOR.
+ *
+ * This used to filter on `unenrolled` alone, which meant a printed sheet listed the
+ * whole roster whatever session the camp was working on. That is the worst place in
+ * the app for it to be wrong: a bunk sign-in sheet is the thing a counsellor
+ * physically carries, and a name on it for a child who is not at camp this half gets
+ * called at roll and marked absent.
+ *
+ * It follows the master key by default, so a printed sheet matches the roster screen
+ * it was built from. `whoWhen` is the escape hatch for a sheet that deliberately
+ * wants everybody — a full family directory, an end-of-summer mailing list — and it
+ * takes exactly the values the roster picker uses, so there is one vocabulary for
+ * "which campers" rather than two.
+ */
+function psWhoWhen(sheet){
+    var v=String((sheet&&sheet.whoWhen)||'');
+    // '' means follow the camp. Resolved here rather than stored on the sheet,
+    // because a sheet that stored 'session:1st Half' in June would still print 1st
+    // Half in August — the same freezing the master key's pin exists to avoid.
+    if(v)return v;
+    return _rosterWhenDefault();
+}
 function psFilteredCampers(sheet){
     var who=sheet.whoScope||'campers';
     var rows=[];
-    if(who!=='staff')rows=rows.concat(Object.entries(roster).filter(function(r){return !r[1].unenrolled;}));
+    if(who!=='staff'){
+        var camperRows=Object.entries(roster).filter(function(r){return !r[1].unenrolled;});
+        var _W=_presenceAPI();
+        if(_W&&typeof _W.filterNames==='function'){
+            _freshSessions();
+            var keep={};
+            _W.filterNames(psWhoWhen(sheet),{
+                camperNames:camperRows.map(function(r){return r[0]}),
+                enrollments:enrollments, sessions:sessions, roster:roster,
+                on:_rosterOn()
+            }).forEach(function(n){keep[n]=1});
+            camperRows=camperRows.filter(function(r){return !!keep[r[0]]});
+        }
+        rows=rows.concat(camperRows);
+    }
     if(who!=='campers')rows=rows.concat(hiredStaff().map(_psStaffAsRow));
     if(sheet.scopeDiv)rows=rows.filter(function(r){return r[1].division===sheet.scopeDiv});
     var sortKey=sheet.sortBy||'lastName';
@@ -21343,7 +21380,11 @@ function renderPrintSheets(){
         var cols=(s.columns||[]).filter(psColPrints);
         var grpLabel={'':'One combined sheet',division:'One sheet per division',grade:'One sheet per grade',bunk:'One sheet per bunk',team:'One sheet per team'}[s.groupBy||'']||'';
         var whoLabel={staff:'Staff only',both:'Campers + Staff'}[s.whoScope]||'';
-        var scope=(s.scopeDiv?('Division: '+s.scopeDiv):'All campers')+(whoLabel?' · '+whoLabel:'');
+        var _whenLabel=!s.whoWhen?'' : (s.whoWhen==='all'?'Everyone enrolled'
+            : (s.whoWhen==='today'?'In camp today'
+               : (s.whoWhen.indexOf('session:')===0?s.whoWhen.slice(8):'')));
+        var scope=(s.scopeDiv?('Division: '+s.scopeDiv):'All campers')+(whoLabel?' · '+whoLabel:'')
+            +(_whenLabel?' · '+_whenLabel:'');
         h+='<div class="me-card" style="padding:16px;display:flex;flex-direction:column;gap:8px">'
             +'<div style="font-size:.95rem;font-weight:700">'+esc(s.name||'Untitled Sheet')+'</div>'
             +'<div style="font-size:.72rem;color:var(--s400)">'+cols.length+' column'+(cols.length===1?'':'s')+' · '+esc(grpLabel)+'</div>'
@@ -21367,6 +21408,22 @@ function psEditorHtml(s){
 
     var whoOpts=[['campers','Campers only'],['staff','Staff only'],['both','Campers + Staff']];
     h+='<div class="me-field"><label>Who</label><select class="me-input" onchange="CampistryMe.psSetProp(\''+je(s.id)+'\',\'whoScope\',this.value)">'+whoOpts.map(function(o){return'<option value="'+o[0]+'"'+(o[0]===(s.whoScope||'campers')?' selected':'')+'>'+o[1]+'</option>'}).join('')+'</select></div>';
+
+    // WHICH CAMPERS, BY SESSION. Blank follows the camp, so a sheet built in June
+    // prints 2nd Half's children in August without anybody remembering to change it.
+    var _sesOpts='<option value=""'+(!s.whoWhen?' selected':'')+'>Follow the camp'
+        +(function(){try{
+            var sc=(typeof window.campistrySessionScope==='function')?window.campistrySessionScope():null;
+            return (sc&&sc.session)?(' \u2014 '+sc.session+' now'):'';
+        }catch(_e){return ''}})()+'</option>';
+    _sesOpts+='<option value="all"'+(s.whoWhen==='all'?' selected':'')+'>Everyone enrolled</option>';
+    _sesOpts+='<option value="today"'+(s.whoWhen==='today'?' selected':'')+'>In camp today</option>';
+    (sessions||[]).forEach(function(x){
+        if(!x||!x.name)return;
+        var v='session:'+x.name;
+        _sesOpts+='<option value="'+esc(v)+'"'+(s.whoWhen===v?' selected':'')+'>'+esc(x.name)+'</option>';
+    });
+    h+='<div class="me-field"><label>Which campers</label><select class="me-input" onchange="CampistryMe.psSetProp(\''+je(s.id)+'\',\'whoWhen\',this.value)">'+_sesOpts+'</select></div>';
 
     var divOpts='<option value="">All campers</option>'+Object.keys(structure).sort().map(function(d){return'<option value="'+esc(d)+'"'+(d===s.scopeDiv?' selected':'')+'>'+esc(d)+'</option>'}).join('');
     h+='<div class="me-field"><label>Include (division scope — campers only)</label><select class="me-input" onchange="CampistryMe.psSetProp(\''+je(s.id)+'\',\'scopeDiv\',this.value)">'+divOpts+'</select></div>';

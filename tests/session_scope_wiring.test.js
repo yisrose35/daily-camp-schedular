@@ -429,3 +429,65 @@ test('a person who touches the picker is still obeyed', () => {
     assert.ok(body.indexOf('if(_rosterWhenTouched)') < body.indexOf('campistrySessionScope'),
         'the touched check comes first');
 });
+
+// ── printed sheets follow it too ──────────────────────────────────────────
+
+test('a print sheet filters campers by session, not just by `unenrolled`', () => {
+    // This is the worst place in the app to be wrong: a bunk sign-in sheet is what a
+    // counsellor physically carries, and a name on it for a child who is not at camp
+    // this half gets called at roll and marked absent.
+    const a = ME.indexOf('function psFilteredCampers(sheet){');
+    const body = ME.slice(a, ME.indexOf('function psGroupVal(', a));
+    assert.match(body, /_W\.filterNames\(psWhoWhen\(sheet\)/,
+        'the sheet does not consult presence at all');
+    assert.match(body, /camperRows=camperRows\.filter\(function\(r\)\{return !!keep\[r\[0\]\]\}\)/,
+        'the filter is computed and then not applied');
+    // Staff are NOT session-filtered, and this checks the LINE rather than its
+    // position: a counsellor is not enrolled in a session, so putting them through an
+    // enrolment filter would empty the staff half of every sheet.
+    assert.ok(body.indexOf(
+        "if(who!=='campers')rows=rows.concat(hiredStaff().map(_psStaffAsRow));") > 0,
+        'the staff rows must reach the sheet unfiltered');
+    assert.ok(body.indexOf('_W.filterNames') < body.indexOf("if(who!=='campers')"),
+        'the session filter belongs to the camper rows only');
+});
+
+test('a print sheet with no stored choice follows the camp', () => {
+    // Stored would freeze it: a sheet holding 'session:1st Half' from June would still
+    // print 1st Half in August, which is the same failure the pin's expiry prevents.
+    const a = ME.indexOf('function psWhoWhen(sheet){');
+    const body = ME.slice(a, ME.indexOf('function psFilteredCampers(', a));
+    assert.match(body, /if\(v\)return v;/);
+    assert.match(body, /return _rosterWhenDefault\(\);/,
+        'the default must resolve through the master key, not be stored');
+});
+
+test('a sheet that wants everybody can still say so', () => {
+    // A family directory or an end-of-summer mailing list is a real use, and it takes
+    // the same vocabulary as the roster picker so there is one language for this.
+    const a = ME.indexOf("var _sesOpts=");
+    const body = ME.slice(a, a + 1400);
+    assert.match(body, /value="all"/);
+    assert.match(body, /value="today"/);
+    assert.match(body, /'session:'\+x\.name/);
+    assert.match(body, /Follow the camp/);
+    // A substring, not a regex: the handler is emitted inside a JS string literal, so
+    // the source carries escaped quotes and a regex for it is all backslashes and no
+    // signal.
+    assert.ok(body.indexOf("psSetProp(\\''+je(s.id)+'\\',\\'whoWhen\\'") > 0,
+        'the control is not wired to the sheet');
+});
+
+test('the sheet list says which campers it prints, without opening it', () => {
+    const a = ME.indexOf('var _whenLabel=');
+    assert.ok(a > 0, 'the summary line does not mention the session scope');
+    const body = ME.slice(a, a + 500);
+    assert.match(body, /_whenLabel\?' · '\+_whenLabel:''/);
+});
+
+test('a page without the presence rule prints what it always printed', () => {
+    const a = ME.indexOf('function psFilteredCampers(sheet){');
+    const body = ME.slice(a, ME.indexOf('function psGroupVal(', a));
+    assert.match(body, /if\(_W&&typeof _W\.filterNames==='function'\)\{/,
+        'without the rule the sheet must fall back to the whole roster, not to nobody');
+});
