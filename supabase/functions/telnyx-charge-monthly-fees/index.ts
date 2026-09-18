@@ -29,7 +29,16 @@ function json(body: unknown, status = 200) {
   return new Response(JSON.stringify(body), { status, headers: { ...corsHeaders, "Content-Type": "application/json" } });
 }
 
-async function stripeCharge(customerId: string, pmId: string | null, amountCents: number, description: string, metadata: Record<string, string>) {
+/**
+ * Charge a camp's own card for its SMS number.
+ *
+ * `idemKey` closes the one window the next_charge_at guard cannot: the charge
+ * succeeds at Stripe and this function dies before advancing the date, so the next
+ * run finds the row still due and charges again. Stripe's Idempotency-Key makes
+ * that second attempt return the FIRST payment intent instead of creating another,
+ * so the money moves once however many times this is invoked.
+ */
+async function stripeCharge(customerId: string, pmId: string | null, amountCents: number, description: string, metadata: Record<string, string>, idemKey?: string) {
   const params: Record<string, string> = {
     amount: String(amountCents),
     currency: "usd",
@@ -40,9 +49,14 @@ async function stripeCharge(customerId: string, pmId: string | null, amountCents
   };
   if (pmId) params.payment_method = pmId;
   Object.entries(metadata).forEach(([k, v]) => { params[`metadata[${k}]`] = String(v); });
+  const headers: Record<string, string> = {
+    Authorization: `Bearer ${STRIPE_SECRET}`,
+    "Content-Type": "application/x-www-form-urlencoded",
+  };
+  if (idemKey) headers["Idempotency-Key"] = idemKey;
   const resp = await fetch(`${STRIPE_API}/payment_intents`, {
     method: "POST",
-    headers: { Authorization: `Bearer ${STRIPE_SECRET}`, "Content-Type": "application/x-www-form-urlencoded" },
+    headers,
     body: new URLSearchParams(params).toString(),
   });
   return resp.json();
@@ -83,6 +97,10 @@ serve(async (req) => {
       row.stripe_customer_id, row.stripe_payment_method_id || null, row.monthly_fee_cents,
       `Campistry SMS number — monthly (${row.business_legal_name || row.camp_id})`,
       { campId: row.camp_id, purpose: "telnyx_monthly_fee" },
+      // Camp + the period being charged. Identical on a retry of this month,
+      // different next month, so a crash between the charge and the date advance
+      // costs a duplicate API call rather than a duplicate charge.
+      `telnyx_fee_${row.camp_id}_${row.next_charge_at}`,
     );
 
     if (pi.error || pi.status !== "succeeded") {

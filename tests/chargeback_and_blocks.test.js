@@ -282,3 +282,57 @@ test('the Cardknox mapper reads the names the POSTBACK uses, not the API respons
         'the API-response spelling was dropped — harmless to keep and needed if a ' +
         'dispute ever arrives shaped like an API response');
 });
+
+// ───────────────────────────────────────────────────────────────────────────
+// THE DISPUTE WEBHOOK FAILS CLOSED.
+//
+// Its secret check used to be conditional on the secret being set, and the file's
+// own header said leaving it unset was fine — the endpoint would rely on an
+// unguessable URL, because every write it makes is idempotent and reversible.
+//
+// Wrong twice. A Supabase function URL is a project ref and a function name, not a
+// secret. And reversible is not harmless: record_chargeback posts a real ledger
+// entry, rewrites campistryMe and notifies the office, so an unauthenticated
+// caller could fabricate chargebacks and somebody would have to work out which
+// were real.
+// ───────────────────────────────────────────────────────────────────────────
+
+const _byopPath = require('node:path').join(
+    __dirname, '..', 'supabase/functions/byop-dispute-webhook/index.ts');
+const BYOP = require('node:fs').readFileSync(_byopPath, 'utf8');
+/** Comments stripped. The prose above mentions record_chargeback; the code test
+ *  below is about WHERE it is called, and matching a comment answers nothing. */
+const BYOP_CODE = BYOP.split('\n')
+    .filter(l => !/^\s*(\/\/|\*|\/\*)/.test(l)).join('\n');
+
+test('no secret configured means no requests served', () => {
+    assert.match(BYOP_CODE, /if \(!WEBHOOK_SECRET\) \{/,
+        'the unset case must be handled on its own, before the compare');
+    const blk = BYOP_CODE.slice(BYOP_CODE.indexOf('if (!WEBHOOK_SECRET) {'));
+    assert.match(blk.slice(0, 700), /webhook_not_configured/);
+    assert.match(blk.slice(0, 700), /status: 503/,
+        '503: the deployment is incomplete, which is not the caller being wrong');
+});
+
+test('the secret compare is no longer conditional on having one', () => {
+    // The whole bug in one line: `if (WEBHOOK_SECRET && ...)` skips the check
+    // entirely when the secret is absent.
+    assert.ok(!/if \(WEBHOOK_SECRET && req\.headers\.get/.test(BYOP_CODE),
+        'a conditional check is an open door with extra steps');
+    assert.match(BYOP_CODE, /if \(req\.headers\.get\("x-webhook-secret"\) !== WEBHOOK_SECRET\)/);
+});
+
+test('the header no longer tells an operator it is fine to leave it unset', () => {
+    // Documentation recommending the insecure configuration is worse than none.
+    assert.ok(!/leave the secret unset/.test(BYOP));
+    assert.match(BYOP, /BYOP_DISPUTE_SECRET IS REQUIRED/);
+});
+
+test('the refusal happens BEFORE anything is read or written', () => {
+    const gate = BYOP_CODE.indexOf('if (!WEBHOOK_SECRET) {');
+    assert.ok(gate > 0);
+    ['record_chargeback', 'resolve_chargeback', 'camp_processor_credentials'].forEach(sym => {
+        assert.ok(BYOP_CODE.indexOf(sym) > gate,
+            sym + ' must be unreachable until the secret gate has passed');
+    });
+});

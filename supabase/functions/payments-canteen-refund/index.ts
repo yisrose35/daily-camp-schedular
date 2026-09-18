@@ -166,7 +166,7 @@ serve(async (req) => {
     const authedCampId = await callerCampId(req);
     if (!authedCampId) return json({ error: "Only camp owners/admins can refund a canteen deposit." }, 403);
 
-    const { camperName, amount, reason } = await req.json();
+    const { camperName, amount, reason, idempotencyKey } = await req.json();
     if (!camperName) return json({ error: "camperName is required" }, 400);
 
     const service = createClient(SUPABASE_URL, SUPABASE_SERVICE_KEY);
@@ -237,10 +237,41 @@ serve(async (req) => {
 
       try {
         const chunkCents = Math.round(chunk * 100);
+        // CLAIM BEFORE THE PROCESSOR. Same reasoning as payments-refund: the
+        // ledger's idempotency keys on the processor's refund id, which does not
+        // exist until money has already moved. Per CHUNK, because each chunk is a
+        // separate processor call and a retry may resume partway through.
+        const chunkKey = (typeof idempotencyKey === "string" && idempotencyKey.trim())
+          ? `${idempotencyKey.trim()}:${dep.externalTransactionId}:${chunkCents}` : null;
+        if (chunkKey) {
+          const { data: claim } = await service.rpc("claim_refund_intent", {
+            p_camp_id: authedCampId, p_key: chunkKey, p_amount: chunk,
+            p_payment_ref: String(dep.externalTransactionId),
+          });
+          // Already done. Skip the processor and move to the next deposit rather
+          // than refunding this one twice.
+          if (claim && claim.claimed === false) {
+            console.log(`[canteen-refund] chunk already settled, skipping: ${chunkKey}`);
+            continue;
+          }
+        }
         const refundResult = processorKey === "cardknox"
           ? await cardknoxRefund(credResult.credentials, dep.externalTransactionId, chunkCents)
           : await banquestRefund(credResult.credentials, dep.externalTransactionId, chunkCents);
-        if (!refundResult.success) throw new Error(refundResult.error || "Refund failed");
+        if (!refundResult.success) {
+          // No money moved, so give the claim back or this chunk is locked out.
+          if (chunkKey) {
+            await service.rpc("release_refund_intent", { p_camp_id: authedCampId, p_key: chunkKey });
+          }
+          throw new Error(refundResult.error || "Refund failed");
+        }
+        if (chunkKey) {
+          await service.rpc("settle_refund_intent", {
+            p_camp_id: authedCampId, p_key: chunkKey,
+            p_result: { success: true, externalTransactionId: refundResult.externalTransactionId,
+                        amount: chunk },
+          });
+        }
 
         await service.rpc("record_processor_transaction", {
           p_camp_id: authedCampId,

@@ -154,7 +154,7 @@ serve(async (req) => {
     const campId = await callerCampId(req);
     if (!campId) return json({ error: "Only camp owners/admins can issue a refund." }, 403);
 
-    const { externalTransactionId, amount } = await req.json();
+    const { externalTransactionId, amount, idempotencyKey } = await req.json();
     if (!externalTransactionId || !amount) {
       return json({ error: "externalTransactionId and amount are required (see this file's header re: full refunds)." }, 400);
     }
@@ -172,12 +172,55 @@ serve(async (req) => {
     if (!credResult?.success) return json({ error: credResult?.error || "This camp's processor isn't connected/verified yet." }, 400);
 
     const amountCents = Math.round(Number(amount) * 100);
+
+    // CLAIM BEFORE THE PROCESSOR, NOT AFTER.
+    //
+    // record_external_refund is idempotent on the processor's refund id — which
+    // does not exist until the call below has already moved money. So a repeat of
+    // this request creates a SECOND refund and books both correctly: the ledger
+    // stays right and the family is paid twice. The claim is the only thing that
+    // can prevent it, and it has to be taken first.
+    //
+    // A request with no key proceeds unguarded, exactly as it did before this
+    // existed. A missing header must not stop an office issuing money.
+    const claimKey = typeof idempotencyKey === "string" && idempotencyKey.trim()
+      ? idempotencyKey.trim() : null;
+    if (claimKey) {
+      const { data: claim } = await service.rpc("claim_refund_intent", {
+        p_camp_id: campId, p_key: claimKey,
+        p_amount: Number((amountCents / 100).toFixed(2)),
+        p_payment_ref: String(externalTransactionId),
+      });
+      if (claim && claim.claimed === false) {
+        // Somebody already did this. Replay their answer rather than refunding
+        // again — a retry should look like the success it is repeating.
+        console.log(`[payments-refund] replaying settled refund for key ${claimKey}`);
+        return json(Object.assign({ replayed: true }, claim.previous || {}), 200);
+      }
+    }
+
     const result = processorKey === "cardknox"
       ? await cardknoxRefund(credResult.credentials, String(externalTransactionId), amountCents)
       : await banquestRefund(credResult.credentials, String(externalTransactionId), amountCents);
 
     if (!result.success) {
+      // The processor did NOT move money, so hand the claim back — otherwise a
+      // dropped connection locks this refund out for good: the office retries, is
+      // told it already happened, and the family never sees the money.
+      if (claimKey) {
+        await service.rpc("release_refund_intent", { p_camp_id: campId, p_key: claimKey });
+      }
       return json({ error: result.error || "Refund failed", status: result.status }, 200);
+    }
+
+    // Record what the processor said, so a later retry of the same key replays
+    // this answer instead of looking like a fresh failure.
+    if (claimKey) {
+      await service.rpc("settle_refund_intent", {
+        p_camp_id: campId, p_key: claimKey,
+        p_result: { success: true, externalTransactionId: result.externalTransactionId,
+                    status: result.status || "unknown", amount: amountCents / 100 },
+      });
     }
 
     await service.rpc("record_processor_transaction", {

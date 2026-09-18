@@ -21,11 +21,21 @@
 // is inferred from the body, because a mis-detected processor would map the
 // wrong fields and post a chargeback against the wrong payment.
 //
-// Set BYOP_DISPUTE_SECRET and pass it as the x-webhook-secret header if the
-// processor supports custom headers. If it does not, leave the secret unset —
-// the endpoint then relies on the unguessable URL, and every write it makes is
-// idempotent and reversible, so a spurious call costs a wrong ledger entry that
-// an office can reverse rather than money.
+// BYOP_DISPUTE_SECRET IS REQUIRED. Set it, and have the processor send it as the
+// x-webhook-secret header.
+//
+// This used to say that leaving it unset was acceptable — the endpoint would then
+// rely on an unguessable URL, on the reasoning that every write here is idempotent
+// and reversible. That reasoning was wrong twice over. A Supabase function URL is
+// a project ref and a function name, which is not a secret; and "reversible" is
+// not the same as harmless, because record_chargeback posts a real ledger entry,
+// rewrites campistryMe and notifies the office. An unauthenticated caller could
+// fabricate chargebacks against families, and somebody would have to work out
+// which of them were real.
+//
+// So it fails CLOSED: no secret configured, no requests served. A feature that is
+// switched off until an operator finishes configuring it is a far smaller problem
+// than one that is quietly open.
 //
 // ── WHAT IS VERIFIED AND WHAT IS NOT ───────────────────────────────────────
 // CARDKNOX / SOLA: the field names are verified against the field picker in the
@@ -178,7 +188,18 @@ serve(async (req) => {
       status: 400, headers: { ...corsHeaders, "Content-Type": "application/json" },
     });
   }
-  if (WEBHOOK_SECRET && req.headers.get("x-webhook-secret") !== WEBHOOK_SECRET) {
+  // No secret configured at all: refuse everything, and say what to do about it.
+  // 503 rather than 401 because this is the deployment being incomplete, not the
+  // caller being wrong — and it keeps the two cases apart in the logs.
+  if (!WEBHOOK_SECRET) {
+    console.error("[byop-dispute] REFUSING ALL REQUESTS: BYOP_DISPUTE_SECRET is not " +
+                  "set. Set it in the Edge Function secrets and have the processor " +
+                  "send it as the x-webhook-secret header.");
+    return new Response(JSON.stringify({ error: "webhook_not_configured" }), {
+      status: 503, headers: { ...corsHeaders, "Content-Type": "application/json" },
+    });
+  }
+  if (req.headers.get("x-webhook-secret") !== WEBHOOK_SECRET) {
     console.warn(`[byop-dispute] rejected: bad or missing x-webhook-secret (${processor})`);
     return new Response(JSON.stringify({ error: "unauthorized" }), {
       status: 401, headers: { ...corsHeaders, "Content-Type": "application/json" },

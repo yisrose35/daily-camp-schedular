@@ -44,13 +44,54 @@
 
     // Same stance as the canteen: credit yes, debit no. "Camp bill" posts the
     // amount to the family's account in Billing instead of taking money now.
-    S.PAY_METHODS = [
+    /**
+     * The shop's payment methods — ASKED FOR, not declared here.
+     *
+     * This used to be a hard-coded list, which is the exact drift
+     * campistry_payments.js was written to end: a camp that stopped taking cheques
+     * said so once and the shop carried on offering them, because the shop had its
+     * own copy. Worse, the catalogue already described the shop's own methods
+     * ('charge to canteen account', 'charge to camp bill') and nothing here read
+     * them, so the camp-wide setting governed every till except this one.
+     *
+     * The literal below survives ONLY as the fallback for a page that did not load
+     * the catalogue. It is deliberately the same five it always was, so such a page
+     * behaves exactly as it did rather than suddenly offering more.
+     */
+    var FALLBACK_PAY_METHODS = [
         { id: 'credit', label: 'Credit card' },
         { id: 'cash', label: 'Cash' },
         { id: 'check', label: 'Check' },
         { id: 'canteen', label: 'Charge to canteen account' },
         { id: 'bill', label: 'Charge to camp bill' }
     ];
+
+    /**
+     * What this camp accepts in the shop, right now.
+     *
+     * A getter rather than a fixed array because the policy can change while the
+     * page is open — an owner edits it in another tab and the shop should not need
+     * a reload to stop offering a method the camp no longer takes.
+     */
+    S.payMethods = function () {
+        try {
+            var P = (typeof window !== 'undefined' && window.CampistryPayments) || null;
+            if (P && typeof P.forContext === 'function') {
+                var list = P.forContext('shop');
+                if (list && list.length) return list;
+            }
+        } catch (e) {}
+        return FALLBACK_PAY_METHODS.slice();
+    };
+
+    /**
+     * Kept for readers that only need a LABEL for an id already stored on an order.
+     *
+     * It must span more than what the camp currently accepts: an order paid by
+     * cheque last season still has to render as "Check" after the camp stops taking
+     * cheques, or the history turns into raw ids.
+     */
+    S.PAY_METHODS = FALLBACK_PAY_METHODS;
 
     S.ORDER_STATUSES = ['placed', 'paid', 'packed', 'delivered', 'cancelled'];
     S.STATUS_LABELS = {

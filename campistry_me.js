@@ -30,6 +30,9 @@ function _schoolGradeOptions(current){
 var AV_BG=['#147D91','#6366F1','#0EA5E9','#10B981','#F43F5E','#8B5CF6','#D97706'];
 
 var structure={}, roster={}, families={}, payments=[], broadcasts=[], bunkAsgn={}, bunkManualCounts={}, bunkStaff={}, divisionHeads={};
+// The payer registry: households beyond the camper's own, and organizations —
+// funds, agencies, employers — that pay part of a bill. See campistry_payers.js.
+var payers={};
 // A bunk's second name: "Bunk 6A" is also called "Moshe".
 //
 // Deliberately a map alongside the structure rather than a field inside it.
@@ -415,6 +418,7 @@ function loadData(){
         roster=(s.app1&&s.app1.camperRoster)||{};
         var me=s.campistryMe||{};
         families=me.families||{}; payments=me.payments||[];
+        payers=(window.CampistryPayers?window.CampistryPayers.normalize(me.payers):(me.payers||{}));
         broadcasts=me.broadcasts||[]; bunkAsgn=me.bunkAssignments||{}; bunkManualCounts=me.bunkManualCounts||{};
         bunkCapacity=me.bunkCapacity||{};
         bunkStaff=me.bunkStaff||{};
@@ -621,6 +625,12 @@ function save(){
         // navigates away from Dashboard. Never let an empty in-memory copy
         // override a non-empty one already sitting in the local cache.
         var _savedSessions=(sessions&&sessions.length)?sessions:((g.campistryMe&&Array.isArray(g.campistryMe.sessions))?g.campistryMe.sessions:sessions);
+        // ★ Same guard, same reason: `payers` is a small registry that is empty
+        // until loadData() has run, and a save() fired from an unrelated edit
+        // before hydration would otherwise wipe every organization a camp had
+        // set up. An empty in-memory copy never overrides a populated stored one.
+        var _savedPayers=(payers&&Object.keys(payers).length)?payers
+                         :((g.campistryMe&&g.campistryMe.payers)||payers);
         // ★ Same class of bug as the sessions guard above, for the two records
         // that hold submitted applications: enrollments/staffApplications are
         // module-level vars only populated once loadData() has hydrated real
@@ -685,6 +695,7 @@ function save(){
         g.campistryMe=Object.assign({},(g.campistryMe&&typeof g.campistryMe==='object')?g.campistryMe:{},{
             families:_savedFamilies,
             payments:_savedPayments,
+            payers:_savedPayers,
             broadcasts:broadcasts,
             bunkAssignments:bunkAsgn,
             bunkManualCounts:bunkManualCounts,
@@ -1434,6 +1445,766 @@ function _liveOnlyEdit(section,whatFor){
  *
  * Returns '' in live, so a camp that never uses session planning sees nothing.
  */
+/** The payer rule, or null on a page that did not load it. */
+function _payersAPI(){return (typeof window!=='undefined'&&window.CampistryPayers)||null}
+
+/**
+ * The payer picker's options: the household first, then everyone in the registry.
+ *
+ * The household is always present and always the default, because it is the payer
+ * that absorbs whatever nobody else was assigned — see campistry_payers.js.
+ */
+function _payerOptions(famKey,selected){
+    var f=families[famKey]||{};
+    var h='<option value="'+esc(famKey||'')+'"'+((!selected||selected===famKey)?' selected':'')+'>'
+         +esc(f.name||'Household')+' (household)</option>';
+    Object.keys(payers||{}).sort(function(a,b){
+        return String((payers[a]||{}).name||'').localeCompare(String((payers[b]||{}).name||''));
+    }).forEach(function(id){
+        var p=payers[id]||{};
+        if(p.archived)return;
+        if(id===famKey)return;
+        h+='<option value="'+esc(id)+'"'+(selected===id?' selected':'')+'>'+esc(p.name||id)
+          +(p.kind==='organization'?' (organization)':'')+'</option>';
+    });
+    return h;
+}
+
+/** One editable split row inside the Add Charge form. */
+function _payerRowHtml(famKey,i,share){
+    share=share||{};
+    return '<div class="me-payer-row" data-i="'+i+'" style="display:grid;'
+      +'grid-template-columns:1.6fr .8fr .8fr 1.4fr auto;gap:7px;align-items:end;margin-bottom:7px">'
+      +'<div class="me-field" style="margin:0"><label style="font-size:.72rem">Payer</label>'
+      +'<select class="me-input me-pay-who">'+_payerOptions(famKey,share.payerId)+'</select></div>'
+      +'<div class="me-field" style="margin:0"><label style="font-size:.72rem">Amount</label>'
+      +'<input type="number" class="me-input me-pay-amt" step="0.01" min="0" placeholder="0.00" value="'
+      +(share.amount!=null?esc(share.amount):'')+'"></div>'
+      +'<div class="me-field" style="margin:0"><label style="font-size:.72rem">or %</label>'
+      +'<input type="number" class="me-input me-pay-pct" step="0.01" min="0" max="100" placeholder="%" value="'
+      +(share.pct!=null?esc(share.pct):'')+'"></div>'
+      +'<div class="me-field" style="margin:0"><label style="font-size:.72rem">Note</label>'
+      +'<input type="text" class="me-input me-pay-note" placeholder="approval ref, terms\u2026" value="'
+      +esc(share.note||'')+'"></div>'
+      +'<button type="button" class="me-btn me-btn--ghost me-btn--sm" '
+      +'onclick="this.closest(\'.me-payer-row\').remove();CampistryMe._payerSplitPreview()">\u2715</button>'
+      +'</div>';
+}
+
+/** Read the split rows back out of the form. */
+function _payerSharesFromForm(){
+    var out=[];
+    document.querySelectorAll('.me-payer-row').forEach(function(row){
+        var who=row.querySelector('.me-pay-who'), amt=row.querySelector('.me-pay-amt');
+        var pct=row.querySelector('.me-pay-pct'), note=row.querySelector('.me-pay-note');
+        if(!who||!who.value)return;
+        var a=amt&&amt.value!==''?parseFloat(amt.value):null;
+        var pc=pct&&pct.value!==''?parseFloat(pct.value):null;
+        if(a==null&&pc==null&&!(note&&note.value.trim()))return;
+        var sh={payerId:who.value};
+        if(a!=null)sh.amount=a;
+        if(pc!=null)sh.pct=pc;
+        if(note&&note.value.trim())sh.note=note.value.trim();
+        out.push(sh);
+    });
+    return out;
+}
+
+/** Live arithmetic under the split rows, so a mistake is visible before saving. */
+function _payerSplitPreview(){
+    var box=document.getElementById('chgSplitPreview');
+    if(!box)return;
+    var P=_payersAPI();
+    var amtEl=document.getElementById('chgAmount');
+    var total=amtEl?(parseFloat(amtEl.value)||0):0;
+    var shares=_payerSharesFromForm();
+    if(!P||!shares.length){box.innerHTML='';return}
+    var v=P.validate(total,shares);
+    if(!v.ok){
+        box.innerHTML='<div style="background:#FEF2F2;border:1px solid #FECACA;color:#991B1B;'
+          +'border-radius:8px;padding:7px 10px;font-size:.78rem">'+esc(v.message)+'</div>';
+        return;
+    }
+    var fk=(document.getElementById('chgFamKey')||{}).value||'';
+    var reg=Object.assign({},payers);
+    if(fk&&families[fk])reg[fk]={id:fk,name:families[fk].name||'Household',kind:'household'};
+    var line=P.describe(total,shares,reg,fk);
+    box.innerHTML=line?'<div style="background:#F0FDF4;border:1px solid #BBF7D0;color:#166534;'
+      +'border-radius:8px;padding:7px 10px;font-size:.78rem">'+esc(line)+'</div>':'';
+}
+
+function _addPayerRow(){
+    var wrap=document.getElementById('chgSplitRows');
+    if(!wrap)return;
+    var fk=(document.getElementById('chgFamKey')||{}).value||'';
+    wrap.insertAdjacentHTML('beforeend',_payerRowHtml(fk,wrap.children.length,{}));
+    _payerSplitPreview();
+}
+
+/**
+ * Manage the payers that are not the camper's own household.
+ *
+ * Mostly organizations — a shul fund, an agency, an employer — and occasionally a
+ * second household when parents bill separately. The NOTE is the reason this
+ * screen exists: "approved 2026-03-14, ref #4471" is what an office needs in
+ * August when the cheque has not arrived.
+ */
+function managePayers(){
+    if(!_secEdit('billing','Managing payers'))return;
+    var P=_payersAPI();
+    if(!P){toast('The payer module did not load','error');return}
+    var ids=Object.keys(payers||{}).sort(function(a,b){
+        return String((payers[a]||{}).name||'').localeCompare(String((payers[b]||{}).name||''));
+    });
+    var h='<div class="me-modal-form">';
+    h+='<p style="font-size:.83rem;color:var(--s500);margin:0 0 12px">'
+      +'Anyone other than a camper\u2019s own household who pays part of a bill. '
+      +'The household is always a payer and never needs adding here.</p>';
+    if(!ids.length){
+        h+='<div style="background:#F8FAFC;border:1px dashed var(--s200);border-radius:var(--r);'
+          +'padding:14px;text-align:center;color:var(--s500);font-size:.83rem;margin-bottom:12px">'
+          +'No organizations or extra households yet.</div>';
+    } else {
+        h+='<div style="max-height:260px;overflow:auto;margin-bottom:12px">';
+        ids.forEach(function(id){
+            var p=payers[id]||{};
+            h+='<div style="display:flex;gap:8px;align-items:center;padding:7px 9px;border:1px solid var(--s200);'
+              +'border-radius:8px;margin-bottom:6px;'+(p.archived?'opacity:.55':'')+'">'
+              +'<div style="flex:1;min-width:0"><strong style="font-size:.86rem">'+esc(p.name||id)+'</strong>'
+              +' <span style="font-size:.74rem;color:var(--s500)">'
+              +esc(p.kind==='organization'?'organization':'household')+'</span>'
+              +(p.note?'<div style="font-size:.76rem;color:var(--s500)">'+esc(p.note)+'</div>':'')
+              +(p.contact||p.email||p.phone?'<div style="font-size:.74rem;color:var(--s400)">'
+                 +esc([p.contact,p.email,p.phone].filter(Boolean).join(' \u00b7 '))+'</div>':'')
+              +'</div>'
+              +'<button type="button" class="me-btn me-btn--ghost me-btn--sm" '
+              +'onclick="CampistryMe.togglePayerArchived(\''+je(id)+'\')">'
+              +(p.archived?'Restore':'Archive')+'</button>'
+              +'</div>';
+        });
+        h+='</div>';
+    }
+    h+='<div style="border-top:1px solid var(--s200);padding-top:12px">';
+    h+='<div style="font-size:.82rem;font-weight:600;margin-bottom:8px">Add a payer</div>';
+    h+='<div style="display:grid;grid-template-columns:1.4fr .9fr;gap:9px">';
+    h+='<div class="me-field" style="margin:0"><label>Name</label>'
+      +'<input type="text" id="npName" class="me-input" placeholder="e.g. Tomchei Fund"></div>';
+    h+='<div class="me-field" style="margin:0"><label>Kind</label><select id="npKind" class="me-input">'
+      +'<option value="organization">Organization</option>'
+      +'<option value="household">Household</option></select></div>';
+    h+='</div>';
+    h+='<div style="display:grid;grid-template-columns:1fr 1fr;gap:9px">';
+    h+='<div class="me-field" style="margin:0"><label>Contact / email</label>'
+      +'<input type="text" id="npContact" class="me-input" placeholder="optional"></div>';
+    h+='<div class="me-field" style="margin:0"><label>Note</label>'
+      +'<input type="text" id="npNote" class="me-input" placeholder="approval ref, terms\u2026"></div>';
+    h+='</div>';
+    h+='</div></div>';
+    showModal('Payers & Organizations',h,function(){
+        var name=(document.getElementById('npName').value||'').trim();
+        if(!name){toast('Give the payer a name','error');return}
+        var kind=document.getElementById('npKind').value;
+        var id=P.idFor(name,kind);
+        // A repeated name would otherwise silently overwrite the first one, taking
+        // its note and its history with it.
+        if(payers[id]){toast('A payer called that already exists','error');return}
+        payers[id]={id:id,name:name,kind:kind,
+                    contact:(document.getElementById('npContact').value||'').trim(),
+                    note:(document.getElementById('npNote').value||'').trim()};
+        save();closeModal('dynModal');toast(name+' added as a payer');
+    },'Add payer');
+}
+function togglePayerArchived(id){
+    if(!_secEdit('billing','Managing payers'))return;
+    if(!payers[id])return;
+    // Archived rather than deleted: a payer named on a past charge has to keep
+    // resolving to a name, or last season's statements stop making sense.
+    payers[id].archived=!payers[id].archived;
+    save();closeModal('dynModal');managePayers();
+}
+
+/**
+ * WHICH PAYMENTS THIS CAMP TAKES — one screen, and it holds everywhere.
+ *
+ * This setting already existed and applied camp-wide, but the only way to reach it
+ * was to open the registration form builder and save a form. So a camp that stopped
+ * taking cheques had to go and edit a form to say so, and an owner looking for
+ * "which payments do we accept" would never have found it.
+ *
+ * It governs tuition, the canteen, the shop and luggage. Nothing is off by default:
+ * a camp turns off what it does not take, and a method turned off shows struck
+ * through with the reason rather than vanishing, so the gap reads as a decision.
+ */
+function managePaymentMethods(){
+    if(!_secEdit('billing','Changing accepted payments'))return;
+    var P=_payAPI();
+    if(!P){toast('The payment catalogue did not load','error');return}
+    var pol=P.policy();
+    var enabled=Array.isArray(pol.enabled)?pol.enabled:null;
+
+    var h='<div class="me-modal-form">';
+    h+='<p style="font-size:.83rem;color:var(--s500);margin:0 0 4px">'
+      +'Everything is accepted unless you turn it off here. This applies '
+      +'<strong>everywhere</strong> \u2014 registration, Billing, the canteen, the shop '
+      +'and luggage.</p>';
+    h+='<p style="font-size:.78rem;color:var(--s400);margin:0 0 14px">'
+      +'A method you turn off still appears on past records, so last season\u2019s '
+      +'payments keep reading correctly.</p>';
+
+    (P.CONTEXTS||[]).forEach(function(ctx){
+        var all=(P.METHODS||[]).filter(function(m){return m.contexts.indexOf(ctx)>=0});
+        if(!all.length)return;
+        h+='<div style="margin-bottom:14px"><div style="font-size:.8rem;font-weight:600;'
+          +'color:var(--s600);margin-bottom:6px;text-transform:capitalize">'+esc(ctx)+'</div>';
+        all.forEach(function(m){
+            // No stored list means every method is on — the open default, stated in
+            // the checkbox rather than implied by an empty setting.
+            var on=enabled?(enabled.indexOf(m.id)>=0):true;
+            h+='<label class="ops-check" style="display:inline-flex;align-items:center;gap:6px;'
+              +'margin:0 14px 7px 0;font-size:.83rem">'
+              +'<input type="checkbox" class="pmChk" data-ctx="'+esc(ctx)+'" value="'+esc(m.id)+'"'
+              +(on?' checked':'')+'> '+esc(m.label)+'</label>';
+        });
+        h+='</div>';
+    });
+    h+='</div>';
+
+    showModal('Accepted payments',h,function(){
+        var picked={};
+        document.querySelectorAll('.pmChk:checked').forEach(function(cb){picked[cb.value]=1});
+        var list=Object.keys(picked);
+        if(!list.length){toast('Keep at least one payment method','error');return}
+        _pendingPaymentPolicy=Object.assign({},pol,{enabled:list});
+        save();closeModal('dynModal');
+        toast('Accepted payments updated \u2014 '+list.length+' method'
+              +(list.length===1?'':'s')+', everywhere');
+    },'Save');
+}
+
+/** The close-out rule, or null on a page that did not load it. */
+function _closeoutAPI(){return (typeof window!=='undefined'&&window.CampistryCloseout)||null}
+
+/**
+ * A camper's unspent canteen money, or 0 when we cannot tell.
+ *
+ * Canteen balances live under `campistrySnacks`, which this page does not own and
+ * may not have hydrated at all — so this reads defensively and answers 0 rather
+ * than guessing. `balanceFloor` is subtracted for the same reason
+ * payments-canteen-refund-all subtracts it: money below the floor is not the
+ * family's to take back.
+ */
+/**
+ * A camper's name as a human reads it. Roster keys are unique but are not always
+ * the name — a second camper sharing one is keyed "Malky Stein #102".
+ */
+function _camperLabel(key){
+    return String(key==null?'':key).replace(/\s#\d+$/,'');
+}
+function _canteenAvailableFor(camperName){
+    try{
+        var g=(typeof loadGlobalSettings==='function')?loadGlobalSettings():null;
+        var acc=g&&g.campistrySnacks&&g.campistrySnacks.accounts
+                &&g.campistrySnacks.accounts[camperName];
+        if(!acc)return 0;
+        var avail=(Number(acc.balance)||0)-(Number(acc.balanceFloor)||0);
+        return Math.max(0,Math.round(avail*100)/100);
+    }catch(e){return 0}
+}
+
+/**
+ * How much of this family's money could actually go back to a card.
+ *
+ * _famRefundableOnlineAll takes the FAMILY OBJECT and returns the refundable
+ * payments newest-first, each with what is left on it — so the ceiling is the sum of
+ * those remainders, not the list. Sharing that helper with the refund screen is the
+ * point: two answers to "how much can go back to a card" is one of them being wrong.
+ */
+function _closeoutCardCeiling(f){
+    try{
+        if(typeof _famRefundableOnlineAll!=='function')return 0;
+        return Math.round((_famRefundableOnlineAll(f)||[]).reduce(function(n,d){
+            return n+(Number(d&&d.remaining)||0);
+        },0)*100)/100;
+    }catch(e){return 0}
+}
+
+/**
+ * SEASON-END CLOSE-OUT for one family.
+ *
+ * Shows both pots — the account credit and each camper's unspent canteen money —
+ * with a disposition per pot, and the resulting arithmetic under it. Nothing is
+ * applied until the office agrees to the whole disposition, because a card refund
+ * that can only be partly done changes what happens to the rest.
+ */
+function closeOutFamily(famKey){
+    if(!_secEdit('billing','Closing out a family'))return;
+    var C=_closeoutAPI();
+    if(!C){toast('The close-out module did not load','error');return}
+    var f=families[famKey];
+    if(!f){toast('Family not found','error');return}
+
+    var credit=Math.max(0,-(Number(f.balance)||0));   // a NEGATIVE balance is credit
+    var kids=(f.camperIds||[]).map(function(n){
+        return {name:n,canteen:_canteenAvailableFor(n)};
+    }).filter(function(k){return k.canteen>0});
+
+    if(credit<=0&&!kids.length){
+        showModal('Nothing to close out',
+            '<p style="margin:0;font-size:.86rem">'+esc(f.name||'This family')
+            +' has no credit balance and no unspent canteen money.</p>');
+        return;
+    }
+
+    function optHtml(id,sel){
+        return (C.OPTIONS||[]).map(function(o){
+            return '<option value="'+esc(o.id)+'"'+(o.id===sel?' selected':'')+'>'
+                 +esc(o.label)+'</option>';
+        }).join('');
+    }
+    var pol=C.normalize((window.loadGlobalSettings&&(loadGlobalSettings('campistryMe')||{}).closeoutPolicy)||{});
+
+    var h='<div class="me-modal-form" id="coForm">';
+    h+='<p style="font-size:.83rem;color:var(--s500);margin:0 0 12px">'
+      +'Decide what happens to each amount. Nothing is applied until you confirm, '
+      +'and a card refund that can only be partly done will say so below.</p>';
+
+    if(credit>0){
+        h+='<div style="border:1px solid var(--s200);border-radius:var(--r);padding:11px;margin-bottom:9px">'
+          +'<div style="display:flex;justify-content:space-between;align-items:center;gap:10px;margin-bottom:7px">'
+          +'<strong style="font-size:.88rem">Account credit</strong>'
+          +'<span style="font-weight:700">'+fm(credit)+'</span></div>'
+          +'<select class="me-input coDisp" data-kind="family" data-amount="'+credit+'" '
+          +'onchange="CampistryMe._closeoutPreview(\''+je(famKey)+'\')">'
+          +optHtml(pol.family)+'</select></div>';
+    }
+    kids.forEach(function(k){
+        h+='<div style="border:1px solid var(--s200);border-radius:var(--r);padding:11px;margin-bottom:9px">'
+          +'<div style="display:flex;justify-content:space-between;align-items:center;gap:10px;margin-bottom:7px">'
+          +'<strong style="font-size:.88rem">'+esc(_camperLabel(k.name))+'\u2019s canteen money</strong>'
+          +'<span style="font-weight:700">'+fm(k.canteen)+'</span></div>'
+          +'<select class="me-input coDisp" data-kind="canteen" data-camper="'+esc(k.name)+'" '
+          +'data-amount="'+k.canteen+'" '
+          +'onchange="CampistryMe._closeoutPreview(\''+je(famKey)+'\')">'
+          +optHtml(pol.canteen)+'</select></div>';
+    });
+    h+='<div id="coPreview" style="margin-top:10px"></div></div>';
+
+    showModal('Close out '+(f.name||'this family'),h,function(){
+        var plan=_closeoutPlanFromForm(famKey);
+        if(!plan||!plan.steps.length){toast('Nothing to apply','error');return}
+        _applyCloseout(famKey,plan);
+    },'Apply');
+    _closeoutPreview(famKey);
+}
+
+/** Read the dispositions off the form and ask the rule what that means. */
+function _closeoutPlanFromForm(famKey){
+    var C=_closeoutAPI(); if(!C)return null;
+    var f=families[famKey]||{};
+    var famDisp=null,campers=[];
+    document.querySelectorAll('.coDisp').forEach(function(sel){
+        var amt=parseFloat(sel.getAttribute('data-amount'))||0;
+        if(sel.getAttribute('data-kind')==='family')famDisp=sel.value;
+        else campers.push({name:sel.getAttribute('data-camper'),canteen:amt,
+                           disposition:sel.value});
+    });
+    var credit=Math.max(0,-(Number(f.balance)||0));
+    return C.plan({
+        familyCredit:credit,
+        // What can actually go back to a card, from the same helper the refund
+        // screen uses — so the two cannot disagree about the ceiling.
+        refundableToCard:_closeoutCardCeiling(f),
+        campers:campers,
+        familyDisposition:famDisp,
+        policy:(loadGlobalSettings&&(loadGlobalSettings('campistryMe')||{}).closeoutPolicy)||{}
+    });
+}
+
+/**
+ * Apply an agreed close-out.
+ *
+ * DELIBERATELY DOES NOT MOVE MONEY AT A PROCESSOR. `refund_card` is handed to the
+ * existing refund screen instead, which already has the idempotency claim, the
+ * refund-window check and the newest-first chunking across payments. A second path
+ * to the same processor call is how a camp ends up refunded twice, and this project
+ * has already paid for that lesson once.
+ *
+ * Everything else is a LEDGER write, and every one of them is a charge or a credit
+ * with a reason — never an edit to a balance. `bill` and `hold` are deliberately
+ * no-ops: the credit is already sitting on the account, and the disposition was the
+ * office deciding to leave it there.
+ */
+function _applyCloseout(famKey,plan){
+    var f=families[famKey];
+    var C=_closeoutAPI();
+    if(!f||!C||!plan)return;
+    var stamp=Date.now(), applied=0, deferred=[];
+
+    plan.steps.forEach(function(st,i){
+        var amt=Math.round((Number(st.amount)||0)*100)/100;
+        if(!(amt>0))return;
+        var who=(st.kind==='canteen')?(_camperLabel(st.camper||'')+'\u2019s canteen money')
+                                     :'Account credit';
+        var id='co_'+stamp+'_'+i;
+
+        if(st.do==='bill'||st.do==='hold'){
+            // Nothing to do, and that IS the disposition: the credit stays where it
+            // already is. Writing an entry here would move money for no reason.
+            applied++;
+            return;
+        }
+        if(st.do==='refund_card'){
+            deferred.push(amt);
+            return;
+        }
+        // donate / cash / check / roll_forward all CONSUME the credit, so each is a
+        // charge against the account with the reason attached. Crediting would double
+        // the family's credit; editing the balance would bypass the ledger entirely.
+        var reason=(st.do==='donate')?'donation'
+                  :(st.do==='roll_forward')?'carried_forward':'disbursement';
+        var note=C.labelFor(st.do)+' \u2014 '+who
+                +(st.do==='roll_forward'?' (opening credit next season)':'');
+        if(!f.charges)f.charges=[];
+        f.charges.push({id:id,category:'Close-out',description:note,amount:amt,
+                        date:today(),timestamp:stamp,closeout:{disposition:st.do,
+                        reason:reason,kind:st.kind||'family',camper:st.camper||''}});
+        f.balance=(f.balance||0)+amt;
+        applied++;
+    });
+
+    save();closeModal('dynModal');
+    if(curPage==='familydetail')renderFamilyDetailPage();else renderBilling();
+
+    var msg=applied?(applied+' close-out step'+(applied===1?'':'s')+' applied'):'';
+    if(deferred.length){
+        var total=deferred.reduce(function(n,x){return n+x},0);
+        msg+=(msg?'. ':'')+fm(Math.round(total*100)/100)+' is set to go back to a card '
+            +'\u2014 use Issue Credit/Refund so it goes through the refund checks';
+    }
+    toast(msg||'Nothing to apply');
+}
+
+/** Live arithmetic under the form, so a partial card refund is visible first. */
+function _closeoutPreview(famKey){
+    var box=document.getElementById('coPreview');
+    if(!box)return;
+    var C=_closeoutAPI(); if(!C)return;
+    var plan=_closeoutPlanFromForm(famKey);
+    if(!plan||!plan.total){box.innerHTML='';return}
+    var h='<div style="background:#F8FAFC;border:1px solid var(--s200);border-radius:8px;'
+        +'padding:9px 11px;font-size:.8rem;line-height:1.6">'
+        +'<strong>'+esc(C.describe(plan))+'</strong>';
+    plan.steps.forEach(function(st){
+        h+='<div style="color:var(--s500)">'+esc(C.labelFor(st.do))+' \u2014 '+fm(st.amount)
+          +(st.note?' <span style="color:var(--s400)">('+esc(st.note)+')</span>':'')+'</div>';
+    });
+    h+='</div>';
+    (plan.warnings||[]).forEach(function(w){
+        h+='<div style="background:#FFFBEB;border:1px solid #FDE68A;color:#92400E;'
+          +'border-radius:8px;padding:8px 11px;font-size:.79rem;margin-top:7px">'+esc(w)+'</div>';
+    });
+    box.innerHTML=h;
+}
+
+/**
+ * PUT A CARD SURCHARGE ON A FAMILY'S BILL.
+ *
+ * The policy, the 3% brand cap, the credit-only rule and the state bans have existed
+ * since campistry_card_fees.js and migration 192 — but nothing ever applied one. A
+ * camp could configure surcharging in full and collect nothing.
+ *
+ * The fee is computed by F.quote rather than here, which is what keeps the cap and
+ * the bans in ONE place. Three things it refuses outright, because each of them is a
+ * merchant-account problem rather than a preference:
+ *
+ *   * surcharging switched off — configure it first, in Card Fees
+ *   * a state that bans it on the date being charged
+ *   * anything the quote marks not permitted, whatever the reason
+ *
+ * And the DISCLOSURE goes on the charge description. The card brands require the
+ * family to be told; a surcharge line reading only "Card fee" is the version that
+ * gets a camp in trouble.
+ */
+function addCardSurcharge(famKey){
+    if(!_secEdit('billing','Adding a card surcharge'))return;
+    var F=_cfAPI();
+    if(!F){toast('The card-fee module did not load','error');return}
+    var f=families[famKey];
+    if(!f){toast('Family not found','error');return}
+
+    var pol=F.normalize(enrollSettings.cardFeePolicy);
+    if(pol.mode==='off'){
+        showModal('Card fees are switched off',
+            '<p style="margin:0 0 10px;font-size:.86rem">Nothing is set up to charge. '
+            +'Open <strong>Card Fees</strong> in settings and choose how you pass card '
+            +'costs on \u2014 surcharge, convenience fee, or a cash discount.</p>'
+            +'<p style="margin:0;font-size:.8rem;color:var(--s500)">Each has different '
+            +'rules, which is why this will not guess one for you.</p>');
+        return;
+    }
+    var x=F.explain(pol);
+    if(x&&x.blockers&&x.blockers.length){
+        showModal('Not chargeable yet',
+            '<p style="margin:0 0 8px;font-size:.86rem">This has to be sorted out first:</p>'
+            +'<ul style="margin:0;padding-left:18px;font-size:.83rem;line-height:1.7">'
+            +x.blockers.map(function(b){return '<li>'+esc(b)+'</li>'}).join('')+'</ul>');
+        return;
+    }
+
+    // Default to what they owe: the surcharge is normally on the amount about to be
+    // paid by card, and the outstanding balance is the best guess at that.
+    var owed=Math.max(0,Number(f.balance)||0);
+    var h='<div class="me-modal-form">';
+    h+='<div class="me-field"><label>Amount being paid by card ($)</label>'
+      +'<input type="number" id="csBase" class="me-input" step="0.01" min="0" value="'
+      +(owed>0?owed.toFixed(2):'')+'" placeholder="0.00" '
+      +'oninput="CampistryMe._surchargePreview()"></div>';
+    h+='<div id="csPreview" style="margin-top:4px"></div>';
+    h+='<p style="font-size:.78rem;color:var(--s400);margin:12px 0 0;line-height:1.6">'
+      +esc(F.disclosure(pol,{fmt:fm}))+'</p>';
+    h+='</div>';
+
+    showModal('Add card surcharge',h,function(){
+        var base=parseFloat((document.getElementById('csBase')||{}).value)||0;
+        if(!(base>0)){toast('Enter the amount being paid by card','error');return}
+        var q=F.quote(pol,{amount:base,method:'card',funding:'credit',channel:'online'});
+        if(!q||!q.permitted){
+            toast((q&&q.label)||'That fee is not permitted \u2014 see Card Fees','error');return;
+        }
+        if(!(q.fee>0)){toast('That works out to no fee','error');return}
+        if(!f.charges)f.charges=[];
+        f.charges.push({id:'sur_'+Date.now(),category:'Card Fee',
+            // The disclosure IS the description. A line reading only "Card fee" is
+            // the version that gets a camp in trouble with the brands.
+            description:F.disclosure(pol,{fmt:fm})||'Card fee',
+            amount:Math.round(q.fee*100)/100,date:today(),timestamp:Date.now(),
+            cardFee:{mode:q.mode,base:Math.round(base*100)/100,reason:q.reason}});
+        f.balance=(f.balance||0)+Math.round(q.fee*100)/100;
+        save();closeModal('dynModal');
+        if(curPage==='familydetail')renderFamilyDetailPage();else renderBilling();
+        toast('Card fee of '+fm(q.fee)+' added to '+(f.name||'the account'));
+    },'Add fee');
+    _surchargePreview();
+}
+
+/** Live figure under the amount, so the office sees the fee before agreeing. */
+function _surchargePreview(){
+    var box=document.getElementById('csPreview');
+    if(!box)return;
+    var F=_cfAPI(); if(!F)return;
+    var base=parseFloat((document.getElementById('csBase')||{}).value)||0;
+    if(!(base>0)){box.innerHTML='';return}
+    var pol=F.normalize(enrollSettings.cardFeePolicy);
+    var q=F.quote(pol,{amount:base,method:'card',funding:'credit',channel:'online'});
+    if(!q||!q.permitted||!(q.fee>0)){
+        box.innerHTML='<div style="background:#FEF2F2;border:1px solid #FECACA;color:#991B1B;'
+          +'border-radius:8px;padding:7px 10px;font-size:.78rem">'
+          +esc((q&&q.label)||'No fee applies to that amount.')+'</div>';
+        return;
+    }
+    box.innerHTML='<div style="background:#F0FDF4;border:1px solid #BBF7D0;color:#166534;'
+      +'border-radius:8px;padding:7px 10px;font-size:.79rem">Fee <strong>'+fm(q.fee)
+      +'</strong> \u2014 total with fee '+fm(Math.round((base+q.fee)*100)/100)+'</div>';
+}
+
+/** The AR rule, or null on a page that did not load it. */
+function _arAPI(){return (typeof window!=='undefined'&&window.CampistryAR)||null}
+
+/**
+ * INVOICES ARE DERIVED FROM THE LEDGER, and that choice is the whole design.
+ *
+ * An invoice is an installment somebody has been ASKED to pay —
+ * campistry_installments.js records invoicedAt and invoiceDueDate on the
+ * installment itself, and buildFamilyLedgers() is what decides WHICH FAMILY an
+ * enrollment belongs to (exact membership, then a fuzzy match for an accepted
+ * applicant, then an ephemeral `pending_` ledger for a camper no family owns
+ * yet). Re-deriving that cascade here would be a second answer to the same
+ * question, and the two would disagree the first time one of them changed — which
+ * is exactly the defect that keeps turning up in this file. So aging reads the
+ * ledger's own installment entries, and every account Billing lists is an account
+ * this screen can age.
+ *
+ * Only `invoiced` and `paid` count. A PENDING installment is not an invoice:
+ * nobody has asked for it, and aging it would charge the family for the camp's own
+ * delay in billing.
+ */
+function _arDocsFor(ledger){
+    var docs=[];
+    (((ledger||{}).entries)||[]).forEach(function(en){
+        if(!en||en.type!=='installment')return;
+        var st=String(en.status||'');
+        if(st!=='invoiced'&&st!=='paid')return;
+        var amt=Number(en.amount)||0;
+        if(!(amt>0))return;
+        docs.push({
+            id:'inst:'+String(en.ref||''), kind:'invoice',
+            amount:amt,
+            paid:st==='paid'?amt:0,
+            status:st==='paid'?'paid':'open',
+            issuedOn:en.invoicedAt||'',
+            // What the office asked for when it invoiced, falling back to what the
+            // schedule intended. dueOn is carried on the entry by
+            // buildFamilyLedgers so this does not have to re-read enrollments.
+            dueDate:en.dueOn||en.date||'',
+            note:en.desc||en.category||'Installment'
+        });
+    });
+    return docs;
+}
+
+/**
+ * When this family last actually paid us.
+ *
+ * From the ledger's payment entries, so it counts bank deposits and
+ * name-matched legacy payments the same way the balance does, and ignores a
+ * pending or failed card — money that has not arrived is not a payment, and
+ * treating it as one would quietly excuse a family from the no-payment-since
+ * query.
+ */
+function _arLastPayment(ledger){
+    var last='';
+    (((ledger||{}).entries)||[]).forEach(function(en){
+        if(!en||en.type!=='payment')return;
+        if((Number(en.amount)||0)<=0)return;           // a refund is not a payment
+        if(en.status==='pending'||en.status==='failed')return;
+        var d=String(en.date||'');
+        if(d&&d>last)last=d;
+    });
+    return last;
+}
+
+/** Every account Billing knows about, shaped the way CampistryAR.inquire wants. */
+function _arFamilies(ledgers){
+    ledgers=ledgers||buildFamilyLedgers();
+    return Object.keys(ledgers).map(function(fk){
+        var l=ledgers[fk]||{};
+        return {
+            key:fk,
+            name:((l.family||{}).name)||fk,
+            docs:_arDocsFor(l),
+            lastPaymentOn:_arLastPayment(l)
+        };
+    });
+}
+
+/** The state of the who-owes screen. Not persisted: it is a question, not a setting. */
+var _arOpen=false;
+var _arQuery={minPastDue:0,minDaysLate:0,bucket:'',noPaymentSince:''};
+function setArQuery(field,value){
+    if(!(field in _arQuery))return;
+    _arQuery[field]=(field==='bucket'||field==='noPaymentSince')?String(value||'')
+                                                               :(parseFloat(value)||0);
+    renderBilling();
+}
+function toggleAging(){_arOpen=!_arOpen;renderBilling()}
+
+/**
+ * WHO OWES — the question an office actually asks in August.
+ *
+ * Collapsed by default. This page was deliberately stripped back to one search box
+ * and one dropdown because a six-tile stat row above the account list was read by
+ * nobody; an aging table with four filters permanently expanded above it would undo
+ * that. Closed, it is one line with the number that decides whether to open it.
+ *
+ * Aging needs invoices, and invoices need somebody to have been asked, so a camp
+ * that has never invoiced anybody sees an explanation rather than an empty table.
+ * That is the commonest reason this screen is blank and the least obvious.
+ */
+function _arAgingHtml(ledgers){
+    var A=_arAPI(); if(!A)return '';
+    var fams=_arFamilies(ledgers);
+    var anyDocs=fams.some(function(f){return f.docs.length>0});
+    // Unfiltered, so the collapsed summary line answers "is there anything in
+    // here" rather than "is there anything matching a filter I cannot see".
+    var all=A.inquire({families:fams});
+    var head='<div style="display:flex;gap:10px;align-items:center;justify-content:space-between;'
+      +'flex-wrap:wrap;border:1px solid var(--s200);border-radius:9px;padding:10px 13px;'
+      +'margin-bottom:'+(_arOpen?'12px':'14px')+';background:#fff">'
+      +'<div><strong style="font-size:.9rem">Who owes</strong>'
+      +'<div style="font-size:.79rem;color:var(--s500);margin-top:2px">'
+      +(!anyDocs
+          ? 'Nothing has been invoiced yet'
+          : (all.totals.pastDue>0
+              ? fm(all.totals.pastDue)+' past due across '+all.rows.length+' famil'
+                +(all.rows.length===1?'y':'ies')
+              : 'Nothing past due — '+fm(all.totals.total)+' invoiced and outstanding'))
+      +'</div></div>'
+      +'<button class="me-btn me-btn--sec me-btn--sm" onclick="CampistryMe.toggleAging()">'
+      +(_arOpen?'Hide':'Aging report')+'</button></div>';
+
+    if(!_arOpen)return head;
+    var h=head;
+
+    if(!anyDocs){
+        h+='<div style="background:#FFFBEB;border:1px solid #FDE68A;color:#92400E;'
+          +'border-radius:9px;padding:12px 14px;font-size:.85rem;line-height:1.6;'
+          +'margin-bottom:14px">'
+          +'<strong>Nothing has been invoiced yet.</strong> Aging measures how long ago '
+          +'a family was <em>asked</em> to pay, so nothing appears here until an '
+          +'installment is invoiced. A camp that has not billed has families who owe '
+          +'nothing yet — not families who are late.</div>';
+        return h;
+    }
+
+    var r=A.inquire(Object.assign({},_arQuery,{families:fams}));
+
+    h+='<div style="display:flex;gap:8px;flex-wrap:wrap;align-items:end;margin-bottom:12px">';
+    h+='<div class="me-field" style="margin:0"><label style="font-size:.74rem">At least ($)</label>'
+      +'<input type="number" class="me-input" style="width:110px" step="0.01" min="0" value="'
+      +(_arQuery.minPastDue||'')+'" onchange="CampistryMe.setArQuery(\'minPastDue\',this.value)"></div>';
+    h+='<div class="me-field" style="margin:0"><label style="font-size:.74rem">Days late</label>'
+      +'<input type="number" class="me-input" style="width:100px" min="0" value="'
+      +(_arQuery.minDaysLate||'')+'" onchange="CampistryMe.setArQuery(\'minDaysLate\',this.value)"></div>';
+    h+='<div class="me-field" style="margin:0"><label style="font-size:.74rem">Bucket</label>'
+      +'<select class="me-input" onchange="CampistryMe.setArQuery(\'bucket\',this.value)">'
+      +'<option value="">Any</option>'
+      +(A.BUCKETS||[]).map(function(b){
+          return '<option value="'+esc(b.id)+'"'+(b.id===_arQuery.bucket?' selected':'')+'>'
+               +esc(b.label)+'</option>';
+      }).join('')+'</select></div>';
+    h+='<div class="me-field" style="margin:0"><label style="font-size:.74rem">No payment since</label>'
+      +'<input type="date" class="me-input" value="'+esc(_arQuery.noPaymentSince)+'" '
+      +'onchange="CampistryMe.setArQuery(\'noPaymentSince\',this.value)"></div>';
+    h+='</div>';
+
+    h+='<div style="display:flex;gap:10px;flex-wrap:wrap;margin-bottom:12px">';
+    (A.BUCKETS||[]).forEach(function(b){
+        var v=r.totals.buckets[b.id]||0;
+        h+='<div style="flex:1;min-width:118px;border:1px solid var(--s200);border-radius:8px;'
+          +'padding:9px 11px;background:'+(b.id==='current'?'#F8FAFC':'#FFFBEB')+'">'
+          +'<div style="font-size:.72rem;color:var(--s500)">'+esc(b.label)+'</div>'
+          +'<div style="font-weight:700;font-size:1rem">'+fm(v)+'</div></div>';
+    });
+    h+='</div>';
+
+    if(!r.rows.length){
+        h+='<p style="font-size:.85rem;color:var(--s500);margin-bottom:14px">Nobody matches that. '
+          +(_arQuery.minPastDue||_arQuery.minDaysLate||_arQuery.bucket||_arQuery.noPaymentSince
+             ?'Try widening the filters.':'Nothing is past due.')+'</p>';
+        return h;
+    }
+
+    h+='<p style="font-size:.82rem;color:var(--s500);margin:0 0 8px">'
+      +r.rows.length+' famil'+(r.rows.length===1?'y':'ies')+' · '
+      +'<strong>'+fm(r.totals.pastDue)+' past due</strong> of '+fm(r.totals.total)
+      +' invoiced and outstanding</p>';
+    h+='<div class="me-tw" style="margin-bottom:14px"><table class="me-t"><thead><tr>'
+      +'<th>Family</th><th>Past due</th><th>Oldest</th><th>Outstanding</th>'
+      +'<th>Last payment</th><th style="width:1%"></th></tr></thead><tbody>';
+    r.rows.forEach(function(row){
+        h+='<tr><td><strong>'+esc(row.name)+'</strong></td>'
+          +'<td style="font-weight:700;color:'+(row.aging.pastDue>0?'#B45309':'inherit')+'">'
+          +fm(row.aging.pastDue)+'</td>'
+          +'<td>'+(row.aging.oldestDays?row.aging.oldestDays+'d':'—')+'</td>'
+          +'<td>'+fm(row.aging.total)+'</td>'
+          +'<td>'+esc(row.lastPaymentOn||'never')+'</td>'
+          +'<td><button class="me-btn me-btn--sec me-btn--sm" '
+          +'onclick="CampistryMe.viewFamily(\''+je(row.key)+'\')">Open</button></td></tr>';
+    });
+    h+='</tbody></table></div>';
+    return h;
+}
+
 function _liveOnlyNotice(what){
     var ws='';
     try{ if(typeof window.campistryWorkspace==='function')ws=window.campistryWorkspace()||''; }catch(e){}
@@ -11975,7 +12746,24 @@ function enrollCamper(id){
 // actually enrolled) and buildFamilyLedgers() (previews it for an accepted-
 // but-not-yet-enrolled applicant, so Billing shows the real payment
 // structure instead of one lump "Tuition" number).
+/**
+ * The installment schedule — now built by campistry_installments.js.
+ *
+ * Two things the old body here got wrong and the rule fixes:
+ *
+ *   * It split with Math.floor on DOLLARS, so a 3-way split of 1000 came out as
+ *     334/333/333 by luck and could leave pennies unaccounted on other figures. The
+ *     rule splits in cents and puts the remainder on the FIRST payment, so nothing
+ *     is left outstanding at the end of the summer for somebody to chase.
+ *   * It did not ask whether the camp allows plans at all. A camp that unticks
+ *     "Payment plan" in Accepted payments now gets no schedule, rather than a
+ *     schedule that is offered and then refused at the till.
+ *
+ * The fallback is the old shape, for a page that did not load the rule.
+ */
 function _buildInstallmentSchedule(sesObj,tuition){
+    var R=(typeof window!=='undefined'&&window.CampistryInstallments)||null;
+    if(R)return R.build({session:sesObj,tuition:tuition});
     if(!sesObj||!sesObj.paymentPlan||sesObj.paymentPlan==='full')return null;
     var plan=sesObj.paymentPlan,out=[],today=new Date();
     if(plan==='deposit'){
@@ -13055,9 +13843,17 @@ function buildFamilyLedgers(){
         if((!schedule||!schedule.length)&&e.status==='accepted'){
             schedule=_buildInstallmentSchedule(sessObj,net);
         }
-        if(schedule&&schedule.length>1){
+        // A lone installment used to be hidden: it is just the tuition charge
+        // restated, so it added nothing. But once it has been INVOICED it is a
+        // real event — the family was asked — and the aging report reads these
+        // entries, so hiding it would make a one-payment plan un-ageable.
+        var _schedSeen=schedule&&schedule.length&&(schedule.length>1
+            ||String((schedule[0]||{}).status||'pending')!=='pending');
+        if(_schedSeen){
             schedule.forEach(function(inst,ii){
-                ledgers[fk].entries.push({type:'installment',category:inst.label,desc:esc(e.camperName)+' — '+esc(inst.label),amount:inst.amount,date:inst.dueDate||'',status:inst.status||'pending',ref:eid+'_inst'+ii});
+                // invoicedAt/dueOn ride along so aging can be derived from the
+                // ledger instead of re-deciding which family owns this enrollment.
+                ledgers[fk].entries.push({type:'installment',category:inst.label,desc:esc(e.camperName)+' — '+esc(inst.label),amount:inst.amount,date:inst.dueDate||'',status:inst.status||'pending',ref:eid+'_inst'+ii,invoicedAt:inst.invoicedAt||'',dueOn:inst.invoiceDueDate||inst.dueDate||''});
             });
         }
     });
@@ -13066,7 +13862,9 @@ function buildFamilyLedgers(){
     Object.entries(families).forEach(function([fk,f]){
         if(!ledgers[fk])return;
         (f.charges||[]).forEach(function(ch){
-            ledgers[fk].entries.push({type:'charge',category:ch.category||'Add-On',desc:ch.description||'',amount:Number(ch.amount)||0,date:ch.date||'',ref:ch.id||''});
+            // `payers` rides along so the per-payer view can be derived from the
+            // ledger rather than re-read from families — one source, one answer.
+            ledgers[fk].entries.push({type:'charge',category:ch.category||'Add-On',desc:ch.description||'',amount:Number(ch.amount)||0,date:ch.date||'',ref:ch.id||'',payers:ch.payers||null});
             if(ch.id)ledgers[fk]._seen['c:'+ch.id]=1;
             ledgers[fk].totalCharges+=Number(ch.amount)||0;
         });
@@ -14401,6 +15199,8 @@ function renderBilling(){
         +'<button onclick="CampistryMe.addFamily()">Add Household</button>'
         +'<button onclick="CampistryMe.addCharge()">Add Charge</button>'
         +'<button onclick="CampistryMe.issueCredit()">Issue Credit/Refund</button>'
+        +'<button onclick="CampistryMe.managePaymentMethods()">Accepted payments</button>'
+        +'<button onclick="CampistryMe.managePayers()">Payers &amp; Organizations</button>'
         +'<button onclick="CampistryMe.openMergeFamiliesTool()">Merge Families</button>'
         // Printing/exporting the household list moved to Reports (a
         // "Family Directory" template, filterable/groupable/printable) —
@@ -14432,6 +15232,10 @@ function renderBilling(){
         h+='<div style="background:#EFF6FF;border:1px solid #BFDBFE;padding:9px 12px;border-radius:var(--r);margin-bottom:12px;font-size:.82rem;color:#1E40AF;cursor:pointer" onclick="CampistryMe.openDepositInbox()">'
             +fm(_depPendingAmt)+' in bank deposits ('+_depPending+') arrived but '+(_depPending===1?'hasn\'t':'haven\'t')+' been matched to a family yet. Click to review.</div>';
     }
+
+    // Aging sits above the account list because it is the question that decides
+    // which account you open. Collapsed by default — see _arAgingHtml.
+    h+=_arAgingHtml(ledgers);
 
     // One plain search box + one plain status dropdown, replacing the old
     // 6-tile stat row and the 4-button count-labeled tab strip. Same data
@@ -14575,6 +15379,8 @@ function renderFamilyDetailPage(){
     else if(l.balance>0.005) moreItems+='<button onclick="CampistryMe.monthlyPlan(\''+je(l.famKey)+'\')">Set up Payment Plan</button>';
     moreItems+=hasCard?'<button onclick="CampistryMe.requestCardSetup(\''+je(l.famKey)+'\')">Replace payment method</button>':'<button onclick="CampistryMe.requestCardSetup(\''+je(l.famKey)+'\')">Set up payment method</button>';
     moreItems+='<button onclick="CampistryMe.addChargeForFamily(\''+je(l.famKey)+'\')">Add Charge</button>';
+    moreItems+='<button onclick="CampistryMe.addCardSurcharge(\''+je(l.famKey)+'\')">Add card surcharge\u2026</button>';
+    moreItems+='<button onclick="CampistryMe.closeOutFamily(\''+je(l.famKey)+'\')">Close out\u2026</button>';
     moreItems+='<button onclick="CampistryMe.issueCreditForFamily(\''+je(l.famKey)+'\')">Issue Credit/Refund</button>';
     moreItems+='<button onclick="CampistryMe.printStatement(\''+je(l.famKey)+'\')">Print Statement</button>';
     // The year-end statement offers the years this family actually paid in,
@@ -14795,6 +15601,23 @@ function addChargeForFamily(famKey){
     h+='<div class="me-field"><label>Amount ($)</label><input type="number" id="chgAmount" class="me-input" placeholder="0.00" step="0.01" min="0"></div>';
     h+='</div>';
     h+='<div class="me-field"><label>Date</label><input type="date" id="chgDate" class="me-input" value="'+today+'"></div>';
+
+    // WHO IS PAYING THIS. Optional and closed by default: a charge with no split
+    // is wholly the household's, which is what every charge before this was.
+    // Opened when a fund covers part of a bill, or two parents split it.
+    if(_payersAPI()){
+        h+='<details style="margin-top:6px;border:1px solid var(--s200);border-radius:var(--r);padding:9px 11px">';
+        h+='<summary style="cursor:pointer;font-size:.82rem;font-weight:600;color:var(--s600)">'
+          +'Split between payers <span style="font-weight:400;color:var(--s500)">'
+          +'\u2014 optional; anything unassigned is the household\u2019s</span></summary>';
+        h+='<div id="chgSplitRows" style="margin-top:9px"></div>';
+        h+='<button type="button" class="me-btn me-btn--sec me-btn--sm" '
+          +'onclick="CampistryMe._addPayerRow()">+ Add payer</button> ';
+        h+='<button type="button" class="me-btn me-btn--ghost me-btn--sm" '
+          +'onclick="CampistryMe.managePayers()">Manage payers\u2026</button>';
+        h+='<div id="chgSplitPreview" style="margin-top:9px"></div>';
+        h+='</details>';
+    }
     h+='</div>';
     showModal('Add Charge',h,function(){
         var fk=document.getElementById('chgFamKey').value;
@@ -14802,8 +15625,20 @@ function addChargeForFamily(famKey){
         if(!fk||!f){toast('Select a family','error');return}
         var amt=parseFloat(document.getElementById('chgAmount').value)||0;
         if(!amt){toast('Enter an amount','error');return}
+        // The split, if one was entered. REFUSED rather than clamped when it
+        // over-allocates: a household shown a negative balance and an organization
+        // billed for money nobody owes is worse than being made to fix the figures.
+        var _P=_payersAPI(), _shares=_P?_payerSharesFromForm():[];
+        if(_P&&_shares.length){
+            var _v=_P.validate(amt,_shares);
+            if(!_v.ok){toast(_v.message,'error');return}
+        }
         if(!f.charges) f.charges=[];
-        f.charges.push({id:'chg_'+Date.now(),category:document.getElementById('chgCategory').value,description:document.getElementById('chgDesc').value.trim(),amount:amt,date:document.getElementById('chgDate').value,timestamp:Date.now()});
+        var _chg={id:'chg_'+Date.now(),category:document.getElementById('chgCategory').value,description:document.getElementById('chgDesc').value.trim(),amount:amt,date:document.getElementById('chgDate').value,timestamp:Date.now()};
+        // Stored only when there IS a split, so an ordinary charge is byte-identical
+        // to one written before this feature existed.
+        if(_shares.length)_chg.payers=_shares;
+        f.charges.push(_chg);
         f.balance=(f.balance||0)+amt;
         save();closeModal('dynModal');if(curPage==='familydetail')renderFamilyDetailPage();else renderBilling();toast('Charge of '+fm(amt)+' added to '+f.name);
     });
@@ -15103,6 +15938,14 @@ function issueCreditForFamily(famKey){
             // If a chunk fails partway, the
             // chunks before it already moved real money — keep and report them
             // rather than rolling back (same reasoning as payments-canteen-refund).
+            // ONE KEY FOR THIS CLICK, reused by every chunk it issues.
+            //
+            // The server claims each chunk against it before calling the processor
+            // (migration 198), so a retry of this same action resumes instead of
+            // refunding twice. A second, deliberate refund is a second click and
+            // gets its own key, which is the distinction only the client can make.
+            var _refundKey='rfnd_'+fk+'_'+Date.now()+'_'
+                          +Math.random().toString(36).slice(2,8);
             var remaining=refundAmt, done=0, failMsg=null;
             toast('Processing refund…');
             for(var ci=0; ci<chunks.length && remaining>0.001; ci++){
@@ -15117,7 +15960,10 @@ function issueCreditForFamily(famKey){
                         var res=await callEdgeFunction('stripe-refund',{paymentIntentId:p.stripePaymentIntentId,amount:chunk,reason:stripeReason,metadata:{campId:getCampId(),family:p.family||''}});
                         refId=res.refundId;
                     } else {
-                        var byopRes=await callEdgeFunctionAuthed('payments-refund',{externalTransactionId:p.byopTransactionId,amount:chunk});
+                        var byopRes=await callEdgeFunctionAuthed('payments-refund',{externalTransactionId:p.byopTransactionId,amount:chunk,idempotencyKey:_refundKey+':'+ci});
+                        // A replayed claim means this chunk already moved money on
+                        // an earlier attempt. Treat it as the success it repeats.
+                        if(byopRes&&byopRes.replayed)console.log('[Me] refund chunk replayed:',ci);
                         refId=byopRes.externalTransactionId;
                     }
                 }catch(err){
@@ -19784,6 +20630,12 @@ window.CampistryMe={
     openCsv:function(){openModal('csvModal')},downloadTemplate:downloadTemplate,
     finReconcileCharges:finReconcileCharges,
     _dpToggle:_dpToggle,_cpToggle:_cpToggle,_cfToggle:_cfToggle,_fbRetryPreview:_fbRetryPreview,markDepositPaid:markDepositPaid,chargeDepositNow:chargeDepositNow,
+    managePayers:managePayers,togglePayerArchived:togglePayerArchived,
+    managePaymentMethods:managePaymentMethods,setArQuery:setArQuery,
+    toggleAging:toggleAging,
+    closeOutFamily:closeOutFamily,_closeoutPreview:_closeoutPreview,
+    addCardSurcharge:addCardSurcharge,_surchargePreview:_surchargePreview,
+    _addPayerRow:_addPayerRow,_payerSplitPreview:_payerSplitPreview,
     setRosterPage:setRosterPage,setRosterSubTab:setRosterSubTab,setRosterWhen:setRosterWhen,setBillingPage:setBillingPage,setAnalyticsInvoicePage:setAnalyticsInvoicePage,setAnalyticsPaymentPage:setAnalyticsPaymentPage,
     _runSetupChecklistAction:_runSetupChecklistAction,dismissSetupChecklist:dismissSetupChecklist,
     bbDrop:bbDrop,autoAssign:autoAssign,autoGenerateBunks:autoGenerateBunks,openBunkGenSettings:openBunkGenSettings,showCamperBunkRequests:showCamperBunkRequests,clearBunks:clearBunks,setBunkCount:setBunkCount,openBunkCountModal:openBunkCountModal,_clearBunkCount:_clearBunkCount,

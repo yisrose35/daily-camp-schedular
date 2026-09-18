@@ -304,9 +304,24 @@ function renderOrders() {
     h += '</tbody></table></div></div>';
     return h;
 }
+/**
+ * A label for a method id already stored on an order.
+ *
+ * Deliberately NOT limited to what the camp currently accepts: an order paid by
+ * cheque last season still has to read "Check" after the camp stops taking cheques,
+ * or the order history turns into raw ids. Asks the catalogue first — it knows every
+ * method there is — and falls back to the shop's own list.
+ */
 function payLabel(id) {
-    var m = SC.PAY_METHODS.filter(function (x) { return x.id === id; })[0];
-    return m ? m.label : '—';
+    try {
+        var P = (typeof window !== 'undefined' && window.CampistryPayments) || null;
+        if (P && typeof P.label === 'function' && id) {
+            var l = P.label(id);
+            if (l && l !== id && l !== '\u2014') return l;
+        }
+    } catch (e) {}
+    var m = (SC.PAY_METHODS || []).filter(function (x) { return x.id === id; })[0];
+    return m ? m.label : '\u2014';
 }
 
 function renderFulfil() {
@@ -619,7 +634,15 @@ window.shopEditOrder = function (id) {
     h += '<div class="ops-fsec">Payment</div>' +
         '<div class="ops-row"><div class="ops-field"><label>Method</label><select class="ops-select" id="oPay">' +
             '<option value="">— Not set —</option>' +
-            SC.PAY_METHODS.map(function (m) { return '<option value="' + m.id + '"' + (o.payMethod === m.id ? ' selected' : '') + '>' + m.label + '</option>'; }).join('') +
+            // What the camp ACCEPTS, from the one camp-wide catalogue. Plus, if the
+            // order already carries a method the camp has since stopped taking, that
+            // one as well — otherwise editing an old order silently clears how it
+            // was paid.
+            SC.payMethods().concat(
+                (o.payMethod && !SC.payMethods().some(function (m) { return m.id === o.payMethod; }))
+                    ? [{ id: o.payMethod, label: payLabel(o.payMethod) + ' (no longer accepted)' }]
+                    : []
+            ).map(function (m) { return '<option value="' + m.id + '"' + (o.payMethod === m.id ? ' selected' : '') + '>' + m.label + '</option>'; }).join('') +
         '</select></div>' +
         '<div class="ops-field"><label>Status</label><select class="ops-select" id="oStatus">' +
             SC.ORDER_STATUSES.map(function (s) { return '<option value="' + s + '"' + ((o.status || 'placed') === s ? ' selected' : '') + '>' + SC.STATUS_LABELS[s] + '</option>'; }).join('') +
