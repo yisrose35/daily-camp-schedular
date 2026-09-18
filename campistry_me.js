@@ -43,6 +43,19 @@ var payers={};
 var bunkAliases={};
 var bunkCapacity={}; // max campers per bunk (capacity), keyed by bunk name — distinct from bunkManualCounts (headcount override)
 var enrollments={}, sessions=[], enrollSettings={}, formConfig=null;
+// WHICH PUBLIC SUBMISSIONS THIS BROWSER DELETED.
+//
+// campistryMe goes up WHOLE on every save, and submit_public_application writes
+// new applications into it server-side without asking this tab. So a save from a
+// tab that loaded before a family applied erases that application — the parent saw
+// "Success!" and nobody finds out.
+//
+// campistry_finance_merge.js puts back anything the cloud has and we do not, but
+// it cannot tell "never saw it" from "deleted it" without being told, and
+// deleteApplication() is a real action on an application at any status. Hence a
+// record of the deletes. Pruned by the merge once each one has landed, so this
+// holds only deletes still in flight.
+var deletedIds={};
 // Set when the form builder saves its payment-method ticks; written onto
 // campistryMe by save(), which owns that blob. Null until then, so an
 // unrelated save never invents a policy the camp did not choose.
@@ -450,6 +463,7 @@ function loadData(){
         divisionHeads=me.divisionHeads||{};
         enrollments=me.enrollments||{}; sessions=me.sessions||[]; enrollSettings=me.enrollSettings||{};
         billingRules=(me.billingRules&&typeof me.billingRules==='object')?me.billingRules:{};
+        deletedIds=(me.deletedIds&&typeof me.deletedIds==='object')?me.deletedIds:{};
         staffApplications=me.staffApplications||{};
         leads=me.leads||{};
         counselorVisibility=(me.counselorVisibility&&typeof me.counselorVisibility==='object')?me.counselorVisibility:null;
@@ -736,6 +750,7 @@ function save(){
             sessions:_savedSessions,
             enrollSettings:enrollSettings,
             billingRules:billingRules,
+            deletedIds:deletedIds,
             // Only when the builder actually set it. Spreading `undefined`
             // here would be harmless; writing {} would not -- it would read as
             // "this camp accepts nothing".
@@ -2229,6 +2244,27 @@ function _arAgingHtml(ledgers){
     });
     h+='</tbody></table></div>';
     return h;
+}
+
+/**
+ * Record that this browser deleted a public submission, so the write-time merge
+ * honours the delete instead of restoring it from the cloud.
+ *
+ * Degrades to a no-op without the merge module: a page that cannot merge cannot
+ * resurrect anything either, so there is nothing for a tombstone to prevent.
+ */
+function _tombstoneSubmission(kind,id){
+    var M=(typeof window!=='undefined'&&window.CampistryFinanceMerge)||null;
+    if(!M||typeof M.tombstone!=='function')return;
+    var box={deletedIds:deletedIds};
+    M.tombstone(box,kind,id);
+    deletedIds=box.deletedIds||deletedIds;
+}
+/** Undo of a delete. Without this the next save re-deletes what was restored. */
+function _untombstoneSubmission(kind,id){
+    var M=(typeof window!=='undefined'&&window.CampistryFinanceMerge)||null;
+    if(!M||typeof M.untombstone!=='function')return;
+    M.untombstone({deletedIds:deletedIds},kind,id);
 }
 
 /** The bulk rule, or null on a page that did not load it. */
@@ -5553,7 +5589,10 @@ function cascadeCamperDelete(name){
         // nothing is lost if the delete itself is undone.
         Object.keys(enrollments).forEach(function(eid){
             var e=enrollments[eid];
-            if(e&&e.camperName===name)delete enrollments[eid];
+            if(e&&e.camperName===name){
+                delete enrollments[eid];
+                _tombstoneSubmission('enrollments',eid);
+            }
         });
     }catch(_){}
     // payments are intentionally KEPT — silently erasing billing history when a camper
@@ -5627,7 +5666,14 @@ async function deleteCamper(n){
         });
         capturedBunks.forEach(function(b){if(!bunkAsgn[b])bunkAsgn[b]=[];if(bunkAsgn[b].indexOf(n)<0)bunkAsgn[b].push(n)});
         Object.keys(capturedEnrollments).forEach(function(eid){
-            if(enrollments[eid])enrollments[eid]=capturedEnrollments[eid];
+            // UNCONDITIONAL. This used to be guarded on the enrollment still
+            // existing — but cascadeCamperDelete DELETES these keys, so the guard
+            // was false for exactly the enrollments Undo was snapshotted to bring
+            // back, and it silently restored none of them. The snapshot is the truth
+            // for these ids; if the key is still there, assigning it is a no-op.
+            enrollments[eid]=capturedEnrollments[eid];
+            // And the tombstone goes, or the next save re-deletes what Undo restored.
+            _untombstoneSubmission('enrollments',eid);
         });
         save();render(curPage);toast('Camper restored');
     }});
@@ -9734,11 +9780,15 @@ async function deleteApplication(id){
     var captured;
     try{captured=JSON.parse(JSON.stringify(e));}catch(_){captured=e;}
     delete enrollments[id];
+    // BEFORE the save, so the write-time merge sees the tombstone and does not put
+    // the application straight back from the cloud.
+    _tombstoneSubmission('enrollments',id);
     save();
     closeModal('appViewModal');
     _refreshPplIfActive();
     toast('Application deleted','ok',{actionLabel:'Undo',onAction:function(){
         enrollments[id]=captured;
+        _untombstoneSubmission('enrollments',id);
         save();render(curPage);toast('Application restored');
     }});
 }
