@@ -202,8 +202,14 @@ test('both Undo paths remove the tombstone', () => {
 });
 
 test('the cascade delete records each enrollment it removes', () => {
-    const a = ME.indexOf('Object.keys(enrollments).forEach(function(eid){');
-    const body = ME.slice(a, a + 400);
+    // ANCHORED TO THE FUNCTION, not to the loop shape. A bare
+    // `Object.keys(enrollments).forEach` matches an unrelated camper-merge loop
+    // earlier in the file, and indexOf takes the first — so this asserted against
+    // the wrong 400 characters.
+    const a = ME.indexOf('function cascadeCamperDelete');
+    assert.ok(a > 0, 'cascadeCamperDelete is gone — re-anchor this test');
+    const body = ME.slice(a, ME.indexOf('async function deleteCamper(n)', a));
+    assert.ok(body.length > 0, 'empty slice — the anchors moved');
     assert.match(body, /delete enrollments\[eid\];\s*\n\s*_tombstoneSubmission\('enrollments',eid\);/);
 });
 
