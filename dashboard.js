@@ -1952,8 +1952,10 @@
             }
 
             if (readOnly) {
+                // Just `disabled` — .dash-input:disabled carries the look now, so this
+                // no longer hand-paints two properties the stylesheet already owns.
                 [startEl, h1EndEl, h2StartEl, endEl].forEach(function(el) {
-                    if (el) { el.disabled = true; el.style.backgroundColor = 'var(--slate-50)'; el.style.color = 'var(--slate-500)'; }
+                    if (el) el.disabled = true;
                 });
                 var actions = document.getElementById('campDatesActions');
                 if (actions) actions.style.display = 'none';
@@ -2007,13 +2009,6 @@
     // snapping shut on the user mid-edit.
     var _weekPreviewOpen = false;
 
-    window._toggleWeekPreview = function() {
-        _weekPreviewOpen = !_weekPreviewOpen;
-        var body = document.getElementById('weekPreviewBody');
-        var chev = document.getElementById('weekPreviewChevron');
-        if (body) body.style.display = _weekPreviewOpen ? 'block' : 'none';
-        if (chev) chev.textContent = _weekPreviewOpen ? '▾' : '▸';
-    };
 
     function updateWeekPreview() {
         var startDate = document.getElementById('campStartDate')?.value;
@@ -2055,12 +2050,18 @@
             weeksHtml += 'Week ' + w.week + ': ' + fmt(w.start) + ' – ' + fmt(w.end) + halfTag + '<br>';
         });
 
+        // ONE DISCLOSURE PATTERN on this panel, the same <details> the Plan card
+        // uses. This was a hand-rolled chevron with its own click handler and its
+        // own open flag, and it looked like a different kind of thing.
         preview.innerHTML =
-            '<div style="cursor:pointer; user-select:none;" onclick="window._toggleWeekPreview()">' +
-                '<span id="weekPreviewChevron">' + (_weekPreviewOpen ? '▾' : '▸') + '</span> ' +
-                '<strong style="color:var(--slate-700);">Week breakdown (' + weeks.length + ' weeks)</strong>' +
-            '</div>' +
-            '<div id="weekPreviewBody" style="display:' + (_weekPreviewOpen ? 'block' : 'none') + '; margin-top:6px;">' + weeksHtml + '</div>';
+            '<details class="dash-more"' + (_weekPreviewOpen ? ' open' : '') + '>' +
+                '<summary>Week breakdown (' + weeks.length + ' weeks)</summary>' +
+                '<div class="dash-more-body" id="weekPreviewBody">' + weeksHtml + '</div>' +
+            '</details>';
+        // Remembered across the re-render a date change triggers, so opening it and
+        // then correcting a date does not close it under you.
+        var det = preview.querySelector('details');
+        if (det) det.addEventListener('toggle', function () { _weekPreviewOpen = det.open; });
         preview.style.display = 'block';
     }
 

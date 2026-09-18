@@ -731,6 +731,112 @@ button { font-family: inherit; cursor: pointer; border: none; background: none; 
 .dash-setup-tab.active { color: var(--camp-green); border-bottom-color: var(--camp-green); }
 .dash-setup-panel .dashboard-card:not(:last-child) { margin-bottom: 18px; }
 
+/* ============================================
+   SETUP PANEL CARDS
+   ============================================
+   CARDS SIZE TO THEIR CONTENT. A grid stretches its items to the tallest row
+   by default, which on Dates & Pricing left the two short cards with a hand's
+   width of empty white below the Save button while the long one set the height.
+   Three cards of honest, different heights read as three things; three cards
+   padded to match read as one thing that is mostly empty. */
+.dash-setup-panel .dashboard-grid { align-items: start; }
+
+/* A card that owns a list rather than a form spans the row — a sessions list
+   squeezed into a 320px column wraps its own header buttons onto two lines. */
+.dashboard-card--wide { grid-column: 1 / -1; }
+
+/* The header's button group. `nowrap` because "+ Add Session" breaking across
+   two lines is the single ugliest thing on this page, and the header is allowed
+   to wrap as a whole instead. */
+.card-header { flex-wrap: wrap; gap: 10px; }
+.card-header > h2 { flex: 1 1 auto; min-width: 0; }
+.card-actions { display: flex; gap: 8px; flex-wrap: nowrap; }
+.btn-edit { white-space: nowrap; }
+
+/* ===== the repeated form bits, named once =====
+   These were eight copies of the same inline style string. One class means one
+   place to change the field rhythm, and a diff that shows intent. */
+/* `.form-group` is the panel's existing wrapper; adding .dash-field to it is what
+   lets fourteen labels drop their identical inline style string rather than being
+   edited one at a time. The margin reset is deliberate — the card body owns the
+   rhythm now, so a wrapper with its own bottom margin double-spaces every row. */
+/* A flex column with its own gap, so it works alone (the date ranges) and also
+   composes with `.form-group`, which is already one. Using a label margin instead
+   would double up against that gap inside the edit forms. */
+.dash-field { display: flex; flex-direction: column; gap: 5px; margin: 0; min-width: 0; }
+.dash-field > label {
+    margin: 0;
+    font-size: 0.78rem; font-weight: 500; letter-spacing: 0.01em;
+    color: var(--slate-400);
+}
+/* TYPE-QUALIFIED DELIBERATELY. `.form-group input` is one class plus one element,
+   so a bare `.dash-input` loses to it on specificity — which is why the session
+   edit form's fields silently kept the old, larger sizing while every other field
+   on the panel shrank. Matching that specificity and coming later in the file is
+   what makes the whole panel one size. */
+input.dash-input, select.dash-input, textarea.dash-input, .dash-input {
+    width: 100%; padding: 9px 11px; font-size: 0.88rem; font-family: inherit;
+    color: var(--slate-800); background: white;
+    border: 1px solid var(--slate-200); border-radius: var(--radius-sm);
+    transition: border-color 0.15s ease, box-shadow 0.15s ease;
+}
+.dash-input:hover:not(:disabled) { border-color: var(--slate-300); }
+input.dash-input:focus, select.dash-input:focus, textarea.dash-input:focus, .dash-input:focus {
+    outline: none; border-color: var(--camp-green);
+    box-shadow: 0 0 0 3px rgba(20, 125, 145, 0.1);
+}
+input.dash-input:disabled, select.dash-input:disabled, .dash-input:disabled {
+    background: var(--slate-50); color: var(--slate-500);
+}
+
+/* A quiet block of state or explanation. Not a callout: nothing here is a
+   warning, and giving ordinary information a colour spends attention that the
+   one genuine warning on this page needs. */
+.dash-note {
+    padding: 11px 13px; border-radius: var(--radius-sm);
+    background: var(--slate-50); border: 1px solid var(--slate-100);
+    font-size: 0.82rem; line-height: 1.55; color: var(--slate-600);
+}
+.dash-note strong { color: var(--slate-800); font-weight: 600; }
+.dash-hint { font-size: 0.78rem; line-height: 1.5; color: var(--slate-400); margin: 0; }
+
+.dash-actions { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+.dash-actions .dash-status { font-size: 0.8rem; color: var(--slate-400); }
+
+/* A pair of dates that is really one range. The label sits above the pair, so
+   four date boxes read as two halves of a summer rather than four unrelated
+   fields — which is how they were being read. */
+.dash-range { display: flex; flex-direction: column; gap: 6px; }
+/* Inside a range the field label is the quiet one, so the half reads first. */
+.dash-range-label {
+    font-size: 0.74rem; font-weight: 700; letter-spacing: 0.05em;
+    text-transform: uppercase; color: var(--slate-600);
+}
+.dash-range-fields { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
+
+/* Progressive disclosure for the paragraph nobody reads twice. */
+.dash-more { border-top: 1px solid var(--slate-100); padding-top: 10px; }
+.dash-more > summary {
+    cursor: pointer; list-style: none;
+    font-size: 0.8rem; font-weight: 600; color: var(--camp-green);
+}
+.dash-more > summary::-webkit-details-marker { display: none; }
+.dash-more > summary::before {
+    content: '\25B8'; display: inline-block; margin-right: 7px;
+    transition: transform 0.15s ease;
+}
+.dash-more[open] > summary::before { transform: rotate(90deg); }
+.dash-more > summary:hover { text-decoration: underline; }
+.dash-more-body { margin-top: 10px; font-size: 0.82rem; line-height: 1.6; color: var(--slate-500); }
+.dash-more-body p { margin: 0 0 9px; }
+.dash-more-body p:last-child { margin-bottom: 0; }
+
+/* The card body: one rhythm instead of a per-card gap chosen by hand. */
+.dash-card-body { display: flex; flex-direction: column; gap: 14px; }
+/* A container JS has not filled yet is not on the page, so it must not spend a
+   gap. Several of these are empty until a fetch lands. */
+.dash-card-body > div:empty { display: none; }
+
 /* ===== PRODUCTS SECTION ===== */
 .products-section { margin-bottom: 40px; }
 .products-grid {
@@ -808,6 +914,7 @@ button { font-family: inherit; cursor: pointer; border: none; background: none; 
     .dash-stats-row { grid-template-columns: repeat(2, 1fr); gap: 10px; }
     .dash-feeds-row { grid-template-columns: 1fr; }
     .dashboard-grid { grid-template-columns: 1fr; }
+    .dash-range-fields { grid-template-columns: 1fr; }
     .products-grid { grid-template-columns: 1fr; }
     .team-grid { grid-template-columns: 1fr; }
     .dash-camp-setup { padding: 20px 16px; }

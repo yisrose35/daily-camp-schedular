@@ -9,7 +9,7 @@
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
     <link href="https://fonts.googleapis.com/css2?family=DM+Sans:opsz,wght@9..40,300;9..40,400;9..40,500;9..40,600;9..40,700;9..40,800&family=Fraunces:opsz,wght@9..144,400;9..144,500;9..144,600;9..144,700&display=swap" rel="stylesheet">
     <style>html:not(.css-ready) body { opacity: 0; } html.css-ready body { transition: opacity 0.15s ease; }</style>
-    <link rel="stylesheet" href="dashboard.css?v=20260903-03" onload="document.documentElement.classList.add('css-ready')">
+    <link rel="stylesheet" href="dashboard.css?v=20260918-08" onload="document.documentElement.classList.add('css-ready')">
     <link rel="stylesheet" href="mobile-responsive.css?v=20260903-03">
     <noscript><style>html body { opacity: 1 !important; }</style></noscript>
 </head>
@@ -443,19 +443,21 @@
                 <div class="card-header">
                     <h2>Current Session</h2>
                 </div>
-                <div style="display:flex; flex-direction:column; gap:12px;">
-                    <p style="margin:0; font-size:0.82rem; color:var(--slate-600); line-height:1.6;">
-                        Everything in Campistry &mdash; rosters, bunk sheets, attendance, the
-                        canteen, Health, Go and every printout &mdash; shows this session.
-                    </p>
-                    <div class="form-group" style="margin:0;">
-                        <label for="currentSessionPick" style="font-size:0.82rem; font-weight:600; color:var(--slate-600); margin-bottom:4px; display:block;">The camp is showing</label>
-                        <select id="currentSessionPick" style="width:100%; padding:8px 10px; border-radius:8px; border:1px solid var(--slate-200); font-size:0.88rem;"></select>
+                <!-- The control first, then what it currently means, then Save.
+                     The lead paragraph that used to sit on top said the same thing
+                     as the state box below in different words, so the card opened
+                     with two explanations and no control. -->
+                <div class="dash-card-body">
+                    <div class="dash-field">
+                        <label for="currentSessionPick">The camp is showing</label>
+                        <select id="currentSessionPick" class="dash-input"></select>
                     </div>
-                    <div id="currentSessionExplain" style="background:var(--slate-50); border-radius:8px; padding:12px 14px; font-size:0.82rem; color:var(--slate-600); line-height:1.6;"></div>
-                    <div id="currentSessionActions" style="display:flex; gap:10px; align-items:center;">
-                        <button type="button" id="saveCurrentSessionBtn" onclick="saveCurrentSession()" class="btn-primary" style="padding:8px 20px; font-size:0.85rem;">Save</button>
-                        <span id="currentSessionStatus" style="font-size:0.82rem; color:var(--slate-400);"></span>
+                    <div id="currentSessionExplain" class="dash-note"></div>
+                    <p class="dash-hint">Rosters, bunk sheets, attendance, the canteen, Health,
+                       Go and every printout follow this.</p>
+                    <div id="currentSessionActions" class="dash-actions">
+                        <button type="button" id="saveCurrentSessionBtn" onclick="saveCurrentSession()" class="btn-primary">Save</button>
+                        <span id="currentSessionStatus" class="dash-status"></span>
                     </div>
                 </div>
             </div>
@@ -464,32 +466,45 @@
                 <div class="card-header">
                     <h2>Summer Schedule</h2>
                 </div>
-                <div id="campDatesForm" style="display:flex; flex-direction:column; gap:14px;">
-                    <div style="display:grid; grid-template-columns:1fr 1fr; gap:14px;">
-                        <div class="form-group">
-                            <label for="campStartDate" style="font-size:0.82rem; font-weight:600; color:var(--slate-600); margin-bottom:4px; display:block;">Start of Summer</label>
-                            <input type="date" id="campStartDate" style="width:100%; padding:8px 10px; border-radius:8px; border:1px solid var(--slate-200); font-size:0.88rem;">
-                        </div>
-                        <div class="form-group">
-                            <label for="campHalf1End" style="font-size:0.82rem; font-weight:600; color:var(--slate-600); margin-bottom:4px; display:block;">End of 1st Half</label>
-                            <input type="date" id="campHalf1End" style="width:100%; padding:8px 10px; border-radius:8px; border:1px solid var(--slate-200); font-size:0.88rem;">
-                        </div>
-                    </div>
-                    <div style="display:grid; grid-template-columns:1fr 1fr; gap:14px;">
-                        <div class="form-group">
-                            <label for="campHalf2Start" style="font-size:0.82rem; font-weight:600; color:var(--slate-600); margin-bottom:4px; display:block;">Start of 2nd Half</label>
-                            <input type="date" id="campHalf2Start" style="width:100%; padding:8px 10px; border-radius:8px; border:1px solid var(--slate-200); font-size:0.88rem;">
-                        </div>
-                        <div class="form-group">
-                            <label for="campEndDate" style="font-size:0.82rem; font-weight:600; color:var(--slate-600); margin-bottom:4px; display:block;">End of Summer</label>
-                            <input type="date" id="campEndDate" style="width:100%; padding:8px 10px; border-radius:8px; border:1px solid var(--slate-200); font-size:0.88rem;">
+                <!-- GROUPED AS TWO RANGES, not four dates. These are the start and
+                     end of each half, and laid out as a flat 2x2 they read as four
+                     unrelated fields — which is how somebody ends up entering the
+                     end of the summer as the end of the 1st half. -->
+                <div id="campDatesForm" class="dash-card-body">
+                    <div class="dash-range">
+                        <span class="dash-range-label">1st Half</span>
+                        <div class="dash-range-fields">
+                            <div class="dash-field">
+                                <label for="campStartDate">Starts</label>
+                                <input type="date" id="campStartDate" class="dash-input">
+                            </div>
+                            <div class="dash-field">
+                                <label for="campHalf1End">Ends</label>
+                                <input type="date" id="campHalf1End" class="dash-input">
+                            </div>
                         </div>
                     </div>
-                    <div id="campDatesWeekPreview" style="display:none; background:var(--slate-50); border-radius:8px; padding:12px 14px; font-size:0.82rem; color:var(--slate-600); line-height:1.6;"></div>
-                    <div id="campDatesActions" style="display:flex; gap:10px; align-items:center;">
-                        <button type="button" id="saveCampDatesBtn" onclick="saveCampDates()" class="btn-primary" style="padding:8px 20px; font-size:0.85rem;">Save Dates</button>
-                        <button type="button" id="clearCampDatesBtn" onclick="clearCampDates()" class="btn-secondary" style="padding:8px 16px; font-size:0.85rem;">Clear</button>
-                        <span id="campDatesStatus" style="font-size:0.82rem; color:var(--slate-400);"></span>
+                    <div class="dash-range">
+                        <span class="dash-range-label">2nd Half</span>
+                        <div class="dash-range-fields">
+                            <div class="dash-field">
+                                <label for="campHalf2Start">Starts</label>
+                                <input type="date" id="campHalf2Start" class="dash-input">
+                            </div>
+                            <div class="dash-field">
+                                <label for="campEndDate">Ends</label>
+                                <input type="date" id="campEndDate" class="dash-input">
+                            </div>
+                        </div>
+                    </div>
+                    <!-- Plain, not a note box: what goes in here is a <details> that styles
+                         itself, and a disclosure inside a grey panel reads as two
+                         containers where there is one thing. -->
+                    <div id="campDatesWeekPreview" style="display:none;"></div>
+                    <div id="campDatesActions" class="dash-actions">
+                        <button type="button" id="saveCampDatesBtn" onclick="saveCampDates()" class="btn-primary">Save Dates</button>
+                        <button type="button" id="clearCampDatesBtn" onclick="clearCampDates()" class="btn-secondary">Clear</button>
+                        <span id="campDatesStatus" class="dash-status"></span>
                     </div>
                 </div>
             </div>
@@ -503,20 +518,32 @@
             <div class="dashboard-card" id="workspacesCard" style="display:none;">
                 <div class="card-header">
                     <h2>Plan a Session</h2>
-                    <button class="btn-edit" type="button" onclick="CampistryWorkspaceAdmin.newSandbox()">+ New Plan</button>
+                    <div class="card-actions">
+                        <button class="btn-edit" type="button" onclick="CampistryWorkspaceAdmin.newSandbox()">+ New Plan</button>
+                    </div>
                 </div>
-                <p style="font-size:0.82rem; color:var(--slate-500); line-height:1.6; margin:0 0 12px;">
-                    A plan is a full copy of your bunks, divisions, periods, bus routes, league
-                    setup and rotation history that you can build ahead of time. Nothing in a plan
-                    is live — counsellors and parents never see it. When the session starts, make
-                    it official and it becomes the camp; what it replaces is kept so you can look
-                    back at it.
-                    <br><br>
-                    <strong>Campers, families and payments are never copied.</strong> Those are
-                    always the live ones, in every plan — there is no such thing as a draft payment.
-                </p>
-                <div id="workspacesList" style="font-size:0.88rem;"></div>
-                <div id="workspacesStatus" style="font-size:0.82rem; margin-top:8px;"></div>
+                <!-- ONE SENTENCE, then the list, then the detail folded away. Five
+                     sentences of explanation above the thing they explain is read
+                     once and skipped for ever after, and it was setting this card's
+                     height for the whole row. -->
+                <div class="dash-card-body">
+                    <p class="dash-hint">Build next session's bunks, periods, routes and leagues
+                       ahead of time. Nothing in a plan is live until you make it official.</p>
+                    <div id="workspacesList" style="font-size:0.88rem;"></div>
+                    <div id="workspacesStatus" style="font-size:0.82rem;"></div>
+                    <details class="dash-more">
+                        <summary>What a plan does and does not copy</summary>
+                        <div class="dash-more-body">
+                            <p>A plan copies your bunks, divisions, periods, bus routes, league
+                               setup and rotation history. Counsellors and parents never see it.
+                               When the session starts, make it official and it becomes the camp
+                               &mdash; what it replaces is kept so you can look back at it.</p>
+                            <p><strong>Campers, families and payments are never copied.</strong>
+                               Those are always the live ones, in every plan: there is no such
+                               thing as a draft payment.</p>
+                        </div>
+                    </details>
+                </div>
             </div>
 
             <!-- Sessions & Pricing — owner-only, toggled via #sessionsCard.
@@ -524,33 +551,38 @@
                  rows in the same #sessionsList as sessions (tagged with a
                  small "Bundle" badge), so there's one list of "things a
                  parent can pick at registration," not two. -->
-            <div class="dashboard-card" id="sessionsCard">
+            <div class="dashboard-card dashboard-card--wide" id="sessionsCard">
                 <div class="card-header">
                     <h2>Sessions</h2>
-                    <div style="display:flex; gap:8px;">
+                    <div class="card-actions">
                         <button class="btn-edit" type="button" onclick="addBundleForm()">+ Add Bundle</button>
                         <button class="btn-edit" type="button" onclick="addSessionForm()">+ Add Session</button>
                     </div>
                 </div>
-                <label style="display:flex; align-items:center; gap:8px; font-size:0.82rem; color:var(--slate-600); margin-top:2px; margin-bottom:10px; cursor:pointer;">
-                    <input type="checkbox" id="allowParentPaymentPlans" onchange="saveAllowParentPaymentPlans()">
-                    Let parents set up their own payment plan in Link (once accepted) — when off, an application requesting a payment plan flags the office to set one up instead
+                <!-- The setting, then why it matters, on separate lines. As one run-on
+                     label beside a checkbox it was three lines of text where the
+                     tick-box is the only part anybody is looking for. -->
+                <label style="display:flex; align-items:flex-start; gap:9px; font-size:0.85rem; font-weight:500; color:var(--slate-700); cursor:pointer;">
+                    <input type="checkbox" id="allowParentPaymentPlans" onchange="saveAllowParentPaymentPlans()" style="margin-top:2px;">
+                    <span>Let parents set up their own payment plan in Link
+                        <span class="dash-hint" style="display:block; font-weight:400; margin-top:3px;">Once accepted. When off, an application asking for a payment plan flags the office to set one up instead.</span>
+                    </span>
                 </label>
-                <div id="sessionsList" style="display:flex; flex-direction:column; gap:10px; margin-top:10px;"></div>
+                <div id="sessionsList" style="display:flex; flex-direction:column; gap:10px; margin-top:16px;"></div>
 
                 <div id="bundleEditForm" style="display:none; margin-top:16px; padding:14px 16px; border-radius:10px; background:#f5f3ff; border:1px solid #ddd6fe;">
                     <h3 id="bundleFormTitle" style="margin:0 0 12px; font-size:0.9rem; font-weight:700; color:#5b21b6;">📦 Add Bundle</h3>
-                    <div class="form-group">
-                        <label for="bunName" style="font-size:0.82rem; font-weight:600; color:var(--slate-600); margin-bottom:4px; display:block;">Bundle Name</label>
-                        <input type="text" id="bunName" placeholder="e.g., Full Summer" style="width:100%; padding:8px 10px; border-radius:8px; border:1px solid var(--slate-200); font-size:0.88rem;">
+                    <div class="form-group dash-field">
+                        <label for="bunName">Bundle Name</label>
+                        <input type="text" id="bunName" placeholder="e.g., Full Summer" class="dash-input">
                     </div>
-                    <div class="form-group">
-                        <label style="font-size:0.82rem; font-weight:600; color:var(--slate-600); margin-bottom:4px; display:block;">Sessions included</label>
+                    <div class="form-group dash-field">
+                        <label>Sessions included</label>
                         <div id="bunSessionChecks" style="display:flex; flex-direction:column; gap:6px; padding:8px 10px; border-radius:8px; border:1px solid var(--slate-200);"></div>
                     </div>
-                    <div class="form-group">
-                        <label for="bunPrice" style="font-size:0.82rem; font-weight:600; color:var(--slate-600); margin-bottom:4px; display:block;">Bundle Price ($)</label>
-                        <input type="number" id="bunPrice" placeholder="0.00" step="0.01" min="0" style="width:100%; padding:8px 10px; border-radius:8px; border:1px solid var(--slate-200); font-size:0.88rem;">
+                    <div class="form-group dash-field">
+                        <label for="bunPrice">Bundle Price ($)</label>
+                        <input type="number" id="bunPrice" placeholder="0.00" step="0.01" min="0" class="dash-input">
                     </div>
                     <div style="display:flex; gap:10px; align-items:center;">
                         <button type="button" class="btn-secondary" onclick="cancelBundleForm()">Cancel</button>
@@ -561,13 +593,13 @@
 
                 <div id="sessionEditForm" style="display:none; margin-top:16px; padding:14px 16px; border-radius:10px; background:var(--slate-50); border:1px solid var(--slate-200);">
                     <h3 id="sessionFormTitle" style="margin:0 0 12px; font-size:0.9rem; font-weight:700; color:var(--slate-700);">Add Session</h3>
-                    <div class="form-group">
-                        <label for="sesName" style="font-size:0.82rem; font-weight:600; color:var(--slate-600); margin-bottom:4px; display:block;">Session Name</label>
-                        <input type="text" id="sesName" placeholder="e.g., Summer 2026 — Full Season" style="width:100%; padding:8px 10px; border-radius:8px; border:1px solid var(--slate-200); font-size:0.88rem;">
+                    <div class="form-group dash-field">
+                        <label for="sesName">Session Name</label>
+                        <input type="text" id="sesName" placeholder="e.g., Summer 2026 — Full Season" class="dash-input">
                     </div>
-                    <div class="form-group">
-                        <label for="sesDatePreset" style="font-size:0.82rem; font-weight:600; color:var(--slate-600); margin-bottom:4px; display:block;">Quick-fill from Camp Dates</label>
-                        <select id="sesDatePreset" onchange="applySessionDatePreset()" style="width:100%; padding:8px 10px; border-radius:8px; border:1px solid var(--slate-200); font-size:0.88rem;">
+                    <div class="form-group dash-field">
+                        <label for="sesDatePreset">Quick-fill from Camp Dates</label>
+                        <select id="sesDatePreset" onchange="applySessionDatePreset()" class="dash-input">
                             <option value="">Custom (set dates manually below)</option>
                             <option value="full">Full Summer</option>
                             <option value="half1">1st Half</option>
@@ -576,53 +608,53 @@
                         <p id="sesDatePresetHint" style="font-size:0.72rem; color:var(--slate-400); margin-top:4px;"></p>
                     </div>
                     <div style="display:grid; grid-template-columns:1fr 1fr; gap:14px;">
-                        <div class="form-group">
-                            <label for="sesStart" style="font-size:0.82rem; font-weight:600; color:var(--slate-600); margin-bottom:4px; display:block;">Start Date</label>
-                            <input type="date" id="sesStart" style="width:100%; padding:8px 10px; border-radius:8px; border:1px solid var(--slate-200); font-size:0.88rem;">
+                        <div class="form-group dash-field">
+                            <label for="sesStart">Start Date</label>
+                            <input type="date" id="sesStart" class="dash-input">
                         </div>
-                        <div class="form-group">
-                            <label for="sesEnd" style="font-size:0.82rem; font-weight:600; color:var(--slate-600); margin-bottom:4px; display:block;">End Date</label>
-                            <input type="date" id="sesEnd" style="width:100%; padding:8px 10px; border-radius:8px; border:1px solid var(--slate-200); font-size:0.88rem;">
+                        <div class="form-group dash-field">
+                            <label for="sesEnd">End Date</label>
+                            <input type="date" id="sesEnd" class="dash-input">
                         </div>
                     </div>
-                    <div class="form-group">
-                        <label for="sesDates" style="font-size:0.82rem; font-weight:600; color:var(--slate-600); margin-bottom:4px; display:block;">Date Range Label (optional)</label>
-                        <input type="text" id="sesDates" placeholder="e.g., June 22 – August 14" style="width:100%; padding:8px 10px; border-radius:8px; border:1px solid var(--slate-200); font-size:0.88rem;">
-                    </div>
-                    <div style="display:grid; grid-template-columns:1fr 1fr; gap:14px;">
-                        <div class="form-group">
-                            <label for="sesCap" style="font-size:0.82rem; font-weight:600; color:var(--slate-600); margin-bottom:4px; display:block;">Capacity</label>
-                            <input type="number" id="sesCap" placeholder="Leave blank for unlimited" min="0" style="width:100%; padding:8px 10px; border-radius:8px; border:1px solid var(--slate-200); font-size:0.88rem;">
-                        </div>
-                        <div class="form-group">
-                            <label for="sesTuition" style="font-size:0.82rem; font-weight:600; color:var(--slate-600); margin-bottom:4px; display:block;">Tuition ($)</label>
-                            <input type="number" id="sesTuition" placeholder="0.00" step="0.01" min="0" style="width:100%; padding:8px 10px; border-radius:8px; border:1px solid var(--slate-200); font-size:0.88rem;">
-                        </div>
+                    <div class="form-group dash-field">
+                        <label for="sesDates">Date Range Label (optional)</label>
+                        <input type="text" id="sesDates" placeholder="e.g., June 22 – August 14" class="dash-input">
                     </div>
                     <div style="display:grid; grid-template-columns:1fr 1fr; gap:14px;">
-                        <div class="form-group">
-                            <label for="sesEarly" style="font-size:0.82rem; font-weight:600; color:var(--slate-600); margin-bottom:4px; display:block;">Early Bird Price ($)</label>
-                            <input type="number" id="sesEarly" placeholder="Optional" step="0.01" min="0" style="width:100%; padding:8px 10px; border-radius:8px; border:1px solid var(--slate-200); font-size:0.88rem;">
+                        <div class="form-group dash-field">
+                            <label for="sesCap">Capacity</label>
+                            <input type="number" id="sesCap" placeholder="Leave blank for unlimited" min="0" class="dash-input">
                         </div>
-                        <div class="form-group">
-                            <label for="sesEarlyDate" style="font-size:0.82rem; font-weight:600; color:var(--slate-600); margin-bottom:4px; display:block;">Early Bird Deadline</label>
-                            <input type="date" id="sesEarlyDate" style="width:100%; padding:8px 10px; border-radius:8px; border:1px solid var(--slate-200); font-size:0.88rem;">
+                        <div class="form-group dash-field">
+                            <label for="sesTuition">Tuition ($)</label>
+                            <input type="number" id="sesTuition" placeholder="0.00" step="0.01" min="0" class="dash-input">
                         </div>
                     </div>
-                    <div class="form-group">
-                        <label for="sesSibDisc" style="font-size:0.82rem; font-weight:600; color:var(--slate-600); margin-bottom:4px; display:block;">Sibling Discount (%)</label>
-                        <input type="number" id="sesSibDisc" placeholder="e.g., 10 for 10% off siblings" min="0" max="100" style="width:100%; padding:8px 10px; border-radius:8px; border:1px solid var(--slate-200); font-size:0.88rem;">
+                    <div style="display:grid; grid-template-columns:1fr 1fr; gap:14px;">
+                        <div class="form-group dash-field">
+                            <label for="sesEarly">Early Bird Price ($)</label>
+                            <input type="number" id="sesEarly" placeholder="Optional" step="0.01" min="0" class="dash-input">
+                        </div>
+                        <div class="form-group dash-field">
+                            <label for="sesEarlyDate">Early Bird Deadline</label>
+                            <input type="date" id="sesEarlyDate" class="dash-input">
+                        </div>
                     </div>
-                    <div class="form-group">
+                    <div class="form-group dash-field">
+                        <label for="sesSibDisc">Sibling Discount (%)</label>
+                        <input type="number" id="sesSibDisc" placeholder="e.g., 10 for 10% off siblings" min="0" max="100" class="dash-input">
+                    </div>
+                    <div class="form-group dash-field">
                         <label style="display:flex; align-items:flex-start; gap:8px; font-size:0.85rem; color:var(--slate-600);">
                             <input type="checkbox" id="sesOvernight" style="width:auto; margin:2px 0 0;">
                             <span><strong>Overnight / sleepaway session</strong><br>
                             <span style="font-size:0.78rem; color:var(--slate-500);">Campers sleep at camp. Overnight camp is never a qualifying childcare expense, so this session is excluded from the year-end tax statements parents use for IRS Form 2441. Leave unticked for day camp.</span></span>
                         </label>
                     </div>
-                    <div class="form-group">
-                        <label for="sesPayPlan" style="font-size:0.82rem; font-weight:600; color:var(--slate-600); margin-bottom:4px; display:block;">Payment Plan</label>
-                        <select id="sesPayPlan" onchange="document.getElementById('sesDepositWrap').style.display=this.value==='deposit'?'block':'none'" style="width:100%; padding:8px 10px; border-radius:8px; border:1px solid var(--slate-200); font-size:0.88rem;">
+                    <div class="form-group dash-field">
+                        <label for="sesPayPlan">Payment Plan</label>
+                        <select id="sesPayPlan" onchange="document.getElementById('sesDepositWrap').style.display=this.value==='deposit'?'block':'none'" class="dash-input">
                             <option value="full">Full payment required</option>
                             <option value="2">2 installments (50/50)</option>
                             <option value="3">3 installments (34/33/33)</option>
@@ -633,12 +665,12 @@
                         </select>
                     </div>
                     <div class="form-group" id="sesDepositWrap" style="display:none;">
-                        <label for="sesDeposit" style="font-size:0.82rem; font-weight:600; color:var(--slate-600); margin-bottom:4px; display:block;">Down Payment Amount ($)</label>
-                        <input type="number" id="sesDeposit" step="0.01" min="0" style="width:100%; padding:8px 10px; border-radius:8px; border:1px solid var(--slate-200); font-size:0.88rem;">
+                        <label for="sesDeposit">Down Payment Amount ($)</label>
+                        <input type="number" id="sesDeposit" step="0.01" min="0" class="dash-input">
                     </div>
-                    <div class="form-group">
-                        <label for="sesNotes" style="font-size:0.82rem; font-weight:600; color:var(--slate-600); margin-bottom:4px; display:block;">Description / Notes</label>
-                        <textarea id="sesNotes" placeholder="Optional session description for parents" style="width:100%; padding:8px 10px; border-radius:8px; border:1px solid var(--slate-200); font-size:0.88rem; min-height:60px; resize:vertical;"></textarea>
+                    <div class="form-group dash-field">
+                        <label for="sesNotes">Description / Notes</label>
+                        <textarea id="sesNotes" placeholder="Optional session description for parents" class="dash-input" style="min-height:60px; resize:vertical;"></textarea>
                     </div>
                     <div style="display:flex; gap:10px; align-items:center;">
                         <button type="button" class="btn-secondary" onclick="cancelSessionForm()">Cancel</button>
@@ -653,15 +685,16 @@
                 <div class="card-header">
                     <h2>Attendance History</h2>
                 </div>
-                <p style="font-size:0.82rem; color:var(--slate-500); margin:-4px 0 12px;">
-                    Snapshot everyone currently on the roster and hired staff under a season
-                    label, so their attendance survives a CSV re-import or next year's reset.
-                    This never changes today's roster — it only adds a record to look back on.
-                </p>
-                <div style="display:flex; gap:10px; align-items:center; flex-wrap:wrap;">
-                    <input type="text" id="seasonArchiveLabel" placeholder="e.g. Summer 2026" style="flex:1; min-width:200px; padding:8px 10px; border-radius:8px; border:1px solid var(--slate-200); font-size:0.88rem;">
-                    <button type="button" id="archiveSeasonBtn" onclick="archiveCurrentSeasonNow()" class="btn-primary" style="padding:8px 20px; font-size:0.85rem; white-space:nowrap;">Archive Current Season</button>
-                    <span id="seasonArchiveStatus" style="font-size:0.82rem; color:var(--slate-400);"></span>
+                <div class="dash-card-body">
+                    <p class="dash-hint">Snapshot everyone currently on the roster and hired
+                       staff under a season label, so their attendance survives a CSV re-import
+                       or next year's reset. This never changes today's roster &mdash; it only
+                       adds a record to look back on.</p>
+                    <div class="dash-actions">
+                        <input type="text" id="seasonArchiveLabel" class="dash-input" placeholder="e.g. Summer 2026" style="flex:1; min-width:200px;">
+                        <button type="button" id="archiveSeasonBtn" onclick="archiveCurrentSeasonNow()" class="btn-primary" style="white-space:nowrap;">Archive Current Season</button>
+                        <span id="seasonArchiveStatus" class="dash-status"></span>
+                    </div>
                 </div>
           </div>
         </div>
@@ -912,8 +945,8 @@ if (window.location.protocol === 'file:') {
 <script src="campistry_workspace_admin.js?v=20260917-02"></script>
 
     <script src="cloud_sync_helpers.js?v=20260903-03"></script>
-    <script src="dashboard.js?v=20260918-05"></script>
-    <script src="campistry_setup_checklist.js?v=20260918-05"></script>
+    <script src="dashboard.js?v=20260918-08"></script>
+    <script src="campistry_setup_checklist.js?v=20260918-08"></script>
     <script src="campistry_enrollment_window.js?v=20260917-02"></script>
 <script src="campistry_presence.js?v=20260918-05"></script>
 <!-- The master key: which session the whole program is showing. Pure rule; the
