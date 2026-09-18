@@ -34,6 +34,19 @@
         {key:'notes',  name:'Campistry Notes',  href:'campistry_notes.html',      img:'Notes_clean.png',  title:'Campistry Notes'}
     ];
 
+    // Keyboard shortcuts: Ctrl+Shift+<letter> jumps to an app from anywhere.
+    // Keyed by KeyboardEvent.code (layout-independent). Letters follow each
+    // app's name where free; Live uses V because Link takes L.
+    // NOTE: a few Ctrl+Shift combos are reserved by the browser itself and may
+    // not reach the page — most notably Ctrl+Shift+N (new incognito window),
+    // and sometimes Ctrl+Shift+S. Those apps are still reachable via the Apps
+    // popover; the shortcut is best-effort.
+    var SHORTCUTS={KeyF:'flow',KeyG:'go',KeyM:'me',KeyH:'health',KeyV:'live',KeyS:'snacks',KeyL:'link',KeyN:'notes'};
+    function shortcutFor(appKey){
+        for(var code in SHORTCUTS){ if(SHORTCUTS[code]===appKey) return 'Ctrl+Shift+'+code.replace('Key',''); }
+        return '';
+    }
+
     function esc(s){
         var d=document.createElement('div');
         d.textContent=s==null?'':String(s);
@@ -56,13 +69,18 @@
             +'<rect x="1" y="1" width="4" height="4" rx="1"></rect><rect x="6" y="1" width="4" height="4" rx="1"></rect><rect x="11" y="1" width="4" height="4" rx="1"></rect>'
             +'<rect x="1" y="6" width="4" height="4" rx="1"></rect><rect x="6" y="6" width="4" height="4" rx="1"></rect><rect x="11" y="6" width="4" height="4" rx="1"></rect>'
             +'<rect x="1" y="11" width="4" height="4" rx="1"></rect><rect x="6" y="11" width="4" height="4" rx="1"></rect><rect x="11" y="11" width="4" height="4" rx="1"></rect>'
-            +'</svg><span class="qs-trigger-label">Apps</span>'
+            +'</svg><span class="qs-trigger-label">Menu</span>'
             +'<svg class="qs-caret" width="10" height="10" viewBox="0 0 10 10" aria-hidden="true"><path d="M2 3.5L5 6.5L8 3.5" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"></path></svg>'
             +'</button>';
-        html+='<div class="qs-pop" role="menu" aria-hidden="true"><div class="qs-pop-grid">';
+        html+='<div class="qs-pop" role="menu" aria-hidden="true">';
+        // Dashboard sits at the top of the same dropdown as the app toggles,
+        // so the header no longer needs a separate "← Dashboard" link.
+        html+='<a href="dashboard.html" class="qs-pop-dash" role="menuitem"><span class="qs-dash-arrow">&larr;</span> Dashboard</a>';
+        html+='<div class="qs-pop-grid">';
         APPS.forEach(function(a){
             var isActive=a.key===activeKey;
-            html+='<a href="'+a.href+'" class="qs-pop-item'+(isActive?' is-active':'')+'" data-app="'+a.key+'" role="menuitem" title="'+esc(a.title)+'"'+(isActive?' aria-current="page"':'')+'>'
+            var sc=shortcutFor(a.key);
+            html+='<a href="'+a.href+'" class="qs-pop-item'+(isActive?' is-active':'')+'" data-app="'+a.key+'" role="menuitem" title="'+esc(a.title)+(sc?' ('+sc+')':'')+'"'+(isActive?' aria-current="page"':'')+'>'
                 +'<img src="'+a.img+'" alt="'+esc(a.name)+'">'
                 +'<span>'+esc(shortName(a.name))+'</span>'
                 +'</a>';
@@ -127,7 +145,20 @@
     function wireGlobalHandlers(){
         if(_wired) return; _wired=true;
         document.addEventListener('click', onDocClick);
-        document.addEventListener('keydown', function(e){ if(e.key==='Escape') closeAll(); });
+        document.addEventListener('keydown', function(e){
+            if(e.key==='Escape'){ closeAll(); return; }
+            // Ctrl+Shift+<letter> app-jump (ignore when Alt/Meta also held).
+            if(e.ctrlKey && e.shiftKey && !e.altKey && !e.metaKey){
+                var appKey=SHORTCUTS[e.code];
+                if(!appKey) return;
+                var app=null;
+                for(var i=0;i<APPS.length;i++){ if(APPS[i].key===appKey){ app=APPS[i]; break; } }
+                if(!app) return;
+                e.preventDefault();
+                // Don't reload if we're already on that app's page.
+                if(window.location.pathname.split('/').pop()!==app.href) window.location.href=app.href;
+            }
+        });
         // A fixed popover would drift if the page scrolls or resizes under it;
         // simplest correct behaviour is to close it.
         window.addEventListener('resize', function(){ closeAll(); });
