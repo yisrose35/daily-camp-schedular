@@ -29,7 +29,9 @@ a{color:inherit;text-decoration:none}button{font-family:inherit;cursor:pointer;b
    item's own min-width:0 + the quick-switch-bar's overflow-x:auto let it
    shrink and internally scroll — rather than overlap anything — the
    moment the header runs out of room. */
-.app-header{display:flex;align-items:center;height:56px;padding:0 16px;background:#fff;border-bottom:1px solid var(--s200);position:sticky;top:0;z-index:30}
+/* Continuous with the page: same background as the content area, no divider,
+   so the top of the page reads as one surface rather than a separate bar. */
+.app-header{display:flex;align-items:center;height:56px;padding:0 16px;background:var(--s50);border-bottom:none;position:sticky;top:0;z-index:30}
 .header-left{display:flex;align-items:center;gap:12px;flex:0 0 auto;justify-content:flex-start}
 .header-right{display:flex;align-items:center;gap:10px;min-width:0;flex:0 1 auto;justify-content:flex-end;overflow:hidden}
 .app-header-center{display:flex;justify-content:center;min-width:0;overflow:hidden;flex:1 1 auto}
@@ -159,6 +161,11 @@ body.sidebar-open .sidebar{transform:translateX(0)}
 .me-t tbody tr:hover td{background:var(--s50)}
 .me-t tbody tr.click{cursor:pointer}
 .me-t .bold{font-weight:600;color:var(--s800)}
+/* Cleaner edges: generous side gutters and no trailing divider under the last
+   row (matches the calm, roomy table feel across Billing/Payroll/Roster). */
+.me-t th:first-child,.me-t td:first-child{padding-left:16px}
+.me-t th:last-child,.me-t td:last-child{padding-right:16px}
+.me-t tbody tr:last-child td{border-bottom:none}
 
 /* ── BADGES ─────────────────────────── */
 .badge{display:inline-flex;align-items:center;padding:2px 8px;border-radius:999px;font-size:.7rem;font-weight:600}
@@ -452,33 +459,5 @@ select.me-input{cursor:pointer}
 .rb-advanced>summary::before{content:'▸ ';color:var(--s400)}
 .rb-advanced[open]>summary::before{content:'▾ '}
 
-/* ── Auto-hide header: slides down only on top-edge hover ───────────────────
-   Set by campistry_inline_nav.js (body.hoverbar). The header is hidden off the
-   top of the screen by default, reclaiming its whole row; resting the mouse at
-   the very top for ~1.5s (or hovering the bar) slides it down. Content and the
-   sidebar no longer reserve the old 56px header height. */
-.hoverbar .app-header{
-    position:fixed; left:0; right:0; top:0;
-    transform:translateY(-100%);
-    transition:transform .28s var(--ease);
-    z-index:60;
-    box-shadow:0 6px 18px rgba(0,0,0,.10);
-    will-change:transform;
-}
-.hoverbar.hoverbar-open .app-header{transform:translateY(0)}
-.hoverbar .app-main{min-height:100vh}
-.hoverbar .sidebar{top:0}
-/* Invisible trigger strip pinned to the very top edge of the viewport. */
-.hoverbar-hotzone{position:fixed;top:0;left:0;right:0;height:6px;z-index:59}
-/* A subtle always-visible handle so users can discover the hidden bar. */
-.hoverbar-tab{
-    position:fixed;top:0;left:50%;transform:translateX(-50%);
-    z-index:58;display:flex;align-items:center;gap:6px;
-    padding:2px 14px 4px;border-radius:0 0 10px 10px;
-    background:rgba(255,255,255,.9);border:1px solid var(--s200);border-top:none;
-    box-shadow:0 2px 6px rgba(0,0,0,.06);
-    font-size:.66rem;font-weight:700;letter-spacing:.04em;text-transform:uppercase;color:var(--s400);
-    cursor:pointer;opacity:.8;transition:opacity .15s,color .15s;
-}
-.hoverbar-tab:hover{opacity:1;color:var(--me)}
-.hoverbar.hoverbar-open .hoverbar-tab{opacity:0;pointer-events:none}
+/* Auto-hide header styles now live in campistry-unified.css (body.hoverbar),
+   shared across every app. Me needs no page-specific header overrides. */

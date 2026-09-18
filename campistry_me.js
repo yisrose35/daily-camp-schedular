@@ -3329,6 +3329,58 @@ function acceptAddToFamily(famKey,camperName){
 // office's field-by-field picks; pass null to keep everything from A
 // wholesale (today's original, unconditional behavior — still used when a
 // suggestion is accepted without opening the guided tool).
+// ── Audit log ───────────────────────────────────────────────────────────────
+// Append-only "who changed what when" trail (camp_audit_log table, migration
+// 199). Fire-and-forget: a logging failure must never block or break the user
+// action it is recording, so everything is wrapped and errors are swallowed.
+async function _meAudit(action,details){
+    try{
+        var client=window.CampistryDB&&window.CampistryDB.getClient?window.CampistryDB.getClient():window.supabase;
+        var campId=window.CampistryDB&&window.CampistryDB.getCampId?window.CampistryDB.getCampId():(window.getCampId?window.getCampId():null);
+        if(!client||!campId)return;
+        var uid=null,email=null,role=null;
+        try{ var u=await client.auth.getUser(); if(u&&u.data&&u.data.user){uid=u.data.user.id;email=u.data.user.email;} }catch(_){}
+        try{ role=(window.CampistryDB&&(CampistryDB.getRole?CampistryDB.getRole():(CampistryDB.getUserRole?CampistryDB.getUserRole():null)))||null; }catch(_){}
+        await client.from('camp_audit_log').insert({camp_id:campId,user_id:uid,user_email:email,user_role:role,action:action,details:details||{}});
+    }catch(_){ /* never surface logging errors to the user */ }
+}
+function _alogAction(a){
+    var map={'family.merge':'Merged families','family.delete':'Deleted family','camper.delete':'Deleted camper','roster.import':'Imported roster'};
+    return map[a]||String(a||'').replace(/[._]/g,' ');
+}
+function _alogDetails(d){
+    if(d==null)return'';
+    if(typeof d==='string')return d;
+    try{ return Object.keys(d).map(function(k){return k+': '+d[k]}).join(' · '); }catch(_){ return ''; }
+}
+// Owner-facing viewer — opened from Billing's ⋯ menu. Read-only; RLS already
+// limits SELECT to owner/admin/manager.
+async function openActivityLog(){
+    var client=window.CampistryDB&&window.CampistryDB.getClient?window.CampistryDB.getClient():window.supabase;
+    var campId=window.CampistryDB&&window.CampistryDB.getCampId?window.CampistryDB.getCampId():(window.getCampId?window.getCampId():null);
+    showModal('Activity Log','<div id="alogBody" style="min-height:120px;font-size:.85rem">Loading…</div>',null,{maxWidth:720});
+    var el=document.getElementById('alogBody');
+    if(!client||!campId){ if(el)el.innerHTML='<div class="me-empty"><h3>Not connected</h3></div>'; return; }
+    try{
+        var res=await client.from('camp_audit_log').select('created_at,user_email,user_role,action,details')
+            .eq('camp_id',campId).order('created_at',{ascending:false}).limit(200);
+        if(res&&res.error)throw res.error;
+        var rows=(res&&res.data)||[];
+        if(!rows.length){ el.innerHTML='<div class="me-empty"><h3>No activity recorded yet</h3><p style="color:var(--s400)">Significant actions — merges, deletions, imports, schedule resets — will appear here.</p></div>'; return; }
+        var h='<div class="me-tw"><table class="me-t"><thead><tr><th>When</th><th>Who</th><th>Action</th><th>Details</th></tr></thead><tbody>';
+        rows.forEach(function(r){
+            var when=r.created_at?new Date(r.created_at).toLocaleString():'';
+            var who=esc(r.user_email||'—')+(r.user_role?' <span style="color:var(--s400)">('+esc(r.user_role)+')</span>':'');
+            h+='<tr><td style="white-space:nowrap;color:var(--s500)">'+esc(when)+'</td><td>'+who+'</td><td class="bold">'+esc(_alogAction(r.action))+'</td><td style="color:var(--s500)">'+esc(_alogDetails(r.details))+'</td></tr>';
+        });
+        h+='</tbody></table></div>';
+        el.innerHTML=h;
+    }catch(e){
+        var msg=(e&&(e.message||e.hint))||'';
+        if(el)el.innerHTML='<div class="me-empty"><h3>Couldn\'t load activity</h3><p style="color:var(--s400)">'+esc(msg||'The audit log table may not be set up yet.')+'</p></div>';
+    }
+}
+
 function mergeFamiliesReconciled(keyA,keyB,reconciled){
     var a=families[keyA],b=families[keyB];
     if(!a||!b)return;
@@ -3381,10 +3433,120 @@ function mergeFamiliesReconciled(keyA,keyB,reconciled){
         a.savedPaymentMethods=existing.concat(
             b.savedPaymentMethods.filter(function(m){return m&&!tokens[m.token]}));
     }
+    _meAudit('family.merge',{into:a.name||'',from:b.name||''});
     delete families[keyB];
     save();render(curPage);toast(b.name+' merged into '+a.name);
 }
 function mergeFamilies(keyA,keyB){ mergeFamiliesReconciled(keyA,keyB,null); }
+
+// ── Camper merge (fold a duplicate roster record into the one you keep) ───────
+// Re-points every reference to the duplicate (family membership, bunk,
+// enrollments — linked by camperName, payments, Go addresses) onto the survivor,
+// fills the survivor's blank fields from the duplicate, concatenates history,
+// then removes the duplicate roster entry. LOCAL records only: cloud-side
+// per-camper records (health documents, photos) attached specifically to the
+// duplicate are not moved — the confirm note tells the office to review those.
+function mergeCampers(keyA,keyB){
+    if(!keyA||!keyB||keyA===keyB){toast('Pick two different campers','error');return}
+    var a=roster[keyA],b=roster[keyB];
+    if(!a||!b){toast('Camper not found','error');return}
+    // 1. Fill A's blank content fields from B — never overwrite what A has.
+    var SKIP={history:1,displayName:1};
+    Object.keys(b).forEach(function(k){
+        if(SKIP[k])return;
+        var av=a[k];
+        var aEmpty=(av==null||av===''||(Array.isArray(av)&&!av.length));
+        if(aEmpty&&b[k]!=null&&b[k]!=='')a[k]=b[k];
+    });
+    // 2. Merge history timelines + a merge marker.
+    a.history=(Array.isArray(a.history)?a.history:[]).concat(Array.isArray(b.history)?b.history:[]);
+    a.history.push({ts:new Date().toISOString(),type:'edit',changes:[{field:'Merged from',from:_lbl(keyB),to:_lbl(keyA)}]});
+    // 3. Re-point enrollments (linked by camperName) from B → A.
+    try{Object.keys(enrollments).forEach(function(eid){if(enrollments[eid]&&enrollments[eid].camperName===keyB)enrollments[eid].camperName=keyA});}catch(_){}
+    // 4. Re-point family membership, bunks, payments and Go addresses.
+    cascadeCamperRename(keyB,keyA);
+    // 5. Dedup arrays the rename may have doubled (A was already present).
+    try{Object.values(families).forEach(function(f){if(Array.isArray(f.camperIds))f.camperIds=f.camperIds.filter(function(c,i,arr){return arr.indexOf(c)===i})});}catch(_){}
+    try{Object.keys(bunkAsgn).forEach(function(bn){if(Array.isArray(bunkAsgn[bn]))bunkAsgn[bn]=bunkAsgn[bn].filter(function(c,i,arr){return arr.indexOf(c)===i})});}catch(_){}
+    // 6. Remove the duplicate roster record.
+    delete roster[keyB];
+    _meAudit('camper.merge',{into:_lbl(keyA),from:_lbl(keyB)});
+    save();
+    if(curPage==='camperdetail'&&_camperDetailName===keyB)nav('campers');else render(curPage);
+    toast(_lbl(keyB)+' merged into '+_lbl(keyA));
+}
+function openMergeCampersTool(preKeep,preDrop){
+    var keys=Object.keys(roster).sort(function(x,y){return _lbl(x).localeCompare(_lbl(y))});
+    if(keys.length<2){toast('Need at least two campers to merge','error');return}
+    var keepSel=(preKeep&&roster[preKeep])?preKeep:keys[0];
+    var dropSel=(preDrop&&roster[preDrop]&&preDrop!==keepSel)?preDrop:(keys.filter(function(k){return k!==keepSel})[0]||keys[1]);
+    var opts=function(sel){return keys.map(function(k){return '<option value="'+esc(k)+'"'+(k===sel?' selected':'')+'>'+esc(_lbl(k))+'</option>'}).join('')};
+    var body=''
+        +'<p style="font-size:.85rem;color:var(--s600);margin:0 0 12px">Combine two duplicate camper records into one. The camper you <strong>keep</strong> stays; the <strong>duplicate</strong> is removed and its family, bunk, enrollments, billing and history move onto the kept record.</p>'
+        +'<label style="font-size:.75rem;font-weight:600;color:var(--s600)">Keep this camper</label>'
+        +'<select id="mcKeep" class="me-input" style="width:100%;margin:4px 0 12px;box-sizing:border-box">'+opts(keepSel)+'</select>'
+        +'<label style="font-size:.75rem;font-weight:600;color:var(--s600)">Merge &amp; remove this duplicate</label>'
+        +'<select id="mcDrop" class="me-input" style="width:100%;margin:4px 0 4px;box-sizing:border-box">'+opts(dropSel)+'</select>'
+        +'<p style="font-size:.72rem;color:var(--s400);margin-top:10px">Blank fields on the kept camper are filled in from the duplicate; fields it already has are left as-is. This cannot be undone. Health documents and photos uploaded under the duplicate should be reviewed on the kept camper afterward.</p>';
+    showModal('Merge Campers',body,function(){
+        var a=document.getElementById('mcKeep').value, b=document.getElementById('mcDrop').value;
+        if(a===b){toast('Pick two different campers','error');return;}
+        mergeCampers(a,b);
+    },{maxWidth:480});
+    var sb=document.getElementById('dynModalSave'); if(sb)sb.textContent='Merge';
+}
+// Family key that lists this camper, or '' — used by duplicate detection.
+function _famKeyOfCamper(name){
+    var hit='';
+    Object.keys(families).some(function(fk){
+        var f=families[fk];
+        if(f&&Array.isArray(f.camperIds)&&f.camperIds.indexOf(name)>=0){hit=fk;return true;}
+        return false;
+    });
+    return hit;
+}
+// Silent duplicate detection. Two roster records are a likely duplicate only
+// when they share the SAME display name AND corroborating evidence they're the
+// same child — the same family, the same date of birth, or the same camper id.
+// Name alone is not enough: this app deliberately supports two DIFFERENT campers
+// with the same name (keyed "Name #id"), so those must NOT be flagged. Returns
+// an array of [keyA,keyB] pairs. High precision by design; runs automatically,
+// no button.
+function _detectDuplicateCampers(){
+    var keys=Object.keys(roster);
+    var byName={};
+    keys.forEach(function(k){ var nm=_lbl(k).trim().toLowerCase(); if(!nm)return; (byName[nm]=byName[nm]||[]).push(k); });
+    var pairs=[], seen={};
+    Object.keys(byName).forEach(function(nm){
+        var grp=byName[nm]; if(grp.length<2)return;
+        for(var i=0;i<grp.length;i++){
+            for(var j=i+1;j<grp.length;j++){
+                var a=roster[grp[i]]||{}, b=roster[grp[j]]||{};
+                var sameFam=(function(){var fa=_famKeyOfCamper(grp[i]),fb=_famKeyOfCamper(grp[j]);return fa&&fb&&fa===fb;})();
+                var sameDob=a.dob&&b.dob&&String(a.dob).trim()===String(b.dob).trim();
+                var sameId=a.camperId&&b.camperId&&normalizePersonId(a.camperId)===normalizePersonId(b.camperId);
+                if(sameFam||sameDob||sameId){
+                    var sig=grp[i]+'|'+grp[j];
+                    if(!seen[sig]){seen[sig]=1;pairs.push([grp[i],grp[j]]);}
+                }
+            }
+        }
+    });
+    return pairs;
+}
+// A quiet, dismissible warning banner for the Roster when likely duplicates are
+// found. Clicking it opens the merge tool pre-filled with the first pair — the
+// only entry point to merging, so there's no standing "Merge" button.
+function _dupCamperBannerHtml(){
+    var pairs=_detectDuplicateCampers();
+    if(!pairs.length)return '';
+    var first=pairs[0];
+    var names=pairs.slice(0,3).map(function(p){return esc(_lbl(p[0]))}).join(', ');
+    return '<div style="background:#FFFBEB;border:1px solid #FDE68A;padding:10px 13px;border-radius:var(--r);margin-bottom:12px;font-size:.85rem;color:#92400E;cursor:pointer;display:flex;gap:10px;align-items:center;justify-content:space-between;flex-wrap:wrap" '
+        +'onclick="CampistryMe.openMergeCampersTool(\''+je(first[0])+'\',\''+je(first[1])+'\')">'
+        +'<span>⚠ <strong>'+pairs.length+'</strong> possible duplicate camper'+(pairs.length===1?'':'s')+' — '+names+(pairs.length>3?'…':'')+' look like the same child (same name and family, birth date, or ID).</span>'
+        +'<span style="font-weight:700;white-space:nowrap">Review &amp; merge &rarr;</span></div>';
+}
 
 // Guided side-by-side merge tool — an on-demand entry point (Billing's
 // ⋯ menu) for picking ANY two family records, or a pre-filled call from
@@ -3624,6 +3786,7 @@ async function deleteFamily(id){
     if(!ok)return;
     var captured=families[id];
     var wasOnDetailPage=curPage==='familydetail'&&_familyDetailKey===id;
+    _meAudit('family.delete',{name:nm});
     delete families[id];
     save();closeModal('familyModal');
     if(wasOnDetailPage)nav('billing');else render(curPage);
@@ -4316,6 +4479,9 @@ function renderCampers(filter){
     var _sliceLabel=(showUnenrolled||_whenNow==='all')?''
         :(_whenNow==='today'?' in camp today':' on '+_whenNow.replace(/^session:/,''));
     var h='<div class="sec-hd"><div><h2 class="sec-title">Roster</h2><p class="sec-desc">'+enrolledEntries.length+' camper'+(enrolledEntries.length!==1?'s':'')+_sliceLabel+(canStaff?' · '+allStaffRows.length+' staff':'')+(unenrolledEntries.length?' · '+unenrolledEntries.length+' unenrolled':'')+'</p></div><div class="sec-actions"><button class="me-btn me-btn--ghost me-btn--sm" onclick="CampistryMe.manageCustomFields()" title="Define custom fields">⚙ Custom Fields</button><button class="me-btn me-btn--sec me-btn--sm" onclick="CampistryMe.downloadTemplate()">Template</button><button class="me-btn me-btn--sec me-btn--sm" onclick="CampistryMe.openCsv()">Import</button></div></div>';
+    // Silent duplicate detection: a quiet warning banner appears here only when
+    // likely-duplicate camper records are found (no button triggers it).
+    h+=_dupCamperBannerHtml();
     h+=_setupChecklistHtml();
 
     var unplaced=(canStaff&&!showUnenrolled)?hiredStaff().filter(function(a){return !String(a.email||'').trim()||!bunksForStaffEmail(a.email).length;}):[];
@@ -5644,6 +5810,7 @@ async function deleteCamper(n){
             try{capturedEnrollments[pair[0]]=JSON.parse(JSON.stringify(pair[1]));}catch(_){}
         }
     });
+    _meAudit('camper.delete',{name:_lbl(n)});
     delete roster[n];
     cascadeCamperDelete(n);
     save();
@@ -16024,6 +16191,7 @@ function renderBilling(){
         +'<button onclick="CampistryMe.managePaymentMethods()">Accepted payments</button>'
         +'<button onclick="CampistryMe.managePayers()">Payers &amp; Organizations</button>'
         +'<button onclick="CampistryMe.openMergeFamiliesTool()">Merge Families</button>'
+        +'<button onclick="CampistryMe.openActivityLog()">Activity Log</button>'
         // Printing/exporting the household list moved to Reports (a
         // "Family Directory" template, filterable/groupable/printable) —
         // no need for a second, less capable copy of that feature here.
@@ -20363,66 +20531,105 @@ function handleCsv(file){
             if(m)leagueCols[m[1].trim()]=idx;
         });
 
-        var start=1; // skip header
-        var rows=[];
-        for(var i=start;i<Math.min(lines.length,5001);i++){
-            var c=parseCsvLine(lines[i]);
-            var firstName=(iFirst>=0?c[iFirst]:'').trim();
-            var lastName=(iLast>=0?c[iLast]:'').trim();
-            var fullName='';
-            if(firstName||lastName){fullName=(firstName+' '+lastName).trim()}
-            else if(iName>=0){fullName=(c[iName]||'').trim()}
-            if(!fullName)continue;
-
-            var teams={};
-            Object.entries(leagueCols).forEach(function([lg,idx]){
-                var v=(c[idx]||'').trim();
-                if(v)teams[lg]=v;
-            });
-
-            rows.push({
-                name:fullName,
-                camperId:iCamperId>=0?normalizePersonId(c[iCamperId]):'',
-                dob:iDob>=0?(c[iDob]||'').trim():'',
-                gender:iGender>=0?(c[iGender]||'').trim():'',
-                school:iSchool>=0?(c[iSchool]||'').trim():'',
-                schoolGrade:iSchoolGr>=0?(c[iSchoolGr]||'').trim():'',
-                teacher:iTeacher>=0?(c[iTeacher]||'').trim():'',
-                division:iDiv>=0?(c[iDiv]||'').trim():'',
-                grade:iGrade>=0?(c[iGrade]||'').trim():'',
-                bunk:iBunk>=0?(c[iBunk]||'').trim():'',
-                street:iStreet>=0?(c[iStreet]||'').trim():'',
-                city:iCity>=0?(c[iCity]||'').trim():'',
-                state:iState>=0?(c[iState]||'').trim():'',
-                zip:iZip>=0?(c[iZip]||'').trim():'',
-                summerStreet:iSumStreet>=0?(c[iSumStreet]||'').trim():'',
-                summerCity:iSumCity>=0?(c[iSumCity]||'').trim():'',
-                summerState:iSumState>=0?(c[iSumState]||'').trim():'',
-                summerZip:iSumZip>=0?(c[iSumZip]||'').trim():'',
-                summerPhone:iSumPhone>=0?(c[iSumPhone]||'').trim():'',
-                parent1Name:iP1>=0?(c[iP1]||'').trim():'',
-                parent1Relation:iP1Rel>=0?(c[iP1Rel]||'').trim():'',
-                parent1Phone:iP1Ph>=0?(c[iP1Ph]||'').trim():'',
-                parent1Email:iP1Em>=0?(c[iP1Em]||'').trim():'',
-                parent2Name:iP2>=0?(c[iP2]||'').trim():'',
-                parent2Relation:iP2Rel>=0?(c[iP2Rel]||'').trim():'',
-                parent2Phone:iP2Ph>=0?(c[iP2Ph]||'').trim():'',
-                parent2Email:iP2Em>=0?(c[iP2Em]||'').trim():'',
-                emergencyName:iEmN>=0?(c[iEmN]||'').trim():'',
-                emergencyPhone:iEmPh>=0?(c[iEmPh]||'').trim():'',
-                emergencyRel:iEmR>=0?(c[iEmR]||'').trim():'',
-                allergies:iAlg>=0?(c[iAlg]||'').trim():'',
-                medications:iMed>=0?(c[iMed]||'').trim():'',
-                dietary:iDiet>=0?(c[iDiet]||'').trim():'',
-                teams:teams
-            });
+        // Auto-detected field → column index map. Every field is remappable in
+        // the preview below, so a wrong guess or an unrecognized header can be
+        // fixed by hand instead of being silently dropped.
+        var mapping={
+            camperId:iCamperId,first:iFirst,last:iLast,name:iName,dob:iDob,gender:iGender,
+            school:iSchool,schoolGrade:iSchoolGr,teacher:iTeacher,division:iDiv,grade:iGrade,bunk:iBunk,
+            street:iStreet,city:iCity,state:iState,zip:iZip,
+            summerStreet:iSumStreet,summerCity:iSumCity,summerState:iSumState,summerZip:iSumZip,summerPhone:iSumPhone,
+            parent1Name:iP1,parent1Relation:iP1Rel,parent1Phone:iP1Ph,parent1Email:iP1Em,
+            parent2Name:iP2,parent2Relation:iP2Rel,parent2Phone:iP2Ph,parent2Email:iP2Em,
+            emergencyName:iEmN,emergencyPhone:iEmPh,emergencyRel:iEmR,
+            allergies:iAlg,medications:iMed,dietary:iDiet
+        };
+        // [key,label] in the order shown in the remap UI. Keys match the row
+        // properties built by buildRows() (first/last/name are name-only).
+        var IMPORT_FIELDS=[
+            ['camperId','Camper ID'],['first','First name'],['last','Last name'],['name','Full name'],
+            ['dob','Date of birth'],['gender','Gender'],['school','School'],['schoolGrade','School grade'],['teacher','Teacher'],
+            ['division','Division'],['grade','Grade'],['bunk','Bunk'],
+            ['street','Address'],['city','City'],['state','State'],['zip','Zip'],
+            ['summerStreet','Summer address'],['summerCity','Summer city'],['summerState','Summer state'],['summerZip','Summer zip'],['summerPhone','Summer phone'],
+            ['parent1Name','Parent 1 name'],['parent1Relation','Parent 1 relation'],['parent1Phone','Parent 1 phone'],['parent1Email','Parent 1 email'],
+            ['parent2Name','Parent 2 name'],['parent2Relation','Parent 2 relation'],['parent2Phone','Parent 2 phone'],['parent2Email','Parent 2 email'],
+            ['emergencyName','Emergency name'],['emergencyPhone','Emergency phone'],['emergencyRel','Emergency relation'],
+            ['allergies','Allergies'],['medications','Medications'],['dietary','Dietary']
+        ];
+        function _impCell(c,idx){ return (idx!=null&&idx>=0)?(c[idx]||'').trim():''; }
+        function buildRows(m){
+            var out=[];
+            for(var i=1;i<Math.min(lines.length,5001);i++){
+                var c=parseCsvLine(lines[i]);
+                var firstName=_impCell(c,m.first);
+                var lastName=_impCell(c,m.last);
+                var fullName='';
+                if(firstName||lastName){fullName=(firstName+' '+lastName).trim()}
+                else if(m.name!=null&&m.name>=0){fullName=(c[m.name]||'').trim()}
+                if(!fullName)continue;
+                var teams={};
+                Object.keys(leagueCols).forEach(function(lg){var v=(c[leagueCols[lg]]||'').trim();if(v)teams[lg]=v;});
+                out.push({
+                    name:fullName,
+                    camperId:(m.camperId!=null&&m.camperId>=0)?normalizePersonId(c[m.camperId]):'',
+                    dob:_impCell(c,m.dob),gender:_impCell(c,m.gender),school:_impCell(c,m.school),
+                    schoolGrade:_impCell(c,m.schoolGrade),teacher:_impCell(c,m.teacher),division:_impCell(c,m.division),
+                    grade:_impCell(c,m.grade),bunk:_impCell(c,m.bunk),
+                    street:_impCell(c,m.street),city:_impCell(c,m.city),state:_impCell(c,m.state),zip:_impCell(c,m.zip),
+                    summerStreet:_impCell(c,m.summerStreet),summerCity:_impCell(c,m.summerCity),summerState:_impCell(c,m.summerState),summerZip:_impCell(c,m.summerZip),summerPhone:_impCell(c,m.summerPhone),
+                    parent1Name:_impCell(c,m.parent1Name),parent1Relation:_impCell(c,m.parent1Relation),parent1Phone:_impCell(c,m.parent1Phone),parent1Email:_impCell(c,m.parent1Email),
+                    parent2Name:_impCell(c,m.parent2Name),parent2Relation:_impCell(c,m.parent2Relation),parent2Phone:_impCell(c,m.parent2Phone),parent2Email:_impCell(c,m.parent2Email),
+                    emergencyName:_impCell(c,m.emergencyName),emergencyPhone:_impCell(c,m.emergencyPhone),emergencyRel:_impCell(c,m.emergencyRel),
+                    allergies:_impCell(c,m.allergies),medications:_impCell(c,m.medications),dietary:_impCell(c,m.dietary),
+                    teams:teams
+                });
+            }
+            return out;
         }
+        // Read the (possibly user-overridden) mapping from the remap selects.
+        function currentMapping(){
+            var m={};
+            IMPORT_FIELDS.forEach(function(f){
+                var sel=document.getElementById('csvMap_'+f[0]);
+                var v=sel?parseInt(sel.value,10):mapping[f[0]];
+                m[f[0]]=(v==null||isNaN(v))?-1:v;
+            });
+            return m;
+        }
+        var rows=buildRows(mapping);
 
-        if(rows.length){
+        if(hdr.length){
             var pvEl=document.getElementById('csvPV');
-            if(pvEl){pvEl.style.display='block';pvEl.innerHTML='<div style="font-weight:600;margin:8px 0 4px">'+rows.length+' campers found</div><div style="font-size:.75rem;color:var(--s400)">Columns detected: '+hdr.filter(function(h){return h}).length+'</div>'}
+            if(pvEl){
+                var _optsFor=function(sel){
+                    var o='<option value="-1"'+(sel<0?' selected':'')+'>— not imported —</option>';
+                    hdr.forEach(function(h,idx){ if(!h)return; o+='<option value="'+idx+'"'+(sel===idx?' selected':'')+'>'+esc(h)+'</option>'; });
+                    return o;
+                };
+                var _mapHtml=IMPORT_FIELDS.map(function(f){
+                    var cur=mapping[f[0]]!=null?mapping[f[0]]:-1;
+                    return '<label style="display:flex;align-items:center;gap:8px;font-size:.75rem">'
+                        +'<span style="flex:0 0 118px;color:var(--s600);font-weight:600">'+esc(f[1])+'</span>'
+                        +'<select id="csvMap_'+f[0]+'" data-impfield="'+f[0]+'" class="me-input" style="flex:1;min-width:0;padding:4px 6px;font-size:.75rem">'+_optsFor(cur)+'</select>'
+                        +'</label>';
+                }).join('');
+                pvEl.style.display='block';
+                pvEl.innerHTML='<div style="font-weight:600;margin:8px 0 4px" id="csvCount">'+rows.length+' campers found</div>'
+                    +'<details style="margin-top:4px"><summary style="cursor:pointer;font-size:.78rem;color:var(--me);font-weight:600">Check / fix column mapping ('+hdr.filter(function(h){return h}).length+' columns detected)</summary>'
+                    +'<div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(230px,1fr));gap:6px 16px;margin-top:8px;max-height:280px;overflow:auto;padding:4px 2px">'+_mapHtml+'</div></details>';
+                pvEl.querySelectorAll('select[data-impfield]').forEach(function(sel){
+                    sel.addEventListener('change',function(){
+                        rows=buildRows(currentMapping());
+                        var cnt=document.getElementById('csvCount'); if(cnt)cnt.textContent=rows.length+' campers found';
+                    });
+                });
+            }
             var btn=document.getElementById('csvBtn');
             if(btn){btn.disabled=false;btn.onclick=async function(){
+                // Rebuild from the current (possibly corrected) mapping.
+                rows=buildRows(currentMapping());
+                if(!rows.length){toast('No campers to import — check the Full name (or First/Last) column mapping.');return}
                 // ★ #3 + footgun: Replace mode WIPES all current campers/structure/
                 //   families/bunks (and fans the wipe to cloud) — confirm first, and
                 //   let the office choose Update instead when they just want to
@@ -21506,7 +21713,7 @@ window.CampistryMe={
     addFamily:function(){openFamilyForm(null)},editFamily:function(id){openFamilyForm(id)},deleteFamily:deleteFamily,removeCamperFromFamily:removeCamperFromFamily,
     setPplStaffSubTab:setPplStaffSubTab,viewStaffMember:viewStaffMember,openEditStaffModal:openEditStaffModal,saveStaffMember:saveStaffMember,
     acceptFamilySuggestion:acceptFamilySuggestion,dismissFamilySuggestion:dismissFamilySuggestion,acceptAddToFamily:acceptAddToFamily,
-    mergeFamilies:mergeFamilies,dismissMergeFamilies:dismissMergeFamilies,openMergeFamiliesTool:openMergeFamiliesTool,
+    mergeFamilies:mergeFamilies,dismissMergeFamilies:dismissMergeFamilies,openMergeFamiliesTool:openMergeFamiliesTool,openActivityLog:openActivityLog,mergeCampers:mergeCampers,openMergeCampersTool:openMergeCampersTool,
     openUnmatchedPaymentsModal:openUnmatchedPaymentsModal,
     openDepositInbox:openDepositInbox,
     _bcRefreshPreview:_bcRefreshPreview,

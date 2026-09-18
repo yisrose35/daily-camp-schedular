@@ -67,91 +67,113 @@
     // opens a popover grid — the row of icons only appears on demand, freeing
     // the header. Camps know which app they're in, so the trigger doesn't need
     // to name the active app.
+    // The mount renders only the little top-center "Menu" tab (the handle). The
+    // actual dropdown is a full-width bar injected into the page (see
+    // buildBarHtml) that pushes content down when opened.
     function renderAppSwitcher(activeKey){
-        var html='<div class="quick-switch" data-active="'+esc(activeKey)+'">';
-        html+='<button type="button" class="qs-trigger" aria-haspopup="true" aria-expanded="false" title="Switch apps">'
-            +'<svg class="qs-grid-icon" width="16" height="16" viewBox="0 0 16 16" aria-hidden="true">'
-            +'<rect x="1" y="1" width="4" height="4" rx="1"></rect><rect x="6" y="1" width="4" height="4" rx="1"></rect><rect x="11" y="1" width="4" height="4" rx="1"></rect>'
-            +'<rect x="1" y="6" width="4" height="4" rx="1"></rect><rect x="6" y="6" width="4" height="4" rx="1"></rect><rect x="11" y="6" width="4" height="4" rx="1"></rect>'
-            +'<rect x="1" y="11" width="4" height="4" rx="1"></rect><rect x="6" y="11" width="4" height="4" rx="1"></rect><rect x="11" y="11" width="4" height="4" rx="1"></rect>'
-            +'</svg><span class="qs-trigger-label">Menu</span>'
-            +'<svg class="qs-caret" width="10" height="10" viewBox="0 0 10 10" aria-hidden="true"><path d="M2 3.5L5 6.5L8 3.5" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"></path></svg>'
-            +'</button>';
-        html+='<div class="qs-pop" role="menu" aria-hidden="true">';
-        // Dashboard sits at the top of the same dropdown as the app toggles,
-        // so the header no longer needs a separate "← Dashboard" link.
-        html+='<a href="dashboard.html" class="qs-pop-dash" role="menuitem" title="Dashboard (Ctrl+Shift+D)"><span class="qs-dash-arrow">&larr;</span> Dashboard</a>';
-        html+='<div class="qs-pop-grid">';
+        return '<div class="quick-switch" data-active="'+esc(activeKey)+'">'
+            +'<button type="button" class="qs-trigger" aria-haspopup="true" aria-expanded="false" title="Menu">'
+            +'<span class="qs-trigger-label">Menu</span>'
+            +'<svg class="qs-caret" width="11" height="11" viewBox="0 0 10 10" aria-hidden="true"><path d="M2 3.5L5 6.5L8 3.5" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"></path></svg>'
+            +'</button></div>';
+    }
+
+    // Full-width dropdown bar: on open it becomes a header row that PUSHES the
+    // page down — Dashboard on the far left, the logo strip in the middle.
+    function buildBarHtml(activeKey){
+        var h='<div class="qs-bar" aria-hidden="true"><div class="qs-bar-inner">';
+        h+='<a href="dashboard.html" class="qs-bar-dash" title="Dashboard (Ctrl+Shift+D)"><span class="qs-dash-arrow">&larr;</span> Dashboard</a>';
+        h+='<div class="qs-bar-strip">';
         APPS.forEach(function(a){
             var isActive=a.key===activeKey;
             var sc=shortcutFor(a.key);
-            html+='<a href="'+a.href+'" class="qs-pop-item'+(isActive?' is-active':'')+'" data-app="'+a.key+'" role="menuitem" title="'+esc(a.title)+(sc?' ('+sc+')':'')+'"'+(isActive?' aria-current="page"':'')+'>'
-                +'<img src="'+a.img+'" alt="'+esc(a.name)+'">'
-                +'<span>'+esc(shortName(a.name))+'</span>'
-                +'</a>';
+            var tt=esc(a.title)+(sc?' ('+sc+')':'');
+            if(isActive){
+                h+='<div class="quick-switch-active" data-app="'+a.key+'" title="'+tt+'" aria-current="page"><img src="'+a.img+'" alt="'+esc(a.name)+'"></div>';
+            }else{
+                h+='<a href="'+a.href+'" class="quick-switch-link" data-app="'+a.key+'" title="'+tt+'"><img src="'+a.img+'" alt="'+esc(a.name)+'"></a>';
+            }
         });
-        html+='</div></div></div>';
-        return html;
+        h+='</div></div></div>';
+        return h;
     }
 
-    // ── Popover open/close (event-delegated so it survives re-mounts and works
-    //    for every page identically) ──────────────────────────────────────────
-    function closeAll(except){
-        var open=document.querySelectorAll('.quick-switch.open');
-        for(var i=0;i<open.length;i++){
-            if(except&&open[i]===except) continue;
-            open[i].classList.remove('open');
-            var t=open[i].querySelector('.qs-trigger'); if(t) t.setAttribute('aria-expanded','false');
-            var p=open[i].querySelector('.qs-pop'); if(p) p.setAttribute('aria-hidden','true');
-        }
+    // ── Open/close: a body class drives the in-flow bar's height, so opening it
+    //    pushes the whole page down and closing it lets the page rise back. ─────
+    var _hideT=null, _openedAt=0;
+    function openBar(){
+        if(_hideT){ clearTimeout(_hideT); _hideT=null; }
+        if(typeof _cancelDwell==='function') _cancelDwell();
+        if(!document.body.classList.contains('qs-open')) _openedAt=Date.now();
+        document.body.classList.add('qs-open');
+        var t=document.querySelector('.qs-trigger'); if(t) t.setAttribute('aria-expanded','true');
+        var b=document.querySelector('.qs-bar'); if(b) b.setAttribute('aria-hidden','false');
     }
-
-    // The header centre column sets overflow:hidden, which would clip a normal
-    // absolutely-positioned popover — so the popover is position:fixed and we
-    // compute its coordinates from the trigger's rect on open (same approach as
-    // the header search dropdown).
-    function positionPop(container){
-        var trigger=container.querySelector('.qs-trigger');
-        var pop=container.querySelector('.qs-pop');
-        if(!trigger||!pop) return;
-        var r=trigger.getBoundingClientRect();
-        pop.style.top=(r.bottom+8)+'px';
-        var popW=pop.offsetWidth||300;
-        var left=r.left+r.width/2-popW/2;
-        left=Math.max(8, Math.min(left, window.innerWidth-popW-8));
-        pop.style.left=left+'px';
+    function closeBar(){
+        document.body.classList.remove('qs-open');
+        var t=document.querySelector('.qs-trigger'); if(t) t.setAttribute('aria-expanded','false');
+        var b=document.querySelector('.qs-bar'); if(b) b.setAttribute('aria-hidden','true');
     }
-
-    function openPop(container){
-        closeAll(container);
-        container.classList.add('open');
-        var t=container.querySelector('.qs-trigger'); if(t) t.setAttribute('aria-expanded','true');
-        var p=container.querySelector('.qs-pop'); if(p) p.setAttribute('aria-hidden','false');
-        positionPop(container);
-    }
+    function isOpen(){ return document.body.classList.contains('qs-open'); }
+    function _inSwitch(el){ return !!(el&&el.closest&&(el.closest('.quick-switch')||el.closest('.qs-bar'))); }
 
     function onDocClick(e){
         var trigger=e.target.closest && e.target.closest('.qs-trigger');
         if(trigger){
-            var container=trigger.closest('.quick-switch');
-            if(container){
-                e.preventDefault();
-                if(container.classList.contains('open')) closeAll();
-                else openPop(container);
-            }
+            e.preventDefault();
+            if(isOpen()){
+                // On touch a tap fires mouseover (which may have just opened it)
+                // THEN click — don't let that click close what it just opened.
+                if(Date.now()-_openedAt < 400) return;
+                closeBar();
+            } else openBar();
             return;
         }
-        // A click inside the popover on an app link navigates normally; any
-        // other click (outside) closes the menu.
-        if(!(e.target.closest && e.target.closest('.qs-pop'))) closeAll();
+        // Clicks on a bar link navigate normally; any click outside closes it.
+        if(!_inSwitch(e.target)) closeBar();
+    }
+
+    // Hover-to-open only on devices that actually hover; on touch the tap opens
+    // it (see onDocClick). Opening requires the cursor to DWELL near the top of
+    // the screen for HOLD_MS — anywhere along the top, not only over the Menu —
+    // but NOT while it's over a real control up there (hamburger, search, date
+    // picker, avatars, sync badge, links). Those are excluded so brushing past
+    // them never triggers the menu.
+    var HOVER_CAPABLE = !!(window.matchMedia && window.matchMedia('(hover: hover)').matches);
+    var TOP_ZONE = 56;     // px from the top that counts as "the top"
+    var HOLD_MS = 650;     // dwell before it opens (~650ms hold + ~350ms slide ≈ 1s total)
+    var _dwellT = null;
+    function _isExcluded(el){
+        if(!el || !el.closest) return false;
+        if(el.closest('.quick-switch') || el.closest('.qs-bar')) return false; // the menu itself is never excluded
+        return !!el.closest('a,button,input,select,textarea,label,[role="button"],[contenteditable="true"],.me-search-wrap,.sync-badge,.nav-user,.nt-avatar,.hc-toc-toggle,.snacks-user-name');
+    }
+    function _cancelDwell(){ if(_dwellT){ clearTimeout(_dwellT); _dwellT=null; } }
+    function onTopMove(e){
+        if(!HOVER_CAPABLE) return;
+        var overSwitch = _inSwitch(e.target);
+        var atTop = e.clientY <= TOP_ZONE;
+        if(isOpen()){
+            // Keep open while at the top or over the tab/bar; otherwise close.
+            if(atTop || overSwitch){ if(_hideT){ clearTimeout(_hideT); _hideT=null; } }
+            else if(!_hideT){ _hideT=setTimeout(closeBar, 260); }
+            return;
+        }
+        // Closed: dwell near the top (and not over an excluded control) to open.
+        if(atTop && !_isExcluded(e.target)){
+            if(!_dwellT) _dwellT=setTimeout(function(){ _dwellT=null; openBar(); }, HOLD_MS);
+        } else {
+            _cancelDwell();
+        }
     }
 
     var _wired=false;
     function wireGlobalHandlers(){
         if(_wired) return; _wired=true;
         document.addEventListener('click', onDocClick);
+        document.addEventListener('mousemove', onTopMove);
         document.addEventListener('keydown', function(e){
-            if(e.key==='Escape'){ closeAll(); return; }
+            if(e.key==='Escape'){ closeBar(); return; }
             // Ctrl+Shift+<key> jump (ignore when Alt/Meta also held). Works on
             // any page that loads this script, including the Dashboard.
             if(e.ctrlKey && e.shiftKey && !e.altKey && !e.metaKey){
@@ -168,21 +190,30 @@
                 if(window.location.pathname.split('/').pop()!==href) window.location.href=href;
             }
         });
-        // A fixed popover would drift if the page scrolls or resizes under it;
-        // simplest correct behaviour is to close it.
-        window.addEventListener('resize', function(){ closeAll(); });
-        window.addEventListener('scroll', function(){ closeAll(); }, true);
+    }
+
+    // Inject the single full-width dropdown bar as the first thing in the body
+    // so opening it (via body.qs-open) pushes the header and page content down.
+    function ensureBar(activeKey){
+        if(document.querySelector('.qs-bar'))return;
+        var tmp=document.createElement('div');
+        tmp.innerHTML=buildBarHtml(activeKey);
+        var bar=tmp.firstChild;
+        if(bar&&document.body) document.body.insertBefore(bar, document.body.firstChild);
     }
 
     function mountAll(){
         var nodes=document.querySelectorAll('[data-quick-switch-mount]');
+        var activeKey='';
         for(var i=0;i<nodes.length;i++){
             var el=nodes[i];
             var key=el.getAttribute('data-quick-switch-mount');
+            if(!activeKey)activeKey=key;
             var tmp=document.createElement('div');
             tmp.innerHTML=renderAppSwitcher(key);
             el.replaceWith(tmp.firstChild);
         }
+        if(nodes.length) ensureBar(activeKey);
         // Always wire shortcuts — they should work on every page that loads
         // this script, even ones with no switcher mount (e.g. the Dashboard).
         wireGlobalHandlers();
