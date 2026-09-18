@@ -338,6 +338,22 @@ select.me-input{cursor:pointer}
 .bb-c:active{cursor:grabbing;opacity:.7}
 .bb-c-nm{font-weight:600;color:var(--s700);flex:1;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 
+/* ── Card grid ──────────────────────── */
+/* Same visual engine as the Bunk Builder board (.bb-grid), pulled into a
+   neutral namespace so list pages (Billing, Payroll) can read like the
+   roster/bunk grid instead of a single-column stack. Each cell is a
+   click-through summary card: key data on the face, full detail on open. */
+.card-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(240px,1fr));gap:10px;margin-bottom:14px}
+.grid-card{position:relative;background:#fff;border:1px solid var(--s200);border-radius:var(--r);padding:12px 14px;cursor:pointer;transition:border-color .15s,box-shadow .15s;display:flex;flex-direction:column;gap:7px}
+.grid-card:hover{border-color:var(--s300);box-shadow:0 1px 4px rgba(0,0,0,.06)}
+.grid-card-hd{display:flex;justify-content:space-between;align-items:baseline;gap:8px}
+.grid-card-nm{font-size:.9rem;font-weight:700;color:var(--s800);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.grid-card-amt{font-size:1.05rem;font-weight:800;white-space:nowrap;flex-shrink:0}
+.grid-card-sub{font-size:.75rem;color:var(--s400);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;margin-top:-3px}
+.grid-card-meta{display:flex;flex-wrap:wrap;gap:5px 10px;align-items:center;font-size:.78rem}
+.grid-card-x{position:absolute;top:8px;right:10px;line-height:1;color:var(--s300);font-size:.85rem}
+@media(max-width:768px){.card-grid{grid-template-columns:1fr}}
+
 /* ── CSV ────────────────────────────── */
 .me-dropzone{border:2px dashed var(--s200);border-radius:var(--r2);padding:24px;text-align:center;cursor:pointer;background:var(--s50);transition:border .15s}
 .me-dropzone:hover,.me-dropzone.dragover{border-color:var(--me);background:var(--me-bg)}
