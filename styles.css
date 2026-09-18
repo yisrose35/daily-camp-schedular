@@ -2651,17 +2651,18 @@ body.sidebar-open .sidebar-backdrop {
 /* =============================== */
 /* Snappier Setup: Divisions UI   */
 /* =============================== */
+/* Flat, connected surface: one light panel, no floating shadow/hover-lift. */
 #setup .setup-card {
   border-radius: var(--radius-xl, 20px);
   background: var(--bg-secondary, #FFFFFF);
   border: 1px solid var(--slate-200, #E2E8F0);
-  box-shadow: var(--shadow-xl, 0 12px 24px rgba(15, 23, 42, 0.12));
-  transition: box-shadow 0.2s var(--ease-out), border-color 0.2s var(--ease-out);
+  box-shadow: none;
+  transition: border-color 0.2s var(--ease-out);
 }
 
 #setup .setup-card:hover {
-  box-shadow: var(--shadow-2xl, 0 20px 40px rgba(15, 23, 42, 0.15));
-  border-color: var(--slate-300, #CBD5E1);
+  box-shadow: none;
+  border-color: var(--slate-200, #E2E8F0);
 }
 
 /* Step pills */
@@ -2722,12 +2723,24 @@ body.sidebar-open .sidebar-backdrop {
               0 4px 16px rgba(20, 125, 145, 0.12);
 }
 
-/* Division detail pane */
+/* Division detail pane — not its own box; it sits flat inside the Times panel. */
 #setup #division-detail-pane.detail-pane {
-  border-radius: var(--radius-xl, 20px);
-  border: 1px solid var(--slate-200, #E2E8F0);
-  background: var(--bg-secondary, #FFFFFF);
-  box-shadow: var(--shadow-xl, 0 12px 24px rgba(15, 23, 42, 0.12));
+  border-radius: 0;
+  border: none;
+  background: transparent;
+  box-shadow: none;
+  padding: 0;
+}
+
+/* On phones, drop the outer panel chrome entirely so the whole builder reads
+   as one flat, connected page instead of stacked boxes. */
+@media (max-width: 600px) {
+  #setup .setup-card {
+    border: none;
+    border-radius: 0;
+    background: transparent;
+    padding: 6px 2px 12px;
+  }
 }
 
 /* Header (title + delete button) */
