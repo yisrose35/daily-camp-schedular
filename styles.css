@@ -4117,7 +4117,7 @@ a:hover {
   font-size: 0.85rem;
 }
 /* === MASTER SCHEDULER STYLES === */
-.ms-container { display:flex; gap:0; height:calc(100vh - 84px); min-height:300px; background:#fff; border-radius:12px; overflow:hidden; box-shadow:0 1px 3px rgba(0,0,0,0.06),0 0 0 1px rgba(0,0,0,0.05); }
+.ms-container { display:flex; gap:0; height:calc(100vh - 84px); min-height:300px; background:#fff; border-radius:12px; overflow:hidden; border:1px solid #eef0f3; }
 
 /* ── Manual Sidebar (light) ── */
 .ms-sidebar { width:172px; min-width:172px; background:#fff; border-right:1px solid #eef0f3; display:flex; flex-direction:column; height:100%; max-height:100%; overflow:hidden; }
@@ -4252,8 +4252,8 @@ a:hover {
 .ms-daw-inactive-zone { position:absolute; left:0; right:0; background:repeating-linear-gradient(45deg,transparent,transparent 5px,rgba(0,0,0,0.02) 5px,rgba(0,0,0,0.02) 10px); z-index:1; pointer-events:none; }
 
 /* ── Pinned Band Blocks (vertical orientation) ── */
-.ms-daw-band { position:absolute; border-radius:8px; cursor:pointer; display:flex; flex-direction:column; align-items:stretch; justify-content:flex-start; padding:0; font-size:10px; font-weight:600; transition:box-shadow 0.15s,transform 0.1s; z-index:2; user-select:none; box-shadow:0 1px 3px rgba(0,0,0,0.1),0 0 0 1px rgba(0,0,0,0.05); border:none; overflow:hidden; }
-.ms-daw-band:hover { box-shadow:0 3px 10px rgba(0,0,0,0.15); transform:translateX(-1px); z-index:3; }
+.ms-daw-band { position:absolute; border-radius:8px; cursor:pointer; display:flex; flex-direction:column; align-items:stretch; justify-content:flex-start; padding:0; font-size:10px; font-weight:600; transition:box-shadow 0.15s,transform 0.1s; z-index:2; user-select:none; box-shadow:0 0 0 1px rgba(0,0,0,0.05); border:none; overflow:hidden; }
+.ms-daw-band:hover { box-shadow:0 0 0 1px rgba(0,0,0,0.08); transform:translateX(-1px); z-index:3; }
 .ms-daw-band.selected { z-index:4; outline:none !important; box-shadow:0 0 0 2px #fff,0 0 0 4px #6366f1,0 4px 12px rgba(0,0,0,0.08) !important; transform:translateX(-2px) !important; }
 .ms-daw-band[data-type="sport"] { background:linear-gradient(180deg,#bbf7d0,#86efac); color:#14532d; }
 .ms-daw-band[data-type="special"] { background:linear-gradient(180deg,#ddd6fe,#c4b5fd); color:#3b0764; }
