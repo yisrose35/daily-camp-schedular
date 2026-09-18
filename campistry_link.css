@@ -326,13 +326,13 @@ body {
 /* CARDS — Material 3 "elevated card": flat surface, minimal shadow */
 .lk-card {
     background: var(--md-surface);
+    border: 1px solid var(--slate-200);
     border-radius: var(--radius-lg);
     padding: 24px;
     margin-bottom: 16px;
-    box-shadow: var(--shadow-sm);
-    transition: box-shadow 0.2s ease;
+    transition: border-color 0.2s ease;
 }
-.lk-card:hover { box-shadow: var(--shadow-md); }
+.lk-card:hover { border-color: var(--slate-300, #cbd5e1); }
 .lk-card-head {
     display: flex; align-items: center; justify-content: space-between;
     padding-bottom: 14px;
@@ -349,10 +349,9 @@ body {
     border-radius: var(--radius-lg);
     padding: 20px;
     display: flex; align-items: flex-start; gap: 14px;
-    box-shadow: var(--shadow-sm);
-    transition: box-shadow 0.25s ease, transform 0.25s ease;
+    transition: border-color 0.25s ease;
 }
-.lk-stat:hover { box-shadow: var(--shadow-md); transform: translateY(-1px); }
+.lk-stat:hover { border-color: var(--slate-300, #cbd5e1); }
 .lk-stat-icon {
     width: 44px; height: 44px;
     border-radius: var(--radius-md);
@@ -754,7 +753,7 @@ body {
     margin-bottom: 8px;
     transition: all 0.2s ease;
 }
-.doc-item:hover { border-color: var(--link-border); box-shadow: var(--shadow-md); }
+.doc-item:hover { border-color: var(--link-border); }
 .doc-icon {
     width: 36px; height: 36px;
     border-radius: var(--radius-sm);
@@ -869,9 +868,8 @@ body {
     border-radius: var(--radius-xl);
     border: 1px solid rgba(15,23,42,0.06);
     background: #fff;
-    box-shadow: var(--shadow-sm);
     cursor: pointer;
-    transition: box-shadow 0.25s var(--ease-out, cubic-bezier(0.16,1,0.3,1)), transform 0.25s var(--ease-out, cubic-bezier(0.16,1,0.3,1)), border-color 0.25s ease;
+    transition: transform 0.25s var(--ease-out, cubic-bezier(0.16,1,0.3,1)), border-color 0.25s ease, background 0.25s ease;
     font-family: var(--font-body);
     text-align: left;
     /* Was 152px with the icon pushed to the top by margin-bottom:auto, which
@@ -882,15 +880,14 @@ body {
     overflow: hidden;
 }
 .lk-home-tile:hover {
-    box-shadow: var(--shadow-md);
     background: var(--md-surface-container-high);
+    border-color: var(--slate-300, #cbd5e1);
 }
 /* A tile that only changes colour on press feels like a link; one that gives
    under the finger feels like a control. */
 .lk-home-tile:active {
     background: var(--md-surface-container-high);
     transform: scale(0.985);
-    box-shadow: var(--shadow-sm);
 }
 .lk-home-tile-icon {
     width: 46px; height: 46px;
@@ -966,10 +963,9 @@ body {
     background: #fff; cursor: pointer;
     transition: all 0.2s ease;
     font-family: var(--font-body); width: 100%;
-    box-shadow: var(--shadow-sm);
 }
-.pickup-type-btn:hover { border-color: var(--link-border); background: var(--link-tint); box-shadow: var(--shadow-md); }
-.pickup-type-btn.active { border-color: var(--link-color); background: var(--link-tint); box-shadow: var(--shadow-md); }
+.pickup-type-btn:hover { border-color: var(--link-border); background: var(--link-tint); }
+.pickup-type-btn.active { border-color: var(--link-color); background: var(--link-tint); }
 .pickup-type-icon {
     width: 44px; height: 44px;
     border-radius: var(--radius-md);
@@ -1329,7 +1325,7 @@ body {
     flex-direction: column;
     transition: box-shadow 0.15s, border-color 0.15s;
 }
-.shop-item:hover { border-color: var(--link-color); box-shadow: 0 4px 14px rgba(0,0,0,0.07); }
+.shop-item:hover { border-color: var(--link-color); }
 .shop-item.sold-out { opacity: 0.6; }
 .shop-item-photo {
     width: 100%;
@@ -1567,7 +1563,7 @@ body {
 .lk-set-id {
     display: flex; align-items: center; gap: 14px;
     background: var(--md-surface); border-radius: var(--radius-lg);
-    padding: 16px; box-shadow: var(--shadow-sm);
+    padding: 16px; border: 1px solid var(--slate-200);
 }
 .lk-set-id-avatar {
     width: 52px; height: 52px; border-radius: 50%; flex: none;
