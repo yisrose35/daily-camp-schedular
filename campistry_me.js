@@ -20369,66 +20369,105 @@ function handleCsv(file){
             if(m)leagueCols[m[1].trim()]=idx;
         });
 
-        var start=1; // skip header
-        var rows=[];
-        for(var i=start;i<Math.min(lines.length,5001);i++){
-            var c=parseCsvLine(lines[i]);
-            var firstName=(iFirst>=0?c[iFirst]:'').trim();
-            var lastName=(iLast>=0?c[iLast]:'').trim();
-            var fullName='';
-            if(firstName||lastName){fullName=(firstName+' '+lastName).trim()}
-            else if(iName>=0){fullName=(c[iName]||'').trim()}
-            if(!fullName)continue;
-
-            var teams={};
-            Object.entries(leagueCols).forEach(function([lg,idx]){
-                var v=(c[idx]||'').trim();
-                if(v)teams[lg]=v;
-            });
-
-            rows.push({
-                name:fullName,
-                camperId:iCamperId>=0?normalizePersonId(c[iCamperId]):'',
-                dob:iDob>=0?(c[iDob]||'').trim():'',
-                gender:iGender>=0?(c[iGender]||'').trim():'',
-                school:iSchool>=0?(c[iSchool]||'').trim():'',
-                schoolGrade:iSchoolGr>=0?(c[iSchoolGr]||'').trim():'',
-                teacher:iTeacher>=0?(c[iTeacher]||'').trim():'',
-                division:iDiv>=0?(c[iDiv]||'').trim():'',
-                grade:iGrade>=0?(c[iGrade]||'').trim():'',
-                bunk:iBunk>=0?(c[iBunk]||'').trim():'',
-                street:iStreet>=0?(c[iStreet]||'').trim():'',
-                city:iCity>=0?(c[iCity]||'').trim():'',
-                state:iState>=0?(c[iState]||'').trim():'',
-                zip:iZip>=0?(c[iZip]||'').trim():'',
-                summerStreet:iSumStreet>=0?(c[iSumStreet]||'').trim():'',
-                summerCity:iSumCity>=0?(c[iSumCity]||'').trim():'',
-                summerState:iSumState>=0?(c[iSumState]||'').trim():'',
-                summerZip:iSumZip>=0?(c[iSumZip]||'').trim():'',
-                summerPhone:iSumPhone>=0?(c[iSumPhone]||'').trim():'',
-                parent1Name:iP1>=0?(c[iP1]||'').trim():'',
-                parent1Relation:iP1Rel>=0?(c[iP1Rel]||'').trim():'',
-                parent1Phone:iP1Ph>=0?(c[iP1Ph]||'').trim():'',
-                parent1Email:iP1Em>=0?(c[iP1Em]||'').trim():'',
-                parent2Name:iP2>=0?(c[iP2]||'').trim():'',
-                parent2Relation:iP2Rel>=0?(c[iP2Rel]||'').trim():'',
-                parent2Phone:iP2Ph>=0?(c[iP2Ph]||'').trim():'',
-                parent2Email:iP2Em>=0?(c[iP2Em]||'').trim():'',
-                emergencyName:iEmN>=0?(c[iEmN]||'').trim():'',
-                emergencyPhone:iEmPh>=0?(c[iEmPh]||'').trim():'',
-                emergencyRel:iEmR>=0?(c[iEmR]||'').trim():'',
-                allergies:iAlg>=0?(c[iAlg]||'').trim():'',
-                medications:iMed>=0?(c[iMed]||'').trim():'',
-                dietary:iDiet>=0?(c[iDiet]||'').trim():'',
-                teams:teams
-            });
+        // Auto-detected field → column index map. Every field is remappable in
+        // the preview below, so a wrong guess or an unrecognized header can be
+        // fixed by hand instead of being silently dropped.
+        var mapping={
+            camperId:iCamperId,first:iFirst,last:iLast,name:iName,dob:iDob,gender:iGender,
+            school:iSchool,schoolGrade:iSchoolGr,teacher:iTeacher,division:iDiv,grade:iGrade,bunk:iBunk,
+            street:iStreet,city:iCity,state:iState,zip:iZip,
+            summerStreet:iSumStreet,summerCity:iSumCity,summerState:iSumState,summerZip:iSumZip,summerPhone:iSumPhone,
+            parent1Name:iP1,parent1Relation:iP1Rel,parent1Phone:iP1Ph,parent1Email:iP1Em,
+            parent2Name:iP2,parent2Relation:iP2Rel,parent2Phone:iP2Ph,parent2Email:iP2Em,
+            emergencyName:iEmN,emergencyPhone:iEmPh,emergencyRel:iEmR,
+            allergies:iAlg,medications:iMed,dietary:iDiet
+        };
+        // [key,label] in the order shown in the remap UI. Keys match the row
+        // properties built by buildRows() (first/last/name are name-only).
+        var IMPORT_FIELDS=[
+            ['camperId','Camper ID'],['first','First name'],['last','Last name'],['name','Full name'],
+            ['dob','Date of birth'],['gender','Gender'],['school','School'],['schoolGrade','School grade'],['teacher','Teacher'],
+            ['division','Division'],['grade','Grade'],['bunk','Bunk'],
+            ['street','Address'],['city','City'],['state','State'],['zip','Zip'],
+            ['summerStreet','Summer address'],['summerCity','Summer city'],['summerState','Summer state'],['summerZip','Summer zip'],['summerPhone','Summer phone'],
+            ['parent1Name','Parent 1 name'],['parent1Relation','Parent 1 relation'],['parent1Phone','Parent 1 phone'],['parent1Email','Parent 1 email'],
+            ['parent2Name','Parent 2 name'],['parent2Relation','Parent 2 relation'],['parent2Phone','Parent 2 phone'],['parent2Email','Parent 2 email'],
+            ['emergencyName','Emergency name'],['emergencyPhone','Emergency phone'],['emergencyRel','Emergency relation'],
+            ['allergies','Allergies'],['medications','Medications'],['dietary','Dietary']
+        ];
+        function _impCell(c,idx){ return (idx!=null&&idx>=0)?(c[idx]||'').trim():''; }
+        function buildRows(m){
+            var out=[];
+            for(var i=1;i<Math.min(lines.length,5001);i++){
+                var c=parseCsvLine(lines[i]);
+                var firstName=_impCell(c,m.first);
+                var lastName=_impCell(c,m.last);
+                var fullName='';
+                if(firstName||lastName){fullName=(firstName+' '+lastName).trim()}
+                else if(m.name!=null&&m.name>=0){fullName=(c[m.name]||'').trim()}
+                if(!fullName)continue;
+                var teams={};
+                Object.keys(leagueCols).forEach(function(lg){var v=(c[leagueCols[lg]]||'').trim();if(v)teams[lg]=v;});
+                out.push({
+                    name:fullName,
+                    camperId:(m.camperId!=null&&m.camperId>=0)?normalizePersonId(c[m.camperId]):'',
+                    dob:_impCell(c,m.dob),gender:_impCell(c,m.gender),school:_impCell(c,m.school),
+                    schoolGrade:_impCell(c,m.schoolGrade),teacher:_impCell(c,m.teacher),division:_impCell(c,m.division),
+                    grade:_impCell(c,m.grade),bunk:_impCell(c,m.bunk),
+                    street:_impCell(c,m.street),city:_impCell(c,m.city),state:_impCell(c,m.state),zip:_impCell(c,m.zip),
+                    summerStreet:_impCell(c,m.summerStreet),summerCity:_impCell(c,m.summerCity),summerState:_impCell(c,m.summerState),summerZip:_impCell(c,m.summerZip),summerPhone:_impCell(c,m.summerPhone),
+                    parent1Name:_impCell(c,m.parent1Name),parent1Relation:_impCell(c,m.parent1Relation),parent1Phone:_impCell(c,m.parent1Phone),parent1Email:_impCell(c,m.parent1Email),
+                    parent2Name:_impCell(c,m.parent2Name),parent2Relation:_impCell(c,m.parent2Relation),parent2Phone:_impCell(c,m.parent2Phone),parent2Email:_impCell(c,m.parent2Email),
+                    emergencyName:_impCell(c,m.emergencyName),emergencyPhone:_impCell(c,m.emergencyPhone),emergencyRel:_impCell(c,m.emergencyRel),
+                    allergies:_impCell(c,m.allergies),medications:_impCell(c,m.medications),dietary:_impCell(c,m.dietary),
+                    teams:teams
+                });
+            }
+            return out;
         }
+        // Read the (possibly user-overridden) mapping from the remap selects.
+        function currentMapping(){
+            var m={};
+            IMPORT_FIELDS.forEach(function(f){
+                var sel=document.getElementById('csvMap_'+f[0]);
+                var v=sel?parseInt(sel.value,10):mapping[f[0]];
+                m[f[0]]=(v==null||isNaN(v))?-1:v;
+            });
+            return m;
+        }
+        var rows=buildRows(mapping);
 
-        if(rows.length){
+        if(hdr.length){
             var pvEl=document.getElementById('csvPV');
-            if(pvEl){pvEl.style.display='block';pvEl.innerHTML='<div style="font-weight:600;margin:8px 0 4px">'+rows.length+' campers found</div><div style="font-size:.75rem;color:var(--s400)">Columns detected: '+hdr.filter(function(h){return h}).length+'</div>'}
+            if(pvEl){
+                var _optsFor=function(sel){
+                    var o='<option value="-1"'+(sel<0?' selected':'')+'>— not imported —</option>';
+                    hdr.forEach(function(h,idx){ if(!h)return; o+='<option value="'+idx+'"'+(sel===idx?' selected':'')+'>'+esc(h)+'</option>'; });
+                    return o;
+                };
+                var _mapHtml=IMPORT_FIELDS.map(function(f){
+                    var cur=mapping[f[0]]!=null?mapping[f[0]]:-1;
+                    return '<label style="display:flex;align-items:center;gap:8px;font-size:.75rem">'
+                        +'<span style="flex:0 0 118px;color:var(--s600);font-weight:600">'+esc(f[1])+'</span>'
+                        +'<select id="csvMap_'+f[0]+'" data-impfield="'+f[0]+'" class="me-input" style="flex:1;min-width:0;padding:4px 6px;font-size:.75rem">'+_optsFor(cur)+'</select>'
+                        +'</label>';
+                }).join('');
+                pvEl.style.display='block';
+                pvEl.innerHTML='<div style="font-weight:600;margin:8px 0 4px" id="csvCount">'+rows.length+' campers found</div>'
+                    +'<details style="margin-top:4px"><summary style="cursor:pointer;font-size:.78rem;color:var(--me);font-weight:600">Check / fix column mapping ('+hdr.filter(function(h){return h}).length+' columns detected)</summary>'
+                    +'<div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(230px,1fr));gap:6px 16px;margin-top:8px;max-height:280px;overflow:auto;padding:4px 2px">'+_mapHtml+'</div></details>';
+                pvEl.querySelectorAll('select[data-impfield]').forEach(function(sel){
+                    sel.addEventListener('change',function(){
+                        rows=buildRows(currentMapping());
+                        var cnt=document.getElementById('csvCount'); if(cnt)cnt.textContent=rows.length+' campers found';
+                    });
+                });
+            }
             var btn=document.getElementById('csvBtn');
             if(btn){btn.disabled=false;btn.onclick=async function(){
+                // Rebuild from the current (possibly corrected) mapping.
+                rows=buildRows(currentMapping());
+                if(!rows.length){toast('No campers to import — check the Full name (or First/Last) column mapping.');return}
                 // ★ #3 + footgun: Replace mode WIPES all current campers/structure/
                 //   families/bunks (and fans the wipe to cloud) — confirm first, and
                 //   let the office choose Update instead when they just want to
