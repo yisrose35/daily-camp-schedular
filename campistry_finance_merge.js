@@ -38,11 +38,47 @@
 // is the correct rule. Local still wins on ids it also has: the office
 // legitimately edits and refunds payments it can see.
 //
+// AND THE SAME HOLE, FOR APPLICATIONS
+//
+// The fix above was written for money and stopped there. The identical clobber
+// applies to the other thing the server writes without asking this browser:
+// PUBLIC SUBMISSIONS. submit_public_application (migrations 083/184/190) is an
+// anon RPC that merges a new enrollment or staff application into this same row,
+// atomically, server-side. A family submits at 10:00; the office has had Me open
+// since 09:55; at 10:05 they save anything at all and the application is gone.
+//
+// The parent saw "Success!". Nobody finds out.
+//
+// This needs no thousand simultaneous parents to bite -- one is enough -- and it
+// is worse at scale only because more is lost.
+//
+// WHY THIS HALF NEEDS TOMBSTONES AND THE MONEY HALF DOES NOT
+//
+// "Keep anything the cloud has that we do not" is exact for payments because a
+// payment is never un-made. An application IS deleted: deleteApplication() exists
+// and is a legitimate action on an application at any status, including a brand
+// new one. So a blind restore would resurrect every deleted application and make
+// deletion impossible -- the save would put it straight back.
+//
+// A status guess ("only restore ones still marked applied") gets this wrong for
+// exactly the case somebody deletes a new application, which is the common one.
+// A timestamp comparison needs a parent's clock and this tab's clock to agree,
+// and they do not.
+//
+// So a delete RECORDS ITSELF: `deletedIds.enrollments[id]`. The rule is then
+// exact and needs no clocks at all --
+//
+//   cloud has it, we do not, we never tombstoned it  -> we never saw it, restore
+//   cloud has it, we do not, we tombstoned it        -> deliberate, honour it
+//
+// Tombstones are pruned as soon as the delete has reached the cloud, so the list
+// holds only deletes still in flight.
+//
 // DELIBERATELY NARROW
 //
-// Only payments, installment status, and the card-on-file fields autopay needs
-// to run at all. A deleted family, a renamed household, a corrected enrollment
-// are all real local edits that must not be resurrected by a merge.
+// Only payments, installment status, the card-on-file fields autopay needs, and
+// public submissions. A deleted family, a renamed household, a corrected
+// enrollment are all real local edits that must not be resurrected by a merge.
 // =============================================================================
 (function () {
     'use strict';
@@ -186,9 +222,89 @@
      * The whole job: what this browser is about to write, with everything a
      * server wrote in the meantime put back. Mutates and returns `local`.
      */
+    /** The branches submit_public_application can write. A closed list, as there. */
+    M.PUBLIC_KINDS = ['enrollments', 'staffApplications'];
+
+    /** Where a delete records itself so a merge can tell it from "never saw it". */
+    M.tombstonesOf = function (blob, kind) {
+        var d = isObj(blob) && isObj(blob.deletedIds) ? blob.deletedIds[kind] : null;
+        return isObj(d) ? d : {};
+    };
+
+    /**
+     * Record that THIS browser deleted a public submission.
+     *
+     * Called by the delete itself, not by the merge, because only the caller knows
+     * the difference between "I removed this" and "I have not seen this yet" — and
+     * that difference is the whole reason this exists.
+     */
+    M.tombstone = function (blob, kind, id, on) {
+        if (!isObj(blob) || !id) return blob;
+        if (M.PUBLIC_KINDS.indexOf(String(kind)) < 0) return blob;
+        if (!isObj(blob.deletedIds)) blob.deletedIds = {};
+        if (!isObj(blob.deletedIds[kind])) blob.deletedIds[kind] = {};
+        blob.deletedIds[kind][String(id)] = String(on || new Date().toISOString());
+        return blob;
+    };
+
+    /** Undo of a delete. The tombstone must go, or the next merge re-deletes it. */
+    M.untombstone = function (blob, kind, id) {
+        if (!isObj(blob) || !id) return blob;
+        var d = isObj(blob.deletedIds) ? blob.deletedIds[kind] : null;
+        if (isObj(d)) delete d[String(id)];
+        return blob;
+    };
+
+    /**
+     * Put back the public submissions the cloud has and this browser has not seen.
+     *
+     * Returns { restored, pruned }. Local always wins on an id it also holds: the
+     * office legitimately accepts, declines and edits applications it can see.
+     */
+    M.mergePublicSubmissions = function (local, cloud) {
+        var out = { restored: 0, pruned: 0 };
+        if (!isObj(local) || !isObj(cloud)) return out;
+
+        M.PUBLIC_KINDS.forEach(function (kind) {
+            var cloudSide = isObj(cloud[kind]) ? cloud[kind] : null;
+            if (!cloudSide) return;
+            // A local branch that is absent entirely is not the same as an empty
+            // one, but for this purpose it is treated the same: anything the cloud
+            // has and we do not is a candidate, and the tombstones decide.
+            if (!isObj(local[kind])) local[kind] = {};
+            var graves = M.tombstonesOf(local, kind);
+
+            Object.keys(cloudSide).forEach(function (id) {
+                if (local[kind][id] !== undefined) return;   // we have it; we win
+                if (graves[id]) return;                      // we deleted it; honour
+                local[kind][id] = cloudSide[id];
+                out.restored++;
+            });
+
+            // PRUNE, for two different reasons.
+            Object.keys(graves).forEach(function (id) {
+                // 1. WE HOLD IT. Then we did not delete it, or we put it back —
+                //    rescindEnrollment does exactly that, deleting through the
+                //    cascade and re-inserting the withdrawn record for the audit
+                //    trail. Self-healing on purpose: every present and future path
+                //    that restores an enrollment would otherwise have to remember to
+                //    clear a tombstone, and one that forgot would leave a landmine
+                //    that suppresses the record on some later tab.
+                if (local[kind][id] !== undefined) { delete graves[id]; out.pruned++; return; }
+                // 2. THE CLOUD NO LONGER HAS IT. The delete landed, so the tombstone
+                //    has done its job. Keeping it for ever would make this an
+                //    unbounded list, and would block a family who legitimately
+                //    re-applies and is handed the same id by a retry.
+                if (cloudSide[id] === undefined) { delete graves[id]; out.pruned++; }
+            });
+        });
+        return out;
+    };
+
     M.mergeCampistryMe = function (local, cloud) {
         if (!isObj(local) || !isObj(cloud)) return local;
-        var report = { payments: 0, installments: 0, cards: 0 };
+        var report = { payments: 0, installments: 0, cards: 0,
+                       restored: 0, pruned: 0 };
 
         var lFin = isObj(local.finance) ? local.finance : null;
         var cFin = isObj(cloud.finance) ? cloud.finance : null;
@@ -205,6 +321,10 @@
 
         report.installments = M.mergeInstallments(local.families, cloud.families);
         report.cards = M.mergeCardFields(local.families, cloud.families);
+
+        var pub = M.mergePublicSubmissions(local, cloud);
+        report.restored = pub.restored;
+        report.pruned = pub.pruned;
 
         local._financeMergeReport = report;
         return local;

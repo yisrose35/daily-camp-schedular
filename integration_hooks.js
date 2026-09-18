@@ -916,10 +916,12 @@
                                         changesToSync[mergeKey], cur.value);
                                     const rep = changesToSync[mergeKey]._financeMergeReport;
                                     delete changesToSync[mergeKey]._financeMergeReport;
-                                    if (rep && (rep.payments || rep.installments || rep.cards)) {
-                                        log('campistryMe: kept server-written money out of the clobber —',
+                                    if (rep && (rep.payments || rep.installments || rep.cards
+                                                || rep.restored)) {
+                                        log('campistryMe: kept server-written data out of the clobber —',
                                             rep.payments, 'payment(s),', rep.installments,
-                                            'paid installment(s),', rep.cards, 'card field(s)');
+                                            'paid installment(s),', rep.cards, 'card field(s),',
+                                            rep.restored, 'public submission(s)');
                                     }
                                 } catch (finErr) {
                                     // Never block the save: a failed merge loses
