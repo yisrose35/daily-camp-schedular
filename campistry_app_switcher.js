@@ -122,13 +122,19 @@
         if(!_inSwitch(e.target)) closeBar();
     }
 
-    // Hovering the tab or the bar keeps it open; leaving both closes it.
+    // Hover-to-open only on devices that actually hover. On touch, a tap fires a
+    // synthetic mouseover AND a click — if hover opened it, the click would
+    // immediately toggle it back shut (looks like "nothing happens"). Gating
+    // hover to (hover:hover) leaves the click/tap as the sole opener on phones.
+    var HOVER_CAPABLE = !!(window.matchMedia && window.matchMedia('(hover: hover)').matches);
     function onSwitchOver(e){
+        if(!HOVER_CAPABLE)return;
         if(!_inSwitch(e.target))return;
         if(_hideT){ clearTimeout(_hideT); _hideT=null; }
         openBar();
     }
     function onSwitchOut(e){
+        if(!HOVER_CAPABLE)return;
         if(!_inSwitch(e.target))return;
         if(_inSwitch(e.relatedTarget))return; // moved within the tab/bar
         if(_hideT)clearTimeout(_hideT);
