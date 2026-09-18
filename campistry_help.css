@@ -31,7 +31,7 @@
 .hc-header-right { display: flex; align-items: center; gap: 10px; min-width: 0; }
 .hc-header .quick-switch-bar { position: static; transform: none; max-width: 100%; }
 .hc-toc-toggle {
-    display: none; align-items: center; gap: 6px;
+    display: inline-flex; align-items: center; gap: 6px;
     background: var(--slate-100); border: none; border-radius: var(--radius-sm);
     padding: 7px 11px; font-size: .78rem; font-weight: 600; color: var(--slate-600);
     cursor: pointer; flex-shrink: 0; transition: background .15s;
@@ -39,9 +39,22 @@
 .hc-toc-toggle:hover { background: var(--slate-200); }
 
 /* ==================== LAYOUT ==================== */
-.hc-layout { max-width: 1280px; margin: 0 auto; display: flex; align-items: flex-start; gap: 40px; padding: 0 32px; }
+/* Wider than the rest of Campistry's 1200px content cap (dashboard.css) —
+   this page carries a persistent sidebar competing for the same space, so
+   it earns the extra room instead of leaving it empty on a large monitor. */
+.hc-layout { max-width: 1600px; margin: 0 auto; display: flex; align-items: flex-start; gap: 40px; padding: 0 32px; }
 .hc-main { flex: 1; min-width: 0; padding: 0 0 100px; max-width: none; display: flex; flex-direction: column; }
 [id] { scroll-margin-top: 76px; }
+
+/* Same hamburger toggle as mobile — on a wide desktop screen it collapses
+   the sidebar and reclaims its width for .hc-main instead of overlaying
+   the page, since there's room for content to reflow rather than needing
+   a drawer. Separate class from mobile's .hc-toc-open (which means the
+   opposite — shown as an overlay, default hidden) so the two never fight
+   over the same element at a breakpoint change. */
+@media (min-width: 981px) {
+    .hc-toc.hc-toc-collapsed { display: none; }
+}
 
 /* ==================== SIDEBAR TOC ==================== */
 .hc-toc {
@@ -94,12 +107,12 @@
 .hc-hero > * { position: relative; z-index: 1; }
 .hc-hero h1 {
     font-family: var(--font-display); font-weight: 600;
-    font-size: clamp(2.1rem, 4.2vw, 3rem); color: var(--slate-900);
+    font-size: clamp(2.1rem, 3.2vw + 1rem, 3.4rem); color: var(--slate-900);
     letter-spacing: -.025em; line-height: 1.1; margin-bottom: 12px;
 }
 .hc-hero h1 em { font-style: italic; font-weight: 500; color: var(--teal-600); }
-.hc-hero p { color: var(--text-secondary); font-size: 1.02rem; max-width: 520px; margin: 0 auto 30px; }
-.hc-search-wrap { position: relative; z-index: 5; max-width: 580px; margin: 0 auto; }
+.hc-hero p { color: var(--text-secondary); font-size: 1.05rem; max-width: 580px; margin: 0 auto 30px; }
+.hc-search-wrap { position: relative; z-index: 5; max-width: 680px; margin: 0 auto; }
 .hc-search-wrap svg {
     position: absolute; left: 20px; top: 50%; transform: translateY(-50%);
     color: var(--slate-400); pointer-events: none;
