@@ -12321,8 +12321,19 @@ async function _sendLinkNow(isStaff){
     var btn=document.getElementById('slSendBtn');
     if(btn){btn.disabled=true;btn.textContent='Sending…';}
     try{
-        await callEdgeFunctionAuthed('send-broadcast',{campId:getCampId(),to:recipients,subject:subject,body:body,method:'email',campName:campName});
-        toast('Sent to '+recipients.length+' recipient'+(recipients.length!==1?'s':''));
+        // eventKey added so this can resume when the send outgrows one
+        // invocation — without it, a second pass would email everyone twice.
+        // One key per click, so re-opening the modal and sending again is a
+        // genuinely new send rather than a no-op.
+        var r=await sendBroadcastComplete({campId:getCampId(),to:recipients,subject:subject,body:body,method:'email',campName:campName,eventKey:'me-sendlink:'+Date.now()})||{};
+        // Report what was actually sent. This used to announce
+        // recipients.length regardless, so a send that reached 180 of 400
+        // families still said "Sent to 400".
+        var sent=Number(r.emailSent||0),failed=Number(r.emailFailed||0);
+        toast('Sent to '+sent+' recipient'+(sent!==1?'s':'')
+            +(failed?' — '+failed+' could not be delivered':'')
+            +(r.truncated?' (still more to go — send again to continue)':''),
+            failed||r.truncated?'error':undefined);
         closeModal('sendLinkModal');
     }catch(err){
         toast('Send failed: '+(err&&err.message||'unknown error'),'error');
@@ -17351,6 +17362,43 @@ async function callEdgeFunctionAuthed(fnName,body){
     return data;
 }
 
+// A broadcast to a whole camp does not fit in one edge-function invocation.
+//
+// send-broadcast paces itself against the email/SMS providers' rate limits and
+// stops before the platform's wall-clock limit, answering `done:false` with the
+// number it did not reach. Left at one call, a send to several hundred families
+// simply stopped part way through and reported whatever it had managed — which
+// looked like a successful send of a fraction of the list.
+//
+// Calling again with the SAME eventKey and the SAME recipients resumes exactly
+// where it stopped: the function claims each recipient in the notifications
+// table before sending and releases every claim it could not honour, so an
+// already-messaged family is skipped and an unsent one is picked up. THE
+// eventKey IS WHAT MAKES THAT SAFE — without one there are no claims, and a
+// second pass would message everyone again. So this refuses to resume without
+// it rather than risk double-sending.
+//
+// Returns the summed counts across every pass, plus `truncated:true` if it hit
+// the pass limit with work still outstanding.
+async function sendBroadcastComplete(body){
+    var COUNTS=['emailSent','emailFailed','emailSkipped','smsSent','smsFailed','smsSkipped'];
+    var totals=null,pass=0;
+    for(;;){
+        var d=await callEdgeFunctionAuthed('send-broadcast',body)||{};
+        if(!totals) totals=d;
+        else{
+            COUNTS.forEach(function(k){ totals[k]=(totals[k]||0)+(d[k]||0); });
+            totals.done=d.done; totals.remaining=d.remaining;
+        }
+        // An older deployment of the function sends no `done` at all — treat
+        // that as complete rather than looping for a field it will never send.
+        if(d.done!==false) break;
+        if(!body.eventKey){ totals.truncated=true; break; }
+        if(++pass>=20){ totals.truncated=true; break; }
+    }
+    return totals;
+}
+
 // Office-side fallback for getting a payment method on file — e.g. a family
 // with no Link portal access, or a parent on the phone. This does NOT collect
 // card/bank details on Campistry's own page: it opens a real Stripe-hosted
@@ -20237,7 +20285,7 @@ async function sendBroadcastNow(broadcast){
     // consent (smsEmailConsent, captured on the registration/staff-apply
     // forms) — a recipient added before that consent flow existed is
     // correctly skipped rather than texted/emailed without consent on file.
-    try{return await callEdgeFunctionAuthed('send-broadcast',{campId:getCampId(),to:recipients,subject:broadcast.subject||'',body:broadcast.body||'',method:broadcast.method||'Email',campName:campName,branding:_getLinkBranding(),eventKey:'me-broadcast:'+(broadcast.timestamp||Date.now())})}
+    try{return await sendBroadcastComplete({campId:getCampId(),to:recipients,subject:broadcast.subject||'',body:broadcast.body||'',method:broadcast.method||'Email',campName:campName,branding:_getLinkBranding(),eventKey:'me-broadcast:'+(broadcast.timestamp||Date.now())})}
     catch(err){toast('Send failed: '+err.message,'error');return{sent:0,failed:0}}
 }
 

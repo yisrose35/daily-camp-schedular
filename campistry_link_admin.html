@@ -1940,11 +1940,34 @@ async function _sendNonAdopterFallback(nonAdopters, subj, body, channels, campNa
     });
     var method = fallbackChannels.length === 2 ? 'all' : fallbackChannels[0];
     try {
-        var res = await db.client.functions.invoke('send-broadcast', {
-            body: { campId: db.campId, to: to, subject: subj, body: body, method: method, campName: campName, eventKey: eventKey }
-        });
-        if (res.error) throw new Error(res.error.message || 'send-broadcast failed');
-        return res.data;
+        // send-broadcast stops before the platform's wall-clock limit and answers
+        // `done:false` with however many it did not get to, rather than being
+        // killed mid-send and leaving the office with no idea how far it got.
+        // Calling again with the SAME eventKey and the SAME list resumes exactly
+        // where it stopped: the function claims each recipient in the
+        // notifications table before sending and releases every claim it could
+        // not honour, so an already-messaged family is skipped and an unsent one
+        // is picked up. Bounded, so a permanently stuck send cannot spin.
+        var totals = null, pass = 0;
+        for (;;) {
+            var res = await db.client.functions.invoke('send-broadcast', {
+                body: { campId: db.campId, to: to, subject: subj, body: body, method: method, campName: campName, eventKey: eventKey }
+            });
+            if (res.error) throw new Error(res.error.message || 'send-broadcast failed');
+            var d = res.data || {};
+            if (!totals) totals = d;
+            else {
+                ['emailSent','emailFailed','emailSkipped','smsSent','smsFailed','smsSkipped']
+                    .forEach(function(k){ totals[k] = (totals[k]||0) + (d[k]||0); });
+                totals.done = d.done; totals.remaining = d.remaining;
+            }
+            // `done` means it worked through the whole list. `remaining` can
+            // still be non-zero then — those are outright failures, which
+            // another identical pass would only repeat.
+            if (d.done !== false) break;
+            if (++pass >= 20) { totals.truncated = true; break; }
+        }
+        return totals;
     } catch (e) {
         console.error('[Link Admin] non-adopter fallback failed', e);
         toast('In-app message sent, but the SMS/email fallback failed: ' + (e.message || 'unknown error'));
