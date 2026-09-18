@@ -575,18 +575,24 @@ body {
    position:fixed (coords computed in JS from the trigger) so the header
    centre column's overflow:hidden can't clip it. */
 /* Fixed to the top-center of the screen so it's always truly centered and
-   reads as a little tab cut out of the top edge (rounded bottom corners, no
-   top border, a soft shadow — it "hangs" from the top). */
-.quick-switch { position: fixed; top: 0; left: 50%; transform: translateX(-50%); z-index: 55; display: inline-flex; }
+   reads as a little tab cut out of the top edge. High z-index so it (and its
+   dropdown) sit above every app's header instead of being hidden behind it —
+   the centering transform makes .quick-switch its own stacking context, so its
+   z-index is what actually clears the headers (which go up to z-index 100). */
+.quick-switch { position: fixed; top: 0; left: 50%; transform: translateX(-50%); z-index: 1000; display: inline-flex; }
+/* Slightly angled (trapezoid) sides so it stands out as its own little tab,
+   with a soft drop-shadow (a filter, not box-shadow, so it follows the angled
+   shape). */
 .qs-trigger {
     display: inline-flex; flex-direction: column; align-items: center; gap: 0;
-    padding: 5px 24px 7px;
-    background: #fff; border: 1px solid var(--slate-200,#E2E8F0); border-top: none;
-    border-radius: 0 0 14px 14px; box-shadow: 0 3px 10px rgba(15,23,42,.07);
+    padding: 5px 26px 7px;
+    background: #fff; border: none; border-radius: 0;
+    clip-path: polygon(0 0, 100% 0, calc(100% - 7px) 100%, 7px 100%);
+    filter: drop-shadow(0 3px 5px rgba(15,23,42,.12));
     color: var(--slate-600,#475569); font-family: inherit; font-size: .82rem; font-weight: 600;
-    line-height: 1.05; cursor: pointer; transition: color .15s, box-shadow .15s;
+    line-height: 1.05; cursor: pointer; transition: color .15s, filter .15s;
 }
-.qs-trigger:hover, .quick-switch.open .qs-trigger { color: var(--slate-900,#0F172A); box-shadow: 0 5px 16px rgba(15,23,42,.11); }
+.qs-trigger:hover, .quick-switch.open .qs-trigger { color: var(--slate-900,#0F172A); filter: drop-shadow(0 4px 8px rgba(15,23,42,.16)); }
 .qs-trigger-label { white-space: nowrap; }
 .qs-caret { flex-shrink: 0; transition: transform .18s ease; margin-top: 1px; }
 .quick-switch.open .qs-caret { transform: rotate(180deg); }
