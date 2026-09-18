@@ -219,3 +219,88 @@ test('describe says the total, what goes back, and what stays', () => {
     assert.match(s, /24\.00 left on account or carried over/);
     assert.strictEqual(C.describe(C.plan({})), '', 'nothing to say when there is nothing to do');
 });
+
+// ───────────────────────────────────────────────────────────────────────────
+// THE WIRING. The rule above is useless until an office can reach it, and the one
+// thing it must NOT do is open a second route to a processor.
+// ───────────────────────────────────────────────────────────────────────────
+
+const fs = require('node:fs');
+const ME = fs.readFileSync(path.join(__dirname, '..', 'campistry_me.js'), 'utf8');
+const MEHTML = fs.readFileSync(path.join(__dirname, '..', 'campistry_me.html'), 'utf8');
+
+test('a card refund is handed to the EXISTING refund path, not repeated here', () => {
+    // A second route to the same processor call is how a camp gets refunded twice,
+    // and this project has already paid for that lesson once. The existing screen
+    // has the idempotency claim, the window check and the chunking.
+    const fn = ME.slice(ME.indexOf('function _applyCloseout(famKey,plan)'));
+    const body = fn.slice(0, fn.indexOf('\n/**', 10));
+    assert.match(body, /if\(st\.do==='refund_card'\)\{\s*\n\s*deferred\.push\(amt\);/);
+    ['payments-refund', 'stripe-refund', 'cardknoxRefund', 'callEdgeFunction']
+        .forEach(sym => assert.ok(!body.includes(sym),
+            '_applyCloseout must not call ' + sym + ' itself'));
+    assert.match(body, /use Issue Credit\/Refund/, 'and it must say where to go');
+});
+
+test('bill and hold write NOTHING, because that is the disposition', () => {
+    // The credit is already on the account. An entry here would move money for no
+    // reason and leave the family's balance wrong.
+    const fn = ME.slice(ME.indexOf('function _applyCloseout(famKey,plan)'));
+    assert.match(fn.slice(0, 2600), /if\(st\.do==='bill'\|\|st\.do==='hold'\)\{[\s\S]{0,320}return;/);
+});
+
+test('every other disposition CONSUMES the credit, as a charge with a reason', () => {
+    // Crediting would double the family's credit; editing the balance would bypass
+    // the ledger, which is the one thing this codebase does not allow.
+    const fn = ME.slice(ME.indexOf('function _applyCloseout(famKey,plan)'));
+    const body = fn.slice(0, 2600);
+    assert.match(body, /f\.charges\.push\(/);
+    assert.match(body, /closeout:\{disposition:st\.do,/, 'each entry records which it was');
+    assert.match(body, /category:'Close-out'/);
+
+    // THE SIGN. A charge INCREASES the balance, which consumes a credit sitting on
+    // the account. Subtracting would deepen the credit instead — handing the family
+    // the money twice and leaving the camp short. Asserting only that a charge is
+    // pushed says nothing about the direction, which is the part that costs money.
+    assert.match(body, /f\.balance=\(f\.balance\|\|0\)\+amt;/,
+        'a close-out disposition must consume the credit, not deepen it');
+    assert.ok(!/f\.balance=\(f\.balance\|\|0\)-amt;/.test(body),
+        'subtracting would credit the family a second time');
+});
+
+test('the card ceiling comes from the SAME helper the refund screen uses', () => {
+    // Two answers to "how much can go back to a card" is one of them being wrong.
+    assert.match(ME, /function _closeoutCardCeiling\(f\)/);
+    const fn = ME.slice(ME.indexOf('function _closeoutCardCeiling(f)'));
+    assert.match(fn.slice(0, 700), /_famRefundableOnlineAll\(f\)/);
+    // It returns a LIST of remainders, so the ceiling is their sum — not the list,
+    // and not its length.
+    assert.match(fn.slice(0, 700), /reduce\(function\(n,d\)\{[\s\S]{0,120}d\.remaining/);
+    assert.match(ME, /refundableToCard:_closeoutCardCeiling\(f\),/);
+});
+
+test('canteen money is read defensively from a key this page does not own', () => {
+    const fn = ME.slice(ME.indexOf('function _canteenAvailableFor(camperName)'));
+    const body = fn.slice(0, 800);
+    assert.match(body, /campistrySnacks/);
+    assert.match(body, /balanceFloor/, 'money below the floor is not the family\'s to take');
+    assert.match(body, /catch\(e\)\{return 0\}/, 'and a page without it answers 0, not a guess');
+});
+
+test('close-out is gated and reachable', () => {
+    const fn = ME.slice(ME.indexOf('function closeOutFamily(famKey)'));
+    assert.match(fn.slice(0, 400), /_secEdit\('billing'/);
+    assert.match(ME, /closeOutFamily:closeOutFamily,_closeoutPreview:_closeoutPreview,/);
+    assert.match(ME, /CampistryMe\.closeOutFamily\(/, 'and there is a way in');
+});
+
+test('a family with nothing left is told so rather than shown an empty form', () => {
+    const fn = ME.slice(ME.indexOf('function closeOutFamily(famKey)'));
+    assert.match(fn.slice(0, 1600), /no credit balance and no unspent canteen money/);
+});
+
+test('the module is loaded before the page that uses it', () => {
+    const tags = [...MEHTML.matchAll(/<script src="([^"?]+)/g)].map(m => m[1]);
+    assert.ok(tags.indexOf('campistry_closeout.js') >= 0);
+    assert.ok(tags.indexOf('campistry_closeout.js') < tags.indexOf('campistry_me.js'));
+});

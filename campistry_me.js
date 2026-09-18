@@ -1671,6 +1671,231 @@ function managePaymentMethods(){
     },'Save');
 }
 
+/** The close-out rule, or null on a page that did not load it. */
+function _closeoutAPI(){return (typeof window!=='undefined'&&window.CampistryCloseout)||null}
+
+/**
+ * A camper's unspent canteen money, or 0 when we cannot tell.
+ *
+ * Canteen balances live under `campistrySnacks`, which this page does not own and
+ * may not have hydrated at all — so this reads defensively and answers 0 rather
+ * than guessing. `balanceFloor` is subtracted for the same reason
+ * payments-canteen-refund-all subtracts it: money below the floor is not the
+ * family's to take back.
+ */
+/**
+ * A camper's name as a human reads it. Roster keys are unique but are not always
+ * the name — a second camper sharing one is keyed "Malky Stein #102".
+ */
+function _camperLabel(key){
+    return String(key==null?'':key).replace(/\s#\d+$/,'');
+}
+function _canteenAvailableFor(camperName){
+    try{
+        var g=(typeof loadGlobalSettings==='function')?loadGlobalSettings():null;
+        var acc=g&&g.campistrySnacks&&g.campistrySnacks.accounts
+                &&g.campistrySnacks.accounts[camperName];
+        if(!acc)return 0;
+        var avail=(Number(acc.balance)||0)-(Number(acc.balanceFloor)||0);
+        return Math.max(0,Math.round(avail*100)/100);
+    }catch(e){return 0}
+}
+
+/**
+ * How much of this family's money could actually go back to a card.
+ *
+ * _famRefundableOnlineAll takes the FAMILY OBJECT and returns the refundable
+ * payments newest-first, each with what is left on it — so the ceiling is the sum of
+ * those remainders, not the list. Sharing that helper with the refund screen is the
+ * point: two answers to "how much can go back to a card" is one of them being wrong.
+ */
+function _closeoutCardCeiling(f){
+    try{
+        if(typeof _famRefundableOnlineAll!=='function')return 0;
+        return Math.round((_famRefundableOnlineAll(f)||[]).reduce(function(n,d){
+            return n+(Number(d&&d.remaining)||0);
+        },0)*100)/100;
+    }catch(e){return 0}
+}
+
+/**
+ * SEASON-END CLOSE-OUT for one family.
+ *
+ * Shows both pots — the account credit and each camper's unspent canteen money —
+ * with a disposition per pot, and the resulting arithmetic under it. Nothing is
+ * applied until the office agrees to the whole disposition, because a card refund
+ * that can only be partly done changes what happens to the rest.
+ */
+function closeOutFamily(famKey){
+    if(!_secEdit('billing','Closing out a family'))return;
+    var C=_closeoutAPI();
+    if(!C){toast('The close-out module did not load','error');return}
+    var f=families[famKey];
+    if(!f){toast('Family not found','error');return}
+
+    var credit=Math.max(0,-(Number(f.balance)||0));   // a NEGATIVE balance is credit
+    var kids=(f.camperIds||[]).map(function(n){
+        return {name:n,canteen:_canteenAvailableFor(n)};
+    }).filter(function(k){return k.canteen>0});
+
+    if(credit<=0&&!kids.length){
+        showModal('Nothing to close out',
+            '<p style="margin:0;font-size:.86rem">'+esc(f.name||'This family')
+            +' has no credit balance and no unspent canteen money.</p>');
+        return;
+    }
+
+    function optHtml(id,sel){
+        return (C.OPTIONS||[]).map(function(o){
+            return '<option value="'+esc(o.id)+'"'+(o.id===sel?' selected':'')+'>'
+                 +esc(o.label)+'</option>';
+        }).join('');
+    }
+    var pol=C.normalize((window.loadGlobalSettings&&(loadGlobalSettings('campistryMe')||{}).closeoutPolicy)||{});
+
+    var h='<div class="me-modal-form" id="coForm">';
+    h+='<p style="font-size:.83rem;color:var(--s500);margin:0 0 12px">'
+      +'Decide what happens to each amount. Nothing is applied until you confirm, '
+      +'and a card refund that can only be partly done will say so below.</p>';
+
+    if(credit>0){
+        h+='<div style="border:1px solid var(--s200);border-radius:var(--r);padding:11px;margin-bottom:9px">'
+          +'<div style="display:flex;justify-content:space-between;align-items:center;gap:10px;margin-bottom:7px">'
+          +'<strong style="font-size:.88rem">Account credit</strong>'
+          +'<span style="font-weight:700">'+fm(credit)+'</span></div>'
+          +'<select class="me-input coDisp" data-kind="family" data-amount="'+credit+'" '
+          +'onchange="CampistryMe._closeoutPreview(\''+je(famKey)+'\')">'
+          +optHtml(pol.family)+'</select></div>';
+    }
+    kids.forEach(function(k){
+        h+='<div style="border:1px solid var(--s200);border-radius:var(--r);padding:11px;margin-bottom:9px">'
+          +'<div style="display:flex;justify-content:space-between;align-items:center;gap:10px;margin-bottom:7px">'
+          +'<strong style="font-size:.88rem">'+esc(_camperLabel(k.name))+'\u2019s canteen money</strong>'
+          +'<span style="font-weight:700">'+fm(k.canteen)+'</span></div>'
+          +'<select class="me-input coDisp" data-kind="canteen" data-camper="'+esc(k.name)+'" '
+          +'data-amount="'+k.canteen+'" '
+          +'onchange="CampistryMe._closeoutPreview(\''+je(famKey)+'\')">'
+          +optHtml(pol.canteen)+'</select></div>';
+    });
+    h+='<div id="coPreview" style="margin-top:10px"></div></div>';
+
+    showModal('Close out '+(f.name||'this family'),h,function(){
+        var plan=_closeoutPlanFromForm(famKey);
+        if(!plan||!plan.steps.length){toast('Nothing to apply','error');return}
+        _applyCloseout(famKey,plan);
+    },'Apply');
+    _closeoutPreview(famKey);
+}
+
+/** Read the dispositions off the form and ask the rule what that means. */
+function _closeoutPlanFromForm(famKey){
+    var C=_closeoutAPI(); if(!C)return null;
+    var f=families[famKey]||{};
+    var famDisp=null,campers=[];
+    document.querySelectorAll('.coDisp').forEach(function(sel){
+        var amt=parseFloat(sel.getAttribute('data-amount'))||0;
+        if(sel.getAttribute('data-kind')==='family')famDisp=sel.value;
+        else campers.push({name:sel.getAttribute('data-camper'),canteen:amt,
+                           disposition:sel.value});
+    });
+    var credit=Math.max(0,-(Number(f.balance)||0));
+    return C.plan({
+        familyCredit:credit,
+        // What can actually go back to a card, from the same helper the refund
+        // screen uses — so the two cannot disagree about the ceiling.
+        refundableToCard:_closeoutCardCeiling(f),
+        campers:campers,
+        familyDisposition:famDisp,
+        policy:(loadGlobalSettings&&(loadGlobalSettings('campistryMe')||{}).closeoutPolicy)||{}
+    });
+}
+
+/**
+ * Apply an agreed close-out.
+ *
+ * DELIBERATELY DOES NOT MOVE MONEY AT A PROCESSOR. `refund_card` is handed to the
+ * existing refund screen instead, which already has the idempotency claim, the
+ * refund-window check and the newest-first chunking across payments. A second path
+ * to the same processor call is how a camp ends up refunded twice, and this project
+ * has already paid for that lesson once.
+ *
+ * Everything else is a LEDGER write, and every one of them is a charge or a credit
+ * with a reason — never an edit to a balance. `bill` and `hold` are deliberately
+ * no-ops: the credit is already sitting on the account, and the disposition was the
+ * office deciding to leave it there.
+ */
+function _applyCloseout(famKey,plan){
+    var f=families[famKey];
+    var C=_closeoutAPI();
+    if(!f||!C||!plan)return;
+    var stamp=Date.now(), applied=0, deferred=[];
+
+    plan.steps.forEach(function(st,i){
+        var amt=Math.round((Number(st.amount)||0)*100)/100;
+        if(!(amt>0))return;
+        var who=(st.kind==='canteen')?(_camperLabel(st.camper||'')+'\u2019s canteen money')
+                                     :'Account credit';
+        var id='co_'+stamp+'_'+i;
+
+        if(st.do==='bill'||st.do==='hold'){
+            // Nothing to do, and that IS the disposition: the credit stays where it
+            // already is. Writing an entry here would move money for no reason.
+            applied++;
+            return;
+        }
+        if(st.do==='refund_card'){
+            deferred.push(amt);
+            return;
+        }
+        // donate / cash / check / roll_forward all CONSUME the credit, so each is a
+        // charge against the account with the reason attached. Crediting would double
+        // the family's credit; editing the balance would bypass the ledger entirely.
+        var reason=(st.do==='donate')?'donation'
+                  :(st.do==='roll_forward')?'carried_forward':'disbursement';
+        var note=C.labelFor(st.do)+' \u2014 '+who
+                +(st.do==='roll_forward'?' (opening credit next season)':'');
+        if(!f.charges)f.charges=[];
+        f.charges.push({id:id,category:'Close-out',description:note,amount:amt,
+                        date:today(),timestamp:stamp,closeout:{disposition:st.do,
+                        reason:reason,kind:st.kind||'family',camper:st.camper||''}});
+        f.balance=(f.balance||0)+amt;
+        applied++;
+    });
+
+    save();closeModal('dynModal');
+    if(curPage==='familydetail')renderFamilyDetailPage();else renderBilling();
+
+    var msg=applied?(applied+' close-out step'+(applied===1?'':'s')+' applied'):'';
+    if(deferred.length){
+        var total=deferred.reduce(function(n,x){return n+x},0);
+        msg+=(msg?'. ':'')+fm(Math.round(total*100)/100)+' is set to go back to a card '
+            +'\u2014 use Issue Credit/Refund so it goes through the refund checks';
+    }
+    toast(msg||'Nothing to apply');
+}
+
+/** Live arithmetic under the form, so a partial card refund is visible first. */
+function _closeoutPreview(famKey){
+    var box=document.getElementById('coPreview');
+    if(!box)return;
+    var C=_closeoutAPI(); if(!C)return;
+    var plan=_closeoutPlanFromForm(famKey);
+    if(!plan||!plan.total){box.innerHTML='';return}
+    var h='<div style="background:#F8FAFC;border:1px solid var(--s200);border-radius:8px;'
+        +'padding:9px 11px;font-size:.8rem;line-height:1.6">'
+        +'<strong>'+esc(C.describe(plan))+'</strong>';
+    plan.steps.forEach(function(st){
+        h+='<div style="color:var(--s500)">'+esc(C.labelFor(st.do))+' \u2014 '+fm(st.amount)
+          +(st.note?' <span style="color:var(--s400)">('+esc(st.note)+')</span>':'')+'</div>';
+    });
+    h+='</div>';
+    (plan.warnings||[]).forEach(function(w){
+        h+='<div style="background:#FFFBEB;border:1px solid #FDE68A;color:#92400E;'
+          +'border-radius:8px;padding:8px 11px;font-size:.79rem;margin-top:7px">'+esc(w)+'</div>';
+    });
+    box.innerHTML=h;
+}
+
 function _liveOnlyNotice(what){
     var ws='';
     try{ if(typeof window.campistryWorkspace==='function')ws=window.campistryWorkspace()||''; }catch(e){}
@@ -12212,7 +12437,24 @@ function enrollCamper(id){
 // actually enrolled) and buildFamilyLedgers() (previews it for an accepted-
 // but-not-yet-enrolled applicant, so Billing shows the real payment
 // structure instead of one lump "Tuition" number).
+/**
+ * The installment schedule — now built by campistry_installments.js.
+ *
+ * Two things the old body here got wrong and the rule fixes:
+ *
+ *   * It split with Math.floor on DOLLARS, so a 3-way split of 1000 came out as
+ *     334/333/333 by luck and could leave pennies unaccounted on other figures. The
+ *     rule splits in cents and puts the remainder on the FIRST payment, so nothing
+ *     is left outstanding at the end of the summer for somebody to chase.
+ *   * It did not ask whether the camp allows plans at all. A camp that unticks
+ *     "Payment plan" in Accepted payments now gets no schedule, rather than a
+ *     schedule that is offered and then refused at the till.
+ *
+ * The fallback is the old shape, for a page that did not load the rule.
+ */
 function _buildInstallmentSchedule(sesObj,tuition){
+    var R=(typeof window!=='undefined'&&window.CampistryInstallments)||null;
+    if(R)return R.build({session:sesObj,tuition:tuition});
     if(!sesObj||!sesObj.paymentPlan||sesObj.paymentPlan==='full')return null;
     var plan=sesObj.paymentPlan,out=[],today=new Date();
     if(plan==='deposit'){
@@ -14816,6 +15058,7 @@ function renderFamilyDetailPage(){
     else if(l.balance>0.005) moreItems+='<button onclick="CampistryMe.monthlyPlan(\''+je(l.famKey)+'\')">Set up Payment Plan</button>';
     moreItems+=hasCard?'<button onclick="CampistryMe.requestCardSetup(\''+je(l.famKey)+'\')">Replace payment method</button>':'<button onclick="CampistryMe.requestCardSetup(\''+je(l.famKey)+'\')">Set up payment method</button>';
     moreItems+='<button onclick="CampistryMe.addChargeForFamily(\''+je(l.famKey)+'\')">Add Charge</button>';
+    moreItems+='<button onclick="CampistryMe.closeOutFamily(\''+je(l.famKey)+'\')">Close out\u2026</button>';
     moreItems+='<button onclick="CampistryMe.issueCreditForFamily(\''+je(l.famKey)+'\')">Issue Credit/Refund</button>';
     moreItems+='<button onclick="CampistryMe.printStatement(\''+je(l.famKey)+'\')">Print Statement</button>';
     // The year-end statement offers the years this family actually paid in,
@@ -20067,6 +20310,7 @@ window.CampistryMe={
     _dpToggle:_dpToggle,_cpToggle:_cpToggle,_cfToggle:_cfToggle,_fbRetryPreview:_fbRetryPreview,markDepositPaid:markDepositPaid,chargeDepositNow:chargeDepositNow,
     managePayers:managePayers,togglePayerArchived:togglePayerArchived,
     managePaymentMethods:managePaymentMethods,
+    closeOutFamily:closeOutFamily,_closeoutPreview:_closeoutPreview,
     _addPayerRow:_addPayerRow,_payerSplitPreview:_payerSplitPreview,
     setRosterPage:setRosterPage,setRosterSubTab:setRosterSubTab,setRosterWhen:setRosterWhen,setBillingPage:setBillingPage,setAnalyticsInvoicePage:setAnalyticsInvoicePage,setAnalyticsPaymentPage:setAnalyticsPaymentPage,
     _runSetupChecklistAction:_runSetupChecklistAction,dismissSetupChecklist:dismissSetupChecklist,

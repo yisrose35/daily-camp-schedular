@@ -222,6 +222,11 @@
 <!-- Who is paying a charge, and how much of it. Pure rule; loaded before
      campistry_me.js, which asks it to validate and describe a split. -->
 <script src="campistry_payers.js?v=20260917-02"></script>
+<!-- Payment plans: the schedule, and whether this camp allows them at all.
+     Loaded after campistry_payments.js, which it asks about "plan". -->
+<script src="campistry_installments.js?v=20260918-01"></script>
+<!-- Season-end close-out: what happens to leftover money. -->
+<script src="campistry_closeout.js?v=20260918-01"></script>
 <script src="campistry_enrollment_window.js?v=20260917-02"></script>
 <script src="campistry_presence.js?v=20260917-02"></script>
 <script src="campistry_card_fees.js?v=20260916-01"></script>
