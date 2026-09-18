@@ -23,8 +23,13 @@
  *
  * An owner may PIN a session when derivation is not what they want ("we are all
  * working on 2nd Half now, even though 1st Half is still running"), and the whole
- * program follows. Separately, one person may PEEK at another session in their own
- * tab, clearly marked, without changing what anybody else sees.
+ * program follows.
+ *
+ * There was briefly a per-person "peek" as well, reachable only from a bar this file
+ * put on top of every page. The bar was noise and is gone, and the peek went with it
+ * rather than staying as an API nothing can call — which is the exact shape of
+ * defect this codebase keeps turning up. The per-page roster picker still does that
+ * job where it is actually wanted, without leaking across pages.
  *
  * ── WHY A PIN SNAPS BACK ───────────────────────────────────────────────────
  *
@@ -42,7 +47,6 @@
  *
  *   workspace   you are inside a planning sandbox built for a session. Already
  *               stated in the amber bar, and the most specific reality there is.
- *   peek        this person, this tab, deliberately looking elsewhere right now.
  *   pin         the camp-wide pin, if it has not expired.
  *   calendar    the session today falls in. The normal answer.
  *   only        the camp has exactly one session, so there was never a choice.
@@ -72,15 +76,11 @@
     /** Every way the answer can have been arrived at, and what each one means. */
     S.SOURCES = {
         workspace: 'A planning sandbox built for this session',
-        peek:      'You are looking at this session; nobody else is',
         pin:       'The camp is pinned to this session',
         calendar:  'The session running today',
         only:      'The camp’s only session',
         none:      'No session — showing everyone, as of today'
     };
-
-    /** Sources that everybody in the camp shares. A peek and a sandbox do not. */
-    S.SHARED = { pin: 1, calendar: 1, only: 1, none: 1 };
 
     /** Today, in the app's own date strings. Callers may override it. */
     S.today = function (now) {
@@ -196,7 +196,6 @@
      * o = {
      *   sessions:         [{name, startDate, endDate}],
      *   pin:              camp-wide pinned session name, or '' for automatic
-     *   peek:             this person's temporary session, or ''
      *   workspaceSession: the session a planning sandbox is built for, or ''
      *   today:            override for testing
      *   windowRule:       override for testing
@@ -204,11 +203,8 @@
      *
      * Returns everything a caller could need, so nobody has to re-derive any of it:
      *
-     *   { session, on, source, shared, sessionObj, from, to, coversToday,
-     *     pin, pinDropped, droppedPin, peek, label, detail }
-     *
-     * Plus, when a peek is in force, `campSession` and `campSource`: what everybody
-     * else is seeing, so the way back can be labelled with where it goes.
+     *   { session, on, source, sessionObj, from, to, coversToday,
+     *     pin, pinDropped, droppedPin, label, detail }
      */
     S.resolve = function (o) {
         o = o || {};
@@ -216,9 +212,9 @@
         var sessions = Array.isArray(o.sessions) ? o.sessions : [];
         var today = ymd(o.today) || S.today();
         var out = {
-            session: '', on: today, source: 'none', shared: true, sessionObj: null,
+            session: '', on: today, source: 'none', sessionObj: null,
             from: null, to: null, coversToday: true,
-            pin: str(o.pin), pinDropped: false, droppedPin: '', peek: str(o.peek),
+            pin: str(o.pin), pinDropped: false, droppedPin: '',
             label: '', detail: ''
         };
 
@@ -229,33 +225,7 @@
             return decorate(out, 'workspace', find(sessions, wsName), today, rule);
         }
 
-        // 2. This person, this tab. Deliberate and temporary.
-        var peekObj = find(sessions, out.peek);
-        if (peekObj) {
-            var r = decorate(out, 'peek', peekObj, today, rule);
-            // WHAT THE CAMP WOULD SHOW IF THIS PERSON WERE NOT PEEKING. Needed so the
-            // way back out can be labelled with the session it returns you to — "Back
-            // to 1st Half" when 1st Half is what you are already looking at is the
-            // kind of button nobody trusts twice.
-            //
-            // One level deep and it cannot recurse: peek is '' on the way in.
-            var camp = S.resolve({
-                sessions: sessions, pin: out.pin, peek: '',
-                workspaceSession: '', today: today, windowRule: rule
-            });
-            r.campSession = camp.session;
-            r.campSource = camp.source;
-            // A peek does not get to hide that the camp's own pin has expired.
-            r.pinDropped = camp.pinDropped;
-            r.droppedPin = camp.droppedPin;
-            return r;
-        }
-        // A peek naming a session that no longer exists is not an error worth
-        // stopping for — it silently stops applying, which is the same thing that
-        // happens when the tab closes.
-        if (out.peek) out.peek = '';
-
-        // 3. The camp-wide pin, if it is still meaningful.
+        // 2. The camp-wide pin, if it is still meaningful.
         var pinObj = find(sessions, out.pin);
         if (out.pin && !pinObj) {
             // Pinned to a session somebody has since deleted or renamed. There is
@@ -273,21 +243,20 @@
             }
         }
 
-        // 4. Whatever is running today.
+        // 3. Whatever is running today.
         var calName = S.calendarSession(sessions, today, rule);
         if (calName) return decorate(out, 'calendar', find(sessions, calName), today, rule);
 
-        // 5. Exactly one session: there was never a choice to make.
+        // 4. Exactly one session: there was never a choice to make.
         var named = sessions.filter(function (s) { return s && str(s.name); });
         if (named.length === 1) return decorate(out, 'only', named[0], today, rule);
 
-        // 6. Nothing to scope by. The app behaves exactly as it did before.
+        // 5. Nothing to scope by. The app behaves exactly as it did before.
         return decorate(out, 'none', null, today, rule);
     };
 
     function decorate(out, source, sessionObj, today, rule) {
         out.source = source;
-        out.shared = !!S.SHARED[source];
         out.sessionObj = sessionObj || null;
         out.session = sessionObj ? str(sessionObj.name) : '';
 
@@ -343,24 +312,9 @@
     };
 
     /**
-     * One line for the bar every page carries. Empty when there is nothing to say —
-     * an unscoped camp must not be given a banner about it.
-     */
-    S.describe = function (r) {
-        if (!r || !r.session) return '';
-        if (r.source === 'workspace') return '';   // the planning bar already says it
-        var bits = [r.session];
-        if (r.source === 'peek') bits.push('just you');
-        else if (r.source === 'pin') bits.push('pinned');
-        else if (r.source === 'calendar') bits.push('automatic');
-        if (!r.coversToday && r.from) bits.push('roster as of ' + r.from);
-        return bits.join(' · ');
-    };
-
-    /**
-     * What to tell somebody when a pin was dropped. This is the only message in the
-     * feature that must be impossible to miss, so it names the session that was
-     * dropped rather than saying "a session".
+     * What to tell somebody when a pin was dropped. Shown on the dashboard card, and
+     * it names the session that was dropped rather than saying "a session" — the
+     * whole point is that somebody can act on it.
      */
     S.droppedNotice = function (r) {
         if (!r || !r.pinDropped) return '';

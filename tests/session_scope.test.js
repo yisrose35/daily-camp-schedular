@@ -66,23 +66,12 @@ test('with nothing set at all, the calendar decides', () => {
     const r = S.resolve({ sessions: BOTH, today: '2026-07-01' });
     assert.strictEqual(r.session, '1st Half');
     assert.strictEqual(r.source, 'calendar');
-    assert.strictEqual(r.shared, true, 'the calendar is the same for everybody');
 });
 
 test('a pin beats the calendar, and the whole camp follows', () => {
     const r = S.resolve({ sessions: BOTH, pin: '2nd Half', today: '2026-07-01' });
     assert.strictEqual(r.session, '2nd Half');
     assert.strictEqual(r.source, 'pin');
-    assert.strictEqual(r.shared, true);
-});
-
-test('a peek beats a pin, and only for the person peeking', () => {
-    const r = S.resolve({ sessions: BOTH, pin: '2nd Half', peek: '1st Half',
-                          today: '2026-07-25' });
-    assert.strictEqual(r.session, '1st Half');
-    assert.strictEqual(r.source, 'peek');
-    assert.strictEqual(r.shared, false, 'a peek must never read as camp-wide');
-    assert.strictEqual(r.pin, '2nd Half', 'the pin is still reported, so it can be offered back');
 });
 
 test('a planning sandbox beats everything', () => {
@@ -92,7 +81,6 @@ test('a planning sandbox beats everything', () => {
                           pin: '1st Half', peek: '1st Half', today: '2026-07-01' });
     assert.strictEqual(r.session, '2nd Half');
     assert.strictEqual(r.source, 'workspace');
-    assert.strictEqual(r.shared, false);
 });
 
 test('one session and nothing set is "only", not "calendar"', () => {
@@ -177,23 +165,6 @@ test('a dropped pin with nothing to fall back to leaves the camp unscoped', () =
     assert.strictEqual(r.session, '');
 });
 
-test('a PEEK at a session that no longer exists just stops applying', () => {
-    // Not an error worth stopping for: the same thing happens when the tab closes.
-    const r = S.resolve({ sessions: BOTH, peek: 'Gone', today: '2026-07-01' });
-    assert.strictEqual(r.source, 'calendar');
-    assert.strictEqual(r.peek, '', 'a dead peek must not be reported as active');
-    assert.strictEqual(r.pinDropped, false, 'a dead peek is not a dropped pin');
-});
-
-test('a peek at an ENDED session is allowed', () => {
-    // Deliberately unlike a pin. Looking back at last half to answer a question is
-    // exactly what a peek is for, it is marked as yours alone, and it dies with the
-    // tab — none of which is true of a pin.
-    const r = S.resolve({ sessions: BOTH, peek: '1st Half', today: '2026-07-25' });
-    assert.strictEqual(r.source, 'peek');
-    assert.strictEqual(r.session, '1st Half');
-});
-
 // ── the date, which is the part that does the work ───────────────────────
 
 test('inside the session, the date is TODAY', () => {
@@ -213,12 +184,6 @@ test('looking FORWARD, the date moves to the session’s first day', () => {
     assert.strictEqual(r.coversToday, false);
     assert.strictEqual(r.from, '2026-07-20');
     assert.strictEqual(r.to, '2026-08-09');
-});
-
-test('looking BACK, the date also moves to the session’s first day', () => {
-    const r = S.resolve({ sessions: BOTH, peek: '1st Half', today: '2026-08-01' });
-    assert.strictEqual(r.on, '2026-06-28');
-    assert.strictEqual(r.coversToday, false);
 });
 
 test('an undated session falls back to today rather than to no date', () => {
@@ -241,7 +206,8 @@ test('a past session with only an END date still yields a usable date', () => {
     // today is the only thing standing between this and a blank date — which would
     // filter nobody in and quietly empty every list in the app.
     const upto = { name: 'Early', endDate: '2026-07-10' };
-    const r = S.resolve({ sessions: [upto, H1], peek: 'Early', today: '2026-08-01' });
+    const r = S.resolve({ sessions: [upto, H1], workspaceSession: 'Early',
+                          today: '2026-08-01' });
     assert.strictEqual(r.coversToday, false);
     assert.strictEqual(r.from, null);
     assert.strictEqual(r.on, '2026-08-01', 'a blank date is never acceptable');
@@ -286,30 +252,6 @@ test('every session is offered, in date order, with expiry marked', () => {
     assert.strictEqual(opts[2].expired, false);
     assert.strictEqual(opts[1].from, '2026-06-28');
     assert.strictEqual(opts[1].to, '2026-07-19');
-});
-
-test('the bar says which session and how it was chosen', () => {
-    assert.strictEqual(S.describe(S.resolve({ sessions: BOTH, today: '2026-08-01' })),
-        '2nd Half · automatic');
-    assert.strictEqual(S.describe(S.resolve({ sessions: BOTH, pin: '2nd Half',
-        today: '2026-07-01' })), '2nd Half · pinned · roster as of 2026-07-20');
-    assert.strictEqual(S.describe(S.resolve({ sessions: BOTH, peek: '1st Half',
-        today: '2026-08-01' })), '1st Half · just you · roster as of 2026-06-28');
-});
-
-test('an unscoped camp gets no bar at all', () => {
-    // A camp with one undated session, or none, must not be given a banner about a
-    // choice it does not have.
-    assert.strictEqual(S.describe(S.resolve({ sessions: [], today: '2026-07-01' })), '');
-    assert.strictEqual(S.describe(null), '');
-});
-
-test('a sandbox gets no session bar, because the planning bar already says it', () => {
-    // Two bars saying the same thing in different colours is how a person learns to
-    // read neither.
-    const r = S.resolve({ sessions: BOTH, workspaceSession: '2nd Half', today: '2026-07-01' });
-    assert.strictEqual(S.describe(r), '');
-    assert.strictEqual(r.session, '2nd Half', 'it still scopes — it just does not shout');
 });
 
 test('droppedNotice is empty when no pin was dropped', () => {
@@ -363,47 +305,3 @@ test('names are trimmed, so a stray space cannot break a pin', () => {
 
 // ── the way back out of a peek ────────────────────────────────────────────
 
-test('a peek reports what the camp would be showing without it', () => {
-    // "Back to 1st Half" when 1st Half is what you are already looking at is the kind
-    // of button nobody trusts twice.
-    const r = S.resolve({ sessions: BOTH, peek: '1st Half', today: '2026-08-01' });
-    assert.strictEqual(r.session, '1st Half');
-    assert.strictEqual(r.campSession, '2nd Half', 'where the way out leads');
-    assert.strictEqual(r.campSource, 'calendar');
-});
-
-test('a peek over a pin reports the PIN as the way back', () => {
-    const r = S.resolve({ sessions: BOTH, pin: '2nd Half', peek: '1st Half',
-                          today: '2026-07-01' });
-    assert.strictEqual(r.campSession, '2nd Half');
-    assert.strictEqual(r.campSource, 'pin');
-});
-
-test('a peek cannot hide that the camp’s own pin has expired', () => {
-    // Otherwise peeking would be a way to make the red notice go away without fixing
-    // anything, and the person peeking is often exactly who should be telling somebody.
-    const r = S.resolve({ sessions: BOTH, pin: '1st Half', peek: '1st Half',
-                          today: '2026-07-25' });
-    assert.strictEqual(r.source, 'peek');
-    assert.strictEqual(r.pinDropped, true);
-    assert.strictEqual(r.droppedPin, '1st Half');
-    assert.strictEqual(r.campSession, '2nd Half');
-});
-
-test('a peek where the camp shows nothing says so rather than naming a session', () => {
-    const r = S.resolve({ sessions: BOTH, peek: '1st Half', today: '2026-09-30' });
-    assert.strictEqual(r.session, '1st Half');
-    assert.strictEqual(r.campSession, '', 'the season is over — there is nothing to go back to');
-});
-
-test('resolving a peek does not recurse', () => {
-    // It re-enters once with peek:'' and must terminate. A stack overflow here would
-    // take down every page at once.
-    const r = S.resolve({ sessions: BOTH, pin: '2nd Half', peek: '1st Half',
-                          today: '2026-07-01' });
-    assert.strictEqual(r.campSession, '2nd Half');
-    assert.strictEqual(r.campSession !== undefined, true);
-    // And the nested resolve must not itself carry a campSession, since its peek is ''.
-    const camp = S.resolve({ sessions: BOTH, pin: '2nd Half', peek: '', today: '2026-07-01' });
-    assert.strictEqual(camp.campSession, undefined);
-});

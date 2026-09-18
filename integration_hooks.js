@@ -1927,19 +1927,12 @@
     // the part that knows where the three inputs live:
     //
     //   the pin   camp-wide, set on the dashboard, stored under `campSession`
-    //   the peek  this person, this tab, in sessionStorage — it dies with the tab,
-    //             which is the whole point of a peek
     //   the plan  campistryWorkspaceSession(), already resolved above
     //
     // MEMOIZED for the same reason _wsSession rides along rather than being looked
     // up: presence asks this once per camper inside page loops, and resolving walks
-    // the session list. Cleared by campistrySetPeekSession and by a settings write.
+    // the session list. Cleared by campistrySessionScopeRefresh after a settings write.
     var _scopeCache = null, _scopeAt = 0, _SCOPE_MS = 2000;
-    var _peekSession = '';
-    try {
-        var _peekSaved = sessionStorage.getItem('campistry_peek_session');
-        if (_peekSaved) _peekSession = String(_peekSaved);
-    } catch (_) {}
 
     function _scopeRule() {
         return (typeof window !== 'undefined' && window.CampistrySessionScope) || null;
@@ -1986,7 +1979,7 @@
                 session: '', on: new Date(today.getTime() - today.getTimezoneOffset() * 60000)
                     .toISOString().slice(0, 10),
                 source: 'none', shared: true, sessionObj: null, from: null, to: null,
-                coversToday: true, pin: '', pinDropped: false, droppedPin: '', peek: '',
+                coversToday: true, pin: '', pinDropped: false, droppedPin: '',
                 label: '', detail: '', ruleMissing: true
             };
         }
@@ -1997,7 +1990,6 @@
         var r = R.resolve({
             sessions: _scopeSessions(),
             pin: _pinnedSession(),
-            peek: _peekSession,
             workspaceSession: window.campistryWorkspaceSession
                 ? window.campistryWorkspaceSession() : '',
             today: opts && opts.today
@@ -2014,42 +2006,11 @@
     window.campistrySessionAsOf = function () {
         return window.campistrySessionScope().on;
     };
-    /** Throw the memo away — after a settings write, or a peek change. */
+    /** Throw the memo away — after a settings write. */
     window.campistrySessionScopeRefresh = function () {
         _scopeCache = null; _scopeAt = 0;
         return window.campistrySessionScope();
     };
-
-    /**
-     * Look at another session, in this tab only.
-     *
-     * Per-tab and non-persistent on purpose. A peek that survived a reload would
-     * become a second, invisible pin — and the reason the pin expires at all is that
-     * a forgotten session scope is the one failure that makes people stop trusting
-     * every list in the app.
-     */
-    window.campistrySetPeekSession = function (name) {
-        _peekSession = (name && String(name)) || '';
-        try {
-            if (_peekSession) sessionStorage.setItem('campistry_peek_session', _peekSession);
-            else sessionStorage.removeItem('campistry_peek_session');
-        } catch (_) {}
-        _scopeCache = null; _scopeAt = 0;
-        // Presence memoizes its own as-of date, so it has to be told too or the
-        // first render after a peek shows the previous session's campers.
-        try {
-            if (window.CampistryPresence && window.CampistryPresence.refresh) {
-                window.CampistryPresence.refresh();
-            }
-        } catch (_) {}
-        log('session peek is now ' + (_peekSession || '(off)'));
-        try {
-            window.dispatchEvent(new CustomEvent('campistry-session-scope',
-                { detail: window.campistrySessionScope() }));
-        } catch (_) {}
-        return _peekSession;
-    };
-    window.campistryPeekSession = function () { return _peekSession; };
 
     window.loadGlobalSettings = function(key) {
         const settings = getLocalSettings();

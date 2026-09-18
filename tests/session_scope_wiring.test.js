@@ -3,8 +3,12 @@
 // campistry_session_scope.js is proved by tests/session_scope.test.js. This file
 // proves the master key actually turns something — that the pin is read and written,
 // that presence follows it (which is what carries the scope to every list in the app
-// without touching those pages), that the bar is on the pages it should be on, and
-// that it is deliberately NOT on the two where "now" is the only correct answer.
+// without touching those pages), that the dashboard is the only place it is set, and
+// that the two surfaces which answer for RIGHT NOW are deliberately left alone.
+//
+// There is no UI beyond the dashboard card. A bar on every page was tried and removed:
+// it was noise, and the per-person override it carried went with it rather than
+// staying as an API nothing can call.
 //
 // The runtime helpers run for real in a vm. The rest is asserted against the source,
 // anchored so that `if(false)` cannot satisfy it.
@@ -19,7 +23,6 @@ const ROOT = path.join(__dirname, '..');
 const read = p => fs.readFileSync(path.join(ROOT, p), 'utf8');
 const HOOKS = read('integration_hooks.js');
 const PRESENCE = read('campistry_presence.js');
-const BAR = read('campistry_session_bar.js');
 const DASH = read('dashboard.js');
 const DASH_HTML = read('dashboard.html');
 const ME = read('campistry_me.js');
@@ -94,33 +97,6 @@ test('the pin is read from campSession, as an object OR a bare string', () => {
         .campistrySessionScope({ today: '2026-07-01' }).source, 'pin');
     assert.strictEqual(loadRuntime({ pin: { session: '' } })
         .campistrySessionScope({ today: '2026-07-01' }).source, 'calendar');
-});
-
-test('the peek is read from sessionStorage at load, so a reload keeps it', () => {
-    // Per-tab, not per-page: navigating between Me and Live must not silently drop
-    // what you are looking at.
-    const w = loadRuntime({ sessionStorage: { campistry_peek_session: '1st Half' } });
-    const sc = w.campistrySessionScope({ today: '2026-08-01' });
-    assert.strictEqual(sc.source, 'peek');
-    assert.strictEqual(sc.session, '1st Half');
-});
-
-test('setting a peek writes sessionStorage, and clearing it removes the key', () => {
-    // Removed rather than set to '': a lingering empty key would survive as a
-    // second, invisible piece of state nobody looks at.
-    const w = loadRuntime({});
-    w.campistrySetPeekSession('1st Half');
-    assert.strictEqual(w.__store.campistry_peek_session, '1st Half');
-    w.campistrySetPeekSession('');
-    assert.ok(!('campistry_peek_session' in w.__store));
-});
-
-test('setting a peek tells presence, which memoizes its own date', () => {
-    // Without this the first render after a peek shows the previous session's
-    // campers — the exact bug the whole feature exists to prevent.
-    const w = loadRuntime({});
-    w.campistrySetPeekSession('1st Half');
-    assert.strictEqual(w.__presenceRefreshed, true);
 });
 
 test('a planning sandbox still wins over the pin at runtime', () => {
@@ -297,67 +273,6 @@ test('the card hides itself when the rule did not load', () => {
 
 // ── the bar makes it visible ──────────────────────────────────────────────
 
-test('the bar renders nothing inside a planning sandbox', () => {
-    // The amber planning bar already says which session that plan is for, and two
-    // bars saying the same thing in different colours is how a person learns to read
-    // neither.
-    assert.match(BAR, /if \(sc\.source === 'workspace'\) return drop\(\);/);
-});
-
-test('the bar renders nothing when there is no choice to make', () => {
-    assert.match(BAR, /if \(!hasChoice\(list\) && !sc\.pinDropped\) return drop\(\);/,
-        'a camp with one session would get a picker with one option in it');
-});
-
-test('a dropped pin is reported even on a camp with one session', () => {
-    // Somebody pinned something and needs to know it stopped applying, whatever the
-    // session list looks like now.
-    const a = BAR.indexOf('if (!hasChoice(list)');
-    assert.match(BAR.slice(a, a + 120), /!sc\.pinDropped/);
-});
-
-test('the ordinary case is quiet — no colour, no border', () => {
-    // A page that shouts every day teaches people to stop reading it, which is what
-    // would make it useless on the day it matters.
-    const a = BAR.indexOf('var skin = {');
-    const body = BAR.slice(a, a + 400);
-    assert.match(body, /'':\s*\{ bg: 'transparent', bd: 'transparent'/);
-    assert.match(BAR, /var loud = sc\.pinDropped \? 'drop' : \(sc\.source === 'peek' \? 'peek'/);
-});
-
-test('a peek carries the way back, labelled with where it goes', () => {
-    // "Back to 1st Half" when 1st Half is what you are already looking at is the kind
-    // of button nobody trusts twice — so it uses campSession, not session.
-    assert.match(BAR, /Back to '\s*\n?\s*\+ esc\(sc\.campSession \|\| 'the camp'\)/);
-    assert.match(BAR, /if \(back\) back\.onclick = function \(\) \{ U\.peek\(''\); \};/);
-});
-
-test('changing the session reloads, because there is no registry of what to redraw', () => {
-    const a = BAR.indexOf('U.peek = function');
-    const body = BAR.slice(a, a + 700);
-    assert.match(body, /campistrySetPeekSession\(after\)/);
-    assert.match(body, /root\.location\.reload\(\)/);
-    assert.match(body, /if \(before === after\) return;/,
-        'picking the session you are already on must not reload the page');
-});
-
-test('the bar re-renders on events that actually exist', () => {
-    // A listener for an event nothing dispatches is dead code that looks like
-    // coverage. These three are all dispatched by integration_hooks.js.
-    ['campistry-session-scope', 'campistry-cloud-hydrated', 'campistry-remote-change']
-        .forEach(ev => {
-            assert.ok(BAR.indexOf("'" + ev + "'") > 0, ev + ' is not listened for');
-            assert.ok(HOOKS.indexOf("'" + ev + "'") > 0,
-                ev + ' is listened for but never dispatched');
-        });
-});
-
-test('a remote change to an unrelated key does not re-render', () => {
-    const a = BAR.indexOf("'campistry-remote-change'");
-    const body = BAR.slice(a, a + 300);
-    assert.match(body, /k === 'campSession' \|\| k === 'campistryMe' \|\| k === 'campDates'/);
-});
-
 // ── which pages get it ───────────────────────────────────────────────────
 
 const OFFICE = ['campistry_live.html', 'flow.html', 'campistry_snacks.html',
@@ -368,15 +283,36 @@ const OFFICE = ['campistry_live.html', 'flow.html', 'campistry_snacks.html',
 // planning pin there would gate a real child's snack on a roster for next month.
 const NOW_ONLY = ['campistry_snacks_pos.html', 'campistry_lite.html'];
 
-test('every office page loads the rule and the bar, rule first', () => {
+test('every office page loads the rule, cache-busted', () => {
     OFFICE.forEach(p => {
         const h = read(p);
         const rule = h.indexOf('src="campistry_session_scope.js');
-        const bar = h.indexOf('src="campistry_session_bar.js');
         assert.ok(rule > 0, p + ' does not load the rule');
-        assert.ok(bar > rule, p + ' loads the bar before the rule');
         assert.match(h.slice(rule, rule + 60), /\?v=/, p + ' needs a cache-bust');
-        assert.match(h.slice(bar, bar + 60), /\?v=/, p + ' needs a cache-bust');
+    });
+});
+
+test('no page loads a session bar \u2014 it was removed, not just hidden', () => {
+    // Removed rather than left in and unreferenced: a bar file sitting in the repo is
+    // one somebody re-adds in six months wondering why it is not wired up.
+    const fs2 = require('node:fs');
+    assert.ok(!fs2.existsSync(path.join(ROOT, 'campistry_session_bar.js')),
+        'the bar file is back');
+    OFFICE.concat(NOW_ONLY).forEach(p => {
+        assert.ok(read(p).indexOf('campistry_session_bar') < 0, p + ' still loads a bar');
+    });
+});
+
+test('nothing refers to the removed per-person peek', () => {
+    // It was reachable only from the bar, so keeping it would have left an API with
+    // no caller — the exact shape of defect this codebase keeps finding.
+    ['campistry_session_scope.js', 'integration_hooks.js', 'campistry_presence.js',
+     'dashboard.js'].forEach(f => {
+        const src = read(f);
+        ['campistrySetPeekSession', 'campistryPeekSession', 'campistry_peek_session',
+         'campSession:', 'campSource'].forEach(sym => {
+            assert.ok(src.indexOf(sym) < 0, f + ' still refers to ' + sym);
+        });
     });
 });
 
