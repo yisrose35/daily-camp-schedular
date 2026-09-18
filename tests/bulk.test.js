@@ -456,3 +456,73 @@ test('the total only counts what will actually be charged', () => {
     assert.strictEqual(mixed.count, 1);
     assert.strictEqual(mixed.alreadyApplied.length, 1);
 });
+
+// ── 5. telling the family ─────────────────────────────────────────────────
+
+test('two parents sharing an inbox get ONE copy', () => {
+    const p = B.planSend({ kind: 'invoice', recipients: [
+        { key: 'f1', name: 'Klein', emails: ['a@x.com', 'A@X.com', 'b@x.com'] }
+    ] });
+    assert.strictEqual(p.count, 1);
+    assert.strictEqual(p.send[0].to.join(','), 'a@x.com,b@x.com');
+    assert.strictEqual(p.addresses, 2);
+});
+
+test('two families sharing an address each get their own document', () => {
+    // A grandparent paying for two households is owed two invoices, not one.
+    // Deduping across families would quietly drop the second family's bill.
+    const p = B.planSend({ recipients: [
+        { key: 'f1', name: 'Klein', emails: ['gran@x.com'] },
+        { key: 'f2', name: 'Stein', emails: ['gran@x.com'] }
+    ] });
+    assert.strictEqual(p.count, 2);
+    assert.strictEqual(p.send.map(s => s.key).join(','), 'f1,f2');
+});
+
+test('a family with no usable address is named, not silently dropped', () => {
+    // A run that marks installments invoiced and reaches nobody is worse than one
+    // that refuses: the office believes it has asked and the family has not been.
+    const p = B.planSend({ recipients: [
+        { key: 'f1', name: 'Klein', emails: [] },
+        { key: 'f2', name: 'Stein', emails: ['  '] },
+        { key: 'f3', name: 'Gross', emails: ['not-an-address'] },
+        { key: 'f4', name: 'Weiss', emails: ['ok@x.com'] }
+    ] });
+    assert.strictEqual(p.count, 1);
+    assert.strictEqual(p.noEmail.map(x => x.name).join(','), 'Klein,Stein,Gross');
+});
+
+test('an ordinary address is not rejected by an over-strict pattern', () => {
+    // A dropped invoice looks exactly like a family who ignored one, so the bar is
+    // one @ with something either side rather than a guess at the RFC.
+    ['a+tag@x.co.uk', "o'brien@x.com", 'a.b-c_d@sub.domain.museum', 'ünïcode@x.com']
+        .forEach(e => {
+            const p = B.planSend({ recipients: [{ key: 'f', name: 'N', emails: [e] }] });
+            assert.strictEqual(p.count, 1, e + ' should be deliverable');
+        });
+});
+
+test('an address with a space, or two @, is refused', () => {
+    ['a b@x.com', 'a@b@x.com', '@x.com', 'a@'].forEach(e => {
+        const p = B.planSend({ recipients: [{ key: 'f', name: 'N', emails: [e] }] });
+        assert.strictEqual(p.count, 0, e + ' should not be deliverable');
+    });
+});
+
+test('the kind rides along, and an unknown kind is an invoice', () => {
+    assert.strictEqual(B.planSend({ kind: 'statement',
+        recipients: [{ key: 'f', emails: ['a@x.com'] }] }).send[0].kind, 'statement');
+    assert.strictEqual(B.planSend({ kind: 'nonsense',
+        recipients: [{ key: 'f', emails: ['a@x.com'] }] }).kind, 'invoice');
+});
+
+test('describeSend distinguishes "nobody has an email" from "nobody selected"', () => {
+    assert.match(B.describeSend(B.planSend({ recipients: [] })), /Nobody to send to/);
+    assert.match(B.describeSend(B.planSend({ recipients: [{ key: 'f', emails: [] }] })),
+        /Nobody on this list has an email/);
+    const p = B.planSend({ recipients: [
+        { key: 'f1', name: 'A', emails: ['a@x.com', 'b@x.com'] },
+        { key: 'f2', name: 'B', emails: [] }
+    ] });
+    assert.strictEqual(B.describeSend(p), '1 family · 2 addresses · 1 with no email');
+});

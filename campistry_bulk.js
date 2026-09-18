@@ -39,6 +39,10 @@
  *    only worth anything if somebody checks it, so this is the checker: run the
  *    month twice and the second run applies nothing.
  *
+ * 5. TELLING THE FAMILY. An invoice nobody is told about is not an invoice. A run
+ *    that marks installments invoiced and silently reaches nobody is worse than one
+ *    that refuses, because the office then believes it has asked.
+ *
  * Pure. It plans and reads; it writes nothing.
  * ========================================================================== */
 (function (root) {
@@ -392,6 +396,71 @@
         return p.count + ' fee' + (p.count === 1 ? '' : 's') + ' · '
              + money(p.total).toFixed(2)
              + (p.alreadyApplied.length ? ' (' + p.alreadyApplied.length + ' already applied)' : '');
+    };
+
+    // ── 5. telling the family ─────────────────────────────────────────────
+
+    /**
+     * Who a bulk send can actually reach.
+     *
+     * An invoice nobody is told about is not an invoice, so a run that marks
+     * installments invoiced and silently reaches nobody is worse than one that
+     * refuses: the office believes it has asked, and the family has not been asked.
+     * This names both halves.
+     *
+     * o = { kind: 'invoice'|'statement',
+     *       recipients: [{ key, name, emails: [...] }] }
+     *
+     * Addresses are deduplicated WITHIN a household, because two parents sharing an
+     * inbox should get one copy — but NOT across households, because two families
+     * can legitimately share an address (a grandparent paying for both) and each is
+     * owed their own document.
+     */
+    B.planSend = function (o) {
+        o = o || {};
+        var kind = str(o.kind) === 'statement' ? 'statement' : 'invoice';
+        var list = Array.isArray(o.recipients) ? o.recipients : [];
+        var out = { ok: false, kind: kind, send: [], noEmail: [], count: 0, addresses: 0 };
+
+        list.forEach(function (r) {
+            if (!r || !str(r.key)) return;
+            var seen = {}, to = [];
+            (Array.isArray(r.emails) ? r.emails : []).forEach(function (e) {
+                var raw = str(e);
+                // The bar is deliberately low — one @ with something either side.
+                // A stricter pattern here would silently drop addresses that the
+                // mail provider would have delivered to perfectly well, and a
+                // dropped invoice looks exactly like a family who ignored one.
+                if (!/^[^@\s]+@[^@\s]+$/.test(raw)) return;
+                var k = raw.toLowerCase();
+                if (seen[k]) return;
+                seen[k] = 1;
+                to.push(raw);
+            });
+            if (!to.length) {
+                out.noEmail.push({ key: str(r.key), name: str(r.name) });
+                return;
+            }
+            out.send.push({ key: str(r.key), name: str(r.name), to: to, kind: kind });
+            out.addresses += to.length;
+        });
+
+        out.count = out.send.length;
+        out.ok = out.count > 0;
+        return out;
+    };
+
+    B.describeSend = function (p) {
+        if (!p) return '';
+        if (!p.count) {
+            return p.noEmail && p.noEmail.length
+                ? 'Nobody on this list has an email address on file.'
+                : 'Nobody to send to.';
+        }
+        var bits = [p.count + ' famil' + (p.count === 1 ? 'y' : 'ies')];
+        if (p.addresses !== p.count) bits.push(p.addresses + ' addresses');
+        if (p.noEmail.length) bits.push(p.noEmail.length + ' with no email');
+        return bits.join(' \u00b7 ');
     };
 
     if (typeof module !== 'undefined' && module.exports) module.exports = B;

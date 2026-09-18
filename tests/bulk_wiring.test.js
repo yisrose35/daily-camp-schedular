@@ -343,3 +343,108 @@ test('the direction of a bulk adjustment is remembered, not read off the screen'
     assert.ok(!/me-modal-title/.test(ME),
         'nothing may depend on a modal-title class that does not exist');
 });
+
+// ── telling the family ────────────────────────────────────────────────────
+
+const SEND_FROM = 'function _famEmails(f){';
+const SEND_TO = '\nfunction _campNameForSend(){';
+
+function loadEmails() {
+    const a = ME.indexOf(SEND_FROM);
+    const b = ME.indexOf(SEND_TO, a);
+    assert.ok(a > 0 && b > a, 'cannot find _famEmails — re-anchor this test');
+    const box = { console };
+    vm.runInContext(ME.slice(a, b) + '\n;this.__f=_famEmails;', vm.createContext(box));
+    return box.__f;
+}
+
+test('the billing-contact household is asked first', () => {
+    // A camp that has said which parent handles the money has said something this
+    // must not ignore.
+    const _famEmails = loadEmails();
+    const got = _famEmails({ households: [
+        { label: 'Dad', parents: [{ email: 'dad@x.com' }] },
+        { label: 'Mum', billingContact: true, parents: [{ email: 'mum@x.com' }] }
+    ] });
+    assert.strictEqual(got.join(','), 'mum@x.com,dad@x.com');
+});
+
+test('every address is returned, not just the first', () => {
+    // Two parents who both want the invoice is the ordinary case; picking one of
+    // them quietly makes the other wonder why the camp never writes.
+    const _famEmails = loadEmails();
+    const got = _famEmails({ households: [
+        { billingContact: true, parents: [{ email: 'a@x.com' }, { email: 'b@x.com' }] }
+    ] });
+    assert.strictEqual(got.join(','), 'a@x.com,b@x.com');
+});
+
+test('a household with no parents, or a family with none, is empty not broken', () => {
+    const _famEmails = loadEmails();
+    assert.strictEqual(_famEmails(null).length, 0);
+    assert.strictEqual(_famEmails({}).length, 0);
+    assert.strictEqual(_famEmails({ households: [{}, { parents: [] },
+        { parents: [{ name: 'no email' }] }] }).length, 0);
+});
+
+test('the run offers to email, ticked by default', () => {
+    const a = ME.indexOf('\nfunction runInstallments(){');
+    const body = ME.slice(a, ME.indexOf('\nfunction _riToggleAll', a));
+    assert.match(body, /id="riEmail" checked/,
+        'an invoice nobody is told about is not an invoice');
+    // The GUARD, not just the call. `if(!wantEmail)return;` rewritten to a bare
+    // `return;` leaves the planSend call sitting right there, unreachable, which a
+    // match on the call alone is perfectly happy with.
+    assert.match(body, /\n        if\(!wantEmail\)return;\n/,
+        'the email step must be conditional on the tick, and reachable when it is set');
+    const guard = body.indexOf('if(!wantEmail)return;');
+    const send = body.indexOf("B2.planSend({kind:'invoice'");
+    assert.ok(send > guard, 'nothing is sent');
+});
+
+test('the invoices go out AFTER the schedules are saved', () => {
+    // A send that goes out and then fails to save would ask a family for money the
+    // app has no record of asking for — and the next run would ask again.
+    const a = ME.indexOf('\nfunction runInstallments(){');
+    const body = ME.slice(a, ME.indexOf('\nfunction _riToggleAll', a));
+    const saved = body.indexOf('\n        save();');
+    const sent = body.indexOf('B2.planSend(');
+    assert.ok(saved > 0 && sent > saved, 'the send must follow the save, not precede it');
+});
+
+test('a send failure is counted, not allowed to stop the run', () => {
+    const a = ME.indexOf('\nasync function _sendBillingDoc(');
+    const body = ME.slice(a, ME.indexOf('\n/**', a + 10));
+    assert.match(body, /catch\(e\)\{/, 'one bad address would abort the whole run');
+    assert.match(body, /return false;/, 'a failure must be reportable');
+});
+
+test('statements are sent, and carry no due date', () => {
+    // campistry_ar.js refuses a statement a dueDate on purpose: a summary with a
+    // deadline is an invoice wearing the wrong name.
+    assert.ok(ME.indexOf('\nasync function sendStatements(){') > 0);
+    assert.match(ME, /\n    sendStatements:sendStatements,/);
+    const a = ME.indexOf('\nfunction _statementBody(');
+    const body = ME.slice(a, ME.indexOf('\n/**', a + 10));
+    assert.ok(!/[Dd]ue by|dueDate/.test(body), 'a statement must not carry a deadline');
+    assert.match(body, /This is a statement, not a bill/);
+    assert.ok(ME.indexOf("CampistryMe.sendStatements()") > 0,
+        'statements are not reachable from the Billing menu');
+});
+
+test('sendStatements is gated and only lists families with something to report', () => {
+    const a = ME.indexOf('\nasync function sendStatements(){');
+    const body = ME.slice(a, ME.indexOf('\nfunction _statementBody(', a));
+    assert.match(body, /if\(!_secEdit\('billing','Sending statements'\)\)return;/);
+    assert.match(body, /return r\.balance>0\|\|r\.owed\.total>0/,
+        'a family who owes nothing should not be sent a statement about it');
+    assert.match(body, /plan\.noEmail\.length/,
+        'families with no email must be named, not silently skipped');
+});
+
+test('a run that can reach nobody does not offer a Send button', () => {
+    const a = ME.indexOf('\nasync function sendStatements(){');
+    const body = ME.slice(a, ME.indexOf('\nfunction _statementBody(', a));
+    assert.match(body, /if\(!plan\.ok\)\{\s*\n\s*showModal\('Send statements',h,null\);/,
+        'a Send button that can send nothing is a button that lies');
+});

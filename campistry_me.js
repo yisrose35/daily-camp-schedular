@@ -2328,9 +2328,14 @@ function runInstallments(){
         });
         h+='</div></details>';
     }
+    // TICKED BY DEFAULT. An invoice nobody is told about is not an invoice, and a
+    // run that advances every schedule while reaching nobody leaves the office
+    // believing it has asked when the family has not been asked.
+    h+='<label style="display:inline-flex;align-items:center;gap:6px;font-size:.83rem">'
+      +'<input type="checkbox" id="riEmail" checked> Email each family their invoice</label>';
     h+='<div id="riPreview"></div></div>';
 
-    showModal('Run an installment',h,function(){
+    showModal('Run an installment',h,async function(){
         var picked={};
         document.querySelectorAll('.riChk:checked').forEach(function(cb){picked[cb.value]=1});
         var chosen=runnable.filter(function(r){return picked[r.key]});
@@ -2346,9 +2351,40 @@ function runInstallments(){
             var eid=String(r.key).split('|')[1];
             if(enrollments[eid])enrollments[eid].installments=r.schedule;
         });
-        save();closeModal('dynModal');renderBilling();
+        save();
+        var wantEmail=!!((document.getElementById('riEmail')||{}).checked);
+        closeModal('dynModal');renderBilling();
         toast('Invoiced '+plan.count+' installment'+(plan.count===1?'':'s')+' \u00b7 '
               +fm(plan.total));
+        // SENT AFTER THE SCHEDULES ARE SAVED, never before. A send that goes out and
+        // then fails to save would ask a family for money the app has no record of
+        // asking for — and the second run would ask them again.
+        if(!wantEmail)return;
+        var B2=_bulkAPI();
+        var sendPlan=B2.planSend({kind:'invoice',recipients:plan.run.map(function(r){
+            // The rule copies only key and name, so the family key comes back out of
+            // the composite key rather than off the run entry.
+            return {key:r.key,name:r.name,
+                    emails:_famEmails(families[String(r.key).split('|')[0]])};
+        })});
+        var byKey2={};
+        plan.run.forEach(function(r){byKey2[r.key]=r});
+        var sent=0,failed=0;
+        for(var si=0;si<sendPlan.send.length;si++){
+            var en=sendPlan.send[si];
+            var r2=byKey2[en.key]||{};
+            var ok=await _sendBillingDoc(en,
+                'Invoice from '+_campNameForSend(),
+                _invoiceBody(r2.name,r2.label||'Payment',r2.amount||0,dueBy));
+            if(ok)sent++;else failed++;
+        }
+        if(sent||failed||sendPlan.noEmail.length){
+            toast('Emailed '+sent+' famil'+(sent===1?'y':'ies')
+                +(failed?' \u2014 '+failed+' failed':'')
+                +(sendPlan.noEmail.length?' \u2014 '+sendPlan.noEmail.length
+                   +' had no email on file':''),
+                (failed||sendPlan.noEmail.length)?'error':undefined);
+        }
     },{saveLabel:'Invoice them'});
     _riPreview();
 }
@@ -2755,6 +2791,162 @@ function assessLateFees(){
         toast('Charged '+n+' late fee'+(n===1?'':'s')+' \u00b7 '
               +fm(Math.round(total*100)/100));
     },{saveLabel:'Charge them'});
+}
+
+/**
+ * Where a household's bill goes.
+ *
+ * The household marked `billingContact` first, and only then the rest — a camp that
+ * has said which parent handles the money has said something this must not ignore.
+ * Every address is returned rather than the first one found: two parents who both
+ * want the invoice is the ordinary case, and picking one of them quietly makes the
+ * other wonder why they never hear from the camp.
+ */
+function _famEmails(f){
+    var out=[];
+    var hh=(f&&Array.isArray(f.households))?f.households:[];
+    var ordered=hh.filter(function(h){return h&&h.billingContact})
+                  .concat(hh.filter(function(h){return !(h&&h.billingContact)}));
+    ordered.forEach(function(h){
+        ((h&&h.parents)||[]).forEach(function(pr){
+            if(pr&&pr.email)out.push(String(pr.email).trim());
+        });
+    });
+    return out;
+}
+
+/** The camp's name, as every other send on this page reads it. */
+function _campNameForSend(){
+    try{
+        var ss=JSON.parse(localStorage.getItem('campGlobalSettings_v1')||'{}');
+        return ss.campName||ss.camp_name||'Camp';
+    }catch(e){ return 'Camp'; }
+}
+
+/**
+ * Send one family their document. Returns a promise resolving true on success.
+ *
+ * Failures are per-family and reported as counts by the caller: a send that stops
+ * at the first bad address leaves half a run delivered with no record of where it
+ * got to.
+ */
+async function _sendBillingDoc(entry,subject,body){
+    try{
+        await callEdgeFunctionAuthed('send-broadcast',{
+            campId:getCampId(),
+            to:entry.to.map(function(e){return {email:e,name:entry.name||''}}),
+            subject:subject, body:body, method:'email',
+            campName:_campNameForSend(),
+            branding:(typeof _getLinkBranding==='function')?_getLinkBranding():undefined,
+            eventKey:'billing-'+entry.kind+':'+entry.key+':'+Date.now()
+        });
+        return true;
+    }catch(e){
+        console.error('[Me] billing send failed for',entry.key,e);
+        return false;
+    }
+}
+
+/**
+ * STATEMENTS TO MANY FAMILIES. A statement ASKS FOR NOTHING — it reports the
+ * account. That distinction is the whole reason campistry_ar.js refuses a statement
+ * a due date: a summary that carries a deadline is an invoice wearing the wrong
+ * name, and a family who pays it early has been billed for money nobody had asked
+ * for yet.
+ */
+async function sendStatements(){
+    if(!_secEdit('billing','Sending statements'))return;
+    var A=_arAPI(), B=_bulkAPI();
+    if(!A||!B){toast('The billing rules did not load','error');return}
+    var ledgers=buildFamilyLedgers();
+    var rows=Object.keys(ledgers).map(function(fk){
+        var l=ledgers[fk];
+        return {key:fk,name:((l.family||{}).name)||fk,
+                emails:_famEmails(families[fk]),
+                balance:Math.round((l.balance||0)*100)/100,
+                owed:A.age({docs:_arDocsFor(l)})};
+    }).filter(function(r){return r.balance>0||r.owed.total>0})
+      .sort(function(a,b){return a.name.localeCompare(b.name)});
+    if(!rows.length){toast('No family has a balance to report');return}
+    var plan=B.planSend({kind:'statement',recipients:rows});
+
+    var h='<div class="me-modal-form">';
+    h+='<p style="font-size:.83rem;color:var(--s600);margin:0 0 10px">A statement '
+      +'<strong>reports</strong> the account. It asks for nothing and carries no due '
+      +'date \u2014 only an invoice does that.</p>';
+    h+='<div style="max-height:250px;overflow-y:auto;border:1px solid var(--s200);'
+      +'border-radius:var(--r);margin-bottom:10px">';
+    plan.send.forEach(function(en){
+        var r=rows.filter(function(x){return x.key===en.key})[0]||{};
+        h+='<div style="display:flex;justify-content:space-between;gap:10px;padding:7px 11px;'
+          +'border-bottom:1px solid var(--s100);font-size:.81rem">'
+          +'<span><strong>'+esc(en.name)+'</strong><span style="color:var(--s500)"> \u2014 '
+          +esc(en.to.join(', '))+'</span></span>'
+          +'<span style="font-weight:700">'+fm(r.balance||0)+'</span></div>';
+    });
+    h+='</div>';
+    if(plan.noEmail.length){
+        h+='<div style="background:#FFFBEB;border:1px solid #FDE68A;color:#92400E;'
+          +'border-radius:8px;padding:8px 11px;font-size:.8rem;margin-bottom:10px">'
+          +plan.noEmail.length+' famil'+(plan.noEmail.length===1?'y has':'ies have')
+          +' no email address on file and will not be sent one: '
+          +esc(plan.noEmail.map(function(x){return x.name}).join(', '))+'</div>';
+    }
+    h+='<div style="font-size:.81rem;color:var(--s500)">'+esc(B.describeSend(plan))
+      +'</div></div>';
+
+    if(!plan.ok){
+        showModal('Send statements',h,null);
+        return;
+    }
+    showModal('Send statements',h,async function(){
+        var btn=document.getElementById('dynModalSave');
+        if(btn){btn.disabled=true;btn.textContent='Sending\u2026'}
+        var sent=0,failed=0;
+        for(var i=0;i<plan.send.length;i++){
+            var en=plan.send[i];
+            var r=rows.filter(function(x){return x.key===en.key})[0]||{};
+            var ok=await _sendBillingDoc(en,
+                'Your account with '+_campNameForSend(),
+                _statementBody(en.name,r));
+            if(ok)sent++;else failed++;
+        }
+        closeModal('dynModal');
+        toast('Sent '+sent+' statement'+(sent===1?'':'s')
+              +(failed?' \u2014 '+failed+' could not be delivered':''));
+    },{saveLabel:'Send them'});
+}
+
+/** The statement's words. No deadline, deliberately. */
+function _statementBody(name,r){
+    var lines=['Hello '+(name||'')+',','',
+        'This is a summary of your account with '+_campNameForSend()+'.','',
+        'Balance on the account: '+fm(r.balance||0)];
+    var aged=r.owed||{};
+    if(aged.total>0){
+        lines.push('Invoiced and not yet paid: '+fm(aged.total));
+        if(aged.pastDue>0){
+            lines.push('Of that, '+fm(aged.pastDue)+' is past its due date'
+                +(aged.oldestDays?' (the oldest by '+aged.oldestDays+' days)':'')+'.');
+        }
+    }
+    lines.push('',
+        'This is a statement, not a bill \u2014 there is nothing new to pay here. '
+        +'Anything we have asked you for was sent as its own invoice.','',
+        'Thank you,',''+_campNameForSend());
+    return lines.join('\n');
+}
+
+/** An invoice's words, for one installment of a plan. */
+function _invoiceBody(name,label,amount,dueBy){
+    var lines=['Hello '+(name||'')+',','',
+        _campNameForSend()+' has issued an invoice on your account.','',
+        label+': '+fm(amount)];
+    // Only when the office actually set one. "Due by:" with nothing after it reads
+    // as a mistake, and a family cannot tell whether that means today.
+    if(dueBy)lines.push('Due by: '+dueBy);
+    lines.push('','Thank you,',_campNameForSend());
+    return lines.join('\n');
 }
 
 function _liveOnlyNotice(what){
@@ -15756,6 +15948,7 @@ function renderBilling(){
         +'<button onclick="CampistryMe.bulkAdjust(\'credit\')">Credit several accounts\u2026</button>'
         +'<button onclick="CampistryMe.bulkAdjust(\'charge\')">Charge several accounts\u2026</button>'
         +'<button onclick="CampistryMe.applyCreditsToOwed()">Settle invoices from credit\u2026</button>'
+        +'<button onclick="CampistryMe.sendStatements()">Send statements\u2026</button>'
         +'<button onclick="CampistryMe.assessLateFees()">Charge late fees\u2026</button>'
         +'<button onclick="CampistryMe.manageLateFees()">Late-fee policy\u2026</button>'
         +'<button onclick="CampistryMe.issueCredit()">Issue Credit/Refund</button>'
@@ -21203,6 +21396,7 @@ window.CampistryMe={
     applyCreditsToOwed:applyCreditsToOwed,
     manageLateFees:manageLateFees,
     assessLateFees:assessLateFees,
+    sendStatements:sendStatements,
     closeOutFamily:closeOutFamily,_closeoutPreview:_closeoutPreview,
     addCardSurcharge:addCardSurcharge,_surchargePreview:_surchargePreview,
     _addPayerRow:_addPayerRow,_payerSplitPreview:_payerSplitPreview,
