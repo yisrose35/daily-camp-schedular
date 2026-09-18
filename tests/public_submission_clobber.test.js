@@ -292,3 +292,74 @@ test('rescind survives a save: the record stays and the tombstone goes', () => {
     assert.deepStrictEqual(M.tombstonesOf(blob, 'enrollments'), {},
         'and must not leave a tombstone behind to bite a later tab');
 });
+
+// ── the register page must not push the whole blob ────────────────────────
+
+const REG = read('campistry_register.html');
+
+test('the register page does NOT push the whole campistryMe row', () => {
+    // It used to, as "belt-and-suspenders" beside the real RPC, and it was a loaded
+    // gun. The lite localStorage snapshot DELETES campistryMe.enrollments (it grows
+    // without bound), the page then creates an empty one and puts this single
+    // application in it, and saveGlobalSettings replaces the row with only a shallow
+    // top-level merge. The pushed `enrollments` was one entry, replacing every real
+    // one.
+    //
+    // It never fired for a parent only because _canWriteCampState() reads
+    // localStorage.campistry_role and a visitor has none. A camp OWNER opening their
+    // own registration link to see what parents see has role=owner in that same
+    // browser — so testing the form wiped the camp's applications.
+    assert.ok(REG.indexOf("saveGlobalSettings('campistryMe'") < 0,
+        'the whole-blob nudge is back');
+    assert.ok(REG.indexOf('_isAuthoritativeHandler') < 0,
+        'something on this page is pushing state again');
+    // The atomic, per-entry RPC is still the path.
+    assert.match(REG, /client\.rpc\('submit_public_application'/);
+});
+
+test('the snapshot really does strip enrollments, which is why that mattered', () => {
+    // The whole argument above rests on this one line. If the strip ever goes away
+    // the reasoning changes, so it is asserted rather than assumed.
+    assert.match(HOOKS, /delete lite\.campistryMe\.enrollments;/);
+});
+
+test('the register page loads no merge, because it pushes no shared state', () => {
+    // 130fac6 took the merge module off this page on the grounds that it "has no job
+    // on a page that writes only a localStorage draft and submits through an RPC",
+    // and deposit_policy.test.js keeps it off — including keeping its filename out of
+    // the file entirely, which is why the comment there names no name.
+    //
+    // That premise was not quite true at the time: the whole-blob nudge was still
+    // there, and the nudge is exactly what the merge defends against. Removing the
+    // nudge is what makes the rollback's reasoning hold — so the right end state is
+    // both gone, not one propping up the other.
+    assert.ok(REG.indexOf('campistry_finance_merge.js') < 0,
+        'the merge is back on a public page that has nothing for it to protect');
+    assert.ok(REG.indexOf("saveGlobalSettings('campistryMe'") < 0,
+        'and the thing it would have protected against is back too');
+});
+
+test('no other public form pushes the whole blob either', () => {
+    ['campistry_staff_apply.html', 'campistry_postaccept.html',
+     'campistry_posthire.html'].forEach(f => {
+        let src;
+        try { src = read(f); } catch (e) { return; }   // not every page exists
+        assert.ok(src.indexOf("saveGlobalSettings('campistryMe'") < 0,
+            f + ' pushes the whole campistryMe row from a public page');
+    });
+});
+
+test('the strip list is exactly the five branches the reasoning above assumes', () => {
+    // Whether a public form's whole-row push WIPES a branch or merely re-pushes it
+    // depends entirely on which keys this snapshot deletes. That made posthire safe
+    // and postaccept destructive from otherwise identical code. If a sixth key joins
+    // the list, every "this one is harmless" judgement has to be re-made — so the
+    // list is pinned here rather than assumed.
+    ['families', 'enrollments', 'payments', 'finance', 'bunkAssignments'].forEach(k => {
+        assert.ok(HOOKS.indexOf('delete lite.campistryMe.' + k + ';') > 0,
+            k + ' is no longer stripped — re-read the public-form comments');
+    });
+    const stripped = (HOOKS.match(/delete lite\.campistryMe\.\w+;/g) || []);
+    assert.strictEqual(stripped.length, 5,
+        'the strip list changed: ' + stripped.join(' '));
+});

@@ -2391,8 +2391,36 @@ window.submitApp=async function(){
         // login at all and camp_state_kv's own RLS only allows owner/admin.
         // AWAITED (not fire-and-forget) — the success screen below only shows
         // once the camp has actually received this, not just this browser.
-        // Belt-and-suspenders: also nudge integration_hooks if it's authoritative.
-        try{ if(window.saveGlobalSettings&&window.saveGlobalSettings._isAuthoritativeHandler) window.saveGlobalSettings('campistryMe',g.campistryMe); }catch(_){}
+        // NO WHOLE-BLOB NUDGE HERE. There used to be a "belt-and-suspenders" push of
+        // the entire campistryMe row on this line, beside the real RPC. It was a
+        // loaded gun:
+        //
+        //   * `g` is read from this browser's localStorage, and the lite snapshot
+        //     DELETES campistryMe.enrollments (integration_hooks, "delete
+        //     lite.campistryMe.enrollments") because it grows without bound.
+        //   * the code above then does `if(!g.campistryMe.enrollments)
+        //     g.campistryMe.enrollments={}` and puts this one application in it.
+        //   * the whole-row writer replaces campistryMe wholesale, with only a
+        //     shallow top-level merge against cloud.
+        //
+        // So the pushed `enrollments` was ONE entry, replacing every real one. It
+        // never fired for a parent only because _canWriteCampState() checks
+        // localStorage.campistry_role and a visitor has none — but a camp OWNER
+        // opening their own registration link to see what parents see has
+        // role=owner in that same browser. Testing the form wiped the camp's
+        // applications.
+        //
+        // submit_public_application below is the real path: atomic, server-side,
+        // scoped to one entry id. There is nothing for a second writer to add.
+        //
+        // And this is why the write-time finance/submission merge module is
+        // deliberately NOT loaded on this page (130fac6 took it off; a test keeps it
+        // off, and also keeps its filename out of this file, hence no name here).
+        // That rollback's reasoning was that the merge "has no job on a page that
+        // writes only a localStorage draft and submits through an RPC" — which was
+        // not quite true while the nudge above existed, since the nudge was exactly
+        // what that merge defends against. With it gone the reasoning holds, so the
+        // merge stays off and this page pushes no shared state at all.
 
         var cloudRes=await _flushEnrollmentsToCloud(g.campistryMe);
         if(!cloudRes||!cloudRes.ok){
