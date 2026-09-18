@@ -430,9 +430,23 @@ DECLARE
     v_pay_bad    jsonb := '[]'::jsonb;
     v_fam_n      integer := 0;
     v_pay_n      integer := 0;
+    -- NULL when there is no API request at all — a direct database session,
+    -- which is exactly what the SQL Editor is. NULLIF because a missing
+    -- setting can read back as '' rather than NULL.
+    v_claims     text := NULLIF(current_setting('request.jwt.claims', true), '');
     r            record;
 BEGIN
-    IF NOT public.camp_reader(p_camp_id) THEN
+    -- Who may run this: camp staff and this camp's parents through the API,
+    -- the service key, and a direct database session. The first version gated
+    -- on camp_reader() ALONE, which answers by auth.uid() — and the SQL Editor
+    -- carries no JWT, so auth.uid() is NULL there and the gate refused the
+    -- person holding the postgres password, in the one venue the header tells
+    -- them to run it. A no-JWT session cannot be an API caller at all (every
+    -- PostgREST request has claims, anon included), so recognising it gives
+    -- nothing to anyone who reaches the database through the API.
+    IF v_claims IS NOT NULL
+       AND COALESCE(v_claims::jsonb ->> 'role', '') <> 'service_role'
+       AND NOT public.camp_reader(p_camp_id) THEN
         RETURN jsonb_build_object('success', false, 'error', 'not_authorized');
     END IF;
 

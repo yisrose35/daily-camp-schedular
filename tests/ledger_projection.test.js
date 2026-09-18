@@ -258,7 +258,8 @@ test('the backfill converges instead of churning, so it doubles as the repair to
 
 test('the verifier is gated and reports keys, never money', () => {
     const body = CAT.verify_ledger_projection.body;
-    assert.match(body, /IF NOT public\.camp_reader\(p_camp_id\) THEN/);
+    assert.match(body, /AND NOT public\.camp_reader\(p_camp_id\) THEN/,
+        'an API caller with no relationship to the camp must still be refused');
     assert.match(body, /'not_authorized'/);
     const ret = body.slice(body.lastIndexOf('RETURN jsonb_build_object'));
     assert.ok(!/entries|payments'?,\s*(r\.|v_me)/.test(ret),
@@ -266,6 +267,25 @@ test('the verifier is gated and reports keys, never money', () => {
     assert.match(ret, /'familiesMismatched', v_fam_bad/);
     assert.match(ret, /'paymentBucketsMismatched', v_pay_bad/);
     assert.match(ret, /'inSync'/);
+});
+
+test('the verifier works from the SQL Editor, where its header says to run it', () => {
+    // Found live: the first version gated on camp_reader() alone, which answers
+    // by auth.uid() — and the SQL Editor carries no JWT, so auth.uid() is NULL
+    // there and the gate said not_authorized to the person holding the postgres
+    // password. The gate must only apply to API callers, who ALWAYS carry
+    // claims (anon included), so "no claims at all" can only be a direct
+    // database session.
+    const body = CAT.verify_ledger_projection.body;
+    assert.match(body, /NULLIF\(current_setting\('request\.jwt\.claims', true\), ''\)/,
+        "the missing-setting read must be NULLIF'd — it can come back '' rather than NULL");
+    assert.match(body, /IF v_claims IS NOT NULL\s*\n\s*AND COALESCE\(v_claims::jsonb ->> 'role', ''\) <> 'service_role'\s*\n\s*AND NOT public\.camp_reader\(p_camp_id\) THEN/,
+        'gate order: only an API request without the service key needs a camp relationship');
+    // current_user/session_user are useless here and must not sneak in: inside
+    // a SECURITY DEFINER function current_user is the OWNER for every caller,
+    // so a role-name check would wave everyone through.
+    assert.ok(!/current_user|session_user/.test(codeOnly(body)),
+        'role-name checks inside SECURITY DEFINER always see the owner');
 });
 
 test('the verifier misses nothing on either side', () => {
