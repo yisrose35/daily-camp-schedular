@@ -465,6 +465,10 @@ function loadData(){
         billingRules=(me.billingRules&&typeof me.billingRules==='object')?me.billingRules:{};
         deletedIds=(me.deletedIds&&typeof me.deletedIds==='object')?me.deletedIds:{};
         staffApplications=me.staffApplications||{};
+        // The submissions that arrived as ROWS rather than into the blob
+        // (migration 200). Fired and not awaited: hydration must not wait on a
+        // network call, and the drain re-renders when it finds anything.
+        try{ _drainApplications(); }catch(_){}
         leads=me.leads||{};
         counselorVisibility=(me.counselorVisibility&&typeof me.counselorVisibility==='object')?me.counselorVisibility:null;
         _setupChecklistDismissed=!!me.setupChecklistDismissed;
@@ -2244,6 +2248,70 @@ function _arAgingHtml(ledgers){
     });
     h+='</tbody></table></div>';
     return h;
+}
+
+/**
+ * DRAIN THE APPLICATIONS TABLE INTO enrollments / staffApplications.
+ *
+ * Migration 200 moved public submissions out of the campistryMe blob and into
+ * camp_applications, one row each — so a registration burst no longer serialises
+ * on the camp's single row and no longer rewrites megabytes per family. The
+ * office's working copy stays where every page already reads it, which is why
+ * this exists: the rows have to arrive in `enrollments`.
+ *
+ * It reuses campistry_finance_merge.js's mergePublicSubmissions rather than a
+ * second merge of its own. That function already answers the two questions that
+ * matter — local wins on an id we hold, a tombstoned id stays deleted — and having
+ * one answer is the point. Shape the RPC's reply like a cloud blob and hand it over.
+ *
+ * Async and best-effort. A camp whose migration has not been applied gets a
+ * function-missing error and behaves exactly as it did before, because the blob
+ * still holds everything 200's backfill copied out of it.
+ */
+async function _drainApplications(){
+    var M=(typeof window!=='undefined'&&window.CampistryFinanceMerge)||null;
+    if(!M||typeof M.mergePublicSubmissions!=='function')return 0;
+    var client=window.CampistryDB&&window.CampistryDB.getClient?window.CampistryDB.getClient():window.supabase;
+    var campId=window.CampistryDB&&window.CampistryDB.getCampId?window.CampistryDB.getCampId():(window.getCampId?window.getCampId():null);
+    if(!client||typeof client.rpc!=='function'||!campId)return 0;
+
+    // The rule's own closed list, not a second copy of it. Two lists of "which
+    // branches are public submissions" is two chances to disagree, and the merge
+    // would silently skip whichever one this file forgot.
+    var kinds=(M.PUBLIC_KINDS||[]).slice();
+    var restored=0;
+    for(var i=0;i<kinds.length;i++){
+        var kind=kinds[i];
+        try{
+            var res=await client.rpc('get_camp_applications',{p_camp_id:campId,p_kind:kind});
+            if(res&&res.error){
+                // A camp that has not pasted 200 yet. Not an error worth showing:
+                // the blob still has everything, which is what it had before.
+                console.log('[Me] applications table unavailable ('+kind+'):',res.error.message);
+                continue;
+            }
+            var d=res&&res.data;
+            if(!d||d.success===false||!d.entries)continue;
+            var local={};
+            local[kind]=(kind==='enrollments')?enrollments:staffApplications;
+            local.deletedIds=deletedIds;
+            var cloud={};
+            cloud[kind]=d.entries;
+            var rep=M.mergePublicSubmissions(local,cloud);
+            restored+=(rep&&rep.restored)||0;
+        }catch(e){
+            console.warn('[Me] application drain failed for '+kind+':',e&&e.message);
+        }
+    }
+    if(restored){
+        console.log('[Me] drained',restored,'submission(s) from camp_applications');
+        // NOT saved from here. A save would push the whole blob back up, which is
+        // the write this migration exists to avoid doing once per application —
+        // and the next ordinary save carries them anyway. Rendering is what the
+        // office actually needs.
+        try{ render(curPage); }catch(_){}
+    }
+    return restored;
 }
 
 /**
