@@ -4463,6 +4463,22 @@ function _writeLinkStore(s){try{localStorage.setItem(LINK_STORE_KEY,JSON.stringi
 // sent by the admin, or a reply sent from a different device, could never
 // show up here. Merges into the same local store _loadMessages() already
 // reads, keyed off id so nothing gets duplicated on repeat syncs.
+//
+// ONE sync is one RPC PER CAMP the parent belongs to (get_my_messages) plus
+// one get_camp_broadcasts. That is fine on the 30s poll and NOT fine once
+// realtime drives it: the office sending a threaded reply, or a broadcast
+// fanning out to every family, delivers a burst of row events, and firing a
+// full re-read per event multiplies the camp's one action by every connected
+// parent. _syncMessagesSoon coalesces a burst into a single read — the same
+// thing campistry_live.html's _debouncedSync does for the office side.
+var _msgSyncDebTimer = null;
+function _syncMessagesSoon(){
+    if (_msgSyncDebTimer) clearTimeout(_msgSyncDebTimer);
+    _msgSyncDebTimer = setTimeout(function(){
+        _msgSyncDebTimer = null;
+        _syncMessagesFromCloud();
+    }, 400);
+}
 function _syncMessagesFromCloud(){
     if(typeof window._loadMyMessagesCloud==='function'){
         window._loadMyMessagesCloud(function(){
@@ -4756,10 +4772,21 @@ function reportDroppedOff(reqId) {
 // (ppr_parent_read, migration 025) already scopes the read to rows tied to
 // this parent's invite, so a plain select is safe here.
 function pollPickupStatuses() {
-    if (!pickupRequests.some(function(r){ return r.cloudId && r.status === 'Pending'; })) return;
+    // Only the rows this parent is actually waiting on. This used to select the
+    // whole camp's parent_pickup_requests and filter client-side: RLS still cut
+    // the response down to this family's rows, so it read correctly, but the
+    // server had to walk every request the camp had ever taken and run the
+    // policy's per-row invite subquery on each one — per parent, every 30
+    // seconds. An `in` on the handful of ids we are waiting for is a primary-key
+    // probe instead, and it stops the cost growing with the camp's history.
+    var waiting = pickupRequests
+        .filter(function(r){ return r.cloudId && r.status === 'Pending'; })
+        .map(function(r){ return r.cloudId; });
+    if (!waiting.length) return;
     var db = window._parentDB; if (!db) return;
     var cid = (typeof parent!=='undefined'&&parent)?parent.campId:null;
-    db.from('parent_pickup_requests').select('id,status,office_message').eq('camp_id', cid)
+    db.from('parent_pickup_requests').select('id,status,office_message')
+        .eq('camp_id', cid).in('id', waiting)
         .then(function(res){
             if (res.error || !res.data) return;
             var byId = {}; res.data.forEach(function(r){ byId[r.id] = r; });
@@ -5399,14 +5426,7 @@ if (window.pdfjsLib) { window.pdfjsLib.GlobalWorkerOptions.workerSrc = 'pdfjs-di
         // email, so RLS limits the stream to their messages). New camp messages
         // appear instantly. A slow 30s poll + focus-sync stay as a safety net if
         // the socket drops.
-        try {
-            if (typeof db !== 'undefined' && db && db.channel) {
-                if (window._parentMsgChannel) { try { db.removeChannel(window._parentMsgChannel); } catch(_){} }
-                window._parentMsgChannel = db.channel('parent-msgs')
-                    .on('postgres_changes', { event: '*', schema: 'public', table: 'link_messages' }, function(){ _syncMessagesFromCloud(); })
-                    .subscribe();
-            }
-        } catch (e) { console.warn('[Parent] realtime subscribe failed, falling back to poll', e); }
+        _subscribeParentMsgs([d.camp_id]);
         if(!window._msgPollTimer){
             window._msgPollTimer=setInterval(function(){ if(document.visibilityState!=='hidden') _syncMessagesFromCloud(); }, 30000);
         }
@@ -5543,6 +5563,55 @@ if (window.pdfjsLib) { window.pdfjsLib.GlobalWorkerOptions.workerSrc = 'pdfjs-di
         }).catch(function(e){ console.warn('[Parent] _augmentOtherCamps failed — other camps/campers will not be merged in:', e); });
     }
 
+    // Subscribe to this parent's message rows — ONE `.on()` PER CAMP, each
+    // filtered to that camp_id.
+    //
+    // This used to be a single unfiltered subscription to link_messages. RLS
+    // still kept the parent from SEEING anyone else's row, so it looked
+    // correct, and it is correct — it just doesn't scale. postgres_changes
+    // evaluates the row's RLS policy once per subscriber per change, so an
+    // unfiltered subscription asks the realtime worker "may this parent see
+    // it?" for every link_messages row written anywhere in the database, for
+    // every connected parent. The cost is worst at the exact moment the camp
+    // most needs it to work: a broadcast to 400 families inserts 400 rows
+    // while 400 parents are connected, which is 160,000 policy evaluations for
+    // 400 useful deliveries. A camp_id filter drops the candidate set to one
+    // camp before RLS runs, and is what campistry_link_admin.html already does
+    // on the office side of the same table.
+    //
+    // Per camp rather than one filter because a parent can have children at
+    // more than one camp, and Realtime allows exactly one filter per `.on()`.
+    // Filtering on the parent's email instead would be narrower still, but
+    // link_messages stores whatever case the sender typed and the RLS policy
+    // compares with lower() on both sides — an `eq` filter would silently miss
+    // a row written as Parent@Example.com. camp_id has no such hazard.
+    function _subscribeParentMsgs(campIds) {
+        try {
+            if (typeof db === 'undefined' || !db || !db.channel) return;
+            var ids = (campIds || []).filter(function(v){ return !!v; });
+            // Dedupe: _augmentOtherCamps can hand back the primary camp again.
+            var seen = {}, uniq = [];
+            ids.forEach(function(id){ var k = String(id); if (!seen[k]) { seen[k] = true; uniq.push(k); } });
+            if (!uniq.length) return;
+            // Nothing to do if we are already listening to exactly these camps —
+            // otherwise the post-merge call would tear down a working socket and
+            // rebuild it for no reason.
+            if (window._parentMsgChannel && window._parentMsgCamps === uniq.join(',')) return;
+            if (window._parentMsgChannel) { try { db.removeChannel(window._parentMsgChannel); } catch(_){} }
+            var ch = db.channel('parent-msgs');
+            uniq.forEach(function(id){
+                ch = ch.on('postgres_changes',
+                    { event: '*', schema: 'public', table: 'link_messages', filter: 'camp_id=eq.' + id },
+                    function(){ if (typeof _syncMessagesSoon === 'function') _syncMessagesSoon();
+                                else if (typeof _syncMessagesFromCloud === 'function') _syncMessagesFromCloud(); });
+            });
+            window._parentMsgChannel = ch.subscribe();
+            window._parentMsgCamps = uniq.join(',');
+        } catch (e) {
+            console.warn('[Parent] realtime subscribe failed, falling back to poll', e);
+        }
+    }
+
     // init() (re-run after the multi-camp merge) rebuilds the page shell and
     // resets the cloud-backed sections to their empty state. Re-run the loaders
     // so forms / lists / health / photos / messages / mail / tips reappear with
@@ -5564,6 +5633,13 @@ if (window.pdfjsLib) { window.pdfjsLib.GlobalWorkerOptions.workerSrc = 'pdfjs-di
             if (typeof _loadParentPhotos === 'function') _loadParentPhotos();
             if (typeof _loadCamperFaceStatus === 'function') _loadCamperFaceStatus();
             if (typeof _syncMessagesFromCloud === 'function') _syncMessagesFromCloud();
+            // The first subscription (in _applyData) could only know the primary
+            // camp — parent.camps is resolved later, by _augmentOtherCamps. Now
+            // that it is known, widen the subscription so a message from a
+            // SECOND camp arrives live too instead of waiting for the 30s poll.
+            if (parent && parent.camps && parent.camps.length) {
+                _subscribeParentMsgs(parent.camps.map(function(cp){ return cp.camp_id || cp.campId; }));
+            }
             if (typeof _loadMyMail === 'function') _loadMyMail();
             if (typeof _loadMyTips === 'function') _loadMyTips();
         } catch (e) { console.warn('[Parent] _afterMergeReloadCloud', e); }
