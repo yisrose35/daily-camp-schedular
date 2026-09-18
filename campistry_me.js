@@ -3293,6 +3293,58 @@ function acceptAddToFamily(famKey,camperName){
 // office's field-by-field picks; pass null to keep everything from A
 // wholesale (today's original, unconditional behavior — still used when a
 // suggestion is accepted without opening the guided tool).
+// ── Audit log ───────────────────────────────────────────────────────────────
+// Append-only "who changed what when" trail (camp_audit_log table, migration
+// 199). Fire-and-forget: a logging failure must never block or break the user
+// action it is recording, so everything is wrapped and errors are swallowed.
+async function _meAudit(action,details){
+    try{
+        var client=window.CampistryDB&&window.CampistryDB.getClient?window.CampistryDB.getClient():window.supabase;
+        var campId=window.CampistryDB&&window.CampistryDB.getCampId?window.CampistryDB.getCampId():(window.getCampId?window.getCampId():null);
+        if(!client||!campId)return;
+        var uid=null,email=null,role=null;
+        try{ var u=await client.auth.getUser(); if(u&&u.data&&u.data.user){uid=u.data.user.id;email=u.data.user.email;} }catch(_){}
+        try{ role=(window.CampistryDB&&(CampistryDB.getRole?CampistryDB.getRole():(CampistryDB.getUserRole?CampistryDB.getUserRole():null)))||null; }catch(_){}
+        await client.from('camp_audit_log').insert({camp_id:campId,user_id:uid,user_email:email,user_role:role,action:action,details:details||{}});
+    }catch(_){ /* never surface logging errors to the user */ }
+}
+function _alogAction(a){
+    var map={'family.merge':'Merged families','family.delete':'Deleted family','camper.delete':'Deleted camper','roster.import':'Imported roster'};
+    return map[a]||String(a||'').replace(/[._]/g,' ');
+}
+function _alogDetails(d){
+    if(d==null)return'';
+    if(typeof d==='string')return d;
+    try{ return Object.keys(d).map(function(k){return k+': '+d[k]}).join(' · '); }catch(_){ return ''; }
+}
+// Owner-facing viewer — opened from Billing's ⋯ menu. Read-only; RLS already
+// limits SELECT to owner/admin/manager.
+async function openActivityLog(){
+    var client=window.CampistryDB&&window.CampistryDB.getClient?window.CampistryDB.getClient():window.supabase;
+    var campId=window.CampistryDB&&window.CampistryDB.getCampId?window.CampistryDB.getCampId():(window.getCampId?window.getCampId():null);
+    showModal('Activity Log','<div id="alogBody" style="min-height:120px;font-size:.85rem">Loading…</div>',null,{maxWidth:720});
+    var el=document.getElementById('alogBody');
+    if(!client||!campId){ if(el)el.innerHTML='<div class="me-empty"><h3>Not connected</h3></div>'; return; }
+    try{
+        var res=await client.from('camp_audit_log').select('created_at,user_email,user_role,action,details')
+            .eq('camp_id',campId).order('created_at',{ascending:false}).limit(200);
+        if(res&&res.error)throw res.error;
+        var rows=(res&&res.data)||[];
+        if(!rows.length){ el.innerHTML='<div class="me-empty"><h3>No activity recorded yet</h3><p style="color:var(--s400)">Significant actions — merges, deletions, imports, schedule resets — will appear here.</p></div>'; return; }
+        var h='<div class="me-tw"><table class="me-t"><thead><tr><th>When</th><th>Who</th><th>Action</th><th>Details</th></tr></thead><tbody>';
+        rows.forEach(function(r){
+            var when=r.created_at?new Date(r.created_at).toLocaleString():'';
+            var who=esc(r.user_email||'—')+(r.user_role?' <span style="color:var(--s400)">('+esc(r.user_role)+')</span>':'');
+            h+='<tr><td style="white-space:nowrap;color:var(--s500)">'+esc(when)+'</td><td>'+who+'</td><td class="bold">'+esc(_alogAction(r.action))+'</td><td style="color:var(--s500)">'+esc(_alogDetails(r.details))+'</td></tr>';
+        });
+        h+='</tbody></table></div>';
+        el.innerHTML=h;
+    }catch(e){
+        var msg=(e&&(e.message||e.hint))||'';
+        if(el)el.innerHTML='<div class="me-empty"><h3>Couldn\'t load activity</h3><p style="color:var(--s400)">'+esc(msg||'The audit log table may not be set up yet.')+'</p></div>';
+    }
+}
+
 function mergeFamiliesReconciled(keyA,keyB,reconciled){
     var a=families[keyA],b=families[keyB];
     if(!a||!b)return;
@@ -3345,6 +3397,7 @@ function mergeFamiliesReconciled(keyA,keyB,reconciled){
         a.savedPaymentMethods=existing.concat(
             b.savedPaymentMethods.filter(function(m){return m&&!tokens[m.token]}));
     }
+    _meAudit('family.merge',{into:a.name||'',from:b.name||''});
     delete families[keyB];
     save();render(curPage);toast(b.name+' merged into '+a.name);
 }
@@ -3588,6 +3641,7 @@ async function deleteFamily(id){
     if(!ok)return;
     var captured=families[id];
     var wasOnDetailPage=curPage==='familydetail'&&_familyDetailKey===id;
+    _meAudit('family.delete',{name:nm});
     delete families[id];
     save();closeModal('familyModal');
     if(wasOnDetailPage)nav('billing');else render(curPage);
@@ -5605,6 +5659,7 @@ async function deleteCamper(n){
             try{capturedEnrollments[pair[0]]=JSON.parse(JSON.stringify(pair[1]));}catch(_){}
         }
     });
+    _meAudit('camper.delete',{name:_lbl(n)});
     delete roster[n];
     cascadeCamperDelete(n);
     save();
@@ -15974,6 +16029,7 @@ function renderBilling(){
         +'<button onclick="CampistryMe.managePaymentMethods()">Accepted payments</button>'
         +'<button onclick="CampistryMe.managePayers()">Payers &amp; Organizations</button>'
         +'<button onclick="CampistryMe.openMergeFamiliesTool()">Merge Families</button>'
+        +'<button onclick="CampistryMe.openActivityLog()">Activity Log</button>'
         // Printing/exporting the household list moved to Reports (a
         // "Family Directory" template, filterable/groupable/printable) —
         // no need for a second, less capable copy of that feature here.
@@ -21456,7 +21512,7 @@ window.CampistryMe={
     addFamily:function(){openFamilyForm(null)},editFamily:function(id){openFamilyForm(id)},deleteFamily:deleteFamily,removeCamperFromFamily:removeCamperFromFamily,
     setPplStaffSubTab:setPplStaffSubTab,viewStaffMember:viewStaffMember,openEditStaffModal:openEditStaffModal,saveStaffMember:saveStaffMember,
     acceptFamilySuggestion:acceptFamilySuggestion,dismissFamilySuggestion:dismissFamilySuggestion,acceptAddToFamily:acceptAddToFamily,
-    mergeFamilies:mergeFamilies,dismissMergeFamilies:dismissMergeFamilies,openMergeFamiliesTool:openMergeFamiliesTool,
+    mergeFamilies:mergeFamilies,dismissMergeFamilies:dismissMergeFamilies,openMergeFamiliesTool:openMergeFamiliesTool,openActivityLog:openActivityLog,
     openUnmatchedPaymentsModal:openUnmatchedPaymentsModal,
     openDepositInbox:openDepositInbox,
     _bcRefreshPreview:_bcRefreshPreview,
