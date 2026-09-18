@@ -141,7 +141,7 @@
     // them never triggers the menu.
     var HOVER_CAPABLE = !!(window.matchMedia && window.matchMedia('(hover: hover)').matches);
     var TOP_ZONE = 56;     // px from the top that counts as "the top"
-    var HOLD_MS = 1350;    // required dwell before it opens
+    var HOLD_MS = 650;     // dwell before it opens (~650ms hold + ~350ms slide ≈ 1s total)
     var _dwellT = null;
     function _isExcluded(el){
         if(!el || !el.closest) return false;
