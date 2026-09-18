@@ -100,9 +100,10 @@
 
     // ── Open/close: a body class drives the in-flow bar's height, so opening it
     //    pushes the whole page down and closing it lets the page rise back. ─────
-    var _hideT=null;
+    var _hideT=null, _openedAt=0;
     function openBar(){
         if(_hideT){ clearTimeout(_hideT); _hideT=null; }
+        if(!document.body.classList.contains('qs-open')) _openedAt=Date.now();
         document.body.classList.add('qs-open');
         var t=document.querySelector('.qs-trigger'); if(t) t.setAttribute('aria-expanded','true');
         var b=document.querySelector('.qs-bar'); if(b) b.setAttribute('aria-hidden','false');
@@ -117,7 +118,16 @@
 
     function onDocClick(e){
         var trigger=e.target.closest && e.target.closest('.qs-trigger');
-        if(trigger){ e.preventDefault(); isOpen()?closeBar():openBar(); return; }
+        if(trigger){
+            e.preventDefault();
+            if(isOpen()){
+                // On touch a tap fires mouseover (which may have just opened it)
+                // THEN click — don't let that click close what it just opened.
+                if(Date.now()-_openedAt < 400) return;
+                closeBar();
+            } else openBar();
+            return;
+        }
         // Clicks on a bar link navigate normally; any click outside closes it.
         if(!_inSwitch(e.target)) closeBar();
     }
