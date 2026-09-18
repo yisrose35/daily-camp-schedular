@@ -1613,6 +1613,64 @@ function togglePayerArchived(id){
     save();closeModal('dynModal');managePayers();
 }
 
+/**
+ * WHICH PAYMENTS THIS CAMP TAKES — one screen, and it holds everywhere.
+ *
+ * This setting already existed and applied camp-wide, but the only way to reach it
+ * was to open the registration form builder and save a form. So a camp that stopped
+ * taking cheques had to go and edit a form to say so, and an owner looking for
+ * "which payments do we accept" would never have found it.
+ *
+ * It governs tuition, the canteen, the shop and luggage. Nothing is off by default:
+ * a camp turns off what it does not take, and a method turned off shows struck
+ * through with the reason rather than vanishing, so the gap reads as a decision.
+ */
+function managePaymentMethods(){
+    if(!_secEdit('billing','Changing accepted payments'))return;
+    var P=_payAPI();
+    if(!P){toast('The payment catalogue did not load','error');return}
+    var pol=P.policy();
+    var enabled=Array.isArray(pol.enabled)?pol.enabled:null;
+
+    var h='<div class="me-modal-form">';
+    h+='<p style="font-size:.83rem;color:var(--s500);margin:0 0 4px">'
+      +'Everything is accepted unless you turn it off here. This applies '
+      +'<strong>everywhere</strong> \u2014 registration, Billing, the canteen, the shop '
+      +'and luggage.</p>';
+    h+='<p style="font-size:.78rem;color:var(--s400);margin:0 0 14px">'
+      +'A method you turn off still appears on past records, so last season\u2019s '
+      +'payments keep reading correctly.</p>';
+
+    (P.CONTEXTS||[]).forEach(function(ctx){
+        var all=(P.METHODS||[]).filter(function(m){return m.contexts.indexOf(ctx)>=0});
+        if(!all.length)return;
+        h+='<div style="margin-bottom:14px"><div style="font-size:.8rem;font-weight:600;'
+          +'color:var(--s600);margin-bottom:6px;text-transform:capitalize">'+esc(ctx)+'</div>';
+        all.forEach(function(m){
+            // No stored list means every method is on — the open default, stated in
+            // the checkbox rather than implied by an empty setting.
+            var on=enabled?(enabled.indexOf(m.id)>=0):true;
+            h+='<label class="ops-check" style="display:inline-flex;align-items:center;gap:6px;'
+              +'margin:0 14px 7px 0;font-size:.83rem">'
+              +'<input type="checkbox" class="pmChk" data-ctx="'+esc(ctx)+'" value="'+esc(m.id)+'"'
+              +(on?' checked':'')+'> '+esc(m.label)+'</label>';
+        });
+        h+='</div>';
+    });
+    h+='</div>';
+
+    showModal('Accepted payments',h,function(){
+        var picked={};
+        document.querySelectorAll('.pmChk:checked').forEach(function(cb){picked[cb.value]=1});
+        var list=Object.keys(picked);
+        if(!list.length){toast('Keep at least one payment method','error');return}
+        _pendingPaymentPolicy=Object.assign({},pol,{enabled:list});
+        save();closeModal('dynModal');
+        toast('Accepted payments updated \u2014 '+list.length+' method'
+              +(list.length===1?'':'s')+', everywhere');
+    },'Save');
+}
+
 function _liveOnlyNotice(what){
     var ws='';
     try{ if(typeof window.campistryWorkspace==='function')ws=window.campistryWorkspace()||''; }catch(e){}
@@ -14582,6 +14640,7 @@ function renderBilling(){
         +'<button onclick="CampistryMe.addFamily()">Add Household</button>'
         +'<button onclick="CampistryMe.addCharge()">Add Charge</button>'
         +'<button onclick="CampistryMe.issueCredit()">Issue Credit/Refund</button>'
+        +'<button onclick="CampistryMe.managePaymentMethods()">Accepted payments</button>'
         +'<button onclick="CampistryMe.managePayers()">Payers &amp; Organizations</button>'
         +'<button onclick="CampistryMe.openMergeFamiliesTool()">Merge Families</button>'
         // Printing/exporting the household list moved to Reports (a
@@ -20007,6 +20066,7 @@ window.CampistryMe={
     finReconcileCharges:finReconcileCharges,
     _dpToggle:_dpToggle,_cpToggle:_cpToggle,_cfToggle:_cfToggle,_fbRetryPreview:_fbRetryPreview,markDepositPaid:markDepositPaid,chargeDepositNow:chargeDepositNow,
     managePayers:managePayers,togglePayerArchived:togglePayerArchived,
+    managePaymentMethods:managePaymentMethods,
     _addPayerRow:_addPayerRow,_payerSplitPreview:_payerSplitPreview,
     setRosterPage:setRosterPage,setRosterSubTab:setRosterSubTab,setRosterWhen:setRosterWhen,setBillingPage:setBillingPage,setAnalyticsInvoicePage:setAnalyticsInvoicePage,setAnalyticsPaymentPage:setAnalyticsPaymentPage,
     _runSetupChecklistAction:_runSetupChecklistAction,dismissSetupChecklist:dismissSetupChecklist,

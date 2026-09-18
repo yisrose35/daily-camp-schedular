@@ -93,6 +93,30 @@ function _wsK(key) {
     return key;
 }
 
+/**
+ * What this camp accepts for luggage, from the ONE camp-wide catalogue.
+ *
+ * Asked for each time rather than captured once: an owner can change the policy in
+ * another tab, and this should not need a reload to stop offering a method the camp
+ * no longer takes. A page without the catalogue gets nothing, which is what luggage
+ * had before — a `paid` tick and no method.
+ */
+function lugPayMethods() {
+    try {
+        var P = (typeof window !== 'undefined' && window.CampistryPayments) || null;
+        if (P && typeof P.forContext === 'function') return P.forContext('luggage') || [];
+    } catch (e) {}
+    return [];
+}
+/** A label for a stored method, whether or not the camp still accepts it. */
+function lugPayLabel(id) {
+    try {
+        var P = (typeof window !== 'undefined' && window.CampistryPayments) || null;
+        if (P && typeof P.label === 'function' && id) return P.label(id);
+    } catch (e) {}
+    return String(id || '\u2014');
+}
+
 function camperList() {
     var g = readGlobal();
     var r = (g.app1 && g.app1.camperRoster) || {};
@@ -305,7 +329,8 @@ function renderBookings() {
                 '<td style="font-size:.8rem">' + esc(b.pickupMode === 'private' ? 'Private pick-up' : (locationName(b.locationId) || '—')) + '</td>' +
                 '<td class="num">' + LC.bagCount(b) + '</td>' +
                 '<td class="num">' + money(b.quotedTotal) + '</td>' +
-                '<td>' + (b.paid ? '<span class="ops-badge ops-badge--ok">Paid</span>' : '<span class="ops-badge ops-badge--warn">Unpaid</span>') + '</td>' +
+                '<td>' + (b.paid ? '<span class="ops-badge ops-badge--ok">Paid</span>' : '<span class="ops-badge ops-badge--warn">Unpaid</span>')
+                    + (b.payMethod ? ' <span class="ops-hint">' + esc(lugPayLabel(b.payMethod)) + '</span>' : '') + '</td>' +
                 '<td style="text-align:right" onclick="event.stopPropagation()">' +
                     '<button class="ops-btn ops-btn--sm ops-btn--danger" onclick="lugDeleteBooking(\'' + esc(b.id) + '\')">✕</button></td></tr>';
         });
@@ -564,10 +589,26 @@ window.lugEditBooking = function (id) {
         }).join('') + '</div>' +
         '<div class="ops-field"><label class="ops-check"><input type="checkbox" id="bkOversize"' + (b.oversize ? ' checked' : '') + ' onchange="lugQuote()"> Includes an oversize piece</label></div>';
 
+    // HOW it was paid, not just WHETHER. The catalogue has always described
+    // luggage methods ('charge to camp bill' and the rest) and nothing here read
+    // them, so a booking recorded a `paid` tick with no record of how — which is
+    // the one thing a bookkeeper reconciling a bus run actually needs.
+    var lugMethods = lugPayMethods();
     h += '<div class="ops-fsec">Billing</div>' +
         '<div id="bkQuote" style="padding:12px 14px;background:var(--ops-line-soft);border-radius:var(--ops-r-sm);margin-bottom:12px"></div>' +
         '<div class="ops-row">' +
         '<div class="ops-field"><label class="ops-check"><input type="checkbox" id="bkPaid"' + (b.paid ? ' checked' : '') + '> Paid</label></div>' +
+        '<div class="ops-field"><label>Method</label><select class="ops-select" id="bkPayMethod">' +
+            '<option value="">\u2014 Not set \u2014</option>' +
+            lugMethods.concat(
+                (b.payMethod && !lugMethods.some(function (m) { return m.id === b.payMethod; }))
+                    ? [{ id: b.payMethod, label: lugPayLabel(b.payMethod) + ' (no longer accepted)' }]
+                    : []
+            ).map(function (m) {
+                return '<option value="' + esc(m.id) + '"' + (b.payMethod === m.id ? ' selected' : '') + '>'
+                     + esc(m.label) + '</option>';
+            }).join('') +
+        '</select></div>' +
         '<div class="ops-field"><label>Status</label><select class="ops-select" id="bkStatus">' +
             ['active', 'cancelled'].map(function (s) { return '<option value="' + s + '"' + ((b.status || 'active') === s ? ' selected' : '') + '>' + (s === 'active' ? 'Active' : 'Cancelled') + '</option>'; }).join('') +
         '</select></div></div>' +
@@ -612,6 +653,7 @@ function draftBooking() {
         counts: counts,
         oversize: checked('bkOversize'),
         paid: checked('bkPaid'),
+        payMethod: val('bkPayMethod'),
         status: val('bkStatus') || 'active',
         notes: val('bkNotes')
     };
