@@ -8,7 +8,7 @@
     <link rel="icon" type="image/png" href="Campistry_logo.png">
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-    <link href="https://fonts.googleapis.com/css2?family=DM+Sans:opsz,wght@9..40,400;9..40,500;9..40,600;9..40,700;9..40,800&family=Fraunces:opsz,wght@9..144,500;9..144,600;9..144,700&display=swap" rel="stylesheet">
+    <link href="https://fonts.googleapis.com/css2?family=DM+Sans:opsz,wght@9..40,400;9..40,500;9..40,600;9..40,700;9..40,800&family=Fraunces:ital,opsz,wght@0,9..144,500;0,9..144,600;0,9..144,700;1,9..144,500;1,9..144,600&display=swap" rel="stylesheet">
     <link rel="stylesheet" href="campistry-unified.css?v=20260903-03">
     <link rel="stylesheet" href="campistry_help.css">
 </head>
@@ -39,6 +39,7 @@
             <span class="hc-toc-label">Start Here</span>
             <a class="hc-toc-link" href="#getting-started">Getting Started</a>
             <a class="hc-toc-link" href="#roles-access">Roles &amp; Access</a>
+            <a class="hc-toc-link hc-c-dashboard" href="#glossary"><span class="hc-toc-dot"></span>Glossary</a>
         </div>
         <div class="hc-toc-group">
             <span class="hc-toc-label">Platform</span>
@@ -58,7 +59,8 @@
         </div>
         <div class="hc-toc-group">
             <span class="hc-toc-label">More</span>
-            <a class="hc-toc-link" href="#faq">FAQ</a>
+            <a class="hc-toc-link hc-c-dashboard" href="#troubleshooting"><span class="hc-toc-dot"></span>Troubleshooting</a>
+            <a class="hc-toc-link hc-c-dashboard" href="#faq"><span class="hc-toc-dot"></span>FAQ</a>
             <a class="hc-toc-link" href="#contact">Contact Support</a>
         </div>
     </nav>
@@ -66,7 +68,8 @@
     <main class="hc-main" id="hcMain">
 
         <section class="hc-hero">
-            <h1>How can we help?</h1>
+            <div class="hc-hero-mesh" aria-hidden="true"></div>
+            <h1>How can we <em>help</em>?</h1>
             <div class="hc-hero-static">
                 <p>Search across every Campistry product, or jump straight to what you need.</p>
             </div>
@@ -77,6 +80,7 @@
                 <button class="hc-search-clear" id="hcSearchClear" type="button" aria-label="Clear search">
                     <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
                 </button>
+                <div class="hc-suggest" id="hcSuggest"></div>
             </div>
             <div class="hc-search-count" id="hcSearchCount"></div>
             <div class="hc-hero-static">
@@ -90,16 +94,56 @@
         </section>
 
         <section class="hc-product-grid">
-            <a class="hc-product-tile hc-c-dashboard" href="#product-dashboard"><img src="Campistry_clean.png" alt=""><span>Dashboard</span><small>Command center</small></a>
-            <a class="hc-product-tile hc-c-me" href="#product-me"><img src="Me_clean.png" alt=""><span>Me</span><small>Structure &amp; staff</small></a>
-            <a class="hc-product-tile hc-c-flow" href="#product-flow"><img src="Flow_clean.png" alt=""><span>Flow</span><small>Scheduling</small></a>
-            <a class="hc-product-tile hc-c-go" href="#product-go"><img src="Go_clean.png" alt=""><span>Go</span><small>Buses &amp; luggage</small></a>
-            <a class="hc-product-tile hc-c-health" href="#product-health"><img src="Health_clean.png" alt=""><span>Health</span><small>Medical records</small></a>
-            <a class="hc-product-tile hc-c-live" href="#product-live"><img src="Live_clean.png" alt=""><span>Live</span><small>Attendance</small></a>
-            <a class="hc-product-tile hc-c-snacks" href="#product-snacks"><img src="Snacks_clean.png" alt=""><span>Snacks</span><small>Canteen &amp; shop</small></a>
-            <a class="hc-product-tile hc-c-link" href="#product-link"><img src="Link_clean.png" alt=""><span>Link</span><small>Parent comms</small></a>
-            <a class="hc-product-tile hc-c-notes" href="#product-notes"><img src="Notes_clean.png" alt=""><span>Notes</span><small>Reminders</small></a>
-            <a class="hc-product-tile hc-c-lite" href="#product-lite"><img src="Lite_clean.png" alt=""><span>Lite</span><small>On your phone</small></a>
+            <a class="hc-product-tile hc-c-dashboard" href="#product-dashboard">
+                <span class="hc-product-icon"><img src="Campistry_clean.png" alt=""></span>
+                <span class="hc-product-name">Dashboard</span>
+                <span class="hc-product-tag">Command center</span>
+            </a>
+            <a class="hc-product-tile hc-c-me" href="#product-me">
+                <span class="hc-product-icon"><img src="Me_clean.png" alt=""></span>
+                <span class="hc-product-name">Me</span>
+                <span class="hc-product-tag">Structure &amp; staff</span>
+            </a>
+            <a class="hc-product-tile hc-c-flow" href="#product-flow">
+                <span class="hc-product-icon"><img src="Flow_clean.png" alt=""></span>
+                <span class="hc-product-name">Flow</span>
+                <span class="hc-product-tag">Scheduling</span>
+            </a>
+            <a class="hc-product-tile hc-c-go" href="#product-go">
+                <span class="hc-product-icon"><img src="Go_clean.png" alt=""></span>
+                <span class="hc-product-name">Go</span>
+                <span class="hc-product-tag">Buses &amp; luggage</span>
+            </a>
+            <a class="hc-product-tile hc-c-health" href="#product-health">
+                <span class="hc-product-icon"><img src="Health_clean.png" alt=""></span>
+                <span class="hc-product-name">Health</span>
+                <span class="hc-product-tag">Medical records</span>
+            </a>
+            <a class="hc-product-tile hc-c-live" href="#product-live">
+                <span class="hc-product-icon"><img src="Live_clean.png" alt=""></span>
+                <span class="hc-product-name">Live</span>
+                <span class="hc-product-tag">Attendance</span>
+            </a>
+            <a class="hc-product-tile hc-c-snacks" href="#product-snacks">
+                <span class="hc-product-icon"><img src="Snacks_clean.png" alt=""></span>
+                <span class="hc-product-name">Snacks</span>
+                <span class="hc-product-tag">Canteen &amp; shop</span>
+            </a>
+            <a class="hc-product-tile hc-c-link" href="#product-link">
+                <span class="hc-product-icon"><img src="Link_clean.png" alt=""></span>
+                <span class="hc-product-name">Link</span>
+                <span class="hc-product-tag">Parent comms</span>
+            </a>
+            <a class="hc-product-tile hc-c-notes" href="#product-notes">
+                <span class="hc-product-icon"><img src="Notes_clean.png" alt=""></span>
+                <span class="hc-product-name">Notes</span>
+                <span class="hc-product-tag">Reminders</span>
+            </a>
+            <a class="hc-product-tile hc-c-lite" href="#product-lite">
+                <span class="hc-product-icon"><img src="Lite_clean.png" alt=""></span>
+                <span class="hc-product-name">Lite</span>
+                <span class="hc-product-tag">On your phone</span>
+            </a>
         </section>
 
         <div class="hc-empty" id="hcEmpty">
@@ -208,10 +252,44 @@
             </div>
         </section>
 
+        <!-- ===================== GLOSSARY ===================== -->
+        <section id="glossary" class="hc-section hc-c-dashboard" data-searchable>
+            <div class="hc-section-head">
+                <div class="hc-section-title"><h2>Glossary</h2></div>
+            </div>
+            <p class="hc-section-intro">Camp-specific terms used throughout Campistry.</p>
+            <div class="hc-faq-list">
+                <details class="hc-faq-item">
+                    <summary class="hc-faq-q"><span class="hc-faq-q-text">What is a Division, Grade and Bunk?</span><svg class="hc-chev" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><polyline points="6 9 12 15 18 9"/></svg></summary>
+                    <div class="hc-faq-a"><p>Camp's org chart, top to bottom: a <strong>Division</strong> is the broadest group (e.g. "Seniors"), a <strong>Grade</strong> is a level inside it, and a <strong>Bunk</strong> is the smallest unit — the actual group of campers and counselors. Set up in Me → Structure.</p></div>
+                </details>
+                <details class="hc-faq-item">
+                    <summary class="hc-faq-q"><span class="hc-faq-q-text">What is a Layer?</span><svg class="hc-chev" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><polyline points="6 9 12 15 18 9"/></svg></summary>
+                    <div class="hc-faq-a"><p>A rotation rule in Flow's Auto Builder — e.g. "2 Sports periods, 1 Special a day" — rather than an exact activity. The solver fills in the specifics.</p></div>
+                </details>
+                <details class="hc-faq-item">
+                    <summary class="hc-faq-q"><span class="hc-faq-q-text">What is a Skeleton?</span><svg class="hc-chev" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><polyline points="6 9 12 15 18 9"/></svg></summary>
+                    <div class="hc-faq-a"><p>The hand-built time-slot layout used by Flow's Manual Builder — you place the exact tile in every slot yourself, and Generate fills in which bunk gets what inside each one.</p></div>
+                </details>
+                <details class="hc-faq-item">
+                    <summary class="hc-faq-q"><span class="hc-faq-q-text">What does "rotation fairness" mean?</span><svg class="hc-chev" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><polyline points="6 9 12 15 18 9"/></svg></summary>
+                    <div class="hc-faq-a"><p>Flow's automatic system for spreading activities evenly — a bunk that did something recently is penalized in the scoring, so whatever it hasn't done in the longest time wins out. Runs on its own; nothing to turn on.</p></div>
+                </details>
+                <details class="hc-faq-item">
+                    <summary class="hc-faq-q"><span class="hc-faq-q-text">What is a League, and what's a Session or Half?</span><svg class="hc-chev" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><polyline points="6 9 12 15 18 9"/></svg></summary>
+                    <div class="hc-faq-a"><p>A <strong>League</strong> is an inter-bunk sports/game competition in Flow, with its own teams and standings. A <strong>Session</strong> is a date range parents register for (e.g. "Full Summer," "1st Half") set on the Dashboard. A <strong>Half</strong> is one half of the summer — used to reset rotation fairness and split pricing.</p></div>
+                </details>
+                <details class="hc-faq-item">
+                    <summary class="hc-faq-q"><span class="hc-faq-q-text">What's the difference between a Role and an Access Group?</span><svg class="hc-chev" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><polyline points="6 9 12 15 18 9"/></svg></summary>
+                    <div class="hc-faq-a"><p>A <strong>Role</strong> (Owner, Admin, Scheduler, Counselor, Viewer) is a starting point for what someone can see and do. An <strong>Access Group</strong> fine-tunes that further, section by section, for one teammate. Both live in Dashboard → Team &amp; Access.</p></div>
+                </details>
+            </div>
+        </section>
+
         <!-- ===================== DASHBOARD ===================== -->
         <section id="product-dashboard" class="hc-section hc-c-dashboard" data-searchable>
             <div class="hc-section-head">
-                <div class="hc-section-title"><img src="Campistry_clean.png" alt=""><h2>Dashboard &amp; Account</h2></div>
+                <div class="hc-section-title"><span class="hc-section-title-icon"><img src="Campistry_clean.png" alt=""></span><h2>Dashboard &amp; Account</h2></div>
                 <a class="hc-open-link" href="dashboard.html">Open Dashboard →</a>
             </div>
             <p class="hc-section-intro">The first page you land on after signing in — your camp's vitals, setup, and the launchpad for every other product.</p>
@@ -265,7 +343,7 @@
         <!-- ===================== ME ===================== -->
         <section id="product-me" class="hc-section hc-c-me" data-searchable>
             <div class="hc-section-head">
-                <div class="hc-section-title"><img src="Me_clean.png" alt=""><h2>Me</h2></div>
+                <div class="hc-section-title"><span class="hc-section-title-icon"><img src="Me_clean.png" alt=""></span><h2>Me</h2></div>
                 <a class="hc-open-link" href="campistry_me.html">Open Me →</a>
             </div>
             <p class="hc-section-intro">Your camp's structure, roster and hiring pipeline — divisions, grades, bunks, campers, staff and payroll. Flow and every other product read from what's set up here.</p>
@@ -322,13 +400,29 @@
                     <summary class="hc-faq-q"><span class="hc-faq-q-text">Where do I build printable rosters or reports?</span><svg class="hc-chev" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><polyline points="6 9 12 15 18 9"/></svg></summary>
                     <div class="hc-faq-a"><p>Me → Analytics/Reports — pick your columns and group by bunk, division or team.</p></div>
                 </details>
+                <details class="hc-faq-item">
+                    <summary class="hc-faq-q"><span class="hc-faq-q-text">How do I send a form or document for parents to sign?</span><svg class="hc-chev" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><polyline points="6 9 12 15 18 9"/></svg></summary>
+                    <div class="hc-faq-a"><p>Me → Forms &amp; Documents — build or upload a form, then send it. It's the e-form/document counterpart to Link's messaging, and completed, filed documents live here alongside the camper record.</p></div>
+                </details>
+                <details class="hc-faq-item">
+                    <summary class="hc-faq-q"><span class="hc-faq-q-text">How do I track a family who hasn't applied yet?</span><svg class="hc-chev" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><polyline points="6 9 12 15 18 9"/></svg></summary>
+                    <div class="hc-faq-a"><p>Me → Leads &amp; Inquiries — a pre-registration CRM for families who've shown interest but haven't started a Registration application yet. Once they apply, they move into the normal Registration pipeline.</p></div>
+                </details>
+                <details class="hc-faq-item">
+                    <summary class="hc-faq-q"><span class="hc-faq-q-text">How do siblings get grouped as one family?</span><svg class="hc-chev" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><polyline points="6 9 12 15 18 9"/></svg></summary>
+                    <div class="hc-faq-a"><p>Me → Families — auto-suggests households by matching last name, address or parent email, so siblings' billing and communication can be handled together.</p></div>
+                </details>
+                <details class="hc-faq-item">
+                    <summary class="hc-faq-q"><span class="hc-faq-q-text">How do I add a custom field to a camper's profile?</span><svg class="hc-chev" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><polyline points="6 9 12 15 18 9"/></svg></summary>
+                    <div class="hc-faq-a"><p>Roster → Custom Fields — define a field once and it shows up on every camper's profile and on CSV import/export, alongside the built-in ones.</p></div>
+                </details>
             </div>
         </section>
 
         <!-- ===================== FLOW ===================== -->
         <section id="product-flow" class="hc-section hc-c-flow" data-searchable>
             <div class="hc-section-head">
-                <div class="hc-section-title"><img src="Flow_clean.png" alt=""><h2>Flow</h2></div>
+                <div class="hc-section-title"><span class="hc-section-title-icon"><img src="Flow_clean.png" alt=""></span><h2>Flow</h2></div>
                 <a class="hc-open-link" href="flow.html">Open Flow →</a>
             </div>
             <p class="hc-section-intro">Campistry's scheduling engine — build your rotation rules or a hand-placed skeleton, generate each day's schedule, then print or export it. Everything here works from the divisions, bunks and activities set up in Me.</p>
@@ -449,7 +543,7 @@
         <!-- ===================== GO ===================== -->
         <section id="product-go" class="hc-section hc-c-go" data-searchable>
             <div class="hc-section-head">
-                <div class="hc-section-title"><img src="Go_clean.png" alt=""><h2>Go</h2></div>
+                <div class="hc-section-title"><span class="hc-section-title-icon"><img src="Go_clean.png" alt=""></span><h2>Go</h2></div>
                 <a class="hc-open-link" href="campistry_go.html">Open Go →</a>
             </div>
             <p class="hc-section-intro">Bus routes, driver stops, and Luggage — camper bags that travel separately from the bus.</p>
@@ -491,13 +585,24 @@
                     <summary class="hc-faq-q"><span class="hc-faq-q-text">What is Luggage and where do I find it?</span><svg class="hc-chev" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><polyline points="6 9 12 15 18 9"/></svg></summary>
                     <div class="hc-faq-a"><p>It lives inside Go, not as a separate product (it reuses Go's stops, addresses and vehicles). Add Drop-off Locations, then New Booking per camper — service type and bag count auto-price it — print bag Tags, and track bags through the Manifest as they're received, loaded and delivered.</p></div>
                 </details>
+                <details class="hc-faq-item">
+                    <summary class="hc-faq-q"><span class="hc-faq-q-text">Why isn't Go using Google Maps for my routes?</span><svg class="hc-chev" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><polyline points="6 9 12 15 18 9"/></svg></summary>
+                    <div class="hc-faq-a">
+                        <p>Go tries free USPS/Census-based geocoding first. A built-in cost guard blocks paid providers like Google or Geoapify — even if a key is saved — unless paid access is explicitly enabled in Setup.</p>
+                        <div class="hc-gotcha"><svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><line x1="12" y1="8" x2="12" y2="12.5"/><line x1="12" y1="16" x2="12.01" y2="16"/></svg><div><strong>Sandbox mode</strong> is on by default and uses fake coordinates with no real network calls at all — turn it off in Setup before generating routes you intend to actually drive.</div></div>
+                    </div>
+                </details>
+                <details class="hc-faq-item">
+                    <summary class="hc-faq-q"><span class="hc-faq-q-text">What's "Neighborhood" routing mode?</span><svg class="hc-chev" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><polyline points="6 9 12 15 18 9"/></svg></summary>
+                    <div class="hc-faq-a"><p>An experimental (beta) mode alongside Door-to-Door, Optimized Stops and Corner Stops. Leave it off unless you're specifically testing it — the other three are the proven modes.</p></div>
+                </details>
             </div>
         </section>
 
         <!-- ===================== HEALTH ===================== -->
         <section id="product-health" class="hc-section hc-c-health" data-searchable>
             <div class="hc-section-head">
-                <div class="hc-section-title"><img src="Health_clean.png" alt=""><h2>Health</h2></div>
+                <div class="hc-section-title"><span class="hc-section-title-icon"><img src="Health_clean.png" alt=""></span><h2>Health</h2></div>
                 <a class="hc-open-link" href="campistry_health.html">Open Health →</a>
             </div>
             <p class="hc-section-intro">Medical records, medication dispensing, and infirmary visits for medical staff and directors.</p>
@@ -525,13 +630,17 @@
                     <summary class="hc-faq-q"><span class="hc-faq-q-text">How do I review a medical document a parent uploaded?</span><svg class="hc-chev" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><polyline points="6 9 12 15 18 9"/></svg></summary>
                     <div class="hc-faq-a"><p>Health → Medical Forms → Parent-Submitted Documents → Approve, Flag, or View.</p></div>
                 </details>
+                <details class="hc-faq-item">
+                    <summary class="hc-faq-q"><span class="hc-faq-q-text">What does the Health Dashboard show me?</span><svg class="hc-chev" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><polyline points="6 9 12 15 18 9"/></svg></summary>
+                    <div class="hc-faq-a"><p>A daily snapshot — medications on file, medications already given today, today's visits, and allergy alerts — with Log Visit and Dispense Med shortcuts right there.</p></div>
+                </details>
             </div>
         </section>
 
         <!-- ===================== LIVE ===================== -->
         <section id="product-live" class="hc-section hc-c-live" data-searchable>
             <div class="hc-section-head">
-                <div class="hc-section-title"><img src="Live_clean.png" alt=""><h2>Live</h2></div>
+                <div class="hc-section-title"><span class="hc-section-title-icon"><img src="Live_clean.png" alt=""></span><h2>Live</h2></div>
                 <a class="hc-open-link" href="campistry_live.html">Open Live →</a>
             </div>
             <p class="hc-section-intro">Daily attendance, camper locator, and same-day pickup or bus-change requests from parents.</p>
@@ -559,13 +668,17 @@
                     <summary class="hc-faq-q"><span class="hc-faq-q-text">How do I print letters parents wrote through Link?</span><svg class="hc-chev" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><polyline points="6 9 12 15 18 9"/></svg></summary>
                     <div class="hc-faq-a"><p>Live → Camper Mail → "To print" tab → Print selected or Print all new.</p></div>
                 </details>
+                <details class="hc-faq-item">
+                    <summary class="hc-faq-q"><span class="hc-faq-q-text">How do I see every early pickup or bus change over a date range?</span><svg class="hc-chev" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><polyline points="6 9 12 15 18 9"/></svg></summary>
+                    <div class="hc-faq-a"><p>Live → Attendance Reports → Dismissal Changes tab → set a From/To date range → Generate Report. It cross-references Go's saved routes; the main attendance report on the same page exports to CSV.</p></div>
+                </details>
             </div>
         </section>
 
         <!-- ===================== SNACKS & SHOP ===================== -->
         <section id="product-snacks" class="hc-section hc-c-snacks" data-searchable>
             <div class="hc-section-head">
-                <div class="hc-section-title"><img src="Snacks_clean.png" alt=""><h2>Snacks &amp; Shop</h2></div>
+                <div class="hc-section-title"><span class="hc-section-title-icon"><img src="Snacks_clean.png" alt=""></span><h2>Snacks &amp; Shop</h2></div>
                 <a class="hc-open-link" href="campistry_snacks.html">Open Snacks →</a>
             </div>
             <p class="hc-section-intro">Canteen accounts, point-of-sale, and Camp Shop — camp swag ordered by parents. Shop lives inside Snacks, not as its own product.</p>
@@ -606,7 +719,7 @@
         <!-- ===================== LINK ===================== -->
         <section id="product-link" class="hc-section hc-c-link" data-searchable>
             <div class="hc-section-head">
-                <div class="hc-section-title"><img src="Link_clean.png" alt=""><h2>Link</h2></div>
+                <div class="hc-section-title"><span class="hc-section-title-icon"><img src="Link_clean.png" alt=""></span><h2>Link</h2></div>
                 <a class="hc-open-link" href="campistry_link_admin.html">Open Link →</a>
             </div>
             <p class="hc-section-intro">The bridge between camp and home — messaging, forms, photos and payments for parents, plus a code-gated tip lookup for staff. Link has three views: this Camp Office console, the Parent Portal, and Staff.</p>
@@ -651,7 +764,7 @@
         <!-- ===================== NOTES ===================== -->
         <section id="product-notes" class="hc-section hc-c-notes" data-searchable>
             <div class="hc-section-head">
-                <div class="hc-section-title"><img src="Notes_clean.png" alt=""><h2>Notes</h2></div>
+                <div class="hc-section-title"><span class="hc-section-title-icon"><img src="Notes_clean.png" alt=""></span><h2>Notes</h2></div>
                 <a class="hc-open-link" href="campistry_notes.html">Open Notes →</a>
             </div>
             <p class="hc-section-intro">Private sticky notes and reminders, available from every Campistry page.</p>
@@ -679,13 +792,17 @@
                     <summary class="hc-faq-q"><span class="hc-faq-q-text">I deleted a note by accident — can I get it back?</span><svg class="hc-chev" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><polyline points="6 9 12 15 18 9"/></svg></summary>
                     <div class="hc-faq-a"><p>Yes, as long as you haven't deleted it a second time from Trash — open Trash and click Restore.</p></div>
                 </details>
+                <details class="hc-faq-item">
+                    <summary class="hc-faq-q"><span class="hc-faq-q-text">How do I organize a lot of notes?</span><svg class="hc-chev" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><polyline points="6 9 12 15 18 9"/></svg></summary>
+                    <div class="hc-faq-a"><p>The sidebar has quick views — All Notes, Pinned, Shared, Reminders, Trash — plus Tags for your own categories. Click a view to filter the grid, or use the search box to filter within it.</p></div>
+                </details>
             </div>
         </section>
 
         <!-- ===================== LITE ===================== -->
         <section id="product-lite" class="hc-section hc-c-lite" data-searchable>
             <div class="hc-section-head">
-                <div class="hc-section-title"><img src="Lite_clean.png" alt=""><h2>Lite</h2></div>
+                <div class="hc-section-title"><span class="hc-section-title-icon"><img src="Lite_clean.png" alt=""></span><h2>Lite</h2></div>
                 <a class="hc-open-link" href="campistry_lite.html">Open Lite →</a>
             </div>
             <p class="hc-section-intro">The mobile companion to Campistry — a phone-first view of schedules, rosters and messaging for head staff and counselors.</p>
@@ -705,6 +822,44 @@
                 <details class="hc-faq-item">
                     <summary class="hc-faq-q"><span class="hc-faq-q-text">What can head staff do differently from counselors in Lite?</span><svg class="hc-chev" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><polyline points="6 9 12 15 18 9"/></svg></summary>
                     <div class="hc-faq-a"><p>Fuller, per-product tabs gated to owner/admin/scheduler roles: Flow Lite (whole-camp schedule, camper locator, reports), Me Lite (full roster &amp; medical), Link Lite (parent messaging, tips), Health Lite (medication dispensing — the one place in Lite that writes data), and Live Lite (attendance).</p></div>
+                </details>
+                <details class="hc-faq-item">
+                    <summary class="hc-faq-q"><span class="hc-faq-q-text">Can Lite ask before I delete something?</span><svg class="hc-chev" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><polyline points="6 9 12 15 18 9"/></svg></summary>
+                    <div class="hc-faq-a"><p>Yes — avatar → Settings → "Confirm before deleting." Turn it on if you'd rather get a prompt than delete something with one tap.</p></div>
+                </details>
+            </div>
+        </section>
+
+        <!-- ===================== TROUBLESHOOTING ===================== -->
+        <section id="troubleshooting" class="hc-section hc-c-dashboard" data-searchable>
+            <div class="hc-section-head">
+                <div class="hc-section-title"><h2>Troubleshooting</h2></div>
+            </div>
+            <p class="hc-section-intro">Common problems and the first thing to check.</p>
+            <div class="hc-faq-list">
+                <details class="hc-faq-item">
+                    <summary class="hc-faq-q"><span class="hc-faq-q-text">My changes disappeared after I reloaded the page</span><svg class="hc-chev" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><polyline points="6 9 12 15 18 9"/></svg></summary>
+                    <div class="hc-faq-a"><p>Check your internet connection first — Campistry saves to the cloud as you work and keeps a local copy so you can keep going offline, but a change made while disconnected only reaches the cloud once you're back online. If you were online the whole time, try a hard refresh before re-entering the change.</p></div>
+                </details>
+                <details class="hc-faq-item">
+                    <summary class="hc-faq-q"><span class="hc-faq-q-text">The generated schedule has gaps or looks wrong</span><svg class="hc-chev" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><polyline points="6 9 12 15 18 9"/></svg></summary>
+                    <div class="hc-faq-a"><p>Check the Current Schedule Date at the top of Flow — it's global, so it's easy to be looking at (or have generated) the wrong day. Also check Rainy Day Mode isn't on by accident, and that your Layers/Skeleton actually cover the whole day.</p></div>
+                </details>
+                <details class="hc-faq-item">
+                    <summary class="hc-faq-q"><span class="hc-faq-q-text">A parent can't sign into Link</span><svg class="hc-chev" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><polyline points="6 9 12 15 18 9"/></svg></summary>
+                    <div class="hc-faq-a"><p>Link → Parents → check the Access Requests queue — this is where a sign-up with an email that doesn't match your roster ends up. Their camper also needs to already be enrolled in Me for them to become eligible in the first place.</p></div>
+                </details>
+                <details class="hc-faq-item">
+                    <summary class="hc-faq-q"><span class="hc-faq-q-text">A counselor can't sign into Campistry Lite</span><svg class="hc-chev" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><polyline points="6 9 12 15 18 9"/></svg></summary>
+                    <div class="hc-faq-a"><p>Me → Hiring → open their staff record and confirm both an email and a bunk assignment are set — both are required before Lite will let them in.</p></div>
+                </details>
+                <details class="hc-faq-item">
+                    <summary class="hc-faq-q"><span class="hc-faq-q-text">I generated the wrong day, or overwrote a manual tweak</span><svg class="hc-chev" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><polyline points="6 9 12 15 18 9"/></svg></summary>
+                    <div class="hc-faq-a"><p>Double-check the Current Schedule Date before you hit Generate — it's the single global date every Flow tab reads and edits. A full Generate rebuilds the whole day, which can overwrite prior tweaks; use "Regenerate selected" on just the tiles you need re-rolled instead.</p></div>
+                </details>
+                <details class="hc-faq-item">
+                    <summary class="hc-faq-q"><span class="hc-faq-q-text">A page or button I expect just isn't there</span><svg class="hc-chev" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><polyline points="6 9 12 15 18 9"/></svg></summary>
+                    <div class="hc-faq-a"><p>Almost always a role or Access Group setting, not a bug — ask your camp Owner to check Dashboard → Team &amp; Access. See <a href="#roles-access">Roles &amp; Access</a>.</p></div>
                 </details>
             </div>
         </section>
