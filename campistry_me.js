@@ -1997,6 +1997,204 @@ function _surchargePreview(){
       +'</strong> \u2014 total with fee '+fm(Math.round((base+q.fee)*100)/100)+'</div>';
 }
 
+/** The AR rule, or null on a page that did not load it. */
+function _arAPI(){return (typeof window!=='undefined'&&window.CampistryAR)||null}
+
+/**
+ * INVOICES ARE DERIVED FROM THE LEDGER, and that choice is the whole design.
+ *
+ * An invoice is an installment somebody has been ASKED to pay —
+ * campistry_installments.js records invoicedAt and invoiceDueDate on the
+ * installment itself, and buildFamilyLedgers() is what decides WHICH FAMILY an
+ * enrollment belongs to (exact membership, then a fuzzy match for an accepted
+ * applicant, then an ephemeral `pending_` ledger for a camper no family owns
+ * yet). Re-deriving that cascade here would be a second answer to the same
+ * question, and the two would disagree the first time one of them changed — which
+ * is exactly the defect that keeps turning up in this file. So aging reads the
+ * ledger's own installment entries, and every account Billing lists is an account
+ * this screen can age.
+ *
+ * Only `invoiced` and `paid` count. A PENDING installment is not an invoice:
+ * nobody has asked for it, and aging it would charge the family for the camp's own
+ * delay in billing.
+ */
+function _arDocsFor(ledger){
+    var docs=[];
+    (((ledger||{}).entries)||[]).forEach(function(en){
+        if(!en||en.type!=='installment')return;
+        var st=String(en.status||'');
+        if(st!=='invoiced'&&st!=='paid')return;
+        var amt=Number(en.amount)||0;
+        if(!(amt>0))return;
+        docs.push({
+            id:'inst:'+String(en.ref||''), kind:'invoice',
+            amount:amt,
+            paid:st==='paid'?amt:0,
+            status:st==='paid'?'paid':'open',
+            issuedOn:en.invoicedAt||'',
+            // What the office asked for when it invoiced, falling back to what the
+            // schedule intended. dueOn is carried on the entry by
+            // buildFamilyLedgers so this does not have to re-read enrollments.
+            dueDate:en.dueOn||en.date||'',
+            note:en.desc||en.category||'Installment'
+        });
+    });
+    return docs;
+}
+
+/**
+ * When this family last actually paid us.
+ *
+ * From the ledger's payment entries, so it counts bank deposits and
+ * name-matched legacy payments the same way the balance does, and ignores a
+ * pending or failed card — money that has not arrived is not a payment, and
+ * treating it as one would quietly excuse a family from the no-payment-since
+ * query.
+ */
+function _arLastPayment(ledger){
+    var last='';
+    (((ledger||{}).entries)||[]).forEach(function(en){
+        if(!en||en.type!=='payment')return;
+        if((Number(en.amount)||0)<=0)return;           // a refund is not a payment
+        if(en.status==='pending'||en.status==='failed')return;
+        var d=String(en.date||'');
+        if(d&&d>last)last=d;
+    });
+    return last;
+}
+
+/** Every account Billing knows about, shaped the way CampistryAR.inquire wants. */
+function _arFamilies(ledgers){
+    ledgers=ledgers||buildFamilyLedgers();
+    return Object.keys(ledgers).map(function(fk){
+        var l=ledgers[fk]||{};
+        return {
+            key:fk,
+            name:((l.family||{}).name)||fk,
+            docs:_arDocsFor(l),
+            lastPaymentOn:_arLastPayment(l)
+        };
+    });
+}
+
+/** The state of the who-owes screen. Not persisted: it is a question, not a setting. */
+var _arOpen=false;
+var _arQuery={minPastDue:0,minDaysLate:0,bucket:'',noPaymentSince:''};
+function setArQuery(field,value){
+    if(!(field in _arQuery))return;
+    _arQuery[field]=(field==='bucket'||field==='noPaymentSince')?String(value||'')
+                                                               :(parseFloat(value)||0);
+    renderBilling();
+}
+function toggleAging(){_arOpen=!_arOpen;renderBilling()}
+
+/**
+ * WHO OWES — the question an office actually asks in August.
+ *
+ * Collapsed by default. This page was deliberately stripped back to one search box
+ * and one dropdown because a six-tile stat row above the account list was read by
+ * nobody; an aging table with four filters permanently expanded above it would undo
+ * that. Closed, it is one line with the number that decides whether to open it.
+ *
+ * Aging needs invoices, and invoices need somebody to have been asked, so a camp
+ * that has never invoiced anybody sees an explanation rather than an empty table.
+ * That is the commonest reason this screen is blank and the least obvious.
+ */
+function _arAgingHtml(ledgers){
+    var A=_arAPI(); if(!A)return '';
+    var fams=_arFamilies(ledgers);
+    var anyDocs=fams.some(function(f){return f.docs.length>0});
+    // Unfiltered, so the collapsed summary line answers "is there anything in
+    // here" rather than "is there anything matching a filter I cannot see".
+    var all=A.inquire({families:fams});
+    var head='<div style="display:flex;gap:10px;align-items:center;justify-content:space-between;'
+      +'flex-wrap:wrap;border:1px solid var(--s200);border-radius:9px;padding:10px 13px;'
+      +'margin-bottom:'+(_arOpen?'12px':'14px')+';background:#fff">'
+      +'<div><strong style="font-size:.9rem">Who owes</strong>'
+      +'<div style="font-size:.79rem;color:var(--s500);margin-top:2px">'
+      +(!anyDocs
+          ? 'Nothing has been invoiced yet'
+          : (all.totals.pastDue>0
+              ? fm(all.totals.pastDue)+' past due across '+all.rows.length+' famil'
+                +(all.rows.length===1?'y':'ies')
+              : 'Nothing past due — '+fm(all.totals.total)+' invoiced and outstanding'))
+      +'</div></div>'
+      +'<button class="me-btn me-btn--sec me-btn--sm" onclick="CampistryMe.toggleAging()">'
+      +(_arOpen?'Hide':'Aging report')+'</button></div>';
+
+    if(!_arOpen)return head;
+    var h=head;
+
+    if(!anyDocs){
+        h+='<div style="background:#FFFBEB;border:1px solid #FDE68A;color:#92400E;'
+          +'border-radius:9px;padding:12px 14px;font-size:.85rem;line-height:1.6;'
+          +'margin-bottom:14px">'
+          +'<strong>Nothing has been invoiced yet.</strong> Aging measures how long ago '
+          +'a family was <em>asked</em> to pay, so nothing appears here until an '
+          +'installment is invoiced. A camp that has not billed has families who owe '
+          +'nothing yet — not families who are late.</div>';
+        return h;
+    }
+
+    var r=A.inquire(Object.assign({},_arQuery,{families:fams}));
+
+    h+='<div style="display:flex;gap:8px;flex-wrap:wrap;align-items:end;margin-bottom:12px">';
+    h+='<div class="me-field" style="margin:0"><label style="font-size:.74rem">At least ($)</label>'
+      +'<input type="number" class="me-input" style="width:110px" step="0.01" min="0" value="'
+      +(_arQuery.minPastDue||'')+'" onchange="CampistryMe.setArQuery(\'minPastDue\',this.value)"></div>';
+    h+='<div class="me-field" style="margin:0"><label style="font-size:.74rem">Days late</label>'
+      +'<input type="number" class="me-input" style="width:100px" min="0" value="'
+      +(_arQuery.minDaysLate||'')+'" onchange="CampistryMe.setArQuery(\'minDaysLate\',this.value)"></div>';
+    h+='<div class="me-field" style="margin:0"><label style="font-size:.74rem">Bucket</label>'
+      +'<select class="me-input" onchange="CampistryMe.setArQuery(\'bucket\',this.value)">'
+      +'<option value="">Any</option>'
+      +(A.BUCKETS||[]).map(function(b){
+          return '<option value="'+esc(b.id)+'"'+(b.id===_arQuery.bucket?' selected':'')+'>'
+               +esc(b.label)+'</option>';
+      }).join('')+'</select></div>';
+    h+='<div class="me-field" style="margin:0"><label style="font-size:.74rem">No payment since</label>'
+      +'<input type="date" class="me-input" value="'+esc(_arQuery.noPaymentSince)+'" '
+      +'onchange="CampistryMe.setArQuery(\'noPaymentSince\',this.value)"></div>';
+    h+='</div>';
+
+    h+='<div style="display:flex;gap:10px;flex-wrap:wrap;margin-bottom:12px">';
+    (A.BUCKETS||[]).forEach(function(b){
+        var v=r.totals.buckets[b.id]||0;
+        h+='<div style="flex:1;min-width:118px;border:1px solid var(--s200);border-radius:8px;'
+          +'padding:9px 11px;background:'+(b.id==='current'?'#F8FAFC':'#FFFBEB')+'">'
+          +'<div style="font-size:.72rem;color:var(--s500)">'+esc(b.label)+'</div>'
+          +'<div style="font-weight:700;font-size:1rem">'+fm(v)+'</div></div>';
+    });
+    h+='</div>';
+
+    if(!r.rows.length){
+        h+='<p style="font-size:.85rem;color:var(--s500);margin-bottom:14px">Nobody matches that. '
+          +(_arQuery.minPastDue||_arQuery.minDaysLate||_arQuery.bucket||_arQuery.noPaymentSince
+             ?'Try widening the filters.':'Nothing is past due.')+'</p>';
+        return h;
+    }
+
+    h+='<p style="font-size:.82rem;color:var(--s500);margin:0 0 8px">'
+      +r.rows.length+' famil'+(r.rows.length===1?'y':'ies')+' · '
+      +'<strong>'+fm(r.totals.pastDue)+' past due</strong> of '+fm(r.totals.total)
+      +' invoiced and outstanding</p>';
+    h+='<div class="me-tw" style="margin-bottom:14px"><table class="me-t"><thead><tr>'
+      +'<th>Family</th><th>Past due</th><th>Oldest</th><th>Outstanding</th>'
+      +'<th>Last payment</th><th style="width:1%"></th></tr></thead><tbody>';
+    r.rows.forEach(function(row){
+        h+='<tr><td><strong>'+esc(row.name)+'</strong></td>'
+          +'<td style="font-weight:700;color:'+(row.aging.pastDue>0?'#B45309':'inherit')+'">'
+          +fm(row.aging.pastDue)+'</td>'
+          +'<td>'+(row.aging.oldestDays?row.aging.oldestDays+'d':'—')+'</td>'
+          +'<td>'+fm(row.aging.total)+'</td>'
+          +'<td>'+esc(row.lastPaymentOn||'never')+'</td>'
+          +'<td><button class="me-btn me-btn--sec me-btn--sm" '
+          +'onclick="CampistryMe.viewFamily(\''+je(row.key)+'\')">Open</button></td></tr>';
+    });
+    h+='</tbody></table></div>';
+    return h;
+}
+
 function _liveOnlyNotice(what){
     var ws='';
     try{ if(typeof window.campistryWorkspace==='function')ws=window.campistryWorkspace()||''; }catch(e){}
@@ -13635,9 +13833,17 @@ function buildFamilyLedgers(){
         if((!schedule||!schedule.length)&&e.status==='accepted'){
             schedule=_buildInstallmentSchedule(sessObj,net);
         }
-        if(schedule&&schedule.length>1){
+        // A lone installment used to be hidden: it is just the tuition charge
+        // restated, so it added nothing. But once it has been INVOICED it is a
+        // real event — the family was asked — and the aging report reads these
+        // entries, so hiding it would make a one-payment plan un-ageable.
+        var _schedSeen=schedule&&schedule.length&&(schedule.length>1
+            ||String((schedule[0]||{}).status||'pending')!=='pending');
+        if(_schedSeen){
             schedule.forEach(function(inst,ii){
-                ledgers[fk].entries.push({type:'installment',category:inst.label,desc:esc(e.camperName)+' — '+esc(inst.label),amount:inst.amount,date:inst.dueDate||'',status:inst.status||'pending',ref:eid+'_inst'+ii});
+                // invoicedAt/dueOn ride along so aging can be derived from the
+                // ledger instead of re-deciding which family owns this enrollment.
+                ledgers[fk].entries.push({type:'installment',category:inst.label,desc:esc(e.camperName)+' — '+esc(inst.label),amount:inst.amount,date:inst.dueDate||'',status:inst.status||'pending',ref:eid+'_inst'+ii,invoicedAt:inst.invoicedAt||'',dueOn:inst.invoiceDueDate||inst.dueDate||''});
             });
         }
     });
@@ -15016,6 +15222,10 @@ function renderBilling(){
         h+='<div style="background:#EFF6FF;border:1px solid #BFDBFE;padding:9px 12px;border-radius:var(--r);margin-bottom:12px;font-size:.82rem;color:#1E40AF;cursor:pointer" onclick="CampistryMe.openDepositInbox()">'
             +fm(_depPendingAmt)+' in bank deposits ('+_depPending+') arrived but '+(_depPending===1?'hasn\'t':'haven\'t')+' been matched to a family yet. Click to review.</div>';
     }
+
+    // Aging sits above the account list because it is the question that decides
+    // which account you open. Collapsed by default — see _arAgingHtml.
+    h+=_arAgingHtml(ledgers);
 
     // One plain search box + one plain status dropdown, replacing the old
     // 6-tile stat row and the 4-button count-labeled tab strip. Same data
@@ -20411,7 +20621,8 @@ window.CampistryMe={
     finReconcileCharges:finReconcileCharges,
     _dpToggle:_dpToggle,_cpToggle:_cpToggle,_cfToggle:_cfToggle,_fbRetryPreview:_fbRetryPreview,markDepositPaid:markDepositPaid,chargeDepositNow:chargeDepositNow,
     managePayers:managePayers,togglePayerArchived:togglePayerArchived,
-    managePaymentMethods:managePaymentMethods,
+    managePaymentMethods:managePaymentMethods,setArQuery:setArQuery,
+    toggleAging:toggleAging,
     closeOutFamily:closeOutFamily,_closeoutPreview:_closeoutPreview,
     addCardSurcharge:addCardSurcharge,_surchargePreview:_surchargePreview,
     _addPayerRow:_addPayerRow,_payerSplitPreview:_payerSplitPreview,
