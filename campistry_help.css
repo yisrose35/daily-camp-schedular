@@ -39,7 +39,7 @@
 
 /* ==================== LAYOUT ==================== */
 .hc-layout { max-width: 1280px; margin: 0 auto; display: flex; align-items: flex-start; gap: 32px; padding: 0 32px; }
-.hc-main { flex: 1; min-width: 0; padding: 0 0 96px; max-width: none; }
+.hc-main { flex: 1; min-width: 0; padding: 0 0 96px; max-width: none; display: flex; flex-direction: column; }
 [id] { scroll-margin-top: 76px; }
 
 /* ==================== SIDEBAR TOC ==================== */
@@ -63,6 +63,13 @@
 .hc-toc-link:hover { background: var(--slate-50); color: var(--slate-900); }
 .hc-toc-link.active { background: var(--product-50); color: var(--product-700); font-weight: 700; }
 .hc-toc-dot { width: 8px; height: 8px; border-radius: 50%; flex-shrink: 0; background: var(--dot, var(--slate-300)); }
+.hc-toc-count {
+    display: none; flex-shrink: 0; margin-left: auto; min-width: 18px; padding: 1px 6px;
+    font-size: .68rem; font-weight: 700; text-align: center;
+    color: var(--sec, var(--slate-600)); background: var(--sec-tint, var(--slate-100));
+    border-radius: var(--radius-full);
+}
+.hc-toc-count.show { display: inline-block; }
 
 /* ==================== HERO / SEARCH ==================== */
 .hc-hero {
@@ -99,7 +106,18 @@
 }
 .hc-search-clear:hover { background: var(--slate-200); }
 .hc-search-active .hc-search-clear { display: flex; }
+.hc-search-kbd {
+    position: absolute; right: 14px; top: 50%; transform: translateY(-50%);
+    min-width: 20px; height: 20px; padding: 0 6px;
+    display: flex; align-items: center; justify-content: center;
+    font-family: var(--font-body); font-size: .72rem; font-weight: 600;
+    color: var(--slate-400); background: var(--slate-50);
+    border: 1px solid var(--slate-200); border-radius: 5px;
+    pointer-events: none;
+}
+.hc-search-active .hc-search-kbd { display: none; }
 .hc-search-count { margin-top: 12px; font-size: .8rem; color: var(--text-muted); min-height: 1.2em; }
+.hc-search-count strong { color: var(--slate-600); }
 
 .hc-chip-row { display: flex; flex-wrap: wrap; gap: 8px; justify-content: center; margin-top: 22px; }
 .hc-chip {
@@ -171,6 +189,7 @@
 .hc-faq-q::-webkit-details-marker { display: none; }
 .hc-faq-q .hc-chev { flex-shrink: 0; transition: transform .2s var(--ease-out); color: var(--slate-400); }
 .hc-faq-item[open] .hc-chev { transform: rotate(180deg); }
+.hc-faq-q-text mark { background: var(--amber-200); color: var(--slate-900); border-radius: 3px; padding: 0 2px; }
 .hc-faq-a { padding: 0 18px 18px; color: var(--text-secondary); font-size: .87rem; line-height: 1.65; }
 .hc-faq-a p { margin: 0 0 10px; }
 .hc-faq-a p:last-child { margin-bottom: 0; }
@@ -234,6 +253,20 @@
 .hc-search-active .hc-hero-static,
 .hc-search-active .hc-product-grid,
 .hc-search-active .hc-non-faq { display: none; }
+
+/* ==================== BACK TO TOP ==================== */
+.hc-back-top {
+    position: fixed; right: 24px; bottom: 24px; z-index: 80;
+    width: 44px; height: 44px; border-radius: 50%;
+    background: #fff; border: 1px solid var(--slate-200); color: var(--slate-500);
+    box-shadow: var(--shadow-md); cursor: pointer;
+    display: flex; align-items: center; justify-content: center;
+    opacity: 0; transform: translateY(8px); pointer-events: none;
+    transition: opacity .2s var(--ease-out), transform .2s var(--ease-out), border-color .15s, color .15s;
+}
+.hc-back-top.show { opacity: 1; transform: translateY(0); pointer-events: auto; }
+.hc-back-top:hover { color: var(--product-600); border-color: var(--product-200); }
+@media (max-width: 640px) { .hc-back-top { right: 16px; bottom: 16px; width: 40px; height: 40px; } }
 
 /* ==================== PER-PRODUCT ACCENTS ==================== */
 .hc-c-dashboard, .hc-c-flow { --tile:#147D91; --dot:#147D91; --sec:#0F5F6E; --sec-tint:#F0FDFA; }
