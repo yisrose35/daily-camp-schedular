@@ -1258,6 +1258,48 @@ var CamperMail = (function(){
     function _toast(msg){ var el=document.getElementById('toastEl'); if(!el)return; el.textContent=msg; el.className='toast'; requestAnimationFrame(function(){el.classList.add('show');setTimeout(function(){el.classList.remove('show')},2500)}); }
     function _campName(){ try{ var g=JSON.parse(localStorage.getItem('campGlobalSettings_v1')||'{}'); return (g.campistryMe&&g.campistryMe.campName)||g.campName||'Camp'; }catch(e){ return 'Camp'; } }
 
+    // ── Routing order ────────────────────────────────────────────────────────
+    // So the secretary never hand-sorts the printed stack: letters come out in
+    // the camp's own setup order — divisions in the order they were created,
+    // then grades within a division, then bunks in their listed order, then
+    // camper name. A letter whose division/grade/bunk no longer matches the
+    // current structure (renamed since the parent wrote it) sorts to the end,
+    // grouped together and alpha-sorted, so it's never silently scattered into
+    // the wrong pile — it lands in an obvious "check me" run at the bottom.
+    var _RANK_MISS = 1e6, _SEP = '\u0000';
+    function _routeIndex(){
+        var idx={ div:{}, grade:{}, bunk:{} };
+        try{
+            var struct=(JSON.parse(localStorage.getItem('campGlobalSettings_v1')||'{}').campStructure)||{};
+            Object.keys(struct).forEach(function(divName,di){
+                idx.div[divName]=di;
+                var grades=(struct[divName]&&struct[divName].grades)||{}, bi=0;
+                Object.keys(grades).forEach(function(gradeName,gi){
+                    idx.grade[divName+_SEP+gradeName]=gi;
+                    ((grades[gradeName]&&grades[gradeName].bunks)||[]).forEach(function(bunkName){ idx.bunk[divName+_SEP+bunkName]=bi++; });
+                });
+            });
+        }catch(e){}
+        return idx;
+    }
+    // Numeric-aware compare so "Bunk 2" precedes "Bunk 10" (plain sort doesn't).
+    function _nat(a,b){ return String(a==null?'':a).localeCompare(String(b==null?'':b),undefined,{numeric:true,sensitivity:'base'}); }
+    function _sortRoute(rows,idx){
+        idx=idx||_routeIndex();
+        function rank(map,key){ var v=map[key]; return v==null?_RANK_MISS:v; }
+        return rows.slice().sort(function(a,b){
+            var ad=rank(idx.div,a.division), bd=rank(idx.div,b.division);
+            if(ad!==bd) return ad-bd;
+            if(a.division!==b.division) return _nat(a.division,b.division);
+            var ag=rank(idx.grade,a.division+_SEP+a.grade), bg=rank(idx.grade,b.division+_SEP+b.grade);
+            if(ag!==bg) return ag-bg;
+            var ab=rank(idx.bunk,a.division+_SEP+a.bunk), bb=rank(idx.bunk,b.division+_SEP+b.bunk);
+            if(ab!==bb) return ab-bb;
+            if(a.bunk!==b.bunk) return _nat(a.bunk,b.bunk);
+            return _nat(a.camper,b.camper);
+        });
+    }
+
     function load(cb){
         var db=_db();
         if(!db){ if(cb)cb(); return; }
@@ -1266,7 +1308,7 @@ var CamperMail = (function(){
             .eq('camp_id',db.campId).order('created_at',{ascending:false}).limit(2000)
             .then(function(res){
                 if(res.error){ console.warn('[Live] link_camper_mail load:',res.error.message); }
-                else { _rows=(res.data||[]).map(function(r){ return { id:r.id, camper:r.camper_name, division:r.division||'', bunk:r.bunk||'', parentName:r.parent_name||'', subject:r.subject||'', body:r.body||'', status:r.status||'new', date:r.created_at }; }); }
+                else { _rows=(res.data||[]).map(function(r){ return { id:r.id, camper:r.camper_name, division:r.division||'', grade:r.grade||'', bunk:r.bunk||'', parentName:r.parent_name||'', subject:r.subject||'', body:r.body||'', status:r.status||'new', date:r.created_at }; }); }
                 if(cb)cb();
             });
     }
@@ -1280,11 +1322,17 @@ var CamperMail = (function(){
         var dv=divSel?divSel.value:'';
         var rows=_rows.filter(function(m){ if(_tab==='new'&&m.status==='printed')return false; if(_tab==='printed'&&m.status!=='printed')return false; if(dv&&m.division!==dv)return false; return true; });
         if(!rows.length){ el.innerHTML='<div class="empty-state">'+(_tab==='new'?'Nothing waiting to print — letters families write in Campistry Link appear here.':'No printed letters yet.')+'</div>'; return; }
+        // Grouped in the exact order they'll print, so what you see is the pile
+        // you'll get. A subheader marks each division · grade · bunk run.
+        rows=_sortRoute(rows);
+        var _grp=null;
         el.innerHTML='<div class="card"><div class="card-body" style="padding:0 18px;">'+rows.map(function(m){
             var d=m.date?new Date(m.date).toLocaleDateString('en-US',{month:'short',day:'numeric'}):'—';
-            var where=[m.division,m.bunk].filter(Boolean).join(' · ');
+            var where=[m.division,m.grade,m.bunk].filter(Boolean).join(' · ');
             var b=m.status==='printed'?'<span class="badge badge-ok">Printed</span>':'<span class="badge badge-warn">New</span>';
-            return '<div style="display:flex;align-items:center;gap:10px;padding:12px 0;border-bottom:1px solid var(--slate-100);">'
+            var gkey=[m.division,m.grade,m.bunk].join('|'), head='';
+            if(gkey!==_grp){ _grp=gkey; head='<div style="display:flex;align-items:center;gap:8px;padding:14px 0 6px;font-size:.72rem;font-weight:700;letter-spacing:.05em;text-transform:uppercase;color:var(--slate-500);">'+(esc(where)||'Unassigned — check placement')+'</div>'; }
+            return head+'<div style="display:flex;align-items:center;gap:10px;padding:12px 0;border-bottom:1px solid var(--slate-100);">'
               +'<input type="checkbox" '+(_sel[m.id]?'checked':'')+' onchange="CamperMail.sel(\''+esc(m.id)+'\',this.checked)" style="width:16px;height:16px;flex-shrink:0;">'
               +'<div style="flex:1;min-width:0;"><div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;"><span style="font-weight:700;">'+esc(m.camper)+'</span>'+(where?'<span style="font-size:.72rem;color:var(--slate-400);">'+esc(where)+'</span>':'')+b+'</div>'
               +'<div style="font-size:.75rem;color:var(--slate-500);margin-top:2px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">'+(m.subject?'<strong>'+esc(m.subject)+'</strong> — ':'')+esc(String(m.body).slice(0,100))+'</div></div>'
@@ -1302,18 +1350,25 @@ var CamperMail = (function(){
         el.style.cssText='position:fixed;inset:0;background:rgba(0,0,0,.4);z-index:9100;display:flex;align-items:center;justify-content:center;padding:20px;';
         el.innerHTML='<div style="background:#fff;border-radius:14px;max-width:560px;width:100%;max-height:82vh;overflow-y:auto;box-shadow:0 20px 60px rgba(0,0,0,.2);">'
           +'<div style="display:flex;align-items:center;justify-content:space-between;padding:16px 20px;border-bottom:1px solid var(--slate-200);position:sticky;top:0;background:#fff;"><span style="font-size:.92rem;font-weight:700;">Letter for '+esc(m.camper)+'</span><div style="display:flex;gap:6px;"><button class="btn btn-primary btn-sm" onclick="CamperMail.print([\''+esc(m.id)+'\']);this.closest(\'[style*=fixed]\').remove()">Print</button><button class="btn btn-secondary btn-sm" onclick="this.closest(\'[style*=fixed]\').remove()">Close</button></div></div>'
-          +'<div style="padding:18px 20px;"><div style="font-size:.74rem;color:var(--slate-400);margin-bottom:12px;">From '+esc(m.parentName||'parent')+' · '+esc(d)+([m.division,m.bunk].filter(Boolean).length?' · '+esc([m.division,m.bunk].filter(Boolean).join(' · ')):'')+'</div>'+(m.subject?'<div style="font-size:1rem;font-weight:700;margin-bottom:10px;">'+esc(m.subject)+'</div>':'')+'<div style="font-size:.9rem;line-height:1.7;color:var(--slate-800);white-space:pre-wrap;">'+esc(m.body)+'</div></div></div>';
+          +'<div style="padding:18px 20px;"><div style="font-size:.74rem;color:var(--slate-400);margin-bottom:12px;">From '+esc(m.parentName||'parent')+' · '+esc(d)+([m.division,m.grade,m.bunk].filter(Boolean).length?' · '+esc([m.division,m.grade,m.bunk].filter(Boolean).join(' · ')):'')+'</div>'+(m.subject?'<div style="font-size:1rem;font-weight:700;margin-bottom:10px;">'+esc(m.subject)+'</div>':'')+'<div style="font-size:.9rem;line-height:1.7;color:var(--slate-800);white-space:pre-wrap;">'+esc(m.body)+'</div></div></div>';
         el.addEventListener('click',function(e){ if(e.target===el) el.remove(); });
         document.body.appendChild(el);
     }
     function print(ids){
-        var letters=_rows.filter(function(m){return ids.indexOf(m.id)>=0;});
+        // Print in camp order, not the order they arrived, so the stack comes
+        // off the printer already sorted division → grade → bunk → camper. The
+        // routing strip at the top of each sheet lets counselors split the pile
+        // into per-bunk bundles at a glance without reading the whole letter.
+        var letters=_sortRoute(_rows.filter(function(m){return ids.indexOf(m.id)>=0;}));
         if(!letters.length)return;
         var camp=_campName();
         var pages=letters.map(function(m){
             var d=m.date?new Date(m.date).toLocaleDateString('en-US',{weekday:'long',month:'long',day:'numeric'}):'';
-            return '<div class="letter"><div class="lt-head"><div class="lt-camp">'+esc(camp)+' — Camper Mail</div><div class="lt-date">'+esc(d)+'</div></div>'
-              +'<div class="lt-to">To: <strong>'+esc(m.camper)+'</strong>'+(m.bunk?' &nbsp;·&nbsp; '+esc(m.bunk):'')+(m.division?' &nbsp;·&nbsp; '+esc(m.division):'')+'</div>'
+            var route=[m.division,m.grade,m.bunk].filter(Boolean).map(function(x){return esc(x);}).join('<span class="lt-route-sep">›</span>')||'Unassigned — check placement';
+            return '<div class="letter">'
+              +'<div class="lt-route">'+route+'</div>'
+              +'<div class="lt-head"><div class="lt-camp">'+esc(camp)+' — Camper Mail</div><div class="lt-date">'+esc(d)+'</div></div>'
+              +'<div class="lt-to">To: <strong>'+esc(m.camper)+'</strong></div>'
               +(m.subject?'<div class="lt-subject">'+esc(m.subject)+'</div>':'')
               +'<div class="lt-body">'+esc(m.body)+'</div>'
               +'<div class="lt-from">— From '+esc(m.parentName||'your family')+', with love ❤</div></div>';
@@ -1322,8 +1377,10 @@ var CamperMail = (function(){
         if(!w){ _toast('Allow pop-ups to print letters'); return; }
         w.document.write('<!DOCTYPE html><html><head><title>Camper Mail — '+letters.length+' letter'+(letters.length!==1?'s':'')+'</title><style>'
           +'body{font-family:Georgia,\'Times New Roman\',serif;color:#1a1a1a;margin:0;}'
-          +'.letter{padding:56px 64px;page-break-after:always;min-height:90vh;box-sizing:border-box;}'
+          +'.letter{padding:44px 64px 56px;page-break-after:always;min-height:90vh;box-sizing:border-box;}'
           +'.letter:last-child{page-break-after:auto;}'
+          +'.lt-route{font-family:Arial,Helvetica,sans-serif;font-size:15px;font-weight:bold;letter-spacing:.04em;text-transform:uppercase;color:#111;background:#f1f1f1;border:1px solid #ccc;border-radius:6px;padding:8px 14px;margin-bottom:26px;display:flex;align-items:center;gap:10px;}'
+          +'.lt-route-sep{color:#999;font-weight:normal;}'
           +'.lt-head{display:flex;justify-content:space-between;align-items:baseline;border-bottom:2px solid #ccc;padding-bottom:10px;margin-bottom:22px;}'
           +'.lt-camp{font-size:13px;letter-spacing:.12em;text-transform:uppercase;color:#666;}'
           +'.lt-date{font-size:13px;color:#666;}'
