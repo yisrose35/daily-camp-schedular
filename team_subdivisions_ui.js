@@ -447,6 +447,10 @@ function _wsK(key) {
     async function showInviteModal() {
         const subdivisions = window.AccessControl?.getSubdivisions() || [];
         const meDivisions = await getMeDivisions(false);
+        // Custom Access Groups (migration 097) are reusable roles too — an
+        // owner who built one expects it to show up right here, not only
+        // reachable later through Edit on an already-invited member.
+        const accessGroups = await fetchAccessGroups();
 
         const modal = document.createElement('div');
         modal.className = 'modal-overlay';
@@ -471,6 +475,13 @@ function _wsK(key) {
                             <option value="scheduler">Scheduler - Access to assigned divisions</option>
                             <option value="viewer">Viewer - View only, no editing</option>
                             <option value="counselor">Counselor - Campistry Lite mobile app only</option>
+                        </select>
+                    </div>
+                    <div class="form-group" id="invite-access-group-field">
+                        <label for="invite-access-group">Access Group <span style="font-weight:400;color:var(--slate-400);">— a named, reusable permission set (optional)</span></label>
+                        <select id="invite-access-group">
+                            <option value="">No group — configure apps and sections after they're invited</option>
+                            ${accessGroups.map(g => `<option value="${g.id}">${_tsuEsc(g.name)}</option>`).join('')}
                         </select>
                     </div>
                     <div class="form-group" id="subdivisions-group" style="display: none;">
@@ -525,10 +536,19 @@ function _wsK(key) {
             if (!email || !role) { errorEl.textContent = 'Please fill in all required fields'; return; }
 
             const subdivisionIds = [...modal.querySelectorAll('input[name="subdivision"]:checked')].map(cb => cb.value);
+            const accessGroupId = document.getElementById('invite-access-group')?.value || null;
 
             try {
                 const result = await window.AccessControl.inviteTeamMember(email, role, subdivisionIds);
                 if (result.error) { errorEl.textContent = result.error; return; }
+                if (accessGroupId && result.data && result.data.id && window.supabase) {
+                    const { data: agRes, error: agErr } = await window.supabase.rpc('assign_member_access_group', {
+                        p_member_id: result.data.id, p_group_id: accessGroupId
+                    });
+                    if (agErr || !agRes || !agRes.success) {
+                        errorEl.textContent = 'Invite sent, but the access group could not be assigned — set it from Edit instead.';
+                    }
+                }
                 successEl.innerHTML = `
                     <div style="margin-bottom:12px;">Invite created for <strong>${email}</strong></div>
                     <div style="display:flex;gap:8px;flex-wrap:wrap;">
@@ -909,8 +929,8 @@ function _wsK(key) {
             <div class="card-header">
                 <h2>Team & Access</h2>
                 <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;">
-                    <a href="campistry_team_access.html" class="btn-edit" style="text-decoration:none;">What each job can open &rarr;</a>
                     <a href="team_access_setup.html" class="btn-edit" style="text-decoration:none;">Manage &rarr;</a>
+                    <a href="campistry_team_access.html" class="btn-edit" style="text-decoration:none;">What each job can open &rarr;</a>
                 </div>
             </div>
             <p class="card-desc">Who's on your team, their role, and what they can access. Invite people and build Access Groups on the setup page &mdash; or set what a whole job can open, and make exceptions for individuals, on the access page.</p>

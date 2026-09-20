@@ -6232,10 +6232,14 @@ function renderStructure(){
             var rollup=_divisionHeadRollup(dn,grades);
             var dHeadChip=rollup.heads.length
                 ?rollup.heads.map(function(s){return esc(s.name);}).join(', ')
-                :(rollup.editable?'+ Assign division head':(rollup.mixed?'Set per grade below':'+ Assign per grade'));
-            var dHeadAttrs=rollup.editable
-                ?' onclick="event.stopPropagation();CampistryMe.openDivisionHeadModal(\''+je(dn)+'\')" style="cursor:pointer"'
-                :' style="cursor:default"';
+                :(rollup.mixed?'Mixed — click to set division-wide':'+ Assign division head');
+            // A division head can always be assigned directly at the division
+            // level, even when grades already have their own heads set — the
+            // rollup above only controls what's SHOWN (derived from grades
+            // when they're uniform), not whether the division-level record
+            // itself is editable. Without this, a division with grades could
+            // only ever get a head assigned per-grade.
+            var dHeadAttrs=' onclick="event.stopPropagation();CampistryMe.openDivisionHeadModal(\''+je(dn)+'\')" style="cursor:pointer"';
             var bodyId='structBody'+ix;
             var openKey='struct_'+dn;
             var isOpen=Object.prototype.hasOwnProperty.call(_accOpenState,openKey)?_accOpenState[openKey]:false;
@@ -6261,7 +6265,7 @@ function renderStructure(){
                 +'</div>'
                 +'</div>'
                 +'<div style="display:flex;gap:10px;align-items:center;flex-shrink:0">'
-                +'<span'+dHeadAttrs+' title="'+(rollup.editable?'Who gets notified for this division':'Assigned per grade below')+' " style="font-size:.74rem;'+(rollup.heads.length?'color:var(--s600)':'color:var(--me)')+';font-weight:600;white-space:nowrap">'
+                +'<span'+dHeadAttrs+' title="Who gets notified for this division — grade heads below can still override per grade" style="font-size:.74rem;'+(rollup.heads.length?'color:var(--s600)':'color:var(--me)')+';font-weight:600;white-space:nowrap">'
                 +'<span style="color:var(--s400);font-weight:600">Head:</span> '+dHeadChip+'</span>'
                 +'<button class="me-btn me-btn--ghost me-btn--sm" onclick="CampistryMe.editDiv(\''+je(dn)+'\')">Edit</button>'
                 +'<button class="me-btn me-btn--danger me-btn--sm" onclick="CampistryMe.deleteDiv(\''+je(dn)+'\')">Delete</button>'
@@ -8938,7 +8942,7 @@ function addDivisionHead(divName){
     else divisionHeads[divName].push(rec);
     save();
     renderStructure();
-    _renderDivisionHeadModalBody(divName);
+    closeModal('dynModal');
     toast((idx>=0?'Saved ':'Added ')+name);
 }
 function removeDivisionHead(divName,idx){

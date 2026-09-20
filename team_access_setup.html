@@ -55,6 +55,14 @@
                 </div>
 
                 <div class="tas-section">
+                    <div id="access-groups-card" class="dashboard-card">
+                        <div class="card-header"><h2>Access Groups</h2></div>
+                        <p class="card-desc">Named, reusable permission sets — which apps and sections a group can open.</p>
+                        <div style="text-align:center;color:var(--slate-400);padding:20px;">Loading…</div>
+                    </div>
+                </div>
+
+                <div class="tas-section">
                     <div id="subdivisions-card" class="dashboard-card">
                         <div class="card-header"><h2>Divisions</h2></div>
                         <p class="card-desc">Divisions are synced from Campistry Me.</p>
@@ -66,14 +74,6 @@
                     <div id="team-card" class="dashboard-card">
                         <div class="card-header"><h2>Team Members</h2></div>
                         <p class="card-desc">Manage who can access and edit your camp schedules.</p>
-                        <div style="text-align:center;color:var(--slate-400);padding:20px;">Loading…</div>
-                    </div>
-                </div>
-
-                <div class="tas-section">
-                    <div id="access-groups-card" class="dashboard-card">
-                        <div class="card-header"><h2>Access Groups</h2></div>
-                        <p class="card-desc">Named, reusable permission sets — which apps and sections a group can open.</p>
                         <div style="text-align:center;color:var(--slate-400);padding:20px;">Loading…</div>
                     </div>
                 </div>
@@ -184,9 +184,9 @@
 
             if (!window.TeamSubdivisionsUI) { denied(); return; }
             await window.TeamSubdivisionsUI.initialize();
+            window.TeamSubdivisionsUI.renderAccessGroupsCard(document.getElementById('access-groups-card'));
             window.TeamSubdivisionsUI.renderSubdivisionsCard(document.getElementById('subdivisions-card'));
             window.TeamSubdivisionsUI.renderTeamCard(document.getElementById('team-card'));
-            window.TeamSubdivisionsUI.renderAccessGroupsCard(document.getElementById('access-groups-card'));
         }
 
         document.addEventListener('DOMContentLoaded', function() {
