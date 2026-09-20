@@ -359,7 +359,7 @@ function init(){
     // nav()'s other targets (camperdetail, familydetail, ...) expect a
     // selected record that doesn't exist this early.
     (function(){
-        var SIDEBAR_PAGES={analytics:1,billing:1,campers:1,finance:1,hiring:1,payroll:1,registration:1,reports:1,structure:1};
+        var SIDEBAR_PAGES={analytics:1,billing:1,broadcasts:1,campers:1,finance:1,hiring:1,payroll:1,registration:1,reports:1,structure:1};
         var requested=(window.location.hash||'').replace(/^#/,'');
         nav(Object.prototype.hasOwnProperty.call(SIDEBAR_PAGES,requested)?requested:'campers');
     })();
@@ -3182,7 +3182,7 @@ function ff(label,id,val,type,opts){
 
 // ═══ RENDERERS ═══════════════════════════════════════════════════
 function render(p){
-    var m={campers:renderCampers,camperdetail:renderCamperDetailPage,staffdetail:renderStaffDetailPage,structure:renderStructure,bunkbuilder:renderBB,registration:renderRegistrationPage,hiring:renderHiringPage,leads:renderLeads,billing:renderBilling,familydetail:renderFamilyDetailPage,payroll:renderPayroll,analytics:renderAnalytics,finance:renderFinance,reports:renderReports,printsheets:renderPrintSheets};
+    var m={campers:renderCampers,camperdetail:renderCamperDetailPage,staffdetail:renderStaffDetailPage,structure:renderStructure,bunkbuilder:renderBB,registration:renderRegistrationPage,hiring:renderHiringPage,leads:renderLeads,billing:renderBilling,familydetail:renderFamilyDetailPage,payroll:renderPayroll,analytics:renderAnalytics,finance:renderFinance,reports:renderReports,printsheets:renderPrintSheets,broadcasts:renderBroadcasts};
     if(m[p])m[p]();else renderSoon(p);
 }
 
@@ -6281,9 +6281,14 @@ function renderStructure(){
                 var gBunks=gd.bunks||[];
                 var gBunksId='structGB'+ix+'_'+gix;
                 var gOpenKey='structgb_'+dn+'_'+gn;
+                // Grades default to CLOSED when a division is first opened — with
+                // several grades each carrying their own bunk chips, an
+                // all-expanded division is a wall of bunks before you've even
+                // decided which grade you came in to look at. The user's
+                // explicit expand/collapse choice (_accOpenState) still wins.
                 var gOpen=Object.prototype.hasOwnProperty.call(_accOpenState,gOpenKey)
                     ?_accOpenState[gOpenKey]
-                    :(gBunks.length<=8);
+                    :false;
                 var gCampers=Object.values(roster).filter(function(c){return c.grade===gn&&c.division===dn}).length;
                 var gHeads=divisionHeads[gn]||[];
                 var gHeadChip=gHeads.length?gHeads.map(function(s){return esc(s.name);}).join(', '):'+ Assign';
