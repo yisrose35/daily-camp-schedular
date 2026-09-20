@@ -2703,7 +2703,7 @@
         var title = document.getElementById('sessionFormTitle');
         if (title) title.textContent = 'Add Session';
         var form = document.getElementById('sessionEditForm');
-        if (form) form.style.display = 'block';
+        if (form) form.style.display = 'flex';
         var status = document.getElementById('sessionFormStatus');
         if (status) status.textContent = '';
     };
@@ -2715,7 +2715,7 @@
         var title = document.getElementById('sessionFormTitle');
         if (title) title.textContent = 'Edit Session';
         var form = document.getElementById('sessionEditForm');
-        if (form) form.style.display = 'block';
+        if (form) form.style.display = 'flex';
         var status = document.getElementById('sessionFormStatus');
         if (status) status.textContent = '';
     };
@@ -2853,12 +2853,28 @@
             wrap.innerHTML = '<span style="font-size:0.8rem; color:var(--slate-400);">Add sessions above first.</span>';
             return;
         }
+        // A plain vertical checkbox-per-label list read cramped once a camp had
+        // more than 2-3 sessions, with no visual separation between rows and no
+        // context (price/dates) to tell two similarly-named sessions apart. This
+        // renders each session as its own bordered row/card — checkbox, name,
+        // and its price + dates for context — in a responsive grid instead.
         wrap.innerHTML = _dashSessions.map(function(s) {
             var checked = selectedIds.indexOf(s.id) >= 0 ? ' checked' : '';
-            return '<label style="display:flex; align-items:center; gap:6px; font-size:0.85rem; color:var(--slate-700);">'
-                + '<input type="checkbox" value="' + _dashEsc(s.id) + '" class="bunSessionCheck"' + checked + '> ' + _dashEsc(s.name)
+            var meta = [];
+            if (s.dates) meta.push(_dashEsc(s.dates));
+            if (s.tuition) meta.push('$' + Number(s.tuition).toLocaleString());
+            var metaHtml = meta.length
+                ? '<div style="font-size:0.72rem; color:var(--slate-400); margin-top:2px;">' + meta.join(' &middot; ') + '</div>'
+                : '';
+            return '<label style="display:flex; align-items:flex-start; gap:9px; padding:9px 11px; border-radius:8px; border:1px solid var(--slate-200); background:#fff; cursor:pointer; transition:border-color .12s,background .12s;" '
+                + 'onmouseover="this.style.borderColor=\'#a78bfa\'" onmouseout="this.style.borderColor=\'var(--slate-200)\'">'
+                + '<input type="checkbox" value="' + _dashEsc(s.id) + '" class="bunSessionCheck"' + checked + ' style="margin-top:2px; flex-shrink:0;">'
+                + '<span style="min-width:0;"><span style="display:block; font-size:0.85rem; font-weight:600; color:var(--slate-700);">' + _dashEsc(s.name) + '</span>' + metaHtml + '</span>'
                 + '</label>';
         }).join('');
+        wrap.style.display = 'grid';
+        wrap.style.gridTemplateColumns = 'repeat(auto-fill, minmax(220px, 1fr))';
+        wrap.style.gap = '8px';
     }
 
     window.addBundleForm = function() {
