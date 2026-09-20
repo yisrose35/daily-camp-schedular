@@ -1695,6 +1695,11 @@ function managePaymentMethods(){
     h+='<p style="font-size:.78rem;color:var(--s400);margin:0 0 14px">'
       +'A method you turn off still appears on past records, so last season\u2019s '
       +'payments keep reading correctly.</p>';
+    h+='<p style="font-size:.78rem;color:var(--s500);background:var(--s50);border-radius:var(--r);'
+      +'padding:9px 12px;margin:0 0 14px">'
+      +'\ud83d\udcb3 <strong>Already have your own card processor</strong> (Banquest, Sola/Cardknox, etc.)? '
+      +'Bring-Your-Own-Processor is supported \u2014 it isn\u2019t self-service here, so '
+      +'<strong>contact Campistry support</strong> to get it connected.</p>';
 
     (P.CONTEXTS||[]).forEach(function(ctx){
         var all=(P.METHODS||[]).filter(function(m){return m.contexts.indexOf(ctx)>=0});
@@ -18002,7 +18007,7 @@ function monthlyPlan(famKey,planId){
         else{ plans.push(newPlan); }
         save();closeModal('dynModal');if(curPage==='familydetail')renderFamilyDetailPage();else renderBilling();
         toast('Payment plan saved — '+insts.length+' payment'+(insts.length>1?'s':'')+(auto?', autopay on':''));
-    },{maxWidth:920,maxHeight:'94vh',minHeight:'80vh'});
+    },{maxWidth:920,maxHeight:'94vh',minHeight:'80vh',saveLabel:existingPlan?'Update Plan':'Create Plan'});
     _mpSwitchTab(startTab);
 }
 function _mpSwitchTab(tab){
