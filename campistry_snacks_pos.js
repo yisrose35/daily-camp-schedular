@@ -104,10 +104,41 @@ function _txSig(t) { return [t.date, t.time, t.camper, t.type, t.amount, t.items
 // rules. Two copies exist because the POS register loads without the manager, and
 // they decide what every canteen balance is, so tests/canteen_identity.test.js
 // asserts they are character-identical once comments are stripped.
-function _reconcileBalances(data) {
-    if (!data || !data.accounts) return data;
-    var byId = {}, byNameNoId = {}, byName = {};
-    (data.transactions || []).forEach(function(t) {
+// ── Ledger compaction ───────────────────────────────────────────────────────
+// The transactions array is prepend-only and, until this, unbounded: every
+// register sale, office save and parent deposit rewrote the whole season, and
+// every reader, sync and realtime event paid for it. It could not simply be
+// trimmed, because balances are Σ of that very array — trim it and the next
+// save rewrites every balance in the camp. So compaction FOLDS instead: rows
+// older than a watermark are summed into `ledgerCarry` (the exact three
+// buckets _reconcileBalances attributes by, so a recreated account finds its
+// history by the same rules as before) and removed, and `ledgerCompactedThrough`
+// records the watermark. Balance = carry + Σ(live rows) — identical by
+// construction, and compactSnacksLedger refuses to save if it is not.
+//
+// Nothing is folded that is not already archived: migration 203's trigger
+// copies every transaction the cloud ever sees into canteen_transactions, and
+// compaction verifies that before dropping a row. The archive is the floor.
+//
+// The merge has to know about the watermark, or a stale tab whose local copy
+// still holds folded rows would union them straight back in — and, keeping the
+// cloud's carry as well, count them twice. _mergeCompaction keeps the carry
+// that belongs to the higher watermark and drops anything at or below it.
+// This block is IDENTICAL in campistry_snacks_pos.js, and a test holds the two
+// copies together the way one already holds the two _reconcileBalances.
+function _txFolded(t, w) {
+    if (!w || !t) return false;
+    var d = t.date;
+    // Only a well-formed date can be compared; a legacy row with none is never
+    // folded and never dropped, so it can never be lost by either.
+    return typeof d === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(d) && d <= w;
+}
+function _ledgerBuckets(transactions, carry) {
+    var c = carry || {};
+    var byId = Object.assign({}, c.byId || {});
+    var byNameNoId = Object.assign({}, c.byNameNoId || {});
+    var byName = Object.assign({}, c.byName || {});
+    (transactions || []).forEach(function(t) {
         if (!t) return;
         var amt = parseFloat(t.amount) || 0;
         var signed = (t.type === 'credit' ? amt : -amt);
@@ -118,6 +149,23 @@ function _reconcileBalances(data) {
             if (!hasId) byNameNoId[t.camper] = (byNameNoId[t.camper] || 0) + signed;
         }
     });
+    return { byId: byId, byNameNoId: byNameNoId, byName: byName };
+}
+function _mergeCompaction(merged, tx, cloud, local) {
+    var cw = (cloud && cloud.ledgerCompactedThrough) || '';
+    var lw = (local && local.ledgerCompactedThrough) || '';
+    var w = cw >= lw ? cw : lw;
+    if (!w) return tx;
+    merged.ledgerCompactedThrough = w;
+    merged.ledgerCarry = ((cw >= lw ? cloud : local).ledgerCarry) || {};
+    return tx.filter(function(t) { return !_txFolded(t, w); });
+}
+
+function _reconcileBalances(data) {
+    if (!data || !data.accounts) return data;
+    // Seeded from the compaction carry, so a folded row still counts.
+    var b = _ledgerBuckets(data.transactions, data.ledgerCarry);
+    var byId = b.byId, byNameNoId = b.byNameNoId, byName = b.byName;
     Object.keys(data.accounts).forEach(function(name) {
         var a = data.accounts[name];
         if (!a) return;
@@ -176,7 +224,7 @@ function cloudSaveSnacks(data) {
                         var cloudAr = cloud.accounts && cloud.accounts[name] && cloud.accounts[name].autoReload;
                         if (cloudAr !== undefined) merged.accounts[name].autoReload = cloudAr;
                     });
-                    merged.transactions = tx;
+                    merged.transactions = _mergeCompaction(merged, tx, cloud, data);
                     _reconcileBalances(merged);
                 }
                 _dbg('about to upsert merged inventory deltas:', _invSummary(merged));
