@@ -510,7 +510,7 @@ function fakeDb() {
 
 test('_subscribeParentMsgs opens one filtered .on() per camp', () => {
     const { db, chans } = fakeDb();
-    const { fn, ctx } = loadFn('_subscribeParentMsgs', { db });
+    const { fn, ctx } = loadFn('_subscribeParentMsgs', { window: { CAMPISTRY_PARENT_REALTIME: true }, db });
     fn(['camp-a', 'camp-b']);
     assert.strictEqual(chans.length, 1, 'one channel');
     assert.strictEqual(chans[0].ons.length, 2, 'one .on() per camp');
@@ -527,7 +527,7 @@ test('_subscribeParentMsgs opens one filtered .on() per camp', () => {
 
 test('_subscribeParentMsgs dedupes the primary camp coming back a second time', () => {
     const { db, chans } = fakeDb();
-    const { fn } = loadFn('_subscribeParentMsgs', { db });
+    const { fn } = loadFn('_subscribeParentMsgs', { window: { CAMPISTRY_PARENT_REALTIME: true }, db });
     fn(['camp-a', 'camp-a', 'camp-b', 'camp-a']);
     assert.deepStrictEqual(chans[0].ons.map(o => o.filter),
         ['camp_id=eq.camp-a', 'camp_id=eq.camp-b']);
@@ -535,14 +535,14 @@ test('_subscribeParentMsgs dedupes the primary camp coming back a second time', 
 
 test('_subscribeParentMsgs drops null and empty camp ids', () => {
     const { db, chans } = fakeDb();
-    const { fn } = loadFn('_subscribeParentMsgs', { db });
+    const { fn } = loadFn('_subscribeParentMsgs', { window: { CAMPISTRY_PARENT_REALTIME: true }, db });
     fn([null, 'camp-a', undefined, '']);
     assert.deepStrictEqual(chans[0].ons.map(o => o.filter), ['camp_id=eq.camp-a']);
 });
 
 test('_subscribeParentMsgs with no usable camp opens nothing', () => {
     const { db, chans } = fakeDb();
-    const { fn } = loadFn('_subscribeParentMsgs', { db });
+    const { fn } = loadFn('_subscribeParentMsgs', { window: { CAMPISTRY_PARENT_REALTIME: true }, db });
     fn([]); fn([null]); fn(undefined);
     assert.strictEqual(chans.length, 0,
         'a channel with no .on() would be a socket that can never deliver anything');
@@ -550,7 +550,7 @@ test('_subscribeParentMsgs with no usable camp opens nothing', () => {
 
 test('_subscribeParentMsgs re-subscribing to the same camps is a no-op', () => {
     const { db, chans, removed } = fakeDb();
-    const { fn } = loadFn('_subscribeParentMsgs', { db });
+    const { fn } = loadFn('_subscribeParentMsgs', { window: { CAMPISTRY_PARENT_REALTIME: true }, db });
     fn(['camp-a']);
     fn(['camp-a']);
     assert.strictEqual(chans.length, 1, 'must not tear down a working socket for nothing');
@@ -559,7 +559,7 @@ test('_subscribeParentMsgs re-subscribing to the same camps is a no-op', () => {
 
 test('_subscribeParentMsgs widens to a second camp, tearing the old channel down', () => {
     const { db, chans, removed } = fakeDb();
-    const { fn } = loadFn('_subscribeParentMsgs', { db });
+    const { fn } = loadFn('_subscribeParentMsgs', { window: { CAMPISTRY_PARENT_REALTIME: true }, db });
     fn(['camp-a']);
     fn(['camp-a', 'camp-b']);
     assert.strictEqual(chans.length, 2);
@@ -573,23 +573,23 @@ test('_subscribeParentMsgs survives a realtime client that throws', () => {
     const warns = [];
     const db = { channel() { throw new Error('websocket refused'); } };
     const { fn } = loadFn('_subscribeParentMsgs',
-        { db, console: { warn: (...a) => warns.push(a) } });
+        { window: { CAMPISTRY_PARENT_REALTIME: true }, db, console: { warn: (...a) => warns.push(a) } });
     assert.doesNotThrow(() => fn(['camp-a']),
         'a dead socket must leave the 30s poll working, not break auth');
     assert.strictEqual(warns.length, 1);
 });
 
 test('_subscribeParentMsgs does nothing when realtime is unavailable', () => {
-    const { fn } = loadFn('_subscribeParentMsgs', { db: {} });
+    const { fn } = loadFn('_subscribeParentMsgs', { window: { CAMPISTRY_PARENT_REALTIME: true }, db: {} });
     assert.doesNotThrow(() => fn(['camp-a']));
-    const { fn: fn2 } = loadFn('_subscribeParentMsgs', { db: null });
+    const { fn: fn2 } = loadFn('_subscribeParentMsgs', { window: { CAMPISTRY_PARENT_REALTIME: true }, db: null });
     assert.doesNotThrow(() => fn2(['camp-a']));
 });
 
 test('the callback wired into each .on() goes through the debounce', () => {
     const { db, chans } = fakeDb();
     let soon = 0, now = 0;
-    const { fn } = loadFn('_subscribeParentMsgs', {
+    const { fn } = loadFn('_subscribeParentMsgs', { window: { CAMPISTRY_PARENT_REALTIME: true },
         db,
         _syncMessagesSoon: () => { soon++; },
         _syncMessagesFromCloud: () => { now++; },
@@ -607,7 +607,7 @@ test('the callback wired into each .on() goes through the debounce', () => {
         },
         removeChannel() {},
     };
-    const { fn: fn3 } = loadFn('_subscribeParentMsgs', {
+    const { fn: fn3 } = loadFn('_subscribeParentMsgs', { window: { CAMPISTRY_PARENT_REALTIME: true },
         db: db2,
         _syncMessagesSoon: () => { soon++; },
         _syncMessagesFromCloud: () => { now++; },
@@ -620,6 +620,26 @@ test('the callback wired into each .on() goes through the debounce', () => {
     void cb;
 });
 
+test('parent Realtime is off by default: no channel is opened without the flag', () => {
+    // Every parent websocket competes with the OFFICE for the plan's Realtime
+    // connection budget, which Live pickup and notifications depend on. The
+    // poll (30s, plus tab focus) delivers everything; instant delivery is a
+    // nicety that hundreds of parents cannot afford. Opt back in with
+    // window.CAMPISTRY_PARENT_REALTIME = true.
+    const { db, chans, removed } = fakeDb();
+    const { fn, ctx } = loadFn('_subscribeParentMsgs', { db });          // no flag
+    fn(['camp-a', 'camp-b']);
+    assert.strictEqual(chans.length, 0, 'no websocket without the opt-in');
+    assert.strictEqual(removed.length, 0);
+    assert.strictEqual(ctx.window._parentMsgCamps, undefined);
+    // and the gate is the FIRST thing the function does, before it touches db
+    const src = sourceOf('_subscribeParentMsgs');
+    assert.ok(src.indexOf('window.CAMPISTRY_PARENT_REALTIME !== true') < src.indexOf('db.channel'),
+        'the flag must be checked before any Realtime work');
+    // the 30s poll is unconditional — it is what carries messages now
+    assert.match(PARENT, /window\._msgPollTimer=setInterval\(function\(\)\{ if\(document\.visibilityState!=='hidden'\) _syncMessagesFromCloud\(\); \}, 30000\);/);
+});
+
 test('the .on() callback falls back to a direct read if the debounce is missing', () => {
     const kept = [];
     let now = 0;
@@ -628,7 +648,7 @@ test('the .on() callback falls back to a direct read if the debounce is missing'
         removeChannel() {},
     };
     const { fn } = loadFn('_subscribeParentMsgs',
-        { db, _syncMessagesFromCloud: () => { now++; } });
+        { window: { CAMPISTRY_PARENT_REALTIME: true }, db, _syncMessagesFromCloud: () => { now++; } });
     fn(['camp-a']);
     kept[0]();
     assert.strictEqual(now, 1, 'losing the debounce must not silence live messages');

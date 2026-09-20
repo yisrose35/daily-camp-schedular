@@ -5629,8 +5629,17 @@ if (window.pdfjsLib) { window.pdfjsLib.GlobalWorkerOptions.workerSrc = 'pdfjs-di
     // link_messages stores whatever case the sender typed and the RLS policy
     // compares with lower() on both sides — an `eq` filter would silently miss
     // a row written as Parent@Example.com. camp_id has no such hazard.
+    // Parent Realtime is OFF by default. It only ever bought instant delivery
+    // of a camp message instead of delivery within the 30-second poll (or on
+    // the next tab focus, which also syncs) — and every parent holding a
+    // websocket competes with the OFFICE for the project's per-plan Realtime
+    // connection budget, which Live pickup, notifications and cross-tab sync
+    // genuinely depend on. Hundreds of parents would exhaust it before the
+    // office got a socket. Set window.CAMPISTRY_PARENT_REALTIME = true (before
+    // this script) to turn it back on, e.g. on a plan with headroom.
     function _subscribeParentMsgs(campIds) {
         try {
+            if (window.CAMPISTRY_PARENT_REALTIME !== true) return;
             if (typeof db === 'undefined' || !db || !db.channel) return;
             var ids = (campIds || []).filter(function(v){ return !!v; });
             // Dedupe: _augmentOtherCamps can hand back the primary camp again.
