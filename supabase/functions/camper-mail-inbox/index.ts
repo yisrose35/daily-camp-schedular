@@ -14,19 +14,25 @@
 //
 // ─────────────────────────────────────────────────────────────────────────────
 // This endpoint is public (Resend is not a Supabase caller), so it is
-// authenticated by three independent checks:
+// authenticated by the Svix signature and a routing token, then matched:
 //
 //   1. Svix signature over the RAW body — proves Resend sent it. The only
 //      check that returns non-200; an unsigned request is not worth a retry.
 //   2. The routing token in the To: address — proves which camp.
-//   3. The From: address matched against the camp's own parent list — this is
-//      both the anti-spam gate (a public address otherwise fills the print
-//      queue with junk) and what pins the letter to the right child.
+//   3. Which child: FIRST the camper code the parent typed —
+//      <camp number>-<camper id> in the subject/body — which pins the letter to
+//      the right child regardless of which address it came from (same reference
+//      format as the deposit memo, migration 149); then the From: address
+//      against the camp's parent list.
 //
-// Once the signature passes it always answers 200, including on a sender that
-// isn't a known parent or a letter it can't pin to a child: a non-2xx makes
-// Resend redeliver, and the fingerprint would dedupe it but a webhook that is
-// loudly "failing" while behaving correctly wastes far more time than a log.
+// A letter that can't be pinned to a child is stored as '(unassigned)' for the
+// office to place, never dropped. A camp that gets flooded can turn on the
+// known-parents-only gate, after which mail from an unknown address with no
+// valid code is dropped instead.
+//
+// Once the signature passes it always answers 200: a non-2xx makes Resend
+// redeliver, and the fingerprint would dedupe it but a webhook that is loudly
+// "failing" while behaving correctly wastes far more time than a log.
 //
 // Env: SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY, CAMPER_MAIL_WEBHOOK_SECRET,
 //      RESEND_API_KEY, (optional) RESEND_RECEIVING_URL
@@ -278,24 +284,11 @@ serve(async (req) => {
     return json({ ok: true, skipped: "unknown_token" });
   }
   const campId = camp.campId as string;
-  const knownParentsOnly = camp.knownParentsOnly !== false;
+  const campNumber = String(camp.campNumber || "").replace(/\D/g, "").replace(/^0+/, "");
+  const knownParentsOnly = camp.knownParentsOnly === true;
 
   const sender = fromParties[0] || { email: "", name: "" };
   const senderEmail = sender.email;
-
-  // Which child? Match the sender against the camp's parent list.
-  const { data: cand, error: candErr } = await service.rpc("_camper_mail_candidates", {
-    p_camp_id: campId,
-    p_sender_email: senderEmail,
-  });
-  const candidates: Array<any> = (!candErr && cand?.success && Array.isArray(cand.candidates))
-    ? cand.candidates : [];
-
-  // Anti-spam gate: an unknown sender is dropped when known-parents-only is on.
-  if (knownParentsOnly && candidates.length === 0) {
-    console.log(`[camper-mail-inbox] camp ${campId}: sender ${senderEmail} not a known parent — dropped`);
-    return json({ ok: true, skipped: "sender_not_a_known_parent" });
-  }
 
   // Body: inline if present, otherwise fetched. Prefer text; fall back to HTML.
   let text = pick(data, "text", "plain");
@@ -312,11 +305,50 @@ serve(async (req) => {
     return json({ ok: true, skipped: "empty_body" });
   }
 
-  // Resolve the child. One candidate → assign. Several → the name the parent
-  // wrote decides, else it's stored unassigned for the office to place.
+  // ── who is this letter for? ────────────────────────────────────────────────
+  // First the camper code the parent typed — <camp number>-<camper id>. It
+  // works no matter which email address the letter came from, and the camp
+  // number must match this camp's own before the second half is read as a
+  // camper at all (a stray "718-555" or a date can't misfile a letter). Same
+  // reference format as the deposit memo (migration 149).
   let chosen: any = null;
-  if (candidates.length === 1) chosen = candidates[0];
-  else if (candidates.length > 1) chosen = pinByName(candidates, subject + "\n" + body);
+  let hadValidCode = false;
+  if (campNumber) {
+    const re = /([0-9]{3,6})\s*[-–—]\s*([0-9]{1,6})/g;
+    let mm: RegExpExecArray | null;
+    const hay = subject + "\n" + body;
+    while ((mm = re.exec(hay)) !== null) {
+      if (mm[1].replace(/^0+/, "") !== campNumber) continue;
+      const byCode = await service.rpc("_camper_mail_by_camper_number", {
+        p_camp_id: campId,
+        p_camper_number: mm[2],
+      });
+      if (!byCode.error && byCode.data?.success && byCode.data.found) {
+        chosen = byCode.data;
+        hadValidCode = true;
+        break;
+      }
+    }
+  }
+
+  // No code match → the sender's email against the camp's parent list. This is
+  // also the spam gate: with known-parents-only ON, mail from an unknown address
+  // and no valid code is dropped. OFF (the default), it's kept as unassigned.
+  let candidates: Array<any> = [];
+  if (!chosen) {
+    const { data: cand, error: candErr } = await service.rpc("_camper_mail_candidates", {
+      p_camp_id: campId,
+      p_sender_email: senderEmail,
+    });
+    candidates = (!candErr && cand?.success && Array.isArray(cand.candidates)) ? cand.candidates : [];
+    if (candidates.length === 1) chosen = candidates[0];
+    else if (candidates.length > 1) chosen = pinByName(candidates, subject + "\n" + body);
+  }
+
+  if (!chosen && knownParentsOnly && candidates.length === 0 && !hadValidCode) {
+    console.log(`[camper-mail-inbox] camp ${campId}: unknown sender ${senderEmail}, no code — dropped`);
+    return json({ ok: true, skipped: "sender_not_a_known_parent" });
+  }
 
   const parentName = (sender.name && sender.name.trim())
     || (senderEmail ? senderEmail.split("@")[0] : "");

@@ -28,12 +28,18 @@ CREATE TABLE IF NOT EXISTS camp_camper_mail_settings (
     camp_id             uuid PRIMARY KEY REFERENCES camps(id) ON DELETE CASCADE,
     enabled             boolean NOT NULL DEFAULT true,
     inbound_token       text    NOT NULL UNIQUE,
-    -- The anti-spam gate. When true (default), only mail whose From address is
-    -- a known parent email for this camp is accepted; anything else is dropped
-    -- by the edge function without ever creating a row. A public inbound
-    -- address otherwise fills the print queue with junk. A camp can turn this
-    -- off briefly while testing, when it wants to see anything at all arrive.
-    known_parents_only  boolean NOT NULL DEFAULT true,
+    -- The parent's camper code lives on the camp number: a letter is matched by
+    -- <camp number>-<camper id> in the subject/body regardless of which email
+    -- it came from (mirrors the deposit reference, migration 149). Seeded from
+    -- the camp's deposit number when it has one, so a family's code is the same
+    -- in a bank memo and an email subject.
+    camp_number         text    NOT NULL DEFAULT '',
+    -- Spam gate, OFF by default: an email that can't be pinned to a child (no
+    -- code, unknown sender) is stored as '(unassigned)' for the office to place,
+    -- never dropped — losing a real letter is worse than a junk row a human can
+    -- delete. A camp that gets flooded can turn this ON, and then only mail from
+    -- a known parent (or carrying a valid code) is kept.
+    known_parents_only  boolean NOT NULL DEFAULT false,
     created_at          timestamptz NOT NULL DEFAULT now(),
     updated_at          timestamptz NOT NULL DEFAULT now()
 );
@@ -41,6 +47,12 @@ CREATE TABLE IF NOT EXISTS camp_camper_mail_settings (
 ALTER TABLE camp_camper_mail_settings ENABLE ROW LEVEL SECURITY;
 -- No client-facing policies — every read/write goes through the RPCs below,
 -- same as camp_deposit_settings.
+
+-- Idempotent add for a table created before the code column existed.
+ALTER TABLE camp_camper_mail_settings ADD COLUMN IF NOT EXISTS camp_number text NOT NULL DEFAULT '';
+
+CREATE UNIQUE INDEX IF NOT EXISTS camp_camper_mail_number_uq
+    ON camp_camper_mail_settings (camp_number) WHERE camp_number <> '';
 
 -- ─── 2. link_camper_mail additions ──────────────────────────────────────────
 -- `source` distinguishes a letter typed in Link from one that arrived by email
@@ -72,6 +84,62 @@ AS $$
     );
 $$;
 
+-- ─── 3b. camp number (the guard half of a camper code) ──────────────────────
+-- Four digits, unique across camps, assigned once. Reused from the camp's
+-- deposit number when it has one, so <camp>-<camper> reads the same wherever a
+-- family sees it. Widens to five digits rather than fail — a camp with no
+-- number can't be reached by code at all.
+CREATE OR REPLACE FUNCTION public._camper_mail_assign_camp_number(p_camp_id uuid)
+RETURNS text
+LANGUAGE plpgsql
+SECURITY DEFINER
+SET search_path = public, pg_catalog
+AS $$
+DECLARE
+    v_existing text;
+    v_seed     text;
+    v_try      text;
+    i          integer := 0;
+BEGIN
+    SELECT camp_number INTO v_existing FROM camp_camper_mail_settings WHERE camp_id = p_camp_id;
+    IF COALESCE(v_existing, '') <> '' THEN RETURN v_existing; END IF;
+
+    -- Reuse the deposit number if this camp already has one.
+    BEGIN
+        SELECT camp_number INTO v_seed FROM camp_deposit_settings
+         WHERE camp_id = p_camp_id AND COALESCE(camp_number, '') <> '';
+    EXCEPTION WHEN undefined_table OR undefined_column THEN
+        v_seed := NULL;
+    END;
+    IF COALESCE(v_seed, '') <> '' THEN
+        BEGIN
+            UPDATE camp_camper_mail_settings SET camp_number = v_seed, updated_at = now()
+             WHERE camp_id = p_camp_id;
+            RETURN v_seed;
+        EXCEPTION WHEN unique_violation THEN
+            NULL; -- extremely unlikely; fall through and mint a fresh one
+        END;
+    END IF;
+
+    LOOP
+        i := i + 1;
+        IF i <= 40 THEN
+            v_try := lpad((1000 + floor(random() * 9000))::int::text, 4, '0');
+        ELSE
+            v_try := lpad((10000 + floor(random() * 90000))::int::text, 5, '0');
+        END IF;
+        BEGIN
+            UPDATE camp_camper_mail_settings SET camp_number = v_try, updated_at = now()
+             WHERE camp_id = p_camp_id;
+            RETURN v_try;
+        EXCEPTION WHEN unique_violation THEN
+            IF i > 80 THEN RETURN ''; END IF;
+        END;
+    END LOOP;
+END;
+$$;
+REVOKE ALL ON FUNCTION public._camper_mail_assign_camp_number(uuid) FROM public, anon, authenticated;
+
 -- ─── 4. get settings (owner/admin) — mints the token on first use ────────────
 CREATE OR REPLACE FUNCTION public.get_camper_mail_inbox_settings(p_camp_id uuid)
 RETURNS jsonb
@@ -90,12 +158,14 @@ BEGIN
     VALUES (p_camp_id, replace(gen_random_uuid()::text, '-', ''))
     ON CONFLICT (camp_id) DO NOTHING;
 
+    PERFORM _camper_mail_assign_camp_number(p_camp_id);
     SELECT * INTO v_row FROM camp_camper_mail_settings WHERE camp_id = p_camp_id;
 
     RETURN jsonb_build_object(
         'success', true,
         'enabled', v_row.enabled,
         'inboundToken', v_row.inbound_token,
+        'campNumber', v_row.camp_number,
         'knownParentsOnly', v_row.known_parents_only
     );
 END;
@@ -150,6 +220,7 @@ AS $$
 DECLARE
     v_token text;
     v_on    boolean;
+    v_num   text;
 BEGIN
     IF NOT EXISTS (
         SELECT 1 FROM link_parent_invites
@@ -161,14 +232,15 @@ BEGIN
         RETURN jsonb_build_object('success', false, 'error', 'not_authorized');
     END IF;
 
-    SELECT inbound_token, enabled INTO v_token, v_on
+    SELECT inbound_token, enabled, camp_number INTO v_token, v_on, v_num
       FROM camp_camper_mail_settings WHERE camp_id = p_camp_id;
 
     IF v_token IS NULL OR v_on IS NOT TRUE THEN
         RETURN jsonb_build_object('success', true, 'available', false);
     END IF;
 
-    RETURN jsonb_build_object('success', true, 'available', true, 'inboundToken', v_token);
+    RETURN jsonb_build_object('success', true, 'available', true,
+                              'inboundToken', v_token, 'campNumber', COALESCE(v_num, ''));
 END;
 $$;
 
@@ -192,11 +264,63 @@ BEGIN
     RETURN jsonb_build_object(
         'success', true,
         'campId', v_row.camp_id,
+        'campNumber', v_row.camp_number,
         'knownParentsOnly', v_row.known_parents_only
     );
 END;
 $$;
 REVOKE ALL ON FUNCTION public._camper_mail_camp_for_token(text) FROM public, anon, authenticated;
+
+-- ─── 7b. resolve a camper code (service role only) ──────────────────────────
+-- The parent puts <camp number>-<camper id> in the subject/body, so a letter is
+-- pinned to the right child no matter which email it came from. The edge
+-- function has already checked the camp-number half against the camp's own
+-- number; this resolves the camper-id half against the roster in camp_state_kv,
+-- the same read-only source the deposit inbox uses. Leading zeros are ignored
+-- on both sides so "0057" and "57" are the same camper.
+CREATE OR REPLACE FUNCTION public._camper_mail_by_camper_number(
+    p_camp_id        uuid,
+    p_camper_number  text
+)
+RETURNS jsonb
+LANGUAGE plpgsql
+SECURITY DEFINER
+SET search_path = public, pg_catalog
+AS $$
+DECLARE
+    v_blob jsonb;
+    v_want text := ltrim(regexp_replace(coalesce(p_camper_number, ''), '\D', '', 'g'), '0');
+    rec    RECORD;
+    v_cid  text;
+BEGIN
+    IF v_want = '' THEN
+        RETURN jsonb_build_object('success', true, 'found', false);
+    END IF;
+
+    SELECT value INTO v_blob FROM camp_state_kv
+     WHERE camp_id = p_camp_id AND key = 'campistryMe';
+    IF v_blob IS NULL THEN
+        RETURN jsonb_build_object('success', true, 'found', false);
+    END IF;
+
+    FOR rec IN SELECT key AS name, value AS c
+                 FROM jsonb_each(COALESCE(v_blob -> 'roster', '{}'::jsonb))
+    LOOP
+        v_cid := ltrim(regexp_replace(coalesce(rec.c ->> 'camperId', ''), '\D', '', 'g'), '0');
+        IF v_cid <> '' AND v_cid = v_want THEN
+            RETURN jsonb_build_object('success', true, 'found', true,
+                'name',     COALESCE(NULLIF(btrim(rec.c ->> 'displayName'), ''),
+                                     regexp_replace(rec.name, '\s#\d+$', '')),
+                'division', COALESCE(rec.c ->> 'division', ''),
+                'grade',    COALESCE(rec.c ->> 'grade', ''),
+                'bunk',     COALESCE(rec.c ->> 'bunk', ''));
+        END IF;
+    END LOOP;
+
+    RETURN jsonb_build_object('success', true, 'found', false);
+END;
+$$;
+REVOKE ALL ON FUNCTION public._camper_mail_by_camper_number(uuid, text) FROM public, anon, authenticated;
 
 -- ─── 8. which campers does this sender's email cover? (service role only) ─────
 -- The From: address is matched against parent emails on the camp's invites.

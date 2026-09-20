@@ -1323,7 +1323,8 @@ var CamperMail = (function(){
         return '<div class="card" style="margin-bottom:14px;"><div class="card-body" style="display:flex;align-items:center;gap:12px;flex-wrap:wrap;">'
           +'<div style="flex:1;min-width:200px;"><div style="font-size:.72rem;font-weight:700;text-transform:uppercase;letter-spacing:.05em;color:var(--slate-500);margin-bottom:4px;">Families can email letters here</div>'
           +'<div style="font-family:ui-monospace,Menlo,monospace;font-size:.92rem;font-weight:700;color:var(--slate-800);word-break:break-all;">'+esc(addr)+'</div>'
-          +'<div style="font-size:.72rem;color:var(--slate-400);margin-top:4px;">Any letter a parent emails here lands in this list, ready to print — matched to their camper automatically.</div></div>'
+          +'<div style="font-size:.72rem;color:var(--slate-400);margin-top:4px;">Any letter a parent emails here lands in this list, ready to print — matched to their camper automatically.</div>'
+          +((_settings&&_settings.campNumber)?'<div style="font-size:.72rem;color:var(--slate-400);margin-top:6px;">Emailing from a different address? Families just add their camper code — <strong style="color:var(--slate-600);">'+esc(_settings.campNumber)+'-&lt;camper #&gt;</strong> — to the subject or first line, and it still reaches the right child.</div>':'')+'</div>'
           +'<button class="btn btn-secondary btn-sm" onclick="CamperMail.copyAddress()">Copy</button>'
           +'</div></div>';
     }

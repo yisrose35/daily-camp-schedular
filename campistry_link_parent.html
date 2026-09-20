@@ -625,6 +625,7 @@
             <code id="mailEmailAddr" style="font-size:.9rem;font-weight:700;background:var(--surface-2,#f1f5f9);padding:8px 12px;border-radius:8px;word-break:break-all;"></code>
             <button class="btn btn-secondary" onclick="_copyMailEmail()">Copy</button>
         </div>
+        <div id="mailEmailCodes" style="margin-top:12px;"></div>
     </div>
 
     <div class="lk-card" style="margin-top:16px;">
@@ -4271,9 +4272,25 @@ function _renderMailEmailOption(){
         if(d&&d.success&&d.available&&d.inboundToken){
             var addr='letters+'+d.inboundToken+'@'+(window.CAMPISTRY_INBOUND_DOMAIN||'inbound.campistry.org');
             var a=document.getElementById('mailEmailAddr'); if(a)a.textContent=addr;
+            _renderMailCodes(cid,d.campNumber||'');
             card.style.display='';
         }
     },function(){});
+}
+// Each of this parent's campers at this camp gets a code — <camp number>-<camper
+// id> — that pins an email to them from ANY address. Shown so a parent emailing
+// from a work or shared inbox can still route the letter to the right child.
+function _renderMailCodes(cid,campNumber){
+    var box=document.getElementById('mailEmailCodes'); if(!box) return;
+    box.innerHTML='';
+    if(!campNumber) return;
+    var kids=(children||[]).filter(function(c){ return c.campId===cid && String(c.id||'').replace(/\D/g,''); });
+    if(!kids.length) return;
+    box.innerHTML='<div style="font-size:.76rem;color:var(--text-muted);margin-bottom:6px;">Emailing from a different address? Put your camper’s code in the subject or first line:</div>'
+      +kids.map(function(c){
+          var code=campNumber+'-'+String(c.id).replace(/\D/g,'');
+          return '<div style="display:flex;align-items:center;gap:8px;margin:4px 0;"><code style="font-size:.86rem;font-weight:700;background:var(--surface-2,#f1f5f9);padding:5px 10px;border-radius:6px;">'+code+'</code><span style="font-size:.8rem;color:var(--text-muted);">'+(c.name?String(c.name).replace(/[<>&]/g,''):'')+'</span></div>';
+      }).join('');
 }
 function _copyMailEmail(){ var a=document.getElementById('mailEmailAddr'); if(!a||!a.textContent)return; try{ navigator.clipboard.writeText(a.textContent); toast('Address copied'); }catch(e){ toast(a.textContent); } }
 

@@ -21,14 +21,19 @@ Parent emails a letter from Gmail
 letters+<token>@<your inbound domain>        ← Resend receives it
         ↓  email.received webhook
 camper-mail-inbox  (Supabase edge function)
-        ↓  verify signature → which camp (token) → which child (sender email)
+        ↓  verify signature → which camp (token) → which child
 link_camper_mail table   (source = 'email')
         ↓
-  sender is a known parent, one child      → stored, auto-assigned
-  sender known, several children           → the name in the subject/first line decides
+  camper code in subject/body              → assigned to that child, from ANY address
+  known parent, one child                  → auto-assigned
+  known parent, several children           → the name in the subject/first line decides
   can't be pinned to a child               → stored '(unassigned)', office assigns in one click
-  sender is NOT a known parent             → dropped (anti-spam gate)
 ```
+
+**Nothing is dropped by default** — a letter that can't be matched is stored as
+`(unassigned)` for the office to place. A camp that gets flooded with junk can
+turn on the *Known parents only* gate, after which mail from an unknown address
+with no valid code is dropped instead.
 
 Emailed letters land in the same table (migration 015) as Link letters, so they
 appear together in Live with no separate screen. `source = 'email'` only drives
@@ -38,21 +43,28 @@ the "✉ Email" tag and the **Assign** button.
 
 ## How a letter is matched to a camper
 
-The one hard problem is *which child is this for*. Two signals do it, both from
-data the camp already has (`link_parent_invites`, migration 008):
+The one hard problem is *which child is this for*. Three signals, tried in order:
 
-1. **The sender's email** is matched against the parent emails on the camp's
-   invites. This is also the **anti-spam gate** — with *Known parents only* on
-   (the default), mail from an address the camp doesn't recognise is dropped
-   without ever creating a row. A public address otherwise fills the print queue
-   with junk.
-2. **The camper's name** in the subject or first line, used only when one parent
-   has more than one child at camp. One child → auto-assigned. Several, and the
-   name decides; ambiguous or missing → stored `(unassigned)` for the office.
+1. **The camper code** — `<camp number>-<camper id>`, e.g. `1234-57`, the parent
+   types into the subject or first line. This is the reliable one: it works **no
+   matter which email address the letter comes from** (a work inbox, a
+   grandparent, a shared family account). The camp number must match this camp's
+   own before the second half is read as a camper, so a stray `718-555` or a
+   date like `2026-09` can't misfile anything. It's the **same reference format
+   as the deposit memo** (migration 149) and reuses the camp's deposit number
+   when it has one, so a family's code is identical in a bank memo and an email.
+   Parents see their children's codes in **Campistry Link → Camper Mail**.
+2. **The sender's email** matched against the parent emails on the camp's invites
+   (`link_parent_invites`, migration 008) — for parents who email from their
+   registered address and type no code.
+3. **The camper's name** in the subject/first line, used only to pick between the
+   children of a parent who has more than one at camp.
 
-Nothing is ever silently misfiled: an unmatched letter shows up in Live under
-the **"Unassigned — check placement"** group with an **Assign** button that
-pins it to a camper (and fills in their division/grade/bunk) in one click.
+A letter none of these can pin is stored as `(unassigned)` — never dropped. It
+shows in Live under the **"Unassigned — check placement"** group with an
+**Assign** button that pins it to a camper (and fills in division/grade/bunk) in
+one click. (Turn on *Known parents only* to instead drop unknown-sender, no-code
+mail — see below.)
 
 ---
 
@@ -143,10 +155,10 @@ A camp needs **nothing** beyond the platform setup above. On the first visit to
 address appears at the top of the page with a **Copy** button. Parents see the
 same address in **Campistry Link → Camper Mail → "Prefer email?"**.
 
-- **Turn it off / on, or loosen the spam gate:** `set_camper_mail_inbox_settings`
-  (owner/admin), params `p_enabled`, `p_known_parents_only`, `p_rotate_token`.
-  Turn *Known parents only* off briefly when testing if you want to see anything
-  reach the address at all; turn it back on before real use.
+- **Tighten the spam gate:** `set_camper_mail_inbox_settings` (owner/admin),
+  params `p_enabled`, `p_known_parents_only`, `p_rotate_token`. `p_known_parents_only`
+  is **off by default** (unmatched mail is kept as `(unassigned)`); set it true
+  only if a camp gets flooded, after which unknown-sender no-code mail is dropped.
 - **Rotate the address** (if it ever leaks to a spammer): call with
   `p_rotate_token => true`. No DNS change — only the address a camp is *told*
   changes, so re-share it.
@@ -155,17 +167,18 @@ same address in **Campistry Link → Camper Mail → "Prefer email?"**.
 
 ## Security
 
-Every request is authenticated by three independent checks, all required:
+Every delivery is authenticated before anything is stored:
 
 1. **Svix signature** over the raw body — proves Resend sent it. The only check
    that returns non-200; an unsigned request is not a delivery worth retrying.
 2. **Routing token** in the To: address — proves which camp.
-3. **Sender matched to a known parent** — the anti-spam gate and what pins the
-   letter to the right child.
 
-Unlike the deposit token, the camper-mail token is **shared with parents on
-purpose** — they are the senders. Secrecy isn't the defence; the known-parents
-gate is. The token only says which camp, and rotating it costs nothing but a
-re-share. The service-role RPCs (`_camper_mail_camp_for_token`,
-`_camper_mail_candidates`, `_camper_mail_record`) are revoked from every client
-role — only the edge function's service role can reach them.
+The camper code and the sender-email match then decide *which child*; the camp
+number guards the code so a stray digit-pair can't misfile a letter. Unlike the
+deposit token, the camper-mail token and the codes are **shared with parents on
+purpose** — they are the senders, and a letter carries no money, so the failure
+of a leaked address is a junk row a human deletes, not a wrong payment. The token
+only says which camp, and rotating it costs nothing but a re-share. The
+service-role RPCs (`_camper_mail_camp_for_token`, `_camper_mail_candidates`,
+`_camper_mail_by_camper_number`, `_camper_mail_record`) are revoked from every
+client role — only the edge function's service role can reach them.
