@@ -197,6 +197,63 @@ function _txSig(t) {
     return [t.date, t.time, t.camper, t.type, t.amount, t.items].join('|');
 }
 
+// ── Ledger compaction ───────────────────────────────────────────────────────
+// The transactions array is prepend-only and, until this, unbounded: every
+// register sale, office save and parent deposit rewrote the whole season, and
+// every reader, sync and realtime event paid for it. It could not simply be
+// trimmed, because balances are Σ of that very array — trim it and the next
+// save rewrites every balance in the camp. So compaction FOLDS instead: rows
+// older than a watermark are summed into `ledgerCarry` (the exact three
+// buckets _reconcileBalances attributes by, so a recreated account finds its
+// history by the same rules as before) and removed, and `ledgerCompactedThrough`
+// records the watermark. Balance = carry + Σ(live rows) — identical by
+// construction, and compactSnacksLedger refuses to save if it is not.
+//
+// Nothing is folded that is not already archived: migration 203's trigger
+// copies every transaction the cloud ever sees into canteen_transactions, and
+// compaction verifies that before dropping a row. The archive is the floor.
+//
+// The merge has to know about the watermark, or a stale tab whose local copy
+// still holds folded rows would union them straight back in — and, keeping the
+// cloud's carry as well, count them twice. _mergeCompaction keeps the carry
+// that belongs to the higher watermark and drops anything at or below it.
+// This block is IDENTICAL in campistry_snacks_pos.js, and a test holds the two
+// copies together the way one already holds the two _reconcileBalances.
+function _txFolded(t, w) {
+    if (!w || !t) return false;
+    var d = t.date;
+    // Only a well-formed date can be compared; a legacy row with none is never
+    // folded and never dropped, so it can never be lost by either.
+    return typeof d === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(d) && d <= w;
+}
+function _ledgerBuckets(transactions, carry) {
+    var c = carry || {};
+    var byId = Object.assign({}, c.byId || {});
+    var byNameNoId = Object.assign({}, c.byNameNoId || {});
+    var byName = Object.assign({}, c.byName || {});
+    (transactions || []).forEach(function(t) {
+        if (!t) return;
+        var amt = parseFloat(t.amount) || 0;
+        var signed = (t.type === 'credit' ? amt : -amt);
+        var hasId = (t.camperId != null && t.camperId !== '');
+        if (hasId) byId[t.camperId] = (byId[t.camperId] || 0) + signed;
+        if (t.camper) {
+            byName[t.camper] = (byName[t.camper] || 0) + signed;
+            if (!hasId) byNameNoId[t.camper] = (byNameNoId[t.camper] || 0) + signed;
+        }
+    });
+    return { byId: byId, byNameNoId: byNameNoId, byName: byName };
+}
+function _mergeCompaction(merged, tx, cloud, local) {
+    var cw = (cloud && cloud.ledgerCompactedThrough) || '';
+    var lw = (local && local.ledgerCompactedThrough) || '';
+    var w = cw >= lw ? cw : lw;
+    if (!w) return tx;
+    merged.ledgerCompactedThrough = w;
+    merged.ledgerCarry = ((cw >= lw ? cloud : local).ledgerCarry) || {};
+    return tx.filter(function(t) { return !_txFolded(t, w); });
+}
+
 // The canteen is event-sourced: an account's balance is always Σ of its
 // transactions, recomputed here rather than stored. That is why a balance edited
 // without a matching transaction is erased by the next merge.
@@ -213,18 +270,9 @@ function _txSig(t) {
 // money used to move between two children sharing a name.
 function _reconcileBalances(data) {
     if (!data || !data.accounts) return data;
-    var byId = {}, byNameNoId = {}, byName = {};
-    (data.transactions || []).forEach(function(t) {
-        if (!t) return;
-        var amt = parseFloat(t.amount) || 0;
-        var signed = (t.type === 'credit' ? amt : -amt);
-        var hasId = (t.camperId != null && t.camperId !== '');
-        if (hasId) byId[t.camperId] = (byId[t.camperId] || 0) + signed;
-        if (t.camper) {
-            byName[t.camper] = (byName[t.camper] || 0) + signed;
-            if (!hasId) byNameNoId[t.camper] = (byNameNoId[t.camper] || 0) + signed;
-        }
-    });
+    // Seeded from the compaction carry, so a folded row still counts.
+    var b = _ledgerBuckets(data.transactions, data.ledgerCarry);
+    var byId = b.byId, byNameNoId = b.byNameNoId, byName = b.byName;
     Object.keys(data.accounts).forEach(function(name) {
         var a = data.accounts[name];
         if (!a) return;
@@ -258,18 +306,7 @@ function cloudSaveSnacks(data) {
         client.from('camp_state_kv').select('value').eq('camp_id', campId).eq('key', 'campistrySnacks').maybeSingle()
             .then(function(res) {
                 var cloud = (res && res.data && res.data.value) || null;
-                var merged = data;
-                if (cloud && typeof cloud === 'object') {
-                    // Union transactions (cloud + local), deduped by signature.
-                    var seen = {}, tx = [];
-                    (data.transactions || []).concat(cloud.transactions || []).forEach(function(t) {
-                        var s = _txSig(t); if (seen[s]) return; seen[s] = 1; tx.push(t);
-                    });
-                    merged = Object.assign({}, cloud, data);          // local wins for inventory/config
-                    merged.accounts = Object.assign({}, cloud.accounts || {}, data.accounts || {});
-                    merged.transactions = tx;
-                    _reconcileBalances(merged);                        // balance := ledger truth
-                }
+                var merged = _mergeSnacksInto(cloud, data);
                 _cloudUpsertSnacks(merged);
                 // Keep local mirror consistent with what we just wrote.
                 try { var g = JSON.parse(localStorage.getItem(STORE_KEY) || '{}'); g.campistrySnacks = merged; localStorage.setItem(STORE_KEY, JSON.stringify(g)); } catch (_) {}
@@ -587,27 +624,32 @@ function _renderHistoryBody() {
     txs = txs.slice().sort((x, y) => _histSortKey(y) - _histSortKey(x)); // newest first
     if (!txs.length) {
         body.innerHTML = '<div style="text-align:center;padding:2.5rem 1rem;color:var(--text-muted);font-size:.85rem">No ' +
-            (_histFilter === 'in' ? 'incoming funds' : _histFilter === 'out' ? 'spending' : 'transactions') + ' yet.</div>';
+            (_histFilter === 'in' ? 'incoming funds' : _histFilter === 'out' ? 'spending' : 'transactions') +
+            (snacks.ledgerCompactedThrough ? ' in the live list.' : ' yet.') + '</div>' + _archivedHistoryHtml();
         return;
     }
-    body.innerHTML = txs.map(t => {
-        const credit = t.type === 'credit';
-        const auto = credit && (t.kind === 'autoreload' || /auto[- ]?(reload|pay)/i.test(t.items || ''));
-        const isRefund = t.kind === 'refund';
-        const isCashOut = t.kind === 'cash_out';
-        let label = t.items || (credit ? 'Deposit' : 'Purchase');
-        if (auto) label = 'Auto-reload top-up';
-        else if (isRefund) label = 'Refund';
-        else if (isCashOut) label = 'Cash out';
-        const tag = auto ? '<span class="hist-tag">Auto-Pay</span>' : '';
-        const when = (t.date || '') + (t.time ? ' · ' + t.time : '');
-        const amt = Number(t.amount) || 0;
-        const amtHtml = credit
-            ? '<span style="color:var(--green-600);font-weight:700">+$' + amt.toFixed(2) + '</span>'
-            : '<span style="color:var(--red-600);font-weight:700">−$' + amt.toFixed(2) + '</span>';
-        return '<div class="hist-row"><div class="hist-main"><div class="hist-label">' + esc(label) + tag +
-            '</div><div class="hist-when">' + esc(when) + '</div></div><div class="hist-amt">' + amtHtml + '</div></div>';
-    }).join('');
+    // The live rows, then — once the ledger has been compacted — a way to pull
+    // the older ones from the archive without ever writing them back.
+    body.innerHTML = txs.map(_histRowHtml).join('') + _archivedHistoryHtml();
+}
+
+function _histRowHtml(t) {
+    const credit = t.type === 'credit';
+    const auto = credit && (t.kind === 'autoreload' || /auto[- ]?(reload|pay)/i.test(t.items || ''));
+    const isRefund = t.kind === 'refund';
+    const isCashOut = t.kind === 'cash_out';
+    let label = t.items || (credit ? 'Deposit' : 'Purchase');
+    if (auto) label = 'Auto-reload top-up';
+    else if (isRefund) label = 'Refund';
+    else if (isCashOut) label = 'Cash out';
+    const tag = auto ? '<span class="hist-tag">Auto-Pay</span>' : '';
+    const when = (t.date || '') + (t.time ? ' · ' + t.time : '');
+    const amt = Number(t.amount) || 0;
+    const amtHtml = credit
+        ? '<span style="color:var(--green-600);font-weight:700">+$' + amt.toFixed(2) + '</span>'
+        : '<span style="color:var(--red-600);font-weight:700">−$' + amt.toFixed(2) + '</span>';
+    return '<div class="hist-row"><div class="hist-main"><div class="hist-label">' + esc(label) + tag +
+        '</div><div class="hist-when">' + esc(when) + '</div></div><div class="hist-amt">' + amtHtml + '</div></div>';
 }
 
 /** Open a modal with its camper select pre-filled (and its dependent UI refreshed). */
@@ -858,6 +900,7 @@ function rSettings() {
     }
 
     loadPosPinStatus();
+    _renderCompactionCard();
 }
 
 window.saveSettingsForm = function() {
@@ -1632,6 +1675,258 @@ function _refreshSnacksFromCloud() {
             });
     } catch (e) { console.warn('[Snacks] refresh after refund failed:', e); }
 }
+
+// ==========================================================================
+// LEDGER COMPACTION — the office action
+// ==========================================================================
+// See the block above _reconcileBalances for the model. This is the ONLY
+// writer of ledgerCarry / ledgerCompactedThrough; every other path merely
+// carries them through. Three things make it safe to drop rows:
+//
+//   1. Nothing is folded that is not archived. Step A saves the merged ledger
+//      first, so migration 203's trigger has archived every row this tab can
+//      see; verify_canteen_archive then has to say inSync for exactly that
+//      many rows before a single one is dropped.
+//   2. The fold cannot move a balance. The plan reconciles before and after
+//      and refuses to save if any account differs by a cent.
+//   3. The save is compare-and-set on camp_state_kv.updated_at, so a register
+//      sale landing between the read and the write makes the write fail and
+//      the whole thing retry from a fresh read — instead of the sale being
+//      overwritten by a value that never saw it.
+
+/** The merge cloudSaveSnacks does, as a function, so compaction runs the same one. */
+function _mergeSnacksInto(cloud, data) {
+    if (!cloud || typeof cloud !== 'object') return data;
+    // Union transactions (cloud + local), deduped by signature.
+    var seen = {}, tx = [];
+    (data.transactions || []).concat(cloud.transactions || []).forEach(function(t) {
+        var s = _txSig(t); if (seen[s]) return; seen[s] = 1; tx.push(t);
+    });
+    var merged = Object.assign({}, cloud, data);          // local wins for inventory/config
+    merged.accounts = Object.assign({}, cloud.accounts || {}, data.accounts || {});
+    merged.transactions = _mergeCompaction(merged, tx, cloud, data);
+    _reconcileBalances(merged);                            // balance := ledger truth
+    return merged;
+}
+
+/** YYYY-MM-DD, `days` before `today` (also YYYY-MM-DD). Calendar days, UTC-safe. */
+function _dateDaysBefore(today, days) {
+    var m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(today || '');
+    if (!m) return '';
+    var t = Date.UTC(+m[1], +m[2] - 1, +m[3]) - (Math.max(0, days | 0) * 86400000);
+    var d = new Date(t);
+    return d.getUTCFullYear() + '-' + String(d.getUTCMonth() + 1).padStart(2, '0') + '-' + String(d.getUTCDate()).padStart(2, '0');
+}
+
+function _cents(n) { return Math.round((Number(n) || 0) * 100) / 100; }
+
+/**
+ * The fold, as a pure plan over one ledger. Returns everything the action and
+ * the tests need to judge it, and never touches its input.
+ */
+function _snacksCompactPlan(data, days, today) {
+    var w = _dateDaysBefore(today, days);
+    var oldW = (data && data.ledgerCompactedThrough) || '';
+    if (!w) return { error: 'bad_date' };
+    if (w <= oldW) return { nothing: true, watermark: oldW };
+
+    var txs = (data && data.transactions) || [];
+    var dropped = [], folded = [], live = [];
+    txs.forEach(function(t) {
+        if (_txFolded(t, oldW)) dropped.push(t);          // already carried — must not fold twice
+        else if (_txFolded(t, w)) folded.push(t);
+        else live.push(t);
+    });
+
+    var carry = _ledgerBuckets(folded, data.ledgerCarry);
+    ['byId', 'byNameNoId', 'byName'].forEach(function(k) {
+        Object.keys(carry[k]).forEach(function(key) { carry[k][key] = _cents(carry[k][key]); });
+    });
+
+    // The baseline is the ledger as the merge contract defines it: rows at or
+    // below the OLD watermark are already in the carry, so a stale-code tab
+    // that resurrected one must not make the baseline count it twice — that
+    // would refuse a correct fold for the wrong reason.
+    var base = JSON.parse(JSON.stringify(data));
+    base.transactions = txs.filter(function(t) { return !_txFolded(t, oldW); });
+    var before = _reconcileBalances(base);
+    var result = Object.assign({}, data, {
+        accounts: JSON.parse(JSON.stringify(data.accounts || {})),
+        transactions: live,
+        ledgerCarry: carry,
+        ledgerCompactedThrough: w
+    });
+    _reconcileBalances(result);
+
+    var drift = [];
+    Object.keys(before.accounts || {}).forEach(function(name) {
+        var a = before.accounts[name], b = result.accounts[name];
+        if (!a || !b) return;
+        if (_cents(a.balance) !== _cents(b.balance)) drift.push(name);
+    });
+
+    return { watermark: w, oldWatermark: oldW, folded: folded, live: live, dropped: dropped,
+             result: result, invariantOk: drift.length === 0, drift: drift };
+}
+
+/**
+ * Compare-and-set write of the whole campistrySnacks value. Resolves to the
+ * new updated_at, or null if the row's updated_at no longer matched — someone
+ * wrote in between, and the caller must re-read rather than overwrite them.
+ */
+async function _casWriteSnacks(client, campId, value, expectStamp) {
+    var q = client.from('camp_state_kv')
+        .update({ value: value, updated_at: new Date().toISOString() })
+        .eq('camp_id', campId).eq('key', 'campistrySnacks');
+    if (expectStamp) q = q.eq('updated_at', expectStamp);
+    var res = await q.select('updated_at');
+    if (res.error) throw new Error(res.error.message || 'save failed');
+    if (!res.data || !res.data.length) return null;
+    return res.data[0].updated_at;
+}
+
+function _renderCompactionCard() {
+    var box = document.getElementById('ledgerCompactBox');
+    if (!box) return;
+    var txs = snacks.transactions || [];
+    var dates = txs.map(function(t) { return t && typeof t.date === 'string' ? t.date : ''; })
+                   .filter(function(d) { return /^\d{4}-\d{2}-\d{2}$/.test(d); }).sort();
+    var w = snacks.ledgerCompactedThrough || '';
+    box.innerHTML =
+        '<div style="display:flex;gap:1.5rem;flex-wrap:wrap;margin-bottom:.85rem">' +
+            '<div><div style="font-size:.72rem;color:var(--text-muted);font-weight:600;text-transform:uppercase;letter-spacing:.04em">Live transactions</div>' +
+                '<div style="font-size:1.15rem;font-weight:700">' + txs.length + '</div></div>' +
+            '<div><div style="font-size:.72rem;color:var(--text-muted);font-weight:600;text-transform:uppercase;letter-spacing:.04em">Oldest live</div>' +
+                '<div style="font-size:1.15rem;font-weight:700">' + esc(dates[0] || '—') + '</div></div>' +
+            '<div><div style="font-size:.72rem;color:var(--text-muted);font-weight:600;text-transform:uppercase;letter-spacing:.04em">Archived through</div>' +
+                '<div style="font-size:1.15rem;font-weight:700">' + esc(w || 'never') + '</div></div>' +
+        '</div>' +
+        '<p style="font-size:.82rem;color:var(--text-muted);margin:0 0 .75rem">Every transaction is kept permanently in the archive the moment it reaches the cloud. ' +
+        'Archiving moves older rows out of the live list so every register sale and sync stays fast all season. ' +
+        'Balances do not change — each camper\'s archived history is carried forward to the cent — and the full history stays viewable from a camper\'s History.</p>' +
+        '<div style="display:flex;gap:.5rem;align-items:center;flex-wrap:wrap">' +
+            '<label style="font-size:.85rem">Keep the last <input type="number" id="compactDays" class="input" value="30" min="7" max="365" style="width:5rem;display:inline-block;margin:0 .35rem"> days live</label>' +
+            '<button class="btn btn-secondary" id="compactBtn" onclick="compactSnacksLedger()">Archive older transactions</button>' +
+        '</div>' +
+        '<div id="compactResult" style="margin-top:.6rem;font-size:.82rem;display:none"></div>';
+}
+
+window.compactSnacksLedger = async function() {
+    if (!_secEdit('settings', 'Archiving old transactions')) return;
+    var db = window.CampistryDB;
+    var client = db && db.client;
+    var campId = db && db.getCampId && db.getCampId();
+    if (!client || !campId) { toast('Not signed in', 1); return; }
+    var daysEl = document.getElementById('compactDays');
+    var days = daysEl ? parseInt(daysEl.value, 10) : 30;
+    if (!isFinite(days) || days < 7) { toast('Keep at least 7 days live', 1); return; }
+    var btn = document.getElementById('compactBtn');
+    var out = document.getElementById('compactResult');
+    var say = function(msg, bad) {
+        if (out) { out.style.display = ''; out.style.color = bad ? 'var(--red-600)' : '#16A34A'; out.textContent = msg; }
+    };
+    if (btn) { btn.disabled = true; btn.textContent = 'Archiving…'; }
+    try {
+        for (var attempt = 0; attempt < 3; attempt++) {
+            // read
+            var res = await client.from('camp_state_kv').select('value, updated_at')
+                .eq('camp_id', campId).eq('key', 'campistrySnacks').maybeSingle();
+            if (res.error) throw new Error(res.error.message);
+            var cloud = res.data && res.data.value;
+            var stamp = res.data && res.data.updated_at;
+            if (!cloud || typeof cloud !== 'object') { say('Nothing to archive yet.'); return; }
+
+            // A: land everything this tab knows, so the archive sees it
+            var merged = _mergeSnacksInto(cloud, snacks);
+            var stamp1 = await _casWriteSnacks(client, campId, merged, stamp);
+            if (stamp1 === null) continue;                 // a sale landed — re-read
+
+            // the floor has to be under every row before any row is dropped
+            var v = await client.rpc('verify_canteen_archive', { p_camp_id: campId });
+            var vd = v && v.data;
+            if (v.error || !vd || !vd.success) {
+                say('Could not confirm the archive (' + ((v.error && v.error.message) || (vd && vd.error) || 'unknown') + '). Nothing was changed.', true);
+                return;
+            }
+            if (!vd.inSync) {
+                say('The archive is behind the live list (' + vd.missingFromArchive + ' missing). Nothing was changed — try again in a moment.', true);
+                return;
+            }
+            // In sync, but counting a different ledger than the one this tab
+            // just landed: a sale arrived between A and the check. That is a
+            // race, not a gap — re-read and go again rather than fold a value
+            // the verifier never looked at.
+            if (Number(vd.blobTransactions) !== merged.transactions.length) continue;
+
+            // the fold, checked
+            var plan = _snacksCompactPlan(merged, days, todayStr());
+            if (plan.error) { say('Could not work out the date.', true); return; }
+            if (plan.nothing) { say('Already archived through ' + plan.watermark + ' — nothing older than ' + days + ' days to move.'); return; }
+            if (!plan.invariantOk) {
+                console.error('[Snacks] compaction refused — balances would move:', plan.drift);
+                say('Refused: archiving would change ' + plan.drift.length + ' balance' + (plan.drift.length === 1 ? '' : 's') + '. Nothing was changed.', true);
+                return;
+            }
+            if (!plan.folded.length) { say('Nothing older than ' + days + ' days to move.'); return; }
+
+            // B: the compacted value, only if nobody wrote since A
+            var stamp2 = await _casWriteSnacks(client, campId, plan.result, stamp1);
+            if (stamp2 === null) continue;
+
+            snacks = plan.result;
+            try {
+                var g = JSON.parse(localStorage.getItem(STORE_KEY) || '{}');
+                g.campistrySnacks = snacks; g.updated_at = new Date().toISOString();
+                localStorage.setItem(STORE_KEY, JSON.stringify(g));
+                localStorage.setItem('CAMPISTRY_LOCAL_CACHE', JSON.stringify(g));
+                localStorage.setItem(SNACKS_LOCAL_KEY, JSON.stringify(snacks));
+            } catch (_) {}
+            renderStats(); rAccounts(); rAnalytics(); rSettings();
+            say('Archived ' + plan.folded.length + ' transaction' + (plan.folded.length === 1 ? '' : 's') +
+                ' through ' + plan.watermark + '. ' + plan.live.length + ' stay live. No balance changed.');
+            toast('Archived ' + plan.folded.length + ' older transactions');
+            return;
+        }
+        say('The register was busy — nothing was changed. Try again in a moment.', true);
+    } catch (e) {
+        console.error('[Snacks] compaction failed:', e);
+        say('Archiving failed: ' + (e && e.message || 'unknown error') + '. Nothing was changed.', true);
+    } finally {
+        if (btn) { btn.disabled = false; btn.textContent = 'Archive older transactions'; }
+    }
+};
+
+// ── Archived history, on demand, from the archive rather than the blob ──────
+// Fetched rows are rendered only; they are never written back into
+// snacks.transactions, which would undo the compaction on the next save.
+function _archivedHistoryHtml() {
+    var w = snacks.ledgerCompactedThrough;
+    if (!w) return '';
+    return '<div id="histArchived" style="margin-top:.75rem;border-top:1px dashed var(--border);padding-top:.6rem">' +
+        '<button class="btn btn-secondary btn-sm" onclick="loadArchivedHistory()">Show archived history (before ' + esc(w) + ')</button></div>';
+}
+
+window.loadArchivedHistory = async function() {
+    var host = document.getElementById('histArchived');
+    if (!host) return;
+    var db = window.CampistryDB, client = db && db.client, campId = db && db.getCampId && db.getCampId();
+    if (!client || !campId) { toast('Not signed in', 1); return; }
+    host.innerHTML = '<div style="font-size:.82rem;color:var(--text-muted)">Loading…</div>';
+    try {
+        var res = await client.rpc('get_canteen_history', { p_camp_id: campId, p_camper: _histCamper, p_before: null, p_limit: 1000 });
+        var d = res && res.data;
+        if (res.error || !d || !d.success) throw new Error((res.error && res.error.message) || (d && d.error) || 'unknown');
+        var w = snacks.ledgerCompactedThrough;
+        var rows = (d.transactions || []).filter(function(t) { return _txFolded(t, w); });
+        if (_histFilter === 'in') rows = rows.filter(function(t) { return t.type === 'credit'; });
+        else if (_histFilter === 'out') rows = rows.filter(function(t) { return t.type !== 'credit'; });
+        rows.sort(function(x, y) { return _histSortKey(y) - _histSortKey(x); });
+        host.innerHTML = '<div style="font-size:.72rem;color:var(--text-muted);font-weight:600;text-transform:uppercase;letter-spacing:.04em;margin-bottom:.4rem">Archived · through ' + esc(w) + '</div>' +
+            (rows.length ? rows.map(_histRowHtml).join('') : '<div style="font-size:.82rem;color:var(--text-muted)">No archived transactions.</div>');
+    } catch (e) {
+        host.innerHTML = '<div style="font-size:.82rem;color:var(--red-600)">Could not load the archive: ' + esc(e && e.message || 'unknown error') + '</div>';
+    }
+};
 
 window.setLimit = function() {
     if (!_secEdit('accounts', 'Changing a spending limit')) return;
