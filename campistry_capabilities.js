@@ -166,8 +166,8 @@
             sections: [{ key: 'notes', label: 'Notes', desc: 'Shared camp notes' }]
         },
         {
-            key: 'guard', label: 'Campistry Guard', hint: 'Safety',
-            sections: [{ key: 'guard', label: 'Guard', desc: 'Safety and incident tracking', sensitive: true }]
+            key: 'guard', label: 'Campistry Lifeguard', hint: 'Waterfront safety',
+            sections: [{ key: 'guard', label: 'Lifeguard', desc: 'Waterfront safety and incident tracking', sensitive: true }]
         }
     ];
 
