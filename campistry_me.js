@@ -1731,6 +1731,38 @@ function managePaymentMethods(){
     },'Save');
 }
 
+/**
+ * PARENT SELF-SERVE PAYMENT PLANS — camp-wide toggle.
+ *
+ * This used to be a checkbox on the Dashboard, inside Sessions & Pricing. It
+ * moved here because it's a Billing policy, not a session detail — same
+ * reasoning as managePaymentMethods() above. It reads/writes the SAME
+ * underlying setting Dashboard used (`enrollSettings.allowParentPaymentPlans`),
+ * so flipping it here has the same effect the old Dashboard checkbox had:
+ * once accepted, a family can build their own installment schedule from Link
+ * (set_my_payment_plan RPC, migration 115) instead of the office building one
+ * manually via Billing -> Monthly Plan.
+ */
+function manageParentPaymentPlanSetting(){
+    if(!_secEdit('billing','Changing payment plan settings'))return;
+    var on=!!enrollSettings.allowParentPaymentPlans;
+    var h='<div class="me-modal-form">';
+    h+='<label class="ops-check" style="display:flex;align-items:flex-start;gap:9px;font-size:.85rem;'
+      +'font-weight:500;color:var(--s700);cursor:pointer">'
+      +'<input type="checkbox" id="ppAllowChk" style="margin-top:2px"'+(on?' checked':'')+'> '
+      +'<span>Let parents set up their own payment plan in Link'
+      +'<span style="display:block;font-weight:400;margin-top:3px;font-size:.78rem;color:var(--s500)">'
+      +'Once accepted. When off, an application asking for a payment plan flags the office to '
+      +'set one up instead.</span></span></label>';
+    h+='</div>';
+    showModal('Parent payment plans',h,function(){
+        var checked=!!(document.getElementById('ppAllowChk')||{}).checked;
+        enrollSettings.allowParentPaymentPlans=checked;
+        save();closeModal('dynModal');
+        toast('Parent payment plans '+(checked?'enabled':'disabled'));
+    },'Save');
+}
+
 /** The close-out rule, or null on a page that did not load it. */
 function _closeoutAPI(){return (typeof window!=='undefined'&&window.CampistryCloseout)||null}
 
@@ -4551,7 +4583,7 @@ function renderCampers(filter){
     // staged an application). No "+ Add Camper" button here anymore.
     var _sliceLabel=(showUnenrolled||_whenNow==='all')?''
         :(_whenNow==='today'?' in camp today':' on '+_whenNow.replace(/^session:/,''));
-    var h='<div class="sec-hd"><div><h2 class="sec-title">Roster</h2><p class="sec-desc">'+enrolledEntries.length+' camper'+(enrolledEntries.length!==1?'s':'')+_sliceLabel+(canStaff?' · '+allStaffRows.length+' staff':'')+(unenrolledEntries.length?' · '+unenrolledEntries.length+' unenrolled':'')+'</p></div><div class="sec-actions"><button class="me-btn me-btn--ghost me-btn--sm" onclick="CampistryMe.manageCustomFields()" title="Define custom fields">⚙ Custom Fields</button><button class="me-btn me-btn--sec me-btn--sm" onclick="CampistryMe.downloadTemplate()">Template</button><button class="me-btn me-btn--sec me-btn--sm" onclick="CampistryMe.openCsv()">Import</button></div></div>';
+    var h='<div class="sec-hd"><div><h2 class="sec-title">Roster</h2><p class="sec-desc">'+enrolledEntries.length+' camper'+(enrolledEntries.length!==1?'s':'')+_sliceLabel+(canStaff?' · '+allStaffRows.length+' staff':'')+(unenrolledEntries.length?' · '+unenrolledEntries.length+' unenrolled':'')+'</p></div><div class="sec-actions"><button class="me-btn me-btn--ghost me-btn--sm" onclick="CampistryMe.manageCustomFields()" title="Define custom fields">⚙ Custom Fields</button><button class="me-btn me-btn--sec me-btn--sm" onclick="CampistryMe.downloadTemplate()">Template</button><button class="me-btn me-btn--sec me-btn--sm" onclick="CampistryMe.openCsv()">Import</button><button class="me-btn me-btn--sec me-btn--sm" onclick="CampistryMe.archiveSeasonNow()" title="Snapshot the current roster/staff under a season label so it survives a CSV re-import or next year\'s reset">Archive Season</button></div></div>';
     // Silent duplicate detection: a quiet warning banner appears here only when
     // likely-duplicate camper records are found (no button triggers it).
     h+=_dupCamperBannerHtml();
@@ -16282,6 +16314,7 @@ function renderBilling(){
         +'<button onclick="CampistryMe.manageLateFees()">Late-fee policy\u2026</button>'
         +'<button onclick="CampistryMe.issueCredit()">Issue Credit/Refund</button>'
         +'<button onclick="CampistryMe.managePaymentMethods()">Accepted payments</button>'
+        +'<button onclick="CampistryMe.manageParentPaymentPlanSetting()">Parent self-serve payment plans</button>'
         +'<button onclick="CampistryMe.managePayers()">Payers &amp; Organizations</button>'
         +'<button onclick="CampistryMe.openMergeFamiliesTool()">Merge Families</button>'
         +'<button onclick="CampistryMe.openActivityLog()">Activity Log</button>'
@@ -20870,6 +20903,28 @@ function _defaultSeasonLabel(){
 // it works from either caller without needing roster/staffApplications
 // loaded into this page's memory — save() already keeps the cloud copy
 // current on every edit, so there's nothing this page needs to send.
+// Manual trigger — used to be Dashboard's "Attendance History" card
+// (Archive Current Season button); moved here so Attendance History lives
+// only in Me. Same RPC/label default as the automatic pre-CSV-import call.
+function archiveSeasonNow(){
+    if(!_secEdit('campers','Archiving the current season'))return;
+    var h='<div class="me-modal-form">';
+    h+='<p style="font-size:.83rem;color:var(--s500);margin:0 0 12px">'
+      +'Snapshot everyone currently on the roster and hired staff under a season '
+      +'label, so their attendance survives a CSV re-import or next year’s reset. '
+      +'This never changes today’s roster — it only adds a record to look back on.</p>';
+    h+='<div class="form-group dash-field"><label for="archSeasonLabel">Season Label</label>'
+      +'<input type="text" id="archSeasonLabel" class="dash-input" value="'+esc(_defaultSeasonLabel())+'"></div>';
+    h+='</div>';
+    showModal('Archive Current Season',h,async function(){
+        var label=(document.getElementById('archSeasonLabel').value||'').trim()||_defaultSeasonLabel();
+        var res=await archiveCurrentSeason(label);
+        if(!res||res.success===false){toast('Error archiving — '+((res&&res.error)||'try again'),'error');return}
+        closeModal('dynModal');
+        toast('Archived '+(res.saved||0)+' — "'+label+'" saved');
+    },'Archive');
+}
+
 async function archiveCurrentSeason(label){
     var db=window.CampistryDB&&window.CampistryDB.getClient?window.CampistryDB.getClient():null;
     var campId=window.CampistryDB&&window.CampistryDB.getCampId?window.CampistryDB.getCampId():null;
@@ -21854,7 +21909,7 @@ window.CampistryMe={
     finReconcileCharges:finReconcileCharges,
     _dpToggle:_dpToggle,_cpToggle:_cpToggle,_cfToggle:_cfToggle,_fbRetryPreview:_fbRetryPreview,markDepositPaid:markDepositPaid,chargeDepositNow:chargeDepositNow,
     managePayers:managePayers,togglePayerArchived:togglePayerArchived,
-    managePaymentMethods:managePaymentMethods,setArQuery:setArQuery,
+    managePaymentMethods:managePaymentMethods,manageParentPaymentPlanSetting:manageParentPaymentPlanSetting,archiveSeasonNow:archiveSeasonNow,setArQuery:setArQuery,
     toggleAging:toggleAging,
     runInstallments:runInstallments,
     _riToggleAll:_riToggleAll,
