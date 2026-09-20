@@ -12,3 +12,4 @@ SECURITY_AUDIT.md
 # npm dependencies (test tooling only — the app itself has no build step)
 node_modules/
 
+.claude/worktrees/
