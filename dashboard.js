@@ -2362,6 +2362,18 @@
             // Camp dates are ordinary configuration, not an ownership decision.
             if (userRole === 'owner' || userRole === 'admin') loadCampDates(false);
         }
+        // Camp Settings (Language & Regional) has the exact same bug shape as
+        // Sessions & Pricing did: loadCampSettingsSection() runs once, at page
+        // load, straight off setupDashboardForRole() — well before this cloud
+        // hydration event fires. On a browser whose local snapshot is stale or
+        // empty (new device, cleared storage, a value saved from elsewhere),
+        // the checkboxes render pre-hydration defaults and never get corrected
+        // once the real cloud values arrive, so the owner sees "my setting
+        // didn't take" even though the save itself worked. Re-read now that
+        // hydration has actually completed, same as Sessions above.
+        if (document.getElementById('settLocale') && (userRole === 'owner' || userRole === 'admin')) {
+            loadCampSettingsSection();
+        }
     });
     // Safety fallback — a camp with no cloud config, or a failed/unusually
     // slow hydration, must not permanently block legitimate auto-saves.
