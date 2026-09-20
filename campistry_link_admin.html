@@ -273,6 +273,11 @@
             <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><path d="M16 8h-6a2 2 0 1 0 0 4h4a2 2 0 1 1 0 4H8"/><line x1="12" y1="6" x2="12" y2="8"/><line x1="12" y1="16" x2="12" y2="18"/></svg>
             Tips Setup
         </button>
+        <div class="lk-nav-divider"></div>
+        <button class="lk-nav-item" data-page="settings" onclick="nav('settings')">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg>
+            Settings
+        </button>
     </div>
 </nav>
 
@@ -301,6 +306,10 @@
     <button class="lk-bnav-item" data-page="tips" onclick="nav('tips')">
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><path d="M16 8h-6a2 2 0 1 0 0 4h4a2 2 0 1 1 0 4H8"/><line x1="12" y1="6" x2="12" y2="8"/><line x1="12" y1="16" x2="12" y2="18"/></svg>
         Tips
+    </button>
+    <button class="lk-bnav-item" data-page="settings" onclick="nav('settings')">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg>
+        Settings
     </button>
 </div></div>
 
@@ -950,6 +959,35 @@
     </div>
 </div>
 
+<!-- ═══════════════════════════════════════════════════ -->
+<!--  LINK PROGRAM SETTINGS                              -->
+<!--  Moved here from Dashboard → Camp Settings — this is -->
+<!--  Link's own settings, so it's configured from inside -->
+<!--  Link rather than from Me/Dashboard. Same             -->
+<!--  camp_link_program_settings table / RPCs as before   -->
+<!--  (get_link_program_settings / set_link_program_       -->
+<!--  settings, migration 106) — only the UI moved.       -->
+<!-- ═══════════════════════════════════════════════════ -->
+<div class="lk-page" id="page-settings">
+    <div class="lk-page-hero">
+        <div class="lk-page-hero-icon">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg>
+        </div>
+        <div>
+            <h1>Link Settings</h1>
+            <p>Configure what Campistry Link offers your parents this year</p>
+        </div>
+    </div>
+
+    <div class="lk-card" style="max-width:700px;">
+        <div class="lk-card-head">
+            <h2>Link Programs</h2>
+        </div>
+        <p style="font-size:.82rem;color:var(--text-muted);">Turn off anything your camp doesn't actually run this year — parents in Link will never see it, and no one can sign up or pay for a program that isn't happening.</p>
+        <div id="linkProgramsBox" style="font-size:0.85rem;color:var(--text-muted);margin-top:10px;">Loading…</div>
+    </div>
+</div>
+
 <!-- List editor modal -->
 <div id="listEditorBackdrop" style="display:none;position:fixed;inset:0;background:rgba(0,0,0,.32);z-index:950;" onclick="closeListEditor()"></div>
 <div id="listEditorModal" style="display:none;position:fixed;top:50%;left:50%;transform:translate(-50%,-50%);background:#fff;border-radius:var(--radius-lg);box-shadow:0 16px 48px rgba(0,0,0,.18);z-index:951;width:480px;max-width:calc(100vw - 32px);max-height:88vh;overflow-y:auto;padding:28px;">
@@ -1242,6 +1280,7 @@ function nav(p) {
     }
     if (p === 'lists') renderAdminLists();
     if (p === 'tips') renderTipsAdmin();
+    if (p === 'settings') { var _sdb = _dbc2(); if (_sdb) loadLinkProgramSettings(_sdb.campId); }
 }
 
 function switchMsgTab(tab, btn) {
@@ -1271,6 +1310,77 @@ function _updateSchedCount() {
 
 // ─── STAFF INBOX: messages a parent routed to this specific user (migration 027) ─
 function _dbc2(){ var d=window.CampistryDB; if(!d)return null; var c=d.getClient&&d.getClient(), id=d.getCampId&&d.getCampId(); return (c&&id&&c.rpc)?{client:c,campId:id}:null; }
+
+// ========================================
+// LINK PROGRAMS — per-camp on/off switches for parent-facing Link
+// features (migration 106). Moved here from Dashboard → Camp Settings so
+// Link's own settings are configured from inside Link. Any authenticated
+// user can read them (get_link_program_settings), but only owner/admin
+// can flip one (set_link_program_settings enforces that server-side
+// regardless of what this UI shows) — so a non-owner/admin viewer just
+// sees the current state as disabled checkboxes rather than this card
+// being hidden outright.
+// ========================================
+var LINK_PROGRAMS = [
+    { key: 'photos', label: 'Photos', desc: 'Facial-recognition folders + HD downloads' },
+    { key: 'canteen', label: 'Canteen', desc: 'Add Funds / prepaid camper wallet' },
+    { key: 'shop', label: 'Camp Shop', desc: 'Swag & merch store' },
+    { key: 'tips', label: 'Tips', desc: 'Parents tipping staff' },
+    { key: 'camperMail', label: 'Camper Mail', desc: 'Parents sending mail to their camper' },
+    { key: 'pickup', label: 'Pickup & Arrival', desc: 'Bus/dismissal tracking and requests' }
+];
+var _linkProgramsCampId = null;
+
+function loadLinkProgramSettings(campId) {
+    _linkProgramsCampId = campId;
+    var box = document.getElementById('linkProgramsBox');
+    if (!box) return;
+    var db = _dbc2();
+    if (!db) { box.textContent = 'Could not load Link program settings.'; return; }
+    var role = null;
+    try { role = localStorage.getItem('campistry_role'); } catch (e) {}
+    var canWrite = role ? (['owner', 'admin'].indexOf(role) !== -1) : true; // unknown role: let the RPC be the real gate, don't hide the control
+    db.client.rpc('get_link_program_settings', { p_camp_id: campId }).then(function(res) {
+        var data = res && res.data;
+        if (res.error || !data || !data.success) {
+            var reason = (res.error && res.error.message) || (data && data.error) || '';
+            box.textContent = 'Could not load Link program settings.' + (reason ? ' (' + reason + ')' : '');
+            return;
+        }
+        box.innerHTML = LINK_PROGRAMS.map(function(p) {
+            var on = data[p.key] !== false;
+            return '<label style="display:flex;align-items:center;justify-content:space-between;gap:12px;padding:9px 0;border-bottom:1px solid var(--border-color,#E2E8F0);cursor:' + (canWrite ? 'pointer' : 'default') + ';">' +
+                '<span><strong style="font-size:0.86rem;">' + p.label + '</strong><br><span style="font-size:0.76rem;color:var(--text-muted);">' + p.desc + '</span></span>' +
+                '<input type="checkbox" ' + (on ? 'checked' : '') + (canWrite ? '' : ' disabled') + ' style="width:18px;height:18px;flex-shrink:0;" onchange="toggleLinkProgram(\'' + p.key + '\', this.checked, this)">' +
+                '</label>';
+        }).join('') + '<div id="linkProgramsStatus" style="font-size:0.78rem;color:var(--text-muted);margin-top:8px;"></div>';
+    }).catch(function() {
+        box.textContent = 'Could not load Link program settings.';
+    });
+}
+
+function toggleLinkProgram(key, enabled, checkboxEl) {
+    var statusEl = document.getElementById('linkProgramsStatus');
+    var db = _dbc2();
+    if (checkboxEl) checkboxEl.disabled = true;
+    if (statusEl) statusEl.textContent = 'Saving…';
+    if (!db) { if (statusEl) statusEl.textContent = 'Could not save — try again.'; if (checkboxEl) { checkboxEl.checked = !enabled; checkboxEl.disabled = false; } return; }
+    var settings = {}; settings[key] = enabled;
+    db.client.rpc('set_link_program_settings', { p_camp_id: _linkProgramsCampId, p_settings: settings }).then(function(res) {
+        var data = res && res.data;
+        if (res.error || !data || !data.success) {
+            if (statusEl) statusEl.textContent = 'Could not save — ' + ((data && data.error) || (res.error && res.error.message) || 'try again.');
+            if (checkboxEl) { checkboxEl.checked = !enabled; checkboxEl.disabled = false; }
+            return;
+        }
+        if (statusEl) statusEl.textContent = 'Saved.';
+        setTimeout(function() { if (statusEl) statusEl.textContent = ''; }, 2000);
+        if (checkboxEl) checkboxEl.disabled = false;
+    }).catch(function() {
+        if (statusEl) statusEl.textContent = 'Could not save — try again.';
+        if (checkboxEl) { checkboxEl.checked = !enabled; checkboxEl.disabled = false; }
+    });
+}
 window._staffInbox = [];
 function _loadStaffInbox(cb){
     var db=_dbc2(); if(!db){ if(cb)cb(); return; }
@@ -4853,6 +4963,7 @@ function boot() {
     renderDash();
     renderAdminMsgs('all');
     _loadFormSubmissions();
+    (function _bootLinkPrograms(){ var d = _dbc2(); if (d) loadLinkProgramSettings(d.campId); })();
 
     // Scheduled broadcasts: tell the data layer how to resolve+send a due
     // broadcast, and keep the list fresh when one fires or lands from cloud.
