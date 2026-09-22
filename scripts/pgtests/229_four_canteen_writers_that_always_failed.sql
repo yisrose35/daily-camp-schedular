@@ -338,3 +338,140 @@ BEGIN
 END $$;
 
 RESET test.uid;
+
+
+-- ── 10. and the rest of the script-converted writers, called at last ────────
+-- tests/transform_leftovers.test.js flagged six more functions that 219's
+-- transform rewrote and no behaviour test ever executed: set_canteen_limits,
+-- set_canteen_auto_reload, submit_canteen_deposit, submit_shop_order,
+-- use_family_card_for_canteen_auto_reload and settle_shop_order. Four in exactly
+-- that position turned out to return an error on every call, so "converted and
+-- never called" is not a state to leave anything in.
+--
+-- These five are PARENT-facing — they resolve the camp from the caller's invite —
+-- so they are exercised as a parent, not as the owner.
+--
+-- camp_families_object comes from 212, which this chain does not include, so it
+-- is stubbed with 212's own body reading the 211 rows. Stubbing it rather than
+-- skipping the call is the point: without it,
+-- use_family_card_for_canteen_auto_reload is never executed, which is the state
+-- that let four functions ship broken.
+CREATE OR REPLACE FUNCTION public.camp_families_object(p_camp_id uuid) RETURNS jsonb
+LANGUAGE sql STABLE SECURITY DEFINER SET search_path = public, pg_catalog
+AS $$
+    SELECT COALESCE(jsonb_object_agg(family_key, payload), '{}'::jsonb)
+      FROM public.camp_families
+     WHERE camp_id = p_camp_id AND deleted_at IS NULL;
+$$;
+INSERT INTO link_parent_invites (camp_id, user_id, parent_name, parent_email, camper_names, status)
+VALUES ('f2900000-0000-0000-0000-000000000001', 'f2900000-0000-0000-0000-00000000e001',
+        'Katz parent', 'k@example.test', jsonb_build_array('Ayala Weiss'), 'active');
+
+DO $$
+DECLARE
+    camp uuid := 'f2900000-0000-0000-0000-000000000001';
+    r    jsonb;
+    bal  numeric;
+BEGIN
+    PERFORM set_config('test.uid', 'f2900000-0000-0000-0000-00000000e001', false);
+
+    -- a deposit
+    SELECT balance INTO bal FROM camp_canteen_accounts
+     WHERE camp_id = camp AND account_key = 'Ayala Weiss';
+    r := public.submit_canteen_deposit('Ayala Weiss', 10.00, camp);
+    IF (r ->> 'success') IS DISTINCT FROM 'true' THEN
+        RAISE EXCEPTION 'a parent deposit was refused: %', r;
+    END IF;
+    IF (SELECT balance FROM camp_canteen_accounts
+         WHERE camp_id = camp AND account_key = 'Ayala Weiss') IS DISTINCT FROM bal + 10.00 THEN
+        RAISE EXCEPTION 'a 10.00 deposit on % left %', bal,
+            (SELECT balance FROM camp_canteen_accounts
+              WHERE camp_id = camp AND account_key = 'Ayala Weiss');
+    END IF;
+    -- and its bounds
+    IF (public.submit_canteen_deposit('Ayala Weiss', 0.50, camp) ->> 'error') <> 'invalid_amount'
+       OR (public.submit_canteen_deposit('Ayala Weiss', 501, camp) ->> 'error') <> 'invalid_amount' THEN
+        RAISE EXCEPTION 'the deposit amount bounds stopped biting';
+    END IF;
+    -- another family's child
+    IF (public.submit_canteen_deposit('Dov Lerner', 10.00, camp) ->> 'error')
+       <> 'camper_not_on_invite' THEN
+        RAISE EXCEPTION 'a parent deposited onto another family''s child';
+    END IF;
+
+    -- the limits
+    r := public.set_canteen_limits('Ayala Weiss', 25, NULL, NULL, camp);
+    IF (r ->> 'success') IS DISTINCT FROM 'true' THEN
+        RAISE EXCEPTION 'setting a limit was refused: %', r;
+    END IF;
+    IF (SELECT daily_limit FROM camp_canteen_accounts
+         WHERE camp_id = camp AND account_key = 'Ayala Weiss') IS DISTINCT FROM 25 THEN
+        RAISE EXCEPTION 'the limit did not land';
+    END IF;
+    -- and it did not touch the money
+    IF (SELECT balance FROM camp_canteen_accounts
+         WHERE camp_id = camp AND account_key = 'Ayala Weiss') IS DISTINCT FROM bal + 10.00 THEN
+        RAISE EXCEPTION 'setting a limit moved the balance';
+    END IF;
+    IF (public.set_canteen_limits('Ayala Weiss', 5000, NULL, NULL, camp) ->> 'error')
+       <> 'bad_daily_limit' THEN
+        RAISE EXCEPTION 'the limit clamp stopped biting';
+    END IF;
+
+    -- auto-reload, with a real trigger shape
+    r := public.set_canteen_auto_reload(camp, 'Ayala Weiss', jsonb_build_object(
+             'enabled', true, 'thresholdEnabled', true,
+             'thresholdAmount', 5, 'thresholdReloadAmount', 20));
+    IF (r ->> 'success') IS DISTINCT FROM 'true' THEN
+        RAISE EXCEPTION 'setting auto-reload was refused: %', r;
+    END IF;
+    IF (SELECT payload -> 'autoReload' ->> 'thresholdReloadAmount' FROM camp_canteen_accounts
+         WHERE camp_id = camp AND account_key = 'Ayala Weiss') IS DISTINCT FROM '20' THEN
+        RAISE EXCEPTION 'the auto-reload config did not land';
+    END IF;
+    IF (SELECT balance FROM camp_canteen_accounts
+         WHERE camp_id = camp AND account_key = 'Ayala Weiss') IS DISTINCT FROM bal + 10.00 THEN
+        RAISE EXCEPTION 'setting auto-reload moved the balance';
+    END IF;
+    -- enabled with no trigger is still refused
+    IF (public.set_canteen_auto_reload(camp, 'Ayala Weiss',
+            jsonb_build_object('enabled', true)) ->> 'error') <> 'no_trigger_selected' THEN
+        RAISE EXCEPTION 'auto-reload accepted a config with no trigger';
+    END IF;
+
+    -- the family card. 214's version reads families through
+    -- camp_families_object, so the family goes into the 211 rows.
+    INSERT INTO camp_families (camp_id, family_key, payload)
+    VALUES (camp, 'fam1', jsonb_build_object(
+                'camperIds', jsonb_build_array('Ayala Weiss'),
+                'byopCustomerRef', 'cus_229',
+                'byopProcessor', 'cardknox',
+                'paymentMethodLabel', 'Visa 4242'))
+    ON CONFLICT (camp_id, family_key) DO UPDATE SET payload = EXCLUDED.payload;
+
+    r := public.use_family_card_for_canteen_auto_reload(camp, 'Ayala Weiss', NULL);
+    IF (r ->> 'success') IS DISTINCT FROM 'true' THEN
+        RAISE EXCEPTION 'attaching the family card was refused: %', r;
+    END IF;
+    IF (r ->> 'processorKey') <> 'cardknox' THEN
+        RAISE EXCEPTION 'the wrong processor was chosen: %', r;
+    END IF;
+    IF (SELECT payload -> 'autoReload' ->> 'byopCustomerRef' FROM camp_canteen_accounts
+         WHERE camp_id = camp AND account_key = 'Ayala Weiss') IS DISTINCT FROM 'cus_229' THEN
+        RAISE EXCEPTION 'the family card did not reach the account';
+    END IF;
+    -- the parent's own trigger config survived it
+    IF (SELECT payload -> 'autoReload' ->> 'thresholdReloadAmount' FROM camp_canteen_accounts
+         WHERE camp_id = camp AND account_key = 'Ayala Weiss') IS DISTINCT FROM '20' THEN
+        RAISE EXCEPTION 'attaching the family card wiped the parent''s trigger config';
+    END IF;
+    -- a camper in no family
+    IF (public.use_family_card_for_canteen_auto_reload(camp, 'Dov Lerner', NULL) ->> 'error')
+       NOT IN ('camper_not_on_invite', 'family_not_found') THEN
+        RAISE EXCEPTION 'the family card was attached to a camper with no family';
+    END IF;
+
+    RAISE NOTICE '229: the parent-facing deposit, limits, auto-reload and family card all work, '
+                 'keep the balance, and refuse what they should';
+END $$;
+
