@@ -179,6 +179,27 @@ async function callerRole(req: Request): Promise<string | null> {
   return typeof role === "string" ? role : null;
 }
 
+// get_user_role() only proves a role in the CALLER'S OWN camp
+// (auth.uid() -> get_user_camp_id()) — nothing ties that to the campId the
+// request body claims. Without this, an owner/admin of Camp A could pass
+// Camp B's id and have this function (running on the service-role key)
+// broadcast to Camp B's families. Confirming the two match is what actually
+// authorizes "send for this specific camp."
+async function callerCampId(req: Request): Promise<string | null> {
+  const supabaseUrl = Deno.env.get("SUPABASE_URL");
+  const anonKey = Deno.env.get("SUPABASE_ANON_KEY");
+  const authHeader = req.headers.get("Authorization");
+  if (!supabaseUrl || !anonKey || !authHeader) return null;
+  const res = await fetch(`${supabaseUrl}/rest/v1/rpc/get_user_camp_id`, {
+    method: "POST",
+    headers: { apikey: anonKey, Authorization: authHeader, "Content-Type": "application/json" },
+    body: "{}",
+  });
+  if (!res.ok) return null;
+  const id = await res.json();
+  return typeof id === "string" ? id : null;
+}
+
 // Every phone number that belongs to this camp — same shape as send-sms's
 // campPhoneBook, scoped by the caller's own JWT/RLS.
 async function campPhoneBook(req: Request): Promise<Set<string> | null> {
@@ -323,6 +344,10 @@ serve(async (req) => {
     const role = await callerRole(req);
     if (!role || !SENDER_ROLES.includes(role)) {
       return json({ error: "Not authorized to send broadcasts (owner/admin/scheduler only)." }, 403);
+    }
+    const ownCampId = await callerCampId(req);
+    if (!ownCampId || ownCampId !== campId) {
+      return json({ error: "Not authorized for this camp." }, 403);
     }
 
     const supabase = createClient(Deno.env.get("SUPABASE_URL")!, Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!);

@@ -26,6 +26,50 @@ const corsHeaders = {
   "Access-Control-Allow-Origin": "*",
   "Access-Control-Allow-Headers": "authorization, x-client-info, apikey, content-type",
 };
+const SENDER_ROLES = ["owner", "admin", "scheduler"];
+
+function fail(status: number, error: string) {
+  return new Response(JSON.stringify({ error }), { status, headers: { ...corsHeaders, "Content-Type": "application/json" } });
+}
+
+// Same shape as send-broadcast's callerRole — asks Postgres who the caller
+// is (via their own JWT, not the service-role key), rather than trusting
+// anything the request body claims about the caller.
+async function callerRole(req: Request): Promise<string | null> {
+  const supabaseUrl = Deno.env.get("SUPABASE_URL");
+  const anonKey = Deno.env.get("SUPABASE_ANON_KEY");
+  const authHeader = req.headers.get("Authorization");
+  if (!supabaseUrl || !anonKey || !authHeader) return null;
+  const res = await fetch(`${supabaseUrl}/rest/v1/rpc/get_user_role`, {
+    method: "POST",
+    headers: { apikey: anonKey, Authorization: authHeader, "Content-Type": "application/json" },
+    body: "{}",
+  });
+  if (!res.ok) return null;
+  const role = await res.json();
+  return typeof role === "string" ? role : null;
+}
+
+// get_user_role() answers for the CALLER'S OWN camp (auth.uid() ->
+// get_user_camp_id()) — it says nothing about the campId the request body
+// claims. Without this, an owner/admin of Camp A could pass Camp B's id and
+// have this function (running on the service-role key) email Camp B's
+// families on their behalf. Confirming the two match is what actually ties
+// "authorized sender" to "the camp being sent for."
+async function callerCampId(req: Request): Promise<string | null> {
+  const supabaseUrl = Deno.env.get("SUPABASE_URL");
+  const anonKey = Deno.env.get("SUPABASE_ANON_KEY");
+  const authHeader = req.headers.get("Authorization");
+  if (!supabaseUrl || !anonKey || !authHeader) return null;
+  const res = await fetch(`${supabaseUrl}/rest/v1/rpc/get_user_camp_id`, {
+    method: "POST",
+    headers: { apikey: anonKey, Authorization: authHeader, "Content-Type": "application/json" },
+    body: "{}",
+  });
+  if (!res.ok) return null;
+  const id = await res.json();
+  return typeof id === "string" ? id : null;
+}
 
 function template(type: string, data: Record<string, string>): { subject: string; html: string } {
   const campName = data.campName || "Camp";
@@ -122,9 +166,7 @@ serve(async (req) => {
     const { campId, recipients, type, data, dryRun } = await req.json();
 
     if (!recipients?.length || !type) {
-      return new Response(JSON.stringify({ error: "recipients and type required" }), {
-        status: 400, headers: { ...corsHeaders, "Content-Type": "application/json" },
-      });
+      return fail(400, "recipients and type required");
     }
 
     // Payment/form reminders and other automated notices are covered by the
@@ -134,23 +176,33 @@ serve(async (req) => {
     // direct call to this function can't skip it. campId is required from
     // here forward (every current caller passes it); a legacy call without
     // one is refused rather than silently let through unchecked.
-    if (!campId) {
-      return new Response(JSON.stringify({ error: "campId required" }), {
-        status: 400, headers: { ...corsHeaders, "Content-Type": "application/json" },
-      });
+    if (!campId) return fail(400, "campId required");
+
+    // This function had NO auth check at all before: any bearer token, any
+    // recipient list, any content — it would send. Same standard as
+    // send-broadcast/send-sms: the caller must be owner/admin/scheduler
+    // *in the camp being sent for*. get_user_role() only proves a role in
+    // the caller's OWN camp, so that's checked together with get_user_camp_id()
+    // matching the campId the request claims — the role check alone would
+    // let an admin of Camp A email Camp B's families just by passing Camp
+    // B's id.
+    const role = await callerRole(req);
+    if (!role || !SENDER_ROLES.includes(role)) {
+      return fail(403, "Not authorized to send notifications (owner/admin/scheduler only).");
     }
+    const ownCampId = await callerCampId(req);
+    if (!ownCampId || ownCampId !== campId) {
+      return fail(403, "Not authorized for this camp.");
+    }
+
     const supabase = createClient(Deno.env.get("SUPABASE_URL")!, Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!);
     const { data: mayEmail, error: mayEmailErr } = await supabase.rpc("_camp_may_send_email", { p_camp_id: campId });
     if (mayEmailErr) {
       console.error("[auto-notify] email-gate check failed:", mayEmailErr.message);
-      return new Response(JSON.stringify({ error: "Could not verify this camp's emailing plan." }), {
-        status: 500, headers: { ...corsHeaders, "Content-Type": "application/json" },
-      });
+      return fail(500, "Could not verify this camp's emailing plan.");
     }
     if (!mayEmail) {
-      return new Response(JSON.stringify({ error: "This camp's plan doesn't include emailing. Contact Campistry to add it." }), {
-        status: 403, headers: { ...corsHeaders, "Content-Type": "application/json" },
-      });
+      return fail(403, "This camp's plan doesn't include emailing. Contact Campistry to add it.");
     }
 
     const { subject, html } = template(type, data || {});
