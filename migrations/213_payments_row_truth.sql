@@ -527,14 +527,29 @@ BEGIN
       INTO v_live, v_deleted, v_collected
       FROM public.camp_payments WHERE camp_id = p_camp_id;
 
-    -- Two live rows sharing a dedupe key would mean a retried charge was
-    -- recorded twice — the exact thing the old camp-wide lock was there to stop.
-    SELECT COALESCE(jsonb_agg(k), '[]'::jsonb) INTO v_dupes
-      FROM (SELECT unnest(dedupe_keys) AS k
-              FROM public.camp_payments
-             WHERE camp_id = p_camp_id AND deleted_at IS NULL) AS x
-     WHERE k IS NOT NULL
-     GROUP BY k HAVING count(*) > 1;
+    -- Two DIFFERENT live payments sharing a dedupe key would mean a retried
+    -- charge was recorded twice — the exact thing the old camp-wide lock was
+    -- there to stop.
+    --
+    -- Counted per PAYMENT, not per occurrence. A single payment whose id and
+    -- reference hold the same value — which is normal, several processors do it —
+    -- puts that value in its own dedupe_keys array twice, and counting
+    -- occurrences reported it as a duplicate of itself. That false alarm fired
+    -- on real data the first time this ran.
+    --
+    -- And as a scalar subquery, not a grouped aggregate: `jsonb_agg(k) ... GROUP
+    -- BY k HAVING` returns one row PER GROUP and `INTO` keeps only the first, so
+    -- the old form could never have listed more than one offending key anyway.
+    SELECT COALESCE((SELECT jsonb_agg(d.k ORDER BY d.k)
+                       FROM (SELECT x.k
+                               FROM (SELECT DISTINCT payment_id, unnest(dedupe_keys) AS k
+                                       FROM public.camp_payments
+                                      WHERE camp_id = p_camp_id AND deleted_at IS NULL) AS x
+                              WHERE x.k IS NOT NULL
+                              GROUP BY x.k
+                             HAVING count(*) > 1) AS d),
+                    '[]'::jsonb)
+      INTO v_dupes;
 
     RETURN jsonb_build_object(
         'success', true,
@@ -543,10 +558,13 @@ BEGIN
         'livePayments', v_live,
         'deletedPayments', v_deleted,
         'collected', v_collected,
-        'note', 'deletedPayments counts DELIBERATE office deletions, stamped and '
+        'note', 'noDoubleCounting counts DISTINCT PAYMENTS per dedupe key, not '
+             || 'occurrences: one payment whose id and reference hold the same '
+             || 'value is normal and is not a duplicate. deletedPayments counts '
+             || 'DELIBERATE office deletions, stamped and '
              || 'never destroyed, so an Undo restores them. noDoubleCounting false '
-             || 'means a retried charge was recorded twice, which is what the '
-             || 'primary key and the dedupe probe replace the camp-wide lock with.');
+             || 'means one dedupe key is on two different payments, which is what '
+             || 'the primary key and the dedupe probe replace the camp-wide lock with.');
 END;
 $$;
 REVOKE ALL ON FUNCTION public.verify_payment_writes(uuid) FROM public, anon;
