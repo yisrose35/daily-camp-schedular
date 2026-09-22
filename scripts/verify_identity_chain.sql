@@ -1,5 +1,5 @@
 -- ============================================================================
--- Confirm migrations 222-231 are in and doing their job.
+-- Confirm migrations 222-234 are in and doing their job.
 --
 -- Paste the whole thing into the Supabase SQL Editor. It is READ ONLY — one
 -- SELECT, nothing is created, changed or deleted, and the two purge functions
@@ -157,7 +157,31 @@
            AND EXISTS (SELECT 1 FROM pg_proc p JOIN pg_namespace n ON n.oid = p.pronamespace
                         WHERE n.nspname = 'public' AND p.proname = '_invite_covers_person'
                           AND p.prosrc ~ 'person_ids_resolved_at' AND p.prosrc ~ 'first_seen')
-          THEN 'ok' ELSE 'MISSING — re-apply 232' END)
+          THEN 'ok' ELSE 'MISSING — re-apply 232' END),
+
+    ('233  no money writer calls a shape that does not exist',
+     CASE WHEN NOT EXISTS (
+            -- The field-scoped call always passed a QUOTED field name in third
+            -- position. Matched on that shape, not on a comma count: a regex
+            -- cannot count arguments, because [^)]* crosses an opening
+            -- parenthesis and reads the comma inside jsonb_build_object() as an
+            -- extra one. 233's first draft did that and refused its own fix.
+            SELECT 1 FROM pg_proc p JOIN pg_namespace n ON n.oid = p.pronamespace
+             WHERE n.nspname = 'public' AND p.prokind = 'f'
+               AND (p.prosrc ~ $re$camp_family_save\s*\(\s*[a-z_]+\s*,\s*[a-z_]+\s*,\s*'$re$
+                    OR p.prosrc ~ $re$camp_family_for_update\s*\(\s*[a-z_]+\s*,\s*[a-z_]+\s*,\s*'$re$))
+          THEN 'ok' ELSE 'AUTOPAY IS STILL DOUBLE-CHARGING — re-apply 233' END),
+
+    ('234  families and shop orders on ids',
+     CASE WHEN to_regprocedure('public.camp_family_key_for_person(uuid,bigint,text)') IS NOT NULL
+           AND to_regprocedure('public.verify_family_identity()') IS NOT NULL
+           AND EXISTS (SELECT 1 FROM information_schema.columns
+                        WHERE table_schema = 'public' AND table_name = 'camp_families'
+                          AND column_name = 'person_ids')
+           AND EXISTS (SELECT 1 FROM pg_proc p JOIN pg_namespace n ON n.oid = p.pronamespace
+                        WHERE n.nspname = 'public' AND p.proname = 'settle_shop_order'
+                          AND p.prosrc ~ 'camp_family_key_for_person')
+          THEN 'ok' ELSE 'MISSING — re-apply 234' END)
     ) AS t(item, result)
 
 UNION ALL
@@ -177,6 +201,8 @@ UNION ALL
     -- a queue for the office, not a defect — work it with
     -- parent_invites_needing_attention() and restamp_parent_invite().
     ('parent invite identity', public.verify_parent_invite_identity()::text),
+    -- still_matching_camper_names_by_hand must be []. 234 takes the last one.
+    ('family identity',     public.verify_family_identity()::text),
     -- Empty is the answer you want for both of these. Anything in the second is
     -- a function PostgREST cannot resolve, which fails every call from an edge
     -- function.
