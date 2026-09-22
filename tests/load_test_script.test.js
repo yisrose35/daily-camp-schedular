@@ -622,6 +622,25 @@ test('the canteen measures SCALING now, not a ceiling it no longer has', () => {
         'the warm-up must run before anything measured');
 });
 
+test('the canteen reports efficiency against linear, not just a ratio', () => {
+    const src = require('node:fs').readFileSync(path.join(__dirname, '..', 'scripts', 'load_test.mjs'), 'utf8');
+    const body = src.slice(src.indexOf('async function phaseCanteen'),
+                           src.indexOf('async function teardown('));
+    // Two consecutive runs of identical work measured the one-register leg at
+    // 3.2/second and then 6.1/second, which inflated the headline ratio to 15x
+    // and 13.2x when the truth was near-linear both times. A baseline that
+    // swings 2x between runs is not a baseline.
+    assert.match(body, /const serialN = Math\.max\(10, Math\.min\(100, o\.parents\)\);/,
+        'the baseline leg needs enough samples to divide by');
+    // tills/p50 is what perfect scaling would be; the fraction achieved says
+    // the same thing as the ratio without a noisy denominator.
+    assert.match(body, /const ideal = tills \/ \(full\.sum\.p50 \/ 1000\);/);
+    assert.match(body, /% of perfect scaling/);
+    assert.match(body, /if \(pct < 60\)/,
+        'well under linear is a finding, and names the likely cause');
+    assert.match(body, /connections/);
+});
+
 test('the label and the plan line both name the register count', () => {
     const src = require('node:fs').readFileSync(path.join(__dirname, '..', 'scripts', 'load_test.mjs'), 'utf8');
     assert.match(src, /report\.push\(\[`canteen rush · \$\{tills\} register\(s\)`/,

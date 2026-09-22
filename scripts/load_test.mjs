@@ -698,7 +698,11 @@ async function phaseCanteen(c, o, env, report, log) {
     // children never contend. So the honest question is the payments phase's
     // question: does the rate RISE with the number of callers? A camp-wide
     // lock cannot let it.
-    const serialN = Math.max(10, Math.min(40, o.parents));
+    // 40 was too few to divide by. Two consecutive runs of identical work gave
+    // 3.2/second and 6.1/second for this leg, which inflated the headline
+    // ratio to 15x and then 13.2x when the truth was near-linear both times.
+    // A baseline that swings 2x between runs is not a baseline.
+    const serialN = Math.max(10, Math.min(100, o.parents));
     const serial = await burst(serialN, 1);
     const tills = Math.min(o.registers, o.parents);
     log(`  canteen: ${o.parents} purchases through ${tills} register(s) at once`);
@@ -721,6 +725,23 @@ async function phaseCanteen(c, o, env, report, log) {
     } else if (s1 > 0 && sN > 0) {
         const scale = Math.round((sN / s1) * 10) / 10;
         log(`  canteen: ${s1}/second with ONE register, ${sN}/second with ${tills} (${scale}x)`);
+
+        // The ROBUST number, and the one to read. If each sale takes p50 and
+        // tills of them run at once, perfect scaling is tills/p50 per second.
+        // What fraction of that was achieved says the same thing as the ratio
+        // above without dividing by a noisy 40-sample baseline — and it keeps
+        // meaning something as the register count grows, where the ratio just
+        // gets bigger.
+        if (full.sum.p50 > 0) {
+            const ideal = tills / (full.sum.p50 / 1000);
+            const pct = Math.round((sN / ideal) * 100);
+            log(`           ${pct}% of perfect scaling (${tills} tills at ${full.sum.p50}ms each`
+                + ` would be ~${ideal.toFixed(0)}/second).`);
+            if (pct < 60) {
+                log('           Well under linear: something shared is binding — connections');
+                log('             or CPU rather than the row lock. That is a sizing question.');
+            }
+        }
         if (scale < 1.5) {
             log(`           ⚠ ${tills} registers achieved barely more than one. Something is`);
             log('             still serialising the camp — before 219/220 the whole snacks');
