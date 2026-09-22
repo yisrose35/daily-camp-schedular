@@ -238,6 +238,17 @@ LANGUAGE sql STABLE SECURITY DEFINER SET search_path = public, pg_catalog AS $$
     SELECT EXISTS (SELECT 1 FROM camps c WHERE c.id = p_camp_id AND c.owner = auth.uid())
 $$;
 
+-- 097's admin gate, copied verbatim rather than simplified: 232 refuses a
+-- restamp from anyone who is not an owner or admin, and a stub that always said
+-- yes would make that refusal untestable — which is how a gate ships open.
+CREATE OR REPLACE FUNCTION public._is_camp_admin(p_camp_id uuid, p_caller uuid)
+RETURNS boolean LANGUAGE sql STABLE SECURITY DEFINER
+SET search_path = public, pg_catalog AS $$
+    SELECT EXISTS (SELECT 1 FROM camps WHERE id = p_camp_id AND owner = p_caller)
+        OR EXISTS (SELECT 1 FROM camp_users
+                   WHERE camp_id = p_camp_id AND user_id = p_caller AND role IN ('owner', 'admin'));
+$$;
+
 CREATE OR REPLACE FUNCTION public.user_section_level(p_camp_id uuid, p_section text)
 RETURNS text LANGUAGE sql STABLE SECURITY DEFINER
 SET search_path = public, pg_catalog AS $$ SELECT 'edit'::text $$;
@@ -257,8 +268,14 @@ CREATE TABLE IF NOT EXISTS public.camp_billing_enrollments (
     PRIMARY KEY (camp_id, entry_id));
 -- 211's families rows, which 212's camp_families_object reads and 214's
 -- use_family_card_for_canteen_auto_reload reaches through it.
+-- The FULL 211 shape, name and camper_ids included. An abbreviated stub is
+-- worse than none here: 211 creates this table with CREATE TABLE IF NOT EXISTS,
+-- so a short stub wins and then 211's own index on camper_ids fails, which makes
+-- 211 impossible to try even though it is correct.
 CREATE TABLE IF NOT EXISTS public.camp_families (
     camp_id uuid NOT NULL, family_key text NOT NULL,
+    name text NOT NULL DEFAULT '',
+    camper_ids jsonb NOT NULL DEFAULT '[]'::jsonb,
     payload jsonb NOT NULL DEFAULT '{}'::jsonb,
     deleted_at timestamptz,
     first_seen timestamptz NOT NULL DEFAULT now(),

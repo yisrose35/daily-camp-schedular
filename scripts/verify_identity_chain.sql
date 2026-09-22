@@ -1,29 +1,34 @@
 -- ============================================================================
--- Confirm migrations 222-230 are in and doing their job.
+-- Confirm migrations 222-234 are in and doing their job.
 --
--- Paste the whole thing into the Supabase SQL Editor. It is READ ONLY — every
--- statement is a SELECT, nothing is created, changed or deleted, and the one
--- purge function it calls is called in its DRY RUN form.
+-- Paste the whole thing into the Supabase SQL Editor. It is READ ONLY — one
+-- SELECT, nothing is created, changed or deleted, and the two purge functions
+-- it calls are called in their DRY RUN form.
 --
--- It answers in three blocks:
+-- ONE STATEMENT ON PURPOSE. The SQL Editor only shows you the result grid of
+-- the LAST statement in a paste. The first version of this file was three
+-- separate SELECTs, so two thirds of the answer was silently thrown away before
+-- anyone could read it. Everything is now a single UNION ALL and comes back as
+-- one grid of (part, item, result).
 --
---   1. IS IT THERE — one row per migration, saying whether the functions it
---      created exist and whether the overloads it dropped are gone. Anything
---      other than "ok" here means that file did not apply.
---   2. WHAT IT FOUND — the verifiers' own numbers, as jsonb. These are facts
---      about your data, not pass/fail: some are meant to be non-zero.
---   3. WHAT TO DO NEXT — the two destructive repairs, still un-run, with the
---      exact line to run when you have read the dry run above it.
+-- The three parts:
+--
+--   1 is it there      — one row per migration. Anything other than "ok" means
+--                        that file did not apply.
+--   2 what it found    — the verifiers' own numbers. These are facts about your
+--                        data, not pass/fail: some are MEANT to be non-zero.
+--   3 what to do next  — the two destructive repairs, still un-run, each
+--                        reporting the exact line to run once you have read it.
 --
 -- Safe to run as often as you like.
 -- ============================================================================
 
--- ─── 1. is it there ─────────────────────────────────────────────────────────
--- to_regprocedure returns NULL for a signature that does not exist instead of
--- erroring, so a missing function reads as a row saying so rather than killing
--- the whole script.
-SELECT * FROM (
-    VALUES
+  -- ─── 1. is it there ───────────────────────────────────────────────────────
+  -- to_regprocedure returns NULL for a signature that does not exist instead of
+  -- erroring, so a missing function reads as a row saying so rather than
+  -- killing the whole query.
+  SELECT '1 is it there' AS part, t.item, t.result
+    FROM (VALUES
     ('222  deleting a camp deletes its data',
      CASE WHEN to_regprocedure('public.purge_camp_data(uuid)') IS NOT NULL
            AND to_regprocedure('public.verify_camp_deletion()') IS NOT NULL
@@ -86,7 +91,7 @@ SELECT * FROM (
                AND (p.proname LIKE '%canteen%' OR p.proname LIKE '%shop_order%')
              GROUP BY p.proname
             HAVING count(DISTINCT p.pronargs) > 1 AND bool_or(p.pronargdefaults > 0))
-          THEN 'ok' ELSE 'STILL AMBIGUOUS — see the list in block 2' END),
+          THEN 'ok' ELSE 'STILL AMBIGUOUS — see the list in part 2' END),
 
     ('229  no writer returns on a variable set to NULL',
      CASE WHEN NOT EXISTS (
@@ -105,43 +110,129 @@ SELECT * FROM (
            AND EXISTS (SELECT 1 FROM pg_proc p JOIN pg_namespace n ON n.oid = p.pronamespace
                         WHERE n.nspname = 'public' AND p.proname = 'submit_shop_order'
                           AND p.prosrc ~ 'settlement')
-          THEN 'ok' ELSE 'MISSING or the stale overload survived — re-apply 230' END)
-) AS t(migration, applied)
-ORDER BY migration;
+          THEN 'ok' ELSE 'MISSING or the stale overload survived — re-apply 230' END),
 
+    ('231  no writer asks the camper question itself',
+     CASE WHEN to_regprocedure('public.submit_canteen_deposit(text,numeric,uuid,bigint)') IS NOT NULL
+           AND to_regprocedure('public.submit_canteen_deposit(text,numeric,uuid)') IS NULL
+           AND to_regprocedure('public.set_canteen_limits(text,numeric,numeric,numeric,uuid,bigint)') IS NOT NULL
+           AND to_regprocedure('public.set_canteen_auto_reload(uuid,text,jsonb,bigint)') IS NOT NULL
+           AND to_regprocedure('public.use_family_card_for_canteen_auto_reload(uuid,text,text,bigint)') IS NOT NULL
+           -- None of 231's OWN functions still tests camper_names ? by hand.
+           --
+           -- Scoped deliberately. The first version of this row asked the
+           -- camp-wide question, which made it read "re-apply 231" for a
+           -- function 231 does not touch — get_my_shop_orders — so applying 231
+           -- could never have turned this row green. A check that cannot pass is
+           -- indistinguishable from a check that is failing, which is the same
+           -- defect shape this whole chain is about. The camp-wide sweep has its
+           -- own row in part 2, where a non-zero answer means "there is more to
+           -- do", not "this file did not apply".
+           AND NOT EXISTS (SELECT 1 FROM pg_proc p JOIN pg_namespace n ON n.oid = p.pronamespace
+                            WHERE n.nspname = 'public' AND p.prokind = 'f'
+                              AND p.proname IN ('submit_canteen_deposit', 'set_canteen_limits',
+                                                'set_canteen_auto_reload',
+                                                'use_family_card_for_canteen_auto_reload',
+                                                '_admin_clear_stale_byop_cards')
+                              AND p.prosrc ~ 'camper_names \?')
+           -- and the two halves that were left on the campistrySnacks document
+           AND NOT EXISTS (SELECT 1 FROM pg_proc p JOIN pg_namespace n ON n.oid = p.pronamespace
+                            WHERE n.nspname = 'public'
+                              AND p.proname IN ('use_family_card_for_canteen_auto_reload',
+                                                '_admin_clear_stale_byop_cards')
+                              AND p.prosrc ~ 'campistrySnacks')
+          THEN 'ok' ELSE 'MISSING — re-apply 231' END),
 
--- ─── 2. what the verifiers found ────────────────────────────────────────────
--- Facts about your data. Several of these are SUPPOSED to be non-zero — read
--- the notes in each migration's header. The ones worth acting on are called out
--- in block 3.
-SELECT 'camp deletion'     AS area, public.verify_camp_deletion()     AS found
-UNION ALL
-SELECT 'camper ids',              public.verify_camper_ids()
-UNION ALL
-SELECT 'parent ownership',        public.verify_camper_ownership()
-UNION ALL
-SELECT 'face consent',            public.verify_face_consent()
-UNION ALL
-SELECT 'canteen identity',        public.verify_canteen_identity()
-UNION ALL
--- Empty is the answer you want. Anything here is a function PostgREST cannot
--- resolve, which fails every call from an edge function.
-SELECT 'ambiguous money RPCs',
-       COALESCE((SELECT jsonb_object_agg(x.proname, x.arities)
-                   FROM (SELECT p.proname,
-                                jsonb_agg(DISTINCT p.pronargs ORDER BY p.pronargs) AS arities
-                           FROM pg_proc p JOIN pg_namespace n ON n.oid = p.pronamespace
-                          WHERE n.nspname = 'public' AND p.prokind = 'f'
-                            AND (p.proname LIKE '%canteen%' OR p.proname LIKE '%shop_order%')
-                          GROUP BY p.proname
-                         HAVING count(DISTINCT p.pronargs) > 1
-                            AND bool_or(p.pronargdefaults > 0)) x),
-                '{}'::jsonb);
+    ('232  an invite cannot inherit a stranger',
+     CASE WHEN to_regprocedure('public.restamp_parent_invite(uuid)') IS NOT NULL
+           AND to_regprocedure('public.parent_invites_needing_attention(uuid)') IS NOT NULL
+           AND to_regprocedure('public.verify_parent_invite_identity()') IS NOT NULL
+           AND EXISTS (SELECT 1 FROM information_schema.columns
+                        WHERE table_schema = 'public' AND table_name = 'link_parent_invites'
+                          AND column_name = 'person_ids_resolved_at')
+           -- The bound is IN the gate. Checked by text because that is what a
+           -- later edit removes; the behaviour is checked by
+           -- scripts/pgtests/232_*.sql, which catches a bound that keeps the
+           -- word and inverts the comparison.
+           AND EXISTS (SELECT 1 FROM pg_proc p JOIN pg_namespace n ON n.oid = p.pronamespace
+                        WHERE n.nspname = 'public' AND p.proname = '_invite_covers_person'
+                          AND p.prosrc ~ 'person_ids_resolved_at' AND p.prosrc ~ 'first_seen')
+          THEN 'ok' ELSE 'MISSING — re-apply 232' END),
 
+    ('233  no money writer calls a shape that does not exist',
+     CASE WHEN NOT EXISTS (
+            -- The field-scoped call always passed a QUOTED field name in third
+            -- position. Matched on that shape, not on a comma count: a regex
+            -- cannot count arguments, because [^)]* crosses an opening
+            -- parenthesis and reads the comma inside jsonb_build_object() as an
+            -- extra one. 233's first draft did that and refused its own fix.
+            SELECT 1 FROM pg_proc p JOIN pg_namespace n ON n.oid = p.pronamespace
+             WHERE n.nspname = 'public' AND p.prokind = 'f'
+               AND (p.prosrc ~ $re$camp_family_save\s*\(\s*[a-z_]+\s*,\s*[a-z_]+\s*,\s*'$re$
+                    OR p.prosrc ~ $re$camp_family_for_update\s*\(\s*[a-z_]+\s*,\s*[a-z_]+\s*,\s*'$re$))
+          THEN 'ok' ELSE 'AUTOPAY IS STILL DOUBLE-CHARGING — re-apply 233' END),
 
--- ─── 3. the two repairs, still un-run ───────────────────────────────────────
--- Both are DRY RUNS here. Each returns the line to run when you have read it.
--- Nothing below deletes anything.
-SELECT 'orphaned camp data'  AS repair, public.purge_orphaned_camp_data() AS dry_run
+    ('234  families and shop orders on ids',
+     CASE WHEN to_regprocedure('public.camp_family_key_for_person(uuid,bigint,text)') IS NOT NULL
+           AND to_regprocedure('public.verify_family_identity()') IS NOT NULL
+           AND EXISTS (SELECT 1 FROM information_schema.columns
+                        WHERE table_schema = 'public' AND table_name = 'camp_families'
+                          AND column_name = 'person_ids')
+           AND EXISTS (SELECT 1 FROM pg_proc p JOIN pg_namespace n ON n.oid = p.pronamespace
+                        WHERE n.nspname = 'public' AND p.proname = 'settle_shop_order'
+                          AND p.prosrc ~ 'camp_family_key_for_person')
+          THEN 'ok' ELSE 'MISSING — re-apply 234' END)
+    ) AS t(item, result)
+
 UNION ALL
-SELECT 'withdrawn face data',          public.purge_revoked_face_data();
+
+  -- ─── 2. what the verifiers found ──────────────────────────────────────────
+  -- Facts about your data. Several of these are SUPPOSED to be non-zero — read
+  -- the notes in each migration's header. The ones worth acting on are called
+  -- out in part 3.
+  SELECT '2 what it found', v.item, v.result
+    FROM (VALUES
+    ('camp deletion',      public.verify_camp_deletion()::text),
+    ('camper ids',         public.verify_camper_ids()::text),
+    ('parent ownership',   public.verify_camper_ownership()::text),
+    ('face consent',       public.verify_face_consent()::text),
+    ('canteen identity',   public.verify_canteen_identity()::text),
+    -- slots_a_later_arrival_could_claim must be 0. slots_awaiting_a_decision is
+    -- a queue for the office, not a defect — work it with
+    -- parent_invites_needing_attention() and restamp_parent_invite().
+    ('parent invite identity', public.verify_parent_invite_identity()::text),
+    -- still_matching_camper_names_by_hand must be []. 234 takes the last one.
+    ('family identity',     public.verify_family_identity()::text),
+    -- Empty is the answer you want for both of these. Anything in the second is
+    -- a function PostgREST cannot resolve, which fails every call from an edge
+    -- function.
+    ('still matching camper names by hand',
+     COALESCE((SELECT jsonb_agg(DISTINCT p.proname)
+                 FROM pg_proc p JOIN pg_namespace n ON n.oid = p.pronamespace
+                WHERE n.nspname = 'public' AND p.prokind = 'f'
+                  AND p.prosrc ~ 'camper_names \?'), '[]'::jsonb)::text),
+    ('ambiguous money RPCs',
+     COALESCE((SELECT jsonb_object_agg(x.proname, x.arities)
+                 FROM (SELECT p.proname,
+                              jsonb_agg(DISTINCT p.pronargs ORDER BY p.pronargs) AS arities
+                         FROM pg_proc p JOIN pg_namespace n ON n.oid = p.pronamespace
+                        WHERE n.nspname = 'public' AND p.prokind = 'f'
+                          AND (p.proname LIKE '%canteen%' OR p.proname LIKE '%shop_order%')
+                        GROUP BY p.proname
+                       HAVING count(DISTINCT p.pronargs) > 1
+                          AND bool_or(p.pronargdefaults > 0)) x),
+              '{}'::jsonb)::text)
+    ) AS v(item, result)
+
+UNION ALL
+
+  -- ─── 3. the two repairs, still un-run ─────────────────────────────────────
+  -- Both are DRY RUNS. Each returns the line to run when you have read it.
+  -- Nothing here deletes anything.
+  SELECT '3 what to do next', r.item, r.result
+    FROM (VALUES
+    ('orphaned camp data',   public.purge_orphaned_camp_data()::text),
+    ('withdrawn face data',  public.purge_revoked_face_data()::text)
+    ) AS r(item, result)
+
+ORDER BY part, item;
