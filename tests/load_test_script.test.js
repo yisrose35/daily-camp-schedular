@@ -599,3 +599,115 @@ test('the label and the plan line both name the register count', () => {
         'two runs at different register counts must not look like the same measurement');
     assert.match(src, /\$\{o\.registers\} canteen register\(s\)/, 'the plan line states it up front');
 });
+
+// ── the payments phase ──────────────────────────────────────────────────────
+// Migrations 208-215 took payment recording off a camp-wide FOR UPDATE. That is
+// asserted structurally by tests/payment_family_writers.test.js and exercised on
+// a real Postgres by scripts/pgtests; this phase is the only thing that turns it
+// into a number against a real project under real concurrency.
+test('parseArgs takes the payments options, with sane defaults', async () => {
+    const { parseArgs } = await load();
+    const o = parseArgs([]);
+    assert.strictEqual(o.payments, 200);
+    assert.strictEqual(o.payFamilies, 50);
+    assert.strictEqual(parseArgs(['--payments', '500']).payments, 500);
+    assert.strictEqual(parseArgs(['--pay-families', '120']).payFamilies, 120);
+    assert.strictEqual(parseArgs(['--payments', '0']).payments, 1, 'floored at one');
+    assert.strictEqual(parseArgs(['--pay-families', '0']).payFamilies, 1);
+    assert.deepStrictEqual(parseArgs(['--phases', 'payments']).phases, ['payments']);
+    assert.throws(() => parseArgs(['--phases', 'paymets']), /unknown phase/);
+});
+
+test('the payments options do not disturb the other phases', async () => {
+    const { parseArgs } = await load();
+    const o = parseArgs(['--payments', '5', '--pay-families', '2']);
+    assert.strictEqual(o.parents, 200);
+    assert.strictEqual(o.registers, 6);
+    assert.strictEqual(o.concurrency, 50);
+});
+
+test('the payment fixture carries every field the dedupe and the ledger need', async () => {
+    const { loadPayment, payFamilyKey } = await load();
+    assert.strictEqual(payFamilyKey(3), 'lt_fam_3');
+    const p = loadPayment('spread_7', 'lt_fam_3');
+    assert.strictEqual(p.id, 'lt_pay_spread_7');
+    assert.strictEqual(p.reference, 'lt_ref_spread_7');
+    assert.strictEqual(p.familyKey, 'lt_fam_3', 'the ledger post needs familyKey, or nothing is locked');
+    assert.ok(p.amount > 0);
+    assert.strictEqual(p.status, 'succeeded', 'a pending payment posts no ledger entry, so it would measure less');
+    assert.match(p.date, /^\d{4}-\d{2}-\d{2}$/);
+    // The ids must be prefixed, because teardown deletes by that prefix.
+    assert.ok(p.id.startsWith('lt_pay_'));
+});
+
+test('every simulated payment is DISTINCT, in both modes', async () => {
+    const { loadPayment } = await load();
+    const ids = new Set();
+    for (const mode of ['spread', 'one']) {
+        for (let i = 0; i < 50; i++) ids.add(loadPayment(`${mode}_${i}`, 'lt_fam_0').id);
+    }
+    // 100 distinct ids: if `one` reused ids, the dedupe would short-circuit and the
+    // run would measure a lookup instead of contention on the family row.
+    assert.strictEqual(ids.size, 100,
+        'a repeated id makes append_camp_payment return alreadyRecorded, measuring nothing');
+});
+
+test('the phase runs BOTH modes and reports them as a labelled pair', () => {
+    const src = require('node:fs').readFileSync(path.join(__dirname, '..', 'scripts', 'load_test.mjs'), 'utf8');
+    assert.match(src, /for \(const mode of \['spread', 'one'\]\)/);
+    assert.match(src, /payments · spread over \$\{o\.payFamilies\} families/);
+    assert.match(src, /payments · all to ONE family/);
+    // `one` must aim every payment at the same family, and `spread` must not.
+    assert.match(src, /payFamilyKey\(mode === 'one' \? 0 : i % o\.payFamilies\)/,
+        'the two modes must differ only in WHICH family is posted to');
+});
+
+test('the phase states the comparison, and warns when it fails to appear', () => {
+    const src = require('node:fs').readFileSync(path.join(__dirname, '..', 'scripts', 'load_test.mjs'), 'utf8');
+    assert.match(src, /const ratio = Math\.round\(\(sp \/ on\) \* 10\) \/ 10;/);
+    assert.match(src, /if \(ratio < 1\.3\)/,
+        'two similar numbers is the finding that the lock did NOT go — it must be called out');
+    assert.match(src, /something is serialising camp-wide/);
+    assert.match(src, /the lock is now per FAMILY, not per camp/);
+});
+
+test('it calls in as the webhooks do — service role, not a browser', () => {
+    const src = require('node:fs').readFileSync(path.join(__dirname, '..', 'scripts', 'load_test.mjs'), 'utf8');
+    assert.match(src, /svcRpc: \(fn, args\) => call\('POST', `\/rest\/v1\/rpc\/\$\{fn\}`, args, svc, svc\)/);
+    assert.match(src, /await c\.svcRpc\('append_camp_payment',/);
+    assert.match(src, /p_dedupe_key: pay\.reference/,
+        'the webhook path always passes a reference, which is what exercises the dedupe index');
+});
+
+test('the families are seeded through the app\'s own route, not behind its back', () => {
+    const src = require('node:fs').readFileSync(path.join(__dirname, '..', 'scripts', 'load_test.mjs'), 'utf8');
+    const a = src.indexOf('async function phasePayments');
+    const body = src.slice(a, src.indexOf('async function phaseCanteen', a));
+    assert.match(body, /upsertKvMerge\(env\.CAMP_ID, 'campistryMe'/,
+        "seeded into the document so migration 211's trigger projects them, as a real save would");
+    assert.doesNotMatch(body, /insert\('camp_families'/,
+        'inserting rows directly would skip the projection and prove less');
+    assert.match(body, /Object\.assign\(\{\}, \(me\.families/,
+        "it must MERGE with the camp's existing families, not replace them");
+});
+
+test('teardown removes the payment rows, the families and the document entries', () => {
+    const src = require('node:fs').readFileSync(path.join(__dirname, '..', 'scripts', 'load_test.mjs'), 'utf8');
+    const a = src.indexOf('async function teardown(');
+    const body = src.slice(a, src.indexOf('\n}', src.indexOf('family rows removed', a)));
+    assert.match(body, /payment_id=like\.lt_pay_\*/, 'the synthetic payment rows');
+    assert.match(body, /family_key=like\.lt_fam_\*/, 'and the synthetic family rows');
+    assert.match(body, /\/\^lt_fam_\\d\+\$\/\.test\(k\)/, 'and the families out of the document');
+    // Leaving payment rows behind would inflate the dedupe index for every later
+    // run — the same decay migration 206 fixed in the canteen archive.
+    assert.match(body, /inflate every later run's dedupe index/);
+    assert.match(body, /if \(paymentsRan\)/, 'and it only runs when the phase did');
+});
+
+test('the phase is in the default set and documented at the top', () => {
+    const src = require('node:fs').readFileSync(path.join(__dirname, '..', 'scripts', 'load_test.mjs'), 'utf8');
+    assert.match(src, /const phases = o\.phases \|\| \['reg', 'portal', 'canteen', 'payments'\];/);
+    assert.match(src, /--payments N\s+payments to record/);
+    assert.match(src, /--pay-families F/);
+    assert.match(src, /any of reg,portal,canteen,payments/);
+});
