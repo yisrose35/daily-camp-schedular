@@ -417,14 +417,16 @@
         </div>
 
         <!-- ===== DATES & PRICING =====
-             Camp Dates, Sessions & Pricing, and Attendance History used to be
-             two separate tabs (Sessions reuses the Camp Dates halves for its
-             quick-fill preset, so they were always really one topic split in
-             two). Combined into one panel/tab. Sessions stays owner-only —
+             Camp Dates and Sessions & Pricing used to be two separate tabs.
+             Combined into one panel/tab. Sessions stays owner-only —
              see #sessionsCard, shown/hidden by setupDashboardForRole() in
-             dashboard.js — while Camp Dates and Attendance History stay
-             visible (read-only for dates) to scheduler/admin team members,
-             same as before. -->
+             dashboard.js — while Camp Dates stays visible (read-only for
+             dates) to scheduler/admin team members, same as before.
+             Attendance History (the "Archive Current Season" action) used to
+             have its own card on this panel too; it moved to Me -> Roster
+             ("Archive Season" button, CampistryMe.archiveSeasonNow()) so
+             Attendance History lives only in Me, next to the per-person
+             history view it already had there. -->
         <div id="camp-dates-section" class="dash-setup-panel" style="display: none;">
           <div class="dashboard-grid">
 
@@ -466,30 +468,21 @@
                 <div class="card-header">
                     <h2>Summer Schedule</h2>
                 </div>
-                <!-- GROUPED AS TWO RANGES, not four dates. These are the start and
-                     end of each half, and laid out as a flat 2x2 they read as four
-                     unrelated fields — which is how somebody ends up entering the
-                     end of the summer as the end of the 1st half. -->
+                <!-- Only the overall start/end live here now. The HALF boundaries used
+                     to be a separate pair of date inputs on this card — that was a
+                     second place to type the same dates a "1st Half"/"2nd Half"
+                     Session already defines below, so they were removed. Per-Half
+                     rotation and the calendar transition markers now read the half
+                     boundaries FROM those two sessions' own start/end dates
+                     (Utils.getCampDates() in scheduler_core_utils.js), with the old
+                     half1End/half2Start fields kept as a silent fallback for a camp
+                     that has neither session named yet. -->
                 <div id="campDatesForm" class="dash-card-body">
                     <div class="dash-range">
-                        <span class="dash-range-label">1st Half</span>
                         <div class="dash-range-fields">
                             <div class="dash-field">
                                 <label for="campStartDate">Starts</label>
                                 <input type="date" id="campStartDate" class="dash-input">
-                            </div>
-                            <div class="dash-field">
-                                <label for="campHalf1End">Ends</label>
-                                <input type="date" id="campHalf1End" class="dash-input">
-                            </div>
-                        </div>
-                    </div>
-                    <div class="dash-range">
-                        <span class="dash-range-label">2nd Half</span>
-                        <div class="dash-range-fields">
-                            <div class="dash-field">
-                                <label for="campHalf2Start">Starts</label>
-                                <input type="date" id="campHalf2Start" class="dash-input">
                             </div>
                             <div class="dash-field">
                                 <label for="campEndDate">Ends</label>
@@ -497,6 +490,7 @@
                             </div>
                         </div>
                     </div>
+                    <p class="dash-hint" id="campDatesHalfInfo" style="display:none;"></p>
                     <!-- Plain, not a note box: what goes in here is a <details> that styles
                          itself, and a disclosure inside a grey panel reads as two
                          containers where there is one thing. -->
@@ -559,15 +553,12 @@
                         <button class="btn-edit" type="button" onclick="addSessionForm()">+ Add Session</button>
                     </div>
                 </div>
-                <!-- The setting, then why it matters, on separate lines. As one run-on
-                     label beside a checkbox it was three lines of text where the
-                     tick-box is the only part anybody is looking for. -->
-                <label style="display:flex; align-items:flex-start; gap:9px; font-size:0.85rem; font-weight:500; color:var(--slate-700); cursor:pointer;">
-                    <input type="checkbox" id="allowParentPaymentPlans" onchange="saveAllowParentPaymentPlans()" style="margin-top:2px;">
-                    <span>Let parents set up their own payment plan in Link
-                        <span class="dash-hint" style="display:block; font-weight:400; margin-top:3px;">Once accepted. When off, an application asking for a payment plan flags the office to set one up instead.</span>
-                    </span>
-                </label>
+                <!-- The "let parents set up their own payment plan" toggle moved to
+                     Me -> Billing -> "Parent self-serve payment plans" — it's a
+                     Billing policy, not a session detail, and it belongs next to
+                     Billing's other payment-policy toggles (Accepted payments).
+                     It still reads/writes the same enrollSettings.allowParentPaymentPlans
+                     key, so nothing about its effect changed. -->
                 <div id="sessionsList" style="display:flex; flex-direction:column; gap:10px; margin-top:16px;"></div>
 
                 <div id="bundleEditForm" style="display:none; margin-top:16px; padding:14px 16px; border-radius:10px; background:#f5f3ff; border:1px solid #ddd6fe;">
@@ -591,8 +582,9 @@
                     </div>
                 </div>
 
-                <div id="sessionEditForm" style="display:none; margin-top:16px; padding:14px 16px; border-radius:10px; background:var(--slate-50); border:1px solid var(--slate-200);">
-                    <h3 id="sessionFormTitle" style="margin:0 0 12px; font-size:0.9rem; font-weight:700; color:var(--slate-700);">Add Session</h3>
+                <div id="sessionEditForm" style="display:none; position:fixed; inset:0; z-index:9500; background:rgba(15,23,42,.45); backdrop-filter:blur(2px); align-items:flex-start; justify-content:center; overflow-y:auto; padding:32px 16px;">
+                  <div style="width:100%; max-width:720px; margin:0 auto 40px; background:#fff; border-radius:14px; border:1px solid var(--slate-200); box-shadow:0 20px 60px rgba(15,23,42,.25); padding:24px 28px 20px;">
+                    <h3 id="sessionFormTitle" style="margin:0 0 16px; font-size:1.15rem; font-weight:700; color:var(--slate-700);">Add Session</h3>
                     <div class="form-group dash-field">
                         <label for="sesName">Session Name</label>
                         <input type="text" id="sesName" placeholder="e.g., Summer 2026 — Full Season" class="dash-input">
@@ -602,8 +594,6 @@
                         <select id="sesDatePreset" onchange="applySessionDatePreset()" class="dash-input">
                             <option value="">Custom (set dates manually below)</option>
                             <option value="full">Full Summer</option>
-                            <option value="half1">1st Half</option>
-                            <option value="half2">2nd Half</option>
                         </select>
                         <p id="sesDatePresetHint" style="font-size:0.72rem; color:var(--slate-400); margin-top:4px;"></p>
                     </div>
@@ -644,6 +634,21 @@
                     <div class="form-group dash-field">
                         <label for="sesSibDisc">Sibling Discount (%)</label>
                         <input type="number" id="sesSibDisc" placeholder="e.g., 10 for 10% off siblings" min="0" max="100" class="dash-input">
+                        <p style="font-size:0.78rem; color:var(--slate-500); margin-top:5px; line-height:1.4;">
+                            "Siblings" are all campers linked to the <strong>same family account</strong>,
+                            counted <strong>camp-wide</strong> — they don't need to share this session;
+                            a child here and a sibling in a different session still count together.
+                            Whichever sibling has the <strong>single highest tuition</strong> across the
+                            whole family is always billed in full; every other sibling is discounted at
+                            <strong>their own session's</strong> percentage. So if this session's rate is
+                            <strong>10%</strong>, any camper enrolled here who is <em>not</em> the family's
+                            most expensive camper gets 10% off their tuition for this session — sessions
+                            with different rates can apply different discounts to different siblings in
+                            the same family. It's who pays full price that can change (not "1st child"
+                            vs "2nd child" — it's always the priciest one), and it re-prices automatically
+                            whenever a sibling enrolls or withdraws. It stacks with Early Bird pricing on
+                            the same invoice.
+                        </p>
                     </div>
                     <div class="form-group dash-field">
                         <label style="display:flex; align-items:flex-start; gap:8px; font-size:0.85rem; color:var(--slate-600);">
@@ -677,26 +682,11 @@
                         <button type="button" class="btn-primary" onclick="saveSessionForm()">Save Session</button>
                         <span id="sessionFormStatus" style="font-size:0.82rem; color:var(--slate-400);"></span>
                     </div>
+                  </div>
                 </div>
             </div>
           </div>
 
-          <div class="dashboard-card" style="max-width:700px;">
-                <div class="card-header">
-                    <h2>Attendance History</h2>
-                </div>
-                <div class="dash-card-body">
-                    <p class="dash-hint">Snapshot everyone currently on the roster and hired
-                       staff under a season label, so their attendance survives a CSV re-import
-                       or next year's reset. This never changes today's roster &mdash; it only
-                       adds a record to look back on.</p>
-                    <div class="dash-actions">
-                        <input type="text" id="seasonArchiveLabel" class="dash-input" placeholder="e.g. Summer 2026" style="flex:1; min-width:200px;">
-                        <button type="button" id="archiveSeasonBtn" onclick="archiveCurrentSeasonNow()" class="btn-primary" style="white-space:nowrap;">Archive Current Season</button>
-                        <span id="seasonArchiveStatus" class="dash-status"></span>
-                    </div>
-                </div>
-          </div>
         </div>
 
         <!-- ===== PAYMENT (Owners only) ===== -->
@@ -770,10 +760,13 @@
             </div>
 
             <!-- ===== LINK PROGRAMS ===== -->
+            <!-- Moved into Link itself (campistry_link_admin.html → Settings)
+                 so a camp owner configures Link's own settings from within
+                 Link rather than from here. Just a pointer left behind. -->
             <div class="dashboard-card" style="flex:1 1 380px; max-width:700px;">
                 <div class="card-header"><h2>🔗 Link Programs</h2></div>
-                <p class="card-desc">Turn off anything your camp doesn't actually run this year — parents in Link will never see it, and no one can sign up or pay for a program that isn't happening.</p>
-                <div id="linkProgramsBox" style="font-size:0.85rem; color:var(--slate-600);">Loading…</div>
+                <p class="card-desc">Turn off anything your camp doesn't actually run this year — parents in Link will never see it, and no one can sign up or pay for a program that isn't happening. This is now configured from inside Link.</p>
+                <a class="btn-primary" style="display:inline-block;padding:8px 16px;font-size:0.85rem;text-decoration:none;" href="campistry_link_admin.html">Open Link → Settings</a>
             </div>
             </div>
         </div>
