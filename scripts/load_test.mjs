@@ -644,38 +644,84 @@ async function phaseCanteen(c, o, env, report, log) {
     const s = await c.signIn(env.OWNER_EMAIL, env.OWNER_PASSWORD);
     const jwt = tokenFrom(s.data);
     if (!jwt) { log(`  canteen: owner sign-in failed (${describeAuthFailure(s)}) — skipped`); return null; }
-    // seed balances for the synthetic campers, touching nobody else's account
-    const cur = await c.select('camp_state_kv', `select=value&camp_id=eq.${env.CAMP_ID}&key=eq.campistrySnacks`);
-    const existing = cur.ok && Array.isArray(cur.data) && cur.data[0] ? cur.data[0].value : null;
-    const seeded = seedCanteenAccounts(existing, o.parents);
-    const w = await c.upsertKvMerge(env.CAMP_ID, 'campistrySnacks', seeded);
+
+    // ── seeding, after 219 ──────────────────────────────────────────────────
+    // This used to write the snacks DOCUMENT and let a trigger project it into
+    // rows. 219 made the rows the truth and dropped that projection, so a
+    // document write now reaches nothing: canteen_account_lock would create
+    // every account at zero and every sale would fail insufficient_balance.
+    // The phase would still print a throughput figure — for a run in which
+    // nothing was actually sold.
+    //
+    // So the accounts are written as ROWS, with the service role.
+    // camp_canteen_accounts is REVOKEd from anon and authenticated, which is
+    // why this cannot be done as the owner.
+    //
+    // Cleared first: insert() is a plain POST with no upsert, so a second run
+    // would collide on the primary key — and a fresh balance per run is what
+    // keeps the daily cap from refusing sales partway through the last burst.
+    await c.del('camp_canteen_accounts', `camp_id=eq.${env.CAMP_ID}&account_key=like.Load Camper *`);
+    const seedRows = Array.from({ length: o.parents }, (_, i) => ({
+        camp_id: env.CAMP_ID,
+        account_key: `Load Camper ${i}`,
+        camper_name: `Load Camper ${i}`,
+        balance: 100, daily_limit: 50, spent_today: 0,
+        payload: { balance: 100, dailyLimit: 50, spentToday: 0 },
+    }));
+    const w = await c.insert('camp_canteen_accounts', seedRows);
     if (!w.ok) { log(`  canteen: could not seed accounts (HTTP ${w.status}) — skipped`); return null; }
-    const samples = [];
+
+    const burst = async (n, tills) => {
+        const samples = [];
+        const t0 = Date.now();
+        await pool(Array.from({ length: n }, (_, i) => i), tills, async (i) => {
+            const res = await c.rpc('submit_canteen_purchase', {
+                p_camp_id: env.CAMP_ID, p_camper_name: `Load Camper ${i}`, p_amount: 1.5, p_items: 'Load test',
+            }, jwt);
+            samples.push(sample(res, 'submit_canteen_purchase'));
+        });
+        const elapsed = Date.now() - t0;
+        return { samples, elapsed, sum: summarize(samples, elapsed) };
+    };
+
+    // Warm-up, discarded: opening connections is not a property of the lock.
+    const warm = Math.min(30, o.parents);
+    await burst(warm, Math.min(o.registers, warm));
+
+    // ── the measurement ─────────────────────────────────────────────────────
+    // Before 219/220 every sale took SELECT ... FOR UPDATE on the whole snacks
+    // document, so a camp was ONE queue: throughput capped at 1/service_time,
+    // and adding registers moved nothing. This phase used to report that
+    // ceiling as a fact, in a sentence that would now be false.
+    //
+    // The lock is one camper's row now, and two tills ringing up different
+    // children never contend. So the honest question is the payments phase's
+    // question: does the rate RISE with the number of callers? A camp-wide
+    // lock cannot let it.
+    const serialN = Math.max(10, Math.min(40, o.parents));
+    const serial = await burst(serialN, 1);
     const tills = Math.min(o.registers, o.parents);
     log(`  canteen: ${o.parents} purchases through ${tills} register(s) at once`);
-    const t0 = Date.now();
-    await pool(Array.from({ length: o.parents }, (_, i) => i), tills, async (i) => {
-        const res = await c.rpc('submit_canteen_purchase', {
-            p_camp_id: env.CAMP_ID, p_camper_name: `Load Camper ${i}`, p_amount: 1.5, p_items: 'Load test',
-        }, jwt);
-        samples.push(sample(res, 'submit_canteen_purchase'));
-    });
-    const elapsed = Date.now() - t0;
-    const sum = summarize(samples, elapsed);
-    report.push([`canteen rush · ${tills} register(s)`, sum, verdict(sum, o.p95, [])]);
-    // submit_canteen_purchase holds a camp-wide FOR UPDATE lock for the whole
-    // read-modify-write of the snacks blob, so sales are SERIALIZED: the wall
-    // clock over N purchases divides into a per-sale cost that no amount of
-    // added concurrency improves. That derived number is the one worth knowing,
-    // because it is the camp's ceiling — and it grows with the blob, which is
-    // what the archive plus client-side compaction exist to bound.
-    if (sum.count > 0 && elapsed > 0) {
-        const perSale = elapsed / sum.count;
-        log(`  canteen: ~${perSale.toFixed(0)}ms of serialized time per sale`);
-        log(`           → a camp-wide ceiling of ~${(1000 / perSale).toFixed(0)} sales/second, whatever the register count.`);
-        log(`           Adding registers does not raise it: the blob's row lock is held per sale.`);
+    const full = await burst(o.parents, tills);
+
+    report.push(['canteen · one register at a time', serial.sum, verdict(serial.sum, o.p95, [])]);
+    report.push([`canteen rush · ${tills} register(s)`, full.sum, verdict(full.sum, o.p95, [])]);
+
+    const s1 = serial.sum.rps, sN = full.sum.rps;
+    if (s1 > 0 && sN > 0) {
+        const scale = Math.round((sN / s1) * 10) / 10;
+        log(`  canteen: ${s1}/second with ONE register, ${sN}/second with ${tills} (${scale}x)`);
+        if (scale < 1.5) {
+            log(`           ⚠ ${tills} registers achieved barely more than one. Something is`);
+            log('             still serialising the camp — before 219/220 the whole snacks');
+            log('             document was locked per sale, and it looked exactly like this.');
+        } else {
+            log('           The rate rises with the registers, so the camp is no longer one');
+            log('             queue: a sale locks only that camper\'s row, and two tills');
+            log('             ringing up different children never wait for each other.');
+        }
     }
-    return existing;
+    return { seededAccounts: o.parents };
 }
 
 async function teardown(c, env, parents, snacksBefore, paymentsRan, log) {
@@ -710,10 +756,16 @@ async function teardown(c, env, parents, snacksBefore, paymentsRan, log) {
         log(`  family rows removed: ${fr.ok ? 'ok' : 'HTTP ' + fr.status}`);
     }
     if (snacksBefore !== undefined) {
-        const cur = await c.select('camp_state_kv', `select=value&camp_id=eq.${env.CAMP_ID}&key=eq.campistrySnacks`);
-        const now = cur.ok && Array.isArray(cur.data) && cur.data[0] ? cur.data[0].value : null;
-        const r = await c.upsertKvMerge(env.CAMP_ID, 'campistrySnacks', unseedCanteenAccounts(now));
-        log(`  canteen accounts removed: ${r.ok ? 'ok' : 'HTTP ' + r.status}`);
+        // ★ 219: the synthetic canteen accounts are ROWS now. Restoring the
+        // document would leave them in the table that actually serves the POS,
+        // and every later run would start with balances already spent down —
+        // the same decay the canteen archive had before 206.
+        const acc = await c.del('camp_canteen_accounts',
+            `camp_id=eq.${env.CAMP_ID}&account_key=like.Load Camper *`);
+        log(`  canteen accounts removed: ${acc.ok ? 'ok' : 'HTTP ' + acc.status}`);
+        const tx = await c.del('canteen_transactions',
+            `camp_id=eq.${env.CAMP_ID}&camper=like.Load Camper *`);
+        log(`  canteen ledger rows removed: ${tx.ok ? 'ok' : 'HTTP ' + tx.status}`);
     }
 }
 

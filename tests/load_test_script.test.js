@@ -575,22 +575,51 @@ test('the canteen phase runs at the register count, capped by the work available
     const src = require('node:fs').readFileSync(path.join(__dirname, '..', 'scripts', 'load_test.mjs'), 'utf8');
     assert.match(src, /const tills = Math\.min\(o\.registers, o\.parents\);/,
         'never more tills than purchases to make');
-    assert.match(src, /await pool\(Array\.from\(\{ length: o\.parents \}, \(_, i\) => i\), tills,/,
+    assert.match(src, /await pool\(Array\.from\(\{ length: n \}, \(_, i\) => i\), tills,/,
         'the pool uses tills — o.concurrency here is the bug this replaced');
-    assert.doesNotMatch(src, /\}, \(_, i\) => i\), o\.concurrency, async \(i\) => \{\s*\n\s*const res = await c\.rpc\('submit_canteen_purchase'/,
-        'the old parent-concurrency call must be gone');
 });
 
-test('the canteen reports the serialized per-sale cost and the ceiling it implies', () => {
+test('the canteen seeds ROWS, because 219 stopped the document reaching them', () => {
     const src = require('node:fs').readFileSync(path.join(__dirname, '..', 'scripts', 'load_test.mjs'), 'utf8');
-    assert.match(src, /const perSale = elapsed \/ sum\.count;/, 'wall clock over purchases');
-    assert.match(src, /ms of serialized time per sale/);
-    assert.match(src, /sales\/second, whatever the register count/,
-        'the ceiling is the actionable number, not the p95 of an impossible burst');
-    assert.match(src, /Adding registers does not raise it/,
-        'a reader must not respond by buying more tills');
-    assert.match(src, /if \(sum\.count > 0 && elapsed > 0\)/,
-        'no divide-by-zero when the phase produced nothing');
+    const body = src.slice(src.indexOf('async function phaseCanteen'),
+                           src.indexOf('async function teardown('));
+    // 219 made camp_canteen_accounts the truth and dropped the projection, so
+    // seeding the document now reaches nothing: every account would be created
+    // at zero by canteen_account_lock and every sale would fail
+    // insufficient_balance — while the phase still printed a throughput number
+    // for a run in which nothing was sold.
+    assert.match(body, /c\.insert\('camp_canteen_accounts', seedRows\)/,
+        'the accounts must be seeded as rows');
+    assert.doesNotMatch(body, /upsertKvMerge\(env\.CAMP_ID, 'campistrySnacks'/,
+        'seeding the document no longer reaches the accounts that serve the POS');
+    // A second run must not collide on the primary key, and must start from a
+    // full balance or the daily cap refuses sales partway through.
+    assert.match(body, /c\.del\('camp_canteen_accounts',[\s\S]{0,120}?Load Camper/,
+        'cleared before seeding');
+});
+
+test('the canteen measures SCALING now, not a ceiling it no longer has', () => {
+    const src = require('node:fs').readFileSync(path.join(__dirname, '..', 'scripts', 'load_test.mjs'), 'utf8');
+    const body = src.slice(src.indexOf('async function phaseCanteen'),
+                           src.indexOf('async function teardown('));
+    // The old phase asserted a camp-wide ceiling as a fact — "adding registers
+    // does not raise it". After 219/220 that sentence is false, and a report
+    // that states it would tell the reader the opposite of what was achieved.
+    assert.doesNotMatch(body, /whatever the register count/);
+    assert.doesNotMatch(body, /Adding registers does not raise it/);
+    // One register against many, same work: a camp-wide lock cannot let the
+    // rate rise, so a rise is the proof it is gone.
+    assert.match(body, /const serial = await burst\(serialN, 1\);/,
+        'the serial leg must run at ONE register whatever --registers says');
+    assert.match(body, /const scale = Math\.round\(\(sN \/ s1\) \* 10\) \/ 10;/);
+    assert.match(body, /if \(scale < 1\.5\)/,
+        'a rate that does not rise with registers is the finding, and must be called out');
+    assert.match(body, /still serialising the camp/);
+    // ...and a discarded warm-up, so the first measured burst does not pay for
+    // opening the connections the second one reuses.
+    assert.match(body, /const warm = Math\.min\(30, o\.parents\);/);
+    assert.ok(body.indexOf('const warm =') < body.indexOf('const serial ='),
+        'the warm-up must run before anything measured');
 });
 
 test('the label and the plan line both name the register count', () => {
