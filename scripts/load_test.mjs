@@ -708,7 +708,17 @@ async function phaseCanteen(c, o, env, report, log) {
     report.push([`canteen rush · ${tills} register(s)`, full.sum, verdict(full.sum, o.p95, [])]);
 
     const s1 = serial.sum.rps, sN = full.sum.rps;
-    if (s1 > 0 && sN > 0) {
+    // A rate is only a measurement of the thing you meant if the calls
+    // SUCCEEDED. 219 shipped a canteen_post that threw on every purchase, and
+    // this phase still printed "5.7x — the rate rises with the registers", a
+    // confident conclusion drawn from 340 identical failures. Errors are
+    // visible in the report, but a sentence in plain English outranks a table
+    // nobody reads twice.
+    if (serial.sum.ok === 0 || full.sum.ok === 0) {
+        log(`  canteen: no conclusion — ${serial.sum.count + full.sum.count - serial.sum.ok - full.sum.ok}`
+            + ' of the purchases failed. Fix the errors above; a rate over failing'
+            + ' calls measures how fast the database can say no.');
+    } else if (s1 > 0 && sN > 0) {
         const scale = Math.round((sN / s1) * 10) / 10;
         log(`  canteen: ${s1}/second with ONE register, ${sN}/second with ${tills} (${scale}x)`);
         if (scale < 1.5) {
