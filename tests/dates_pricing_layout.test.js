@@ -56,30 +56,63 @@ test('the sessions list spans the row rather than sitting in one column', () => 
     assert.match(panel(), /class="dashboard-card dashboard-card--wide" id="sessionsCard"/);
 });
 
-test('the dates card owns only the overall start and end', () => {
-    // The half boundaries used to be a second pair of date inputs here — the same
-    // dates a "1st Half"/"2nd Half" Session already defines, typed twice, which is
-    // how somebody enters the end of the summer as the end of the 1st half. They
-    // were removed; Sessions are the source of truth now.
-    const p = panel();
-    assert.strictEqual((p.match(/class="dash-range"/g) || []).length, 1,
-        'one range: starts and ends');
-    assert.match(CSS, /\.dash-field > label \{[^}]*color: var\(--slate-400\)/s);
-    // The user is TOLD where the halves come from rather than left to wonder why
-    // two date boxes disappeared.
-    assert.match(p, /id="campDatesHalfInfo"/);
-    assert.match(JS, /Half boundaries for Per-Half rotation and the calendar come from your/);
-    assert.match(JS, /using the previously saved half boundaries as a fallback/,
-        'a camp with neither session named must be told it is on the fallback');
+test('the camp date inputs are GONE — sessions are the source of truth', () => {
+    // Superseded twice over. First the half boundaries were removed (the same
+    // dates a "1st Half"/"2nd Half" Session already defines, typed twice), then
+    // commit 44220ca removed the overall Camp Starts/Ends pair as well:
+    // "Sessions ARE the summer schedule, so there is no separate Camp
+    // Starts/Ends step to fill in any more."
+    //
+    // This guards the REMOVAL, so re-adding a date box nobody needs fails here.
+    for (const id of ['campStartDate', 'campEndDate']) {
+        assert.strictEqual((HTML.match(new RegExp('id="' + id + '"', 'g')) || []).length, 0,
+            id + ' is back — sessions already carry these dates');
+    }
+    assert.strictEqual((HTML.match(/class="dash-range"/g) || []).length, 0,
+        'the date-range widget is back');
 });
 
-test('the two date inputs that remain are read by the JS that saves them', () => {
-    ['campStartDate', 'campEndDate'].forEach(id => {
-        assert.strictEqual((HTML.match(new RegExp('id="' + id + '"', 'g')) || []).length, 1,
-            id + ' is missing or duplicated');
-        assert.ok(JS.indexOf("getElementById('" + id + "')") > 0,
-            id + ' is no longer read by dashboard.js');
-    });
+test('the camp range is derived from sessions on every session change', () => {
+    // Utils.getCampDates() still reads camp_state_kv.campDates for older code, so
+    // removing the inputs without deriving the record would leave that permanently
+    // stale — the failure mode the removal has to avoid.
+    assert.match(JS, /function _dashDeriveCampDatesFromSessions\(\)/);
+    // One funnel: add, edit and delete all go through _dashSaveSessions.
+    const save = JS.slice(JS.indexOf('function _dashSaveSessions()'));
+    const body = save.slice(0, save.indexOf('\n    }'));
+    assert.match(body, /_dashDeriveCampDatesFromSessions\(\);/,
+        'saving sessions must re-derive, or the record goes stale silently');
+});
+
+test('the derived range is the earliest start and the latest end', () => {
+    const fn = JS.slice(JS.indexOf('function _dashDeriveCampDatesFromSessions()'));
+    const body = fn.slice(0, fn.indexOf('\n    function '));
+    assert.match(body, /starts\.reduce\(function\s*\(a, b\)\s*\{ return b < a \? b : a; \}\)/,
+        'earliest start');
+    assert.match(body, /ends\.reduce\(function\s*\(a, b\)\s*\{ return b > a \? b : a; \}\)/,
+        'latest end');
+    assert.match(body, /if \(!starts\.length \|\| !ends\.length\) return;/,
+        'a camp whose sessions carry no dates must not overwrite a real range with nothing');
+    assert.match(body, /key: 'campDates'/, 'and it is persisted where getCampDates looks');
+    assert.match(body, /onConflict: 'camp_id,key'/, 'upsert, not a duplicate row');
+});
+
+test('deriving is owner-only and debounced', () => {
+    const fn = JS.slice(JS.indexOf('function _dashDeriveCampDatesFromSessions()'));
+    const body = fn.slice(0, fn.indexOf('\n    function '));
+    assert.match(body, /if \(isTeamMember\) return;/,
+        'same guard saveCampDates() used — a team member must not write camp dates');
+    assert.match(body, /clearTimeout\(_dashDeriveCampDatesDebounce\)/,
+        'editing several sessions in a row must not fire several writes');
+});
+
+test('the half-boundary fallback is carried forward, never blanked', () => {
+    // half1End/half2Start are what Utils.getCampDates() falls back to for a camp
+    // with no "1st Half"/"2nd Half" session named. Deriving must not erase them.
+    const fn = JS.slice(JS.indexOf('function _dashDeriveCampDatesFromSessions()'));
+    const body = fn.slice(0, fn.indexOf('\n    function '));
+    assert.match(body, /half1End: _dashRawCampDatesHalves\.half1End/);
+    assert.match(body, /half2Start: _dashRawCampDatesHalves\.half2Start/);
 });
 
 test('the removed half inputs are gone from the page AND from the JS together', () => {

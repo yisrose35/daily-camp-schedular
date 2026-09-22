@@ -204,9 +204,17 @@ test('presence still exposes the REAL today, unshifted', () => {
 
 test('the dashboard has the master-key card, and it is the first one', () => {
     const card = DASH_HTML.indexOf('id="currentSessionCard"');
-    const dates = DASH_HTML.indexOf('id="campDatesForm"');
+    // It used to be anchored above id="campDatesForm". Commit 44220ca removed the
+    // Camp Dates step entirely — sessions derive the range now — so the anchor is
+    // the Sessions card, which is where those dates come from.
+    //
+    // Both ends are asserted PRESENT before being compared: indexOf returns -1 for
+    // something that is gone, and a -1 makes an ordering check answer with whatever
+    // the comparison happens to be rather than reporting that the anchor vanished.
+    const sessions = DASH_HTML.indexOf('id="sessionsCard"');
     assert.ok(card > 0, 'there is no master-key card');
-    assert.ok(card < dates, 'it belongs above the dates it is derived from');
+    assert.ok(sessions > 0, 'the Sessions card is gone, so this ordering means nothing');
+    assert.ok(card < sessions, 'it belongs above the sessions its answer is derived from');
     ['currentSessionPick', 'currentSessionExplain', 'currentSessionActions',
      'currentSessionStatus', 'saveCurrentSessionBtn'].forEach(id => {
         assert.ok(DASH_HTML.indexOf('id="' + id + '"') > 0, id + ' is missing');
