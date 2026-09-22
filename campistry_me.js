@@ -455,7 +455,12 @@ function loadData(){
         structure=s.campStructure||{};
         roster=(s.app1&&s.app1.camperRoster)||{};
         var me=s.campistryMe||{};
-        families=me.families||{}; payments=me.payments||[];
+        // ★ 211/212: the family rows win when we have them. Same rule and same
+        // reason as finPayments below — camp_families is the second home today and
+        // the only one after the writer phase, at which point me.families stops
+        // being maintained. A reader that preferred the branch would then show a
+        // family list frozen at the moment of that deploy, with no error.
+        families=_familiesFromRows||me.families||{}; payments=me.payments||[];
         payers=(window.CampistryPayers?window.CampistryPayers.normalize(me.payers):(me.payers||{}));
         broadcasts=me.broadcasts||[]; bunkAsgn=me.bunkAssignments||{}; bunkManualCounts=me.bunkManualCounts||{};
         bunkCapacity=me.bunkCapacity||{};
@@ -474,6 +479,7 @@ function loadData(){
         // read by 210). Same shape as the drain above: fired, not awaited, and it
         // re-renders if what it finds differs from what we hydrated with.
         try{ _loadPaymentsFromRows(); }catch(_){}
+        try{ _loadFamiliesFromRows(); }catch(_){}
         leads=me.leads||{};
         counselorVisibility=(me.counselorVisibility&&typeof me.counselorVisibility==='object')?me.counselorVisibility:null;
         _setupChecklistDismissed=!!me.setupChecklistDismissed;
@@ -2363,6 +2369,50 @@ async function _loadPaymentsFromRows(){
 // Exposed so a writer can pull the ledger forward after recording a payment,
 // without waiting for the next full page load.
 window.reloadCampistryPayments=_loadPaymentsFromRows;
+
+// ─── families, from rows ────────────────────────────────────────────────────
+// Migration 211 gave families their own rows; 212 added get_camp_families and
+// moved every server-side reader onto them. This is the office half, and like
+// the payments loader it has to be deployed BEFORE the writer phase stops
+// maintaining me.families — otherwise the first symptom is a family list that
+// quietly stopped changing.
+//
+// Null means "not heard from the rows", NOT "this camp has no families". A camp
+// legitimately answers {}, and conflating the two would empty the Billing screen
+// whenever the call failed.
+//
+// Soft-deleted families are already absent from what the RPC returns, so a family
+// the office removed disappears here without this file knowing the rule.
+var _familiesFromRows=null;
+
+async function _loadFamiliesFromRows(){
+    var client=window.CampistryDB&&window.CampistryDB.getClient?window.CampistryDB.getClient():window.supabase;
+    var campId=window.CampistryDB&&window.CampistryDB.getCampId?window.CampistryDB.getCampId():(window.getCampId?window.getCampId():null);
+    if(!client||typeof client.rpc!=='function'||!campId)return;
+    try{
+        var res=await client.rpc('get_camp_families',{p_camp_id:campId});
+        if(res&&res.error){
+            // A camp that has not pasted 212 yet, or a user without me.billing.
+            // The branch still has everything it had before any of this existed.
+            console.log('[Me] family rows unavailable:',res.error.message);
+            return;
+        }
+        var d=res&&res.data;
+        if(!d||d.success===false||!d.families||typeof d.families!=='object'||Array.isArray(d.families))return;
+        var before=JSON.stringify(families||{});
+        _familiesFromRows=d.families;
+        if(typeof loadData==='function')loadData();
+        // Before the writer phase the two homes agree, so this is normally a
+        // no-op and Billing must not flicker on every load.
+        if(JSON.stringify(families||{})!==before){
+            if(typeof renderBilling==='function'&&document.getElementById('page-billing'))
+                try{ renderBilling(); }catch(_){}
+        }
+    }catch(e){
+        console.warn('[Me] could not load family rows:',e&&e.message);
+    }
+}
+window.reloadCampistryFamilies=_loadFamiliesFromRows;
 
 async function _drainApplications(){
     var M=(typeof window!=='undefined'&&window.CampistryFinanceMerge)||null;
