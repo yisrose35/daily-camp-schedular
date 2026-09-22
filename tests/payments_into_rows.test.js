@@ -116,18 +116,44 @@ test('no foreign key to camps — a trigger must not abort the original save', (
 // ── the trigger ────────────────────────────────────────────────────────────
 test('the trigger upserts only what this write changed', () => {
     const body = fnBody('project_camp_payments');
-    assert.match(body, /WHERE \(v_oldMap -> n\.pid\) IS DISTINCT FROM n\.pay/,
+    assert.match(body, /WHERE \(v_oldMap -> n\.key\) IS DISTINCT FROM n\.value/,
         'new rows AND in-place status patches, and nothing else');
-    assert.match(body, /SELECT COALESCE\(jsonb_object_agg\(public\.camp_payment_identity\(o\), o\), '\{\}'::jsonb\)\s*\n\s*INTO v_oldMap/,
-        'the prior state is gathered once, before the insert');
+    assert.match(body, /FROM jsonb_each\(v_newMap\) AS n/,
+        'the candidates are the reduced map, not the raw array');
+});
+
+// The bug this test exists for was found by running the migration on a real
+// Postgres, not by reading it. With p1 present twice (100, then 120), filtering
+// BEFORE reducing dropped the current 120 as unchanged and let the superseded
+// 100 survive to win — the row went back to 100 and the two sides disagreed by
+// exactly 20. Reducing first makes the whole class impossible.
+test('the trigger REDUCES both sides before it diffs them', () => {
+    const body = fnBody('project_camp_payments');
+    const newAt = body.indexOf('INTO v_newMap');
+    const oldAt = body.indexOf('INTO v_oldMap');
+    const diffAt = body.indexOf('IS DISTINCT FROM n.value');
+    assert.ok(newAt > 0 && oldAt > 0 && diffAt > 0, 'all three steps are present');
+    assert.ok(newAt < diffAt && oldAt < diffAt,
+        'both maps must be built BEFORE the comparison, never filtered first');
+    assert.doesNotMatch(body, /DISTINCT ON/,
+        'reducing by key removes the need for it, and with it the ordering question');
+});
+
+test('last array position wins, by an explicit ORDER BY in the aggregate', () => {
+    const body = fnBody('project_camp_payments');
+    const aggs = body.match(/jsonb_object_agg\(public\.camp_payment_identity\(e\.v\), e\.v\s*\n?\s*ORDER BY e\.ord\)/g) || [];
+    assert.strictEqual(aggs.length, 2,
+        'both NEW and OLD reduce with an explicit order; without it "last" is whatever the scan produced');
+    assert.match(body, /WITH ORDINALITY AS e\(v, ord\)/);
 });
 
 test('membership is a jsonb key probe, not a per-row array scan', () => {
     const body = fnBody('project_camp_payments');
     assert.match(body, /v_oldMap jsonb/);
+    assert.match(body, /v_newMap jsonb/);
     assert.doesNotMatch(body, /=\s*ANY\s*\(\s*v_old/, 'O(n^2) rebuilds 203s growth curve');
-    assert.doesNotMatch(body, /NOT EXISTS\s*\(\s*SELECT[^)]*jsonb_array_elements\(v_old\)/,
-        'the old array must not be re-scanned per candidate');
+    assert.doesNotMatch(body, /NOT EXISTS\s*\(\s*SELECT[^)]*jsonb_array_elements/,
+        'neither array may be re-scanned per candidate');
 });
 
 test('the trigger MERGES and never deletes — phase 2 depends on it', () => {
@@ -163,8 +189,7 @@ test('the trigger fires only for campistryMe, on insert and update', () => {
 
 test('duplicate identities resolve the same way in the trigger and the backfill', () => {
     const body = fnBody('project_camp_payments');
-    assert.match(body, /ORDER BY n\.pid, n\.ord DESC/,
-        'DISTINCT ON without ORDER BY picks arbitrarily; last must win');
+    assert.match(body, /ORDER BY e\.ord\)/, 'the trigger takes the last occurrence');
     // The backfill takes position from the first occurrence, payload from the
     // last. If it disagreed with the trigger, the verifier would report
     // staleRows on data nobody had touched.
@@ -225,10 +250,20 @@ test('the verifier reports WHICH payments are wrong, not just how many', () => {
     assert.match(body, /'repair'/, 'and says what to do about it');
 });
 
-test('the verifier counts DISTINCT identities on the blob side', () => {
+test('the verifier reduces the array ONCE and checks against that', () => {
     const body = fnBody('verify_camp_payments');
-    assert.match(body, /count\(DISTINCT public\.camp_payment_identity\(p\)\)/,
-        'two array entries with one identity are one payment, and become one row');
+    assert.match(body, /INTO v_dedup/, 'one reduction, shared by every check');
+    assert.match(body, /jsonb_object_agg\(public\.camp_payment_identity\(e\.v\), e\.v\s*\n?\s*ORDER BY e\.ord\)/,
+        'last array position wins, same rule as the trigger');
+    // Comparing the RAW array against the rows reported a superseded duplicate
+    // as stale: the array held p1 at 100 and again at 120, the row correctly
+    // held 120, and the 100 looked wrong. Found on a real server.
+    for (const m of ['v_missing', 'v_differs', 'v_blobSum']) {
+        assert.ok(body.includes(m), `${m} is computed`);
+    }
+    assert.match(body, /WHERE r\.payload IS DISTINCT FROM \(v_dedup -> k\)/,
+        'stale is measured against the reduced value, never a superseded duplicate');
+    assert.match(body, /FROM jsonb_each\(v_dedup\) AS v/, 'and so is the money total');
 });
 
 test('rowPayments exceeding blobPayments is documented as expected, not a fault', () => {
