@@ -37,7 +37,16 @@ Usage:  python3 scripts/transform_family_writers.py           # report only
 import re, json, sys, os
 
 DIR='migrations'
-files=sorted([f for f in os.listdir(DIR) if re.match(r'^\d+_.*\.sql$',f)], key=lambda f:int(f[:3]))
+# EXCLUDE this transformation's own output. Without this the script reads the
+# migration it produced, finds it already transformed, fires no rule, and then
+# reports the ALREADY-TRANSFORMED body as the "original" — so the diff test
+# compares a function against itself and passes while proving nothing. That is
+# how the key-blind R6 survived a regeneration: its damage was baked into the
+# body being re-read.
+OUTPUT_AT = 214
+files=sorted([f for f in os.listdir(DIR)
+              if re.match(r'^\d+_.*\.sql$',f) and int(f[:3]) < OUTPUT_AT],
+             key=lambda f:int(f[:3]))
 latest={}
 for f in files:
     src=open(os.path.join(DIR,f)).read()
@@ -66,12 +75,19 @@ for fn in FAMILY_ONLY:
     camp = camp_expr(body)
     applied=[]
 
-    # R6: drop the "create the row if missing" preamble.
+    # R6: drop the "create the row if missing" preamble — for campistryMe ONLY.
+    #
+    # Key-blind, this stripped the campistrySnacks create in
+    # use_family_card_for_canteen_auto_reload, which would have broken auto-reload
+    # for any camp that has no snacks row yet. Second instance of the same class as
+    # R1: the rule is uniform across the FILE and not across the KEYS in it.
     n_before=body
+    def _drop_create(m):
+        return '' if "'campistryMe'" in m.group(0) else m.group(0)
     body = re.sub(r'[ \t]*INSERT INTO camp_state_kv \(camp_id, key, value, updated_at\)\n'
                   r'[ \t]*VALUES \([^\n]*\n[ \t]*ON CONFLICT \(camp_id, key\) DO NOTHING;\n',
-                  '', body)
-    if body!=n_before: applied.append('R6 drop-create')
+                  _drop_create, body)
+    if body!=n_before: applied.append('R6 drop-create(campistryMe only)')
 
     # R1: drop the lock — ONLY on the campistryMe read.
     #
@@ -108,6 +124,30 @@ for fn in FAMILY_ONLY:
                   lambda m: f'PERFORM public.camp_family_save({camp}, {m.group(2)}, {m.group(3)});', body)
     if body!=n_before: applied.append('R4 save-family')
 
+    # R4b: the accumulator idiom. The two _admin_* functions do not write each
+    # family as they go — they build a whole replacement families object inside a
+    # loop and write the branch once at the end:
+    #
+    #     v_fams := jsonb_set(v_fams, ARRAY[rec.key], v_fam, true);   -- per loop
+    #     ...
+    #     v_me := jsonb_set(v_me, '{families}', v_fams, true);        -- once
+    #
+    # R4 does not match that, so without this rule R5 would drop their write and
+    # the transformation would silently do NOTHING — a backfill that reports
+    # success and changes no card on file. The accumulator's NAME is learned from
+    # the branch write, so this cannot latch onto an unrelated variable.
+    acc = None
+    m_acc = re.search(r"\w+ := jsonb_set\(\w+, '\{families\}', (\w+)(?:, true)?\);", body)
+    if m_acc:
+        acc = m_acc.group(1)
+        n_before=body
+        body = re.sub(r'%s := jsonb_set\(%s, ARRAY\[([^\]]+)\], ([^;]+?)(?:, true)?\);' % (acc, acc),
+                      lambda m: f'PERFORM public.camp_family_save({camp}, {m.group(1)}, {m.group(2)});', body)
+        if body!=n_before: applied.append('R4b save-in-loop')
+        n_before=body
+        body = re.sub(r"[ \t]*\w+ := jsonb_set\(\w+, '\{families\}', %s(?:, true)?\);\n" % acc, '', body)
+        if body!=n_before: applied.append('R5b drop-branch-write')
+
     # R5: drop the document write.
     n_before=body
     body = re.sub(r'[ \t]*UPDATE camp_state_kv SET value = \w+, updated_at = [^\n]*\n[ \t]*WHERE camp_id = [^\n]*?key = \'campistryMe\';\n',
@@ -129,6 +169,15 @@ for fn in FAMILY_ONLY:
         k=re.search(r"key = '(\w+)'", m.group(0))
         if k and k.group(1)=='campistryMe':
             leftovers.append('campistryMe STILL WRITTEN')
+    # THE CHECK THAT CAUGHT THE TWO _admin_* FUNCTIONS. If the original put
+    # something back into the families branch and the result saves no family, the
+    # transformation has silently dropped that function's entire effect. It would
+    # apply, report success, and change nothing.
+    ocode=re.sub(r'--[^\n]*','',orig)
+    wrote_families = bool(re.search(r"jsonb_set\(\s*\w+\s*,\s*ARRAY\['families'", ocode)) or \
+                     bool(re.search(r"jsonb_set\(\s*\w+\s*,\s*'\{families\}'", ocode))
+    if wrote_families and 'camp_family_save' not in code:
+        leftovers.append('WRITES LOST — wrote families, saves none')
     if re.search(r"ARRAY\['families'", code): leftovers.append("ARRAY['families'] remains")
     if re.search(r"(?<!camp_families_object\()\w+\s*->\s*'families'", code):
         leftovers.append("->'families' remains")
