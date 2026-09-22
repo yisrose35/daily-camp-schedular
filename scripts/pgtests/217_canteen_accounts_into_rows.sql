@@ -29,7 +29,8 @@ BEGIN
     -- shape of the 354 rows in the live project.
     INSERT INTO camp_state_kv (camp_id, key, value) VALUES (c1, 'campistrySnacks', jsonb_build_object(
         'accounts', jsonb_build_object(
-            'Chaim Katz',   jsonb_build_object('balance', 12.50, 'dailyLimit', 10, 'spentToday', 3),
+            'Chaim Katz',   jsonb_build_object('balance', 12.50, 'dailyLimit', 10, 'spentToday', 3,
+                                               'lastSpendDate', '2026-09-22'),
             '  rivka stern ', jsonb_build_object('balance', 7.25,  'dailyLimit', 5),
             'Gone Lastyear', jsonb_build_object('balance', 18.25, 'dailyLimit', 10),
             'Zero Orphan',   jsonb_build_object('balance', 0,     'dailyLimit', 10))));
@@ -53,6 +54,14 @@ BEGIN
     IF (SELECT person_id FROM camp_canteen_accounts
          WHERE camp_id = c1 AND account_key = 'Chaim Katz') <> 1041 THEN
         RAISE EXCEPTION 'an exact roster name was not attributed';
+    END IF;
+    -- The blob calls it lastSpendDate. The first version of this file read
+    -- `spentOn`, which exists nowhere in the app, so this column was NULL on
+    -- every row in the live project — and 219's daily-limit reset would have
+    -- cleared every camper's counter on every sale.
+    IF (SELECT spent_on FROM camp_canteen_accounts
+         WHERE camp_id = c1 AND account_key = 'Chaim Katz') IS DISTINCT FROM DATE '2026-09-22' THEN
+        RAISE EXCEPTION 'the daily-spend date did not survive the move into a row';
     END IF;
     IF (SELECT person_id FROM camp_canteen_accounts
          WHERE camp_id = c1 AND account_key = '  rivka stern ') <> 1042 THEN
@@ -103,7 +112,8 @@ BEGIN
             'Rivka Stern', jsonb_build_object('camperId', '1042', 'name', 'Rivka Stern')))
      WHERE camp_id = c1 AND key = 'app1';
     UPDATE camp_state_kv SET value = jsonb_set(value,
-        '{accounts,Chaim Katz}', jsonb_build_object('balance', 10.00, 'dailyLimit', 10))
+        '{accounts,Chaim Katz}', jsonb_build_object('balance', 10.00, 'dailyLimit', 10,
+                                                    'lastSpendDate', '2026-09-22'))
      WHERE camp_id = c1 AND key = 'campistrySnacks';
     IF (SELECT person_id FROM camp_canteen_accounts
          WHERE camp_id = c1 AND account_key = 'Chaim Katz') <> pid THEN
@@ -112,7 +122,8 @@ BEGIN
 
     -- ── 6. an account leaving the document is stamped, not destroyed ────────
     UPDATE camp_state_kv SET value = jsonb_build_object('accounts', jsonb_build_object(
-            'Chaim Katz', jsonb_build_object('balance', 10.00, 'dailyLimit', 10)))
+            'Chaim Katz', jsonb_build_object('balance', 10.00, 'dailyLimit', 10,
+                                              'lastSpendDate', '2026-09-22')))
      WHERE camp_id = c1 AND key = 'campistrySnacks';
     IF (SELECT deleted_at FROM camp_canteen_accounts
          WHERE camp_id = c1 AND account_key = 'Gone Lastyear') IS NULL THEN
@@ -135,6 +146,13 @@ BEGIN
     -- Every penny in the camp, before the repair tool runs over it.
     SELECT COALESCE(sum(balance), 0) INTO held FROM camp_canteen_accounts WHERE camp_id = c1;
 
+    -- Damage a row the way a half-applied migration would, so the backfill has
+    -- something to REPAIR. Asserting a correct value stayed correct cannot tell
+    -- a field that is carried from one that is merely never touched: dropping
+    -- spent_on from the ON CONFLICT list passed until this line existed.
+    UPDATE camp_canteen_accounts SET spent_on = NULL, balance = 999.99
+     WHERE camp_id = c1 AND account_key = 'Chaim Katz';
+
     PERFORM public.backfill_canteen_accounts();
 
     IF (SELECT person_id FROM camp_canteen_accounts
@@ -149,13 +167,25 @@ BEGIN
     -- mutation that zeroed the balance in its INSERT passed every check above,
     -- because they all asked about person_id. The tool this file tells people
     -- to run against a live camp must not be able to empty it.
+    -- The total is back to what it was, which now requires the backfill to have
+    -- REPAIRED the 999.99 above from the document — not merely to have left the
+    -- balances alone. Dropping `balance = EXCLUDED.balance` from the ON CONFLICT
+    -- list passed this check until the corruption was added.
     IF (SELECT COALESCE(sum(balance), 0) FROM camp_canteen_accounts WHERE camp_id = c1) <> held THEN
-        RAISE EXCEPTION 'the backfill changed the money it was repairing (% → %)',
+        RAISE EXCEPTION 'the backfill did not restore the money from the document (% → %)',
             held, (SELECT COALESCE(sum(balance), 0) FROM camp_canteen_accounts WHERE camp_id = c1);
     END IF;
     IF (SELECT balance FROM camp_canteen_accounts
          WHERE camp_id = c1 AND account_key = 'Gone Lastyear') <> 18.25 THEN
         RAISE EXCEPTION 'the backfill lost the balance it had just attributed';
+    END IF;
+    -- The backfill's ON CONFLICT list is a second, separate copy of the field
+    -- mapping, and a field missing from it is a field the repair tool quietly
+    -- clears. Reverting just the backfill to the wrong `spentOn` name passed
+    -- every other check in this file.
+    IF (SELECT spent_on FROM camp_canteen_accounts
+         WHERE camp_id = c1 AND account_key = 'Chaim Katz') IS DISTINCT FROM DATE '2026-09-22' THEN
+        RAISE EXCEPTION 'the backfill cleared the daily-spend date';
     END IF;
 
     -- ── 8. the verifier actually compares balances ──────────────────────────

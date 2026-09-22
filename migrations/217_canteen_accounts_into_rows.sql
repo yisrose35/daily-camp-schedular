@@ -83,9 +83,15 @@ CREATE TABLE IF NOT EXISTS public.camp_canteen_accounts (
     credit_limit  numeric,
     balance_floor numeric,
     spent_today   numeric NOT NULL DEFAULT 0,
-    -- The day spent_today belongs to. See the header: a counter that carries
-    -- its own date needs no nightly reset and cannot lock a camper out because
-    -- a job did not run.
+    -- The day spent_today belongs to — the blob calls it `lastSpendDate`, and
+    -- that name is load-bearing: the FIRST version of this file read `spentOn`,
+    -- a field that exists nowhere in the app, so this column was NULL on every
+    -- row. Nothing read it yet, so nothing broke; 219's daily-limit reset would
+    -- have been the first to notice, by resetting every camper's counter on
+    -- every sale. The account shape is documented in 026 line 22.
+    --
+    -- A counter that carries its own date needs no nightly reset and cannot
+    -- lock a camper out because a job did not run.
     spent_on      date,
     payload       jsonb   NOT NULL DEFAULT '{}'::jsonb,
     deleted_at    timestamptz,
@@ -192,7 +198,7 @@ BEGIN
             NULLIF(r.v ->> 'creditLimit',  '')::numeric,
             NULLIF(r.v ->> 'balanceFloor', '')::numeric,
             COALESCE(NULLIF(r.v ->> 'spentToday', '')::numeric, 0),
-            NULLIF(r.v ->> 'spentOn', '')::date,
+            NULLIF(r.v ->> 'lastSpendDate', '')::date,
             r.v)
         ON CONFLICT (camp_id, account_key) DO UPDATE
            SET balance       = EXCLUDED.balance,
@@ -259,7 +265,7 @@ BEGIN
            NULLIF(ac.value ->> 'creditLimit',  '')::numeric,
            NULLIF(ac.value ->> 'balanceFloor', '')::numeric,
            COALESCE(NULLIF(ac.value ->> 'spentToday', '')::numeric, 0),
-           NULLIF(ac.value ->> 'spentOn', '')::date,
+           NULLIF(ac.value ->> 'lastSpendDate', '')::date,
            ac.value
       FROM camp_state_kv kv
       CROSS JOIN LATERAL jsonb_each(

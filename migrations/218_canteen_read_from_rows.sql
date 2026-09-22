@@ -76,7 +76,7 @@ AS $$
                    ELSE jsonb_build_object('balanceFloor', p_row.balance_floor) END
            || jsonb_build_object('spentToday', p_row.spent_today)
            || CASE WHEN p_row.spent_on IS NULL THEN '{}'::jsonb
-                   ELSE jsonb_build_object('spentOn', p_row.spent_on::text) END
+                   ELSE jsonb_build_object('lastSpendDate', p_row.spent_on::text) END
 $$;
 REVOKE ALL ON FUNCTION public._canteen_account_json(public.camp_canteen_accounts)
     FROM public, anon, authenticated;
@@ -214,10 +214,13 @@ BEGIN
     --     agrees with it; calling that a difference reported three phantom
     --     discrepancies on the first run of this verifier.
     --
-    --   dailyLimit, creditLimit, balanceFloor — limits. Absent means NO
-    --     limit; 0 means no spending at all. Coalescing these to 0 would call
-    --     an unlimited account identical to a frozen one, and would do it
-    --     silently, in the direction of refusing a child at the register.
+    --   dailyLimit, creditLimit, balanceFloor — limits, where absent and 0
+    --     are DIFFERENT and neither means what you would guess. Read
+    --     submit_canteen_purchase: an absent dailyLimit defaults to 10, and a
+    --     dailyLimit of 0 means no cap at all (`IF v_daily > 0 AND ...`). So
+    --     coalescing absent to 0 would turn a camper with a $10 daily cap into
+    --     one with no cap whatsoever — silently, in the direction of letting a
+    --     child spend without limit.
     SELECT COALESCE(jsonb_agg(jsonb_build_object(
                'account', e.key,
                'field',   f.field,
@@ -247,6 +250,25 @@ BEGIN
        AND NOT EXISTS (SELECT 1 FROM camp_canteen_accounts a
                         WHERE a.camp_id = p_camp_id AND a.account_key = e.key
                           AND a.deleted_at IS NULL);
+
+    -- lastSpendDate is compared separately because it is a DATE STRING, not a
+    -- number, and the numeric comparison above would have thrown on it. That
+    -- is exactly why it was left out of the field list, and exactly why the
+    -- first version of 217 could read a field name that exists nowhere in the
+    -- app — `spentOn` — and still report every account as matching. A
+    -- verifier's field list is a claim about what it checks; anything absent
+    -- from it is unverified, not verified.
+    SELECT v_diff || COALESCE(jsonb_agg(jsonb_build_object(
+               'account', e.key,
+               'field',   'lastSpendDate',
+               'inBlob',  e.value -> 'lastSpendDate',
+               'inRow',   public._canteen_account_json(a) -> 'lastSpendDate')), '[]'::jsonb)
+      INTO v_diff
+      FROM jsonb_each(v_blob) e
+      JOIN camp_canteen_accounts a
+        ON a.camp_id = p_camp_id AND a.account_key = e.key AND a.deleted_at IS NULL
+     WHERE NULLIF(e.value ->> 'lastSpendDate', '')
+           IS DISTINCT FROM NULLIF(public._canteen_account_json(a) ->> 'lastSpendDate', '');
 
     RETURN jsonb_build_object(
         'accountsInBlob',  (SELECT count(*) FROM jsonb_each(v_blob) e

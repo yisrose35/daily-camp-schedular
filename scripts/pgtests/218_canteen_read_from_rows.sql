@@ -34,6 +34,7 @@ BEGIN
     INSERT INTO camp_state_kv (camp_id, key, value) VALUES (c, 'campistrySnacks', jsonb_build_object(
         'accounts', jsonb_build_object(
             'Mine One',   jsonb_build_object('balance', 5.00, 'dailyLimit', 10,
+                                             'lastSpendDate', '2026-09-22',
                                              'autoReload', jsonb_build_object('on', true, 'amount', 20)),
             'Not Mine',   jsonb_build_object('balance', 99.00, 'dailyLimit', 10),
             'Mine Orphan', jsonb_build_object('balance', 3.50, 'dailyLimit', 10)),
@@ -63,6 +64,13 @@ BEGIN
     -- form for the same reason.
     IF (v -> 'accounts' -> 'Mine One' -> 'autoReload' ->> 'amount') IS DISTINCT FROM '20' THEN
         RAISE EXCEPTION 'an unknown payload field was dropped: %', v -> 'accounts' -> 'Mine One';
+    END IF;
+    -- Emitted under the name the WRITER reads. submit_canteen_purchase does
+    -- v_acct->>'lastSpendDate'; serving it as 'spentOn' would leave the daily
+    -- counter looking like it belonged to no day, resetting on every sale.
+    IF (v -> 'accounts' -> 'Mine One' ->> 'lastSpendDate') IS DISTINCT FROM '2026-09-22' THEN
+        RAISE EXCEPTION 'the daily-spend date is not served under the name the writer reads: %',
+            v -> 'accounts' -> 'Mine One';
     END IF;
 
     -- ── 3. a parent sees their own child, by id ─────────────────────────────
@@ -141,7 +149,46 @@ BEGIN
         RAISE EXCEPTION 'somebody with no relationship to the camp was served: %', v;
     END IF;
 
-    -- ── 9. the verifier agrees the swap lost nothing ────────────────────────
+    -- ── 9. the COLUMN wins over the payload, and the verifier sees it ───────
+    -- _canteen_account_json merges the payload first and layers the columns on
+    -- top. While both agree, a test cannot tell which one it read — which is
+    -- how the check above passed with the column emitted under the wrong name
+    -- entirely, satisfied by the payload's own copy. Make them disagree.
+    --
+    -- This is not hypothetical: after 219 the row is the truth and the payload
+    -- is a stale snapshot of the blob, so a field served from the payload is a
+    -- field frozen at the last document write.
+    UPDATE camp_canteen_accounts SET spent_on = DATE '2026-09-01', balance = 42.00
+     WHERE camp_id = c AND account_key = 'Mine One';
+    PERFORM set_config('test.staff', 'yes', true);
+    v := public.get_canteen_accounts(c);
+    IF (v -> 'accounts' -> 'Mine One' ->> 'lastSpendDate') IS DISTINCT FROM '2026-09-01' THEN
+        RAISE EXCEPTION 'the stale payload beat the column: served %, column says 2026-09-01',
+            v -> 'accounts' -> 'Mine One' ->> 'lastSpendDate';
+    END IF;
+    -- The same question for the number that IS money. The payload still says
+    -- 5.00; after 219 that is a snapshot of the last document write, and a
+    -- balance served from it is a balance frozen in the past.
+    IF (v -> 'accounts' -> 'Mine One' ->> 'balance')::numeric IS DISTINCT FROM 42.00 THEN
+        RAISE EXCEPTION 'the served balance came from the stale payload, not the row: %',
+            v -> 'accounts' -> 'Mine One' ->> 'balance';
+    END IF;
+
+    -- ...and the verifier must NOTICE that the row and the blob now disagree.
+    -- Nothing else in this file produces a lastSpendDate mismatch, so a
+    -- verifier that never compared the field would pass every other check.
+    v := public.verify_canteen_read_swap(c);
+    IF (v ->> 'sameValues') <> 'false' THEN
+        RAISE EXCEPTION 'the verifier ignored a lastSpendDate disagreement: %', v;
+    END IF;
+    IF NOT EXISTS (SELECT 1 FROM jsonb_array_elements(v -> 'differences') d
+                    WHERE d ->> 'field' = 'lastSpendDate') THEN
+        RAISE EXCEPTION 'the verifier reported a difference but not the right field: %', v;
+    END IF;
+    UPDATE camp_canteen_accounts SET spent_on = DATE '2026-09-22', balance = 5.00
+     WHERE camp_id = c AND account_key = 'Mine One';
+
+    -- ── 10. the verifier agrees the swap lost nothing ───────────────────────
     v := public.verify_canteen_read_swap(c);
     IF (v ->> 'sameValues') <> 'true' THEN
         RAISE EXCEPTION 'the rows serve different numbers than the blob: %', v;
