@@ -1333,6 +1333,17 @@ var CamperMail = (function(){
     // ── assigning an emailed letter we couldn't pin to a child ───────────────
     function _roster(){ try{ var g=JSON.parse(localStorage.getItem('campGlobalSettings_v1')||'{}'); return (g.app1&&g.app1.camperRoster)||{}; }catch(e){ return {}; } }
     function _isUnassigned(m){ return m.camper==='(unassigned)' || (m.source==='email' && !m.bunk); }
+    // The camper's own code — <camp number>-<camper id> — resolved from the
+    // roster by name so it can print on the letter. Empty when the camp has no
+    // number yet, or the camper isn't found (an unassigned letter, or a name
+    // that no longer matches the roster).
+    function _camperCode(m){
+        if(!_settings||!_settings.campNumber) return '';
+        var roster=_roster(), c=roster[m.camper];
+        if(!c){ var t=String(m.camper||'').replace(/\s#\d+$/,''); for(var k in roster){ if(String(k).replace(/\s#\d+$/,'')===t){ c=roster[k]; break; } } }
+        var cid=(c&&c.camperId!=null)?String(c.camperId).replace(/\D/g,''):'';
+        return cid?(_settings.campNumber+'-'+cid):'';
+    }
     var _assignCtx=null;
     function _pickRows(id,q){
         if(!_assignCtx) return '';
@@ -1435,7 +1446,10 @@ var CamperMail = (function(){
         var camp=_campName();
         var pages=letters.map(function(m){
             var d=m.date?new Date(m.date).toLocaleDateString('en-US',{weekday:'long',month:'long',day:'numeric'}):'';
-            var route=[m.division,m.grade,m.bunk].filter(Boolean).map(function(x){return esc(x);}).join('<span class="lt-route-sep">›</span>')||'Unassigned — check placement';
+            var segs=[m.division,m.grade,m.bunk].filter(Boolean).map(function(x){return esc(x);});
+            var code=_camperCode(m);
+            if(code) segs.push('<span class="lt-route-code">'+esc(code)+'</span>');
+            var route=segs.join('<span class="lt-route-sep">›</span>')||'Unassigned — check placement';
             return '<div class="letter">'
               +'<div class="lt-route">'+route+'</div>'
               +'<div class="lt-head"><div class="lt-camp">'+esc(camp)+' — Camper Mail</div><div class="lt-date">'+esc(d)+'</div></div>'
@@ -1452,6 +1466,7 @@ var CamperMail = (function(){
           +'.letter:last-child{page-break-after:auto;}'
           +'.lt-route{font-family:Arial,Helvetica,sans-serif;font-size:15px;font-weight:bold;letter-spacing:.04em;text-transform:uppercase;color:#111;background:#f1f1f1;border:1px solid #ccc;border-radius:6px;padding:8px 14px;margin-bottom:26px;display:flex;align-items:center;gap:10px;}'
           +'.lt-route-sep{color:#999;font-weight:normal;}'
+          +'.lt-route-code{font-family:ui-monospace,Menlo,Consolas,monospace;letter-spacing:0;color:#1a56db;}'
           +'.lt-head{display:flex;justify-content:space-between;align-items:baseline;border-bottom:2px solid #ccc;padding-bottom:10px;margin-bottom:22px;}'
           +'.lt-camp{font-size:13px;letter-spacing:.12em;text-transform:uppercase;color:#666;}'
           +'.lt-date{font-size:13px;color:#666;}'
