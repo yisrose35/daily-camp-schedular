@@ -33,7 +33,7 @@
 <input id="campId" placeholder="the camp's UUID from the camps table">
 
 <label>Processor</label>
-<select id="processorKey">
+<select id="processorKey" onchange="fillCredsTemplate()">
   <option value="banquest">Banquest</option>
   <option value="cardknox">Cardknox / Sola</option>
 </select>
@@ -56,6 +56,28 @@
 <div id="result"></div>
 
 <script>
+const CRED_TEMPLATES = {
+  banquest: {
+    sourceKey: "", pin: "", tokenizationKey: "", gatewayUrl: "", tokenizationUrl: ""
+  },
+  cardknox: {
+    apiKey: "", ifieldsKey: "", checkoutSlug: "", webhookPin: ""
+  }
+};
+// Only swaps the template when the box still looks untouched (either the
+// starting Banquest template or a previous auto-filled template) -- so
+// switching the dropdown never wipes out real values you already typed in.
+function fillCredsTemplate() {
+  const box = document.getElementById('credentials');
+  const current = box.value.trim();
+  const isTemplate = Object.values(CRED_TEMPLATES).some(function(t) {
+    return current === JSON.stringify(t, null, 2);
+  });
+  if (current && !isTemplate) return;
+  const key = document.getElementById('processorKey').value;
+  box.value = JSON.stringify(CRED_TEMPLATES[key] || {}, null, 2);
+}
+
 document.getElementById('go').onclick = async function() {
   const btn = this;
   const out = document.getElementById('result');
