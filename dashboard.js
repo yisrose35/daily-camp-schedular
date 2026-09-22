@@ -2764,12 +2764,14 @@
             var metaHtml = meta.length
                 ? '<div style="font-size:0.72rem; color:var(--slate-400); margin-top:2px;">' + meta.join(' &middot; ') + '</div>'
                 : '';
-            return '<label style="display:flex; align-items:flex-start; gap:9px; padding:9px 11px; border-radius:8px; border:1px solid var(--slate-200); background:#fff; cursor:pointer; transition:border-color .12s,background .12s;" '
+            return '<label style="box-sizing:border-box; width:100%; display:flex; align-items:flex-start; gap:9px; padding:9px 11px; border-radius:8px; border:1px solid var(--slate-200); background:#fff; cursor:pointer; transition:border-color .12s,background .12s;" '
                 + 'onmouseover="this.style.borderColor=\'#a78bfa\'" onmouseout="this.style.borderColor=\'var(--slate-200)\'">'
                 + '<input type="checkbox" value="' + _dashEsc(s.id) + '" class="bunSessionCheck"' + checked + ' style="margin-top:2px; flex-shrink:0;">'
-                + '<span style="min-width:0;"><span style="display:block; font-size:0.85rem; font-weight:600; color:var(--slate-700);">' + _dashEsc(s.name) + '</span>' + metaHtml + '</span>'
+                + '<span style="min-width:0; flex:1; white-space:normal; word-break:normal; overflow-wrap:break-word;"><span style="display:block; font-size:0.85rem; font-weight:600; color:var(--slate-700);">' + _dashEsc(s.name) + '</span>' + metaHtml + '</span>'
                 + '</label>';
         }).join('');
+        wrap.style.boxSizing = 'border-box';
+        wrap.style.width = '100%';
         wrap.style.display = 'grid';
         wrap.style.gridTemplateColumns = 'repeat(auto-fill, minmax(220px, 1fr))';
         wrap.style.gap = '8px';

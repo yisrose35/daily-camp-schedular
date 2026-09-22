@@ -837,6 +837,16 @@ input.dash-input:disabled, select.dash-input:disabled, .dash-input:disabled {
    gap. Several of these are empty until a fetch lands. */
 .dash-card-body > div:empty { display: none; }
 
+/* Current Session + Summer Schedule combined card: two columns side by side
+   on desktop, stacked with a horizontal rule on narrow screens. */
+.dash-card-split { flex-direction: row; align-items: stretch; gap: 24px; }
+.dash-card-split-col { flex: 1 1 0; min-width: 0; display: flex; flex-direction: column; gap: 14px; }
+.dash-card-split-divider { width: 1px; flex-shrink: 0; background: var(--slate-200); }
+@media (max-width: 700px) {
+    .dash-card-split { flex-direction: column; gap: 20px; }
+    .dash-card-split-divider { width: 100%; height: 1px; }
+}
+
 /* ===== PRODUCTS SECTION ===== */
 .products-section { margin-bottom: 40px; }
 .products-grid {
