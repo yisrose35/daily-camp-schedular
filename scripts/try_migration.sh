@@ -121,7 +121,10 @@ CREATE SCHEMA IF NOT EXISTS auth;
 CREATE TABLE IF NOT EXISTS auth.users (id uuid PRIMARY KEY, email text);
 CREATE OR REPLACE FUNCTION auth.uid() RETURNS uuid LANGUAGE sql STABLE AS $$ SELECT NULL::uuid $$;
 
-CREATE TABLE IF NOT EXISTS public.camps      (id uuid PRIMARY KEY, owner uuid, name text);
+-- address and contact_email are read by receipt_recipient (212), which builds
+-- the camp's own details into every receipt.
+CREATE TABLE IF NOT EXISTS public.camps      (id uuid PRIMARY KEY, owner uuid, name text,
+    address text, contact_email text);
 CREATE TABLE IF NOT EXISTS public.camp_users (camp_id uuid, user_id uuid, role text);
 CREATE TABLE IF NOT EXISTS public.camp_state_kv (
     camp_id uuid NOT NULL, key text NOT NULL, value jsonb,
@@ -317,6 +320,28 @@ CREATE TABLE IF NOT EXISTS public.pickup_alerts (
     id uuid PRIMARY KEY DEFAULT gen_random_uuid(), camp_id uuid NOT NULL,
     camper_name text NOT NULL, camper_bunk text, camper_division text,
     camper_grade text, status text NOT NULL DEFAULT 'open',
+    -- 064's column, and 235's whole subject: the two league functions read and
+    -- write it, and one of them used to report success without touching it.
+    league_check_state text NOT NULL DEFAULT 'pending',
+    created_at timestamptz NOT NULL DEFAULT now());
+-- 064's recipients, with the UNIQUE that makes the ON CONFLICT in 235's
+-- add_pickup_alert_league_recipients a no-op rather than an error.
+CREATE TABLE IF NOT EXISTS public.pickup_alert_recipients (
+    id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+    alert_id uuid NOT NULL REFERENCES public.pickup_alerts(id) ON DELETE CASCADE,
+    camp_id uuid NOT NULL, recipient_role text NOT NULL,
+    recipient_name text, recipient_email text NOT NULL DEFAULT '',
+    ack_state text NOT NULL DEFAULT 'unseen',
+    acknowledged_at timestamptz, snoozed_until timestamptz,
+    created_at timestamptz NOT NULL DEFAULT now(),
+    UNIQUE (alert_id, recipient_email));
+-- 134's hosted-checkout intents. camper_name is what 223 hangs a person_id on.
+CREATE TABLE IF NOT EXISTS public.cardknox_checkout_intents (
+    id uuid PRIMARY KEY DEFAULT gen_random_uuid(), camp_id uuid NOT NULL,
+    reference text NOT NULL UNIQUE, kind text NOT NULL,
+    family_key text, family_name text, camper_name text,
+    amount_cents integer NOT NULL, description text,
+    status text NOT NULL DEFAULT 'pending', xref_num text,
     created_at timestamptz NOT NULL DEFAULT now());
 CREATE TABLE IF NOT EXISTS public.link_photo_tags (
     photo_id uuid NOT NULL, camper_name text NOT NULL, camp_id uuid NOT NULL,
