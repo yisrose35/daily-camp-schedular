@@ -73,6 +73,48 @@
 -- ════════════════════════════════════════════════════════════════════════════
 
 
+-- ─── 0. preflight ───────────────────────────────────────────────────────────
+-- This file depends on three things an earlier migration created. If one is
+-- absent the paste fails somewhere in the middle with ERROR 42883 naming a
+-- function nobody asked about, the whole transaction rolls back, and the only
+-- visible symptom is that verify_camp_payments "does not exist" — which sends
+-- you looking at the wrong file. So say it plainly and up front instead.
+DO $preflight$
+DECLARE
+    v_missing text[] := ARRAY[]::text[];
+BEGIN
+    IF to_regclass('public.camp_state_kv') IS NULL THEN
+        v_missing := v_missing || 'table camp_state_kv'::text;
+    END IF;
+    IF to_regclass('public.camps') IS NULL THEN
+        v_missing := v_missing || 'table camps'::text;
+    END IF;
+    IF NOT EXISTS (SELECT 1 FROM pg_proc p JOIN pg_namespace n ON n.oid = p.pronamespace
+                    WHERE n.nspname = 'public' AND p.proname = '_num_or_null') THEN
+        v_missing := v_missing || '_num_or_null()  → apply migrations/203_canteen_archive.sql first'::text;
+    END IF;
+    IF NOT EXISTS (SELECT 1 FROM pg_proc p JOIN pg_namespace n ON n.oid = p.pronamespace
+                    WHERE n.nspname = 'public' AND p.proname = 'camp_reader') THEN
+        v_missing := v_missing || 'camp_reader()  → apply migrations/183_lock_down_camp_scoped_readers.sql first'::text;
+    END IF;
+
+    -- A table of this name that is NOT ours would be skipped by CREATE TABLE IF
+    -- NOT EXISTS and then fail confusingly on the first insert.
+    IF to_regclass('public.camp_payments') IS NOT NULL
+       AND NOT EXISTS (SELECT 1 FROM information_schema.columns
+                        WHERE table_schema = 'public' AND table_name = 'camp_payments'
+                          AND column_name = 'payment_id') THEN
+        v_missing := v_missing || 'a DIFFERENT public.camp_payments already exists (no payment_id column) — rename it before applying this'::text;
+    END IF;
+
+    IF array_length(v_missing, 1) > 0 THEN
+        RAISE EXCEPTION E'208 cannot be applied yet. Missing:\n  - %',
+            array_to_string(v_missing, E'\n  - ');
+    END IF;
+END
+$preflight$;
+
+
 -- ─── 1. the identity ────────────────────────────────────────────────────────
 -- IMMUTABLE so it can be used in an index and trusted to give the same answer
 -- to the backfill, the trigger and the verifier.
@@ -155,8 +197,7 @@ SECURITY DEFINER
 SET search_path = public, pg_catalog
 AS $$
 DECLARE
-    v_new    jsonb;
-    v_old    jsonb;
+    v_newMap jsonb;
     v_oldMap jsonb;
 BEGIN
     -- Any save that did not touch payments costs one comparison.
@@ -166,47 +207,57 @@ BEGIN
         RETURN NEW;
     END IF;
 
-    v_new := CASE WHEN jsonb_typeof(NEW.value -> 'finance' -> 'payments') = 'array'
-                  THEN NEW.value -> 'finance' -> 'payments' ELSE '[]'::jsonb END;
-    v_old := CASE WHEN TG_OP = 'INSERT' THEN '[]'::jsonb
-                  WHEN jsonb_typeof(OLD.value -> 'finance' -> 'payments') = 'array'
-                  THEN OLD.value -> 'finance' -> 'payments'
-                  ELSE '[]'::jsonb END;
+    -- REDUCE BEFORE DIFFING. Both sides collapse to one entry per identity,
+    -- LAST array position winning, and only then are they compared.
+    --
+    -- Doing it the other way round is wrong, and quietly: filter first and a
+    -- duplicated identity can have its SUPERSEDED copy survive the filter while
+    -- the current one is dropped as unchanged, leaving the row holding the old
+    -- value. Caught on a real server with p1 present at 100 and again at 120 —
+    -- the row went back to 100 and the two sides disagreed by exactly 20.
+    --
+    -- The ORDER BY inside the aggregate is load-bearing: jsonb_object_agg keeps
+    -- the last value for a repeated key, and without it "last" would mean
+    -- whatever order the scan produced rather than the array's own order.
+    SELECT COALESCE(jsonb_object_agg(public.camp_payment_identity(e.v), e.v
+                                     ORDER BY e.ord), '{}'::jsonb)
+      INTO v_newMap
+      FROM jsonb_array_elements(
+             CASE WHEN jsonb_typeof(NEW.value -> 'finance' -> 'payments') = 'array'
+                  THEN NEW.value -> 'finance' -> 'payments' ELSE '[]'::jsonb END)
+           WITH ORDINALITY AS e(v, ord)
+     WHERE jsonb_typeof(e.v) = 'object';
 
-    -- identity -> payload, as it stood BEFORE this write. Probed with `->`,
-    -- which is a binary search over sorted keys; an array with `= ANY` would be
-    -- a linear scan per candidate and would rebuild 203's growth curve.
-    -- jsonb_object_agg takes the last of duplicate keys, which is right: two
-    -- array entries with one identity are one payment.
-    SELECT COALESCE(jsonb_object_agg(public.camp_payment_identity(o), o), '{}'::jsonb)
+    SELECT COALESCE(jsonb_object_agg(public.camp_payment_identity(e.v), e.v
+                                     ORDER BY e.ord), '{}'::jsonb)
       INTO v_oldMap
-      FROM jsonb_array_elements(v_old) AS o
-     WHERE jsonb_typeof(o) = 'object';
+      FROM jsonb_array_elements(
+             CASE WHEN TG_OP = 'INSERT' THEN '[]'::jsonb
+                  WHEN jsonb_typeof(OLD.value -> 'finance' -> 'payments') = 'array'
+                  THEN OLD.value -> 'finance' -> 'payments' ELSE '[]'::jsonb END)
+           WITH ORDINALITY AS e(v, ord)
+     WHERE jsonb_typeof(e.v) = 'object';
 
+    -- Keys are unique by construction, so no DISTINCT ON and no ordering
+    -- question. `->` on a jsonb object is a binary search over sorted keys; an
+    -- array with `= ANY` would be a linear scan per candidate and would rebuild
+    -- 203's growth curve.
     INSERT INTO public.camp_payments
         (camp_id, payment_id, family_name, family_key, enrollment_id,
          status, amount, pay_date, payload)
-    SELECT DISTINCT ON (n.pid)
-           NEW.camp_id,
-           n.pid,
-           COALESCE(n.pay ->> 'family', ''),
-           COALESCE(n.pay ->> 'familyKey', ''),
-           COALESCE(n.pay ->> 'enrollmentId', ''),
-           COALESCE(n.pay ->> 'status', ''),
-           COALESCE(public._num_or_null(n.pay ->> 'amount'), 0),
-           COALESCE(n.pay ->> 'date', ''),
-           n.pay
-      FROM (SELECT public.camp_payment_identity(t) AS pid, t AS pay, o.ord
-              FROM jsonb_array_elements(v_new) WITH ORDINALITY AS o(t, ord)
-             WHERE jsonb_typeof(o.t) = 'object') AS n
+    SELECT NEW.camp_id,
+           n.key,
+           COALESCE(n.value ->> 'family', ''),
+           COALESCE(n.value ->> 'familyKey', ''),
+           COALESCE(n.value ->> 'enrollmentId', ''),
+           COALESCE(n.value ->> 'status', ''),
+           COALESCE(public._num_or_null(n.value ->> 'amount'), 0),
+           COALESCE(n.value ->> 'date', ''),
+           n.value
+      FROM jsonb_each(v_newMap) AS n
      -- New to this write, or patched in place (Stripe sends pending, then
      -- succeeded, for the same intent — same identity, different payload).
-     WHERE (v_oldMap -> n.pid) IS DISTINCT FROM n.pay
-     -- DISTINCT ON without an ORDER BY picks an arbitrary row among equals.
-     -- Two array entries sharing one identity are one payment, so LAST wins:
-     -- that is where an in-place status patch lands, and where the office's own
-     -- merge keeps the newer copy.
-     ORDER BY n.pid, n.ord DESC
+     WHERE (v_oldMap -> n.key) IS DISTINCT FROM n.value
     ON CONFLICT (camp_id, payment_id) DO UPDATE
        SET family_name   = EXCLUDED.family_name,
            family_key    = EXCLUDED.family_key,
@@ -293,6 +344,12 @@ AS $$
 DECLARE
     v_claims    text := NULLIF(current_setting('request.jwt.claims', true), '');
     v_pays      jsonb;
+    -- The array reduced to one entry per identity, LAST occurrence winning —
+    -- exactly how the trigger and the backfill reduce it. Every check below
+    -- reads this and not the raw array. Comparing the raw array against the
+    -- rows reported a superseded duplicate as "stale": the array held p1 at 100
+    -- and again at 120, the row correctly held 120, and the 100 looked wrong.
+    v_dedup     jsonb := '{}'::jsonb;
     v_blobCount integer := 0;
     v_rowCount  integer := 0;
     v_missing   jsonb := '[]'::jsonb;
@@ -316,43 +373,41 @@ BEGIN
      WHERE camp_id = p_camp_id AND key = 'campistryMe';
     IF v_pays IS NULL THEN v_pays := '[]'::jsonb; END IF;
 
-    -- Distinct identities, because two array entries sharing one identity are
-    -- one payment and become one row.
-    SELECT count(DISTINCT public.camp_payment_identity(p)) INTO v_blobCount
-      FROM jsonb_array_elements(v_pays) AS p
-     WHERE jsonb_typeof(p) = 'object';
+    -- Reduce once. jsonb_object_agg keeps the LAST value for a repeated key,
+    -- and the explicit ORDER BY is what makes "last" mean the last array
+    -- position rather than whatever order the scan happened to produce.
+    SELECT COALESCE(jsonb_object_agg(public.camp_payment_identity(e.v), e.v
+                                     ORDER BY e.ord), '{}'::jsonb)
+      INTO v_dedup
+      FROM jsonb_array_elements(v_pays) WITH ORDINALITY AS e(v, ord)
+     WHERE jsonb_typeof(e.v) = 'object';
+
+    -- Two array entries sharing one identity are one payment, and become one
+    -- row, so the count is over identities.
+    v_blobCount := (SELECT count(*)::integer FROM jsonb_object_keys(v_dedup));
 
     SELECT count(*) INTO v_rowCount FROM public.camp_payments WHERE camp_id = p_camp_id;
 
     -- In the array and NOT in the table: the failure that would lose money.
-    SELECT COALESCE(jsonb_agg(DISTINCT x.pid), '[]'::jsonb) INTO v_missing
-      FROM (SELECT public.camp_payment_identity(p) AS pid
-              FROM jsonb_array_elements(v_pays) AS p
-             WHERE jsonb_typeof(p) = 'object') AS x
+    SELECT COALESCE(jsonb_agg(k ORDER BY k), '[]'::jsonb) INTO v_missing
+      FROM jsonb_object_keys(v_dedup) AS k
      WHERE NOT EXISTS (SELECT 1 FROM public.camp_payments r
-                        WHERE r.camp_id = p_camp_id AND r.payment_id = x.pid);
+                        WHERE r.camp_id = p_camp_id AND r.payment_id = k);
 
-    -- In both, but the row is stale — a patch the trigger did not apply.
-    SELECT COALESCE(jsonb_agg(DISTINCT x.pid), '[]'::jsonb) INTO v_differs
-      FROM (SELECT public.camp_payment_identity(p) AS pid, p AS pay
-              FROM jsonb_array_elements(v_pays) AS p
-             WHERE jsonb_typeof(p) = 'object') AS x
+    -- In both, but the row does not match what the array now says — a patch the
+    -- trigger did not apply.
+    SELECT COALESCE(jsonb_agg(k ORDER BY k), '[]'::jsonb) INTO v_differs
+      FROM jsonb_object_keys(v_dedup) AS k
       JOIN public.camp_payments r
-        ON r.camp_id = p_camp_id AND r.payment_id = x.pid
-     WHERE r.payload IS DISTINCT FROM x.pay;
+        ON r.camp_id = p_camp_id AND r.payment_id = k
+     WHERE r.payload IS DISTINCT FROM (v_dedup -> k);
 
     -- The number that actually matters to a family: collected money. Excludes
     -- pending and failed, the same exclusion the balance uses.
-    SELECT COALESCE(sum(COALESCE(public._num_or_null(p ->> 'amount'), 0)), 0)
+    SELECT COALESCE(sum(COALESCE(public._num_or_null(v.value ->> 'amount'), 0)), 0)
       INTO v_blobSum
-      FROM (SELECT DISTINCT ON (public.camp_payment_identity(e.v)) e.v AS p
-              FROM jsonb_array_elements(v_pays) WITH ORDINALITY AS e(v, ord)
-             WHERE jsonb_typeof(e.v) = 'object'
-             -- LAST wins, exactly as the trigger picks it. Without this the sum
-             -- would depend on an arbitrary choice between duplicate
-             -- identities, and then inSync could flap on unchanged data.
-             ORDER BY public.camp_payment_identity(e.v), e.ord DESC) AS d
-     WHERE COALESCE(p ->> 'status', '') NOT IN ('pending', 'failed');
+      FROM jsonb_each(v_dedup) AS v
+     WHERE COALESCE(v.value ->> 'status', '') NOT IN ('pending', 'failed');
 
     SELECT COALESCE(sum(amount), 0) INTO v_rowSum
       FROM public.camp_payments
