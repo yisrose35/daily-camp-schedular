@@ -55,7 +55,17 @@ def statements(body):
         # statement, skipping FOR UPDATE and FOR NO KEY UPDATE.
         m = None
         for cand in re.finditer(r'\b(UPDATE|INSERT INTO|DELETE FROM)\b', raw, re.I):
-            before = raw[:cand.start()].rstrip().upper()
+            before = raw[:cand.start()]
+            # Inside a string literal, so it is not a statement in this body —
+            # it is dynamic SQL built for EXECUTE, and its %I/%s placeholders are
+            # not valid SQL until format() has filled them in. Checking it here
+            # reports a syntax error in a template, which is a false failure on
+            # correct code: 222's purge loop tripped exactly this. The chunk
+            # splitter above already rejoins until quotes balance, so an odd
+            # count before the match means the match is inside one.
+            if before.count("'") % 2 == 1:
+                continue
+            before = before.rstrip().upper()
             if before.endswith('FOR') or before.endswith('FOR NO KEY'):
                 continue
             m = cand
