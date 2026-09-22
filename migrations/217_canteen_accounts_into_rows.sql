@@ -56,6 +56,15 @@ BEGIN
     END IF;
 END $$;
 
+-- Same lock ordering as 216, and for the same reason — see that file's section
+-- 0b. This one is MORE exposed, not less: its trigger fires on campistrySnacks,
+-- which is rewritten on every single canteen sale, so the window where a live
+-- writer holds camp_state_kv and wants camp_canteen_accounts is open all day
+-- rather than only when somebody edits a roster. 216 deadlocked on the first
+-- live paste; there is no reason to let this one find that out again.
+SET LOCAL lock_timeout = '15s';
+LOCK TABLE public.camp_state_kv IN ACCESS EXCLUSIVE MODE;
+
 
 -- ─── 1. the table ───────────────────────────────────────────────────────────
 -- account_key is the document's own key (the camper's name today), kept as the

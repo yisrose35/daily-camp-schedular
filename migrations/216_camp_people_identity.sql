@@ -66,6 +66,30 @@ BEGIN
     END IF;
 END $$;
 
+-- ─── 0b. lock ordering, or this file deadlocks against the running app ──────
+-- The first live paste of this migration died with:
+--   ERROR: 40P01: deadlock detected
+-- because two lock orders are exactly opposite. Once this file's trigger
+-- exists — from an earlier paste, or a second paste running at the same time —
+-- an ordinary roster save takes camp_state_kv first and then needs camp_people
+-- to run the trigger, while this file takes camp_people first (CREATE INDEX,
+-- ALTER TABLE, REVOKE all want AccessExclusive on it) and then needs
+-- camp_state_kv for DROP TRIGGER. Neither can go on.
+--
+-- Taking camp_state_kv up front, in the strongest mode this file will ever
+-- need, removes the cycle: every other writer must already hold camp_state_kv
+-- before it can want camp_people, so there is only one order left. It also
+-- prevents a lock UPGRADE part-way through, which can deadlock the same way
+-- against a third session that is merely waiting.
+--
+-- This BLOCKS reads and writes of camp_state_kv for as long as the file runs —
+-- seconds, mostly the minting loop. That is a real if brief outage, which is
+-- the price of applying it while the app is up. lock_timeout means a busy
+-- moment fails fast and cleanly, with nothing applied, instead of hanging or
+-- deadlocking: just run it again.
+SET LOCAL lock_timeout = '15s';
+LOCK TABLE public.camp_state_kv IN ACCESS EXCLUSIVE MODE;
+
 
 -- ─── 1. the id normaliser ───────────────────────────────────────────────────
 -- Byte-for-byte the client's normalizePersonId(): digits only, leading zeros
