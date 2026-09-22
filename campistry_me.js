@@ -10491,19 +10491,12 @@ function _pktLiveConfig(){
     };
 }
 // One includable item's toggle row (with up/down reorder) + its fields.
-function _pktBlockHtml(k,cfg,idx,count){
-    function ctrls(){
-        var up=idx>0, dn=idx<count-1;
-        var bs='width:22px;height:15px;padding:0;line-height:13px;border:1px solid var(--s200);background:#fff;border-radius:4px;font-size:8px;color:var(--s500);';
-        return '<span style="display:inline-flex;flex-direction:column;gap:2px;margin-left:auto;flex-shrink:0" onclick="event.preventDefault();event.stopPropagation()">'
-          +'<button type="button" '+(up?'':'disabled ')+'onclick="CampistryMe._pktMove(\''+k+'\',-1)" style="'+bs+(up?'cursor:pointer':'opacity:.3')+'" title="Move up">▲</button>'
-          +'<button type="button" '+(dn?'':'disabled ')+'onclick="CampistryMe._pktMove(\''+k+'\',1)" style="'+bs+(dn?'cursor:pointer':'opacity:.3')+'" title="Move down">▼</button></span>';
-    }
+function _pktBlockHtml(k,cfg){
     function rowc(id,checked,title,desc){
         return '<label style="display:flex;align-items:flex-start;gap:10px;padding:6px 0;cursor:pointer">'
           +'<input type="checkbox" id="'+id+'" '+(checked?'checked':'')+' style="accent-color:var(--me);flex-shrink:0;width:16px;height:16px;margin-top:2px">'
           +'<div style="flex:1;min-width:0"><div style="font-size:.85rem;font-weight:600;color:var(--s800)">'+title+'</div>'
-          +'<div style="font-size:.72rem;color:var(--s400)">'+desc+'</div></div>'+ctrls()+'</label>';
+          +'<div style="font-size:.72rem;color:var(--s400)">'+desc+'</div></div></label>';
     }
     var mailDefault=_defaultMailAddr();
     if(k==='form') return rowc('pktForm',cfg.form.enabled,'Post-Acceptance Form','Include a link to the form (bunkmate requests, t-shirt size, consent, etc.).');
@@ -10514,18 +10507,43 @@ function _pktBlockHtml(k,cfg,idx,count){
     if(k==='camperMail') return rowc('pktMail',cfg.camperMail.enabled,'Camper mail address','Tell the family the email address to send printed letters to.')
       +'<div id="pktMailFields" style="padding:2px 0 8px 26px;'+(cfg.camperMail.enabled?'':'display:none')+'">'
       +'<div class="fg"><label class="fl">Letters email address</label><input class="fi" id="pktMailAddr" value="'+esc(cfg.camperMail.address||'')+'" placeholder="'+esc(mailDefault||'Leave blank to use your Campistry letters address')+'"><div style="font-size:.7rem;color:var(--s400);margin-top:4px">Leave blank to use your Campistry letters address'+(mailDefault?' ('+esc(mailDefault)+')':'')+'.</div></div>'
-      +'<label style="display:flex;align-items:center;gap:8px;font-size:.8rem;color:var(--s600);cursor:pointer"><input type="checkbox" id="pktMailCode" '+(cfg.camperMail.showCode?'checked':'')+' style="accent-color:var(--me);width:15px;height:15px">Show each family their code to include when emailing from another address</label></div>';
+      +'<label style="display:flex;align-items:center;gap:8px;font-size:.8rem;color:var(--s600);cursor:pointer"><input type="checkbox" id="pktMailCode" '+(cfg.camperMail.showCode?'checked':'')+' style="accent-color:var(--me);width:15px;height:15px">Ask families to put their camper’s code in the subject so we can route the letter</label></div>';
     return '';
 }
+// Each includable item is a draggable row (grip on the left); dragging reorders
+// the DOM nodes directly — the same reorder helpers the form builders use — so
+// input values are preserved through a drag (nothing is re-rendered).
 function _pktIncludedHtml(cfg){
-    return _pktOrder.map(function(k,i){ return _pktBlockHtml(k,cfg,i,_pktOrder.length); }).join('');
+    return _pktOrder.map(function(k){
+        return '<div class="pktOrderRow" data-key="'+k+'" style="display:flex;align-items:flex-start;gap:8px;border:1px solid transparent;border-radius:8px">'
+          +'<span class="pktGrip" title="Drag to reorder" style="cursor:grab;color:var(--s300);font-size:15px;line-height:1;user-select:none;flex-shrink:0;padding:9px 2px 0">⠿</span>'
+          +'<div style="flex:1;min-width:0">'+_pktBlockHtml(k,cfg)+'</div></div>';
+    }).join('');
 }
-function _pktMove(k,dir){
-    var i=_pktOrder.indexOf(k); if(i<0)return; var j=i+dir; if(j<0||j>=_pktOrder.length)return;
-    var cfg=_pktLiveConfig();                     // capture edits before the re-render
-    var t=_pktOrder[i]; _pktOrder[i]=_pktOrder[j]; _pktOrder[j]=t;
-    var host=document.getElementById('pktIncluded'); if(host)host.innerHTML=_pktIncludedHtml(cfg);
+function _pktSyncOrderFromDom(){
+    var list=document.getElementById('pktIncluded'); if(!list)return;
+    var ord=[]; list.querySelectorAll('.pktOrderRow').forEach(function(r){ var kk=r.getAttribute('data-key'); if(kk&&ord.indexOf(kk)<0)ord.push(kk); });
+    if(ord.length)_pktOrder=_pktResolveOrder(ord);
     _pktRenderPreview();
+}
+function _pktInitDrag(){
+    var list=document.getElementById('pktIncluded'); if(!list)return;
+    _meReorderInit(list,'.pktOrderRow');
+    list.querySelectorAll('.pktOrderRow').forEach(function(row){
+        if(row._pktDragWired)return; row._pktDragWired=true;
+        var grip=row.querySelector('.pktGrip');
+        // Draggable only while a drag begins from the grip, so the checkboxes
+        // and text fields inside the row stay fully usable: arm on grip press,
+        // and disarm on any press that isn't the grip.
+        if(grip){
+            var arm=function(){ row.draggable=true; };
+            grip.addEventListener('mousedown',arm);
+            grip.addEventListener('touchstart',arm,{passive:true});
+        }
+        row.addEventListener('mousedown',function(e){ if(!(e.target&&e.target.closest&&e.target.closest('.pktGrip'))) row.draggable=false; });
+        row.addEventListener('dragstart',function(e){ e.stopPropagation(); row.classList.add('me-dragging'); row.style.opacity='.5'; try{e.dataTransfer.effectAllowed='move';e.dataTransfer.setData('text/plain','reorder');}catch(_){} });
+        row.addEventListener('dragend',function(e){ e.stopPropagation(); row.classList.remove('me-dragging'); row.style.opacity=''; row.draggable=false; _pktSyncOrderFromDom(); });
+    });
 }
 // Live email preview — same split-view format as the form builders, and it
 // renders the ACTUAL branded email (logo/colour/footer) via the shared
@@ -10573,7 +10591,7 @@ function openAcceptancePacket(){
       +'<div style="font-size:.7rem;color:var(--s400);margin-top:4px">Type <code>{camper}</code> anywhere to drop in the child’s name. Leave blank for the default greeting. The items you turn on below are added under your message.</div></div>';
 
     h+='<div style="border-top:1px solid var(--s100);margin:14px 0 8px"></div>';
-    h+='<div style="font-size:.78rem;font-weight:700;color:var(--s700);text-transform:uppercase;letter-spacing:.04em;margin:0 0 2px">What’s included <span style="font-weight:500;text-transform:none;letter-spacing:0;color:var(--s400)">— drag order with ▲▼</span></div>';
+    h+='<div style="font-size:.78rem;font-weight:700;color:var(--s700);text-transform:uppercase;letter-spacing:.04em;margin:0 0 2px">What’s included <span style="font-weight:500;text-transform:none;letter-spacing:0;color:var(--s400)">— drag ⠿ to reorder</span></div>';
     h+='<div id="pktIncluded">'+_pktIncludedHtml(initCfg)+'</div>';
 
     h+='<div style="border-top:1px solid var(--s100);margin:14px 0 8px"></div>';
@@ -10590,6 +10608,7 @@ function openAcceptancePacket(){
             _pktRenderPreview();
         };
     }
+    _pktInitDrag();
     document.getElementById('packetBuilderOverlay').style.display='flex';
     _pktRenderPreview();
     _loadPktSettings().then(function(){ _pktRenderPreview(); });
@@ -12801,7 +12820,7 @@ function _composeBodyFromParts(p,parts){
     _pktResolveOrder(p.order).forEach(function(k){
         if(k==='form'){
             if(p.form&&p.form.enabled!==false&&parts.formUrl){
-                out.push('','Please complete a few more choices here:',parts.formUrl);
+                out.push('','Please fill out this post-acceptance form:',parts.formUrl);
             }
         }else if(k==='zelle'){
             if(p.zelle&&p.zelle.enabled&&(p.zelle.sendTo||'').trim()){
@@ -12811,7 +12830,7 @@ function _composeBodyFromParts(p,parts){
         }else if(k==='camperMail'){
             if(p.camperMail&&p.camperMail.enabled&&parts.mailAddr){
                 out.push('','You can email letters to your camper any time — the office prints them and hands them out. Send them to: '+parts.mailAddr+'.');
-                if(p.camperMail.showCode&&parts.memo)out.push('Emailing from a different address? Add your camper’s code to the subject so it reaches the right child: '+parts.memo+'.');
+                if(p.camperMail.showCode&&parts.memo)out.push('Please put your camper’s code in the subject so we can get it to the right child: '+parts.memo+'.');
             }
         }
     });
@@ -22384,7 +22403,7 @@ window.CampistryMe={
     openFormConfig:openFormConfig,saveFormConfig:saveFormConfig,addCustomQ:addCustomQ,addPromoRow:addPromoRow,
     openStaffFormConfig:openStaffFormConfig,saveStaffFormConfig:saveStaffFormConfig,addStaffCustomQ:addStaffCustomQ,
     openPostAcceptFormConfig:openPostAcceptFormConfig,savePostAcceptFormConfig:savePostAcceptFormConfig,addPafCustomQ:addPafCustomQ,
-    openAcceptancePacket:openAcceptancePacket,saveAcceptancePacket:saveAcceptancePacket,closeAcceptancePacket:closeAcceptancePacket,_pktMove:_pktMove,_pktOpenPreview:_pktOpenPreview,
+    openAcceptancePacket:openAcceptancePacket,saveAcceptancePacket:saveAcceptancePacket,closeAcceptancePacket:closeAcceptancePacket,_pktOpenPreview:_pktOpenPreview,
     openPostHireFormConfig:openPostHireFormConfig,savePostHireFormConfig:savePostHireFormConfig,addPhfCustomQ:addPhfCustomQ,
     _phfHandbookPick:_phfHandbookPick,_phfHandbookClear:_phfHandbookClear,addPhfPolicyRow:addPhfPolicyRow,
     addCustomSection:addCustomSection,addSectionField:addSectionField,addCustomQToSection:addCustomQToSection,_toggleSectionQuestions:_toggleSectionQuestions,

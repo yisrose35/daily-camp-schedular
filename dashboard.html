@@ -276,6 +276,10 @@
                 </div>
                 <div class="profile-content" id="profileView">
                     <div class="profile-row">
+                        <span class="profile-label">Camp Logo</span>
+                        <span class="profile-value" id="profileLogo">Not set</span>
+                    </div>
+                    <div class="profile-row">
                         <span class="profile-label">Camp Name</span>
                         <span class="profile-value" id="profileCampName">—</span>
                     </div>
@@ -297,6 +301,15 @@
                     </div>
                 </div>
                 <form class="profile-edit-form" id="profileEditForm" style="display: none;" onsubmit="event.preventDefault(); saveProfile();">
+                    <div class="form-group">
+                        <label>Camp Logo</label>
+                        <div style="display:flex;align-items:center;gap:12px;flex-wrap:wrap;">
+                            <img id="editLogoPreview" alt="" style="max-height:48px;max-width:150px;border-radius:6px;border:1px solid var(--border,#e2e8f0);background:#fff;display:none;">
+                            <input type="file" id="editLogoInput" accept="image/png,image/jpeg,image/webp,image/svg+xml" onchange="onLogoPicked(this)" style="font-size:.85rem;">
+                            <button type="button" class="btn-secondary" id="editLogoRemove" onclick="removeLogo()" style="display:none;">Remove</button>
+                        </div>
+                        <small style="color:var(--text-muted,#64748b);font-size:.75rem;">Appears at the top of the emails your camp sends to families — acceptance notes, receipts, broadcasts. PNG or JPG, up to ~300&nbsp;KB.</small>
+                    </div>
                     <div class="form-group">
                         <label for="editCampName">Camp Name</label>
                         <input type="text" id="editCampName" placeholder="Enter camp name">
