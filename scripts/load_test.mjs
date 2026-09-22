@@ -105,6 +105,27 @@ export function verdict(summary, p95Bar, expectedErrors) {
     return summary.p95 <= p95Bar ? 'PASS' : 'WARN';
 }
 
+/**
+ * The order one parent's boot calls go out in, rotated by that parent's index.
+ *
+ * WHY THIS IS NOT JUST `keys`: the boot calls are sequential per parent, and the
+ * pool starts `concurrency` parents at the same instant. A fixed order means
+ * EVERY parent's first call lands in the same thundering herd, so that one RPC
+ * absorbs the whole queue wait against a connection pool far smaller than the
+ * concurrency, while the other three arrive staggered and look fast. That made
+ * `get_my_balance` — first in the list — read 481ms at 32 parents and 2096ms at
+ * 60, which measured the queue, not the function.
+ *
+ * Rotating by index puts each RPC first for its fair share of parents, so the
+ * burst cost is shared and each line reports its own service time. Rotation
+ * rather than a random shuffle so two runs of the same size are comparable.
+ */
+export function bootOrder(keys, i) {
+    if (!keys.length) return [];
+    const k = i % keys.length;   // pool counts up from 0; no normalising needed
+    return keys.slice(k).concat(keys.slice(0, k));
+}
+
 /** Runs `worker` over `items` with at most `limit` in flight. */
 export async function pool(items, limit, worker) {
     let i = 0;
@@ -375,13 +396,18 @@ async function phasePortal(c, o, env, report, parents, log) {
     // boot: what the portal calls when it opens
     const boot = { get_my_balance: [], get_canteen_accounts: [], get_my_messages: [], get_camp_broadcasts: [] };
     let t0 = Date.now();
-    await pool(parents, o.concurrency, async (p) => {
-        for (const fn of Object.keys(boot)) {
+    const bootKeys = Object.keys(boot);
+    await pool(parents, o.concurrency, async (p, i) => {
+        for (const fn of bootOrder(bootKeys, i)) {
             const res = await c.rpc(fn, { p_camp_id: env.CAMP_ID }, p.jwt);
             boot[fn].push(sample(res, fn));
         }
     });
     const bootMs = Date.now() - t0;
+    if (parents.length > 1) {
+        log(`  portal: boot fired ${bootKeys.length} calls per parent, up to ${Math.min(o.concurrency, parents.length)} parents at once,`);
+        log(`          call order rotated per parent so no single RPC absorbs the whole burst.`);
+    }
     for (const fn of Object.keys(boot)) {
         const s = summarize(boot[fn], bootMs);
         report.push([`portal boot · ${fn}`, s, verdict(s, o.p95, ['no_active_invite', 'no_family'])]);

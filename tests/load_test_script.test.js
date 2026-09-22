@@ -480,3 +480,68 @@ test('a shortfall from the limiter explains itself as the test\'s ceiling', () =
     assert.match(src, /Authentication → Rate Limits/, 'and must say how to raise it');
     assert.match(src, /LOADTEST_SIGNIN_PER_SEC/);
 });
+
+// ── bootOrder: the burst must not be charged to one RPC ─────────────────────
+// The defect this exists to prevent: four sequential calls per parent in a
+// FIXED order, started concurrently, make the first call eat the whole queue
+// wait. That reported get_my_balance at 2096ms when its own service time was a
+// fraction of it — a harness artifact that reads exactly like a slow function.
+test('bootOrder rotates, so every call is first for its share of parents', async () => {
+    const { bootOrder } = await load();
+    const keys = ['a', 'b', 'c', 'd'];
+    assert.deepStrictEqual(bootOrder(keys, 0), ['a', 'b', 'c', 'd']);
+    assert.deepStrictEqual(bootOrder(keys, 1), ['b', 'c', 'd', 'a']);
+    assert.deepStrictEqual(bootOrder(keys, 3), ['d', 'a', 'b', 'c']);
+    assert.deepStrictEqual(bootOrder(keys, 4), ['a', 'b', 'c', 'd'], 'wraps');
+});
+
+test('bootOrder is a permutation — no call dropped or measured twice', async () => {
+    const { bootOrder } = await load();
+    const keys = ['get_my_balance', 'get_canteen_accounts', 'get_my_messages', 'get_camp_broadcasts'];
+    for (let i = 0; i < 40; i++) {
+        const got = bootOrder(keys, i);
+        assert.strictEqual(got.length, keys.length, `i=${i}: every call still fires`);
+        assert.deepStrictEqual([...got].sort(), [...keys].sort(), `i=${i}: same set`);
+    }
+});
+
+test('bootOrder spreads first position evenly across the four calls', async () => {
+    const { bootOrder } = await load();
+    const keys = ['a', 'b', 'c', 'd'];
+    const firsts = {};
+    for (let i = 0; i < 60; i++) {
+        const f = bootOrder(keys, i)[0];
+        firsts[f] = (firsts[f] || 0) + 1;
+    }
+    // 60 parents over 4 calls: each must lead 15 times. A fixed order would
+    // give one call 60 and the rest 0 — which is the bug.
+    for (const k of keys) assert.strictEqual(firsts[k], 15, `${k} leads its share`);
+});
+
+test('bootOrder survives degenerate input rather than throwing mid-run', async () => {
+    const { bootOrder } = await load();
+    assert.deepStrictEqual(bootOrder([], 3), [], 'no calls, no crash');
+    assert.deepStrictEqual(bootOrder(['only'], 7), ['only']);
+    // Deliberately NOT asserting a negative index. `pool` counts up from 0, so
+    // it is unreachable, and it is also untestable as a guard: `i % n` already
+    // reduces |i| below n, and JS's negative slice offsets coincide with the
+    // normalised rotation across that whole range. An assertion here would pass
+    // against either spelling and guard nothing.
+});
+
+test('the boot loop actually uses the rotation and the pool index', () => {
+    const src = require('node:fs').readFileSync(path.join(__dirname, '..', 'scripts', 'load_test.mjs'), 'utf8');
+    // pool must hand the worker its index, or the rotation has nothing to rotate on
+    assert.match(src, /for \(;;\) \{ const n = i\+\+; if \(n >= items\.length\) return; await worker\(items\[n\], n\); \}/,
+        'pool passes the index');
+    assert.match(src, /await pool\(parents, o\.concurrency, async \(p, i\) => \{\s*\n\s*for \(const fn of bootOrder\(bootKeys, i\)\)/,
+        'the boot loop rotates per parent — a fixed Object.keys(boot) is the bug');
+    assert.doesNotMatch(src, /for \(const fn of Object\.keys\(boot\)\) \{\s*\n\s*const res = await c\.rpc/,
+        'the fixed-order loop must be gone, not merely shadowed');
+});
+
+test('the boot output says the burst was shared, so the numbers can be read', () => {
+    const src = require('node:fs').readFileSync(path.join(__dirname, '..', 'scripts', 'load_test.mjs'), 'utf8');
+    assert.match(src, /call order rotated per parent so no single RPC absorbs the whole burst/);
+    assert.match(src, /parents at once/, 'and names the real concurrency reached');
+});
