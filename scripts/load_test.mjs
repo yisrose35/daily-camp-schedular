@@ -55,7 +55,14 @@ import { randomBytes } from 'node:crypto';
 
 /** Parse argv into options with defaults; throws on an unknown flag. */
 export function parseArgs(argv) {
-    const o = { parents: 200, concurrency: 50, duration: 60, poll: 30, session: '',
+    // `registers` is the canteen's concurrency, deliberately SEPARATE from
+    // `concurrency` (which is how many parents browse at once). A camp has a
+    // handful of registers, not fifty, and submit_canteen_purchase takes a
+    // camp-wide FOR UPDATE lock — so sales are serialized and the latency of
+    // the Nth simultaneous sale is N times the per-sale cost. Running the
+    // canteen at parent concurrency measured 100 tills ringing in the same
+    // instant, which no camp does, and reported a WARN for it.
+    const o = { parents: 200, concurrency: 50, registers: 6, duration: 60, poll: 30, session: '',
                 phases: null, p95: 1500, keep: false, dryRun: false };
     const num = (v, name) => { const n = Number(v); if (!Number.isFinite(n) || n < 0) throw new Error(`${name} must be a non-negative number`); return n; };
     for (let i = 0; i < argv.length; i++) {
@@ -63,6 +70,7 @@ export function parseArgs(argv) {
         switch (a) {
             case '--parents': o.parents = Math.max(1, Math.floor(num(next(), a))); break;
             case '--concurrency': o.concurrency = Math.max(1, Math.floor(num(next(), a))); break;
+            case '--registers': o.registers = Math.max(1, Math.floor(num(next(), a))); break;
             case '--duration': o.duration = num(next(), a); break;
             case '--poll': o.poll = Math.max(1, num(next(), a)); break;
             case '--session': o.session = String(next() || ''); break;
@@ -455,15 +463,30 @@ async function phaseCanteen(c, o, env, report, log) {
     const w = await c.upsertKvMerge(env.CAMP_ID, 'campistrySnacks', seeded);
     if (!w.ok) { log(`  canteen: could not seed accounts (HTTP ${w.status}) — skipped`); return null; }
     const samples = [];
+    const tills = Math.min(o.registers, o.parents);
+    log(`  canteen: ${o.parents} purchases through ${tills} register(s) at once`);
     const t0 = Date.now();
-    await pool(Array.from({ length: o.parents }, (_, i) => i), o.concurrency, async (i) => {
+    await pool(Array.from({ length: o.parents }, (_, i) => i), tills, async (i) => {
         const res = await c.rpc('submit_canteen_purchase', {
             p_camp_id: env.CAMP_ID, p_camper_name: `Load Camper ${i}`, p_amount: 1.5, p_items: 'Load test',
         }, jwt);
         samples.push(sample(res, 'submit_canteen_purchase'));
     });
-    const sum = summarize(samples, Date.now() - t0);
-    report.push(['canteen rush', sum, verdict(sum, o.p95, [])]);
+    const elapsed = Date.now() - t0;
+    const sum = summarize(samples, elapsed);
+    report.push([`canteen rush · ${tills} register(s)`, sum, verdict(sum, o.p95, [])]);
+    // submit_canteen_purchase holds a camp-wide FOR UPDATE lock for the whole
+    // read-modify-write of the snacks blob, so sales are SERIALIZED: the wall
+    // clock over N purchases divides into a per-sale cost that no amount of
+    // added concurrency improves. That derived number is the one worth knowing,
+    // because it is the camp's ceiling — and it grows with the blob, which is
+    // what the archive plus client-side compaction exist to bound.
+    if (sum.count > 0 && elapsed > 0) {
+        const perSale = elapsed / sum.count;
+        log(`  canteen: ~${perSale.toFixed(0)}ms of serialized time per sale`);
+        log(`           → a camp-wide ceiling of ~${(1000 / perSale).toFixed(0)} sales/second, whatever the register count.`);
+        log(`           Adding registers does not raise it: the blob's row lock is held per sale.`);
+    }
     return existing;
 }
 
@@ -495,7 +518,7 @@ export async function main(argv, env, log) {
     if (env.I_UNDERSTAND_THIS_IS_A_THROWAWAY_PROJECT !== 'yes') {
         throw new Error('This creates auth users and writes camp state. Set I_UNDERSTAND_THIS_IS_A_THROWAWAY_PROJECT=yes to run it against a disposable project.');
     }
-    log(`plan: ${o.parents} parents, concurrency ${o.concurrency}, phases ${phases.join(',')}, portal ${o.duration}s at a ${o.poll}s poll, p95 bar ${o.p95}ms`);
+    log(`plan: ${o.parents} parents, concurrency ${o.concurrency}, ${o.registers} canteen register(s), phases ${phases.join(',')}, portal ${o.duration}s at a ${o.poll}s poll, p95 bar ${o.p95}ms`);
     if (o.dryRun) { log('dry run — nothing created'); return { dryRun: true, plan: o }; }
 
     const c = mkClient(env);
