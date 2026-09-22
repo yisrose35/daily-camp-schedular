@@ -1,5 +1,5 @@
 -- ============================================================================
--- Confirm migrations 222-234 are in and doing their job.
+-- Confirm migrations 222-236 are in and doing their job.
 --
 -- Paste the whole thing into the Supabase SQL Editor. It is READ ONLY — one
 -- SELECT, nothing is created, changed or deleted, and the two purge functions
@@ -200,7 +200,32 @@
            AND EXISTS (SELECT 1 FROM pg_proc p JOIN pg_namespace n ON n.oid = p.pronamespace
                         WHERE n.nspname = 'public' AND p.proname = 'settle_shop_order'
                           AND p.prosrc ~ 'camp_family_key_for_person')
-          THEN 'ok' ELSE 'MISSING — re-apply 234' END)
+          THEN 'ok' ELSE 'MISSING — re-apply 234' END),
+
+    ('235  no function loses a camper on a rename',
+     CASE WHEN to_regprocedure('public.receipt_recipient(uuid,text,text,text,bigint)') IS NOT NULL
+           AND to_regprocedure('public.receipt_recipient(uuid,text,text,text)') IS NULL
+           AND to_regprocedure('public._latest_pickup_alert(uuid,text,bigint)') IS NOT NULL
+           AND to_regprocedure('public.mark_pickup_alert_league_checked(uuid,text,text,bigint)') IS NOT NULL
+           AND to_regprocedure('public.mark_pickup_alert_league_checked(uuid,text,text)') IS NULL
+           AND to_regprocedure('public.add_pickup_alert_league_recipients(uuid,text,text[],text,text,bigint)') IS NOT NULL
+           -- and the one that used to report success having changed nothing can
+           -- now say otherwise
+           AND EXISTS (SELECT 1 FROM pg_proc p JOIN pg_namespace n ON n.oid = p.pronamespace
+                        WHERE n.nspname = 'public'
+                          AND p.proname = 'mark_pickup_alert_league_checked'
+                          AND p.prosrc ~ 'no_matching_alert')
+          THEN 'ok' ELSE 'MISSING — re-apply 235' END),
+
+    ('236  a person can attribute what no rule can',
+     CASE WHEN to_regprocedure('public.camper_name_candidates(uuid)') IS NOT NULL
+           AND to_regprocedure('public.attribute_camper_name(uuid,text,bigint,boolean)') IS NOT NULL
+           AND to_regprocedure('public.verify_camper_attribution()') IS NOT NULL
+           AND to_regprocedure('public.purge_unattributable_canteen_accounts(boolean)') IS NOT NULL
+           -- the transposition it exists for, asked of the function itself
+           AND public._name_letters('Sara Schepansky') = public._name_letters('Sara Schepasnky')
+           AND public._name_letters('Sara Rosenfeld') <> public._name_letters('Chana Rosenfeld')
+          THEN 'ok' ELSE 'MISSING — re-apply 236' END)
     ) AS t(item, result)
 
 UNION ALL
@@ -222,6 +247,9 @@ UNION ALL
     ('parent invite identity', public.verify_parent_invite_identity()::text),
     -- still_matching_camper_names_by_hand must be []. 234 takes the last one.
     ('family identity',     public.verify_family_identity()::text),
+    -- unresolved_accounts_with_a_plausible_match is the decision list; the rest
+    -- of rows_the_roster_cannot_resolve is campers who left.
+    ('camper attribution',  public.verify_camper_attribution()::text),
     -- Empty is the answer you want for both of these. Anything in the second is
     -- a function PostgREST cannot resolve, which fails every call from an edge
     -- function.
