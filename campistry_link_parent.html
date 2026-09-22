@@ -618,6 +618,16 @@
         </button>
     </div>
 
+    <div class="lk-card" id="mailEmailCard" style="margin-top:16px;display:none;">
+        <div class="lk-card-head"><h2>Prefer email?</h2></div>
+        <p style="font-size:.85rem;color:var(--text-muted);margin:0 0 10px;">You can also just email your letter from your own inbox — send it here and it reaches the camp office the same way. Email <strong>from the address you registered with</strong>, and put your camper's name in the subject or first line so it goes to the right child.</p>
+        <div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap;">
+            <code id="mailEmailAddr" style="font-size:.9rem;font-weight:700;background:var(--surface-2,#f1f5f9);padding:8px 12px;border-radius:8px;word-break:break-all;"></code>
+            <button class="btn btn-secondary" onclick="_copyMailEmail()">Copy</button>
+        </div>
+        <div id="mailEmailCodes" style="margin-top:12px;"></div>
+    </div>
+
     <div class="lk-card" style="margin-top:16px;">
         <div class="lk-card-head"><h2>My Letters</h2></div>
         <div id="myMailList"><div class="lk-empty" style="padding:20px 0;"><h3>No letters yet</h3><p>Letters you send appear here with their delivery status.</p></div></div>
@@ -4150,7 +4160,42 @@ function renderCamperMail(){
         }
     }
     _renderMyMail();
+    _renderMailEmailOption();
 }
+// The camp's own letters@ address, shown only when the camp has turned inbound
+// Camper Mail on. Scoped to the active child's camp so a multi-camp family sees
+// the right address as they switch campers.
+function _renderMailEmailOption(){
+    var card=document.getElementById('mailEmailCard'); if(!card) return;
+    card.style.display='none';
+    var child=children.find(function(c){return c.name===_mailChildName;})||children[0];
+    var cid=child&&child.campId; if(!cid||!window._pRpc) return;
+    window._pRpc('get_camper_mail_inbox_address',{},cid).then(function(res){
+        var d=res&&res.data;
+        if(d&&d.success&&d.available&&d.inboundToken){
+            var addr='letters+'+d.inboundToken+'@'+(window.CAMPISTRY_INBOUND_DOMAIN||'inbound.campistry.org');
+            var a=document.getElementById('mailEmailAddr'); if(a)a.textContent=addr;
+            _renderMailCodes(cid,d.campNumber||'');
+            card.style.display='';
+        }
+    },function(){});
+}
+// Each of this parent's campers at this camp gets a code — <camp number>-<camper
+// id> — that pins an email to them from ANY address. Shown so a parent emailing
+// from a work or shared inbox can still route the letter to the right child.
+function _renderMailCodes(cid,campNumber){
+    var box=document.getElementById('mailEmailCodes'); if(!box) return;
+    box.innerHTML='';
+    if(!campNumber) return;
+    var kids=(children||[]).filter(function(c){ return c.campId===cid && String(c.id||'').replace(/\D/g,''); });
+    if(!kids.length) return;
+    box.innerHTML='<div style="font-size:.76rem;color:var(--text-muted);margin-bottom:6px;">Emailing from a different address? Put your camper’s code in the subject or first line:</div>'
+      +kids.map(function(c){
+          var code=campNumber+'-'+String(c.id).replace(/\D/g,'');
+          return '<div style="display:flex;align-items:center;gap:8px;margin:4px 0;"><code style="font-size:.86rem;font-weight:700;background:var(--surface-2,#f1f5f9);padding:5px 10px;border-radius:6px;">'+code+'</code><span style="font-size:.8rem;color:var(--text-muted);">'+(c.name?String(c.name).replace(/[<>&]/g,''):'')+'</span></div>';
+      }).join('');
+}
+function _copyMailEmail(){ var a=document.getElementById('mailEmailAddr'); if(!a||!a.textContent)return; try{ navigator.clipboard.writeText(a.textContent); toast('Address copied'); }catch(e){ toast(a.textContent); } }
 
 function _renderMyMail(){
     var el=document.getElementById('myMailList'); if(!el)return;
@@ -4924,6 +4969,7 @@ window.addEventListener('storage', function(e) {
 <script src="campistry_face_shared.js?v=20260909-01"></script>
 <script src="campistry_face_engine_v2.js?v=20260909-01"></script>
 <script src="supabase-js@2.js?v=20260909-01"></script>
+<script>window.CAMPISTRY_INBOUND_DOMAIN=window.CAMPISTRY_INBOUND_DOMAIN||'inbound.campistry.org';</script>
 <script src="config.js?v=20260909-01"></script>
 <!-- pdf-lib + pdf.js (vendored) — fill-in-browser + stamp/flatten for PDF
      Forms (Forms & Documents → Complete Online → a sourceType:'pdf' form). -->
