@@ -297,21 +297,76 @@ function _reconcileBalances(data) {
 // tab cached its copy. Fetch the CURRENT cloud value first, union the
 // transaction ledgers, then recompute balances from the union — so no deposit
 // or purchase is ever lost, regardless of write order.
+// ★ 219: balances and the ledger live in rows now, not in this document.
+//
+// camp_canteen_accounts is the truth for every balance, daily limit and
+// auto-reload setting, and canteen_transactions is the truth for the ledger.
+// Reading them from the document would show whatever it held at the moment the
+// writers stopped maintaining it — frozen numbers, with no error to notice.
+//
+// get_canteen_accounts (218) serves both from the rows, already scoped: staff
+// get the whole camp, a parent gets only their own children.
+function _loadCanteenRows(then) {
+    try {
+        const db = window.CampistryDB;
+        const client = db && db.client;
+        const campId = db && db.getCampId && db.getCampId();
+        if (!client || !campId) { then(null); return; }
+        client.rpc('get_canteen_accounts', { p_camp_id: campId })
+            .then(function (res) {
+                const d = res && res.data;
+                // A failure must not be mistaken for an empty camp: showing
+                // every balance as zero is worse than showing none, because it
+                // looks like an answer.
+                if (!d || d.success !== true) { then(null); return; }
+                then({ accounts: d.accounts || {}, transactions: d.transactions || [] });
+            }, function () { then(null); });
+    } catch (_) { then(null); }
+}
+
+// Overlay the row-backed truth onto whatever the document gave us. The
+// document still owns inventory, POS configuration and the rest.
+function _overlayCanteenRows(target, done) {
+    _loadCanteenRows(function (rows) {
+        if (rows && target && typeof target === 'object') {
+            target.accounts = rows.accounts;
+            target.transactions = rows.transactions;
+        }
+        if (typeof done === 'function') done(!!rows);
+    });
+}
+
+// ★ 219: never write accounts or transactions back into the document. They are
+// not ours to write any more, and a whole-document save carrying a stale copy
+// is exactly the compare-and-set that would have overwritten live balances
+// while the projection trigger still existed.
+function _withoutRowBackedBranches(data) {
+    if (!data || typeof data !== 'object') return data;
+    const copy = Object.assign({}, data);
+    delete copy.accounts;
+    delete copy.transactions;
+    return copy;
+}
+
 function cloudSaveSnacks(data) {
     try {
         const db = window.CampistryDB;
         const client = db && db.client;
         const campId = db && db.getCampId && db.getCampId();
-        if (!client || !campId) { _cloudUpsertSnacks(data); return; }
+        if (!client || !campId) { _cloudUpsertSnacks(_withoutRowBackedBranches(data)); return; }
         client.from('camp_state_kv').select('value').eq('camp_id', campId).eq('key', 'campistrySnacks').maybeSingle()
             .then(function(res) {
                 var cloud = (res && res.data && res.data.value) || null;
                 var merged = _mergeSnacksInto(cloud, data);
-                _cloudUpsertSnacks(merged);
+                // ★ 219: the document keeps inventory and configuration; the
+                // balances and the ledger it still holds are a frozen copy
+                // from before the writers moved to rows, so they are stripped
+                // rather than written back.
+                _cloudUpsertSnacks(_withoutRowBackedBranches(merged));
                 // Keep local mirror consistent with what we just wrote.
                 try { var g = JSON.parse(localStorage.getItem(STORE_KEY) || '{}'); g.campistrySnacks = merged; localStorage.setItem(STORE_KEY, JSON.stringify(g)); } catch (_) {}
                 snacks = merged;
-            }, function() { _cloudUpsertSnacks(data); });
+            }, function() { _cloudUpsertSnacks(_withoutRowBackedBranches(data)); });
     } catch (e) { console.warn('[Snacks] Cloud save error:', e); _cloudUpsertSnacks(data); }
 }
 
@@ -1670,8 +1725,13 @@ function _refreshSnacksFromCloud() {
                 var cloud = res && res.data && res.data.value;
                 if (!cloud || typeof cloud !== 'object') return;
                 snacks = cloud;
-                try { var g = JSON.parse(localStorage.getItem(STORE_KEY) || '{}'); g.campistrySnacks = cloud; localStorage.setItem(STORE_KEY, JSON.stringify(g)); } catch (_) {}
-                renderStats(); rAccounts(); rAnalytics(); rSettings();
+                // ★ 219: the document's own accounts/transactions are stale by
+                // design. Overlay the rows BEFORE rendering, or the POS shows
+                // balances frozen at the moment the writers moved.
+                _overlayCanteenRows(snacks, function () {
+                    try { var g = JSON.parse(localStorage.getItem(STORE_KEY) || '{}'); g.campistrySnacks = snacks; localStorage.setItem(STORE_KEY, JSON.stringify(g)); } catch (_) {}
+                    renderStats(); rAccounts(); rAnalytics(); rSettings();
+                });
             });
     } catch (e) { console.warn('[Snacks] refresh after refund failed:', e); }
 }
@@ -2280,6 +2340,16 @@ window.addEventListener('campistry-cloud-hydrated', function () {
         console.log('[Snacks Manager DEBUG] loadSnacksData() returned inventory deltas:', afterSummary);
     } catch (e) {}
     _hydratedOnce = true;
-    init();
+    // ★ 219: balances and the ledger come from rows, not from the hydrated
+    // document. Overlay before init() renders, or the first thing a register
+    // shows is every balance as it stood when the writers moved off the
+    // document — plausible numbers, quietly wrong. If the rows cannot be
+    // reached, init() still runs: a POS that renders stale balances is bad,
+    // and a POS that renders nothing at all is worse.
+    _overlayCanteenRows(snacks, function (ok) {
+        if (!ok) console.warn('[Snacks] could not load balances from rows — showing the '
+                              + 'document copy, which is no longer maintained');
+        init();
+    });
 });
 })();
