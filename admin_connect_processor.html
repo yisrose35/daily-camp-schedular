@@ -1,0 +1,108 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>Connect a Camp's Processor — Admin Tool</title>
+<style>
+  body { font-family: -apple-system, Segoe UI, sans-serif; max-width: 640px; margin: 40px auto; padding: 0 20px; color: #1e293b; }
+  h1 { font-size: 1.3rem; }
+  .warn { background: #fef3c7; border: 1px solid #fbbf24; padding: 10px 14px; border-radius: 8px; font-size: 0.85rem; margin-bottom: 20px; }
+  label { display: block; font-size: 0.82rem; font-weight: 600; margin: 14px 0 4px; }
+  input, select, textarea { width: 100%; padding: 8px 10px; font-size: 0.9rem; border: 1px solid #cbd5e1; border-radius: 6px; box-sizing: border-box; font-family: inherit; }
+  textarea { min-height: 120px; font-family: monospace; }
+  button { margin-top: 18px; padding: 10px 20px; background: #0f766e; color: #fff; border: none; border-radius: 8px; font-size: 0.9rem; font-weight: 600; cursor: pointer; }
+  button:disabled { opacity: 0.5; cursor: default; }
+  #result { margin-top: 18px; padding: 12px 14px; border-radius: 8px; font-size: 0.85rem; white-space: pre-wrap; display: none; }
+  #result.ok { background: #dcfce7; border: 1px solid #4ade80; display: block; }
+  #result.err { background: #fee2e2; border: 1px solid #f87171; display: block; }
+  .hint { font-size: 0.75rem; color: #64748b; margin-top: 3px; }
+</style>
+</head>
+<body>
+<h1>Connect a Camp's Payment Processor</h1>
+<div class="warn">This calls a real endpoint against your live Supabase project. Only use with sandbox/test credentials unless you mean to connect a real camp. Nothing here is saved anywhere except by clicking Submit.</div>
+
+<label>Supabase project ref (the part before .supabase.co)</label>
+<input id="projectRef" placeholder="e.g. bzqmhcumuarrbueqttfh">
+
+<label>Service role key</label>
+<input id="serviceKey" type="password" placeholder="paste the service_role key here">
+<div class="hint">Supabase Dashboard → Settings → API → service_role secret</div>
+
+<label>Camp ID</label>
+<input id="campId" placeholder="the camp's UUID from the camps table">
+
+<label>Processor</label>
+<select id="processorKey">
+  <option value="banquest">Banquest</option>
+  <option value="cardknox">Cardknox / Sola</option>
+</select>
+
+<label>Credentials JSON</label>
+<textarea id="credentials">{
+  "sourceKey": "",
+  "pin": "",
+  "tokenizationKey": "",
+  "gatewayUrl": "",
+  "tokenizationUrl": ""
+}</textarea>
+<div class="hint">Banquest: sourceKey, pin, tokenizationKey, gatewayUrl, tokenizationUrl. Cardknox/Sola: apiKey, ifieldsKey, checkoutSlug, webhookPin.</div>
+
+<label>Notes (optional)</label>
+<input id="notes" placeholder="e.g. Sandbox test run">
+
+<button id="go">Connect this camp</button>
+
+<div id="result"></div>
+
+<script>
+document.getElementById('go').onclick = async function() {
+  const btn = this;
+  const out = document.getElementById('result');
+  out.className = ''; out.style.display = 'none';
+
+  const ref = document.getElementById('projectRef').value.trim();
+  const key = document.getElementById('serviceKey').value.trim();
+  const campId = document.getElementById('campId').value.trim();
+  const processorKey = document.getElementById('processorKey').value;
+  const notes = document.getElementById('notes').value.trim();
+  let credentials;
+  try {
+    credentials = JSON.parse(document.getElementById('credentials').value);
+  } catch (e) {
+    out.className = 'err'; out.style.display = 'block';
+    out.textContent = 'The Credentials box is not valid JSON: ' + e.message;
+    return;
+  }
+  if (!ref || !key || !campId) {
+    out.className = 'err'; out.style.display = 'block';
+    out.textContent = 'Fill in the project ref, service role key, and camp ID first.';
+    return;
+  }
+
+  btn.disabled = true; btn.textContent = 'Connecting…';
+  try {
+    const resp = await fetch(`https://${ref}.supabase.co/functions/v1/admin-connect-processor`, {
+      method: 'POST',
+      headers: { 'Authorization': 'Bearer ' + key, 'Content-Type': 'application/json' },
+      body: JSON.stringify({ campId, processorKey, credentials, notes: notes || undefined })
+    });
+    const data = await resp.json();
+    out.style.display = 'block';
+    if (data.success) {
+      out.className = 'ok';
+      out.textContent = 'SUCCESS\n\n' + JSON.stringify(data, null, 2);
+    } else {
+      out.className = 'err';
+      out.textContent = 'FAILED (' + resp.status + ')\n\n' + JSON.stringify(data, null, 2);
+    }
+  } catch (e) {
+    out.className = 'err'; out.style.display = 'block';
+    out.textContent = 'Request failed: ' + e.message + '\n\nIf this says "Failed to fetch", try opening this file through a local web server instead of double-clicking it (some browsers block requests from file:// pages).';
+  } finally {
+    btn.disabled = false; btn.textContent = 'Connect this camp';
+  }
+};
+</script>
+</body>
+</html>
