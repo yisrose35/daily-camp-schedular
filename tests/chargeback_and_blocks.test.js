@@ -120,10 +120,24 @@ test('it matches the payment on a SET of references, not one field', () => {
     // gives the charge id and the payment_intent. Matching one field would fail
     // to find the payment.
     assert.match(SQL, /p_refs\s+text\[\]/, 'the refs argument is no longer a set');
-    for (const f of ['stripePaymentIntentId', 'reference', 'byopTransactionId']) {
-        assert.ok(SQL.includes("e->>'" + f + "' = ANY(p_refs)"),
-            'no longer matches a payment by ' + f);
+    // Migration 215 took this off the camp document. The four-field test is now
+    // `dedupe_keys && p_refs` — array overlap against 213's indexed column — so
+    // the GUARANTEE is unchanged and the expression is not. Asserting the chain
+    // rather than trusting it: the match must be on dedupe_keys, AND dedupe_keys
+    // must be built from exactly those four fields.
+    assert.ok((SQL.match(/dedupe_keys && p_refs/g) || []).length >= 2,
+        'both the family lookup and the annotation must match on the ref SET');
+    const dedupeDef = read('migrations/213_payments_row_truth.sql');
+    const gen = dedupeDef.slice(dedupeDef.indexOf('dedupe_keys text[]'),
+                                dedupeDef.indexOf('STORED;'));
+    for (const f of ['id', 'reference', 'stripePaymentIntentId', 'byopTransactionId']) {
+        assert.ok(gen.includes("'" + f + "'"),
+            `dedupe_keys no longer carries ${f}, so a chargeback can no longer match on it`);
     }
+    // RECORD_CB, not the combined SQL: flag_plan_collection still walks an array,
+    // legitimately, over plans rather than over every payment in the camp.
+    assert.doesNotMatch(RECORD_CB, /FOR i IN 0 \.\. GREATEST\(jsonb_array_length/,
+        'the payment array walk is gone — it scanned every payment the camp ever took');
 });
 
 test('it refuses to guess a family rather than post against the wrong one', () => {
@@ -235,9 +249,13 @@ test('a chargeback with no amount uses the amount of the payment it disputes', (
     const ledgerPath = RECORD_CB.slice(RECORD_CB.indexOf('FOR famRec'), RECORD_CB.indexOf('Not in a ledger'));
     assert.match(ledgerPath, /\(e->>'amount'\)::numeric INTO v_matched/,
         'a chargeback matched via the LEDGER never picks up an amount');
+    // 215 moved this path to the payment ROWS, so the amount comes off the row's
+    // payload rather than an array element. Same guarantee, different column.
     const financePath = RECORD_CB.slice(RECORD_CB.indexOf('Not in a ledger'), RECORD_CB.indexOf('family_not_found'));
-    assert.match(financePath, /\(e->>'amount'\)::numeric/,
-        'a chargeback matched via finance.payments never picks up an amount');
+    assert.match(financePath, /\((?:e|payload)->>'amount'\)::numeric/,
+        'a chargeback matched via the payment rows never picks up an amount');
+    assert.match(financePath, /FROM public\.camp_payments/,
+        'the fallback lookup must read the rows — the document branch is not maintained');
 });
 
 test('matched but still amountless is refused, not posted as $0', () => {

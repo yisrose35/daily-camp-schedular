@@ -61,6 +61,29 @@ FAMILY_ONLY=['settle_shop_order','resolve_chargeback','merge_camp_family_fields'
  'flag_expiring_cards','flag_plan_collection','use_family_card_for_canteen_auto_reload',
  '_admin_backfill_saved_payment_methods','_admin_clear_stale_byop_cards']
 
+# The seven that touch finance.payments as well. Three only READ the array, three
+# APPEND one payment, and record_chargeback PATCHES one element then rewrote the
+# whole array — that last one is done by hand in the migration, because "find the
+# first element matching any of four id fields" becomes a targeted single-row
+# UPDATE and no line-for-line rule expresses that honestly.
+# DONE BY HAND in the migration, not by rule, and each with its own behaviour
+# test. Stretching a rule to cover these would be less honest than writing them
+# out, because neither is a line-for-line substitution:
+#
+#   record_chargeback    finds the FIRST array element matching any of four id
+#                        fields and annotates it. That is a targeted single-row
+#                        UPDATE using 213's dedupe_keys index, not a line swap.
+#   set_my_payment_plan  performs TWO nested mutations on the families
+#                        accumulator — set [key,'plans'] and remove [key,'plan'] —
+#                        before one branch write. A rule that matched only the
+#                        first would silently leave the legacy 'plan' key behind.
+BY_HAND=['record_chargeback','set_my_payment_plan']
+
+ALSO_PAYMENTS=['record_autopay_charge','record_autopay_installment',
+ 'record_external_refund','sync_family_ledger_payments','convert_family_ledgers']
+
+TARGETS = FAMILY_ONLY if os.environ.get('XFORM_SET','family')=='family' else ALSO_PAYMENTS
+
 def camp_expr(body):
     """How this function names the camp id."""
     if re.search(r'\binv\.camp_id\b', body): return 'inv.camp_id'
@@ -69,7 +92,7 @@ def camp_expr(body):
     return None
 
 report={}
-for fn in FAMILY_ONLY:
+for fn in TARGETS:
     f, body = latest[fn]
     orig = body
     camp = camp_expr(body)
@@ -148,6 +171,26 @@ for fn in FAMILY_ONLY:
         body = re.sub(r"[ \t]*\w+ := jsonb_set\(\w+, '\{families\}', %s(?:, true)?\);\n" % acc, '', body)
         if body!=n_before: applied.append('R5b drop-branch-write')
 
+    # ── payments ────────────────────────────────────────────────────────────
+    # P1: the array, read. Same shape, live rows, original order.
+    n_before=body
+    body = re.sub(r"COALESCE\(\w+\s*->\s*'finance'\s*->\s*'payments', '\[\]'::jsonb\)",
+                  lambda m: f'public.camp_payments_array({camp})', body)
+    body = re.sub(r"COALESCE\(\w+\s*->\s*'payments', '\[\]'::jsonb\)",
+                  lambda m: f'public.camp_payments_array({camp})', body)
+    if body!=n_before: applied.append('P1 read-array')
+
+    # P2: the append. `v_fin := jsonb_set(v_fin,'{payments}', v_pays || jsonb_build_array(X), true);`
+    # followed by `v_me := jsonb_set(v_me,'{finance}', v_fin, true);` becomes one
+    # insert. The appended ELEMENT is captured, so a built object survives intact.
+    n_before=body
+    body = re.sub(r"[ \t]*\w+ := jsonb_set\(\w+, '\{payments\}',\s*\n?\s*\w+ \|\| jsonb_build_array\(([\s\S]*?)\)(?:, true)?\);\n",
+                  lambda m: f'    PERFORM public.camp_payment_add({camp}, {m.group(1).strip()});\n', body)
+    if body!=n_before: applied.append('P2 append-row')
+    n_before=body
+    body = re.sub(r"[ \t]*\w+\s*:= jsonb_set\(\w+,\s*'\{finance\}', \w+(?:, true)?\);\n", '', body)
+    if body!=n_before: applied.append('P3 drop-finance-write')
+
     # R5: drop the document write.
     n_before=body
     body = re.sub(r'[ \t]*UPDATE camp_state_kv SET value = \w+, updated_at = [^\n]*\n[ \t]*WHERE camp_id = [^\n]*?key = \'campistryMe\';\n',
@@ -178,6 +221,10 @@ for fn in FAMILY_ONLY:
                      bool(re.search(r"jsonb_set\(\s*\w+\s*,\s*'\{families\}'", ocode))
     if wrote_families and 'camp_family_save' not in code:
         leftovers.append('WRITES LOST — wrote families, saves none')
+    if re.search(r"jsonb_set\(\s*\w+\s*,\s*(?:ARRAY\['finance'|'\{payments\}'|'\{finance\}')", code):
+        leftovers.append('still writes the payments array')
+    if re.search(r"->\s*'finance'\s*->\s*'payments'", code):
+        leftovers.append("reads ->'finance'->'payments' from the document")
     if re.search(r"ARRAY\['families'", code): leftovers.append("ARRAY['families'] remains")
     if re.search(r"(?<!camp_families_object\()\w+\s*->\s*'families'", code):
         leftovers.append("->'families' remains")

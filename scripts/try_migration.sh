@@ -120,6 +120,11 @@ CREATE TABLE IF NOT EXISTS public.bank_deposits (
     id uuid PRIMARY KEY DEFAULT gen_random_uuid(), camp_id uuid, family_key text,
     amount_cents bigint, is_reversal boolean DEFAULT false, deposit_date date,
     status text, kind text, payer_name text, memo_code text, trace_id text);
+CREATE TABLE IF NOT EXISTS public.notifications (
+    id uuid PRIMARY KEY DEFAULT gen_random_uuid(), camp_id uuid, source text,
+    source_id text, title text, body text, link_target text,
+    created_at timestamptz DEFAULT now(), read_at timestamptz,
+    UNIQUE (camp_id, source, source_id));
 CREATE TABLE IF NOT EXISTS public.link_parent_invites (
     id uuid PRIMARY KEY DEFAULT gen_random_uuid(), camp_id uuid, user_id uuid,
     token text, parent_name text, parent_email text, camper_names jsonb,
