@@ -294,7 +294,10 @@ test('describeAuthFailure: says what arrived, and never leaks a token or passwor
 
 test('both sign-in call sites use the extractor and report the reason', () => {
     const src = require('node:fs').readFileSync(path.join(__dirname, '..', 'scripts', 'load_test.mjs'), 'utf8');
-    const sites = [...src.matchAll(/const jwt = tokenFrom\(s\.data\);/g)];
+    // The parent-setup site sits inside the retry loop now (`jwt = ...`), the
+    // owner site still declares (`const jwt = ...`). Count the call, not the
+    // declaration, or this pins a shape rather than the behaviour.
+    const sites = [...src.matchAll(/jwt = tokenFrom\(s\.data\);/g)];
     assert.strictEqual(sites.length, 2, 'the parent setup and the canteen owner');
     assert.ok(!/s\.data\.access_token/.test(src), 'no call site may read the flat field directly again');
     assert.strictEqual([...src.matchAll(/describeAuthFailure\(s\)/g)].length, 2, 'both must say why');
@@ -413,4 +416,67 @@ test('a genuine JSON refusal is still read as a refusal, not as a bad URL', asyn
         assert.match(Object.keys(s.errors)[0], /session_full/);
         assert.strictEqual(v, 'PASS', 'a full session is a feature, and must not read as a broken URL');
     } finally { globalThis.fetch = realFetch; }
+});
+
+// ── the auth rate limit: the test's ceiling, not the app's ──────────────────
+// A 100-parent run signed in 32 and then got HTTP 429 "Request rate limit
+// reached" for the rest. Supabase rate-limits its auth endpoint per IP, and this
+// script signs in N parents from one machine in seconds — which no real camp
+// ever does: a parent signs in once, from home, and keeps the session for days.
+// So the sign-ins are paced and retried, and a shortfall says what it is instead
+// of looking like the app failing.
+
+test('rateGate: spaces calls, and the first one is free', async () => {
+    const { rateGate } = await load();
+    const gate = rateGate(20);                   // one every 50ms
+    const t0 = Date.now();
+    await gate();
+    assert.ok(Date.now() - t0 < 40, 'the first call must not wait');
+    for (let i = 0; i < 5; i++) await gate();
+    const ms = Date.now() - t0;
+    assert.ok(ms >= 200, `expected ~250ms of pacing, got ${ms}ms`);
+    assert.ok(ms < 900, `but not much more, got ${ms}ms`);
+});
+
+test('rateGate: paces concurrent callers too, which is the whole point', async () => {
+    const { rateGate } = await load();
+    const gate = rateGate(20);
+    const t0 = Date.now();
+    await Promise.all(Array.from({ length: 8 }, () => gate()));
+    assert.ok(Date.now() - t0 >= 300, 'eight at once must still be spread out');
+});
+
+test('isRateLimited: recognises the limiter by status AND by message', async () => {
+    const { isRateLimited } = await load();
+    assert.strictEqual(isRateLimited({ status: 429, data: {} }), true);
+    // the real body Supabase sent: {code, error_code, msg}
+    assert.strictEqual(isRateLimited({ status: 400, data: { code: 429, error_code: 'over_request_rate_limit', msg: 'Request rate limit reached' } }), true,
+        'a limiter answering 400 with a rate-limit message must still be recognised');
+    assert.strictEqual(isRateLimited({ status: 200, data: { error_description: 'Rate limit exceeded' } }), true);
+    // and NOT anything else — a wrong password must never be retried as a limit
+    assert.strictEqual(isRateLimited({ status: 400, data: { error: 'invalid_grant', error_description: 'Invalid login credentials' } }), false);
+    assert.strictEqual(isRateLimited({ status: 500, data: { msg: 'internal error' } }), false);
+    assert.strictEqual(isRateLimited({ status: 200, data: { access_token: 'x' } }), false);
+    assert.strictEqual(isRateLimited(null), false);
+    assert.strictEqual(isRateLimited({ status: 400, data: 'some html' }), false);
+});
+
+test('the sign-in loop paces, retries only a rate limit, and gives up bounded', () => {
+    const src = require('node:fs').readFileSync(path.join(__dirname, '..', 'scripts', 'load_test.mjs'), 'utf8');
+    assert.match(src, /const signInGate = rateGate\(Math\.max\(1, Number\(process\.env\.LOADTEST_SIGNIN_PER_SEC \|\| 8\)\)\);/,
+        'paced, and tunable when a project has a tighter limit');
+    assert.match(src, /for \(let attempt = 0; attempt < 4 && !jwt; attempt\+\+\) \{/, 'bounded');
+    assert.match(src, /await signInGate\(\);\s*\n\s*s = await c\.signIn/, 'the gate is inside the retry loop');
+    assert.match(src, /if \(jwt \|\| !isRateLimited\(s\)\) break;/,
+        'only a rate limit is retried — a bad password must not be tried four times');
+    assert.match(src, /await new Promise\(r => setTimeout\(r, 2000 \* \(attempt \+ 1\)\)\);/, 'backoff grows');
+});
+
+test('a shortfall from the limiter explains itself as the test\'s ceiling', () => {
+    const src = require('node:fs').readFileSync(path.join(__dirname, '..', 'scripts', 'load_test.mjs'), 'utf8');
+    assert.match(src, /if \(rateLimited\) \{/);
+    assert.match(src, /THIS SCRIPT's ceiling, not your app's/,
+        'the reader must not mistake it for the app falling over');
+    assert.match(src, /Authentication → Rate Limits/, 'and must say how to raise it');
+    assert.match(src, /LOADTEST_SIGNIN_PER_SEC/);
 });

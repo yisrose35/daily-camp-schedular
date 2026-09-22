@@ -162,6 +162,27 @@ export function unseedCanteenAccounts(value) {
     return v;
 }
 
+/** Spaces calls so no more than `perSecond` start in any second. */
+export function rateGate(perSecond) {
+    const gap = 1000 / Math.max(0.1, perSecond);
+    let next = 0;
+    return async () => {
+        const now = Date.now();
+        const at = Math.max(now, next);
+        next = at + gap;
+        if (at > now) await new Promise(r => setTimeout(r, at - now));
+    };
+}
+
+/** Is this response Supabase's auth rate limiter saying "slow down"? */
+export function isRateLimited(res) {
+    if (!res) return false;
+    if (res.status === 429) return true;
+    const d = res.data;
+    return !!(d && typeof d === 'object'
+        && /rate limit/i.test(String(d.msg || d.error_description || d.error || d.message || '')));
+}
+
 /**
  * The access token out of a sign-in response, whatever shape it arrived in.
  *
@@ -311,8 +332,9 @@ async function setupParents(c, o, env, log) {
     const parents = [];
     // Cap the noise: 300 identical failure lines scrolled the one useful fact
     // off the screen on the first real run. After a few, count silently.
-    let shown = 0, suppressed = 0;
+    let shown = 0, suppressed = 0, rateLimited = 0;
     const warn = (m) => { if (shown < 5) { shown++; log(m); } else suppressed++; };
+    const signInGate = rateGate(Math.max(1, Number(process.env.LOADTEST_SIGNIN_PER_SEC || 8)));
     await pool(Array.from({ length: o.parents }, (_, i) => i), Math.min(o.concurrency, 20), async (i) => {
         const f = parentFixture(i, env.CAMP_ID);
         const u = await c.adminCreateUser(f.email, f.password);
@@ -320,13 +342,31 @@ async function setupParents(c, o, env, log) {
         f.userId = u.data.id;
         const inv = await c.insert('link_parent_invites', [{ ...f.invite, user_id: f.userId }]);
         if (!inv.ok) { warn(`  ! could not invite ${f.email}: HTTP ${inv.status} ${JSON.stringify(inv.data).slice(0, 120)}`); return; }
-        const s = await c.signIn(f.email, f.password);
-        const jwt = tokenFrom(s.data);
+        // Paced and retried, because Supabase rate-limits the auth endpoint per IP
+        // and this script signs in N parents from ONE machine in a few seconds —
+        // which no real camp ever does (a parent signs in once and keeps the
+        // session for days). A shortfall here is the TEST's ceiling, not the app's.
+        let s = null, jwt = null;
+        for (let attempt = 0; attempt < 4 && !jwt; attempt++) {
+            await signInGate();
+            s = await c.signIn(f.email, f.password);
+            jwt = tokenFrom(s.data);
+            if (jwt || !isRateLimited(s)) break;
+            rateLimited++;
+            await new Promise(r => setTimeout(r, 2000 * (attempt + 1)));
+        }
         if (!jwt) { warn(`  ! could not sign in ${f.email}: ${describeAuthFailure(s)}`); return; }
         f.jwt = jwt;
         parents.push(f);
     });
     if (suppressed) log(`  ! ...and ${suppressed} more like the above`);
+    if (rateLimited) {
+        log(`  note: hit Supabase's auth rate limit ${rateLimited} time(s) signing parents in.`);
+        log(`        That is THIS SCRIPT's ceiling, not your app's — real parents sign in`);
+        log(`        once, from their own homes, and keep the session for days. To simulate`);
+        log(`        more: Dashboard → Authentication → Rate Limits, raise sign-ins, or set`);
+        log(`        LOADTEST_SIGNIN_PER_SEC lower to pace them out over a longer setup.`);
+    }
     return parents;
 }
 
