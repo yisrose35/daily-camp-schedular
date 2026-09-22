@@ -139,8 +139,89 @@ CREATE TABLE IF NOT EXISTS public.notifications (
 CREATE TABLE IF NOT EXISTS public.link_parent_invites (
     id uuid PRIMARY KEY DEFAULT gen_random_uuid(), camp_id uuid, user_id uuid,
     token text, parent_name text, parent_email text, camper_names jsonb,
+    camper_data jsonb, camp_connected boolean NOT NULL DEFAULT true,
     status text, billing_access boolean DEFAULT false,
     expires_at timestamptz, created_at timestamptz DEFAULT now());
+
+-- The three tables a parent submits INTO, so 225's conversions have somewhere
+-- to write and its behaviour test can read the row back.
+CREATE TABLE IF NOT EXISTS public.parent_pickup_requests (
+    id uuid PRIMARY KEY DEFAULT gen_random_uuid(), camp_id uuid NOT NULL,
+    request_date date, type text, label text, camper_name text NOT NULL,
+    camper_bunk text, parent_name text, parent_email text,
+    details jsonb NOT NULL DEFAULT '{}'::jsonb, status text,
+    created_at timestamptz NOT NULL DEFAULT now());
+CREATE TABLE IF NOT EXISTS public.link_camper_mail (
+    id uuid PRIMARY KEY DEFAULT gen_random_uuid(), camp_id uuid NOT NULL,
+    invite_id uuid, user_id uuid, camper_name text NOT NULL,
+    division text, grade text, bunk text, parent_name text, parent_email text,
+    subject text, body text, status text NOT NULL DEFAULT 'new',
+    source text NOT NULL DEFAULT 'portal', inbound_fingerprint text,
+    created_at timestamptz NOT NULL DEFAULT now());
+CREATE UNIQUE INDEX IF NOT EXISTS uq_link_camper_mail_inbound
+    ON public.link_camper_mail (camp_id, inbound_fingerprint)
+ WHERE inbound_fingerprint IS NOT NULL;
+CREATE TABLE IF NOT EXISTS public.link_form_responses (
+    id uuid PRIMARY KEY DEFAULT gen_random_uuid(), camp_id uuid NOT NULL,
+    invite_id uuid, user_id uuid, form_id text, form_name text, mode text,
+    camper_name text NOT NULL, camper_id text, parent_name text, parent_email text,
+    division text, grade text, bunk text, answers jsonb, signature_data text,
+    file_name text, file_data text, filled_pdf_path text,
+    created_at timestamptz NOT NULL DEFAULT now());
+
+-- 028/029's facial-recognition tables, 081's photo purchases and 017's staff
+-- tip accounts, so 226 has the whole consent surface to work on.
+CREATE TABLE IF NOT EXISTS public.link_photos (
+    id uuid PRIMARY KEY DEFAULT gen_random_uuid(), camp_id uuid NOT NULL,
+    image_data text, file_name text, week text, uploaded_by uuid,
+    faces_found int NOT NULL DEFAULT 0, sent boolean NOT NULL DEFAULT false,
+    created_at timestamptz NOT NULL DEFAULT now());
+CREATE TABLE IF NOT EXISTS public.link_photo_tags (
+    photo_id uuid NOT NULL REFERENCES public.link_photos(id) ON DELETE CASCADE,
+    camp_id uuid NOT NULL, camper_name text NOT NULL,
+    confidence real, manual boolean NOT NULL DEFAULT false,
+    pending boolean NOT NULL DEFAULT false,
+    PRIMARY KEY (photo_id, camper_name));
+CREATE TABLE IF NOT EXISTS public.link_camper_faces (
+    camp_id uuid NOT NULL, camper_name text NOT NULL,
+    descriptor jsonb, headshot_data text,
+    consent boolean NOT NULL DEFAULT false, consent_by uuid, consent_at timestamptz,
+    updated_at timestamptz NOT NULL DEFAULT now(),
+    PRIMARY KEY (camp_id, camper_name));
+CREATE TABLE IF NOT EXISTS public.link_camper_face_descriptors (
+    id uuid PRIMARY KEY DEFAULT gen_random_uuid(), camp_id uuid NOT NULL,
+    camper_name text NOT NULL, model text NOT NULL DEFAULT 'faceapi-128',
+    pose text NOT NULL DEFAULT 'front', source text NOT NULL DEFAULT 'parent',
+    descriptor jsonb NOT NULL, created_by uuid,
+    created_at timestamptz NOT NULL DEFAULT now());
+CREATE TABLE IF NOT EXISTS public.link_photo_purchases (
+    id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+    camp_id uuid NOT NULL REFERENCES public.camps(id),
+    parent_user_id uuid NOT NULL,
+    kind text NOT NULL CHECK (kind IN ('facial_recognition', 'hd_photo')),
+    camper_name text, photo_id uuid REFERENCES public.link_photos(id),
+    amount_paid_cents integer NOT NULL, stripe_payment_intent_id text NOT NULL,
+    purchased_at timestamptz NOT NULL DEFAULT now());
+CREATE UNIQUE INDEX IF NOT EXISTS uq_link_photo_purchase
+    ON public.link_photo_purchases (stripe_payment_intent_id, kind,
+        (COALESCE(camper_name, '')),
+        (COALESCE(photo_id, '00000000-0000-0000-0000-000000000000'::uuid)));
+CREATE TABLE IF NOT EXISTS public.link_staff_accounts (
+    id uuid PRIMARY KEY DEFAULT gen_random_uuid(), camp_id uuid NOT NULL,
+    staff_name text NOT NULL, role text NOT NULL DEFAULT '',
+    access_code text NOT NULL DEFAULT 'TEST-0000',
+    balance numeric(10,2) NOT NULL DEFAULT 0,
+    total_earned numeric(10,2) NOT NULL DEFAULT 0,
+    total_paid_out numeric(10,2) NOT NULL DEFAULT 0,
+    created_at timestamptz NOT NULL DEFAULT now(),
+    updated_at timestamptz NOT NULL DEFAULT now());
+CREATE UNIQUE INDEX IF NOT EXISTS uq_link_staff_accounts
+    ON public.link_staff_accounts (camp_id, lower(staff_name));
+
+-- 106's camp-wide "does this camp run Camper Mail" gate.
+CREATE OR REPLACE FUNCTION public._link_program_enabled(p_camp_id uuid, p_program text)
+RETURNS boolean LANGUAGE sql STABLE SECURITY DEFINER
+SET search_path = public, pg_catalog AS $$ SELECT true $$;
 
 -- Helpers earlier migrations define, stubbed so a later file can be tried on
 -- its own. A migration that defines them itself just replaces these.
@@ -200,6 +281,37 @@ CREATE TABLE IF NOT EXISTS public.camp_billing_payments (
     family_name text NOT NULL DEFAULT '', family_key text NOT NULL DEFAULT '',
     enrollment_id text NOT NULL DEFAULT '', payload jsonb NOT NULL,
     PRIMARY KEY (camp_id, seq));
+
+-- Four of the twenty tables that identify a camper by NAME, so 223 has real
+-- tables to give a person_id to and a behaviour test can prove the stamp works.
+-- Chosen for their shapes rather than at random: one safety table, one with a
+-- name in its PRIMARY KEY (so a later file that moves the key has something to
+-- move), one health table, one money table.
+CREATE TABLE IF NOT EXISTS public.pickup_alerts (
+    id uuid PRIMARY KEY DEFAULT gen_random_uuid(), camp_id uuid NOT NULL,
+    camper_name text NOT NULL, camper_bunk text, camper_division text,
+    camper_grade text, status text NOT NULL DEFAULT 'open',
+    created_at timestamptz NOT NULL DEFAULT now());
+CREATE TABLE IF NOT EXISTS public.link_photo_tags (
+    photo_id uuid NOT NULL, camper_name text NOT NULL, camp_id uuid NOT NULL,
+    source text, confidence numeric,
+    PRIMARY KEY (photo_id, camper_name));
+CREATE TABLE IF NOT EXISTS public.link_health_submissions (
+    id uuid PRIMARY KEY DEFAULT gen_random_uuid(), camp_id uuid NOT NULL,
+    camper_name text NOT NULL, file_name text, file_type text, file_data text,
+    note text, status text NOT NULL DEFAULT 'pending',
+    reviewed_by uuid, reviewed_at timestamptz, review_notes text,
+    created_at timestamptz NOT NULL DEFAULT now());
+CREATE TABLE IF NOT EXISTS public.link_tips (
+    id uuid PRIMARY KEY DEFAULT gen_random_uuid(), camp_id uuid NOT NULL,
+    invite_id uuid, user_id uuid, camper_name text,
+    parent_name text, parent_email text,
+    recipient_name text NOT NULL, recipient_role text,
+    amount numeric(8,2) NOT NULL, status text NOT NULL DEFAULT 'recorded',
+    payment_method text NOT NULL DEFAULT 'manual',
+    stripe_payment_intent_id text, fee_amount numeric(8,2),
+    staff_account_id uuid, stripe_transfer_id text,
+    created_at timestamptz NOT NULL DEFAULT now());
 STUBS
 
 echo "postgres $("$PGBIN/psql" -h "$SOCK" -p "$PORT" -U postgres -tAc 'show server_version') ready, stubs loaded"

@@ -1,11 +1,16 @@
 // =============================================================================
 // The camper-identity ledger.
 //
-// WHY THIS EXISTS. Migration 216 made (camp_id, person_id) a real identity, but
-// almost nothing uses it yet: 21 tables carry a camper NAME and no id, and 30
-// functions take p_camper_name. "Everything follows camp id and camper id" is
-// therefore not a statement about today — it is a direction, and a direction
-// nobody measures is a direction nobody travels.
+// WHY THIS EXISTS. Migration 216 made (camp_id, person_id) a real identity, and
+// when this file was written almost nothing used it: 16 tables carried a camper
+// NAME and no id, and 30 functions took p_camper_name. "Everything follows camp
+// id and camper id" was therefore not a statement about today — it was a
+// direction, and a direction nobody measures is a direction nobody travels.
+//
+// 223 finished the tables: every one of them now records a person_id and keeps
+// it true on insert. The thirty functions are what is left, and they are the
+// half that decides behaviour — a function that takes a name is a system that
+// asks for a name.
 //
 // So this is a RATCHET, not a report. Every name-keyed surface is listed below
 // by name. A surface that disappears from the codebase must be struck off the
@@ -39,15 +44,44 @@ function migrationFiles() {
  * there, which is fine and often wanted on a printed sheet. It is the tables
  * where the name is the ONLY handle that cannot survive a rename.
  */
+/**
+ * Migration 223 gives a person_id to EVERY table with a uuid camp_id and a text
+ * camper_name, discovered from the catalog in a loop — so the columns it adds
+ * appear in no CREATE TABLE anywhere, and a reader of the files alone cannot see
+ * them.
+ *
+ * The ledger trusts that sweep only while 223 carries both halves of it: the
+ * loop AND the assertion that no such table was left without a column and a
+ * stamping trigger. Delete the assertion and this test stops believing the
+ * sweep, which is the behaviour you want from a ratchet.
+ */
+function sweep223() {
+    const sql = fs.readFileSync(
+        path.join(MIGRATIONS, '223_every_camper_reference_gets_an_id.sql'), 'utf8');
+    const hasLoop = /ADD COLUMN IF NOT EXISTS person_id bigint/.test(sql)
+                 && /a\.attname = 'camper_name' AND a\.atttypid = 'text'::regtype/.test(sql);
+    const hasAssertion = /RAISE EXCEPTION '223 left camper names without an id/.test(sql);
+    return hasLoop && hasAssertion;
+}
+
 function nameKeyedTables() {
+    const swept = sweep223();
     const found = new Map();
     for (const { name, sql } of migrationFiles()) {
         const re = /CREATE TABLE(?: IF NOT EXISTS)?\s+(?:public\.)?(\w+)\s*\(([\s\S]*?)\n\);/g;
         let m;
         while ((m = re.exec(sql)) !== null) {
             const table = m[1];
-            const cols = [...m[2].matchAll(/^\s*(\w+)\s+\w/gm)].map(c => c[1].toLowerCase());
-            const camper = cols.filter(c => c.includes('camper'));
+            const decl = [...m[2].matchAll(/^\s*(\w+)\s+([\w[\]]+)/gm)]
+                .map(c => ({ col: c[1].toLowerCase(), type: c[2].toLowerCase() }));
+            const cols = decl.map(d => d.col);
+            // A boolean is not a camper. camp_link_program_settings.
+            // camper_mail_enabled is a feature flag, and counting it as a camper
+            // reference meant this ledger could never reach zero however much
+            // work was done — a target you cannot hit is not a target.
+            const camper = decl
+                .filter(d => d.col.includes('camper') && d.type !== 'boolean')
+                .map(d => d.col);
             if (!camper.length) continue;
             // `person_id` counts as a camper identity: 216's registry spans
             // campers AND staff, so the column that carries the id is not
@@ -55,7 +89,10 @@ function nameKeyedTables() {
             // a table keyed on the id — as name-keyed, which is the ledger
             // reporting the opposite of the truth.
             const hasId = camper.some(c => c.endsWith('_id') || c.endsWith('_ids'))
-                       || cols.includes('person_id');
+                       || cols.includes('person_id')
+                       // 223's sweep, and the one table it handles by hand.
+                       || (swept && cols.includes('camp_id') && cols.includes('camper_name'))
+                       || (swept && table === 'link_parent_invites');
             const hasName = camper.some(c => !c.endsWith('_id') && !c.endsWith('_ids'));
             if (hasName && !hasId) found.set(table, name);
         }
@@ -90,27 +127,34 @@ function nameKeyedFunctions() {
 // Struck off as each is converted. Do not add to these lists to make a failure
 // go away — a new entry means a new surface that cannot survive a rename.
 
-const TABLES_ON_NAMES = [
-    'banquest_pending_links',
-    'camp_billing_enrollments',
-    'camp_link_program_settings',      // camper_mail_enabled — a flag, not a camper
-    'cardknox_checkout_intents',
-    'link_camper_face_descriptors',
-    'link_camper_faces',
-    'link_camper_mail',
-    'link_health_submissions',
-    'link_messages',
-    'link_parent_invites',
-    'link_photo_purchases',
-    'link_photo_tags',
-    'link_tip_cart_items',
-    'link_tips',
-    'parent_pickup_requests',
-    'pickup_alerts',
-];
+// Empty as of migration 223, which gave a person_id to every table with a uuid
+// camp_id and a text camper_name — banquest_pending_links,
+// camp_billing_enrollments, cardknox_checkout_intents,
+// link_camper_face_descriptors, link_camper_faces, link_camper_mail,
+// link_health_submissions, link_messages, link_photo_purchases, link_photo_tags,
+// link_tip_cart_items, link_tips, parent_pickup_requests and pickup_alerts —
+// plus link_parent_invites, whose camper_names array got a positional person_ids
+// array. camp_link_program_settings was never really on this list:
+// camper_mail_enabled is a feature flag, not a camper.
+//
+// Every one of those columns is backfilled AND kept true by a BEFORE INSERT
+// trigger, which is the half that matters: a column filled once by a migration
+// and maintained by nobody is a snapshot that starts lying with the next row.
+//
+// An empty TABLES half does NOT mean campers are identified by id. It means the
+// id is now RECORDED everywhere. The thirty functions below still take a name,
+// so a name is still what the system asks for and answers on, and a name is
+// still what a rename breaks. That is the remaining work.
+const TABLES_ON_NAMES = [];
 
 const FUNCTIONS_ON_NAMES = [
     '_camper_mail_record',
+    // 225's two new name-accepting surfaces. They exist so the name question can
+    // be answered by the ID rule — _invite_covers_camper resolves and then calls
+    // _invite_covers_person — but they still accept a name, so they still count.
+    // They go when the callers send ids.
+    '_invite_covers_camper',
+    '_parent_invite_for',
     '_parent_owns_camper',
     'add_pickup_alert_league_recipients',
     'create_cardknox_checkout_intent',
@@ -186,8 +230,34 @@ test('the identity itself is defined exactly once, and spans campers AND staff',
     assert.doesNotMatch(sql, /PRIMARY KEY \(person_id\)/);
 });
 
+/**
+ * Of the functions that still take a name, the ones that will ALSO accept an id.
+ *
+ * A function keeps its name parameter long after it stops deciding anything by
+ * it — every caller passes one, and breaking eleven call sites to delete an
+ * argument is not the same work as moving the decision. So the raw count below
+ * barely moves while the actual conversion happens, and a number that does not
+ * move is a number nobody watches. This is the one that moves.
+ */
+function alsoTakeAnId() {
+    const latest = new Map();
+    for (const { name, sql } of migrationFiles()) {
+        const re = /CREATE OR REPLACE FUNCTION\s+(?:public\.)?(\w+)\s*\(([^)]*)\)/g;
+        let m;
+        while ((m = re.exec(sql)) !== null) latest.set(m[1], m[2]);
+    }
+    const out = [];
+    for (const [fn, args] of latest) {
+        if (!/\bp_camper(_name)?\b/.test(args)) continue;
+        if (/\bp_camper_id\b|\bp_person_id\b/.test(args)) out.push(fn);
+    }
+    return out.sort();
+}
+
 test('progress is reported, so the direction is visible', () => {
     const t = nameKeyedTables().size, f = nameKeyedFunctions().size;
+    const withId = alsoTakeAnId();
+    console.log(`    of those, ${withId.length} already accept a camper id: ${withId.join(', ')}`);
     // Not an assertion about the numbers — a place for them to be seen. When
     // this reaches 0/0, every camper reference in the database is an id.
     console.log(`    camper-identity ledger: ${t} tables and ${f} functions still on names`);
