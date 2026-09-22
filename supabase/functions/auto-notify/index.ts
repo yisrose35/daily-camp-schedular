@@ -11,6 +11,7 @@
 // Request: { campId, type?, dryRun? }
 // =============================================================================
 import { serve } from "https://deno.land/std@0.168.0/http/server.ts";
+import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
 import { Resend } from "npm:resend@2.0.0";
 
 const resend = new Resend(Deno.env.get("RESEND_API_KEY"));
@@ -118,11 +119,37 @@ serve(async (req) => {
   }
 
   try {
-    const { recipients, type, data, dryRun } = await req.json();
+    const { campId, recipients, type, data, dryRun } = await req.json();
 
     if (!recipients?.length || !type) {
       return new Response(JSON.stringify({ error: "recipients and type required" }), {
         status: 400, headers: { ...corsHeaders, "Content-Type": "application/json" },
+      });
+    }
+
+    // Payment/form reminders and other automated notices are covered by the
+    // same paid emailing service as broadcasts and the acceptance letter
+    // (migration 196) — this is the server-side half of the check
+    // campistry_me.js's _emailServiceOn() already does client-side, so a
+    // direct call to this function can't skip it. campId is required from
+    // here forward (every current caller passes it); a legacy call without
+    // one is refused rather than silently let through unchecked.
+    if (!campId) {
+      return new Response(JSON.stringify({ error: "campId required" }), {
+        status: 400, headers: { ...corsHeaders, "Content-Type": "application/json" },
+      });
+    }
+    const supabase = createClient(Deno.env.get("SUPABASE_URL")!, Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!);
+    const { data: mayEmail, error: mayEmailErr } = await supabase.rpc("_camp_may_send_email", { p_camp_id: campId });
+    if (mayEmailErr) {
+      console.error("[auto-notify] email-gate check failed:", mayEmailErr.message);
+      return new Response(JSON.stringify({ error: "Could not verify this camp's emailing plan." }), {
+        status: 500, headers: { ...corsHeaders, "Content-Type": "application/json" },
+      });
+    }
+    if (!mayEmail) {
+      return new Response(JSON.stringify({ error: "This camp's plan doesn't include emailing. Contact Campistry to add it." }), {
+        status: 403, headers: { ...corsHeaders, "Content-Type": "application/json" },
       });
     }
 

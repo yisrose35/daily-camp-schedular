@@ -321,6 +321,21 @@ serve(async (req) => {
     }
 
     const supabase = createClient(Deno.env.get("SUPABASE_URL")!, Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!);
+
+    // The client-side check (campistry_me.js's _emailServiceOn()) is what
+    // shows the office a friendly "not in your plan" message before they
+    // even try — this is the real gate, since a client-side-only check can
+    // be skipped by anyone calling this function directly with a valid
+    // token. Same _camp_may_send_email(camp_id) RPC migration 196 defines
+    // for exactly this purpose.
+    const { data: mayEmail, error: mayEmailErr } = await supabase.rpc("_camp_may_send_email", { p_camp_id: campId });
+    if (mayEmailErr) {
+      console.error("[send-broadcast] email-gate check failed:", mayEmailErr.message);
+      return json({ error: "Could not verify this camp's emailing plan." }, 500);
+    }
+    if (!mayEmail) {
+      return json({ error: "This camp's plan doesn't include emailing. Contact Campistry to add it." }, 403);
+    }
     const results = { emailSent: 0, emailFailed: 0, emailSkipped: 0, smsSent: 0, smsFailed: 0, smsSkipped: 0 };
     const sendEmail = method === "email" || method === "all" || method === "All Channels" || method === "Email";
     const sendSms = method === "sms" || method === "SMS" || method === "all" || method === "All Channels";

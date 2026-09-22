@@ -18853,6 +18853,12 @@ function openBroadcastModal(){
         //   Now: confirm before a real send (safety gate), then deliver; In-App is a portal record.
         var realSend=/email|sms|all channels/i.test(method);
         if(realSend){
+            // Broadcasts are one of the things migration 196 named as part of
+            // the paid emailing service — gate the real send the same way the
+            // automatic acceptance letter already is. The In-App portal post
+            // below is unaffected; that's free either way.
+            var svcBc=await _emailServiceOn();
+            if(!svcBc.enabled){toast(_emailBlockedReason(svcBc),'error');return}
             var okSend=await confirmDialog({title:'Send Broadcast?',message:'Send this '+method+' broadcast to '+label+' (~'+count+' recipient'+(count!==1?'s':'')+') now? This delivers to real parents/staff immediately.',confirmLabel:'Send',danger:false});
             if(!okSend)return;
         }
@@ -20343,9 +20349,11 @@ async function sendAutoNotification(type,enrollmentId){
     var e=enrollments[enrollmentId];if(!e)return;
     var campName='';try{var ss=JSON.parse(localStorage.getItem('campGlobalSettings_v1')||'{}');campName=ss.camp_name||ss.campName||'Camp'}catch(ex){}
     if(!e.parentEmail)return;
-    try{await callEdgeFunction('auto-notify',{recipients:[{email:e.parentEmail,name:e.parentName||''}],type:type,data:{campName:campName,camperName:e.camperName||'',parentName:e.parentName||'',amount:fm(e.sessionTuition||0)}})}catch(err){console.error('[Me] Auto-notify:',err)}
+    try{await callEdgeFunction('auto-notify',{campId:getCampId(),recipients:[{email:e.parentEmail,name:e.parentName||''}],type:type,data:{campName:campName,camperName:e.camperName||'',parentName:e.parentName||'',amount:fm(e.sessionTuition||0)}})}catch(err){console.error('[Me] Auto-notify:',err)}
 }
 async function sendPaymentReminders(){
+    var svcPr=await _emailServiceOn();
+    if(!svcPr.enabled){toast(_emailBlockedReason(svcPr),'error');return}
     var campName='';try{var ss=JSON.parse(localStorage.getItem('campGlobalSettings_v1')||'{}');campName=ss.camp_name||ss.campName||'Camp'}catch(ex){}
     var today=new Date().toISOString().split('T')[0];var sevenDays=new Date(Date.now()+7*86400000).toISOString().split('T')[0];
     // ★ pre-collect recipients so we can CONFIRM before emailing real parents (no silent mass-send).
@@ -20354,10 +20362,12 @@ async function sendPaymentReminders(){
     if(!jobs.length){toast('No payment reminders due','error');return}
     var okPr=await confirmDialog({title:'Send Payment Reminders?',message:'Send '+jobs.length+' payment reminder email'+(jobs.length!==1?'s':'')+' to parents now? This emails them immediately.',confirmLabel:'Send',danger:false});
     if(!okPr)return;
-    jobs.forEach(function(j){callEdgeFunction('auto-notify',{recipients:[{email:j.email,name:j.name}],type:j.type,data:j.data}).catch(function(){})});
+    jobs.forEach(function(j){callEdgeFunction('auto-notify',{campId:getCampId(),recipients:[{email:j.email,name:j.name}],type:j.type,data:j.data}).catch(function(){})});
     toast(jobs.length+' payment reminder'+(jobs.length!==1?'s':'')+' sent');
 }
 async function sendFormReminders(){
+    var svcFr=await _emailServiceOn();
+    if(!svcFr.enabled){toast(_emailBlockedReason(svcFr),'error');return}
     var campName='';try{var ss=JSON.parse(localStorage.getItem('campGlobalSettings_v1')||'{}');campName=ss.camp_name||ss.campName||'Camp'}catch(ex){}
     loadForms();
     var jobs=[];
@@ -20365,7 +20375,7 @@ async function sendFormReminders(){
     if(!jobs.length){toast('No form reminders to send','error');return}
     var okFr=await confirmDialog({title:'Send Form Reminders?',message:'Send '+jobs.length+' form reminder email'+(jobs.length!==1?'s':'')+' to parents now? This emails them immediately.',confirmLabel:'Send',danger:false});
     if(!okFr)return;
-    jobs.forEach(function(j){callEdgeFunction('auto-notify',{recipients:[{email:j.email,name:j.name}],type:'form_reminder',data:j.data}).catch(function(){})});
+    jobs.forEach(function(j){callEdgeFunction('auto-notify',{campId:getCampId(),recipients:[{email:j.email,name:j.name}],type:'form_reminder',data:j.data}).catch(function(){})});
     toast(jobs.length+' form reminder'+(jobs.length!==1?'s':'')+' sent');
 }
 
