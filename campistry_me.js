@@ -811,6 +811,19 @@ function save(){
         });
         g.updated_at=new Date().toISOString();
 
+        // ★ 213: the ROWS are the record for families and payments now. Every
+        // one of the 43 family sites and 9 payment sites still just mutates the
+        // object and calls save(), so this is the single place that needs to know:
+        // send what actually CHANGED since we loaded, and nothing else. The
+        // document's branches above are still written, harmlessly — nothing reads
+        // them, and the projection triggers only project entries whose value
+        // changed, which are the same values we are about to sync.
+        //
+        // Sending a diff rather than the whole document is also what removes the
+        // clobber the old full-document upsert could cause, which is what the
+        // comment about a parent's deposit was describing.
+        try{ _syncBillingRows(); }catch(_){}
+
         // saveGlobalSettings → setLocalSettings handles ALL persistence:
         //   - IndexedDB write-through with the FULL state (no quota)
         //   - localStorage write with a stripped sync-init snapshot
@@ -2356,6 +2369,7 @@ async function _loadPaymentsFromRows(){
         // Re-run the normal hydration so every consumer picks the rows up through
         // the one path, rather than this function reaching into each of them.
         if(typeof loadData==='function')loadData();
+        try{ _billSnapshot(); }catch(_){}
         // Only repaint when it actually changed. Before phase 2b the two homes
         // agree, so this is normally a no-op and Billing must not flicker.
         if(JSON.stringify(finPayments||[])!==before){
@@ -2402,6 +2416,7 @@ async function _loadFamiliesFromRows(){
         var before=JSON.stringify(families||{});
         _familiesFromRows=d.families;
         if(typeof loadData==='function')loadData();
+        try{ _billSnapshot(); }catch(_){}
         // Before the writer phase the two homes agree, so this is normally a
         // no-op and Billing must not flicker on every load.
         if(JSON.stringify(families||{})!==before){
@@ -2413,6 +2428,81 @@ async function _loadFamiliesFromRows(){
     }
 }
 window.reloadCampistryFamilies=_loadFamiliesFromRows;
+
+// ─── the office's one write path for billing rows ───────────────────────────
+// The baseline: what the SERVER last told us, so a diff means "what this office
+// changed". Advanced only on a SUCCESSFUL sync — a failed one keeps the old
+// baseline so the next save retries the change instead of losing it.
+var _billBase=null;
+
+function _billSnapshot(){
+    var pays={};
+    (finPayments||[]).forEach(function(p){ var id=_payIdentity(p); if(id) pays[id]=p; });
+    _billBase={
+        fams:JSON.parse(JSON.stringify(families||{})),
+        pays:JSON.parse(JSON.stringify(pays))
+    };
+}
+
+// Byte-for-byte public.camp_payment_identity(jsonb). If these two ever disagree
+// the office would upsert a SECOND row for a payment the server already has, so
+// the order of the four ids and the signature's field list are load-bearing.
+function _payIdentity(p){
+    if(!p||typeof p!=='object'||Array.isArray(p))return '';
+    var t=function(v){ return (v===null||v===undefined)?'':String(v).trim(); };
+    var direct=t(p.id)||t(p.reference)||t(p.stripePaymentIntentId)||t(p.byopTransactionId);
+    if(direct)return direct;
+    var f=function(v){ return (v===null||v===undefined)?'':String(v); };
+    return 'sig:'+[f(p.date),f(p.amount),f(p.family),f(p.familyKey),
+                   f(p.enrollmentId),f(p.method),f(p.status),f(p.notes)].join('|');
+}
+
+async function _syncBillingRows(){
+    // No baseline means we never heard from the rows — syncing a diff against
+    // nothing would look like "the office created every family from scratch".
+    if(!_billBase)return;
+    var client=window.CampistryDB&&window.CampistryDB.getClient?window.CampistryDB.getClient():window.supabase;
+    var campId=window.CampistryDB&&window.CampistryDB.getCampId?window.CampistryDB.getCampId():(window.getCampId?window.getCampId():null);
+    if(!client||typeof client.rpc!=='function'||!campId)return;
+
+    var eq=function(a,b){ return JSON.stringify(a)===JSON.stringify(b); };
+    var famUp={},famDel=[],payUp=[],payDel=[];
+    var nowFams=families||{};
+    Object.keys(nowFams).forEach(function(k){
+        if(!eq(nowFams[k],_billBase.fams[k])) famUp[k]=nowFams[k];
+    });
+    Object.keys(_billBase.fams).forEach(function(k){
+        if(!Object.prototype.hasOwnProperty.call(nowFams,k)) famDel.push(k);
+    });
+
+    var nowPays={};
+    (finPayments||[]).forEach(function(p){ var id=_payIdentity(p); if(id) nowPays[id]=p; });
+    Object.keys(nowPays).forEach(function(id){
+        if(!eq(nowPays[id],_billBase.pays[id])) payUp.push(nowPays[id]);
+    });
+    Object.keys(_billBase.pays).forEach(function(id){
+        if(!Object.prototype.hasOwnProperty.call(nowPays,id)) payDel.push(id);
+    });
+
+    if(!Object.keys(famUp).length&&!famDel.length&&!payUp.length&&!payDel.length)return;
+    try{
+        var res=await client.rpc('sync_camp_billing',{
+            p_camp_id:campId, p_families_upsert:famUp, p_families_delete:famDel,
+            p_payments_upsert:payUp, p_payments_delete:payDel});
+        if(res&&res.error){
+            console.warn('[Me] billing rows not synced:',res.error.message);
+            return;   // baseline unchanged: the next save retries
+        }
+        if(res&&res.data&&res.data.success===false){
+            console.warn('[Me] billing rows refused:',res.data.error);
+            return;
+        }
+        _billSnapshot();
+    }catch(e){
+        console.warn('[Me] billing row sync failed:',e&&e.message);
+    }
+}
+window.syncCampistryBillingRows=_syncBillingRows;
 
 async function _drainApplications(){
     var M=(typeof window!=='undefined'&&window.CampistryFinanceMerge)||null;
