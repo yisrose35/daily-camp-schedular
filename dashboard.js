@@ -1115,12 +1115,48 @@
         if(prev){ if(logo){ prev.src=logo; prev.style.display=''; } else { prev.removeAttribute('src'); prev.style.display='none'; } }
         if(rm) rm.style.display=logo?'':'none';
     }
+    // The logo is embedded as a raw base64 data: URL directly in every email
+    // this camp sends (buildBrandedEmailHtml) — it never gets its own hosted
+    // URL. That's what made a hard 300KB cap necessary in the first place:
+    // a straight-off-the-phone photo/export can be several MB, and that much
+    // inline image data bloats every single send and risks spam-filter
+    // penalties for oversized HTML. Rather than just raising the number (an
+    // owner shouldn't have to know or care what a "reasonable" file size for
+    // an email is), downscale it here to the size it's actually ever
+    // displayed at (max ~340px — the largest headerHtml() ever renders it,
+    // 170px at up to 2x for retina) before it's ever turned into a data URL.
+    // A 12MP phone photo comes out the other side as a normal small PNG.
+    var LOGO_MAX_DIM = 340;
+    var LOGO_RAW_CAP = 8*1024*1024; // sanity ceiling on the ORIGINAL upload, pre-resize
     window.onLogoPicked=function(input){
         var f=input&&input.files&&input.files[0]; if(!f)return;
-        if(f.size>350*1024){ alert('That image is a bit large. Please use a logo under about 300 KB.'); input.value=''; return; }
-        var rd=new FileReader();
-        rd.onload=function(){ _dashLogoData=String(rd.result||''); _syncLogoEditUI(); };
-        rd.readAsDataURL(f);
+        if(f.size>LOGO_RAW_CAP){ alert('That image is too large to use (max 8 MB). Please pick a smaller file.'); input.value=''; return; }
+        var img=new Image();
+        var url=URL.createObjectURL(f);
+        img.onload=function(){
+            URL.revokeObjectURL(url);
+            var scale=Math.min(1, LOGO_MAX_DIM/Math.max(img.naturalWidth||1, img.naturalHeight||1));
+            var w=Math.max(1, Math.round((img.naturalWidth||LOGO_MAX_DIM)*scale));
+            var h=Math.max(1, Math.round((img.naturalHeight||LOGO_MAX_DIM)*scale));
+            var canvas=document.createElement('canvas');
+            canvas.width=w; canvas.height=h;
+            var ctx=canvas.getContext('2d');
+            ctx.drawImage(img,0,0,w,h);
+            // PNG keeps transparency (most logos have a transparent background) and,
+            // at these display dimensions, is already small — no lossy re-compression
+            // needed on top of the resize.
+            _dashLogoData=canvas.toDataURL('image/png');
+            _syncLogoEditUI();
+        };
+        img.onerror=function(){
+            URL.revokeObjectURL(url);
+            // SVG and a handful of formats <img> can't rasterize this way in every
+            // browser — fall back to using the file as-is rather than failing silently.
+            var rd=new FileReader();
+            rd.onload=function(){ _dashLogoData=String(rd.result||''); _syncLogoEditUI(); };
+            rd.readAsDataURL(f);
+        };
+        img.src=url;
     };
     window.removeLogo=function(){ _dashLogoData=''; var i=document.getElementById('editLogoInput'); if(i)i.value=''; _syncLogoEditUI(); };
 
