@@ -1,5 +1,5 @@
 -- ============================================================================
--- Confirm migrations 222-230 are in and doing their job.
+-- Confirm migrations 222-231 are in and doing their job.
 --
 -- Paste the whole thing into the Supabase SQL Editor. It is READ ONLY — every
 -- statement is a SELECT, nothing is created, changed or deleted, and the one
@@ -99,6 +99,24 @@ SELECT * FROM (
                AND p.prosrc ~ 'NULL::jsonb;')
           THEN 'ok' ELSE 'THE DEAD GUARD IS STILL THERE — re-apply 229' END),
 
+    ('231  no writer asks the camper question itself',
+     CASE WHEN to_regprocedure('public.submit_canteen_deposit(text,numeric,uuid,bigint)') IS NOT NULL
+           AND to_regprocedure('public.submit_canteen_deposit(text,numeric,uuid)') IS NULL
+           AND to_regprocedure('public.set_canteen_limits(text,numeric,numeric,numeric,uuid,bigint)') IS NOT NULL
+           AND to_regprocedure('public.set_canteen_auto_reload(uuid,text,jsonb,bigint)') IS NOT NULL
+           AND to_regprocedure('public.use_family_card_for_canteen_auto_reload(uuid,text,text,bigint)') IS NOT NULL
+           -- nothing anywhere still tests camper_names ? by hand
+           AND NOT EXISTS (SELECT 1 FROM pg_proc p JOIN pg_namespace n ON n.oid = p.pronamespace
+                            WHERE n.nspname = 'public' AND p.prokind = 'f'
+                              AND p.prosrc ~ 'camper_names \?')
+           -- and the two halves that were left on the campistrySnacks document
+           AND NOT EXISTS (SELECT 1 FROM pg_proc p JOIN pg_namespace n ON n.oid = p.pronamespace
+                            WHERE n.nspname = 'public'
+                              AND p.proname IN ('use_family_card_for_canteen_auto_reload',
+                                                '_admin_clear_stale_byop_cards')
+                              AND p.prosrc ~ 'campistrySnacks')
+          THEN 'ok' ELSE 'MISSING — re-apply 231' END),
+
     ('230  a shop order records what it took',
      CASE WHEN to_regprocedure('public.submit_shop_order(text,jsonb,text,text,text,bigint)') IS NOT NULL
            AND to_regprocedure('public.submit_shop_order(text,jsonb,text,text,text)') IS NULL
@@ -126,6 +144,12 @@ SELECT 'canteen identity',        public.verify_canteen_identity()
 UNION ALL
 -- Empty is the answer you want. Anything here is a function PostgREST cannot
 -- resolve, which fails every call from an edge function.
+SELECT 'still matching camper names by hand',
+       COALESCE((SELECT jsonb_agg(DISTINCT p.proname)
+                   FROM pg_proc p JOIN pg_namespace n ON n.oid = p.pronamespace
+                  WHERE n.nspname = 'public' AND p.prokind = 'f'
+                    AND p.prosrc ~ 'camper_names \?'), '[]'::jsonb)
+UNION ALL
 SELECT 'ambiguous money RPCs',
        COALESCE((SELECT jsonb_object_agg(x.proname, x.arities)
                    FROM (SELECT p.proname,
