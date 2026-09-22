@@ -49,7 +49,13 @@ function nameKeyedTables() {
             const cols = [...m[2].matchAll(/^\s*(\w+)\s+\w/gm)].map(c => c[1].toLowerCase());
             const camper = cols.filter(c => c.includes('camper'));
             if (!camper.length) continue;
-            const hasId = camper.some(c => c.endsWith('_id') || c.endsWith('_ids'));
+            // `person_id` counts as a camper identity: 216's registry spans
+            // campers AND staff, so the column that carries the id is not
+            // called camper_id. Missing that flagged camp_canteen_accounts —
+            // a table keyed on the id — as name-keyed, which is the ledger
+            // reporting the opposite of the truth.
+            const hasId = camper.some(c => c.endsWith('_id') || c.endsWith('_ids'))
+                       || cols.includes('person_id');
             const hasName = camper.some(c => !c.endsWith('_id') && !c.endsWith('_ids'));
             if (hasName && !hasId) found.set(table, name);
         }
