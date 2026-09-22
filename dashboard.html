@@ -9,7 +9,7 @@
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
     <link href="https://fonts.googleapis.com/css2?family=DM+Sans:opsz,wght@9..40,300;9..40,400;9..40,500;9..40,600;9..40,700;9..40,800&family=Fraunces:opsz,wght@9..144,400;9..144,500;9..144,600;9..144,700&display=swap" rel="stylesheet">
     <style>html:not(.css-ready) body { opacity: 0; } html.css-ready body { transition: opacity 0.15s ease; }</style>
-    <link rel="stylesheet" href="dashboard.css?v=20260922-01" onload="document.documentElement.classList.add('css-ready')">
+    <link rel="stylesheet" href="dashboard.css?v=20260922-02" onload="document.documentElement.classList.add('css-ready')">
     <link rel="stylesheet" href="mobile-responsive.css?v=20260903-03">
     <noscript><style>html body { opacity: 1 !important; }</style></noscript>
 </head>
@@ -441,69 +441,28 @@
                  applying the day its session ends, because a forgotten session scope
                  is the one failure that makes people stop trusting every list in the
                  app. See campistry_session_scope.js. -->
-            <!-- Current Session (which session the program shows) and Summer Schedule
-                 (the camp's overall date range) used to be two separate tiles that
-                 read as unrelated settings, when they're really one concern: "what
-                 time window is this camp in, and which part of it are we looking
-                 at right now." Combined into one card with an internal divider so
-                 they read as a single settings surface. IDs/behavior unchanged. -->
-            <div class="dashboard-card dashboard-card--wide" id="currentSessionCard">
+            <!-- Current Session is a different concern from Summer Schedule/Sessions:
+                 it's "which session are we currently looking at," not "what are the
+                 camp's sessions/dates." Stays its own card. -->
+            <div class="dashboard-card" id="currentSessionCard">
                 <div class="card-header">
-                    <h2>Current Session &amp; Summer Schedule</h2>
+                    <h2>Current Session</h2>
                 </div>
-                <div class="dash-card-body dash-card-split">
-                    <div class="dash-card-split-col">
-                        <!-- The control first, then what it currently means, then Save.
-                             The lead paragraph that used to sit on top said the same thing
-                             as the state box below in different words, so the card opened
-                             with two explanations and no control. -->
-                        <div class="dash-field">
-                            <label for="currentSessionPick">The camp is showing</label>
-                            <select id="currentSessionPick" class="dash-input"></select>
-                        </div>
-                        <div id="currentSessionExplain" class="dash-note"></div>
-                        <p class="dash-hint">Rosters, bunk sheets, attendance, the canteen, Health,
-                           Go and every printout follow this.</p>
-                        <div id="currentSessionActions" class="dash-actions">
-                            <button type="button" id="saveCurrentSessionBtn" onclick="saveCurrentSession()" class="btn-primary">Save</button>
-                            <span id="currentSessionStatus" class="dash-status"></span>
-                        </div>
+                <!-- The control first, then what it currently means, then Save.
+                     The lead paragraph that used to sit on top said the same thing
+                     as the state box below in different words, so the card opened
+                     with two explanations and no control. -->
+                <div class="dash-card-body">
+                    <div class="dash-field">
+                        <label for="currentSessionPick">The camp is showing</label>
+                        <select id="currentSessionPick" class="dash-input"></select>
                     </div>
-                    <div class="dash-card-split-divider"></div>
-                    <div class="dash-card-split-col">
-                        <!-- Only the overall start/end live here now. The HALF boundaries used
-                             to be a separate pair of date inputs on this card — that was a
-                             second place to type the same dates a "1st Half"/"2nd Half"
-                             Session already defines below, so they were removed. Per-Half
-                             rotation and the calendar transition markers now read the half
-                             boundaries FROM those two sessions' own start/end dates
-                             (Utils.getCampDates() in scheduler_core_utils.js), with the old
-                             half1End/half2Start fields kept as a silent fallback for a camp
-                             that has neither session named yet. -->
-                        <div id="campDatesForm">
-                            <div class="dash-range">
-                                <div class="dash-range-fields">
-                                    <div class="dash-field">
-                                        <label for="campStartDate">Starts</label>
-                                        <input type="date" id="campStartDate" class="dash-input">
-                                    </div>
-                                    <div class="dash-field">
-                                        <label for="campEndDate">Ends</label>
-                                        <input type="date" id="campEndDate" class="dash-input">
-                                    </div>
-                                </div>
-                            </div>
-                            <p class="dash-hint" id="campDatesHalfInfo" style="display:none;"></p>
-                            <!-- Plain, not a note box: what goes in here is a <details> that styles
-                                 itself, and a disclosure inside a grey panel reads as two
-                                 containers where there is one thing. -->
-                            <div id="campDatesWeekPreview" style="display:none;"></div>
-                            <div id="campDatesActions" class="dash-actions">
-                                <button type="button" id="saveCampDatesBtn" onclick="saveCampDates()" class="btn-primary">Save Dates</button>
-                                <button type="button" id="clearCampDatesBtn" onclick="clearCampDates()" class="btn-secondary">Clear</button>
-                                <span id="campDatesStatus" class="dash-status"></span>
-                            </div>
-                        </div>
+                    <div id="currentSessionExplain" class="dash-note"></div>
+                    <p class="dash-hint">Rosters, bunk sheets, attendance, the canteen, Health,
+                       Go and every printout follow this.</p>
+                    <div id="currentSessionActions" class="dash-actions">
+                        <button type="button" id="saveCurrentSessionBtn" onclick="saveCurrentSession()" class="btn-primary">Save</button>
+                        <span id="currentSessionStatus" class="dash-status"></span>
                     </div>
                 </div>
             </div>
@@ -564,6 +523,44 @@
                      Billing's other payment-policy toggles (Accepted payments).
                      It still reads/writes the same enrollSettings.allowParentPaymentPlans
                      key, so nothing about its effect changed. -->
+
+                <!-- Summer Schedule and Sessions used to be two separate cards
+                     describing the same thing: sessions ARE the summer schedule —
+                     a "1st Half" session's own start/end dates are what tells the
+                     program when the 1st half runs. The overall camp Starts/Ends
+                     (the outer bounds every session sits inside) now lives here,
+                     at the top of the one place a camp owner sets any date range.
+                     Per-Half rotation and calendar transition markers read the half
+                     boundaries FROM the "1st Half"/"2nd Half" sessions below
+                     (Utils.getCampDates() in scheduler_core_utils.js), with the old
+                     half1End/half2Start fields kept as a silent fallback for a camp
+                     that has neither session named yet. -->
+                <div id="campDatesForm" class="dash-summer-schedule">
+                    <div class="dash-range">
+                        <div class="dash-range-fields">
+                            <div class="dash-field">
+                                <label for="campStartDate">Camp starts</label>
+                                <input type="date" id="campStartDate" class="dash-input">
+                            </div>
+                            <div class="dash-field">
+                                <label for="campEndDate">Camp ends</label>
+                                <input type="date" id="campEndDate" class="dash-input">
+                            </div>
+                        </div>
+                    </div>
+                    <p class="dash-hint" id="campDatesHalfInfo" style="display:none;"></p>
+                    <!-- Plain, not a note box: what goes in here is a <details> that styles
+                         itself, and a disclosure inside a grey panel reads as two
+                         containers where there is one thing. -->
+                    <div id="campDatesWeekPreview" style="display:none;"></div>
+                    <div id="campDatesActions" class="dash-actions">
+                        <button type="button" id="saveCampDatesBtn" onclick="saveCampDates()" class="btn-primary">Save Dates</button>
+                        <button type="button" id="clearCampDatesBtn" onclick="clearCampDates()" class="btn-secondary">Clear</button>
+                        <span id="campDatesStatus" class="dash-status"></span>
+                    </div>
+                </div>
+                <div class="dash-summer-schedule-divider"></div>
+
                 <div id="sessionsList" style="display:flex; flex-direction:column; gap:10px; margin-top:16px;"></div>
 
                 <div id="bundleEditForm" style="display:none; margin-top:16px; padding:14px 16px; border-radius:10px; background:#f5f3ff; border:1px solid #ddd6fe;">
@@ -943,7 +940,7 @@ if (window.location.protocol === 'file:') {
 <script src="campistry_workspace_admin.js?v=20260917-02"></script>
 
     <script src="cloud_sync_helpers.js?v=20260903-03"></script>
-    <script src="dashboard.js?v=20260922-01"></script>
+    <script src="dashboard.js?v=20260922-02"></script>
     <script src="campistry_setup_checklist.js?v=20260918-09"></script>
     <script src="campistry_enrollment_window.js?v=20260917-02"></script>
 <script src="campistry_presence.js?v=20260918-05"></script>
