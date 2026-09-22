@@ -135,12 +135,31 @@
                                                 'use_family_card_for_canteen_auto_reload',
                                                 '_admin_clear_stale_byop_cards')
                               AND p.prosrc ~ 'camper_names \?')
-           -- and the two halves that were left on the campistrySnacks document
+           -- And the two halves that were left on the campistrySnacks document are
+           -- on rows.
+           --
+           -- ASKED AS WHAT THEY DO, not as what their text lacks. The first
+           -- version of this looked for the bare string 'campistrySnacks'
+           -- anywhere in prosrc — and prosrc includes COMMENTS, so it tripped on
+           -- 231's own comment saying "On ROWS, not on campistrySnacks.accounts".
+           -- The prose describing the repair read as the defect, and 231 reported
+           -- MISSING for four applied migrations' worth of work. Third time
+           -- today: the same mistake is in tests/migration_call_arity.test.js's
+           -- history and in 233's first assertion.
+           --
+           -- So: neither function may still OPEN the document (key = '…' is how
+           -- it is read and written, and no comment contains that), and both must
+           -- call the row helpers. An absence is weak evidence; a presence is not.
            AND NOT EXISTS (SELECT 1 FROM pg_proc p JOIN pg_namespace n ON n.oid = p.pronamespace
                             WHERE n.nspname = 'public'
                               AND p.proname IN ('use_family_card_for_canteen_auto_reload',
                                                 '_admin_clear_stale_byop_cards')
-                              AND p.prosrc ~ 'campistrySnacks')
+                              AND p.prosrc ~ $re$key\s*=\s*'campistrySnacks'$re$)
+           AND NOT EXISTS (SELECT 1 FROM pg_proc p JOIN pg_namespace n ON n.oid = p.pronamespace
+                            WHERE n.nspname = 'public'
+                              AND p.proname IN ('use_family_card_for_canteen_auto_reload',
+                                                '_admin_clear_stale_byop_cards')
+                              AND p.prosrc !~ 'canteen_account_(lock|save)')
           THEN 'ok' ELSE 'MISSING — re-apply 231' END),
 
     ('232  an invite cannot inherit a stranger',
