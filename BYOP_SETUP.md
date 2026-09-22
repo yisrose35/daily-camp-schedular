@@ -353,10 +353,19 @@ curl -X POST "https://<your-project>.supabase.co/functions/v1/admin-connect-proc
   -d '{
     "campId": "<the camp'"'"'s id>",
     "processorKey": "banquest",
-    "credentials": { "securityKey": "<the camp'"'"'s Banquest security key>" },
+    "credentials": { "sourceKey": "<the camp'"'"'s Banquest source key>", "pin": "<the camp'"'"'s Banquest pin>", "tokenizationKey": "<the camp'"'"'s Banquest tokenization key, for the Collect.js card widget>" },
     "notes": "Confirmed via call with <name>, <date>"
   }'
 ```
+
+(Banquest runs on the AffiniPay/8am gateway, not NMI — an earlier version of
+this doc and of `banquest_adapter.ts` wrongly assumed NMI's "security key"
+model; corrected against a live sandbox. The real credential shape, matching
+`admin-connect-processor`'s and `banquest_adapter.ts`'s own code, is
+`sourceKey` + `pin` for HTTP Basic auth on server-side charge/refund calls,
+plus `tokenizationKey` for the client-side Collect.js widget. A stored
+`gatewayUrl`/`tokenizationUrl` is optional, only needed if Banquest gave the
+camp environment-specific hostnames instead of the shared default.)
 
 (For Cardknox/Sola instead: `"processorKey": "cardknox"`,
 `"credentials": { "apiKey": "<the camp's private xKey>", "ifieldsKey":
