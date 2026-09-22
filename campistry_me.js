@@ -10220,7 +10220,8 @@ var PAF_SECTIONS=[
     // that never asks for paperwork or money after acceptance must see exactly
     // the form it had before.
     {key:'documents',label:'Required Documents',desc:'The same named list as the registration form — for camps that take the paperwork after acceptance',default:false},
-    {key:'payment',label:'Payment Preference & Deposit',desc:'How the family intends to pay, and what they still owe on their deposit',default:false}
+    {key:'payment',label:'Payment Preference & Deposit',desc:'How the family intends to pay, and what they still owe on their deposit',default:false},
+    {key:'camperMail',label:'Camper Mail',desc:'Show families how to email letters to their camper — the camp address and the child’s code',default:false}
 ];
 var PAF_FIELD_CATALOG={
     bunk:[
