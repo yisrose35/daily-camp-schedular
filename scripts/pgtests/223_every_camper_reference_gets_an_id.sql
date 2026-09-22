@@ -122,7 +122,7 @@ BEGIN
     --     so the number stays spoken for.
     UPDATE camp_people SET deleted_at = now()
      WHERE camp_id = c AND source_key = 'Gone Lastyear';
-    INSERT INTO link_tips (camp_id, camper_name, staff_name, amount)
+    INSERT INTO link_tips (camp_id, camper_name, recipient_name, amount)
          VALUES (c, 'Gone Lastyear', 'Counselor R', 20);
     SELECT person_id INTO got FROM link_tips WHERE camp_id = c AND camper_name = 'Gone Lastyear';
     IF got IS DISTINCT FROM 700 THEN

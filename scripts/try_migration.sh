@@ -169,6 +169,55 @@ CREATE TABLE IF NOT EXISTS public.link_form_responses (
     file_name text, file_data text, filled_pdf_path text,
     created_at timestamptz NOT NULL DEFAULT now());
 
+-- 028/029's facial-recognition tables, 081's photo purchases and 017's staff
+-- tip accounts, so 226 has the whole consent surface to work on.
+CREATE TABLE IF NOT EXISTS public.link_photos (
+    id uuid PRIMARY KEY DEFAULT gen_random_uuid(), camp_id uuid NOT NULL,
+    image_data text, file_name text, week text, uploaded_by uuid,
+    faces_found int NOT NULL DEFAULT 0, sent boolean NOT NULL DEFAULT false,
+    created_at timestamptz NOT NULL DEFAULT now());
+CREATE TABLE IF NOT EXISTS public.link_photo_tags (
+    photo_id uuid NOT NULL REFERENCES public.link_photos(id) ON DELETE CASCADE,
+    camp_id uuid NOT NULL, camper_name text NOT NULL,
+    confidence real, manual boolean NOT NULL DEFAULT false,
+    pending boolean NOT NULL DEFAULT false,
+    PRIMARY KEY (photo_id, camper_name));
+CREATE TABLE IF NOT EXISTS public.link_camper_faces (
+    camp_id uuid NOT NULL, camper_name text NOT NULL,
+    descriptor jsonb, headshot_data text,
+    consent boolean NOT NULL DEFAULT false, consent_by uuid, consent_at timestamptz,
+    updated_at timestamptz NOT NULL DEFAULT now(),
+    PRIMARY KEY (camp_id, camper_name));
+CREATE TABLE IF NOT EXISTS public.link_camper_face_descriptors (
+    id uuid PRIMARY KEY DEFAULT gen_random_uuid(), camp_id uuid NOT NULL,
+    camper_name text NOT NULL, model text NOT NULL DEFAULT 'faceapi-128',
+    pose text NOT NULL DEFAULT 'front', source text NOT NULL DEFAULT 'parent',
+    descriptor jsonb NOT NULL, created_by uuid,
+    created_at timestamptz NOT NULL DEFAULT now());
+CREATE TABLE IF NOT EXISTS public.link_photo_purchases (
+    id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+    camp_id uuid NOT NULL REFERENCES public.camps(id),
+    parent_user_id uuid NOT NULL,
+    kind text NOT NULL CHECK (kind IN ('facial_recognition', 'hd_photo')),
+    camper_name text, photo_id uuid REFERENCES public.link_photos(id),
+    amount_paid_cents integer NOT NULL, stripe_payment_intent_id text NOT NULL,
+    purchased_at timestamptz NOT NULL DEFAULT now());
+CREATE UNIQUE INDEX IF NOT EXISTS uq_link_photo_purchase
+    ON public.link_photo_purchases (stripe_payment_intent_id, kind,
+        (COALESCE(camper_name, '')),
+        (COALESCE(photo_id, '00000000-0000-0000-0000-000000000000'::uuid)));
+CREATE TABLE IF NOT EXISTS public.link_staff_accounts (
+    id uuid PRIMARY KEY DEFAULT gen_random_uuid(), camp_id uuid NOT NULL,
+    staff_name text NOT NULL, role text NOT NULL DEFAULT '',
+    access_code text NOT NULL DEFAULT 'TEST-0000',
+    balance numeric(10,2) NOT NULL DEFAULT 0,
+    total_earned numeric(10,2) NOT NULL DEFAULT 0,
+    total_paid_out numeric(10,2) NOT NULL DEFAULT 0,
+    created_at timestamptz NOT NULL DEFAULT now(),
+    updated_at timestamptz NOT NULL DEFAULT now());
+CREATE UNIQUE INDEX IF NOT EXISTS uq_link_staff_accounts
+    ON public.link_staff_accounts (camp_id, lower(staff_name));
+
 -- 106's camp-wide "does this camp run Camper Mail" gate.
 CREATE OR REPLACE FUNCTION public._link_program_enabled(p_camp_id uuid, p_program text)
 RETURNS boolean LANGUAGE sql STABLE SECURITY DEFINER
@@ -255,7 +304,13 @@ CREATE TABLE IF NOT EXISTS public.link_health_submissions (
     created_at timestamptz NOT NULL DEFAULT now());
 CREATE TABLE IF NOT EXISTS public.link_tips (
     id uuid PRIMARY KEY DEFAULT gen_random_uuid(), camp_id uuid NOT NULL,
-    camper_name text, staff_name text, amount numeric NOT NULL DEFAULT 0,
+    invite_id uuid, user_id uuid, camper_name text,
+    parent_name text, parent_email text,
+    recipient_name text NOT NULL, recipient_role text,
+    amount numeric(8,2) NOT NULL, status text NOT NULL DEFAULT 'recorded',
+    payment_method text NOT NULL DEFAULT 'manual',
+    stripe_payment_intent_id text, fee_amount numeric(8,2),
+    staff_account_id uuid, stripe_transfer_id text,
     created_at timestamptz NOT NULL DEFAULT now());
 STUBS
 
