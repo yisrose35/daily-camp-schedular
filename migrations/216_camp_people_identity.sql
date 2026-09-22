@@ -581,6 +581,7 @@ SECURITY DEFINER
 SET search_path = public, pg_catalog
 AS $$
 DECLARE
+    v_claims text := NULLIF(current_setting('request.jwt.claims', true), '');
     v_roster    jsonb;
     v_staff     jsonb;
     v_in_doc    integer;
@@ -590,7 +591,14 @@ DECLARE
     v_stated_ok integer;
     v_conflicts jsonb;
 BEGIN
-    IF NOT public.camp_reader(p_camp_id) THEN
+    -- Gated the way 202's verifier had to be fixed to be, and 211's after it:
+    -- the SQL Editor carries no JWT at all, so camp_reader() refuses the
+    -- legitimate owner running this by hand — which is the ONLY way anyone
+    -- runs it. current_user is useless here: inside SECURITY DEFINER it is the
+    -- function's owner for every caller alike.
+    IF v_claims IS NOT NULL
+       AND COALESCE(v_claims::jsonb ->> 'role', '') <> 'service_role'
+       AND NOT public.camp_reader(p_camp_id) THEN
         RETURN jsonb_build_object('error', 'not_your_camp');
     END IF;
 
