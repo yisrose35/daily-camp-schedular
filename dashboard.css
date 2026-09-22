@@ -800,6 +800,12 @@ input.dash-input:disabled, select.dash-input:disabled, .dash-input:disabled {
 .dash-note strong { color: var(--slate-800); font-weight: 600; }
 .dash-hint { font-size: 0.78rem; line-height: 1.5; color: var(--slate-400); margin: 0; }
 
+/* Full-screen Edit Session form: named sections instead of one long run of
+   fields, each with its own labeled break. */
+.ses-section { display: flex; flex-direction: column; gap: 14px; padding-top: 18px; border-top: 1px solid var(--slate-100); }
+.ses-section:first-child { padding-top: 0; border-top: none; }
+.ses-section-title { margin: 0; font-size: 0.72rem; font-weight: 700; text-transform: uppercase; letter-spacing: 0.06em; color: var(--slate-400); }
+
 .dash-actions { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
 .dash-actions .dash-status { font-size: 0.8rem; color: var(--slate-400); }
 

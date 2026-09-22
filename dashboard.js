@@ -2514,7 +2514,7 @@
         var list = document.getElementById('sessionsList');
         if (!list) return;
         if (!_dashSessions.length && !_dashBundles.length) {
-            list.innerHTML = '<p style="color:var(--slate-400); font-size:0.85rem; text-align:center; padding:10px;">No sessions yet — set your camp dates above to auto-create 1st/2nd Half sessions, or add one to open registration.</p>';
+            list.innerHTML = '<p style="color:var(--slate-400); font-size:0.85rem; text-align:center; padding:10px;">No sessions yet — add one to open registration.</p>';
             return;
         }
         // Live enrolled count per session name — same filter enrollCamper()/
@@ -2533,7 +2533,7 @@
             var isOpen = s.registrationOpen !== false;
             var html = '<div style="padding:12px 14px; border-radius:8px; border:1px solid ' + (isOpen ? 'var(--slate-200)' : '#fecaca') + '; background:' + (isOpen ? 'var(--slate-50)' : 'rgba(239,68,68,.04)') + ';">';
             html += '<div style="display:flex; justify-content:space-between; align-items:center; gap:8px;">';
-            html += '<span style="font-size:0.9rem; font-weight:700; color:var(--slate-800);">' + _dashEsc(s.name) + (s.autoKey ? ' <span style="font-size:0.68rem; font-weight:600; color:var(--slate-400);">(synced to Camp Dates)</span>' : '') + '</span>';
+            html += '<span style="font-size:0.9rem; font-weight:700; color:var(--slate-800);">' + _dashEsc(s.name) + (s.autoKey ? ' <span style="font-size:0.68rem; font-weight:600; color:var(--slate-400);">(sets Per-Half rotation boundaries)</span>' : '') + '</span>';
             html += '<div style="display:flex; gap:6px; flex-shrink:0;">';
             html += '<button type="button" class="btn-secondary" style="padding:3px 10px; font-size:0.72rem;" onclick="editSessionForm(' + i + ')">Edit</button>';
             html += '<button type="button" class="btn-secondary" style="padding:3px 10px; font-size:0.72rem;' + (isOpen ? '' : ' color:#059669;') + '" onclick="toggleSessionRegistration(' + i + ')">' + (isOpen ? 'Close' : 'Open') + '</button>';
@@ -2618,12 +2618,72 @@
         document.getElementById('sesTuition').value = s.tuition || '';
         document.getElementById('sesEarly').value = s.earlyBird || '';
         document.getElementById('sesEarlyDate').value = s.earlyBirdDeadline || '';
-        document.getElementById('sesSibDisc').value = s.siblingDiscount || '';
+        // Tiers are the current model; a session saved before this existed only
+        // has the old flat siblingDiscount %, so it's shown here as a single
+        // "2 kids" starter row rather than silently dropped.
+        var tiers = Array.isArray(s.siblingDiscountTiers) && s.siblingDiscountTiers.length
+            ? s.siblingDiscountTiers
+            : (s.siblingDiscount > 0 ? [{ count: 2, discount: s.siblingDiscount }] : []);
+        renderSiblingTiers(tiers);
         document.getElementById('sesOvernight').checked = !!s.overnight;
         document.getElementById('sesPayPlan').value = s.paymentPlan || 'full';
         document.getElementById('sesDeposit').value = s.depositAmount || '';
         document.getElementById('sesDepositWrap').style.display = (s.paymentPlan === 'deposit') ? 'block' : 'none';
         document.getElementById('sesNotes').value = s.notes || '';
+    }
+
+    // ── Sibling discount tiers: "N kids enrolled -> X% off every sibling but
+    // the priciest" rows, replacing the old single flat percentage. Rendered
+    // as plain rows into #sesSibTiersWrap; read back into an array on save.
+    function renderSiblingTiers(tiers) {
+        var wrap = document.getElementById('sesSibTiersWrap');
+        if (!wrap) return;
+        if (!tiers || !tiers.length) tiers = [{ count: '', discount: '' }];
+        wrap.innerHTML = tiers.map(function(t, i) {
+            return '<div class="ses-tier-row" style="display:flex; align-items:center; gap:10px;">'
+                + '<div style="flex:1;"><label style="font-size:0.72rem; color:var(--slate-500); display:block; margin-bottom:3px;">Kids enrolled</label>'
+                + '<input type="number" min="2" step="1" class="dash-input ses-tier-count" value="' + (t.count != null ? t.count : '') + '" placeholder="e.g., 2"></div>'
+                + '<div style="flex:1;"><label style="font-size:0.72rem; color:var(--slate-500); display:block; margin-bottom:3px;">Discount %</label>'
+                + '<input type="number" min="0" max="100" class="dash-input ses-tier-discount" value="' + (t.discount != null ? t.discount : '') + '" placeholder="e.g., 10"></div>'
+                + '<button type="button" class="btn-secondary" style="margin-top:18px; padding:6px 10px;" onclick="removeSiblingTierRow(' + i + ')" title="Remove tier">✕</button>'
+                + '</div>';
+        }).join('');
+    }
+
+    window.addSiblingTierRow = function() {
+        var tiers = readSiblingTiers();
+        tiers.push({ count: '', discount: '' });
+        renderSiblingTiers(tiers);
+    };
+
+    window.removeSiblingTierRow = function(idx) {
+        var tiers = readSiblingTiers();
+        tiers.splice(idx, 1);
+        renderSiblingTiers(tiers);
+    };
+
+    // Reads whatever is currently in the rows (including a half-filled row
+    // being edited), so add/remove don't clobber what the owner already typed.
+    function readSiblingTiers() {
+        var wrap = document.getElementById('sesSibTiersWrap');
+        if (!wrap) return [];
+        var counts = wrap.querySelectorAll('.ses-tier-count');
+        var discounts = wrap.querySelectorAll('.ses-tier-discount');
+        var out = [];
+        for (var i = 0; i < counts.length; i++) {
+            out.push({ count: counts[i].value, discount: discounts[i] ? discounts[i].value : '' });
+        }
+        return out;
+    }
+
+    // The saved shape: only complete, valid rows (a positive kid count and a
+    // 0-100 discount), sorted by count so the "highest matching tier" lookup
+    // in campistry_sibling_discount.js can just walk them in order.
+    function collectSiblingTiers() {
+        return readSiblingTiers()
+            .map(function(t) { return { count: parseInt(t.count, 10) || 0, discount: Math.max(0, Math.min(100, parseFloat(t.discount) || 0)) }; })
+            .filter(function(t) { return t.count >= 2 && t.discount > 0; })
+            .sort(function(a, b) { return a.count - b.count; });
     }
 
     window.addSessionForm = function() {
@@ -2689,7 +2749,12 @@
             tuition: parseFloat(document.getElementById('sesTuition').value) || 0,
             earlyBird: parseFloat(document.getElementById('sesEarly').value) || 0,
             earlyBirdDeadline: document.getElementById('sesEarlyDate').value || '',
-            siblingDiscount: parseInt(document.getElementById('sesSibDisc').value) || 0,
+            siblingDiscountTiers: collectSiblingTiers(),
+            // Legacy flat field, kept only so an OLDER page/report reading
+            // siblingDiscount still sees a sane number (the lowest tier's
+            // rate) rather than nothing — campistry_sibling_discount.js
+            // itself always prefers siblingDiscountTiers when present.
+            siblingDiscount: (function() { var t = collectSiblingTiers(); return t.length ? t[0].discount : 0; })(),
             // Day camp unless the camp says otherwise — the common case, and
             // the safe default: a session wrongly marked overnight silently
             // strips a family's whole claim off their tax statement.
