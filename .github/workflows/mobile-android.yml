@@ -80,8 +80,16 @@ jobs:
           distribution: temurin
           java-version: 21
 
+      # packages: '' — do NOT preinstall the action's default 'tools platform-tools'.
+      # Google removed the obsolete 'tools' SDK package from its repository, so the
+      # default install now fails ("Failed to find package 'tools'", sdkmanager exit 1)
+      # and no build runs. cmdline-tools + license acceptance are still set up either
+      # way; the Android Gradle Plugin downloads the exact platform/build-tools it
+      # needs on demand during the build.
       - uses: android-actions/setup-android@v3
         if: steps.gate.outputs.run == 'yes'
+        with:
+          packages: ''
 
       # npm ci needs a lockfile; fall back to install so a freshly scaffolded
       # app builds before its lockfile is committed.
