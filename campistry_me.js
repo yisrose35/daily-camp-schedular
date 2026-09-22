@@ -10316,58 +10316,112 @@ function getAcceptancePacketConfig(){
     if(acceptancePacketConfig)return acceptancePacketConfig;
     return {
         autoSend:!!(paFormConfig&&paFormConfig.autoSend),
+        subject:'',
+        message:'',
         form:{enabled:true},
         zelle:{enabled:false,sendTo:'',showMemo:true},
         camperMail:{enabled:false,address:''}
     };
 }
+// Reads the builder's live inputs into a config shape (before Save), so the
+// preview reflects exactly what's on screen.
+function _pktLiveConfig(){
+    var g=function(id){var el=document.getElementById(id);return el?!!el.checked:false;};
+    var v=function(id){var el=document.getElementById(id);return el?(el.value||''):'';};
+    return {
+        autoSend:g('pktAutoSend'),
+        subject:v('pktSubject').trim(),
+        message:v('pktMessage'),
+        form:{enabled:g('pktForm')},
+        zelle:{enabled:g('pktZelle'),sendTo:v('pktZelleTo').trim(),showMemo:g('pktZelleMemo')},
+        camperMail:{enabled:g('pktMail'),address:v('pktMailAddr').trim()}
+    };
+}
+// Live email preview — same split-view format as the form builders, but the
+// right pane shows the composed acceptance email (with a sample camper) instead
+// of a form iframe.
+function _pktRenderPreview(){
+    var el=document.getElementById('packetPreview'); if(!el)return;
+    var p=_pktLiveConfig();
+    var sampleName='Jordan Miller';
+    var campName='';try{var ss=JSON.parse(localStorage.getItem('campGlobalSettings_v1')||'{}');campName=ss.campName||ss.camp_name||'Your Camp';}catch(_){}
+    var subject=(p.subject)?p.subject.replace(/\{camper\}/gi,sampleName):('A few more choices for '+sampleName);
+    var sampleMemo=(_pktSettings&&_pktSettings.campNumber)?(String(_pktSettings.campNumber).replace(/\D/g,'')+'-2087'):'1234-2087';
+    var mailAddr=p.camperMail.address||_defaultMailAddr()||('letters+yourcamp@'+(window.CAMPISTRY_INBOUND_DOMAIN||'inbound.campistry.org'));
+    var formUrl=window.location.origin+'/campistry_postaccept.html?id=SAMPLE&camp='+encodeURIComponent((window.getCampId?getCampId():'')||'');
+    var body=_composeBodyFromParts(p,{camperName:sampleName,formUrl:formUrl,memo:sampleMemo,mailAddr:mailAddr});
+    el.innerHTML='<div style="width:100%;max-width:640px;align-self:flex-start;background:#fff;border:1px solid var(--s200);border-radius:10px;box-shadow:0 4px 24px rgba(0,0,0,.08);overflow:hidden">'
+      +'<div style="padding:14px 20px;border-bottom:1px solid var(--s100);background:var(--s50)">'
+        +'<div style="font-size:.72rem;color:var(--s400);margin-bottom:3px">From <strong style="color:var(--s600)">'+esc(campName)+'</strong> · To <strong style="color:var(--s600)">a newly-accepted family</strong></div>'
+        +'<div style="font-size:.95rem;font-weight:700;color:var(--s800)">'+esc(subject)+'</div></div>'
+      +'<div style="padding:20px;font-size:.9rem;line-height:1.7;color:var(--s800);white-space:pre-wrap">'+esc(body)+'</div>'
+      +'<div style="padding:10px 20px;border-top:1px solid var(--s100);font-size:.7rem;color:var(--s400)">Preview — shown with a sample camper (Jordan Miller). Each family sees their own name'+((p.zelle&&p.zelle.enabled&&p.zelle.showMemo)?' and deposit reference':'')+'.</div>'
+      +'</div>';
+}
 function openAcceptancePacket(){
-    _toggleMenu&&_toggleMenu('pplFormsMenu');
+    if(typeof _toggleMenu==='function')_toggleMenu('pplFormsMenu');
     var p=getAcceptancePacketConfig();
-    var mailDefault='';
-    try{ var dom=(window.CAMPISTRY_INBOUND_DOMAIN||'inbound.campistry.org'); if(_pktSettings&&_pktSettings.inboundToken) mailDefault='letters+'+_pktSettings.inboundToken+'@'+dom; }catch(_){}
+    var mailDefault=_defaultMailAddr();
     function row(id,checked,title,desc){
         return '<label style="display:flex;align-items:flex-start;gap:10px;padding:6px 0;cursor:pointer">'
           +'<input type="checkbox" id="'+id+'" '+(checked?'checked':'')+' style="accent-color:var(--me);flex-shrink:0;width:16px;height:16px;margin-top:2px">'
           +'<div><div style="font-size:.85rem;font-weight:600;color:var(--s800)">'+title+'</div>'
           +'<div style="font-size:.72rem;color:var(--s400)">'+desc+'</div></div></label>';
     }
-    var h='<p style="font-size:.82rem;color:var(--s500);margin:0 0 14px;line-height:1.5">Choose what a family receives the moment you accept them. The <strong>Post-Acceptance Form</strong> button sets up the form itself; this controls what actually gets sent.</p>';
-    h+=row('pktAutoSend',p.autoSend,'Send automatically on acceptance','When on, this goes out the moment an applicant is marked Accepted. When off, send it yourself from the applicant’s Review panel.');
-    h+='<div style="border-top:1px solid var(--s100);margin:12px 0 6px"></div>';
-    h+=row('pktForm',p.form&&p.form.enabled!==false,'Post-Acceptance Form','Include the link to the form (bunkmate requests, t-shirt size, consent, etc.). Set the form up under “Post-Acceptance Form”.');
+    var h='<p style="font-size:.82rem;color:var(--s500);margin:0 0 14px;line-height:1.5">What a family receives the moment you accept them. The <strong>Post-Acceptance Form</strong> button sets up the form itself; this controls the message and what goes in it.</p>';
 
-    h+='<div style="border-top:1px solid var(--s100);margin:12px 0 6px"></div>';
+    // Your message — first, and easy to edit. {camper} fills in each child's name.
+    h+='<div style="font-size:.78rem;font-weight:700;color:var(--s700);text-transform:uppercase;letter-spacing:.04em;margin:2px 0 8px">Your message</div>';
+    h+='<div class="fg"><label class="fl">Email subject</label><input class="fi" id="pktSubject" value="'+esc(p.subject||'')+'" placeholder="A few more choices for {camper}"></div>';
+    h+='<div class="fg"><label class="fl">Greeting / message</label><textarea class="fi" id="pktMessage" style="min-height:90px;resize:vertical" placeholder="Congratulations — {camper} is accepted!">'+esc(p.message||'')+'</textarea>'
+      +'<div style="font-size:.7rem;color:var(--s400);margin-top:4px">Type <code>{camper}</code> anywhere to drop in the child’s name. Leave blank for the default greeting. The items you turn on below are added under your message.</div></div>';
+
+    h+='<div style="border-top:1px solid var(--s100);margin:14px 0 8px"></div>';
+    h+='<div style="font-size:.78rem;font-weight:700;color:var(--s700);text-transform:uppercase;letter-spacing:.04em;margin:0 0 4px">What’s included</div>';
+    h+=row('pktForm',p.form&&p.form.enabled!==false,'Post-Acceptance Form','Include the link to the form (bunkmate requests, t-shirt size, consent, etc.).');
+
     h+=row('pktZelle',!!(p.zelle&&p.zelle.enabled),'Zelle deposit instructions','Tell the family how to pay their deposit by Zelle.');
-    h+='<div id="pktZelleFields" style="padding:4px 0 4px 26px;'+((p.zelle&&p.zelle.enabled)?'':'display:none')+'">'
+    h+='<div id="pktZelleFields" style="padding:4px 0 6px 26px;'+((p.zelle&&p.zelle.enabled)?'':'display:none')+'">'
       +'<div class="fg"><label class="fl">Send Zelle to (email or phone)</label><input class="fi" id="pktZelleTo" value="'+esc((p.zelle&&p.zelle.sendTo)||'')+'" placeholder="e.g. payments@yourcamp.org"></div>'
       +'<label style="display:flex;align-items:center;gap:8px;font-size:.8rem;color:var(--s600);cursor:pointer"><input type="checkbox" id="pktZelleMemo" '+((p.zelle&&p.zelle.showMemo!==false)?'checked':'')+' style="accent-color:var(--me);width:15px;height:15px">Show each family their deposit reference to put in the Zelle memo</label></div>';
 
-    h+='<div style="border-top:1px solid var(--s100);margin:12px 0 6px"></div>';
     h+=row('pktMail',!!(p.camperMail&&p.camperMail.enabled),'Camper mail address','Tell the family the email address to send printed letters to.');
-    h+='<div id="pktMailFields" style="padding:4px 0 4px 26px;'+((p.camperMail&&p.camperMail.enabled)?'':'display:none')+'">'
+    h+='<div id="pktMailFields" style="padding:4px 0 6px 26px;'+((p.camperMail&&p.camperMail.enabled)?'':'display:none')+'">'
       +'<div class="fg" style="margin-bottom:0"><label class="fl">Letters email address</label><input class="fi" id="pktMailAddr" value="'+esc((p.camperMail&&p.camperMail.address)||'')+'" placeholder="'+esc(mailDefault||'Leave blank to use your Campistry letters address')+'"><div style="font-size:.7rem;color:var(--s400);margin-top:4px">Leave blank to use your Campistry letters address'+(mailDefault?' ('+esc(mailDefault)+')':'')+'. Enter a different address only if letters should go somewhere else.</div></div></div>';
 
-    document.getElementById('packetBody').innerHTML=h;
-    var zc=document.getElementById('pktZelle'); if(zc)zc.onchange=function(){document.getElementById('pktZelleFields').style.display=this.checked?'':'none';};
-    var mc=document.getElementById('pktMail'); if(mc)mc.onchange=function(){document.getElementById('pktMailFields').style.display=this.checked?'':'none';};
-    openModal('packetModal');
-    // Fetch the camp's letters address so the placeholder can show the default.
-    _loadPktSettings();
+    h+='<div style="border-top:1px solid var(--s100);margin:14px 0 8px"></div>';
+    h+='<div style="font-size:.78rem;font-weight:700;color:var(--s700);text-transform:uppercase;letter-spacing:.04em;margin:0 0 4px">Delivery</div>';
+    h+=row('pktAutoSend',p.autoSend,'Send automatically on acceptance','When on, this goes out the moment an applicant is marked Accepted. When off, send it yourself from the applicant’s Review panel.');
+
+    var panel=document.getElementById('packetPanel'); if(panel){
+        panel.innerHTML=h;
+        panel.oninput=_pktRenderPreview;
+        panel.onchange=function(e){
+            var t=e&&e.target;
+            if(t&&t.id==='pktZelle'){var f=document.getElementById('pktZelleFields'); if(f)f.style.display=t.checked?'':'none';}
+            if(t&&t.id==='pktMail'){var f2=document.getElementById('pktMailFields'); if(f2)f2.style.display=t.checked?'':'none';}
+            _pktRenderPreview();
+        };
+    }
+    document.getElementById('packetBuilderOverlay').style.display='flex';
+    _pktRenderPreview();
+    _loadPktSettings().then(function(){ _pktRenderPreview(); });
 }
+function closeAcceptancePacket(){ var o=document.getElementById('packetBuilderOverlay'); if(o)o.style.display='none'; }
 function saveAcceptancePacket(){
-    var g=function(id){var el=document.getElementById(id);return el?el.checked:false;};
-    var v=function(id){var el=document.getElementById(id);return el?(el.value||'').trim():'';};
+    var c=_pktLiveConfig();
     acceptancePacketConfig={
-        autoSend:g('pktAutoSend'),
-        form:{enabled:g('pktForm')},
-        zelle:{enabled:g('pktZelle'),sendTo:v('pktZelleTo'),showMemo:g('pktZelleMemo')},
-        camperMail:{enabled:g('pktMail'),address:v('pktMailAddr')}
+        autoSend:c.autoSend,
+        subject:c.subject,
+        message:c.message,
+        form:{enabled:c.form.enabled},
+        zelle:{enabled:c.zelle.enabled,sendTo:c.zelle.sendTo,showMemo:c.zelle.showMemo},
+        camperMail:{enabled:c.camperMail.enabled,address:c.camperMail.address}
     };
     // Keep the legacy field in step so anything still reading it agrees.
     if(paFormConfig)paFormConfig.autoSend=acceptancePacketConfig.autoSend;
     save();
-    closeModal('packetModal');
+    closeAcceptancePacket();
     toast('On-acceptance settings saved');
 }
 // The camp's letters address + camp number, fetched once for the builder
@@ -12544,26 +12598,39 @@ function _acceptanceMemo(e){
     var cid=(r&&r.camperId!=null)?String(r.camperId).replace(/\D/g,''):((e&&e.camperId!=null)?String(e.camperId).replace(/\D/g,''):'');
     return (num&&cid)?(num+'-'+cid):'';
 }
-// The one place both the manual and the automatic send build the acceptance
-// message, so they can never drift. Blocks are governed by the On-Acceptance
-// packet; call _loadPktSettings() first if you want the Zelle memo / default
-// letters address resolved.
-function _composeAcceptanceBody(id){
-    var e=enrollments[id]||{}; var p=getAcceptancePacketConfig();
-    var out=['Congratulations — '+(e.camperName||'your camper')+' is accepted!'];
-    if(p.form&&p.form.enabled!==false){
-        out.push('','Please complete a few more choices here:',_postAcceptUrl(id));
+function _defaultMailAddr(){
+    return (_pktSettings&&_pktSettings.inboundToken)?('letters+'+_pktSettings.inboundToken+'@'+(window.CAMPISTRY_INBOUND_DOMAIN||'inbound.campistry.org')):'';
+}
+// The one composer both the real send and the builder preview call, so the two
+// can never drift. `parts` holds the values that differ between a real camper
+// and the sample the preview shows: { camperName, formUrl, memo, mailAddr }.
+// The camp's own message (with a {camper} token) leads; the blocks follow.
+function _composeBodyFromParts(p,parts){
+    p=p||{}; parts=parts||{};
+    var nm=parts.camperName||'your camper';
+    var intro=(p.message&&p.message.trim())?p.message.replace(/\{camper\}/gi,nm):('Congratulations — '+nm+' is accepted!');
+    var out=[intro];
+    if(p.form&&p.form.enabled!==false&&parts.formUrl){
+        out.push('','Please complete a few more choices here:',parts.formUrl);
     }
     if(p.zelle&&p.zelle.enabled&&(p.zelle.sendTo||'').trim()){
         out.push('','To pay your deposit by Zelle, send it to: '+p.zelle.sendTo.trim()+'.');
-        if(p.zelle.showMemo!==false){ var memo=_acceptanceMemo(e); if(memo)out.push('Put this reference in the Zelle memo so it’s credited to you: '+memo+'.'); }
+        if(p.zelle.showMemo!==false&&parts.memo)out.push('Put this reference in the Zelle memo so it’s credited to you: '+parts.memo+'.');
     }
-    if(p.camperMail&&p.camperMail.enabled){
-        var addr=(p.camperMail.address||'').trim();
-        if(!addr&&_pktSettings&&_pktSettings.inboundToken)addr='letters+'+_pktSettings.inboundToken+'@'+(window.CAMPISTRY_INBOUND_DOMAIN||'inbound.campistry.org');
-        if(addr)out.push('','You can email letters to your camper any time — the office prints them and hands them out. Send them to: '+addr+'.');
+    if(p.camperMail&&p.camperMail.enabled&&parts.mailAddr){
+        out.push('','You can email letters to your camper any time — the office prints them and hands them out. Send them to: '+parts.mailAddr+'.');
     }
     return out.join('\n');
+}
+function _composeAcceptanceBody(id){
+    var e=enrollments[id]||{}; var p=getAcceptancePacketConfig();
+    var addr=(p.camperMail&&(p.camperMail.address||'').trim())||_defaultMailAddr();
+    return _composeBodyFromParts(p,{camperName:e.camperName||'your camper',formUrl:_postAcceptUrl(id),memo:_acceptanceMemo(e),mailAddr:addr});
+}
+function _acceptanceSubject(id){
+    var e=enrollments[id]||{}; var p=getAcceptancePacketConfig();
+    var nm=e.camperName||'your camper';
+    return (p.subject&&p.subject.trim())?p.subject.replace(/\{camper\}/gi,nm):('A few more choices for '+nm);
 }
 async function openSendPostAcceptModal(id){
     var e=enrollments[id]; if(!e){toast('Application not found','error');return;}
@@ -12571,7 +12638,7 @@ async function openSendPostAcceptModal(id){
     await _loadPktSettings();
     document.getElementById('slTitle').textContent='Send Post-Acceptance Form';
     var h='<div class="fg"><label class="fl">To</label><input class="fi" value="'+esc(e.parentEmail)+'" disabled></div>';
-    h+='<div class="fg"><label class="fl">Subject</label><input class="fi" id="slSubject" value="'+esc('A few more choices for '+(e.camperName||'your camper'))+'"></div>';
+    h+='<div class="fg"><label class="fl">Subject</label><input class="fi" id="slSubject" value="'+esc(_acceptanceSubject(id))+'"></div>';
     h+='<div class="fg"><label class="fl">Message</label><textarea class="fi" id="slBodyText" style="min-height:110px;resize:vertical">'+esc(_composeAcceptanceBody(id))+'</textarea></div>';
     document.getElementById('slBody').innerHTML=h;
     var btn=document.getElementById('slSendBtn');
@@ -12610,7 +12677,7 @@ async function _autoSendPostAccept(id){
     }
     await _loadPktSettings();
     var campName='';try{var ss=JSON.parse(localStorage.getItem('campGlobalSettings_v1')||'{}');campName=ss.campName||ss.camp_name||'Camp';}catch(ex){}
-    var subject='A few more choices for '+(e.camperName||'your camper');
+    var subject=_acceptanceSubject(id);
     var body=_composeAcceptanceBody(id);
     try{
         await callEdgeFunctionAuthed('send-broadcast',{campId:getCampId(),to:[{email:e.parentEmail,name:e.parentName||''}],subject:subject,body:body,method:'email',campName:campName});
@@ -22122,7 +22189,7 @@ window.CampistryMe={
     openFormConfig:openFormConfig,saveFormConfig:saveFormConfig,addCustomQ:addCustomQ,addPromoRow:addPromoRow,
     openStaffFormConfig:openStaffFormConfig,saveStaffFormConfig:saveStaffFormConfig,addStaffCustomQ:addStaffCustomQ,
     openPostAcceptFormConfig:openPostAcceptFormConfig,savePostAcceptFormConfig:savePostAcceptFormConfig,addPafCustomQ:addPafCustomQ,
-    openAcceptancePacket:openAcceptancePacket,saveAcceptancePacket:saveAcceptancePacket,
+    openAcceptancePacket:openAcceptancePacket,saveAcceptancePacket:saveAcceptancePacket,closeAcceptancePacket:closeAcceptancePacket,
     openPostHireFormConfig:openPostHireFormConfig,savePostHireFormConfig:savePostHireFormConfig,addPhfCustomQ:addPhfCustomQ,
     _phfHandbookPick:_phfHandbookPick,_phfHandbookClear:_phfHandbookClear,addPhfPolicyRow:addPhfPolicyRow,
     addCustomSection:addCustomSection,addSectionField:addSectionField,addCustomQToSection:addCustomQToSection,_toggleSectionQuestions:_toggleSectionQuestions,

@@ -169,14 +169,24 @@
     <div class="me-modal-footer"><button class="me-btn me-btn--sec" onclick="CampistryMe.closeModal('sendLinkModal')">Cancel</button><button class="me-btn me-btn--pri" id="slSendBtn">Send</button></div>
 </div></div>
 
-<!-- On-Acceptance packet builder — the central control over what a family gets
-     the moment they're accepted (the form, the Zelle deposit info, the camper
-     mail address) and whether it sends automatically. -->
-<div id="packetModal" class="me-overlay" style="display:none"><div class="me-modal">
-    <div class="me-modal-header"><h3>On Acceptance</h3><button class="me-modal-x" onclick="CampistryMe.closeModal('packetModal')">&times;</button></div>
-    <div class="me-modal-body" id="packetBody"></div>
-    <div class="me-modal-footer"><button class="me-btn me-btn--sec" onclick="CampistryMe.closeModal('packetModal')">Cancel</button><button class="me-btn me-btn--pri" id="packetSaveBtn" onclick="CampistryMe.saveAcceptancePacket()">Save</button></div>
-</div></div>
+<!-- On-Acceptance packet builder — same split-view format as the form builders:
+     editor on the left, a live preview of the acceptance email on the right.
+     Controls the message and what goes in it (form link, Zelle deposit info,
+     camper mail address) and whether it sends automatically on acceptance. -->
+<div id="packetBuilderOverlay" class="fb-overlay" style="display:none">
+    <div class="fb-header">
+        <div class="fb-title">On Acceptance</div>
+        <div class="fb-actions">
+            <span class="fb-savenote">The email on the right updates as you edit — nothing saves until you click Save.</span>
+            <button class="me-btn me-btn--sec" onclick="CampistryMe.closeAcceptancePacket()">Cancel</button>
+            <button class="me-btn me-btn--pri" onclick="CampistryMe.saveAcceptancePacket()">Save</button>
+        </div>
+    </div>
+    <div class="fb-body">
+        <div class="fb-panel" id="packetPanel"></div>
+        <div class="fb-preview"><div id="packetPreview" style="width:100%;max-width:640px;align-self:flex-start"></div></div>
+    </div>
+</div>
 
 <!-- QR CODE -->
 <div id="qrModal" class="me-overlay" style="display:none"><div class="me-modal">
