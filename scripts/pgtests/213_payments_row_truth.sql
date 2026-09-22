@@ -244,4 +244,54 @@ BEGIN
     RAISE NOTICE 'ok  the verifier confirms no double counting';
 END $$;
 
+-- ── the duplicate check counts PAYMENTS, not occurrences ──────────────────
+-- The false alarm this replaces fired on real data: one payment whose id and
+-- reference hold the same value (several processors do that) put the value in
+-- its own dedupe_keys array twice, and counting occurrences reported it as a
+-- duplicate of itself. Both directions are checked, so the fix cannot have
+-- simply silenced the test.
+DO $$
+DECLARE r jsonb;
+BEGIN
+    INSERT INTO public.camps (id, owner, name)
+    VALUES ('dddddddd-dddd-dddd-dddd-dddddddddddd', NULL, 'Dup Probe');
+
+    -- ONE payment, id = reference. Normal. Must NOT be flagged.
+    INSERT INTO public.camp_payments (camp_id, payment_id, payload)
+    VALUES ('dddddddd-dddd-dddd-dddd-dddddddddddd','dp1',
+            jsonb_build_object('id','dp1','reference','dp1','amount',10,'status','paid'));
+    IF (SELECT dedupe_keys FROM public.camp_payments
+         WHERE camp_id='dddddddd-dddd-dddd-dddd-dddddddddddd' AND payment_id='dp1')
+       IS DISTINCT FROM ARRAY['dp1','dp1',NULL,NULL]::text[] THEN
+        RAISE EXCEPTION 'the array should legitimately contain the value twice';
+    END IF;
+    r := public.verify_payment_writes('dddddddd-dddd-dddd-dddd-dddddddddddd');
+    IF (r ->> 'noDoubleCounting') <> 'true' THEN
+        RAISE EXCEPTION 'one payment with id = reference is NOT a duplicate: %', r;
+    END IF;
+    RAISE NOTICE 'ok  a payment whose id equals its reference is not a duplicate of itself';
+
+    -- TWO payments sharing a key. That IS the failure, and must be caught.
+    INSERT INTO public.camp_payments (camp_id, payment_id, payload)
+    VALUES ('dddddddd-dddd-dddd-dddd-dddddddddddd','dp2',
+            jsonb_build_object('id','dp2','reference','dp1','amount',10,'status','paid'));
+    r := public.verify_payment_writes('dddddddd-dddd-dddd-dddd-dddddddddddd');
+    IF (r ->> 'noDoubleCounting') <> 'false' THEN
+        RAISE EXCEPTION 'two payments sharing a dedupe key MUST be reported: %', r;
+    END IF;
+    IF (r -> 'duplicateDedupeKeys') <> '["dp1"]'::jsonb THEN
+        RAISE EXCEPTION 'the offending key should be listed once: %', r -> 'duplicateDedupeKeys';
+    END IF;
+    RAISE NOTICE 'ok  two payments sharing a key IS reported, and listed once';
+
+    -- A soft-deleted duplicate stops counting, because it stops existing.
+    UPDATE public.camp_payments SET deleted_at = now()
+     WHERE camp_id='dddddddd-dddd-dddd-dddd-dddddddddddd' AND payment_id='dp2';
+    r := public.verify_payment_writes('dddddddd-dddd-dddd-dddd-dddddddddddd');
+    IF (r ->> 'noDoubleCounting') <> 'true' THEN
+        RAISE EXCEPTION 'a deleted duplicate must not still be reported: %', r;
+    END IF;
+    RAISE NOTICE 'ok  deleting one of the two clears the report';
+END $$;
+
 SELECT 'ALL 213 BEHAVIOUR CHECKS PASSED' AS result;

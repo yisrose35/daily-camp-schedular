@@ -178,8 +178,8 @@ test('the verifier looks for the failure the lock used to prevent', () => {
     const v = codeOnly(defIn(SQL, 'verify_payment_writes'));
     assert.match(v, /'noDoubleCounting'/);
     assert.match(v, /unnest\(dedupe_keys\)/);
-    assert.match(v, /GROUP BY k HAVING count\(\*\) > 1/,
-        'two live rows sharing a dedupe key means a retry was recorded twice');
+    assert.match(v, /GROUP BY x\.k\s*\n?\s*HAVING count\(\*\) > 1/,
+        'two different live payments sharing a dedupe key means a retry was recorded twice');
     assert.match(v, /'deletedPayments'/);
     assert.match(v, /NULLIF\(current_setting\('request\.jwt\.claims', true\), ''\)/,
         'runnable from the SQL Editor');
@@ -302,4 +302,41 @@ test('213 is a standalone paste that announces itself', () => {
     const lines = SQL.trimEnd().split('\n');
     assert.ok(!lines[lines.length - 1].trim().startsWith('--'));
     assert.ok(!read('scripts/build-migration-bundle.py').includes('213_payments_row_truth'));
+});
+
+// ── the duplicate check must count PAYMENTS, not occurrences ────────────────
+// This fired as a false alarm on real data: one payment whose id and reference
+// held the same value put that value in its own dedupe_keys array twice, and the
+// check counted occurrences, so it reported the payment as a duplicate of itself.
+// noDoubleCounting read false with the same key printed twice.
+test('duplicates are counted per payment, not per occurrence', () => {
+    const v = codeOnly(defIn(SQL, 'verify_payment_writes'));
+    assert.match(v, /SELECT DISTINCT payment_id, unnest\(dedupe_keys\) AS k/,
+        'DISTINCT payment_id is what makes one payment count once');
+    assert.doesNotMatch(v, /FROM \(SELECT unnest\(dedupe_keys\) AS k\s*\n\s*FROM public\.camp_payments/,
+        'the occurrence-counting form is the bug');
+});
+
+test('the duplicate list is a scalar subquery, so it can report more than one key', () => {
+    const v = codeOnly(defIn(SQL, 'verify_payment_writes'));
+    // `jsonb_agg(k) ... GROUP BY k HAVING` returns one row PER GROUP and INTO
+    // keeps only the first, so the old form could never list a second offender.
+    assert.match(v, /SELECT COALESCE\(\(SELECT jsonb_agg\(d\.k ORDER BY d\.k\)/);
+    assert.match(v, /INTO v_dupes;/);
+    assert.doesNotMatch(v, /INTO v_dupes\s*\n[\s\S]{0,400}GROUP BY k HAVING/,
+        'the grouped-aggregate-into-a-variable form is the bug');
+});
+
+test('the note explains the distinction, since the number is read by a person', () => {
+    const v = codeOnly(defIn(SQL, 'verify_payment_writes'));
+    assert.match(v, /DISTINCT PAYMENTS per dedupe key, not /);
+    assert.match(v, /id and reference hold the same /,
+        'the legitimate case is named, so a false alarm is not chased again');
+});
+
+test('a soft-deleted payment cannot be half of a reported duplicate', () => {
+    const v = codeOnly(defIn(SQL, 'verify_payment_writes'));
+    const dup = v.slice(v.indexOf('unnest(dedupe_keys)'));
+    assert.match(dup.slice(0, 300), /deleted_at IS NULL/,
+        'a payment the office deleted has stopped existing for every other purpose too');
 });

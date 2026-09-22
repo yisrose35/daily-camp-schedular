@@ -145,6 +145,10 @@ CREATE OR REPLACE FUNCTION public.user_section_level(p_camp_id uuid, p_section t
 RETURNS text LANGUAGE sql STABLE SECURITY DEFINER
 SET search_path = public, pg_catalog AS $$ SELECT 'edit'::text $$;
 
+CREATE OR REPLACE FUNCTION public.get_user_role() RETURNS text
+LANGUAGE sql STABLE SECURITY DEFINER SET search_path = public, pg_catalog
+AS $$ SELECT 'owner'::text $$;
+
 -- 205's projections, so a later migration that reads them can be tried alone.
 CREATE TABLE IF NOT EXISTS public.camp_billing_config (
     camp_id uuid PRIMARY KEY, sessions jsonb NOT NULL DEFAULT '[]'::jsonb,
