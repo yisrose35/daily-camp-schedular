@@ -12,9 +12,10 @@
 //   portal   N signed-in parents with the portal open — the boot reads, then
 //            the 30-second poll loop (messages + broadcasts), for a while
 //   canteen  M register sales in a rush, as the camp owner
-//   payments N payments recorded as the webhooks record them (service role),
-//            run TWICE — spread over many families and then all aimed at one —
-//            because that contrast is what shows the camp-wide lock is gone
+//   payments N payments recorded as the webhooks record them (service role), at
+//            concurrency 1 and then at the configured concurrency — because a
+//            camp-wide lock caps throughput no matter how many callers arrive,
+//            so a rate that RISES with callers is what shows the lock is gone
 //
 // and reports latency percentiles, error counts and throughput per RPC, with a
 // PASS / WARN verdict against a p95 threshold.
@@ -501,21 +502,45 @@ export function loadPayment(i, famKey) {
 /**
  * Recording payments — the path migrations 208-215 took off the camp-wide lock.
  *
- * WHY THIS REPORTS TWO LINES, NOT ONE. Before the change, append_camp_payment held
- * SELECT ... FOR UPDATE on the camp's whole document, so EVERY payment in a camp
+ * WHAT THE QUESTION ACTUALLY IS. Before the change, append_camp_payment held
+ * SELECT ... FOR UPDATE on the camp's whole document, so every payment in a camp
  * queued behind every other one no matter whose it was. Now the payment is an
  * insert that takes no lock, and only the ledger post locks the ONE family row it
- * writes. That difference is invisible in a single number, so the same payments
- * are run twice:
+ * writes. So: does the camp still serialise?
  *
- *   spread   across many families — nothing contends, so this is the real shape
- *            of a registration day, and it is what the lock removal bought.
- *   one      all aimed at a SINGLE family — every ledger post contends on that
- *            one row. This is the honest worst case, and it is also what the OLD
- *            behaviour looked like for every payment in the camp.
+ * WHY THE FIRST VERSION OF THIS PHASE ANSWERED THE WRONG QUESTION. It ran the same
+ * payments twice — spread over many families, then all aimed at one — and read the
+ * ratio as the verdict. Two things were wrong with that, and the measured run
+ * showed both:
  *
- * If `spread` is not meaningfully faster than `one`, the lock did not really go:
- * something is still serialising camp-wide, and the two runs would match.
+ *   1. It was ORDER-BIASED. `spread` always ran first, so it paid for opening the
+ *      connections the second burst then reused. The real run came back with
+ *      p50 276ms spread and p50 269ms one — identical service time — and a p95 of
+ *      5759ms against 1601ms. The whole difference was the first burst's tail. It
+ *      reported "spreading barely helped" about a cold pool. This is the same
+ *      defect as the fixed boot-call order that bootOrder() exists to fix; see
+ *      the note there. Fixed here by a discarded WARM-UP burst, and by running
+ *      spread on BOTH sides of `one` so drift is visible instead of invisible.
+ *
+ *   2. Even unbiased, the ratio cannot answer the question. Spreading over 75
+ *      families does strictly MORE distinct work than hammering one — 75 rows and
+ *      index pages to dirty instead of one hot row — so a healthy per-family lock
+ *      can legitimately post a lower rate than a contended single row. The ratio
+ *      conflates "is there a camp-wide lock" with "is a cache hit faster than a
+ *      cache miss", and the second effect can be larger.
+ *
+ * WHAT ACTUALLY ANSWERS IT: does throughput SCALE with concurrency? A camp-wide
+ * lock makes the camp a single queue, so total throughput is capped at
+ * 1/service_time no matter how many callers arrive — adding concurrency moves
+ * nothing. That is exactly how the canteen phase reports its ceiling, and the
+ * canteen still HAS such a lock, so the two phases can be read against each
+ * other. So the headline here is the same burst at concurrency 1 and at the
+ * configured concurrency: if the rate climbs with the callers, there is no
+ * camp-wide queue, whatever the spread-vs-one ratio says.
+ *
+ * spread-vs-one is kept, demoted to what it can honestly show: the cost of
+ * contending on one family's row versus many. It is reported, not used as a
+ * verdict.
  *
  * Called with the SERVICE ROLE, because that is how the payment webhooks call in:
  * an edge function, not a browser.
@@ -535,42 +560,80 @@ async function phasePayments(c, o, env, report, log) {
     if (!w.ok) { log(`  payments: could not seed families (HTTP ${w.status}) — skipped`); return null; }
     log(`  payments: ${o.payments} payments, ${o.payFamilies} families seeded, concurrency ${o.concurrency}`);
 
-    const runs = {};
-    for (const mode of ['spread', 'one']) {
+    // One burst. `leg` only tags the payment ids so that every call in the whole
+    // phase carries a DISTINCT id: a repeat would return alreadyRecorded and time
+    // a dedupe probe instead of a write.
+    const burst = async (leg, mode, n, conc) => {
         const samples = [];
         const t0 = Date.now();
-        await pool(Array.from({ length: o.payments }, (_, i) => i), o.concurrency, async (i) => {
-            // A distinct payment id per call in BOTH modes, so `one` measures
-            // contention on the family row and not the dedupe short-circuit.
+        await pool(Array.from({ length: n }, (_, i) => i), conc, async (i) => {
             const famKey = payFamilyKey(mode === 'one' ? 0 : i % o.payFamilies);
-            const pay = loadPayment(`${mode}_${i}`, famKey);
+            const pay = loadPayment(`${leg}_${i}`, famKey);
             const res = await c.svcRpc('append_camp_payment',
                 { p_camp_id: env.CAMP_ID, p_payment: pay, p_dedupe_key: pay.reference });
             samples.push(sample(res, 'append_camp_payment'));
         });
         const elapsed = Date.now() - t0;
-        const sum = summarize(samples, elapsed);
-        runs[mode] = { sum, elapsed };
-        const label = mode === 'spread'
-            ? `payments · spread over ${o.payFamilies} families`
-            : 'payments · all to ONE family';
-        report.push([label, sum, verdict(sum, o.p95, [])]);
+        return { samples, elapsed, sum: summarize(samples, elapsed) };
+    };
+
+    // Warm-up, DISCARDED. Opening `concurrency` connections costs seconds, and
+    // whichever burst pays for it looks slow for a reason that has nothing to do
+    // with locking. Charging it to a burst nobody reads is the whole point.
+    const warm = Math.min(50, o.payments);
+    await burst('warm', 'spread', warm, o.concurrency);
+    log(`  payments: ${warm} discarded as warm-up, so no measured burst pays for opening connections`);
+
+    // The scaling test. Serial leg deliberately small: at concurrency 1 it costs
+    // one service time per payment, so a full-size leg would dominate the run.
+    const serialN = Math.max(10, Math.min(40, o.payments));
+    const serial = await burst('serial', 'spread', serialN, 1);
+    // spread on BOTH sides of `one`, so a drifting project shows up as a gap
+    // between two identical bursts rather than as a finding about families.
+    const spreadA = await burst('spreadA', 'spread', o.payments, o.concurrency);
+    const one = await burst('one', 'one', o.payments, o.concurrency);
+    const spreadB = await burst('spreadB', 'spread', o.payments, o.concurrency);
+
+    // Both spread bursts ran at the same concurrency, so their samples and their
+    // wall clocks add: one rate over twice the payments, with the drift between
+    // the halves reported separately below.
+    const spreadAll = summarize(spreadA.samples.concat(spreadB.samples),
+        spreadA.elapsed + spreadB.elapsed);
+    report.push([`payments · serial (concurrency 1)`, serial.sum, verdict(serial.sum, o.p95, [])]);
+    report.push([`payments · spread over ${o.payFamilies} families`, spreadAll, verdict(spreadAll, o.p95, [])]);
+    report.push(['payments · all to ONE family', one.sum, verdict(one.sum, o.p95, [])]);
+
+    // ── the finding ─────────────────────────────────────────────────────────
+    const s1 = serial.sum.rps, sN = spreadAll.rps;
+    if (s1 > 0 && sN > 0) {
+        const scale = Math.round((sN / s1) * 10) / 10;
+        log(`  payments: ${s1}/second with ONE caller, ${sN}/second with ${o.concurrency} (${scale}x)`);
+        if (scale < 2) {
+            log(`           ⚠ ${o.concurrency} callers achieved less than twice one caller's rate.`);
+            log('             A camp-wide lock makes the camp ONE queue, so throughput cannot');
+            log('             rise with callers — that is what this looks like. Check whether');
+            log('             append_camp_payment still takes a camp-level lock.');
+        } else {
+            log('           Throughput rises with callers, so the camp is NOT one queue: the');
+            log('             payment insert takes no lock and only the ledger post locks the');
+            log('             one family row it writes. (Compare the canteen phase, which still');
+            log('             holds a camp-wide lock and so reports a flat ceiling instead.)');
+        }
     }
 
-    // The comparison is the finding. State it rather than leaving two numbers
-    // side by side for the reader to interpret.
-    const sp = runs.spread.sum.rps, on = runs.one.sum.rps;
-    if (sp > 0 && on > 0) {
-        const ratio = Math.round((sp / on) * 10) / 10;
-        log(`  payments: ${sp} per second spread across families, ${on} all to one family (${ratio}x)`);
-        if (ratio < 1.3) {
-            log('           ⚠ spreading across families barely helped. Before 213-215 a');
-            log('             payment locked the WHOLE camp, so these two would match —');
-            log('             if they still match, something is serialising camp-wide.');
-        } else {
-            log('           Spreading helps because the lock is now per FAMILY, not per camp:');
-            log('             the payment itself is an insert that takes no lock at all, and');
-            log('             only the ledger post locks the one family row it writes.');
+    // Drift, then the demoted comparison — in that order, because the first
+    // decides whether the second means anything.
+    const a = spreadA.sum.rps, b = spreadB.sum.rps, on = one.sum.rps;
+    if (a > 0 && b > 0) {
+        const drift = Math.round((Math.max(a, b) / Math.min(a, b)) * 10) / 10;
+        if (drift >= 1.5) {
+            log(`           ⚠ the two identical spread bursts differ ${drift}x (${a} vs ${b}/second).`);
+            log('             The project is too noisy for the comparison below to mean much;');
+            log('             re-run, and watch the Dashboard database report while it goes.');
+        } else if (on > 0) {
+            log(`  payments: ${sN}/second over ${o.payFamilies} families, ${on}/second all on one.`);
+            log('             This is the cost of contending on a single family row, NOT evidence');
+            log('             about a camp-wide lock: one hot row can beat many cold ones.');
         }
     }
     return { seededFamilies: o.payFamilies };

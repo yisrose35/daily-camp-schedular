@@ -605,6 +605,20 @@ test('the label and the plan line both name the register count', () => {
 // asserted structurally by tests/payment_family_writers.test.js and exercised on
 // a real Postgres by scripts/pgtests; this phase is the only thing that turns it
 // into a number against a real project under real concurrency.
+//
+// These assert the phase's SHAPE, because the thing that went wrong the first
+// time was not a wrong number — it was a measurement whose answer was decided by
+// the order the bursts happened to run in. Order, warm-up and what counts as the
+// verdict are therefore all pinned here.
+
+/** Just phasePayments, so an assertion cannot pass on a match elsewhere in the file. */
+function phaseBody(src) {
+    const a = src.indexOf('async function phasePayments');
+    assert.ok(a > 0, 'phasePayments exists');
+    const b = src.indexOf('async function phaseCanteen', a);
+    assert.ok(b > a, 'and ends before the canteen phase');
+    return src.slice(a, b);
+}
 test('parseArgs takes the payments options, with sane defaults', async () => {
     const { parseArgs } = await load();
     const o = parseArgs([]);
@@ -652,23 +666,74 @@ test('every simulated payment is DISTINCT, in both modes', async () => {
         'a repeated id makes append_camp_payment return alreadyRecorded, measuring nothing');
 });
 
-test('the phase runs BOTH modes and reports them as a labelled pair', () => {
+test('the phase discards a warm-up, so no measured burst pays for the connections', () => {
     const src = require('node:fs').readFileSync(path.join(__dirname, '..', 'scripts', 'load_test.mjs'), 'utf8');
-    assert.match(src, /for \(const mode of \['spread', 'one'\]\)/);
-    assert.match(src, /payments · spread over \$\{o\.payFamilies\} families/);
-    assert.match(src, /payments · all to ONE family/);
-    // `one` must aim every payment at the same family, and `spread` must not.
-    assert.match(src, /payFamilyKey\(mode === 'one' \? 0 : i % o\.payFamilies\)/,
-        'the two modes must differ only in WHICH family is posted to');
+    const body = phaseBody(src);
+    // The warm-up must come BEFORE every measured burst, or it warms nothing.
+    const warm = body.indexOf("burst('warm'");
+    assert.ok(warm > 0, 'there is a warm-up burst');
+    for (const leg of ["burst('serial'", "burst('spreadA'", "burst('one'", "burst('spreadB'"]) {
+        assert.ok(body.indexOf(leg) > warm, `${leg} must run after the warm-up`);
+    }
+    // And it must not reach the report: a burst that is measured is not discarded.
+    assert.doesNotMatch(body, /report\.push\(\[[^\]]*warm/i, 'the warm-up is discarded, not reported');
 });
 
-test('the phase states the comparison, and warns when it fails to appear', () => {
+test('the headline is throughput against CONCURRENCY, which a lock cannot fake', () => {
     const src = require('node:fs').readFileSync(path.join(__dirname, '..', 'scripts', 'load_test.mjs'), 'utf8');
-    assert.match(src, /const ratio = Math\.round\(\(sp \/ on\) \* 10\) \/ 10;/);
-    assert.match(src, /if \(ratio < 1\.3\)/,
-        'two similar numbers is the finding that the lock did NOT go — it must be called out');
-    assert.match(src, /something is serialising camp-wide/);
-    assert.match(src, /the lock is now per FAMILY, not per camp/);
+    const body = phaseBody(src);
+    // One caller vs many, same work. This is the test the ratio could not do.
+    assert.match(body, /burst\('serial', 'spread', serialN, 1\)/,
+        'the serial leg must run at concurrency 1, whatever --concurrency says');
+    assert.match(body, /burst\('spreadA', 'spread', o\.payments, o\.concurrency\)/);
+    assert.match(body, /const scale = Math\.round\(\(sN \/ s1\) \* 10\) \/ 10;/);
+    assert.match(body, /if \(scale < 2\)/,
+        'a rate that does not rise with callers is the finding, and must be called out');
+    assert.match(body, /A camp-wide lock makes the camp ONE queue/);
+    assert.match(body, /still takes a camp-level lock/);
+});
+
+test('spread-vs-one is reported but NOT used as the verdict', () => {
+    const src = require('node:fs').readFileSync(path.join(__dirname, '..', 'scripts', 'load_test.mjs'), 'utf8');
+    const body = phaseBody(src);
+    assert.match(body, /payments · spread over \$\{o\.payFamilies\} families/);
+    assert.match(body, /payments · all to ONE family/);
+    assert.match(body, /payFamilyKey\(mode === 'one' \? 0 : i % o\.payFamilies\)/,
+        'the two modes must differ only in WHICH family is posted to');
+    // The claim the first version of this phase made, and could not support.
+    assert.match(body, /NOT evidence/,
+        'it must say outright that this comparison is not evidence about the camp lock');
+    assert.match(body, /one hot row can beat many cold ones/,
+        'and must give the reason, so the number is not re-promoted to a verdict later');
+    assert.doesNotMatch(body, /if \(ratio < 1\.3\)/,
+        'the old ratio verdict conflated a cache hit with a lock — it must be gone');
+});
+
+test('two identical spread bursts straddle `one`, so drift cannot pass as a finding', () => {
+    const src = require('node:fs').readFileSync(path.join(__dirname, '..', 'scripts', 'load_test.mjs'), 'utf8');
+    const body = phaseBody(src);
+    const a = body.indexOf("burst('spreadA'"), o = body.indexOf("burst('one'"), b = body.indexOf("burst('spreadB'");
+    assert.ok(a > 0 && o > a && b > o,
+        'spreadA then one then spreadB — a fixed order with `one` last is what biased the first version');
+    assert.match(body, /const drift = Math\.round\(\(Math\.max\(a, b\) \/ Math\.min\(a, b\)\) \* 10\) \/ 10;/);
+    assert.match(body, /if \(drift >= 1\.5\)/, 'a drifting project must invalidate the comparison, loudly');
+    assert.match(body, /too noisy for the comparison below to mean much/);
+    // The combined rate must use REAL elapsed time, not a rate reconstructed from
+    // a rounded rps.
+    assert.match(body, /spreadA\.elapsed \+ spreadB\.elapsed/);
+});
+
+test('every burst tags its payment ids, so no call in the phase repeats one', () => {
+    const src = require('node:fs').readFileSync(path.join(__dirname, '..', 'scripts', 'load_test.mjs'), 'utf8');
+    const body = phaseBody(src);
+    assert.match(body, /loadPayment\(`\$\{leg\}_\$\{i\}`, famKey\)/,
+        'ids carry the leg, or the second burst repeats the first burst\'s ids');
+    // Five legs, five distinct tags — a duplicate tag would collide ids across bursts.
+    const tags = [...body.matchAll(/burst\('(\w+)'/g)].map(m => m[1]);
+    assert.deepStrictEqual(tags, ['warm', 'serial', 'spreadA', 'one', 'spreadB']);
+    assert.strictEqual(new Set(tags).size, tags.length, 'a reused leg tag collides ids across bursts');
+    // And teardown's prefix still catches all of them.
+    for (const t of tags) assert.ok(('lt_pay_' + t).startsWith('lt_pay_'));
 });
 
 test('it calls in as the webhooks do — service role, not a browser', () => {
@@ -706,6 +771,15 @@ test('teardown removes the payment rows, the families and the document entries',
 
 test('the phase is in the default set and documented at the top', () => {
     const src = require('node:fs').readFileSync(path.join(__dirname, '..', 'scripts', 'load_test.mjs'), 'utf8');
+    // The header describes the MEASUREMENT, so it has to describe the one the code
+    // performs. The first version's header promised a spread-vs-one contrast and
+    // called it proof the camp lock was gone; that reading is what made a cold
+    // connection pool look like a lock, so the claim must not survive anywhere.
+    const header = src.slice(0, src.indexOf('import {'));
+    assert.match(header, /camp-wide lock caps throughput no matter how many callers arrive/);
+    assert.match(header, /a rate that RISES with callers is what shows the lock is gone/);
+    assert.doesNotMatch(header, /run TWICE/,
+        'the header must not still promise the contrast that could not answer the question');
     assert.match(src, /const phases = o\.phases \|\| \['reg', 'portal', 'canteen', 'payments'\];/);
     assert.match(src, /--payments N\s+payments to record/);
     assert.match(src, /--pay-families F/);
