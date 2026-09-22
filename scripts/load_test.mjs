@@ -586,7 +586,10 @@ async function phasePayments(c, o, env, report, log) {
 
     // The scaling test. Serial leg deliberately small: at concurrency 1 it costs
     // one service time per payment, so a full-size leg would dominate the run.
-    const serialN = Math.max(10, Math.min(40, o.payments));
+    // 100, not 40 — see the canteen phase. Two runs of identical work there
+    // measured the baseline at 3.2/second and 6.1/second, which inflated the
+    // headline ratio by more than 2x in both directions.
+    const serialN = Math.max(10, Math.min(100, o.payments));
     const serial = await burst('serial', 'spread', serialN, 1);
     // spread on BOTH sides of `one`, so a drifting project shows up as a gap
     // between two identical bursts rather than as a finding about families.
@@ -605,9 +608,32 @@ async function phasePayments(c, o, env, report, log) {
 
     // ── the finding ─────────────────────────────────────────────────────────
     const s1 = serial.sum.rps, sN = spreadAll.rps;
-    if (s1 > 0 && sN > 0) {
+    // A rate over calls that FAILED measures how fast the database can say no.
+    // The canteen phase printed "5.7x — the rate rises with the registers" from
+    // 340 errored purchases; the errors were in the table, but a confident
+    // sentence in English outranks a table nobody reads twice.
+    const attempted = serial.sum.count + spreadAll.count + one.sum.count;
+    const succeeded = serial.sum.ok + spreadAll.ok + one.sum.ok;
+    if (succeeded < attempted) {
+        log(`  payments: no conclusion — ${attempted - succeeded} of ${attempted} calls failed.`);
+        log('             Fix the errors above before reading any rate below.');
+    } else if (s1 > 0 && sN > 0) {
         const scale = Math.round((sN / s1) * 10) / 10;
         log(`  payments: ${s1}/second with ONE caller, ${sN}/second with ${o.concurrency} (${scale}x)`);
+
+        // The number that does not depend on the baseline: if one payment takes
+        // p50 and `concurrency` of them run at once, perfect scaling is
+        // concurrency/p50 per second.
+        if (spreadAll.p50 > 0) {
+            const ideal = o.concurrency / (spreadAll.p50 / 1000);
+            const pct = Math.round((sN / ideal) * 100);
+            log(`           ${pct}% of perfect scaling (${o.concurrency} callers at ${spreadAll.p50}ms`
+                + ` each would be ~${ideal.toFixed(0)}/second).`);
+            if (pct < 60) {
+                log('           Well under linear: something shared is binding — connections or');
+                log('             CPU rather than a row lock. That is a sizing question.');
+            }
+        }
         if (scale < 2) {
             log(`           ⚠ ${o.concurrency} callers achieved less than twice one caller's rate.`);
             log('             A camp-wide lock makes the camp ONE queue, so throughput cannot');

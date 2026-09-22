@@ -714,6 +714,23 @@ test('every simulated payment is DISTINCT, in both modes', async () => {
         'a repeated id makes append_camp_payment return alreadyRecorded, measuring nothing');
 });
 
+test('the payments phase draws no conclusion from failed calls', () => {
+    const src = require('node:fs').readFileSync(path.join(__dirname, '..', 'scripts', 'load_test.mjs'), 'utf8');
+    const body = phaseBody(src);
+    // The canteen phase printed "5.7x — the rate rises with the registers"
+    // from 340 errored purchases. Same guard here, before the same mistake.
+    assert.match(body, /const succeeded = serial\.sum\.ok \+ spreadAll\.ok \+ one\.sum\.ok;/);
+    assert.match(body, /if \(succeeded < attempted\) \{/,
+        'a rate over failing calls measures how fast the database can say no');
+    assert.match(body, /no conclusion —/);
+    // ...and a baseline big enough to divide by. The canteen's 40-sample leg
+    // swung 3.2/second to 6.1/second between two runs of identical work.
+    assert.match(body, /const serialN = Math\.max\(10, Math\.min\(100, o\.payments\)\);/);
+    // ...and the number that does not depend on the baseline at all.
+    assert.match(body, /const ideal = o\.concurrency \/ \(spreadAll\.p50 \/ 1000\);/);
+    assert.match(body, /% of perfect scaling/);
+});
+
 test('the phase discards a warm-up, so no measured burst pays for the connections', () => {
     const src = require('node:fs').readFileSync(path.join(__dirname, '..', 'scripts', 'load_test.mjs'), 'utf8');
     const body = phaseBody(src);
