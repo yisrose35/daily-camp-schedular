@@ -140,6 +140,29 @@ CREATE OR REPLACE FUNCTION public.camp_reader(p_camp_id uuid) RETURNS boolean
 LANGUAGE sql STABLE SECURITY DEFINER SET search_path = public, pg_catalog AS $$
     SELECT EXISTS (SELECT 1 FROM camps c WHERE c.id = p_camp_id AND c.owner = auth.uid())
 $$;
+
+CREATE OR REPLACE FUNCTION public.user_section_level(p_camp_id uuid, p_section text)
+RETURNS text LANGUAGE sql STABLE SECURITY DEFINER
+SET search_path = public, pg_catalog AS $$ SELECT 'edit'::text $$;
+
+-- 205's projections, so a later migration that reads them can be tried alone.
+CREATE TABLE IF NOT EXISTS public.camp_billing_config (
+    camp_id uuid PRIMARY KEY, sessions jsonb NOT NULL DEFAULT '[]'::jsonb,
+    enroll_settings jsonb NOT NULL DEFAULT '{}'::jsonb,
+    blob_updated_at timestamptz, updated_at timestamptz NOT NULL DEFAULT now());
+CREATE TABLE IF NOT EXISTS public.camp_billing_enrollments (
+    camp_id uuid NOT NULL, entry_id text NOT NULL,
+    camper_name text NOT NULL DEFAULT '', payload jsonb NOT NULL,
+    PRIMARY KEY (camp_id, entry_id));
+CREATE TABLE IF NOT EXISTS public.camp_billing_families (
+    camp_id uuid NOT NULL, family_key text NOT NULL,
+    camper_ids jsonb NOT NULL DEFAULT '[]'::jsonb, payload jsonb NOT NULL,
+    PRIMARY KEY (camp_id, family_key));
+CREATE TABLE IF NOT EXISTS public.camp_billing_payments (
+    camp_id uuid NOT NULL, seq integer NOT NULL,
+    family_name text NOT NULL DEFAULT '', family_key text NOT NULL DEFAULT '',
+    enrollment_id text NOT NULL DEFAULT '', payload jsonb NOT NULL,
+    PRIMARY KEY (camp_id, seq));
 STUBS
 
 echo "postgres $("$PGBIN/psql" -h "$SOCK" -p "$PORT" -U postgres -tAc 'show server_version') ready, stubs loaded"

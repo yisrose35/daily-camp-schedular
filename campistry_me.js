@@ -469,6 +469,10 @@ function loadData(){
         // (migration 200). Fired and not awaited: hydration must not wait on a
         // network call, and the drain re-renders when it finds anything.
         try{ _drainApplications(); }catch(_){}
+        // The payment ledger as ROWS rather than a jsonb array (migration 208,
+        // read by 210). Same shape as the drain above: fired, not awaited, and it
+        // re-renders if what it finds differs from what we hydrated with.
+        try{ _loadPaymentsFromRows(); }catch(_){}
         leads=me.leads||{};
         counselorVisibility=(me.counselorVisibility&&typeof me.counselorVisibility==='object')?me.counselorVisibility:null;
         _setupChecklistDismissed=!!me.setupChecklistDismissed;
@@ -552,7 +556,13 @@ function loadData(){
         // See the note on _loadedPayroll above — same stripped-snapshot hazard.
         _loadedFinance=(s.campistryMeFinance!==undefined)||(me.finance!==undefined);
         finStaff=fin.staff||[];finExpenses=fin.expenses||[];
-        finPayments=(me.finance&&me.finance.payments)||fin.payments||[];
+        // ★ 208/209: the rows win when we have them. camp_payments is the second
+        // home today and the only one after phase 2b, at which point the array
+        // below stops being maintained — so a reader that preferred the array
+        // would show a ledger frozen at the moment of that deploy, with no error.
+        // Preferring the rows NOW, while the two still agree, is what makes that
+        // later change safe. Same shape as _preferKey's new-home-wins rule.
+        finPayments=_paymentsFromRows||(me.finance&&me.finance.payments)||fin.payments||[];
         finBudget=fin.budget||{revenue:0,payroll:0,expenses:0};finIntegrations=fin.integrations||{};
         // Seed from the new shared field, but also from the two legacy
         // counters (nextCamperId/nextStaffId) that older saves may still
@@ -2305,6 +2315,52 @@ function _arAgingHtml(ledgers){
  * function-missing error and behaves exactly as it did before, because the blob
  * still holds everything 200's backfill copied out of it.
  */
+// ─── the payment ledger, from rows ──────────────────────────────────────────
+// Migration 208 gave payments their own rows and a trigger that keeps them in
+// step with campistryMe.finance.payments; 210 added get_camp_payments to read
+// them. Phase 2b then stops the writers maintaining the array, so this has to be
+// in place and deployed BEFORE that, while the two homes still agree — otherwise
+// the first thing anyone notices is a Billing history that stopped growing.
+//
+// Null means "we have not heard from the rows", NOT "there are no payments": an
+// empty camp legitimately answers [], and conflating the two would blank a real
+// ledger whenever the call failed. loadData only prefers a non-null value.
+var _paymentsFromRows=null;
+
+async function _loadPaymentsFromRows(){
+    var client=window.CampistryDB&&window.CampistryDB.getClient?window.CampistryDB.getClient():window.supabase;
+    var campId=window.CampistryDB&&window.CampistryDB.getCampId?window.CampistryDB.getCampId():(window.getCampId?window.getCampId():null);
+    if(!client||typeof client.rpc!=='function'||!campId)return;
+    try{
+        var res=await client.rpc('get_camp_payments',{p_camp_id:campId});
+        if(res&&res.error){
+            // A camp that has not pasted 209 yet, or a user without me.billing.
+            // Neither is worth showing: the array still has everything, which is
+            // exactly what this screen had before any of this existed.
+            console.log('[Me] payment rows unavailable:',res.error.message);
+            return;
+        }
+        var d=res&&res.data;
+        if(!d||d.success===false||!Array.isArray(d.payments))return;
+        var before=JSON.stringify(finPayments||[]);
+        _paymentsFromRows=d.payments;
+        // Re-run the normal hydration so every consumer picks the rows up through
+        // the one path, rather than this function reaching into each of them.
+        if(typeof loadData==='function')loadData();
+        // Only repaint when it actually changed. Before phase 2b the two homes
+        // agree, so this is normally a no-op and Billing must not flicker.
+        if(JSON.stringify(finPayments||[])!==before){
+            if(typeof renderBilling==='function'&&document.getElementById('page-billing'))
+                try{ renderBilling(); }catch(_){}
+        }
+    }catch(e){
+        console.warn('[Me] could not load payment rows:',e&&e.message);
+    }
+}
+// Exposed so a writer can pull the ledger forward after recording a payment,
+// without waiting for the next full page load.
+window.reloadCampistryPayments=_loadPaymentsFromRows;
+
 async function _drainApplications(){
     var M=(typeof window!=='undefined'&&window.CampistryFinanceMerge)||null;
     if(!M||typeof M.mergePublicSubmissions!=='function')return 0;
