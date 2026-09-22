@@ -531,7 +531,7 @@ test('archived history is rendered, never written back into the ledger', () => {
 test('the settings card exists and the caches are busted', () => {
     const html = read('campistry_snacks.html');
     assert.match(html, /id="ledgerCompactBox"/);
-    assert.match(html, /campistry_snacks\.js\?v=20260920-01/);
+    assert.match(html, /campistry_snacks\.js\?v=20260922-219/);
     assert.match(read('campistry_snacks_pos.html'), /campistry_snacks_pos\.js\?v=20260920-01/);
     assert.match(SNACKS, /loadPosPinStatus\(\);\s*\n\s*_renderCompactionCard\(\);/, 'rendered with the rest of Settings');
     assert.match(sourceOf(SNACKS, '_renderCompactionCard'), /min="7"/);

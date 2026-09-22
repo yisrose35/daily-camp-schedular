@@ -167,6 +167,23 @@ CREATE TABLE IF NOT EXISTS public.camp_billing_families (
     camp_id uuid NOT NULL, family_key text NOT NULL,
     camper_ids jsonb NOT NULL DEFAULT '[]'::jsonb, payload jsonb NOT NULL,
     PRIMARY KEY (camp_id, family_key));
+-- 203's canteen ledger, shape-for-shape, so a later migration that posts to it
+-- can be tried without dragging in 203's own prerequisites. The PK is what
+-- makes a double-post impossible, so it is not optional here.
+CREATE TABLE IF NOT EXISTS public.canteen_transactions (
+    camp_id    uuid        NOT NULL,
+    sig        text        NOT NULL,
+    camper     text        NOT NULL DEFAULT '',
+    camper_id  text,
+    tx_type    text        NOT NULL DEFAULT '',
+    amount     numeric     NOT NULL DEFAULT 0,
+    tx_date    text        NOT NULL DEFAULT '',
+    tx_time    text        NOT NULL DEFAULT '',
+    items      text        NOT NULL DEFAULT '',
+    payload    jsonb       NOT NULL,
+    first_seen timestamptz NOT NULL DEFAULT now(),
+    PRIMARY KEY (camp_id, sig));
+
 CREATE TABLE IF NOT EXISTS public.camp_billing_payments (
     camp_id uuid NOT NULL, seq integer NOT NULL,
     family_name text NOT NULL DEFAULT '', family_key text NOT NULL DEFAULT '',
