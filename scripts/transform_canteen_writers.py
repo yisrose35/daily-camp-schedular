@@ -43,19 +43,49 @@ def migration_number(p):
     return int(m.group(1)) if m else 0
 
 
+def _arity(args):
+    """Parameter count — the part of a signature that makes it a DIFFERENT function."""
+    args = args.strip()
+    if not args:
+        return 0
+    depth, n = 0, 1
+    for ch in args:
+        if ch in '([':
+            depth += 1
+        elif ch in ')]':
+            depth -= 1
+        elif ch == ',' and depth == 0:
+            n += 1
+    return n
+
+
 def latest_definitions():
-    """Each function's CURRENT definition — the last one to be applied wins."""
+    """
+    Each function's CURRENT definition, keyed by NAME AND ARITY.
+
+    Keyed by name alone — which is how the first version of this script did it
+    — overloads collapse and only the newest file's version is seen. Postgres
+    does not work that way: submit_shop_order(4 args) and
+    submit_shop_order(5 args) are two functions, both callable, both live.
+
+    That mistake shipped. 219 reported three functions still holding the
+    camp-wide lock where one was expected, because two superseded overloads
+    were never converted — and campistry_link_parent.html:2090 calls
+    submit_shop_order with four named arguments, so a parent buying from the
+    shop could have been routed to one of them and written a document that
+    nothing maintains any more.
+    """
     out = {}
     for f in sorted(MIG.glob('*.sql'), key=migration_number):
         if f.name.startswith('APPLY') or migration_number(f) >= OUTPUT_AT:
             continue
         s = f.read_text(errors='ignore')
-        for m in re.finditer(r'CREATE OR REPLACE FUNCTION\s+(?:public\.)?(\w+)\s*\(', s):
+        for m in re.finditer(r'CREATE OR REPLACE FUNCTION\s+(?:public\.)?(\w+)\s*\(([^)]*)\)', s):
             start = m.start()
             end = s.find('\n$$;', start)
             if end < 0:
                 continue
-            out[m.group(1)] = (f.name, s[start:end + 4])
+            out[(m.group(1), _arity(m.group(2)))] = (f.name, s[start:end + 4])
     return out
 
 
@@ -309,10 +339,10 @@ def main():
     latest = latest_definitions()
     ok, failed = [], []
     chunks = []
-    for fn in TARGETS:
-        if fn not in latest:
-            failed.append((fn, 'not found in migrations')); continue
-        src_file, body = latest[fn]
+    wanted = [k for k in sorted(latest) if k[0] in TARGETS]
+    for key in wanted:
+        fn = f'{key[0]}/{key[1]}arg'
+        src_file, body = latest[key]
         try:
             new, notes = transform(fn, body)
         except RuntimeError as e:
@@ -328,10 +358,11 @@ def main():
 
     # Anything still holding the camp-wide snacks lock anywhere, named by KEY.
     leftovers = collections.Counter()
-    for fn, (f, body) in latest.items():
+    done = {o[0] for o in ok}
+    for (nm, ar), (f, body) in latest.items():
         for key in re.findall(r"'(campistry\w+)'[^;]{0,400}?FOR UPDATE", body, re.S):
-            if fn not in [o[0] for o in ok]:
-                leftovers[(fn, key)] += 1
+            if f'{nm}/{ar}arg' not in done:
+                leftovers[(f'{nm}({ar} args)', key)] += 1
     if leftovers:
         print('\nstill locking a whole document (not converted by this run):')
         for (fn, key), n in sorted(leftovers.items()):

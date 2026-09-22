@@ -104,7 +104,18 @@ DO $$ BEGIN
   IF NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname='service_role')  THEN CREATE ROLE service_role NOLOGIN; END IF;
 END $$;
 
-CREATE EXTENSION IF NOT EXISTS pgcrypto;
+-- Supabase installs extensions into an `extensions` schema, NOT public. Every
+-- function in these migrations pins SET search_path = public, pg_catalog, so
+-- an extension function is NOT on the path there — and PL/pgSQL resolves
+-- function names at first EXECUTION, so the failure arrives at the first real
+-- call, long after the migration applied and its tests passed.
+--
+-- This stub used to do a bare CREATE EXTENSION, which puts pgcrypto in public.
+-- 219's canteen_post called digest() and passed every test here, then failed
+-- on the first live purchase with "function digest(text, unknown) does not
+-- exist". Shaped the way the real thing is shaped, that fails here instead.
+CREATE SCHEMA IF NOT EXISTS extensions;
+CREATE EXTENSION IF NOT EXISTS pgcrypto SCHEMA extensions;
 
 CREATE SCHEMA IF NOT EXISTS auth;
 CREATE TABLE IF NOT EXISTS auth.users (id uuid PRIMARY KEY, email text);

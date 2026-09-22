@@ -575,22 +575,70 @@ test('the canteen phase runs at the register count, capped by the work available
     const src = require('node:fs').readFileSync(path.join(__dirname, '..', 'scripts', 'load_test.mjs'), 'utf8');
     assert.match(src, /const tills = Math\.min\(o\.registers, o\.parents\);/,
         'never more tills than purchases to make');
-    assert.match(src, /await pool\(Array\.from\(\{ length: o\.parents \}, \(_, i\) => i\), tills,/,
+    assert.match(src, /await pool\(Array\.from\(\{ length: n \}, \(_, i\) => i\), tills,/,
         'the pool uses tills — o.concurrency here is the bug this replaced');
-    assert.doesNotMatch(src, /\}, \(_, i\) => i\), o\.concurrency, async \(i\) => \{\s*\n\s*const res = await c\.rpc\('submit_canteen_purchase'/,
-        'the old parent-concurrency call must be gone');
 });
 
-test('the canteen reports the serialized per-sale cost and the ceiling it implies', () => {
+test('the canteen seeds ROWS, because 219 stopped the document reaching them', () => {
     const src = require('node:fs').readFileSync(path.join(__dirname, '..', 'scripts', 'load_test.mjs'), 'utf8');
-    assert.match(src, /const perSale = elapsed \/ sum\.count;/, 'wall clock over purchases');
-    assert.match(src, /ms of serialized time per sale/);
-    assert.match(src, /sales\/second, whatever the register count/,
-        'the ceiling is the actionable number, not the p95 of an impossible burst');
-    assert.match(src, /Adding registers does not raise it/,
-        'a reader must not respond by buying more tills');
-    assert.match(src, /if \(sum\.count > 0 && elapsed > 0\)/,
-        'no divide-by-zero when the phase produced nothing');
+    const body = src.slice(src.indexOf('async function phaseCanteen'),
+                           src.indexOf('async function teardown('));
+    // 219 made camp_canteen_accounts the truth and dropped the projection, so
+    // seeding the document now reaches nothing: every account would be created
+    // at zero by canteen_account_lock and every sale would fail
+    // insufficient_balance — while the phase still printed a throughput number
+    // for a run in which nothing was sold.
+    assert.match(body, /c\.insert\('camp_canteen_accounts', seedRows\)/,
+        'the accounts must be seeded as rows');
+    assert.doesNotMatch(body, /upsertKvMerge\(env\.CAMP_ID, 'campistrySnacks'/,
+        'seeding the document no longer reaches the accounts that serve the POS');
+    // A second run must not collide on the primary key, and must start from a
+    // full balance or the daily cap refuses sales partway through.
+    assert.match(body, /c\.del\('camp_canteen_accounts',[\s\S]{0,120}?Load Camper/,
+        'cleared before seeding');
+});
+
+test('the canteen measures SCALING now, not a ceiling it no longer has', () => {
+    const src = require('node:fs').readFileSync(path.join(__dirname, '..', 'scripts', 'load_test.mjs'), 'utf8');
+    const body = src.slice(src.indexOf('async function phaseCanteen'),
+                           src.indexOf('async function teardown('));
+    // The old phase asserted a camp-wide ceiling as a fact — "adding registers
+    // does not raise it". After 219/220 that sentence is false, and a report
+    // that states it would tell the reader the opposite of what was achieved.
+    assert.doesNotMatch(body, /whatever the register count/);
+    assert.doesNotMatch(body, /Adding registers does not raise it/);
+    // One register against many, same work: a camp-wide lock cannot let the
+    // rate rise, so a rise is the proof it is gone.
+    assert.match(body, /const serial = await burst\(serialN, 1\);/,
+        'the serial leg must run at ONE register whatever --registers says');
+    assert.match(body, /const scale = Math\.round\(\(sN \/ s1\) \* 10\) \/ 10;/);
+    assert.match(body, /if \(scale < 1\.5\)/,
+        'a rate that does not rise with registers is the finding, and must be called out');
+    assert.match(body, /still serialising the camp/);
+    // ...and a discarded warm-up, so the first measured burst does not pay for
+    // opening the connections the second one reuses.
+    assert.match(body, /const warm = Math\.min\(30, o\.parents\);/);
+    assert.ok(body.indexOf('const warm =') < body.indexOf('const serial ='),
+        'the warm-up must run before anything measured');
+});
+
+test('the canteen reports efficiency against linear, not just a ratio', () => {
+    const src = require('node:fs').readFileSync(path.join(__dirname, '..', 'scripts', 'load_test.mjs'), 'utf8');
+    const body = src.slice(src.indexOf('async function phaseCanteen'),
+                           src.indexOf('async function teardown('));
+    // Two consecutive runs of identical work measured the one-register leg at
+    // 3.2/second and then 6.1/second, which inflated the headline ratio to 15x
+    // and 13.2x when the truth was near-linear both times. A baseline that
+    // swings 2x between runs is not a baseline.
+    assert.match(body, /const serialN = Math\.max\(10, Math\.min\(100, o\.parents\)\);/,
+        'the baseline leg needs enough samples to divide by');
+    // tills/p50 is what perfect scaling would be; the fraction achieved says
+    // the same thing as the ratio without a noisy denominator.
+    assert.match(body, /const ideal = tills \/ \(full\.sum\.p50 \/ 1000\);/);
+    assert.match(body, /% of perfect scaling/);
+    assert.match(body, /if \(pct < 60\)/,
+        'well under linear is a finding, and names the likely cause');
+    assert.match(body, /connections/);
 });
 
 test('the label and the plan line both name the register count', () => {
@@ -664,6 +712,23 @@ test('every simulated payment is DISTINCT, in both modes', async () => {
     // run would measure a lookup instead of contention on the family row.
     assert.strictEqual(ids.size, 100,
         'a repeated id makes append_camp_payment return alreadyRecorded, measuring nothing');
+});
+
+test('the payments phase draws no conclusion from failed calls', () => {
+    const src = require('node:fs').readFileSync(path.join(__dirname, '..', 'scripts', 'load_test.mjs'), 'utf8');
+    const body = phaseBody(src);
+    // The canteen phase printed "5.7x — the rate rises with the registers"
+    // from 340 errored purchases. Same guard here, before the same mistake.
+    assert.match(body, /const succeeded = serial\.sum\.ok \+ spreadAll\.ok \+ one\.sum\.ok;/);
+    assert.match(body, /if \(succeeded < attempted\) \{/,
+        'a rate over failing calls measures how fast the database can say no');
+    assert.match(body, /no conclusion —/);
+    // ...and a baseline big enough to divide by. The canteen's 40-sample leg
+    // swung 3.2/second to 6.1/second between two runs of identical work.
+    assert.match(body, /const serialN = Math\.max\(10, Math\.min\(100, o\.payments\)\);/);
+    // ...and the number that does not depend on the baseline at all.
+    assert.match(body, /const ideal = o\.concurrency \/ \(spreadAll\.p50 \/ 1000\);/);
+    assert.match(body, /% of perfect scaling/);
 });
 
 test('the phase discards a warm-up, so no measured burst pays for the connections', () => {

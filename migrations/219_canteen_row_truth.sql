@@ -212,9 +212,17 @@ SECURITY DEFINER
 SET search_path = public, pg_catalog
 AS $$
 DECLARE
+    -- md5(), not digest(). digest() is pgcrypto, and on Supabase pgcrypto lives
+    -- in the `extensions` schema — not on the search_path this function pins.
+    -- PL/pgSQL resolves function names at first EXECUTION, so the original
+    -- applied cleanly, passed its tests and then failed on the first real
+    -- purchase. md5() is core pg_catalog: nothing to install, nothing to
+    -- resolve. The signature is a dedupe key for rows this function wrote
+    -- itself, not a security primitive — the primary key on (camp_id, sig) is
+    -- what makes a double-post impossible.
     v_sig text := COALESCE(p_sig,
-        'row:' || encode(digest(p_camp_id::text || '|' || p_key || '|' || p_tx::text
-                                || '|' || clock_timestamp()::text, 'sha256'), 'hex'));
+        'row:' || md5(p_camp_id::text || '|' || p_key || '|' || p_tx::text
+                      || '|' || clock_timestamp()::text));
 BEGIN
     INSERT INTO canteen_transactions
         (camp_id, sig, camper, camper_id, tx_type, amount, tx_date, tx_time, items, payload)
