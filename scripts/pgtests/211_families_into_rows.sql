@@ -23,13 +23,13 @@ BEGIN
     SELECT count(*) INTO n FROM camp_families
      WHERE camp_id = '77777777-7777-7777-7777-777777777777' AND deleted_at IS NULL;
     IF n <> 2 THEN RAISE EXCEPTION 'expected 2 live families (the non-object skipped), got %', n; END IF;
-    IF EXISTS (SELECT 1 FROM camp_families WHERE family_key = 'bad') THEN
+    IF EXISTS (SELECT 1 FROM camp_families WHERE camp_id = '77777777-7777-7777-7777-777777777777' AND family_key = 'bad') THEN
         RAISE EXCEPTION 'a non-object families entry was projected';
     END IF;
-    IF (SELECT name FROM camp_families WHERE family_key = 'fk1') <> 'Cohen' THEN
+    IF (SELECT name FROM camp_families WHERE camp_id = '77777777-7777-7777-7777-777777777777' AND family_key = 'fk1') <> 'Cohen' THEN
         RAISE EXCEPTION 'name was not extracted';
     END IF;
-    IF (SELECT jsonb_array_length(camper_ids) FROM camp_families WHERE family_key = 'fk2') <> 2 THEN
+    IF (SELECT jsonb_array_length(camper_ids) FROM camp_families WHERE camp_id = '77777777-7777-7777-7777-777777777777' AND family_key = 'fk2') <> 2 THEN
         RAISE EXCEPTION 'camperIds were not extracted';
     END IF;
     r := public.verify_camp_families('77777777-7777-7777-7777-777777777777');
@@ -47,14 +47,14 @@ END $$;
 DO $$
 DECLARE t2_before timestamptz; t2_after timestamptz; r jsonb;
 BEGIN
-    SELECT updated_at INTO t2_before FROM camp_families WHERE family_key = 'fk2';
+    SELECT updated_at INTO t2_before FROM camp_families WHERE camp_id = '77777777-7777-7777-7777-777777777777' AND family_key = 'fk2';
     UPDATE camp_state_kv
        SET value = jsonb_set(value, '{families,fk1,charges}',
                (value -> 'families' -> 'fk1' -> 'charges')
                || jsonb_build_array(jsonb_build_object('amount',50,'date','2026-06-05','description','Store'))),
            updated_at = now()
      WHERE camp_id = '77777777-7777-7777-7777-777777777777' AND key = 'campistryMe';
-    SELECT updated_at INTO t2_after FROM camp_families WHERE family_key = 'fk2';
+    SELECT updated_at INTO t2_after FROM camp_families WHERE camp_id = '77777777-7777-7777-7777-777777777777' AND family_key = 'fk2';
     IF t2_after IS DISTINCT FROM t2_before THEN
         RAISE EXCEPTION 'editing fk1 rewrote fk2 (% -> %)', t2_before, t2_after;
     END IF;
@@ -94,10 +94,10 @@ BEGIN
      WHERE camp_id = '77777777-7777-7777-7777-777777777777';
     IF n <> 2 THEN RAISE EXCEPTION 'the row was destroyed rather than stamped: % rows left', n; END IF;
 
-    SELECT deleted_at INTO d FROM camp_families WHERE family_key = 'fk2';
+    SELECT deleted_at INTO d FROM camp_families WHERE camp_id = '77777777-7777-7777-7777-777777777777' AND family_key = 'fk2';
     IF d IS NULL THEN RAISE EXCEPTION 'a removed family was not stamped deleted'; END IF;
     -- Its charges are still there, which is the whole point.
-    IF (SELECT jsonb_array_length(payload -> 'charges') FROM camp_families WHERE family_key = 'fk2') <> 1 THEN
+    IF (SELECT jsonb_array_length(payload -> 'charges') FROM camp_families WHERE camp_id = '77777777-7777-7777-7777-777777777777' AND family_key = 'fk2') <> 1 THEN
         RAISE EXCEPTION 'a soft-deleted family lost its charges';
     END IF;
 
@@ -118,11 +118,11 @@ END $$;
 DO $$
 DECLARE d1 timestamptz; d2 timestamptz;
 BEGIN
-    SELECT deleted_at INTO d1 FROM camp_families WHERE family_key = 'fk2';
+    SELECT deleted_at INTO d1 FROM camp_families WHERE camp_id = '77777777-7777-7777-7777-777777777777' AND family_key = 'fk2';
     UPDATE camp_state_kv
        SET value = jsonb_set(value, '{families,fk1,name}', '"Cohen-Gold"'::jsonb), updated_at = now()
      WHERE camp_id = '77777777-7777-7777-7777-777777777777' AND key = 'campistryMe';
-    SELECT deleted_at INTO d2 FROM camp_families WHERE family_key = 'fk2';
+    SELECT deleted_at INTO d2 FROM camp_families WHERE camp_id = '77777777-7777-7777-7777-777777777777' AND family_key = 'fk2';
     IF d2 IS DISTINCT FROM d1 THEN
         RAISE EXCEPTION 'a later save rewrote an existing delete stamp (% -> %)', d1, d2;
     END IF;
@@ -143,7 +143,7 @@ BEGIN
            updated_at = now()
      WHERE camp_id = '77777777-7777-7777-7777-777777777777' AND key = 'campistryMe';
 
-    SELECT deleted_at INTO d FROM camp_families WHERE family_key = 'fk2';
+    SELECT deleted_at INTO d FROM camp_families WHERE camp_id = '77777777-7777-7777-7777-777777777777' AND family_key = 'fk2';
     IF d IS NOT NULL THEN RAISE EXCEPTION 'a family that came back is still stamped deleted'; END IF;
 
     r := public.verify_camp_families('77777777-7777-7777-7777-777777777777');
@@ -163,7 +163,7 @@ BEGIN
     UPDATE camp_state_kv
        SET value = jsonb_set(value, '{families}', (value -> 'families') - 'fk2'), updated_at = now()
      WHERE camp_id = '77777777-7777-7777-7777-777777777777' AND key = 'campistryMe';
-    SELECT deleted_at INTO d1 FROM camp_families WHERE family_key = 'fk2';
+    SELECT deleted_at INTO d1 FROM camp_families WHERE camp_id = '77777777-7777-7777-7777-777777777777' AND family_key = 'fk2';
     IF d1 IS NULL THEN RAISE EXCEPTION 'setup: fk2 should be stamped'; END IF;
 
     -- The migration's backfill shape, re-run. It must NOT clear deleted_at.
@@ -181,7 +181,7 @@ BEGIN
        SET name = EXCLUDED.name, camper_ids = EXCLUDED.camper_ids,
            payload = EXCLUDED.payload, updated_at = now();
 
-    SELECT deleted_at INTO d2 FROM camp_families WHERE family_key = 'fk2';
+    SELECT deleted_at INTO d2 FROM camp_families WHERE camp_id = '77777777-7777-7777-7777-777777777777' AND family_key = 'fk2';
     IF d2 IS DISTINCT FROM d1 THEN
         RAISE EXCEPTION 're-running the backfill disturbed a delete stamp (% -> %)', d1, d2;
     END IF;
