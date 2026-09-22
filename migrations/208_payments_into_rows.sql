@@ -79,7 +79,7 @@
 -- function nobody asked about, the whole transaction rolls back, and the only
 -- visible symptom is that verify_camp_payments "does not exist" — which sends
 -- you looking at the wrong file. So say it plainly and up front instead.
-DO $preflight$
+DO $$
 DECLARE
     v_missing text[] := ARRAY[]::text[];
 BEGIN
@@ -108,11 +108,11 @@ BEGIN
     END IF;
 
     IF array_length(v_missing, 1) > 0 THEN
-        RAISE EXCEPTION E'208 cannot be applied yet. Missing:\n  - %',
-            array_to_string(v_missing, E'\n  - ');
+        RAISE EXCEPTION 'migration 208 cannot be applied yet. Missing: %',
+            array_to_string(v_missing, '; ');
     END IF;
 END
-$preflight$;
+$$;
 
 
 -- ─── 1. the identity ────────────────────────────────────────────────────────
@@ -445,3 +445,18 @@ GRANT EXECUTE ON FUNCTION public.verify_camp_payments(uuid) TO authenticated, se
 --   * 205's camp_billing_payments projection is left alone. It becomes
 --     redundant in phase 2 and gets retired there, not here, so that a rollback
 --     of phase 2 has somewhere to land.
+
+
+-- ─── did it work? ───────────────────────────────────────────────────────────
+-- Deliberately the LAST thing in the file, and deliberately a statement rather
+-- than a comment. A rolled-back paste leaves nothing behind and prints nothing
+-- to notice, so the first sign of trouble was the NEXT query failing on a
+-- function that "does not exist" — which sent the reader to the wrong file,
+-- twice. If you can see this row, everything above it committed.
+SELECT 'migration 208 applied'                                        AS status,
+       (SELECT count(*) FROM public.camp_payments)                    AS payment_rows,
+       (SELECT count(DISTINCT camp_id) FROM public.camp_payments)      AS camps_with_payments,
+       to_regprocedure('public.verify_camp_payments(uuid)') IS NOT NULL AS verify_ready,
+       to_regprocedure('public.camp_payment_identity(jsonb)') IS NOT NULL AS identity_ready,
+       (SELECT count(*) FROM pg_trigger
+         WHERE tgname = 'trg_project_camp_payments' AND NOT tgisinternal) AS triggers_installed;
