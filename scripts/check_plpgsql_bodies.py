@@ -35,8 +35,31 @@ def statements(body):
     # Comments first. 'FOR UPDATE on the registry' in a comment is not an UPDATE,
     # and searching before stripping turned prose into a parse failure.
     body = '\n'.join(re.sub(r'--.*$', '', ln) for ln in body.split('\n'))
-    for raw in body.split(';'):
-        m = re.search(r'\b(UPDATE|INSERT INTO|DELETE FROM)\b', raw, re.I)
+    # Splitting on ';' cuts a string literal that contains one in half, and the
+    # halves then fail as "unterminated quoted string" — a false failure on real,
+    # valid SQL (migration 182 had one). Rejoin chunks until the quotes balance.
+    chunks, pending = [], ''
+    for part in body.split(';'):
+        pending = part if pending == '' else pending + ';' + part
+        if pending.count("'") % 2 == 0:
+            chunks.append(pending)
+            pending = ''
+    if pending:
+        chunks.append(pending)
+    for raw in chunks:
+        # A row-locking clause is not a statement. `SELECT ... FOR UPDATE` used to
+        # match on the word UPDATE, leaving `s` as the bare token "UPDATE", which
+        # pglast reports as "syntax error at end of input" — so this script FAILED
+        # on 168, 172 and 178, the three files with the most money in them, and
+        # had been doing so silently. Take the first match that is a real
+        # statement, skipping FOR UPDATE and FOR NO KEY UPDATE.
+        m = None
+        for cand in re.finditer(r'\b(UPDATE|INSERT INTO|DELETE FROM)\b', raw, re.I):
+            before = raw[:cand.start()].rstrip().upper()
+            if before.endswith('FOR') or before.endswith('FOR NO KEY'):
+                continue
+            m = cand
+            break
         if not m:
             continue
         s = raw[m.start():].strip()
@@ -47,6 +70,14 @@ def statements(body):
         if ':=' in s:
             continue
         if re.match(r'^SELECT', s, re.I):
+            continue
+        # `RETURNING <expr> INTO <vars>` is plpgsql, not SQL, so pglast rejects a
+        # perfectly good INSERT for its tail. Drop the INTO clause and check the
+        # statement that remains. This was failing on 23 files — every trigger
+        # that inserts a row and keeps its id — so those bodies were never
+        # checked at all.
+        s = re.sub(r'(\bRETURNING\b[\s\S]*?)\bINTO\b[\s\S]*$', r'\1', s, flags=re.I).strip()
+        if not s:
             continue
         out.append(s)
     return out
