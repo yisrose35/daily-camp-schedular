@@ -230,10 +230,12 @@
         <div><h1>Camper Mail</h1><p>Letters families write in Campistry Link — print them and hand them out</p></div>
     </div>
     <div class="page-header">
-        <div style="display:flex;gap:6px;align-items:center;">
+        <div style="display:flex;gap:6px;align-items:center;flex-wrap:wrap;">
             <button class="btn btn-secondary btn-sm mail-tab active" data-mailtab="new" onclick="CamperMail.tab('new',this)">To print</button>
             <button class="btn btn-secondary btn-sm mail-tab" data-mailtab="printed" onclick="CamperMail.tab('printed',this)">Printed</button>
-            <select class="btn btn-secondary btn-sm" id="mailDivFilter" onchange="CamperMail.render()" style="min-width:140px;"><option value="">All divisions</option></select>
+            <select class="btn btn-secondary btn-sm" id="mailDivFilter" onchange="CamperMail.apply()" style="min-width:140px;"><option value="">All divisions</option></select>
+            <select class="btn btn-secondary btn-sm" id="mailSourceFilter" onchange="CamperMail.apply()" style="min-width:110px;"><option value="">All sources</option><option value="email">Email</option><option value="link">In-app</option></select>
+            <input type="text" id="mailSearch" oninput="CamperMail.apply()" placeholder="Search camper, parent, subject…" style="border:1px solid var(--slate-200);border-radius:6px;padding:6px 10px;font-size:.82rem;min-width:200px;">
         </div>
         <div class="page-actions">
             <button class="btn btn-secondary" onclick="CamperMail.render()"><svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M1 4v6h6"/><path d="M23 20v-6h-6"/><path d="M20.49 9A9 9 0 005.64 5.64L1 10m22 4l-4.64 4.36A9 9 0 013.51 15"/></svg> Refresh</button>
@@ -1324,7 +1326,8 @@ var CamperMail = (function(){
           +'<div style="flex:1;min-width:200px;"><div style="font-size:.72rem;font-weight:700;text-transform:uppercase;letter-spacing:.05em;color:var(--slate-500);margin-bottom:4px;">Families can email letters here</div>'
           +'<div style="font-family:ui-monospace,Menlo,monospace;font-size:.92rem;font-weight:700;color:var(--slate-800);word-break:break-all;">'+esc(addr)+'</div>'
           +'<div style="font-size:.72rem;color:var(--slate-400);margin-top:4px;">Any letter a parent emails here lands in this list, ready to print — matched to their camper automatically.</div>'
-          +((_settings&&_settings.campNumber)?'<div style="font-size:.72rem;color:var(--slate-400);margin-top:6px;">Emailing from a different address? Families just add their camper code — <strong style="color:var(--slate-600);">'+esc(_settings.campNumber)+'-&lt;camper #&gt;</strong> — to the subject or first line, and it still reaches the right child.</div>':'')+'</div>'
+          +((_settings&&_settings.campNumber)?'<div style="font-size:.72rem;color:var(--slate-400);margin-top:6px;">Emailing from a different address? Families just add their camper code — <strong style="color:var(--slate-600);">'+esc(_settings.campNumber)+'-&lt;camper #&gt;</strong> — to the subject or first line, and it still reaches the right child.</div>':'')
+          +'<label style="display:flex;align-items:center;gap:8px;margin-top:10px;font-size:.76rem;color:var(--slate-500);cursor:pointer;"><input type="checkbox" '+(_settings.deleteOnPrint?'checked':'')+' onchange="CamperMail.setDeleteOnPrint(this.checked)" style="width:15px;height:15px;"> Delete letters once printed <span style="color:var(--slate-400);">(otherwise they move to “Printed” and stay until you delete them)</span></label></div>'
           +'<button class="btn btn-secondary btn-sm" onclick="CamperMail.copyAddress()">Copy</button>'
           +'</div></div>';
     }
@@ -1344,6 +1347,53 @@ var CamperMail = (function(){
         var cid=(c&&c.camperId!=null)?String(c.camperId).replace(/\D/g,''):'';
         return cid?(_settings.campNumber+'-'+cid):'';
     }
+    // A forwarded email drags in "---------- Forwarded message ----------" plus a
+    // block of From:/Date:/Subject:/To: header lines before the actual letter.
+    // Strip that boilerplate for display and printing (the raw is kept in the DB),
+    // leaving just what the family wrote.
+    function _cleanBody(raw){
+        var lines=String(raw==null?'':raw).replace(/\r\n/g,'\n').split('\n');
+        var fwdDiv=/^\s*(?:-{2,}\s*)?(?:begin\s+)?forwarded message\s*:?\s*(?:-{2,}\s*)?$/i;
+        var hdr=/^\s*(from|to|cc|bcc|date|sent|subject|reply-to)\s*:/i;
+        var out=[];
+        for(var i=0;i<lines.length;i++){
+            if(fwdDiv.test(lines[i])){
+                var j=i+1;
+                while(j<lines.length && (hdr.test(lines[j]) || lines[j].trim()==='')) j++;
+                i=j-1;
+                continue;
+            }
+            out.push(lines[i]);
+        }
+        return out.join('\n').replace(/\n{3,}/g,'\n\n').replace(/^\s+|\s+$/g,'');
+    }
+
+    // ── delete + "delete once printed" ───────────────────────────────────────
+    function del(id){
+        var m=_rows.find(function(x){return x.id===id;}); if(!m)return;
+        if(!window.confirm('Delete this letter? This can’t be undone.')) return;
+        var db=_db();
+        if(db){ db.client.from('link_camper_mail').delete().eq('id',id).then(function(res){ if(res.error){ console.warn('[Live] delete mail:',res.error.message); _toast('Could not delete — check your permissions'); } }); }
+        _rows=_rows.filter(function(x){return x.id!==id;}); delete _sel[id];
+        badge(); _render(); _toast('Letter deleted');
+    }
+    function _deletePrinted(ids){
+        var db=_db();
+        if(db){ db.client.from('link_camper_mail').delete().in('id',ids).then(function(res){ if(res.error)console.warn('[Live] delete printed:',res.error.message); }); }
+        _rows=_rows.filter(function(m){ return ids.indexOf(m.id)<0; });
+        _sel={}; badge(); _render();
+        _toast(ids.length+' letter'+(ids.length!==1?'s':'')+' printed and removed');
+    }
+    function _afterPrint(ids){ if(_settings&&_settings.deleteOnPrint){ _deletePrinted(ids); } else { _markPrinted(ids); } }
+    function setDeleteOnPrint(v){
+        var db=_db(); if(!db||!_settings)return;
+        _settings.deleteOnPrint=!!v;
+        db.client.rpc('set_camper_mail_inbox_settings',{p_camp_id:db.campId,p_delete_on_print:!!v}).then(function(res){
+            if(res.error||!(res.data&&res.data.success)){ _toast('Could not save setting'); _settings.deleteOnPrint=!v; }
+            else { _toast(v?'Letters will be removed after printing':'Printed letters will be kept'); }
+        },function(){ _toast('Could not save setting'); });
+    }
+    function apply(){ _render(); }
     var _assignCtx=null;
     function _pickRows(id,q){
         if(!_assignCtx) return '';
@@ -1401,7 +1451,16 @@ var CamperMail = (function(){
         var divSel=document.getElementById('mailDivFilter');
         if(divSel){ var cur=divSel.value; var divs={}; _rows.forEach(function(m){if(m.division)divs[m.division]=1;}); divSel.innerHTML='<option value="">All divisions</option>'+Object.keys(divs).sort().map(function(d){return '<option value="'+esc(d)+'">'+esc(d)+'</option>';}).join(''); divSel.value=cur; }
         var dv=divSel?divSel.value:'';
-        var rows=_rows.filter(function(m){ if(_tab==='new'&&m.status==='printed')return false; if(_tab==='printed'&&m.status!=='printed')return false; if(dv&&m.division!==dv)return false; return true; });
+        var srcSel=document.getElementById('mailSourceFilter'), src=srcSel?srcSel.value:'';
+        var q=((document.getElementById('mailSearch')||{}).value||'').toLowerCase().trim();
+        var rows=_rows.filter(function(m){
+            if(_tab==='new'&&m.status==='printed')return false;
+            if(_tab==='printed'&&m.status!=='printed')return false;
+            if(dv&&m.division!==dv)return false;
+            if(src&&(m.source||'link')!==src)return false;
+            if(q){ var hay=[m.camper,m.parentName,m.subject,m.bunk,m.division,m.grade,m.body].join(' ').toLowerCase(); if(hay.indexOf(q)<0)return false; }
+            return true;
+        });
         if(!rows.length){ el.innerHTML=_addressCard()+'<div class="empty-state">'+(_tab==='new'?'Nothing waiting to print — letters families write in Campistry Link, or email to the address above, appear here.':'No printed letters yet.')+'</div>'; return; }
         // Grouped in the exact order they'll print, so what you see is the pile
         // you'll get. A subheader marks each division · grade · bunk run.
@@ -1417,9 +1476,9 @@ var CamperMail = (function(){
             return head+'<div style="display:flex;align-items:center;gap:10px;padding:12px 0;border-bottom:1px solid var(--slate-100);">'
               +'<input type="checkbox" '+(_sel[m.id]?'checked':'')+' onchange="CamperMail.sel(\''+esc(m.id)+'\',this.checked)" style="width:16px;height:16px;flex-shrink:0;">'
               +'<div style="flex:1;min-width:0;"><div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;"><span style="font-weight:700;">'+esc(m.camper)+'</span>'+(where?'<span style="font-size:.72rem;color:var(--slate-400);">'+esc(where)+'</span>':'')+b+'</div>'
-              +'<div style="font-size:.75rem;color:var(--slate-500);margin-top:2px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">'+(m.subject?'<strong>'+esc(m.subject)+'</strong> — ':'')+esc(String(m.body).slice(0,100))+'</div></div>'
+              +'<div style="font-size:.75rem;color:var(--slate-500);margin-top:2px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">'+(m.subject?'<strong>'+esc(m.subject)+'</strong> — ':'')+esc(_cleanBody(m.body).slice(0,100))+'</div></div>'
               +'<span style="font-size:.72rem;color:var(--slate-400);white-space:nowrap;">From '+esc(m.parentName||'parent')+' · '+d+'</span>'
-              +'<div style="display:flex;gap:5px;flex-shrink:0;">'+((_settings&&_isUnassigned(m))?'<button class="btn btn-secondary btn-sm" onclick="CamperMail.assign(\''+esc(m.id)+'\')">Assign</button>':'')+'<button class="btn btn-secondary btn-sm" onclick="CamperMail.view(\''+esc(m.id)+'\')">Read</button><button class="btn btn-primary btn-sm" onclick="CamperMail.print([\''+esc(m.id)+'\'])">Print</button></div>'
+              +'<div style="display:flex;gap:5px;flex-shrink:0;">'+((_settings&&_isUnassigned(m))?'<button class="btn btn-secondary btn-sm" onclick="CamperMail.assign(\''+esc(m.id)+'\')">Assign</button>':'')+'<button class="btn btn-secondary btn-sm" onclick="CamperMail.view(\''+esc(m.id)+'\')">Read</button><button class="btn btn-primary btn-sm" onclick="CamperMail.print([\''+esc(m.id)+'\'])">Print</button>'+(_settings?'<button class="btn btn-secondary btn-sm" onclick="CamperMail.del(\''+esc(m.id)+'\')" title="Delete">Delete</button>':'')+'</div>'
               +'</div>';
         }).join('')+'</div></div>';
     }
@@ -1432,7 +1491,7 @@ var CamperMail = (function(){
         el.style.cssText='position:fixed;inset:0;background:rgba(0,0,0,.4);z-index:9100;display:flex;align-items:center;justify-content:center;padding:20px;';
         el.innerHTML='<div style="background:#fff;border-radius:14px;max-width:560px;width:100%;max-height:82vh;overflow-y:auto;box-shadow:0 20px 60px rgba(0,0,0,.2);">'
           +'<div style="display:flex;align-items:center;justify-content:space-between;padding:16px 20px;border-bottom:1px solid var(--slate-200);position:sticky;top:0;background:#fff;"><span style="font-size:.92rem;font-weight:700;">Letter for '+esc(m.camper)+'</span><div style="display:flex;gap:6px;"><button class="btn btn-primary btn-sm" onclick="CamperMail.print([\''+esc(m.id)+'\']);this.closest(\'[style*=fixed]\').remove()">Print</button><button class="btn btn-secondary btn-sm" onclick="this.closest(\'[style*=fixed]\').remove()">Close</button></div></div>'
-          +'<div style="padding:18px 20px;"><div style="font-size:.74rem;color:var(--slate-400);margin-bottom:12px;">From '+esc(m.parentName||'parent')+' · '+esc(d)+([m.division,m.grade,m.bunk].filter(Boolean).length?' · '+esc([m.division,m.grade,m.bunk].filter(Boolean).join(' · ')):'')+'</div>'+(m.subject?'<div style="font-size:1rem;font-weight:700;margin-bottom:10px;">'+esc(m.subject)+'</div>':'')+'<div style="font-size:.9rem;line-height:1.7;color:var(--slate-800);white-space:pre-wrap;">'+esc(m.body)+'</div></div></div>';
+          +'<div style="padding:18px 20px;"><div style="font-size:.74rem;color:var(--slate-400);margin-bottom:12px;">From '+esc(m.parentName||'parent')+' · '+esc(d)+([m.division,m.grade,m.bunk].filter(Boolean).length?' · '+esc([m.division,m.grade,m.bunk].filter(Boolean).join(' · ')):'')+'</div>'+(m.subject?'<div style="font-size:1rem;font-weight:700;margin-bottom:10px;">'+esc(m.subject)+'</div>':'')+'<div style="font-size:.9rem;line-height:1.7;color:var(--slate-800);white-space:pre-wrap;">'+esc(_cleanBody(m.body))+'</div></div></div>';
         el.addEventListener('click',function(e){ if(e.target===el) el.remove(); });
         document.body.appendChild(el);
     }
@@ -1455,7 +1514,7 @@ var CamperMail = (function(){
               +'<div class="lt-head"><div class="lt-camp">'+esc(camp)+' — Camper Mail</div><div class="lt-date">'+esc(d)+'</div></div>'
               +'<div class="lt-to">To: <strong>'+esc(m.camper)+'</strong></div>'
               +(m.subject?'<div class="lt-subject">'+esc(m.subject)+'</div>':'')
-              +'<div class="lt-body">'+esc(m.body)+'</div></div>';
+              +'<div class="lt-body">'+esc(_cleanBody(m.body))+'</div></div>';
         }).join('');
         var w=window.open('','_blank');
         if(!w){ _toast('Allow pop-ups to print letters'); return; }
@@ -1476,7 +1535,7 @@ var CamperMail = (function(){
           +'</style></head><body>'+pages+'</body></html>');
         w.document.close(); w.focus();
         setTimeout(function(){ w.print(); },250);
-        _markPrinted(ids);
+        _afterPrint(ids);
     }
     function _markPrinted(ids){
         var db=_db(), iso=new Date().toISOString();
@@ -1490,7 +1549,7 @@ var CamperMail = (function(){
 
     // Prime the sidebar badge on load.
     load(function(){ badge(); });
-    return { render:render, tab:tab, sel:sel, view:view, print:print, printSelected:printSelected, printAllNew:printAllNew, copyAddress:copyAddress, assign:assign, _pick:_pick, _pickRows:_pickRows };
+    return { render:render, tab:tab, sel:sel, view:view, print:print, printSelected:printSelected, printAllNew:printAllNew, copyAddress:copyAddress, assign:assign, _pick:_pick, _pickRows:_pickRows, apply:apply, del:del, setDeleteOnPrint:setDeleteOnPrint };
 })();
 </script>
 <script src="campistry_notes_quick.js?v=20260903-03"></script>
