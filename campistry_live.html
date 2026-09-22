@@ -1455,8 +1455,7 @@ var CamperMail = (function(){
               +'<div class="lt-head"><div class="lt-camp">'+esc(camp)+' — Camper Mail</div><div class="lt-date">'+esc(d)+'</div></div>'
               +'<div class="lt-to">To: <strong>'+esc(m.camper)+'</strong></div>'
               +(m.subject?'<div class="lt-subject">'+esc(m.subject)+'</div>':'')
-              +'<div class="lt-body">'+esc(m.body)+'</div>'
-              +'<div class="lt-from">— From '+esc(m.parentName||'your family')+', with love ❤</div></div>';
+              +'<div class="lt-body">'+esc(m.body)+'</div></div>';
         }).join('');
         var w=window.open('','_blank');
         if(!w){ _toast('Allow pop-ups to print letters'); return; }
@@ -1473,7 +1472,6 @@ var CamperMail = (function(){
           +'.lt-to{font-size:15px;margin-bottom:18px;color:#333;}'
           +'.lt-subject{font-size:22px;font-weight:bold;margin-bottom:16px;}'
           +'.lt-body{font-size:16px;line-height:1.9;white-space:pre-wrap;}'
-          +'.lt-from{margin-top:34px;font-size:15px;font-style:italic;color:#444;}'
           +'@media print{.letter{min-height:auto;}}'
           +'</style></head><body>'+pages+'</body></html>');
         w.document.close(); w.focus();

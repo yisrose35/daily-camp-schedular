@@ -200,22 +200,6 @@ function htmlToText(html: string): string {
     .trim();
 }
 
-// Strip a "> quoted"/"On <date> ... wrote:" trailer so only the parent's own
-// words print, not the whole thread they replied into.
-function stripQuotedTrailer(text: string): string {
-  const lines = String(text || "").split("\n");
-  const markers = [
-    /^\s*On\s.+\bwrote:\s*$/i,
-    /^\s*-{2,}\s*Original Message\s*-{2,}\s*$/i,
-    /^\s*_{5,}\s*$/,
-    /^\s*From:\s.+@/i,
-  ];
-  for (let i = 0; i < lines.length; i++) {
-    if (markers.some((re) => re.test(lines[i]))) return lines.slice(0, i).join("\n").trim();
-  }
-  return text;
-}
-
 // Which candidate did the parent name in the subject/body? Only decisive when
 // exactly one candidate name appears — two children named, or none, and a human
 // assigns it. Word-boundary match so "Ann" doesn't hit "Anna".
@@ -299,7 +283,10 @@ serve(async (req) => {
   } else if (!text && html) {
     text = htmlToText(html);
   }
-  const body = stripQuotedTrailer(text).slice(0, 20000);
+  // Keep the whole message — a forwarded letter's real text sits below the
+  // forward's own From:/Subject: headers, so trimming "quoted" lines would throw
+  // the letter itself away.
+  const body = String(text || "").trim().slice(0, 20000);
   if (!body.trim()) {
     console.log(`[camper-mail-inbox] camp ${campId}: empty body — dropped`);
     return json({ ok: true, skipped: "empty_body" });
