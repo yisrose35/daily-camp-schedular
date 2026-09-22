@@ -131,22 +131,42 @@ UNION ALL
 
 UNION ALL
   -- ─── 6. and how many camps have a roster at all ───────────────────────────
-  -- 38 camps exist. camp_people covers 12 of them. If the 26 without one are
-  -- camps that hold data, a backfill is the next thing to run — and 216 already
-  -- ships one: SELECT public.backfill_camp_people();
+  -- THE KEY IS app1, NOT campistryMe. The first version of this asked about
+  -- campistryMe, which holds staffApplications — backfill_camp_people() reads
+  -- campers from app1 -> camperRoster and staff from campistryMe ->
+  -- staffApplications. So the first answer was counting camps by whether their
+  -- STAFF document existed and calling it a camper-roster gap.
+  --
+  -- camps_with_a_camper_roster_document but no projected roster is the number
+  -- that means "run the backfill": 216 ships it as a repair tool, it is
+  -- idempotent (ON CONFLICT DO NOTHING, a source_key skip, and GREATEST on the
+  -- counter), and it only touches camps that exist.
+  --     SELECT public.backfill_camp_people();
   SELECT '6 coverage', 'camps with and without a roster',
          jsonb_build_object(
            'camps', (SELECT count(*) FROM public.camps),
-           'camps_with_a_camper_roster',
+           'camps_with_a_projected_roster',
                (SELECT count(DISTINCT p.camp_id) FROM public.camp_people p
                  WHERE p.kind = 'camper' AND p.deleted_at IS NULL),
-           'camps_with_campistryMe_saved',
+           'camps_with_a_camper_roster_document',
                (SELECT count(DISTINCT k.camp_id) FROM public.camp_state_kv k
-                 WHERE k.key = 'campistryMe'),
-           'camps_with_campistryMe_but_no_roster',
+                 WHERE k.key = 'app1'
+                   AND jsonb_typeof(k.value -> 'camperRoster') = 'object'
+                   AND k.value -> 'camperRoster' <> '{}'::jsonb),
+           'campers_in_those_documents',
+               (SELECT count(*) FROM public.camp_state_kv k
+                  CROSS JOIN LATERAL jsonb_each(
+                      CASE WHEN jsonb_typeof(k.value -> 'camperRoster') = 'object'
+                           THEN k.value -> 'camperRoster' ELSE '{}'::jsonb END) AS e(key, value)
+                 WHERE k.key = 'app1'
+                   AND EXISTS (SELECT 1 FROM public.camps c WHERE c.id = k.camp_id)),
+           'camps_with_a_document_but_no_projected_roster',
                (SELECT count(*) FROM (
                    SELECT k.camp_id FROM public.camp_state_kv k
-                    WHERE k.key = 'campistryMe'
+                    WHERE k.key = 'app1'
+                      AND jsonb_typeof(k.value -> 'camperRoster') = 'object'
+                      AND k.value -> 'camperRoster' <> '{}'::jsonb
+                      AND EXISTS (SELECT 1 FROM public.camps c WHERE c.id = k.camp_id)
                    EXCEPT
                    SELECT p.camp_id FROM public.camp_people p
                     WHERE p.kind = 'camper' AND p.deleted_at IS NULL) x))

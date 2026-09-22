@@ -141,7 +141,23 @@
                               AND p.proname IN ('use_family_card_for_canteen_auto_reload',
                                                 '_admin_clear_stale_byop_cards')
                               AND p.prosrc ~ 'campistrySnacks')
-          THEN 'ok' ELSE 'MISSING — re-apply 231' END)
+          THEN 'ok' ELSE 'MISSING — re-apply 231' END),
+
+    ('232  an invite cannot inherit a stranger',
+     CASE WHEN to_regprocedure('public.restamp_parent_invite(uuid)') IS NOT NULL
+           AND to_regprocedure('public.parent_invites_needing_attention(uuid)') IS NOT NULL
+           AND to_regprocedure('public.verify_parent_invite_identity()') IS NOT NULL
+           AND EXISTS (SELECT 1 FROM information_schema.columns
+                        WHERE table_schema = 'public' AND table_name = 'link_parent_invites'
+                          AND column_name = 'person_ids_resolved_at')
+           -- The bound is IN the gate. Checked by text because that is what a
+           -- later edit removes; the behaviour is checked by
+           -- scripts/pgtests/232_*.sql, which catches a bound that keeps the
+           -- word and inverts the comparison.
+           AND EXISTS (SELECT 1 FROM pg_proc p JOIN pg_namespace n ON n.oid = p.pronamespace
+                        WHERE n.nspname = 'public' AND p.proname = '_invite_covers_person'
+                          AND p.prosrc ~ 'person_ids_resolved_at' AND p.prosrc ~ 'first_seen')
+          THEN 'ok' ELSE 'MISSING — re-apply 232' END)
     ) AS t(item, result)
 
 UNION ALL
@@ -157,6 +173,10 @@ UNION ALL
     ('parent ownership',   public.verify_camper_ownership()::text),
     ('face consent',       public.verify_face_consent()::text),
     ('canteen identity',   public.verify_canteen_identity()::text),
+    -- slots_a_later_arrival_could_claim must be 0. slots_awaiting_a_decision is
+    -- a queue for the office, not a defect — work it with
+    -- parent_invites_needing_attention() and restamp_parent_invite().
+    ('parent invite identity', public.verify_parent_invite_identity()::text),
     -- Empty is the answer you want for both of these. Anything in the second is
     -- a function PostgREST cannot resolve, which fails every call from an edge
     -- function.
