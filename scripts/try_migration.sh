@@ -139,8 +139,40 @@ CREATE TABLE IF NOT EXISTS public.notifications (
 CREATE TABLE IF NOT EXISTS public.link_parent_invites (
     id uuid PRIMARY KEY DEFAULT gen_random_uuid(), camp_id uuid, user_id uuid,
     token text, parent_name text, parent_email text, camper_names jsonb,
+    camper_data jsonb, camp_connected boolean NOT NULL DEFAULT true,
     status text, billing_access boolean DEFAULT false,
     expires_at timestamptz, created_at timestamptz DEFAULT now());
+
+-- The three tables a parent submits INTO, so 225's conversions have somewhere
+-- to write and its behaviour test can read the row back.
+CREATE TABLE IF NOT EXISTS public.parent_pickup_requests (
+    id uuid PRIMARY KEY DEFAULT gen_random_uuid(), camp_id uuid NOT NULL,
+    request_date date, type text, label text, camper_name text NOT NULL,
+    camper_bunk text, parent_name text, parent_email text,
+    details jsonb NOT NULL DEFAULT '{}'::jsonb, status text,
+    created_at timestamptz NOT NULL DEFAULT now());
+CREATE TABLE IF NOT EXISTS public.link_camper_mail (
+    id uuid PRIMARY KEY DEFAULT gen_random_uuid(), camp_id uuid NOT NULL,
+    invite_id uuid, user_id uuid, camper_name text NOT NULL,
+    division text, grade text, bunk text, parent_name text, parent_email text,
+    subject text, body text, status text NOT NULL DEFAULT 'new',
+    source text NOT NULL DEFAULT 'portal', inbound_fingerprint text,
+    created_at timestamptz NOT NULL DEFAULT now());
+CREATE UNIQUE INDEX IF NOT EXISTS uq_link_camper_mail_inbound
+    ON public.link_camper_mail (camp_id, inbound_fingerprint)
+ WHERE inbound_fingerprint IS NOT NULL;
+CREATE TABLE IF NOT EXISTS public.link_form_responses (
+    id uuid PRIMARY KEY DEFAULT gen_random_uuid(), camp_id uuid NOT NULL,
+    invite_id uuid, user_id uuid, form_id text, form_name text, mode text,
+    camper_name text NOT NULL, camper_id text, parent_name text, parent_email text,
+    division text, grade text, bunk text, answers jsonb, signature_data text,
+    file_name text, file_data text, filled_pdf_path text,
+    created_at timestamptz NOT NULL DEFAULT now());
+
+-- 106's camp-wide "does this camp run Camper Mail" gate.
+CREATE OR REPLACE FUNCTION public._link_program_enabled(p_camp_id uuid, p_program text)
+RETURNS boolean LANGUAGE sql STABLE SECURITY DEFINER
+SET search_path = public, pg_catalog AS $$ SELECT true $$;
 
 -- Helpers earlier migrations define, stubbed so a later file can be tried on
 -- its own. A migration that defines them itself just replaces these.
@@ -217,7 +249,9 @@ CREATE TABLE IF NOT EXISTS public.link_photo_tags (
     PRIMARY KEY (photo_id, camper_name));
 CREATE TABLE IF NOT EXISTS public.link_health_submissions (
     id uuid PRIMARY KEY DEFAULT gen_random_uuid(), camp_id uuid NOT NULL,
-    camper_name text NOT NULL, doc_type text, file_path text,
+    camper_name text NOT NULL, file_name text, file_type text, file_data text,
+    note text, status text NOT NULL DEFAULT 'pending',
+    reviewed_by uuid, reviewed_at timestamptz, review_notes text,
     created_at timestamptz NOT NULL DEFAULT now());
 CREATE TABLE IF NOT EXISTS public.link_tips (
     id uuid PRIMARY KEY DEFAULT gen_random_uuid(), camp_id uuid NOT NULL,

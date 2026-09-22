@@ -109,8 +109,8 @@ BEGIN
     END IF;
 
     -- 5a. case and trailing space are the same child (rank 2)
-    INSERT INTO link_health_submissions (camp_id, camper_name, doc_type)
-         VALUES (c, '  dov LERNER ', 'immunisation');
+    INSERT INTO link_health_submissions (camp_id, camper_name, file_name)
+         VALUES (c, '  dov LERNER ', 'immunisation.pdf');
     SELECT person_id INTO got FROM link_health_submissions
      WHERE camp_id = c AND camper_name = '  dov LERNER ';
     IF got IS DISTINCT FROM 881 THEN

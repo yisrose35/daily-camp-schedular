@@ -149,6 +149,12 @@ const TABLES_ON_NAMES = [];
 
 const FUNCTIONS_ON_NAMES = [
     '_camper_mail_record',
+    // 225's two new name-accepting surfaces. They exist so the name question can
+    // be answered by the ID rule — _invite_covers_camper resolves and then calls
+    // _invite_covers_person — but they still accept a name, so they still count.
+    // They go when the callers send ids.
+    '_invite_covers_camper',
+    '_parent_invite_for',
     '_parent_owns_camper',
     'add_pickup_alert_league_recipients',
     'create_cardknox_checkout_intent',
@@ -224,8 +230,34 @@ test('the identity itself is defined exactly once, and spans campers AND staff',
     assert.doesNotMatch(sql, /PRIMARY KEY \(person_id\)/);
 });
 
+/**
+ * Of the functions that still take a name, the ones that will ALSO accept an id.
+ *
+ * A function keeps its name parameter long after it stops deciding anything by
+ * it — every caller passes one, and breaking eleven call sites to delete an
+ * argument is not the same work as moving the decision. So the raw count below
+ * barely moves while the actual conversion happens, and a number that does not
+ * move is a number nobody watches. This is the one that moves.
+ */
+function alsoTakeAnId() {
+    const latest = new Map();
+    for (const { name, sql } of migrationFiles()) {
+        const re = /CREATE OR REPLACE FUNCTION\s+(?:public\.)?(\w+)\s*\(([^)]*)\)/g;
+        let m;
+        while ((m = re.exec(sql)) !== null) latest.set(m[1], m[2]);
+    }
+    const out = [];
+    for (const [fn, args] of latest) {
+        if (!/\bp_camper(_name)?\b/.test(args)) continue;
+        if (/\bp_camper_id\b|\bp_person_id\b/.test(args)) out.push(fn);
+    }
+    return out.sort();
+}
+
 test('progress is reported, so the direction is visible', () => {
     const t = nameKeyedTables().size, f = nameKeyedFunctions().size;
+    const withId = alsoTakeAnId();
+    console.log(`    of those, ${withId.length} already accept a camper id: ${withId.join(', ')}`);
     // Not an assertion about the numbers — a place for them to be seen. When
     // this reaches 0/0, every camper reference in the database is an id.
     console.log(`    camper-identity ledger: ${t} tables and ${f} functions still on names`);
