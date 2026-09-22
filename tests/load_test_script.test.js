@@ -242,3 +242,70 @@ test('the script has no dependencies and refuses to touch a live camp silently',
     assert.match(src, /payload->>loadTest=eq\.true/);
     assert.match(src, /\/\^Load Camper \\d\+\$\//);
 });
+
+// ── the sign-in bug the first real run exposed ──────────────────────────────
+// The run reported "could not sign in ... HTTP 200" for 300 synthetic parents
+// AND for the owner's real account. HTTP 200 is SUCCESS: the code read only a
+// flat data.access_token and treated every other shape as a failure, then threw
+// away the response so the reason was unknowable. Both halves are fixed here —
+// tolerate the shapes, and report what actually arrived.
+
+test('tokenFrom: accepts every shape a sign-in can answer with', async () => {
+    const { tokenFrom } = await load();
+    assert.strictEqual(tokenFrom({ access_token: 'flat' }), 'flat', "GoTrue's own password grant");
+    assert.strictEqual(tokenFrom({ session: { access_token: 'nested' } }), 'nested');
+    assert.strictEqual(tokenFrom({ data: { session: { access_token: 'deep' } } }), 'deep');
+    assert.strictEqual(tokenFrom({ data: { access_token: 'wrapped' } }), 'wrapped');
+    assert.strictEqual(tokenFrom({ access_token: 'wins', session: { access_token: 'other' } }), 'wins',
+        'the flat field is the real one when both are present');
+});
+
+test('tokenFrom: a genuine failure is still null, never a truthy accident', async () => {
+    const { tokenFrom } = await load();
+    for (const bad of [null, undefined, '', 'a string body', 42, {}, { user: { id: 'u1' } },
+                       { error: 'invalid_grant' }, { session: null }, { data: {} }]) {
+        assert.strictEqual(tokenFrom(bad), null, `on ${JSON.stringify(bad)}`);
+    }
+});
+
+test('describeAuthFailure: says what arrived, and never leaks a token or password', async () => {
+    const { describeAuthFailure } = await load();
+    // an error body
+    const e = describeAuthFailure({ status: 400, data: { error: 'invalid_grant', error_description: 'Invalid login credentials' } });
+    assert.match(e, /HTTP 400/);
+    assert.match(e, /Invalid login credentials/);
+    assert.match(e, /fields: error,error_description/);
+    // the case that actually happened: 200 with an unexpected shape
+    const ok = describeAuthFailure({ status: 200, data: { user: { id: 'u1' }, weird: 1 } });
+    assert.match(ok, /HTTP 200/);
+    assert.match(ok, /fields: user,weird/, 'the field names are the diagnosis');
+    // empty body, text body, network error
+    assert.match(describeAuthFailure({ status: 200, data: null }), /empty body/);
+    assert.match(describeAuthFailure({ status: 200, data: {} }), /empty object/);
+    assert.match(describeAuthFailure({ status: 502, data: '<html>bad gateway</html>' }), /body\(text\): <html>/);
+    assert.match(describeAuthFailure({ status: 0, error: 'fetch failed' }), /HTTP 0 · fetch failed/);
+    assert.match(describeAuthFailure({ status: 429, data: { msg: 'too many requests' } }), /too many requests/);
+    // safety: a description must never carry the secret it was diagnosing
+    const safe = describeAuthFailure({ status: 200, data: { access_token: 'SECRET-JWT', refresh_token: 'SECRET-R' } });
+    assert.ok(!safe.includes('SECRET-JWT') && !safe.includes('SECRET-R'),
+        'field NAMES are diagnostic; values are not ours to print');
+    assert.match(safe, /fields: access_token,refresh_token/);
+});
+
+test('both sign-in call sites use the extractor and report the reason', () => {
+    const src = require('node:fs').readFileSync(path.join(__dirname, '..', 'scripts', 'load_test.mjs'), 'utf8');
+    const sites = [...src.matchAll(/const jwt = tokenFrom\(s\.data\);/g)];
+    assert.strictEqual(sites.length, 2, 'the parent setup and the canteen owner');
+    assert.ok(!/s\.data\.access_token/.test(src), 'no call site may read the flat field directly again');
+    assert.strictEqual([...src.matchAll(/describeAuthFailure\(s\)/g)].length, 2, 'both must say why');
+});
+
+test('setup failure logging is capped so the reason stays readable', () => {
+    // The first real run printed 300 identical lines and scrolled the useful
+    // fact away. A few, then a count.
+    const src = require('node:fs').readFileSync(path.join(__dirname, '..', 'scripts', 'load_test.mjs'), 'utf8');
+    assert.match(src, /const warn = \(m\) => \{ if \(shown < 5\) \{ shown\+\+; log\(m\); \} else suppressed\+\+; \};/);
+    assert.match(src, /if \(suppressed\) log\(`  ! \.\.\.and \$\{suppressed\} more like the above`\);/);
+    assert.strictEqual([...src.matchAll(/warn\(`  ! could not /g)].length, 3,
+        'create, invite and sign-in all route through the cap');
+});

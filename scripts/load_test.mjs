@@ -162,6 +162,45 @@ export function unseedCanteenAccounts(value) {
     return v;
 }
 
+/**
+ * The access token out of a sign-in response, whatever shape it arrived in.
+ *
+ * GoTrue's password grant returns a flat {access_token}, but a gateway or a
+ * newer client shape can nest it under session/data. Reading only the flat
+ * field made a SUCCESSFUL sign-in (HTTP 200) look like a failure, which is
+ * exactly how the first real run reported "could not sign in ... HTTP 200"
+ * for 300 synthetic parents AND for the owner's real account.
+ */
+export function tokenFrom(data) {
+    if (!data || typeof data !== 'object') return null;
+    return data.access_token
+        || (data.session && data.session.access_token)
+        || (data.data && data.data.session && data.data.session.access_token)
+        || (data.data && data.data.access_token)
+        || null;
+}
+
+/**
+ * Why a sign-in did not yield a token, in a line that is safe to paste.
+ *
+ * Never includes a token or a password: only the status, the field names that
+ * came back, and any error-ish message. "200 with no token" is meaningless
+ * without knowing WHAT arrived, and that was the whole problem.
+ */
+export function describeAuthFailure(res) {
+    const d = res && res.data;
+    const bits = [`HTTP ${res ? res.status : '?'}`];
+    if (res && res.error) bits.push(res.error);
+    if (typeof d === 'string') bits.push(`body(text): ${d.slice(0, 120)}`);
+    else if (d && typeof d === 'object') {
+        const msg = d.error_description || d.error || d.msg || d.message || (d.code !== undefined ? `code=${d.code}` : '');
+        if (msg) bits.push(String(msg).slice(0, 160));
+        const keys = Object.keys(d);
+        bits.push(keys.length ? `fields: ${keys.slice(0, 12).join(',')}` : 'empty object');
+    } else if (d === null) bits.push('empty body');
+    return bits.join(' · ');
+}
+
 /** Spread N parents' first poll across one interval so they do not all fire at t=0. */
 export function pollSchedule(n, intervalMs, durationMs) {
     const ticks = [];
@@ -250,18 +289,24 @@ async function phaseRegistration(c, o, env, report) {
 
 async function setupParents(c, o, env, log) {
     const parents = [];
+    // Cap the noise: 300 identical failure lines scrolled the one useful fact
+    // off the screen on the first real run. After a few, count silently.
+    let shown = 0, suppressed = 0;
+    const warn = (m) => { if (shown < 5) { shown++; log(m); } else suppressed++; };
     await pool(Array.from({ length: o.parents }, (_, i) => i), Math.min(o.concurrency, 20), async (i) => {
         const f = parentFixture(i, env.CAMP_ID);
         const u = await c.adminCreateUser(f.email, f.password);
-        if (!u.ok) { log(`  ! could not create ${f.email}: HTTP ${u.status} ${JSON.stringify(u.data).slice(0, 120)}`); return; }
+        if (!u.ok) { warn(`  ! could not create ${f.email}: HTTP ${u.status} ${JSON.stringify(u.data).slice(0, 120)}`); return; }
         f.userId = u.data.id;
         const inv = await c.insert('link_parent_invites', [{ ...f.invite, user_id: f.userId }]);
-        if (!inv.ok) { log(`  ! could not invite ${f.email}: HTTP ${inv.status} ${JSON.stringify(inv.data).slice(0, 120)}`); return; }
+        if (!inv.ok) { warn(`  ! could not invite ${f.email}: HTTP ${inv.status} ${JSON.stringify(inv.data).slice(0, 120)}`); return; }
         const s = await c.signIn(f.email, f.password);
-        if (!s.ok || !s.data || !s.data.access_token) { log(`  ! could not sign in ${f.email}: HTTP ${s.status}`); return; }
-        f.jwt = s.data.access_token;
+        const jwt = tokenFrom(s.data);
+        if (!jwt) { warn(`  ! could not sign in ${f.email}: ${describeAuthFailure(s)}`); return; }
+        f.jwt = jwt;
         parents.push(f);
     });
+    if (suppressed) log(`  ! ...and ${suppressed} more like the above`);
     return parents;
 }
 
@@ -315,8 +360,8 @@ async function phasePortal(c, o, env, report, parents, log) {
 async function phaseCanteen(c, o, env, report, log) {
     if (!env.OWNER_EMAIL || !env.OWNER_PASSWORD) { log('  canteen: OWNER_EMAIL/OWNER_PASSWORD not set — skipped'); return null; }
     const s = await c.signIn(env.OWNER_EMAIL, env.OWNER_PASSWORD);
-    if (!s.ok || !s.data || !s.data.access_token) { log(`  canteen: owner sign-in failed (HTTP ${s.status}) — skipped`); return null; }
-    const jwt = s.data.access_token;
+    const jwt = tokenFrom(s.data);
+    if (!jwt) { log(`  canteen: owner sign-in failed (${describeAuthFailure(s)}) — skipped`); return null; }
     // seed balances for the synthetic campers, touching nobody else's account
     const cur = await c.select('camp_state_kv', `select=value&camp_id=eq.${env.CAMP_ID}&key=eq.campistrySnacks`);
     const existing = cur.ok && Array.isArray(cur.data) && cur.data[0] ? cur.data[0].value : null;
