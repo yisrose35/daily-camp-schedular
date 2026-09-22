@@ -118,9 +118,22 @@
            AND to_regprocedure('public.set_canteen_limits(text,numeric,numeric,numeric,uuid,bigint)') IS NOT NULL
            AND to_regprocedure('public.set_canteen_auto_reload(uuid,text,jsonb,bigint)') IS NOT NULL
            AND to_regprocedure('public.use_family_card_for_canteen_auto_reload(uuid,text,text,bigint)') IS NOT NULL
-           -- nothing anywhere still tests camper_names ? by hand
+           -- None of 231's OWN functions still tests camper_names ? by hand.
+           --
+           -- Scoped deliberately. The first version of this row asked the
+           -- camp-wide question, which made it read "re-apply 231" for a
+           -- function 231 does not touch — get_my_shop_orders — so applying 231
+           -- could never have turned this row green. A check that cannot pass is
+           -- indistinguishable from a check that is failing, which is the same
+           -- defect shape this whole chain is about. The camp-wide sweep has its
+           -- own row in part 2, where a non-zero answer means "there is more to
+           -- do", not "this file did not apply".
            AND NOT EXISTS (SELECT 1 FROM pg_proc p JOIN pg_namespace n ON n.oid = p.pronamespace
                             WHERE n.nspname = 'public' AND p.prokind = 'f'
+                              AND p.proname IN ('submit_canteen_deposit', 'set_canteen_limits',
+                                                'set_canteen_auto_reload',
+                                                'use_family_card_for_canteen_auto_reload',
+                                                '_admin_clear_stale_byop_cards')
                               AND p.prosrc ~ 'camper_names \?')
            -- and the two halves that were left on the campistrySnacks document
            AND NOT EXISTS (SELECT 1 FROM pg_proc p JOIN pg_namespace n ON n.oid = p.pronamespace
