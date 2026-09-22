@@ -200,6 +200,29 @@ CREATE TABLE IF NOT EXISTS public.camp_billing_payments (
     family_name text NOT NULL DEFAULT '', family_key text NOT NULL DEFAULT '',
     enrollment_id text NOT NULL DEFAULT '', payload jsonb NOT NULL,
     PRIMARY KEY (camp_id, seq));
+
+-- Four of the twenty tables that identify a camper by NAME, so 223 has real
+-- tables to give a person_id to and a behaviour test can prove the stamp works.
+-- Chosen for their shapes rather than at random: one safety table, one with a
+-- name in its PRIMARY KEY (so a later file that moves the key has something to
+-- move), one health table, one money table.
+CREATE TABLE IF NOT EXISTS public.pickup_alerts (
+    id uuid PRIMARY KEY DEFAULT gen_random_uuid(), camp_id uuid NOT NULL,
+    camper_name text NOT NULL, camper_bunk text, camper_division text,
+    camper_grade text, status text NOT NULL DEFAULT 'open',
+    created_at timestamptz NOT NULL DEFAULT now());
+CREATE TABLE IF NOT EXISTS public.link_photo_tags (
+    photo_id uuid NOT NULL, camper_name text NOT NULL, camp_id uuid NOT NULL,
+    source text, confidence numeric,
+    PRIMARY KEY (photo_id, camper_name));
+CREATE TABLE IF NOT EXISTS public.link_health_submissions (
+    id uuid PRIMARY KEY DEFAULT gen_random_uuid(), camp_id uuid NOT NULL,
+    camper_name text NOT NULL, doc_type text, file_path text,
+    created_at timestamptz NOT NULL DEFAULT now());
+CREATE TABLE IF NOT EXISTS public.link_tips (
+    id uuid PRIMARY KEY DEFAULT gen_random_uuid(), camp_id uuid NOT NULL,
+    camper_name text, staff_name text, amount numeric NOT NULL DEFAULT 0,
+    created_at timestamptz NOT NULL DEFAULT now());
 STUBS
 
 echo "postgres $("$PGBIN/psql" -h "$SOCK" -p "$PORT" -U postgres -tAc 'show server_version') ready, stubs loaded"
