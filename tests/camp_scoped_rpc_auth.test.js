@@ -389,41 +389,51 @@ test('no RPC is left with an overload PostgREST cannot choose between', () => {
     // So: if a function is created more than once across migrations with
     // DIFFERENT arities, and the wider form's extra parameters all have
     // DEFAULTs, the narrower one has to be dropped.
+    //
+    // ORDER MATTERS, and the first version of this test did not honour it. It
+    // collected every DROP into one set and treated any dropped arity as gone
+    // forever — so a LATER migration re-creating it read as still dropped. That
+    // is exactly what happened: 024, 052, 139 and 145 each dropped a narrow
+    // signature, and 220 re-created all four with converted bodies, believing
+    // they were the live ones. Four money functions were left ambiguous, three of
+    // them by that one file, and this test said nothing. A create after a drop
+    // REVIVES the arity, so drops and creates are replayed in order.
     const dir = path.join(ROOT, 'migrations');
     const files = fs.readdirSync(dir).filter(f => /^\d+.*\.sql$/.test(f)).sort();
 
-    const arities = {};   // name -> Set of arities created
-    const dropped = {};   // name -> Set of arities dropped
+    const live = {};      // name -> Set of arities currently defined
     const defaulted = {}; // name -> true if some form has a DEFAULT param
 
     for (const f of files) {
         const sql = fs.readFileSync(path.join(dir, f), 'utf8');
-        const creates = sql.match(/CREATE\s+(?:OR\s+REPLACE\s+)?FUNCTION\s+(?:public\.)?([a-z0-9_]+)\s*\(([\s\S]*?)\)\s*\n\s*RETURNS/gi) || [];
-        for (const c of creates) {
-            const m = /FUNCTION\s+(?:public\.)?([a-z0-9_]+)\s*\(([\s\S]*?)\)\s*\n\s*RETURNS/i.exec(c);
-            if (!m) continue;
-            const name = m[1], args = m[2].trim();
-            const n = args ? args.split(',').length : 0;
-            (arities[name] || (arities[name] = new Set())).add(n);
-            if (/\bDEFAULT\b/i.test(args)) defaulted[name] = true;
+        // Every create and drop in this file, in the order they appear, because a
+        // file may drop a signature and then create a wider one (052's shape).
+        const events = [];
+        const createRe = /CREATE\s+(?:OR\s+REPLACE\s+)?FUNCTION\s+(?:public\.)?([a-z0-9_]+)\s*\(([\s\S]*?)\)\s*\n\s*RETURNS/gi;
+        let m;
+        while ((m = createRe.exec(sql)) !== null) {
+            events.push({ at: m.index, kind: 'create', name: m[1], args: m[2].trim() });
         }
-        const drops = sql.match(/DROP\s+FUNCTION\s+(?:IF\s+EXISTS\s+)?(?:public\.)?([a-z0-9_]+)\s*\(([^)]*)\)/gi) || [];
-        for (const d of drops) {
-            const m = /DROP\s+FUNCTION\s+(?:IF\s+EXISTS\s+)?(?:public\.)?([a-z0-9_]+)\s*\(([^)]*)\)/i.exec(d);
-            if (!m) continue;
-            const name = m[1], args = m[2].trim();
-            (dropped[name] || (dropped[name] = new Set())).add(args ? args.split(',').length : 0);
+        const dropRe = /DROP\s+FUNCTION\s+(?:IF\s+EXISTS\s+)?(?:public\.)?([a-z0-9_]+)\s*\(([^)]*)\)/gi;
+        while ((m = dropRe.exec(sql)) !== null) {
+            events.push({ at: m.index, kind: 'drop', name: m[1], args: m[2].trim() });
+        }
+        events.sort((a, b) => a.at - b.at);
+        for (const e of events) {
+            const n = e.args ? e.args.split(',').length : 0;
+            const set = live[e.name] || (live[e.name] = new Set());
+            if (e.kind === 'drop') { set.delete(n); continue; }
+            set.add(n);
+            if (/\bDEFAULT\b/i.test(e.args)) defaulted[e.name] = true;
         }
     }
 
     const bad = [];
-    for (const [name, set] of Object.entries(arities)) {
+    for (const [name, set] of Object.entries(live)) {
         if (set.size < 2) continue;                 // one shape, nothing to choose between
         if (!defaulted[name]) continue;             // no defaults, so no overlap by name
-        const live = [...set].filter(n => !(dropped[name] && dropped[name].has(n)));
-        if (live.length > 1) {
-            bad.push(`${name} still has arities ${live.join(' and ')} — drop the narrower one`);
-        }
+        bad.push(`${name} still has arities ${[...set].sort((a, b) => a - b).join(' and ')} `
+                 + '— drop the narrower one');
     }
     assert.deepStrictEqual(bad, [],
         'PostgREST resolves by argument NAME; a defaulted overload makes both forms candidates:\n  ' + bad.join('\n  '));
