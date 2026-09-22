@@ -837,6 +837,7 @@ input.dash-input:disabled, select.dash-input:disabled, .dash-input:disabled {
    gap. Several of these are empty until a fetch lands. */
 .dash-card-body > div:empty { display: none; }
 
+
 /* ===== PRODUCTS SECTION ===== */
 .products-section { margin-bottom: 40px; }
 .products-grid {

@@ -545,3 +545,57 @@ test('the boot output says the burst was shared, so the numbers can be read', ()
     assert.match(src, /call order rotated per parent so no single RPC absorbs the whole burst/);
     assert.match(src, /parents at once/, 'and names the real concurrency reached');
 });
+
+// ── the canteen's concurrency is registers, not parents ─────────────────────
+// submit_canteen_purchase takes a camp-wide FOR UPDATE lock and rewrites the
+// whole snacks blob, so sales serialize. Running the phase at parent
+// concurrency measured 100 tills ringing in the same instant — which no camp
+// does — and reported WARN (p95 2179ms) for a scenario that cannot occur.
+test('parseArgs has a registers default that is a plausible camp, not the pool', async () => {
+    const { parseArgs } = await load();
+    const o = parseArgs([]);
+    assert.strictEqual(o.registers, 6, 'a handful of tills');
+    assert.notStrictEqual(o.registers, o.concurrency,
+        'the canteen must not inherit the parent-browsing concurrency');
+    assert.strictEqual(parseArgs(['--registers', '3']).registers, 3);
+    assert.strictEqual(parseArgs(['--registers', '0']).registers, 1, 'floored at one');
+    assert.strictEqual(parseArgs(['--registers', '100']).registers, 100,
+        'the wide burst stays available for stress runs');
+});
+
+test('--registers leaves the parent concurrency alone, and vice versa', async () => {
+    const { parseArgs } = await load();
+    const a = parseArgs(['--registers', '2']);
+    assert.strictEqual(a.concurrency, 50, 'untouched');
+    const b = parseArgs(['--concurrency', '10']);
+    assert.strictEqual(b.registers, 6, 'untouched');
+});
+
+test('the canteen phase runs at the register count, capped by the work available', () => {
+    const src = require('node:fs').readFileSync(path.join(__dirname, '..', 'scripts', 'load_test.mjs'), 'utf8');
+    assert.match(src, /const tills = Math\.min\(o\.registers, o\.parents\);/,
+        'never more tills than purchases to make');
+    assert.match(src, /await pool\(Array\.from\(\{ length: o\.parents \}, \(_, i\) => i\), tills,/,
+        'the pool uses tills — o.concurrency here is the bug this replaced');
+    assert.doesNotMatch(src, /\}, \(_, i\) => i\), o\.concurrency, async \(i\) => \{\s*\n\s*const res = await c\.rpc\('submit_canteen_purchase'/,
+        'the old parent-concurrency call must be gone');
+});
+
+test('the canteen reports the serialized per-sale cost and the ceiling it implies', () => {
+    const src = require('node:fs').readFileSync(path.join(__dirname, '..', 'scripts', 'load_test.mjs'), 'utf8');
+    assert.match(src, /const perSale = elapsed \/ sum\.count;/, 'wall clock over purchases');
+    assert.match(src, /ms of serialized time per sale/);
+    assert.match(src, /sales\/second, whatever the register count/,
+        'the ceiling is the actionable number, not the p95 of an impossible burst');
+    assert.match(src, /Adding registers does not raise it/,
+        'a reader must not respond by buying more tills');
+    assert.match(src, /if \(sum\.count > 0 && elapsed > 0\)/,
+        'no divide-by-zero when the phase produced nothing');
+});
+
+test('the label and the plan line both name the register count', () => {
+    const src = require('node:fs').readFileSync(path.join(__dirname, '..', 'scripts', 'load_test.mjs'), 'utf8');
+    assert.match(src, /report\.push\(\[`canteen rush · \$\{tills\} register\(s\)`/,
+        'two runs at different register counts must not look like the same measurement');
+    assert.match(src, /\$\{o\.registers\} canteen register\(s\)/, 'the plan line states it up front');
+});

@@ -9,7 +9,7 @@
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
     <link href="https://fonts.googleapis.com/css2?family=DM+Sans:opsz,wght@9..40,300;9..40,400;9..40,500;9..40,600;9..40,700;9..40,800&family=Fraunces:opsz,wght@9..144,400;9..144,500;9..144,600;9..144,700&display=swap" rel="stylesheet">
     <style>html:not(.css-ready) body { opacity: 0; } html.css-ready body { transition: opacity 0.15s ease; }</style>
-    <link rel="stylesheet" href="dashboard.css?v=20260918-09" onload="document.documentElement.classList.add('css-ready')">
+    <link rel="stylesheet" href="dashboard.css?v=20260922-03" onload="document.documentElement.classList.add('css-ready')">
     <link rel="stylesheet" href="mobile-responsive.css?v=20260903-03">
     <noscript><style>html body { opacity: 1 !important; }</style></noscript>
 </head>
@@ -441,6 +441,9 @@
                  applying the day its session ends, because a forgotten session scope
                  is the one failure that makes people stop trusting every list in the
                  app. See campistry_session_scope.js. -->
+            <!-- Current Session is a different concern from Summer Schedule/Sessions:
+                 it's "which session are we currently looking at," not "what are the
+                 camp's sessions/dates." Stays its own card. -->
             <div class="dashboard-card" id="currentSessionCard">
                 <div class="card-header">
                     <h2>Current Session</h2>
@@ -460,45 +463,6 @@
                     <div id="currentSessionActions" class="dash-actions">
                         <button type="button" id="saveCurrentSessionBtn" onclick="saveCurrentSession()" class="btn-primary">Save</button>
                         <span id="currentSessionStatus" class="dash-status"></span>
-                    </div>
-                </div>
-            </div>
-
-            <div class="dashboard-card">
-                <div class="card-header">
-                    <h2>Summer Schedule</h2>
-                </div>
-                <!-- Only the overall start/end live here now. The HALF boundaries used
-                     to be a separate pair of date inputs on this card — that was a
-                     second place to type the same dates a "1st Half"/"2nd Half"
-                     Session already defines below, so they were removed. Per-Half
-                     rotation and the calendar transition markers now read the half
-                     boundaries FROM those two sessions' own start/end dates
-                     (Utils.getCampDates() in scheduler_core_utils.js), with the old
-                     half1End/half2Start fields kept as a silent fallback for a camp
-                     that has neither session named yet. -->
-                <div id="campDatesForm" class="dash-card-body">
-                    <div class="dash-range">
-                        <div class="dash-range-fields">
-                            <div class="dash-field">
-                                <label for="campStartDate">Starts</label>
-                                <input type="date" id="campStartDate" class="dash-input">
-                            </div>
-                            <div class="dash-field">
-                                <label for="campEndDate">Ends</label>
-                                <input type="date" id="campEndDate" class="dash-input">
-                            </div>
-                        </div>
-                    </div>
-                    <p class="dash-hint" id="campDatesHalfInfo" style="display:none;"></p>
-                    <!-- Plain, not a note box: what goes in here is a <details> that styles
-                         itself, and a disclosure inside a grey panel reads as two
-                         containers where there is one thing. -->
-                    <div id="campDatesWeekPreview" style="display:none;"></div>
-                    <div id="campDatesActions" class="dash-actions">
-                        <button type="button" id="saveCampDatesBtn" onclick="saveCampDates()" class="btn-primary">Save Dates</button>
-                        <button type="button" id="clearCampDatesBtn" onclick="clearCampDates()" class="btn-secondary">Clear</button>
-                        <span id="campDatesStatus" class="dash-status"></span>
                     </div>
                 </div>
             </div>
@@ -559,6 +523,19 @@
                      Billing's other payment-policy toggles (Accepted payments).
                      It still reads/writes the same enrollSettings.allowParentPaymentPlans
                      key, so nothing about its effect changed. -->
+
+                <!-- There is no separate "Summer Schedule"/Camp Dates step any more.
+                     Sessions ARE the summer schedule: a session's own start/end
+                     dates are what tells the program when it runs, so the camp's
+                     overall date range is just derived (min/max across every
+                     session below) instead of asked for a second time. Per-Half
+                     rotation and calendar transition markers read the half
+                     boundaries from the "1st Half"/"2nd Half" sessions
+                     (Utils.getCampDates() in scheduler_core_utils.js); the overall
+                     start/end is auto-saved to camp_state_kv.campDates by
+                     _dashDeriveCampDatesFromSessions() whenever sessions change, so
+                     older code paths that still read campDates.startDate/endDate
+                     keep working with no owner action needed. -->
                 <div id="sessionsList" style="display:flex; flex-direction:column; gap:10px; margin-top:16px;"></div>
 
                 <div id="bundleEditForm" style="display:none; margin-top:16px; padding:14px 16px; border-radius:10px; background:#f5f3ff; border:1px solid #ddd6fe;">
@@ -588,14 +565,6 @@
                     <div class="form-group dash-field">
                         <label for="sesName">Session Name</label>
                         <input type="text" id="sesName" placeholder="e.g., Summer 2026 — Full Season" class="dash-input">
-                    </div>
-                    <div class="form-group dash-field">
-                        <label for="sesDatePreset">Quick-fill from Camp Dates</label>
-                        <select id="sesDatePreset" onchange="applySessionDatePreset()" class="dash-input">
-                            <option value="">Custom (set dates manually below)</option>
-                            <option value="full">Full Summer</option>
-                        </select>
-                        <p id="sesDatePresetHint" style="font-size:0.72rem; color:var(--slate-400); margin-top:4px;"></p>
                     </div>
                     <div style="display:grid; grid-template-columns:1fr 1fr; gap:14px;">
                         <div class="form-group dash-field">
@@ -938,7 +907,7 @@ if (window.location.protocol === 'file:') {
 <script src="campistry_workspace_admin.js?v=20260917-02"></script>
 
     <script src="cloud_sync_helpers.js?v=20260903-03"></script>
-    <script src="dashboard.js?v=20260918-09"></script>
+    <script src="dashboard.js?v=20260922-03"></script>
     <script src="campistry_setup_checklist.js?v=20260918-09"></script>
     <script src="campistry_enrollment_window.js?v=20260917-02"></script>
 <script src="campistry_presence.js?v=20260918-05"></script>
