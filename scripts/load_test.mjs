@@ -28,7 +28,8 @@
 // script that creates users and writes camp state must never be pointed at a
 // live camp. It refuses to run without an explicit acknowledgement.
 //
-// HOW TO RUN (from the repo root, Node 18+; no packages to install):
+// HOW TO RUN (from the REPO ROOT — the path below is relative to it, so running
+// it from anywhere else is a MODULE_NOT_FOUND. Node 18+; no packages to install):
 //
 //   SUPABASE_URL=https://xxxx.supabase.co \
 //   SUPABASE_ANON_KEY=... \
@@ -37,6 +38,22 @@
 //   OWNER_EMAIL=... OWNER_PASSWORD=...        (only for the canteen phase) \
 //   I_UNDERSTAND_THIS_IS_A_THROWAWAY_PROJECT=yes \
 //   node scripts/load_test.mjs --parents 300 --concurrency 60 --duration 90
+//
+// ON WINDOWS cmd.exe that VAR=value prefix form is NOT an error — it is simply
+// ignored, so the run reaches the env check and stops at "missing env". Set each
+// one on its own line first, with no quotes and no spaces around the `=`, and
+// note the BACKSLASH in the path:
+//
+//   set SUPABASE_URL=https://xxxx.supabase.co
+//   set SUPABASE_ANON_KEY=...
+//   set SUPABASE_SERVICE_ROLE_KEY=...
+//   set CAMP_ID=...
+//   set I_UNDERSTAND_THIS_IS_A_THROWAWAY_PROJECT=yes
+//   node scripts\load_test.mjs --phases payments --payments 300 --pay-families 75
+//
+// (In PowerShell it is $env:SUPABASE_URL="..." per line.) The four SUPABASE_*/
+// CAMP_ID vars are always required, whatever the phase; OWNER_EMAIL and
+// OWNER_PASSWORD are needed only by the canteen phase.
 //
 //   --parents N        families / parents / register accounts to simulate (200)
 //   --concurrency C    requests in flight at once (50)
