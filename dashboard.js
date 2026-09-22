@@ -892,6 +892,7 @@
         if (profileTaxId) {
             profileTaxId.textContent = campTaxId ? (campTaxId + (campShowTaxId ? ' (shown on statements)' : ' (not shown on statements)')) : 'Not set';
         }
+        if (typeof window._renderProfileLogoView === 'function') window._renderProfileLogoView();
 
         // Pre-fill edit form (only relevant for owners)
         if (editCampName) {
@@ -1084,17 +1085,58 @@
     // EDIT PROFILE (Owners only)
     // ========================================
     
+    // ── Camp logo ────────────────────────────────────────────────────────────
+    // Stored in the same place the emails read their branding from
+    // (campistryLink.settings.branding.logo), so a logo set here appears at the
+    // top of every branded email the camp sends — no extra wiring per send.
+    var _dashLogoData; // undefined = unchanged, '' = remove, dataURL = new pick
+    function _dashGetLogo(){
+        try{ var gs=window.loadGlobalSettings?window.loadGlobalSettings():JSON.parse(localStorage.getItem('campGlobalSettings_v1')||'{}');
+            return (gs&&gs.campistryLink&&gs.campistryLink.settings&&gs.campistryLink.settings.branding&&gs.campistryLink.settings.branding.logo)||''; }
+        catch(e){ return ''; }
+    }
+    function _dashSaveLogo(dataUrl){
+        try{
+            var gs=window.loadGlobalSettings?window.loadGlobalSettings():JSON.parse(localStorage.getItem('campGlobalSettings_v1')||'{}');
+            var link=(gs&&gs.campistryLink)?gs.campistryLink:{};
+            link.settings=link.settings||{}; link.settings.branding=link.settings.branding||{};
+            link.settings.branding.logo=dataUrl||'';
+            if(window.saveGlobalSettings) window.saveGlobalSettings('campistryLink', link);
+        }catch(e){ console.warn('[Dashboard] logo save failed', e); }
+    }
+    window._renderProfileLogoView=function(){
+        var el=document.getElementById('profileLogo'); if(!el)return;
+        var logo=_dashGetLogo();
+        el.innerHTML=logo?('<img src="'+logo+'" alt="Camp logo" style="max-height:40px;max-width:130px;border-radius:6px;vertical-align:middle;">'):'Not set';
+    };
+    function _syncLogoEditUI(){
+        var logo=(_dashLogoData!==undefined)?_dashLogoData:_dashGetLogo();
+        var prev=document.getElementById('editLogoPreview'), rm=document.getElementById('editLogoRemove');
+        if(prev){ if(logo){ prev.src=logo; prev.style.display=''; } else { prev.removeAttribute('src'); prev.style.display='none'; } }
+        if(rm) rm.style.display=logo?'':'none';
+    }
+    window.onLogoPicked=function(input){
+        var f=input&&input.files&&input.files[0]; if(!f)return;
+        if(f.size>350*1024){ alert('That image is a bit large. Please use a logo under about 300 KB.'); input.value=''; return; }
+        var rd=new FileReader();
+        rd.onload=function(){ _dashLogoData=String(rd.result||''); _syncLogoEditUI(); };
+        rd.readAsDataURL(f);
+    };
+    window.removeLogo=function(){ _dashLogoData=''; var i=document.getElementById('editLogoInput'); if(i)i.value=''; _syncLogoEditUI(); };
+
     window.toggleEditMode = function() {
         // Only owners can edit
         if (isTeamMember) {
             alert('Only camp owners can edit the camp profile.');
             return;
         }
-        
+
         isEditMode = !isEditMode;
-        
+
         if (profileView) profileView.style.display = isEditMode ? 'none' : 'block';
         if (profileEditForm) profileEditForm.style.display = isEditMode ? 'flex' : 'none';
+        if (isEditMode) { _dashLogoData = undefined; _syncLogoEditUI(); }
+        else { var li=document.getElementById('editLogoInput'); if(li)li.value=''; }
         
         const editBtn = document.getElementById('editProfileBtn');
         if (editBtn) {
@@ -1222,6 +1264,10 @@
 
             // Update local state
             campName = newCampName;
+
+            // Persist the logo (into the branding the emails read) if it changed.
+            if (_dashLogoData !== undefined) _dashSaveLogo(_dashLogoData);
+            if (typeof window._renderProfileLogoView === 'function') window._renderProfileLogoView();
 
             // Update displays
             if (profileCampName) profileCampName.textContent = newCampName;

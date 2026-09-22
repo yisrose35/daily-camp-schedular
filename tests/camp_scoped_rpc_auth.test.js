@@ -117,8 +117,22 @@ test('a stranger gets nothing from the canteen', () => {
 
 test('a parent gets their own children, not the camp', () => {
     const body = FNS.get_canteen_accounts.body;
-    assert.match(body, /FOR k IN SELECT jsonb_array_elements_text\(v_mine\) LOOP/,
-        'the accounts map is not filtered to the caller’s own campers');
+    // Asserted as a PROPERTY, not a mechanism. This used to pin the literal
+    // `FOR k IN SELECT jsonb_array_elements_text(v_mine) LOOP`, and migration
+    // 218 replaced that loop with a set-based WHERE while keeping the scoping
+    // exactly — so the test failed on a change that broke nothing. What must
+    // hold is that the parent's account query is CONSTRAINED by who they are.
+    const parentAt = body.indexOf('camp_parent_campers(p_camp_id)');
+    const parentBranch = body.slice(parentAt);
+    assert.match(parentBranch, /person_id = ANY \(v_ids\)/,
+        'the accounts map is not filtered to the caller’s own campers by id');
+    assert.match(parentBranch, /v_mine \? a\.account_key/,
+        'an account with no camper id is unreachable, so those parents see a blank balance');
+    // ...and the id path must not be widened into a bare name match, which
+    // would hand a family that reuses a departed camper's name sight of that
+    // camper's balance. See scripts/pgtests/218_canteen_read_from_rows.sql.
+    assert.match(parentBranch, /a\.person_id IS NULL AND v_mine \? a\.account_key/,
+        'the name fallback must apply only to accounts that have no owner yet');
     // The ledger matters as much as the balances: it is a list of what other
     // people's children bought.
     assert.match(body, /v_mine \? COALESCE\(t->>'camper', ''\)/,

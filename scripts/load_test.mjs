@@ -2,16 +2,20 @@
 // =============================================================================
 // Campistry load test — hundreds of parents at once, against a THROWAWAY project.
 //
-// WHAT IT PROVES. Every scaling fix in migrations 200–203 and the parent portal
+// WHAT IT PROVES. Every scaling fix in migrations 200-215 and the parent portal
 // is correct by construction and by test; this is the only thing that turns
 // "should hold" into "does hold" — real concurrent traffic against a real
-// Supabase project, measured. It simulates the three bursts a camp actually
+// Supabase project, measured. It simulates the four bursts a camp actually
 // sees:
 //
 //   reg      N families submitting registrations in the same minute (anon)
 //   portal   N signed-in parents with the portal open — the boot reads, then
 //            the 30-second poll loop (messages + broadcasts), for a while
 //   canteen  M register sales in a rush, as the camp owner
+//   payments N payments recorded as the webhooks record them (service role), at
+//            concurrency 1 and then at the configured concurrency — because a
+//            camp-wide lock caps throughput no matter how many callers arrive,
+//            so a rate that RISES with callers is what shows the lock is gone
 //
 // and reports latency percentiles, error counts and throughput per RPC, with a
 // PASS / WARN verdict against a p95 threshold.
@@ -20,11 +24,13 @@
 // needs N real signed-in parents, so setup creates N auth users
 // (loadtest-parent-<i>@example.com) and N active invites bound to them; the
 // canteen phase seeds N "Load Camper <i>" canteen accounts with balances; the
-// registration phase files N applications. Teardown removes all of it, but a
+// registration phase files N applications; the payments phase seeds F
+// "lt_fam_<i>" families and records payments against them. Teardown removes all of it, but a
 // script that creates users and writes camp state must never be pointed at a
 // live camp. It refuses to run without an explicit acknowledgement.
 //
-// HOW TO RUN (from the repo root, Node 18+; no packages to install):
+// HOW TO RUN (from the REPO ROOT — the path below is relative to it, so running
+// it from anywhere else is a MODULE_NOT_FOUND. Node 18+; no packages to install):
 //
 //   SUPABASE_URL=https://xxxx.supabase.co \
 //   SUPABASE_ANON_KEY=... \
@@ -34,12 +40,30 @@
 //   I_UNDERSTAND_THIS_IS_A_THROWAWAY_PROJECT=yes \
 //   node scripts/load_test.mjs --parents 300 --concurrency 60 --duration 90
 //
+// ON WINDOWS cmd.exe that VAR=value prefix form is NOT an error — it is simply
+// ignored, so the run reaches the env check and stops at "missing env". Set each
+// one on its own line first, with no quotes and no spaces around the `=`, and
+// note the BACKSLASH in the path:
+//
+//   set SUPABASE_URL=https://xxxx.supabase.co
+//   set SUPABASE_ANON_KEY=...
+//   set SUPABASE_SERVICE_ROLE_KEY=...
+//   set CAMP_ID=...
+//   set I_UNDERSTAND_THIS_IS_A_THROWAWAY_PROJECT=yes
+//   node scripts\load_test.mjs --phases payments --payments 300 --pay-families 75
+//
+// (In PowerShell it is $env:SUPABASE_URL="..." per line.) The four SUPABASE_*/
+// CAMP_ID vars are always required, whatever the phase; OWNER_EMAIL and
+// OWNER_PASSWORD are needed only by the canteen phase.
+//
 //   --parents N        families / parents / register accounts to simulate (200)
 //   --concurrency C    requests in flight at once (50)
 //   --duration S       seconds to run the portal poll loop (60)
 //   --poll S           the portal's poll interval to simulate (30, the real one)
 //   --session NAME     session name registrations sign up for (none)
-//   --phases a,b,c     any of reg,portal,canteen (all that are configured)
+//   --payments N       payments to record in the payments phase (200)
+//   --pay-families F   families to spread them over (50)
+//   --phases a,b,c     any of reg,portal,canteen,payments (all that are configured)
 //   --p95-ms MS        the verdict threshold (1500)
 //   --keep             leave the synthetic parents/applications in place
 //   --dry-run          print the plan and create nothing
@@ -62,7 +86,11 @@ export function parseArgs(argv) {
     // the Nth simultaneous sale is N times the per-sale cost. Running the
     // canteen at parent concurrency measured 100 tills ringing in the same
     // instant, which no camp does, and reported a WARN for it.
-    const o = { parents: 200, concurrency: 50, registers: 6, duration: 60, poll: 30, session: '',
+    // payments: how many to record, spread over payFamilies families. The two
+    // numbers matter separately — see phasePayments for why the SPREAD and the
+    // ONE-family runs are reported as a pair.
+    const o = { parents: 200, concurrency: 50, registers: 6, payments: 200, payFamilies: 50,
+                duration: 60, poll: 30, session: '',
                 phases: null, p95: 1500, keep: false, dryRun: false };
     const num = (v, name) => { const n = Number(v); if (!Number.isFinite(n) || n < 0) throw new Error(`${name} must be a non-negative number`); return n; };
     for (let i = 0; i < argv.length; i++) {
@@ -71,6 +99,8 @@ export function parseArgs(argv) {
             case '--parents': o.parents = Math.max(1, Math.floor(num(next(), a))); break;
             case '--concurrency': o.concurrency = Math.max(1, Math.floor(num(next(), a))); break;
             case '--registers': o.registers = Math.max(1, Math.floor(num(next(), a))); break;
+            case '--payments': o.payments = Math.max(1, Math.floor(num(next(), a))); break;
+            case '--pay-families': o.payFamilies = Math.max(1, Math.floor(num(next(), a))); break;
             case '--duration': o.duration = num(next(), a); break;
             case '--poll': o.poll = Math.max(1, num(next(), a)); break;
             case '--session': o.session = String(next() || ''); break;
@@ -81,7 +111,7 @@ export function parseArgs(argv) {
             default: throw new Error(`unknown argument: ${a}`);
         }
     }
-    if (o.phases) for (const p of o.phases) if (!['reg', 'portal', 'canteen'].includes(p)) throw new Error(`unknown phase: ${p}`);
+    if (o.phases) for (const p of o.phases) if (!['reg', 'portal', 'canteen', 'payments'].includes(p)) throw new Error(`unknown phase: ${p}`);
     return o;
 }
 
@@ -283,6 +313,8 @@ function mkClient(env) {
     };
     return {
         rpc: (fn, args, jwt) => call('POST', `/rest/v1/rpc/${fn}`, args, jwt),
+        // As the payment webhooks call in: an edge function with the service role.
+        svcRpc: (fn, args) => call('POST', `/rest/v1/rpc/${fn}`, args, svc, svc),
         // service-role table access (bypasses RLS) — setup and teardown only
         insert: (table, rows) => call('POST', `/rest/v1/${table}`, rows, svc, svc),
         select: (table, query) => call('GET', `/rest/v1/${table}?${query}`, undefined, svc, svc),
@@ -451,6 +483,162 @@ async function phasePortal(c, o, env, report, parents, log) {
     }
 }
 
+/** A synthetic family key, and the payment posted against it. */
+export function payFamilyKey(i) { return 'lt_fam_' + i; }
+export function loadPayment(i, famKey) {
+    return {
+        id: 'lt_pay_' + i,
+        reference: 'lt_ref_' + i,
+        family: 'Load Family ' + famKey.replace('lt_fam_', ''),
+        familyKey: famKey,
+        amount: 25,
+        status: 'succeeded',
+        date: new Date().toISOString().slice(0, 10),
+        method: 'card',
+        notes: 'load test',
+    };
+}
+
+/**
+ * Recording payments — the path migrations 208-215 took off the camp-wide lock.
+ *
+ * WHAT THE QUESTION ACTUALLY IS. Before the change, append_camp_payment held
+ * SELECT ... FOR UPDATE on the camp's whole document, so every payment in a camp
+ * queued behind every other one no matter whose it was. Now the payment is an
+ * insert that takes no lock, and only the ledger post locks the ONE family row it
+ * writes. So: does the camp still serialise?
+ *
+ * WHY THE FIRST VERSION OF THIS PHASE ANSWERED THE WRONG QUESTION. It ran the same
+ * payments twice — spread over many families, then all aimed at one — and read the
+ * ratio as the verdict. Two things were wrong with that, and the measured run
+ * showed both:
+ *
+ *   1. It was ORDER-BIASED. `spread` always ran first, so it paid for opening the
+ *      connections the second burst then reused. The real run came back with
+ *      p50 276ms spread and p50 269ms one — identical service time — and a p95 of
+ *      5759ms against 1601ms. The whole difference was the first burst's tail. It
+ *      reported "spreading barely helped" about a cold pool. This is the same
+ *      defect as the fixed boot-call order that bootOrder() exists to fix; see
+ *      the note there. Fixed here by a discarded WARM-UP burst, and by running
+ *      spread on BOTH sides of `one` so drift is visible instead of invisible.
+ *
+ *   2. Even unbiased, the ratio cannot answer the question. Spreading over 75
+ *      families does strictly MORE distinct work than hammering one — 75 rows and
+ *      index pages to dirty instead of one hot row — so a healthy per-family lock
+ *      can legitimately post a lower rate than a contended single row. The ratio
+ *      conflates "is there a camp-wide lock" with "is a cache hit faster than a
+ *      cache miss", and the second effect can be larger.
+ *
+ * WHAT ACTUALLY ANSWERS IT: does throughput SCALE with concurrency? A camp-wide
+ * lock makes the camp a single queue, so total throughput is capped at
+ * 1/service_time no matter how many callers arrive — adding concurrency moves
+ * nothing. That is exactly how the canteen phase reports its ceiling, and the
+ * canteen still HAS such a lock, so the two phases can be read against each
+ * other. So the headline here is the same burst at concurrency 1 and at the
+ * configured concurrency: if the rate climbs with the callers, there is no
+ * camp-wide queue, whatever the spread-vs-one ratio says.
+ *
+ * spread-vs-one is kept, demoted to what it can honestly show: the cost of
+ * contending on one family's row versus many. It is reported, not used as a
+ * verdict.
+ *
+ * Called with the SERVICE ROLE, because that is how the payment webhooks call in:
+ * an edge function, not a browser.
+ */
+async function phasePayments(c, o, env, report, log) {
+    // Seed the families the payments post against. Written into the document with
+    // the service role, which is the setup path the other phases use; migration
+    // 211's trigger projects them into camp_families, so this exercises the real
+    // route rather than inserting rows behind the app's back.
+    const cur = await c.select('camp_state_kv', `select=value&camp_id=eq.${env.CAMP_ID}&key=eq.campistryMe`);
+    const me = (cur.ok && Array.isArray(cur.data) && cur.data[0] ? cur.data[0].value : null) || {};
+    const fams = Object.assign({}, (me.families && typeof me.families === 'object') ? me.families : {});
+    for (let i = 0; i < o.payFamilies; i++) {
+        fams[payFamilyKey(i)] = { name: 'Load Family ' + i, camperIds: ['Load Camper ' + i], entries: [] };
+    }
+    const w = await c.upsertKvMerge(env.CAMP_ID, 'campistryMe', Object.assign({}, me, { families: fams }));
+    if (!w.ok) { log(`  payments: could not seed families (HTTP ${w.status}) — skipped`); return null; }
+    log(`  payments: ${o.payments} payments, ${o.payFamilies} families seeded, concurrency ${o.concurrency}`);
+
+    // One burst. `leg` only tags the payment ids so that every call in the whole
+    // phase carries a DISTINCT id: a repeat would return alreadyRecorded and time
+    // a dedupe probe instead of a write.
+    const burst = async (leg, mode, n, conc) => {
+        const samples = [];
+        const t0 = Date.now();
+        await pool(Array.from({ length: n }, (_, i) => i), conc, async (i) => {
+            const famKey = payFamilyKey(mode === 'one' ? 0 : i % o.payFamilies);
+            const pay = loadPayment(`${leg}_${i}`, famKey);
+            const res = await c.svcRpc('append_camp_payment',
+                { p_camp_id: env.CAMP_ID, p_payment: pay, p_dedupe_key: pay.reference });
+            samples.push(sample(res, 'append_camp_payment'));
+        });
+        const elapsed = Date.now() - t0;
+        return { samples, elapsed, sum: summarize(samples, elapsed) };
+    };
+
+    // Warm-up, DISCARDED. Opening `concurrency` connections costs seconds, and
+    // whichever burst pays for it looks slow for a reason that has nothing to do
+    // with locking. Charging it to a burst nobody reads is the whole point.
+    const warm = Math.min(50, o.payments);
+    await burst('warm', 'spread', warm, o.concurrency);
+    log(`  payments: ${warm} discarded as warm-up, so no measured burst pays for opening connections`);
+
+    // The scaling test. Serial leg deliberately small: at concurrency 1 it costs
+    // one service time per payment, so a full-size leg would dominate the run.
+    const serialN = Math.max(10, Math.min(40, o.payments));
+    const serial = await burst('serial', 'spread', serialN, 1);
+    // spread on BOTH sides of `one`, so a drifting project shows up as a gap
+    // between two identical bursts rather than as a finding about families.
+    const spreadA = await burst('spreadA', 'spread', o.payments, o.concurrency);
+    const one = await burst('one', 'one', o.payments, o.concurrency);
+    const spreadB = await burst('spreadB', 'spread', o.payments, o.concurrency);
+
+    // Both spread bursts ran at the same concurrency, so their samples and their
+    // wall clocks add: one rate over twice the payments, with the drift between
+    // the halves reported separately below.
+    const spreadAll = summarize(spreadA.samples.concat(spreadB.samples),
+        spreadA.elapsed + spreadB.elapsed);
+    report.push([`payments · serial (concurrency 1)`, serial.sum, verdict(serial.sum, o.p95, [])]);
+    report.push([`payments · spread over ${o.payFamilies} families`, spreadAll, verdict(spreadAll, o.p95, [])]);
+    report.push(['payments · all to ONE family', one.sum, verdict(one.sum, o.p95, [])]);
+
+    // ── the finding ─────────────────────────────────────────────────────────
+    const s1 = serial.sum.rps, sN = spreadAll.rps;
+    if (s1 > 0 && sN > 0) {
+        const scale = Math.round((sN / s1) * 10) / 10;
+        log(`  payments: ${s1}/second with ONE caller, ${sN}/second with ${o.concurrency} (${scale}x)`);
+        if (scale < 2) {
+            log(`           ⚠ ${o.concurrency} callers achieved less than twice one caller's rate.`);
+            log('             A camp-wide lock makes the camp ONE queue, so throughput cannot');
+            log('             rise with callers — that is what this looks like. Check whether');
+            log('             append_camp_payment still takes a camp-level lock.');
+        } else {
+            log('           Throughput rises with callers, so the camp is NOT one queue: the');
+            log('             payment insert takes no lock and only the ledger post locks the');
+            log('             one family row it writes. (Compare the canteen phase, which still');
+            log('             holds a camp-wide lock and so reports a flat ceiling instead.)');
+        }
+    }
+
+    // Drift, then the demoted comparison — in that order, because the first
+    // decides whether the second means anything.
+    const a = spreadA.sum.rps, b = spreadB.sum.rps, on = one.sum.rps;
+    if (a > 0 && b > 0) {
+        const drift = Math.round((Math.max(a, b) / Math.min(a, b)) * 10) / 10;
+        if (drift >= 1.5) {
+            log(`           ⚠ the two identical spread bursts differ ${drift}x (${a} vs ${b}/second).`);
+            log('             The project is too noisy for the comparison below to mean much;');
+            log('             re-run, and watch the Dashboard database report while it goes.');
+        } else if (on > 0) {
+            log(`  payments: ${sN}/second over ${o.payFamilies} families, ${on}/second all on one.`);
+            log('             This is the cost of contending on a single family row, NOT evidence');
+            log('             about a camp-wide lock: one hot row can beat many cold ones.');
+        }
+    }
+    return { seededFamilies: o.payFamilies };
+}
+
 async function phaseCanteen(c, o, env, report, log) {
     if (!env.OWNER_EMAIL || !env.OWNER_PASSWORD) { log('  canteen: OWNER_EMAIL/OWNER_PASSWORD not set — skipped'); return null; }
     const s = await c.signIn(env.OWNER_EMAIL, env.OWNER_PASSWORD);
@@ -490,7 +678,7 @@ async function phaseCanteen(c, o, env, report, log) {
     return existing;
 }
 
-async function teardown(c, env, parents, snacksBefore, log) {
+async function teardown(c, env, parents, snacksBefore, paymentsRan, log) {
     log('teardown…');
     const inv = await c.del('link_parent_invites', `camp_id=eq.${env.CAMP_ID}&parent_email=like.loadtest-parent-*@example.com`);
     log(`  invites removed: ${inv.ok ? 'ok' : 'HTTP ' + inv.status}`);
@@ -499,6 +687,28 @@ async function teardown(c, env, parents, snacksBefore, log) {
     log(`  auth users removed: ${users}/${parents.filter(p => p.userId).length}`);
     const apps = await c.del('camp_applications', `camp_id=eq.${env.CAMP_ID}&payload->>loadTest=eq.true`);
     log(`  applications removed: ${apps.ok ? 'ok' : 'HTTP ' + apps.status}`);
+    if (paymentsRan) {
+        // The payment ROWS. Deleted outright rather than soft-deleted: these are
+        // synthetic rows this script created, not a camp's deliberate deletion, and
+        // leaving them behind would inflate every later run's dedupe index — the
+        // same way the canteen archive decayed before migration 206.
+        const pay = await c.del('camp_payments', `camp_id=eq.${env.CAMP_ID}&payment_id=like.lt_pay_*`);
+        log(`  payment rows removed: ${pay.ok ? 'ok' : 'HTTP ' + pay.status}`);
+        // and the families they were posted against, out of the document. 211's
+        // trigger stamps the rows deleted, which is the app's own route.
+        const cur = await c.select('camp_state_kv', `select=value&camp_id=eq.${env.CAMP_ID}&key=eq.campistryMe`);
+        const now = (cur.ok && Array.isArray(cur.data) && cur.data[0] ? cur.data[0].value : null) || {};
+        const fams = Object.assign({}, (now.families && typeof now.families === 'object') ? now.families : {});
+        let removed = 0;
+        for (const k of Object.keys(fams)) if (/^lt_fam_\d+$/.test(k)) { delete fams[k]; removed++; }
+        if (removed) {
+            const r = await c.upsertKvMerge(env.CAMP_ID, 'campistryMe', Object.assign({}, now, { families: fams }));
+            log(`  load families removed: ${r.ok ? removed : 'HTTP ' + r.status}`);
+        }
+        // The rows 211 soft-deleted are ours too, so take them out properly.
+        const fr = await c.del('camp_families', `camp_id=eq.${env.CAMP_ID}&family_key=like.lt_fam_*`);
+        log(`  family rows removed: ${fr.ok ? 'ok' : 'HTTP ' + fr.status}`);
+    }
     if (snacksBefore !== undefined) {
         const cur = await c.select('camp_state_kv', `select=value&camp_id=eq.${env.CAMP_ID}&key=eq.campistrySnacks`);
         const now = cur.ok && Array.isArray(cur.data) && cur.data[0] ? cur.data[0].value : null;
@@ -512,7 +722,7 @@ async function teardown(c, env, parents, snacksBefore, log) {
 export async function main(argv, env, log) {
     log = log || console.log;
     const o = parseArgs(argv);
-    const phases = o.phases || ['reg', 'portal', 'canteen'];
+    const phases = o.phases || ['reg', 'portal', 'canteen', 'payments'];
     const missing = ['SUPABASE_URL', 'SUPABASE_ANON_KEY', 'SUPABASE_SERVICE_ROLE_KEY', 'CAMP_ID'].filter(k => !env[k]);
     if (missing.length) throw new Error(`missing env: ${missing.join(', ')}`);
     if (env.I_UNDERSTAND_THIS_IS_A_THROWAWAY_PROJECT !== 'yes') {
@@ -540,7 +750,7 @@ export async function main(argv, env, log) {
     log('preflight: REST and Auth both answered JSON');
 
     const report = [];
-    let parents = [], snacksBefore;
+    let parents = [], snacksBefore, paymentsRan;
     try {
         if (phases.includes('reg')) { log('phase: registration burst'); await phaseRegistration(c, o, env, report); }
         if (phases.includes('portal')) {
@@ -550,8 +760,9 @@ export async function main(argv, env, log) {
             await phasePortal(c, o, env, report, parents, log);
         }
         if (phases.includes('canteen')) { log('phase: canteen rush'); snacksBefore = await phaseCanteen(c, o, env, report, log); }
+        if (phases.includes('payments')) { log('phase: payments'); paymentsRan = await phasePayments(c, o, env, report, log); }
     } finally {
-        if (!o.keep) await teardown(c, env, parents, snacksBefore, log);
+        if (!o.keep) await teardown(c, env, parents, snacksBefore, paymentsRan, log);
         else log('--keep: synthetic parents, applications and canteen accounts left in place');
     }
 

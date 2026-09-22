@@ -334,3 +334,73 @@ test('the drain is fired, not awaited, during hydration', () => {
     assert.match(body, /try\{ _drainApplications\(\); \}catch\(_\)\{\}/);
     assert.ok(!/await _drainApplications/.test(ME), 'hydration blocks on the network');
 });
+
+// ── one row per applicant, including siblings ───────────────────────────────
+// A family with three children must create THREE applications, not one with
+// three campers in it. The server side is structural — PRIMARY KEY
+// (camp_id, kind, entry_id) and one row per submit_public_application call, both
+// exercised against a real Postgres in scripts/pgtests/200_applications_out_of_the_blob.sql.
+// What is NOT structural is the client loop: collapsing it into a single call
+// with an array of campers would still "work", and would quietly give a
+// three-child family one application. So the loop is asserted here.
+test('the register page calls the submit RPC ONCE PER CAMPER', () => {
+    const html = read('campistry_register.html');
+    const a = html.indexOf('async function _flushEnrollmentsToCloud');
+    assert.ok(a > 0, 'the cloud flush is gone');
+    const body = html.slice(a, html.indexOf('\n}', html.indexOf('return {ok:true', a)));
+
+    assert.match(body, /var ids=Object\.keys\(campistryMe\.enrollments\|\|\{\}\);/,
+        'it must enumerate every enrollment, not just the first');
+    assert.match(body, /for\(var j=0;j<ids\.length;j\+\+\)\{/,
+        'a loop over all of them');
+    assert.match(body, /client\.rpc\('submit_public_application',\{p_camp_id:campId,p_kind:'enrollments',p_entry_id:id,p_entry:campistryMe\.enrollments\[id\]\}\)/,
+        'one call, carrying ONE entry id and ONE entry — not an array of campers');
+
+    // The call must be inside the loop, not after it.
+    const loopAt = body.indexOf('for(var j=0');
+    const rpcAt = body.indexOf("client.rpc('submit_public_application'");
+    assert.ok(rpcAt > loopAt, 'the submit must happen per iteration');
+});
+
+test('each camper gets its own entry id, and the ids are unique', () => {
+    const html = read('campistry_register.html');
+    // Whatever builds the enrollments object must key each camper separately;
+    // a shared key would collapse siblings onto one primary key server-side.
+    assert.match(html, /p_entry_id:id/, 'the entry id is the loop variable, not a constant');
+    assert.doesNotMatch(html, /p_entry_id:\s*['"]/, 'never a literal entry id');
+    assert.doesNotMatch(html, /p_entry_id:\s*campId/, 'the camp is not the entry id');
+});
+
+test('a waitlisted sibling is reported per camper, not per family', () => {
+    const html = read('campistry_register.html');
+    const a = html.indexOf('async function _flushEnrollmentsToCloud');
+    const body = html.slice(a, html.indexOf('return {ok:true', a));
+    // Each child can be waitlisted independently — the session can fill between
+    // the first sibling and the third.
+    assert.match(body, /_waitlisted\.push\(campistryMe\.enrollments\[id\]\.camperName/,
+        'the waitlisted list names the CAMPER, so a family of three can be told which');
+    assert.match(body, /campistryMe\.enrollments\[id\]\.status='waitlisted'/,
+        'and only that camper is marked');
+});
+
+test('the applications table keys on the entry, so siblings cannot collide', () => {
+    const sql = read('migrations/200_applications_out_of_the_blob.sql');
+    assert.match(sql, /PRIMARY KEY \(camp_id, kind, entry_id\)/,
+        'entry_id in the key is what makes one row per applicant structural');
+    // And the capacity index is partial on enrollments: a staff application is
+    // not a place in a session and must never be counted as one.
+    assert.match(sql, /camp_applications_capacity_idx[\s\S]{0,160}WHERE kind = 'enrollments'/);
+});
+
+test('a submission never writes the camp document — that is the bottleneck removed', () => {
+    const sql = read('migrations/200_applications_out_of_the_blob.sql');
+    const a = sql.indexOf('CREATE OR REPLACE FUNCTION public.submit_public_application');
+    const code = sql.slice(a, sql.indexOf('\n$$;', a)).replace(/--[^\n]*/g, ' ');
+    assert.doesNotMatch(code, /UPDATE camp_state_kv|INSERT INTO camp_state_kv/,
+        'hundreds of parents submitting at once must not queue on one shared row');
+    assert.doesNotMatch(code, /FOR UPDATE/,
+        'the camp-wide lock was narrowed to an advisory lock on (camp, session)');
+    assert.match(code, /pg_advisory_xact_lock/,
+        'two families racing for the last place in ONE session still serialise');
+    assert.match(code, /INSERT INTO public\.camp_applications/);
+});

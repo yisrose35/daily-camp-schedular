@@ -237,6 +237,7 @@ var pplStaffSubTab='applicants';  // Hiring page's own top tab: applicants | hir
 var staffApplications={};   // Staff hiring: applicant id → application record
 var staffFormConfig=null;   // Staff application form config — mirrors formConfig, drives campistry_staff_apply.html
 var paFormConfig=null;      // Post-acceptance form config — mirrors formConfig, drives campistry_postaccept.html
+var acceptancePacketConfig=null;  // "On Acceptance" — what a family is sent when accepted (form link, Zelle info, camper-mail address, auto-send)
 var phFormConfig=null;      // Post-hire form config — mirrors paFormConfig, drives campistry_posthire.html
 var counselorVisibility=null; // What counselors see in Lite; null = catalogue defaults
 var _setupChecklistDismissed=false; // owner dismissed the onboarding progress card
@@ -454,7 +455,12 @@ function loadData(){
         structure=s.campStructure||{};
         roster=(s.app1&&s.app1.camperRoster)||{};
         var me=s.campistryMe||{};
-        families=me.families||{}; payments=me.payments||[];
+        // ★ 211/212: the family rows win when we have them. Same rule and same
+        // reason as finPayments below — camp_families is the second home today and
+        // the only one after the writer phase, at which point me.families stops
+        // being maintained. A reader that preferred the branch would then show a
+        // family list frozen at the moment of that deploy, with no error.
+        families=_familiesFromRows||me.families||{}; payments=me.payments||[];
         payers=(window.CampistryPayers?window.CampistryPayers.normalize(me.payers):(me.payers||{}));
         broadcasts=me.broadcasts||[]; bunkAsgn=me.bunkAssignments||{}; bunkManualCounts=me.bunkManualCounts||{};
         bunkCapacity=me.bunkCapacity||{};
@@ -469,12 +475,18 @@ function loadData(){
         // (migration 200). Fired and not awaited: hydration must not wait on a
         // network call, and the drain re-renders when it finds anything.
         try{ _drainApplications(); }catch(_){}
+        // The payment ledger as ROWS rather than a jsonb array (migration 208,
+        // read by 210). Same shape as the drain above: fired, not awaited, and it
+        // re-renders if what it finds differs from what we hydrated with.
+        try{ _loadPaymentsFromRows(); }catch(_){}
+        try{ _loadFamiliesFromRows(); }catch(_){}
         leads=me.leads||{};
         counselorVisibility=(me.counselorVisibility&&typeof me.counselorVisibility==='object')?me.counselorVisibility:null;
         _setupChecklistDismissed=!!me.setupChecklistDismissed;
         formConfig=me.formConfig||null;
         staffFormConfig=me.staffFormConfig||null;
         paFormConfig=me.postAcceptFormConfig||null;
+        acceptancePacketConfig=me.acceptancePacketConfig||null;
         phFormConfig=me.postHireFormConfig||null;
         bunkGenConfig=Object.assign(_defaultBunkGenConfig(),me.bunkGenConfig||{});
         if(!Array.isArray(bunkGenConfig.criteria)||!bunkGenConfig.criteria.length)bunkGenConfig.criteria=_defaultBunkGenConfig().criteria;
@@ -552,7 +564,13 @@ function loadData(){
         // See the note on _loadedPayroll above — same stripped-snapshot hazard.
         _loadedFinance=(s.campistryMeFinance!==undefined)||(me.finance!==undefined);
         finStaff=fin.staff||[];finExpenses=fin.expenses||[];
-        finPayments=(me.finance&&me.finance.payments)||fin.payments||[];
+        // ★ 208/209: the rows win when we have them. camp_payments is the second
+        // home today and the only one after phase 2b, at which point the array
+        // below stops being maintained — so a reader that preferred the array
+        // would show a ledger frozen at the moment of that deploy, with no error.
+        // Preferring the rows NOW, while the two still agree, is what makes that
+        // later change safe. Same shape as _preferKey's new-home-wins rule.
+        finPayments=_paymentsFromRows||(me.finance&&me.finance.payments)||fin.payments||[];
         finBudget=fin.budget||{revenue:0,payroll:0,expenses:0};finIntegrations=fin.integrations||{};
         // Seed from the new shared field, but also from the two legacy
         // counters (nextCamperId/nextStaffId) that older saves may still
@@ -762,6 +780,7 @@ function save(){
             formConfig:formConfig,
             staffFormConfig:staffFormConfig,
             postAcceptFormConfig:paFormConfig,
+            acceptancePacketConfig:acceptancePacketConfig,
             postHireFormConfig:phFormConfig,
             bunkGenConfig:bunkGenConfig,
             printSheets:printSheets,
@@ -791,6 +810,19 @@ function save(){
             finance:Object.assign({},(_cachedMe.finance&&typeof _cachedMe.finance==='object')?_cachedMe.finance:{},{payments:finPayments})
         });
         g.updated_at=new Date().toISOString();
+
+        // ★ 213: the ROWS are the record for families and payments now. Every
+        // one of the 43 family sites and 9 payment sites still just mutates the
+        // object and calls save(), so this is the single place that needs to know:
+        // send what actually CHANGED since we loaded, and nothing else. The
+        // document's branches above are still written, harmlessly — nothing reads
+        // them, and the projection triggers only project entries whose value
+        // changed, which are the same values we are about to sync.
+        //
+        // Sending a diff rather than the whole document is also what removes the
+        // clobber the old full-document upsert could cause, which is what the
+        // comment about a parent's deposit was describing.
+        try{ _syncBillingRows(); }catch(_){}
 
         // saveGlobalSettings → setLocalSettings handles ALL persistence:
         //   - IndexedDB write-through with the FULL state (no quota)
@@ -2305,6 +2337,173 @@ function _arAgingHtml(ledgers){
  * function-missing error and behaves exactly as it did before, because the blob
  * still holds everything 200's backfill copied out of it.
  */
+// ─── the payment ledger, from rows ──────────────────────────────────────────
+// Migration 208 gave payments their own rows and a trigger that keeps them in
+// step with campistryMe.finance.payments; 210 added get_camp_payments to read
+// them. Phase 2b then stops the writers maintaining the array, so this has to be
+// in place and deployed BEFORE that, while the two homes still agree — otherwise
+// the first thing anyone notices is a Billing history that stopped growing.
+//
+// Null means "we have not heard from the rows", NOT "there are no payments": an
+// empty camp legitimately answers [], and conflating the two would blank a real
+// ledger whenever the call failed. loadData only prefers a non-null value.
+var _paymentsFromRows=null;
+
+async function _loadPaymentsFromRows(){
+    var client=window.CampistryDB&&window.CampistryDB.getClient?window.CampistryDB.getClient():window.supabase;
+    var campId=window.CampistryDB&&window.CampistryDB.getCampId?window.CampistryDB.getCampId():(window.getCampId?window.getCampId():null);
+    if(!client||typeof client.rpc!=='function'||!campId)return;
+    try{
+        var res=await client.rpc('get_camp_payments',{p_camp_id:campId});
+        if(res&&res.error){
+            // A camp that has not pasted 209 yet, or a user without me.billing.
+            // Neither is worth showing: the array still has everything, which is
+            // exactly what this screen had before any of this existed.
+            console.log('[Me] payment rows unavailable:',res.error.message);
+            return;
+        }
+        var d=res&&res.data;
+        if(!d||d.success===false||!Array.isArray(d.payments))return;
+        var before=JSON.stringify(finPayments||[]);
+        _paymentsFromRows=d.payments;
+        // Re-run the normal hydration so every consumer picks the rows up through
+        // the one path, rather than this function reaching into each of them.
+        if(typeof loadData==='function')loadData();
+        try{ _billSnapshot(); }catch(_){}
+        // Only repaint when it actually changed. Before phase 2b the two homes
+        // agree, so this is normally a no-op and Billing must not flicker.
+        if(JSON.stringify(finPayments||[])!==before){
+            if(typeof renderBilling==='function'&&document.getElementById('page-billing'))
+                try{ renderBilling(); }catch(_){}
+        }
+    }catch(e){
+        console.warn('[Me] could not load payment rows:',e&&e.message);
+    }
+}
+// Exposed so a writer can pull the ledger forward after recording a payment,
+// without waiting for the next full page load.
+window.reloadCampistryPayments=_loadPaymentsFromRows;
+
+// ─── families, from rows ────────────────────────────────────────────────────
+// Migration 211 gave families their own rows; 212 added get_camp_families and
+// moved every server-side reader onto them. This is the office half, and like
+// the payments loader it has to be deployed BEFORE the writer phase stops
+// maintaining me.families — otherwise the first symptom is a family list that
+// quietly stopped changing.
+//
+// Null means "not heard from the rows", NOT "this camp has no families". A camp
+// legitimately answers {}, and conflating the two would empty the Billing screen
+// whenever the call failed.
+//
+// Soft-deleted families are already absent from what the RPC returns, so a family
+// the office removed disappears here without this file knowing the rule.
+var _familiesFromRows=null;
+
+async function _loadFamiliesFromRows(){
+    var client=window.CampistryDB&&window.CampistryDB.getClient?window.CampistryDB.getClient():window.supabase;
+    var campId=window.CampistryDB&&window.CampistryDB.getCampId?window.CampistryDB.getCampId():(window.getCampId?window.getCampId():null);
+    if(!client||typeof client.rpc!=='function'||!campId)return;
+    try{
+        var res=await client.rpc('get_camp_families',{p_camp_id:campId});
+        if(res&&res.error){
+            // A camp that has not pasted 212 yet, or a user without me.billing.
+            // The branch still has everything it had before any of this existed.
+            console.log('[Me] family rows unavailable:',res.error.message);
+            return;
+        }
+        var d=res&&res.data;
+        if(!d||d.success===false||!d.families||typeof d.families!=='object'||Array.isArray(d.families))return;
+        var before=JSON.stringify(families||{});
+        _familiesFromRows=d.families;
+        if(typeof loadData==='function')loadData();
+        try{ _billSnapshot(); }catch(_){}
+        // Before the writer phase the two homes agree, so this is normally a
+        // no-op and Billing must not flicker on every load.
+        if(JSON.stringify(families||{})!==before){
+            if(typeof renderBilling==='function'&&document.getElementById('page-billing'))
+                try{ renderBilling(); }catch(_){}
+        }
+    }catch(e){
+        console.warn('[Me] could not load family rows:',e&&e.message);
+    }
+}
+window.reloadCampistryFamilies=_loadFamiliesFromRows;
+
+// ─── the office's one write path for billing rows ───────────────────────────
+// The baseline: what the SERVER last told us, so a diff means "what this office
+// changed". Advanced only on a SUCCESSFUL sync — a failed one keeps the old
+// baseline so the next save retries the change instead of losing it.
+var _billBase=null;
+
+function _billSnapshot(){
+    var pays={};
+    (finPayments||[]).forEach(function(p){ var id=_payIdentity(p); if(id) pays[id]=p; });
+    _billBase={
+        fams:JSON.parse(JSON.stringify(families||{})),
+        pays:JSON.parse(JSON.stringify(pays))
+    };
+}
+
+// Byte-for-byte public.camp_payment_identity(jsonb). If these two ever disagree
+// the office would upsert a SECOND row for a payment the server already has, so
+// the order of the four ids and the signature's field list are load-bearing.
+function _payIdentity(p){
+    if(!p||typeof p!=='object'||Array.isArray(p))return '';
+    var t=function(v){ return (v===null||v===undefined)?'':String(v).trim(); };
+    var direct=t(p.id)||t(p.reference)||t(p.stripePaymentIntentId)||t(p.byopTransactionId);
+    if(direct)return direct;
+    var f=function(v){ return (v===null||v===undefined)?'':String(v); };
+    return 'sig:'+[f(p.date),f(p.amount),f(p.family),f(p.familyKey),
+                   f(p.enrollmentId),f(p.method),f(p.status),f(p.notes)].join('|');
+}
+
+async function _syncBillingRows(){
+    // No baseline means we never heard from the rows — syncing a diff against
+    // nothing would look like "the office created every family from scratch".
+    if(!_billBase)return;
+    var client=window.CampistryDB&&window.CampistryDB.getClient?window.CampistryDB.getClient():window.supabase;
+    var campId=window.CampistryDB&&window.CampistryDB.getCampId?window.CampistryDB.getCampId():(window.getCampId?window.getCampId():null);
+    if(!client||typeof client.rpc!=='function'||!campId)return;
+
+    var eq=function(a,b){ return JSON.stringify(a)===JSON.stringify(b); };
+    var famUp={},famDel=[],payUp=[],payDel=[];
+    var nowFams=families||{};
+    Object.keys(nowFams).forEach(function(k){
+        if(!eq(nowFams[k],_billBase.fams[k])) famUp[k]=nowFams[k];
+    });
+    Object.keys(_billBase.fams).forEach(function(k){
+        if(!Object.prototype.hasOwnProperty.call(nowFams,k)) famDel.push(k);
+    });
+
+    var nowPays={};
+    (finPayments||[]).forEach(function(p){ var id=_payIdentity(p); if(id) nowPays[id]=p; });
+    Object.keys(nowPays).forEach(function(id){
+        if(!eq(nowPays[id],_billBase.pays[id])) payUp.push(nowPays[id]);
+    });
+    Object.keys(_billBase.pays).forEach(function(id){
+        if(!Object.prototype.hasOwnProperty.call(nowPays,id)) payDel.push(id);
+    });
+
+    if(!Object.keys(famUp).length&&!famDel.length&&!payUp.length&&!payDel.length)return;
+    try{
+        var res=await client.rpc('sync_camp_billing',{
+            p_camp_id:campId, p_families_upsert:famUp, p_families_delete:famDel,
+            p_payments_upsert:payUp, p_payments_delete:payDel});
+        if(res&&res.error){
+            console.warn('[Me] billing rows not synced:',res.error.message);
+            return;   // baseline unchanged: the next save retries
+        }
+        if(res&&res.data&&res.data.success===false){
+            console.warn('[Me] billing rows refused:',res.data.error);
+            return;
+        }
+        _billSnapshot();
+    }catch(e){
+        console.warn('[Me] billing row sync failed:',e&&e.message);
+    }
+}
+window.syncCampistryBillingRows=_syncBillingRows;
+
 async function _drainApplications(){
     var M=(typeof window!=='undefined'&&window.CampistryFinanceMerge)||null;
     if(!M||typeof M.mergePublicSubmissions!=='function')return 0;
@@ -4372,7 +4571,9 @@ function _renderRegistrationPane(){
     if(editReg){
         h+='<div class="me-more-wrap"><button class="me-btn me-btn--teal" onclick="CampistryMe._toggleMenu(\'pplFormsMenu\')">Customize Forms ▾</button>'
             +'<div class="me-more-menu" id="pplFormsMenu" style="min-width:210px">'
-            +'<button onclick="CampistryMe.openFormConfig()">Registration Form</button><button onclick="CampistryMe.openPostAcceptFormConfig()" title="Sent after a camper is accepted">Post-Acceptance Form</button>'
+            +'<button onclick="CampistryMe.openFormConfig()">Registration Form</button>'
+            +'<button onclick="CampistryMe.openAcceptancePacket()" title="What a family gets when accepted — the form, deposit info, camper-mail address, and whether it auto-sends">On Acceptance</button>'
+            +'<button onclick="CampistryMe.openPostAcceptFormConfig()" title="The post-acceptance form itself">Post-Acceptance Form</button>'
             +'</div></div>'
             +'<button class="me-btn me-btn--pri" onclick="CampistryMe.addApplication()">+ Manual Entry</button>';
     }
@@ -9593,7 +9794,7 @@ async function _sendContractOfferNow(id){
     var subject='Your offer from '+(campName||'Camp');
     var body='Hi '+firstName+',\n\nWe\'d like to offer you a position for the upcoming season! Please review and accept your offer here:\n\n'+url+'\n\nWe look forward to having you on the team.';
     try{
-        await callEdgeFunctionAuthed('send-broadcast',{campId:getCampId(),to:[{email:a.email,name:a.name||''}],subject:subject,body:body,method:'email',campName:campName});
+        await callEdgeFunctionAuthed('send-broadcast',{campId:getCampId(),to:[{email:a.email,name:a.name||''}],subject:subject,body:body,method:'email',campName:campName,branding:(typeof _getLinkBranding==='function')?_getLinkBranding():undefined});
         a.contract.emailSentAt=new Date().toISOString();
         save();
         toast('Contract offer emailed to '+a.email);
@@ -10220,7 +10421,8 @@ var PAF_SECTIONS=[
     // that never asks for paperwork or money after acceptance must see exactly
     // the form it had before.
     {key:'documents',label:'Required Documents',desc:'The same named list as the registration form — for camps that take the paperwork after acceptance',default:false},
-    {key:'payment',label:'Payment Preference & Deposit',desc:'How the family intends to pay, and what they still owe on their deposit',default:false}
+    {key:'payment',label:'Payment Preference & Deposit',desc:'How the family intends to pay, and what they still owe on their deposit',default:false},
+    {key:'camperMail',label:'Camper Mail',desc:'Show families how to email letters to their camper — the camp address and the child’s code',default:false}
 ];
 var PAF_FIELD_CATALOG={
     bunk:[
@@ -10244,6 +10446,207 @@ function getPostAcceptFormConfig(){
     var sections={};
     PAF_SECTIONS.forEach(function(s){sections[s.key]={enabled:s.default}});
     return{sections:sections,customQuestions:[],customSections:[],welcomeMessage:'',instructions:'',fields:{},sectionOrder:PAF_SECTIONS.map(function(s){return s.key}),branding:{},autoSend:false,attachedListIds:[],printableList:{name:'',items:[]}};
+}
+
+// ── "On Acceptance" packet — what a family receives the moment they're accepted.
+// The Post-Acceptance FORM is just the form; THIS is the builder for what's sent
+// out. Auto-send lives here now (moved off the form). Seeds auto-send from the
+// old form setting so nothing a camp already turned on is lost.
+var PKT_ITEMS=['form','zelle','camperMail'];
+function getAcceptancePacketConfig(){
+    if(acceptancePacketConfig)return acceptancePacketConfig;
+    return {
+        autoSend:!!(paFormConfig&&paFormConfig.autoSend),
+        subject:'',
+        message:'',
+        order:PKT_ITEMS.slice(),
+        form:{enabled:true},
+        zelle:{enabled:false,sendTo:'',showMemo:true},
+        camperMail:{enabled:false,address:'',showCode:false}
+    };
+}
+// The order the included items appear in, validated to the known keys with any
+// missing ones appended (older saved configs).
+function _pktResolveOrder(ord){
+    var out=[]; (ord||[]).forEach(function(k){ if(PKT_ITEMS.indexOf(k)>=0&&out.indexOf(k)<0)out.push(k); });
+    PKT_ITEMS.forEach(function(k){ if(out.indexOf(k)<0)out.push(k); });
+    return out;
+}
+// The included items' current order (reorderable in the builder) and the last
+// rendered preview HTML (for the "Preview" button's new tab).
+var _pktOrder=PKT_ITEMS.slice(), _pktPreviewHtml='';
+// Reads the builder's live inputs into a config shape (before Save), so the
+// preview reflects exactly what's on screen.
+function _pktLiveConfig(){
+    var g=function(id){var el=document.getElementById(id);return el?!!el.checked:false;};
+    var v=function(id){var el=document.getElementById(id);return el?(el.value||''):'';};
+    return {
+        autoSend:g('pktAutoSend'),
+        subject:v('pktSubject').trim(),
+        message:v('pktMessage'),
+        order:_pktOrder.slice(),
+        form:{enabled:g('pktForm')},
+        zelle:{enabled:g('pktZelle'),sendTo:v('pktZelleTo').trim(),showMemo:g('pktZelleMemo')},
+        camperMail:{enabled:g('pktMail'),address:v('pktMailAddr').trim(),showCode:g('pktMailCode')}
+    };
+}
+// One includable item's toggle row (with up/down reorder) + its fields.
+function _pktBlockHtml(k,cfg){
+    function rowc(id,checked,title,desc){
+        return '<label style="display:flex;align-items:flex-start;gap:10px;padding:6px 0;cursor:pointer">'
+          +'<input type="checkbox" id="'+id+'" '+(checked?'checked':'')+' style="accent-color:var(--me);flex-shrink:0;width:16px;height:16px;margin-top:2px">'
+          +'<div style="flex:1;min-width:0"><div style="font-size:.85rem;font-weight:600;color:var(--s800)">'+title+'</div>'
+          +'<div style="font-size:.72rem;color:var(--s400)">'+desc+'</div></div></label>';
+    }
+    var mailDefault=_defaultMailAddr();
+    if(k==='form') return rowc('pktForm',cfg.form.enabled,'Post-Acceptance Form','Include a link to the form (bunkmate requests, t-shirt size, consent, etc.).');
+    if(k==='zelle') return rowc('pktZelle',cfg.zelle.enabled,'Zelle deposit instructions','Tell the family how to pay their deposit by Zelle.')
+      +'<div id="pktZelleFields" style="padding:2px 0 8px 26px;'+(cfg.zelle.enabled?'':'display:none')+'">'
+      +'<div class="fg"><label class="fl">Send Zelle to (email or phone)</label><input class="fi" id="pktZelleTo" value="'+esc(cfg.zelle.sendTo||'')+'" placeholder="e.g. payments@yourcamp.org"></div>'
+      +'<label style="display:flex;align-items:center;gap:8px;font-size:.8rem;color:var(--s600);cursor:pointer"><input type="checkbox" id="pktZelleMemo" '+(cfg.zelle.showMemo!==false?'checked':'')+' style="accent-color:var(--me);width:15px;height:15px">Show each family their deposit reference to put in the Zelle memo</label></div>';
+    if(k==='camperMail') return rowc('pktMail',cfg.camperMail.enabled,'Camper mail address','Tell the family the email address to send printed letters to.')
+      +'<div id="pktMailFields" style="padding:2px 0 8px 26px;'+(cfg.camperMail.enabled?'':'display:none')+'">'
+      +'<div class="fg"><label class="fl">Letters email address</label><input class="fi" id="pktMailAddr" value="'+esc(cfg.camperMail.address||'')+'" placeholder="'+esc(mailDefault||'Leave blank to use your Campistry letters address')+'"><div style="font-size:.7rem;color:var(--s400);margin-top:4px">Leave blank to use your Campistry letters address'+(mailDefault?' ('+esc(mailDefault)+')':'')+'.</div></div>'
+      +'<label style="display:flex;align-items:center;gap:8px;font-size:.8rem;color:var(--s600);cursor:pointer"><input type="checkbox" id="pktMailCode" '+(cfg.camperMail.showCode?'checked':'')+' style="accent-color:var(--me);width:15px;height:15px">Ask families to put their camper’s code in the subject so we can route the letter</label></div>';
+    return '';
+}
+// Each includable item is a draggable row (grip on the left); dragging reorders
+// the DOM nodes directly — the same reorder helpers the form builders use — so
+// input values are preserved through a drag (nothing is re-rendered).
+function _pktIncludedHtml(cfg){
+    return _pktOrder.map(function(k){
+        return '<div class="pktOrderRow" data-key="'+k+'" style="display:flex;align-items:flex-start;gap:8px;border:1px solid transparent;border-radius:8px">'
+          +'<span class="pktGrip" title="Drag to reorder" style="cursor:grab;color:var(--s300);font-size:15px;line-height:1;user-select:none;flex-shrink:0;padding:9px 2px 0">⠿</span>'
+          +'<div style="flex:1;min-width:0">'+_pktBlockHtml(k,cfg)+'</div></div>';
+    }).join('');
+}
+function _pktSyncOrderFromDom(){
+    var list=document.getElementById('pktIncluded'); if(!list)return;
+    var ord=[]; list.querySelectorAll('.pktOrderRow').forEach(function(r){ var kk=r.getAttribute('data-key'); if(kk&&ord.indexOf(kk)<0)ord.push(kk); });
+    if(ord.length)_pktOrder=_pktResolveOrder(ord);
+    _pktRenderPreview();
+}
+function _pktInitDrag(){
+    var list=document.getElementById('pktIncluded'); if(!list)return;
+    _meReorderInit(list,'.pktOrderRow');
+    list.querySelectorAll('.pktOrderRow').forEach(function(row){
+        if(row._pktDragWired)return; row._pktDragWired=true;
+        var grip=row.querySelector('.pktGrip');
+        // Draggable only while a drag begins from the grip, so the checkboxes
+        // and text fields inside the row stay fully usable: arm on grip press,
+        // and disarm on any press that isn't the grip.
+        if(grip){
+            var arm=function(){ row.draggable=true; };
+            grip.addEventListener('mousedown',arm);
+            grip.addEventListener('touchstart',arm,{passive:true});
+        }
+        row.addEventListener('mousedown',function(e){ if(!(e.target&&e.target.closest&&e.target.closest('.pktGrip'))) row.draggable=false; });
+        row.addEventListener('dragstart',function(e){ e.stopPropagation(); row.classList.add('me-dragging'); row.style.opacity='.5'; try{e.dataTransfer.effectAllowed='move';e.dataTransfer.setData('text/plain','reorder');}catch(_){} });
+        row.addEventListener('dragend',function(e){ e.stopPropagation(); row.classList.remove('me-dragging'); row.style.opacity=''; row.draggable=false; _pktSyncOrderFromDom(); });
+    });
+}
+// Live email preview — same split-view format as the form builders, and it
+// renders the ACTUAL branded email (logo/colour/footer) via the shared
+// LinkBranding template, so what's on the right is what recipients receive.
+function _pktRenderPreview(){
+    var host=document.getElementById('packetPreview'); if(!host)return;
+    var p=_pktLiveConfig();
+    var sampleName='Jordan Miller';
+    var campName='';try{var ss=JSON.parse(localStorage.getItem('campGlobalSettings_v1')||'{}');campName=ss.campName||ss.camp_name||'Your Camp';}catch(_){}
+    var subject=(p.subject)?p.subject.replace(/\{camper\}/gi,sampleName):('A few more choices for '+sampleName);
+    var sampleMemo=(_pktSettings&&_pktSettings.campNumber)?(String(_pktSettings.campNumber).replace(/\D/g,'')+'-2087'):'1234-2087';
+    var mailAddr=p.camperMail.address||_defaultMailAddr()||('letters+yourcamp@'+(window.CAMPISTRY_INBOUND_DOMAIN||'inbound.campistry.org'));
+    var formUrl=window.location.origin+'/campistry_postaccept.html?id=SAMPLE&camp='+encodeURIComponent((window.getCampId?getCampId():'')||'');
+    var body=_composeBodyFromParts(p,{camperName:sampleName,formUrl:formUrl,memo:sampleMemo,mailAddr:mailAddr});
+    var branding=(typeof _getLinkBranding==='function')?_getLinkBranding():{};
+    _pktPreviewHtml=(window.LinkBranding&&window.LinkBranding.buildEmailHtml)
+      ? window.LinkBranding.buildEmailHtml({subject:subject,body:body,branding:branding,campName:campName||'Your Camp'})
+      : ('<div style="padding:20px;white-space:pre-wrap;font-family:sans-serif">'+esc(body)+'</div>');
+    var f=document.getElementById('pktPreviewFrame');
+    if(!f){ host.innerHTML='<iframe id="pktPreviewFrame" title="Email preview" style="width:100%;max-width:640px;height:100%;min-height:560px;border:1px solid var(--s200);border-radius:10px;background:#fff;box-shadow:0 4px 24px rgba(0,0,0,.08)"></iframe>'; f=document.getElementById('pktPreviewFrame'); }
+    try{ f.srcdoc=_pktPreviewHtml; }catch(_){ try{ f.contentWindow.document.open(); f.contentWindow.document.write(_pktPreviewHtml); f.contentWindow.document.close(); }catch(__){} }
+}
+function _pktOpenPreview(){
+    if(!_pktPreviewHtml)_pktRenderPreview();
+    var w=window.open('','_blank'); if(!w){ toast('Allow pop-ups to preview the email','error'); return; }
+    w.document.open(); w.document.write(_pktPreviewHtml||''); w.document.close();
+}
+function openAcceptancePacket(){
+    if(typeof _toggleMenu==='function')_toggleMenu('pplFormsMenu');
+    var p=getAcceptancePacketConfig();
+    _pktOrder=_pktResolveOrder(p.order);
+    function row(id,checked,title,desc){
+        return '<label style="display:flex;align-items:flex-start;gap:10px;padding:6px 0;cursor:pointer">'
+          +'<input type="checkbox" id="'+id+'" '+(checked?'checked':'')+' style="accent-color:var(--me);flex-shrink:0;width:16px;height:16px;margin-top:2px">'
+          +'<div><div style="font-size:.85rem;font-weight:600;color:var(--s800)">'+title+'</div>'
+          +'<div style="font-size:.72rem;color:var(--s400)">'+desc+'</div></div></label>';
+    }
+    var initCfg={form:{enabled:p.form&&p.form.enabled!==false},zelle:{enabled:!!(p.zelle&&p.zelle.enabled),sendTo:(p.zelle&&p.zelle.sendTo)||'',showMemo:!(p.zelle&&p.zelle.showMemo===false)},camperMail:{enabled:!!(p.camperMail&&p.camperMail.enabled),address:(p.camperMail&&p.camperMail.address)||'',showCode:!!(p.camperMail&&p.camperMail.showCode)}};
+    var h='<p style="font-size:.82rem;color:var(--s500);margin:0 0 14px;line-height:1.5">What a family receives the moment you accept them. The <strong>Post-Acceptance Form</strong> button sets up the form itself; this controls the message and what goes in it.</p>';
+
+    // Your message — first, and easy to edit. {camper} fills in each child's name.
+    h+='<div style="font-size:.78rem;font-weight:700;color:var(--s700);text-transform:uppercase;letter-spacing:.04em;margin:2px 0 8px">Your message</div>';
+    h+='<div class="fg"><label class="fl">Email subject</label><input class="fi" id="pktSubject" value="'+esc(p.subject||'')+'" placeholder="A few more choices for {camper}"></div>';
+    h+='<div class="fg"><label class="fl">Greeting / message</label><textarea class="fi" id="pktMessage" style="min-height:90px;resize:vertical" placeholder="Congratulations — {camper} is accepted!">'+esc(p.message||'')+'</textarea>'
+      +'<div style="font-size:.7rem;color:var(--s400);margin-top:4px">Type <code>{camper}</code> anywhere to drop in the child’s name. Leave blank for the default greeting. The items you turn on below are added under your message.</div></div>';
+
+    h+='<div style="border-top:1px solid var(--s100);margin:14px 0 8px"></div>';
+    h+='<div style="font-size:.78rem;font-weight:700;color:var(--s700);text-transform:uppercase;letter-spacing:.04em;margin:0 0 2px">What’s included <span style="font-weight:500;text-transform:none;letter-spacing:0;color:var(--s400)">— drag ⠿ to reorder</span></div>';
+    h+='<div id="pktIncluded">'+_pktIncludedHtml(initCfg)+'</div>';
+
+    h+='<div style="border-top:1px solid var(--s100);margin:14px 0 8px"></div>';
+    h+='<div style="font-size:.78rem;font-weight:700;color:var(--s700);text-transform:uppercase;letter-spacing:.04em;margin:0 0 4px">Delivery</div>';
+    h+=row('pktAutoSend',p.autoSend,'Send automatically on acceptance','When on, this goes out the moment an applicant is marked Accepted. When off, send it yourself from the applicant’s Review panel.');
+
+    var panel=document.getElementById('packetPanel'); if(panel){
+        panel.innerHTML=h;
+        panel.oninput=_pktRenderPreview;
+        panel.onchange=function(e){
+            var t=e&&e.target;
+            if(t&&t.id==='pktZelle'){var f=document.getElementById('pktZelleFields'); if(f)f.style.display=t.checked?'':'none';}
+            if(t&&t.id==='pktMail'){var f2=document.getElementById('pktMailFields'); if(f2)f2.style.display=t.checked?'':'none';}
+            _pktRenderPreview();
+        };
+    }
+    _pktInitDrag();
+    document.getElementById('packetBuilderOverlay').style.display='flex';
+    _pktRenderPreview();
+    _loadPktSettings().then(function(){ _pktRenderPreview(); });
+}
+function closeAcceptancePacket(){ var o=document.getElementById('packetBuilderOverlay'); if(o)o.style.display='none'; }
+function saveAcceptancePacket(){
+    var c=_pktLiveConfig();
+    acceptancePacketConfig={
+        autoSend:c.autoSend,
+        subject:c.subject,
+        message:c.message,
+        order:_pktResolveOrder(c.order),
+        form:{enabled:c.form.enabled},
+        zelle:{enabled:c.zelle.enabled,sendTo:c.zelle.sendTo,showMemo:c.zelle.showMemo},
+        camperMail:{enabled:c.camperMail.enabled,address:c.camperMail.address,showCode:c.camperMail.showCode}
+    };
+    // Keep the legacy field in step so anything still reading it agrees.
+    if(paFormConfig)paFormConfig.autoSend=acceptancePacketConfig.autoSend;
+    save();
+    closeAcceptancePacket();
+    toast('On-acceptance settings saved');
+}
+// The camp's letters address + camp number, fetched once for the builder
+// placeholder and for composing the acceptance message.
+var _pktSettings=null;
+async function _loadPktSettings(){
+    if(_pktSettings)return _pktSettings;
+    try{
+        var client=window.CampistryDB&&window.CampistryDB.getClient?window.CampistryDB.getClient():window.supabase;
+        var campId=window.CampistryDB&&window.CampistryDB.getCampId?window.CampistryDB.getCampId():(window.getCampId?window.getCampId():null);
+        if(client&&client.rpc&&campId){
+            var res=await client.rpc('get_camper_mail_inbox_settings',{p_camp_id:campId});
+            if(res&&res.data&&res.data.success)_pktSettings=res.data;
+        }
+    }catch(_){}
+    // Refresh the placeholder if the builder is still open.
+    try{ var ph=document.getElementById('pktMailAddr'); if(ph&&_pktSettings&&_pktSettings.inboundToken){ ph.placeholder='letters+'+_pktSettings.inboundToken+'@'+(window.CAMPISTRY_INBOUND_DOMAIN||'inbound.campistry.org'); } }catch(_){}
+    return _pktSettings;
 }
 
 // ── POST-HIRE FORM ───────────────────────────────────────────────────────
@@ -10490,7 +10893,7 @@ function _collectPostAcceptFormConfigDraft(){
         instructions:(document.getElementById('pafInstructions')?.value||'').trim(),
         fields:_readAdvFields('paf',PAF_FIELD_CATALOG),
         sectionOrder:_readSectionOrder('paf'),
-        autoSend:!!(document.getElementById('pafAutoSend')&&document.getElementById('pafAutoSend').checked),
+        autoSend:(acceptancePacketConfig?!!acceptancePacketConfig.autoSend:!!(paFormConfig&&paFormConfig.autoSend)),
         // Read here because this is where the tick lives, but it is a camp
         // setting rather than part of this form's config -- _paSaveInviteAuto
         // puts it on enrollSettings where _autoInviteOn looks for it.
@@ -11437,10 +11840,7 @@ function _buildPafPanelHtml(){
         +'<div class="fg" style="margin-bottom:0"><label class="fl">Instructions for Parents</label><textarea class="fi" id="pafInstructions" style="min-height:50px;resize:vertical" placeholder="Any special instructions shown at the top of the form">'+(fc.instructions||'')+'</textarea></div>';
     h+=_accCard('Welcome Message',welcomeHtml,{open:true});
 
-    var sendHtml='<label style="display:flex;align-items:center;gap:10px;padding:4px 0;cursor:pointer">'
-        +'<input type="checkbox" id="pafAutoSend" '+(fc.autoSend?'checked':'')+' style="accent-color:var(--me);flex-shrink:0;width:16px;height:16px">'
-        +'<div><div style="font-size:.85rem;font-weight:600;color:var(--s800)">Send automatically on acceptance</div>'
-        +'<div style="font-size:.72rem;color:var(--s400)">When on, this form is emailed the moment an applicant is marked Accepted. When off, send it yourself from the applicant\'s Review panel whenever you\'re ready.</div></div></label>';
+    var sendHtml='<div style="font-size:.72rem;color:var(--s400);padding:2px 0 8px;line-height:1.5">Whether this form is emailed automatically on acceptance — along with deposit and camper-mail info — is now set under <strong>On Acceptance</strong>.</div>';
     // The portal invite is a separate email with its own switch, but it is the
     // same question asked at the same moment, so it belongs beside it rather
     // than in a settings screen nobody would think to open.
@@ -12397,14 +12797,63 @@ async function _sendLinkNow(isStaff){
 function _postAcceptUrl(id){
     return window.location.origin+'/campistry_postaccept.html?id='+encodeURIComponent(id)+'&camp='+encodeURIComponent(getCampId());
 }
-function openSendPostAcceptModal(id){
+// This camper's deposit reference, <camp number>-<camper id>, or '' when either
+// half isn't known yet.
+function _acceptanceMemo(e){
+    var num=(_pktSettings&&_pktSettings.campNumber)?String(_pktSettings.campNumber).replace(/\D/g,''):'';
+    var r=(e&&e.camperName&&typeof roster!=='undefined')?roster[e.camperName]:null;
+    var cid=(r&&r.camperId!=null)?String(r.camperId).replace(/\D/g,''):((e&&e.camperId!=null)?String(e.camperId).replace(/\D/g,''):'');
+    return (num&&cid)?(num+'-'+cid):'';
+}
+function _defaultMailAddr(){
+    return (_pktSettings&&_pktSettings.inboundToken)?('letters+'+_pktSettings.inboundToken+'@'+(window.CAMPISTRY_INBOUND_DOMAIN||'inbound.campistry.org')):'';
+}
+// The one composer both the real send and the builder preview call, so the two
+// can never drift. `parts` holds the values that differ between a real camper
+// and the sample the preview shows: { camperName, formUrl, memo, mailAddr }.
+// The camp's own message (with a {camper} token) leads; the blocks follow.
+function _composeBodyFromParts(p,parts){
+    p=p||{}; parts=parts||{};
+    var nm=parts.camperName||'your camper';
+    var intro=(p.message&&p.message.trim())?p.message.replace(/\{camper\}/gi,nm):('Congratulations — '+nm+' is accepted!');
+    var out=[intro];
+    _pktResolveOrder(p.order).forEach(function(k){
+        if(k==='form'){
+            if(p.form&&p.form.enabled!==false&&parts.formUrl){
+                out.push('','Please fill out this post-acceptance form:',parts.formUrl);
+            }
+        }else if(k==='zelle'){
+            if(p.zelle&&p.zelle.enabled&&(p.zelle.sendTo||'').trim()){
+                out.push('','To pay your deposit by Zelle, send it to: '+p.zelle.sendTo.trim()+'.');
+                if(p.zelle.showMemo!==false&&parts.memo)out.push('Put this reference in the Zelle memo so it’s credited to you: '+parts.memo+'.');
+            }
+        }else if(k==='camperMail'){
+            if(p.camperMail&&p.camperMail.enabled&&parts.mailAddr){
+                out.push('','You can email letters to your camper any time — the office prints them and hands them out. Send them to: '+parts.mailAddr+'.');
+                if(p.camperMail.showCode&&parts.memo)out.push('Please put your camper’s code in the subject so we can get it to the right child: '+parts.memo+'.');
+            }
+        }
+    });
+    return out.join('\n');
+}
+function _composeAcceptanceBody(id){
+    var e=enrollments[id]||{}; var p=getAcceptancePacketConfig();
+    var addr=(p.camperMail&&(p.camperMail.address||'').trim())||_defaultMailAddr();
+    return _composeBodyFromParts(p,{camperName:e.camperName||'your camper',formUrl:_postAcceptUrl(id),memo:_acceptanceMemo(e),mailAddr:addr});
+}
+function _acceptanceSubject(id){
+    var e=enrollments[id]||{}; var p=getAcceptancePacketConfig();
+    var nm=e.camperName||'your camper';
+    return (p.subject&&p.subject.trim())?p.subject.replace(/\{camper\}/gi,nm):('A few more choices for '+nm);
+}
+async function openSendPostAcceptModal(id){
     var e=enrollments[id]; if(!e){toast('Application not found','error');return;}
     if(!e.parentEmail){toast('No parent email on file for this applicant','error');return;}
-    var url=_postAcceptUrl(id);
+    await _loadPktSettings();
     document.getElementById('slTitle').textContent='Send Post-Acceptance Form';
     var h='<div class="fg"><label class="fl">To</label><input class="fi" value="'+esc(e.parentEmail)+'" disabled></div>';
-    h+='<div class="fg"><label class="fl">Subject</label><input class="fi" id="slSubject" value="'+esc('A few more choices for '+(e.camperName||'your camper'))+'"></div>';
-    h+='<div class="fg"><label class="fl">Message</label><textarea class="fi" id="slBodyText" style="min-height:110px;resize:vertical">'+esc('Congratulations — '+(e.camperName||'your camper')+' is accepted! Please complete a few more choices here:\n\n'+url)+'</textarea></div>';
+    h+='<div class="fg"><label class="fl">Subject</label><input class="fi" id="slSubject" value="'+esc(_acceptanceSubject(id))+'"></div>';
+    h+='<div class="fg"><label class="fl">Message</label><textarea class="fi" id="slBodyText" style="min-height:110px;resize:vertical">'+esc(_composeAcceptanceBody(id))+'</textarea></div>';
     document.getElementById('slBody').innerHTML=h;
     var btn=document.getElementById('slSendBtn');
     if(btn){ btn.disabled=false; btn.textContent='Send'; btn.onclick=function(){ _sendPostAcceptNow(id); }; }
@@ -12419,7 +12868,7 @@ async function _sendPostAcceptNow(id){
     var btn=document.getElementById('slSendBtn');
     if(btn){btn.disabled=true;btn.textContent='Sending…';}
     try{
-        await callEdgeFunctionAuthed('send-broadcast',{campId:getCampId(),to:[{email:e.parentEmail,name:e.parentName||''}],subject:subject,body:body,method:'email',campName:campName});
+        await callEdgeFunctionAuthed('send-broadcast',{campId:getCampId(),to:[{email:e.parentEmail,name:e.parentName||''}],subject:subject,body:body,method:'email',campName:campName,branding:(typeof _getLinkBranding==='function')?_getLinkBranding():undefined});
         e.postAcceptSentDate=new Date().toISOString();
         save();
         toast('Post-acceptance form sent to '+e.parentEmail);
@@ -12440,12 +12889,12 @@ async function _autoSendPostAccept(id){
         toast(_emailBlockedReason(svc)+' Send the post-acceptance form from the applicant\u2019s Review panel.','error');
         return;
     }
-    var url=_postAcceptUrl(id);
+    await _loadPktSettings();
     var campName='';try{var ss=JSON.parse(localStorage.getItem('campGlobalSettings_v1')||'{}');campName=ss.campName||ss.camp_name||'Camp';}catch(ex){}
-    var subject='A few more choices for '+(e.camperName||'your camper');
-    var body='Congratulations — '+(e.camperName||'your camper')+' is accepted! Please complete a few more choices here:\n\n'+url;
+    var subject=_acceptanceSubject(id);
+    var body=_composeAcceptanceBody(id);
     try{
-        await callEdgeFunctionAuthed('send-broadcast',{campId:getCampId(),to:[{email:e.parentEmail,name:e.parentName||''}],subject:subject,body:body,method:'email',campName:campName});
+        await callEdgeFunctionAuthed('send-broadcast',{campId:getCampId(),to:[{email:e.parentEmail,name:e.parentName||''}],subject:subject,body:body,method:'email',campName:campName,branding:(typeof _getLinkBranding==='function')?_getLinkBranding():undefined});
         e.postAcceptSentDate=new Date().toISOString();
         save();
         toast('Post-acceptance form auto-sent to '+e.parentEmail);
@@ -12485,7 +12934,7 @@ async function _sendPostHireNow(id){
     var btn=document.getElementById('slSendBtn');
     if(btn){btn.disabled=true;btn.textContent='Sending…';}
     try{
-        await callEdgeFunctionAuthed('send-broadcast',{campId:getCampId(),to:[{email:a.email,name:a.name||''}],subject:subject,body:body,method:'email',campName:campName});
+        await callEdgeFunctionAuthed('send-broadcast',{campId:getCampId(),to:[{email:a.email,name:a.name||''}],subject:subject,body:body,method:'email',campName:campName,branding:(typeof _getLinkBranding==='function')?_getLinkBranding():undefined});
         a.postHireSentDate=new Date().toISOString();
         save();
         toast('Post-hire form sent to '+a.email);
@@ -12506,7 +12955,7 @@ async function _autoSendPostHire(id){
     var subject='A few more details for '+(a.name||'your onboarding');
     var body='Welcome to the team, '+((a.first||a.name||'').split(' ')[0]||'')+'! Please complete a few more details here:\n\n'+url;
     try{
-        await callEdgeFunctionAuthed('send-broadcast',{campId:getCampId(),to:[{email:a.email,name:a.name||''}],subject:subject,body:body,method:'email',campName:campName});
+        await callEdgeFunctionAuthed('send-broadcast',{campId:getCampId(),to:[{email:a.email,name:a.name||''}],subject:subject,body:body,method:'email',campName:campName,branding:(typeof _getLinkBranding==='function')?_getLinkBranding():undefined});
         a.postHireSentDate=new Date().toISOString();
         save();
         toast('Post-hire form auto-sent to '+a.email);
@@ -12840,12 +13289,11 @@ function updateEnrollStatus(id,status,opts){
         });
     }else if(!opts.silent && firstAccept){
         generateParentInvite(id);
-        // Post-acceptance form: only fires if the camp turned "Send automatically
-        // on acceptance" on in that form's builder — otherwise the office sends
-        // it manually from the applicant's Review panel whenever they're ready.
+        // Acceptance packet: only fires if the camp turned "Send automatically
+        // on acceptance" on in the On-Acceptance builder — otherwise the office
+        // sends it manually from the applicant's Review panel when they're ready.
         try{
-            var pfc=getPostAcceptFormConfig();
-            if(pfc.autoSend && enrollments[id] && enrollments[id].parentEmail) _autoSendPostAccept(id);
+            if(getAcceptancePacketConfig().autoSend && enrollments[id] && enrollments[id].parentEmail) _autoSendPostAccept(id);
         }catch(ex){}
     }
 }
@@ -13604,7 +14052,7 @@ async function _sendInviteEmailNow(which,btnEl){
     var origLabel=btn?btn.textContent:'';
     if(btn){btn.disabled=true;btn.textContent='Sending…';}
     try{
-        await callEdgeFunctionAuthed('send-broadcast',{campId:getCampId(),to:[{email:p.email,name:p.name||''}],subject:subject,body:body,method:'email',campName:campName});
+        await callEdgeFunctionAuthed('send-broadcast',{campId:getCampId(),to:[{email:p.email,name:p.name||''}],subject:subject,body:body,method:'email',campName:campName,branding:(typeof _getLinkBranding==='function')?_getLinkBranding():undefined});
         toast('Invite emailed to '+p.email);
         if(btn){btn.textContent='Sent ✓';}
     }catch(err){
@@ -21965,6 +22413,7 @@ window.CampistryMe={
     openFormConfig:openFormConfig,saveFormConfig:saveFormConfig,addCustomQ:addCustomQ,addPromoRow:addPromoRow,
     openStaffFormConfig:openStaffFormConfig,saveStaffFormConfig:saveStaffFormConfig,addStaffCustomQ:addStaffCustomQ,
     openPostAcceptFormConfig:openPostAcceptFormConfig,savePostAcceptFormConfig:savePostAcceptFormConfig,addPafCustomQ:addPafCustomQ,
+    openAcceptancePacket:openAcceptancePacket,saveAcceptancePacket:saveAcceptancePacket,closeAcceptancePacket:closeAcceptancePacket,_pktOpenPreview:_pktOpenPreview,
     openPostHireFormConfig:openPostHireFormConfig,savePostHireFormConfig:savePostHireFormConfig,addPhfCustomQ:addPhfCustomQ,
     _phfHandbookPick:_phfHandbookPick,_phfHandbookClear:_phfHandbookClear,addPhfPolicyRow:addPhfPolicyRow,
     addCustomSection:addCustomSection,addSectionField:addSectionField,addCustomQToSection:addCustomQToSection,_toggleSectionQuestions:_toggleSectionQuestions,

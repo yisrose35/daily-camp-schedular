@@ -169,6 +169,26 @@
     <div class="me-modal-footer"><button class="me-btn me-btn--sec" onclick="CampistryMe.closeModal('sendLinkModal')">Cancel</button><button class="me-btn me-btn--pri" id="slSendBtn">Send</button></div>
 </div></div>
 
+<!-- On-Acceptance packet builder — same split-view format as the form builders:
+     editor on the left, a live preview of the acceptance email on the right.
+     Controls the message and what goes in it (form link, Zelle deposit info,
+     camper mail address) and whether it sends automatically on acceptance. -->
+<div id="packetBuilderOverlay" class="fb-overlay" style="display:none">
+    <div class="fb-header">
+        <div class="fb-title">On Acceptance</div>
+        <div class="fb-actions">
+            <span class="fb-savenote">The email on the right updates as you edit — nothing saves until you click Save.</span>
+            <button class="me-btn me-btn--sec" onclick="CampistryMe._pktOpenPreview()" title="Open the acceptance email in a new tab">👁 Preview</button>
+            <button class="me-btn me-btn--sec" onclick="CampistryMe.closeAcceptancePacket()">Cancel</button>
+            <button class="me-btn me-btn--pri" onclick="CampistryMe.saveAcceptancePacket()">Save</button>
+        </div>
+    </div>
+    <div class="fb-body">
+        <div class="fb-panel" id="packetPanel"></div>
+        <div class="fb-preview"><div id="packetPreview" style="width:100%;max-width:640px;align-self:flex-start"></div></div>
+    </div>
+</div>
+
 <!-- QR CODE -->
 <div id="qrModal" class="me-overlay" style="display:none"><div class="me-modal">
     <div class="me-modal-header"><h3 id="qrTitle">QR Code</h3><button class="me-modal-x" onclick="CampistryMe.closeModal('qrModal')">&times;</button></div>
@@ -319,7 +339,7 @@ if (window.pdfjsLib) { window.pdfjsLib.GlobalWorkerOptions.workerSrc = 'pdfjs-di
      footer/watermark) — reused here so the Broadcast composer's preview
      shows exactly what will be sent, off the camp's real branding config. -->
 <script src="campistry_link_branding.js?v=20260906-01"></script>
-<script src="campistry_me.js?v=20260922-01"></script>
+<script src="campistry_me.js?v=20260922-07"></script>
 <script src="plan_limits.js?v=20260903-03"></script>
 <script src="trial_guard.js?v=20260903-03"></script>
 <script src="campistry_notes_quick.js?v=20260903-03"></script>

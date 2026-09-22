@@ -120,6 +120,11 @@ function brandFooterHtml(b: Branding): string {
   if (!b.footer) return "";
   return `<div style="margin-top:18px;padding-top:12px;border-top:1px solid #e2e8f0;font-size:12px;line-height:1.55;color:#64748b;white-space:pre-wrap;">${escHtml(b.footer)}</div>`;
 }
+// Turn plain URLs in an already-escaped body into clickable links, so a form
+// link (or any link) the camp writes in a message is actually clickable.
+function linkifyHtml(escaped: string): string {
+  return escaped.replace(/(https?:\/\/[^\s<]+[^\s<.,;:!?)\]])/g, (u) => `<a href="${u}" style="color:#2563eb;text-decoration:underline;">${u}</a>`);
+}
 function buildBrandedEmailHtml(o: { subject?: string; body?: string; branding?: any; campName?: string; unsubLink?: string; campAddress?: string }): string {
   const b = normalizeBranding(o.branding);
   const campName = o.campName || "Camp";
@@ -138,7 +143,7 @@ function buildBrandedEmailHtml(o: { subject?: string; body?: string; branding?: 
 <tr><td>${brandHeaderHtml(b, campName)}</td></tr>
 <tr><td style="${bodyBg}padding:26px 28px 30px;">
 ${o.subject ? `<div style="font-size:17px;font-weight:700;color:#0f172a;margin:0 0 12px;">${escHtml(o.subject)}</div>` : ""}
-<div style="font-size:14.5px;line-height:1.65;color:#334155;white-space:pre-wrap;">${escHtml(o.body || "")}</div>
+<div style="font-size:14.5px;line-height:1.65;color:#334155;white-space:pre-wrap;">${linkifyHtml(escHtml(o.body || ""))}</div>
 ${brandFooterHtml(b)}
 </td></tr>
 <tr><td style="padding:14px 20px;background:#f8fafc;text-align:center;font-size:11px;color:#94a3b8;">Sent by ${escHtml(campName)} via Campistry${extras ? ` · ${extras}` : ""}</td></tr>
@@ -336,6 +341,22 @@ serve(async (req) => {
     if (!mayEmail) {
       return json({ error: "This camp's plan doesn't include emailing. Contact Campistry to add it." }, 403);
     }
+
+    // Overall logo/branding: when the caller doesn't pass one (or passes one
+    // with no logo), fall back to the camp's own saved Link branding, so every
+    // email — acceptance notes, receipts, broadcasts — carries the camp's logo
+    // without each send path having to remember to attach it.
+    let brandingResolved: any = branding;
+    if ((method === "email" || method === "all" || method === "All Channels" || method === "Email")
+        && (!brandingResolved || !brandingResolved.logo)) {
+      try {
+        const { data: kv } = await supabase.from("camp_state_kv").select("value")
+          .eq("camp_id", campId).eq("key", "campistryLink").maybeSingle();
+        const stored = (kv?.value as any)?.settings?.branding || (kv?.value as any)?.branding;
+        if (stored && stored.logo) brandingResolved = stored;
+      } catch (_e) { /* keep whatever was passed */ }
+    }
+
     const results = { emailSent: 0, emailFailed: 0, emailSkipped: 0, smsSent: 0, smsFailed: 0, smsSkipped: 0 };
     const sendEmail = method === "email" || method === "all" || method === "All Channels" || method === "Email";
     const sendSms = method === "sms" || method === "SMS" || method === "all" || method === "All Channels";
@@ -453,7 +474,7 @@ serve(async (req) => {
         if (unsubscribedEmails.has(String(recipient.email).toLowerCase())) { results.emailSkipped++; }
         else {
           const link = await unsubLink(recipient.email);
-          const htmlBody = buildBrandedEmailHtml({ subject: rSubject, body: rBody, branding, campName, unsubLink: link, campAddress });
+          const htmlBody = buildBrandedEmailHtml({ subject: rSubject, body: rBody, branding: brandingResolved, campName, unsubLink: link, campAddress });
           const r = await withRetry(async () => {
             await emailGate();
             try {
