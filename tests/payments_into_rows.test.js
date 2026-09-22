@@ -314,3 +314,39 @@ test('207 is a standalone paste, not a bundle entry', () => {
     assert.ok(!read('scripts/build-migration-bundle.py').includes('208_payments_into_rows'));
     assert.ok(!read('migrations/APPLY_BUNDLE.sql').includes('208_payments_into_rows'));
 });
+
+// ── a paste must announce itself ───────────────────────────────────────────
+// Twice, a rolled-back paste of this file was reported to me as "the verify
+// function does not exist". That is the correct error for the NEXT query, and it
+// points at the wrong file. A migration that ends on a comment prints nothing on
+// success, so there is no way to tell "applied" from "rolled back" by looking.
+test('the file ends on a statement that proves the paste committed', () => {
+    const lines = SQL.trimEnd().split('\n');
+    const last = lines[lines.length - 1].trim();
+    assert.ok(!last.startsWith('--'), 'the last line is a comment: a successful paste prints nothing');
+    assert.ok(last.endsWith(';'), 'the last statement is not terminated');
+    assert.match(SQL, /SELECT 'migration 208 applied'\s+AS status/);
+});
+
+test('the confirmation reports each thing the migration was supposed to create', () => {
+    const tail = SQL.slice(SQL.indexOf("SELECT 'migration 208 applied'"));
+    assert.match(tail, /to_regprocedure\('public\.verify_camp_payments\(uuid\)'\) IS NOT NULL/,
+        'the exact signature the next query calls');
+    assert.match(tail, /to_regprocedure\('public\.camp_payment_identity\(jsonb\)'\) IS NOT NULL/);
+    assert.match(tail, /tgname = 'trg_project_camp_payments' AND NOT tgisinternal/,
+        'a table and functions without the trigger would keep nothing true');
+    assert.match(tail, /FROM public\.camp_payments\)\s+AS payment_rows/,
+        'and how much the backfill actually moved');
+});
+
+test('the preflight names the file to apply, and uses no escape-string literal', () => {
+    const body = SQL.slice(SQL.indexOf('DO $$'), SQL.indexOf('$$;'));
+    assert.match(body, /203_canteen_archive\.sql/, 'says which migration supplies _num_or_null');
+    assert.match(body, /183_lock_down_camp_scoped_readers\.sql/, 'and which supplies camp_reader');
+    assert.doesNotMatch(body, /RAISE EXCEPTION E'/,
+        "a backslash-escaped literal is what a failed paste PRINTS — keep it plain");
+    // text[] || 'literal' makes Postgres parse the string AS AN ARRAY. Found by
+    // running the migration, not by reading it.
+    const appends = body.match(/v_missing := v_missing \|\| '(?:[^']|'')*'::text;/g) || [];
+    assert.strictEqual(appends.length, 5, 'every append is explicitly cast to text');
+});
