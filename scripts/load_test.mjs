@@ -105,6 +105,27 @@ export function verdict(summary, p95Bar, expectedErrors) {
     return summary.p95 <= p95Bar ? 'PASS' : 'WARN';
 }
 
+/**
+ * The order one parent's boot calls go out in, rotated by that parent's index.
+ *
+ * WHY THIS IS NOT JUST `keys`: the boot calls are sequential per parent, and the
+ * pool starts `concurrency` parents at the same instant. A fixed order means
+ * EVERY parent's first call lands in the same thundering herd, so that one RPC
+ * absorbs the whole queue wait against a connection pool far smaller than the
+ * concurrency, while the other three arrive staggered and look fast. That made
+ * `get_my_balance` — first in the list — read 481ms at 32 parents and 2096ms at
+ * 60, which measured the queue, not the function.
+ *
+ * Rotating by index puts each RPC first for its fair share of parents, so the
+ * burst cost is shared and each line reports its own service time. Rotation
+ * rather than a random shuffle so two runs of the same size are comparable.
+ */
+export function bootOrder(keys, i) {
+    if (!keys.length) return [];
+    const k = i % keys.length;   // pool counts up from 0; no normalising needed
+    return keys.slice(k).concat(keys.slice(0, k));
+}
+
 /** Runs `worker` over `items` with at most `limit` in flight. */
 export async function pool(items, limit, worker) {
     let i = 0;
@@ -162,6 +183,66 @@ export function unseedCanteenAccounts(value) {
     return v;
 }
 
+/** Spaces calls so no more than `perSecond` start in any second. */
+export function rateGate(perSecond) {
+    const gap = 1000 / Math.max(0.1, perSecond);
+    let next = 0;
+    return async () => {
+        const now = Date.now();
+        const at = Math.max(now, next);
+        next = at + gap;
+        if (at > now) await new Promise(r => setTimeout(r, at - now));
+    };
+}
+
+/** Is this response Supabase's auth rate limiter saying "slow down"? */
+export function isRateLimited(res) {
+    if (!res) return false;
+    if (res.status === 429) return true;
+    const d = res.data;
+    return !!(d && typeof d === 'object'
+        && /rate limit/i.test(String(d.msg || d.error_description || d.error || d.message || '')));
+}
+
+/**
+ * The access token out of a sign-in response, whatever shape it arrived in.
+ *
+ * GoTrue's password grant returns a flat {access_token}, but a gateway or a
+ * newer client shape can nest it under session/data. Reading only the flat
+ * field made a SUCCESSFUL sign-in (HTTP 200) look like a failure, which is
+ * exactly how the first real run reported "could not sign in ... HTTP 200"
+ * for 300 synthetic parents AND for the owner's real account.
+ */
+export function tokenFrom(data) {
+    if (!data || typeof data !== 'object') return null;
+    return data.access_token
+        || (data.session && data.session.access_token)
+        || (data.data && data.data.session && data.data.session.access_token)
+        || (data.data && data.data.access_token)
+        || null;
+}
+
+/**
+ * Why a sign-in did not yield a token, in a line that is safe to paste.
+ *
+ * Never includes a token or a password: only the status, the field names that
+ * came back, and any error-ish message. "200 with no token" is meaningless
+ * without knowing WHAT arrived, and that was the whole problem.
+ */
+export function describeAuthFailure(res) {
+    const d = res && res.data;
+    const bits = [`HTTP ${res ? res.status : '?'}`];
+    if (res && res.error) bits.push(res.error);
+    if (typeof d === 'string') bits.push(`body(text): ${d.slice(0, 120)}`);
+    else if (d && typeof d === 'object') {
+        const msg = d.error_description || d.error || d.msg || d.message || (d.code !== undefined ? `code=${d.code}` : '');
+        if (msg) bits.push(String(msg).slice(0, 160));
+        const keys = Object.keys(d);
+        bits.push(keys.length ? `fields: ${keys.slice(0, 12).join(',')}` : 'empty object');
+    } else if (d === null) bits.push('empty body');
+    return bits.join(' · ');
+}
+
 /** Spread N parents' first poll across one interval so they do not all fire at t=0. */
 export function pollSchedule(n, intervalMs, durationMs) {
     const ticks = [];
@@ -211,6 +292,8 @@ function mkClient(env) {
                 return { ok: res.ok, status: res.status, ms: Date.now() - t0 };
             } catch (e) { return { ok: false, status: 0, ms: Date.now() - t0, error: e.message }; }
         },
+        // unauthenticated-ish GET, for the preflight below
+        probe: (path) => call('GET', path, undefined),
         adminCreateUser: (email, password) => call('POST', '/auth/v1/admin/users', { email, password, email_confirm: true, user_metadata: { loadTest: true } }, svc, svc),
         adminDeleteUser: (id) => call('DELETE', `/auth/v1/admin/users/${id}`, undefined, svc, svc),
         signIn: (email, password) => call('POST', '/auth/v1/token?grant_type=password', { email, password }),
@@ -218,9 +301,27 @@ function mkClient(env) {
 }
 
 /** RPC result → sample. A JSON {success:false,error} is an error even on HTTP 200. */
+/** True only for a parsed JSON object — what every RPC in this app answers with. */
+export function isJsonObject(d) { return !!d && typeof d === 'object' && !Array.isArray(d); }
+
+/**
+ * RPC result → sample.
+ *
+ * THREE ways to fail, and the third is the one that mattered. A JSON
+ * {success:false,error} is a failure even on HTTP 200 — the app reports refusals
+ * that way. And a 200 whose body is NOT JSON is a failure too: on the first real
+ * run SUPABASE_URL pointed at the Vercel-hosted website instead of the project
+ * API, so every request got a 200 with an HTML page, and this counted 300 of 300
+ * "ok" at 73 rps for traffic that never reached the database. A load test that
+ * reports PASS when nothing happened is worse than no load test.
+ */
 function sample(res, fn) {
-    if (!res.ok) return { ms: res.ms, ok: false, error: `${fn}: HTTP ${res.status}${res.error ? ' ' + res.error : ''}${res.data && res.data.message ? ' ' + res.data.message : ''}` };
-    if (res.data && typeof res.data === 'object' && res.data.success === false) return { ms: res.ms, ok: false, error: `${fn}: ${res.data.error || 'success:false'}` };
+    if (!res.ok) return { ms: res.ms, ok: false, error: `${fn}: HTTP ${res.status}${res.error ? ' ' + res.error : ''}${isJsonObject(res.data) && res.data.message ? ' ' + res.data.message : ''}` };
+    if (!isJsonObject(res.data)) {
+        return { ms: res.ms, ok: false,
+                 error: `${fn}: HTTP ${res.status} but the body was not JSON (${typeof res.data === 'string' ? 'html/text' : String(res.data)}) — is SUPABASE_URL the project API URL?` };
+    }
+    if (res.data.success === false) return { ms: res.ms, ok: false, error: `${fn}: ${res.data.error || 'success:false'}` };
     return { ms: res.ms, ok: true };
 }
 
@@ -250,18 +351,43 @@ async function phaseRegistration(c, o, env, report) {
 
 async function setupParents(c, o, env, log) {
     const parents = [];
+    // Cap the noise: 300 identical failure lines scrolled the one useful fact
+    // off the screen on the first real run. After a few, count silently.
+    let shown = 0, suppressed = 0, rateLimited = 0;
+    const warn = (m) => { if (shown < 5) { shown++; log(m); } else suppressed++; };
+    const signInGate = rateGate(Math.max(1, Number(process.env.LOADTEST_SIGNIN_PER_SEC || 8)));
     await pool(Array.from({ length: o.parents }, (_, i) => i), Math.min(o.concurrency, 20), async (i) => {
         const f = parentFixture(i, env.CAMP_ID);
         const u = await c.adminCreateUser(f.email, f.password);
-        if (!u.ok) { log(`  ! could not create ${f.email}: HTTP ${u.status} ${JSON.stringify(u.data).slice(0, 120)}`); return; }
+        if (!u.ok) { warn(`  ! could not create ${f.email}: HTTP ${u.status} ${JSON.stringify(u.data).slice(0, 120)}`); return; }
         f.userId = u.data.id;
         const inv = await c.insert('link_parent_invites', [{ ...f.invite, user_id: f.userId }]);
-        if (!inv.ok) { log(`  ! could not invite ${f.email}: HTTP ${inv.status} ${JSON.stringify(inv.data).slice(0, 120)}`); return; }
-        const s = await c.signIn(f.email, f.password);
-        if (!s.ok || !s.data || !s.data.access_token) { log(`  ! could not sign in ${f.email}: HTTP ${s.status}`); return; }
-        f.jwt = s.data.access_token;
+        if (!inv.ok) { warn(`  ! could not invite ${f.email}: HTTP ${inv.status} ${JSON.stringify(inv.data).slice(0, 120)}`); return; }
+        // Paced and retried, because Supabase rate-limits the auth endpoint per IP
+        // and this script signs in N parents from ONE machine in a few seconds —
+        // which no real camp ever does (a parent signs in once and keeps the
+        // session for days). A shortfall here is the TEST's ceiling, not the app's.
+        let s = null, jwt = null;
+        for (let attempt = 0; attempt < 4 && !jwt; attempt++) {
+            await signInGate();
+            s = await c.signIn(f.email, f.password);
+            jwt = tokenFrom(s.data);
+            if (jwt || !isRateLimited(s)) break;
+            rateLimited++;
+            await new Promise(r => setTimeout(r, 2000 * (attempt + 1)));
+        }
+        if (!jwt) { warn(`  ! could not sign in ${f.email}: ${describeAuthFailure(s)}`); return; }
+        f.jwt = jwt;
         parents.push(f);
     });
+    if (suppressed) log(`  ! ...and ${suppressed} more like the above`);
+    if (rateLimited) {
+        log(`  note: hit Supabase's auth rate limit ${rateLimited} time(s) signing parents in.`);
+        log(`        That is THIS SCRIPT's ceiling, not your app's — real parents sign in`);
+        log(`        once, from their own homes, and keep the session for days. To simulate`);
+        log(`        more: Dashboard → Authentication → Rate Limits, raise sign-ins, or set`);
+        log(`        LOADTEST_SIGNIN_PER_SEC lower to pace them out over a longer setup.`);
+    }
     return parents;
 }
 
@@ -270,13 +396,18 @@ async function phasePortal(c, o, env, report, parents, log) {
     // boot: what the portal calls when it opens
     const boot = { get_my_balance: [], get_canteen_accounts: [], get_my_messages: [], get_camp_broadcasts: [] };
     let t0 = Date.now();
-    await pool(parents, o.concurrency, async (p) => {
-        for (const fn of Object.keys(boot)) {
+    const bootKeys = Object.keys(boot);
+    await pool(parents, o.concurrency, async (p, i) => {
+        for (const fn of bootOrder(bootKeys, i)) {
             const res = await c.rpc(fn, { p_camp_id: env.CAMP_ID }, p.jwt);
             boot[fn].push(sample(res, fn));
         }
     });
     const bootMs = Date.now() - t0;
+    if (parents.length > 1) {
+        log(`  portal: boot fired ${bootKeys.length} calls per parent, up to ${Math.min(o.concurrency, parents.length)} parents at once,`);
+        log(`          call order rotated per parent so no single RPC absorbs the whole burst.`);
+    }
     for (const fn of Object.keys(boot)) {
         const s = summarize(boot[fn], bootMs);
         report.push([`portal boot · ${fn}`, s, verdict(s, o.p95, ['no_active_invite', 'no_family'])]);
@@ -315,8 +446,8 @@ async function phasePortal(c, o, env, report, parents, log) {
 async function phaseCanteen(c, o, env, report, log) {
     if (!env.OWNER_EMAIL || !env.OWNER_PASSWORD) { log('  canteen: OWNER_EMAIL/OWNER_PASSWORD not set — skipped'); return null; }
     const s = await c.signIn(env.OWNER_EMAIL, env.OWNER_PASSWORD);
-    if (!s.ok || !s.data || !s.data.access_token) { log(`  canteen: owner sign-in failed (HTTP ${s.status}) — skipped`); return null; }
-    const jwt = s.data.access_token;
+    const jwt = tokenFrom(s.data);
+    if (!jwt) { log(`  canteen: owner sign-in failed (${describeAuthFailure(s)}) — skipped`); return null; }
     // seed balances for the synthetic campers, touching nobody else's account
     const cur = await c.select('camp_state_kv', `select=value&camp_id=eq.${env.CAMP_ID}&key=eq.campistrySnacks`);
     const existing = cur.ok && Array.isArray(cur.data) && cur.data[0] ? cur.data[0].value : null;
@@ -368,6 +499,22 @@ export async function main(argv, env, log) {
     if (o.dryRun) { log('dry run — nothing created'); return { dryRun: true, plan: o }; }
 
     const c = mkClient(env);
+
+    // ── preflight: is SUPABASE_URL actually the project API? ────────────────
+    // The first real run pointed at the Vercel-hosted website. Every endpoint
+    // answered HTTP 200 with an HTML page, so nothing reached the database and
+    // the run still printed a throughput figure. Prove both APIs answer JSON
+    // before creating a single thing.
+    const [rest, auth] = await Promise.all([c.probe('/rest/v1/'), c.probe('/auth/v1/health')]);
+    const wrong = [];
+    if (!isJsonObject(rest.data)) wrong.push(`  ${env.SUPABASE_URL}/rest/v1/ answered ${describeAuthFailure(rest)}`);
+    if (!isJsonObject(auth.data)) wrong.push(`  ${env.SUPABASE_URL}/auth/v1/health answered ${describeAuthFailure(auth)}`);
+    if (wrong.length) {
+        throw new Error('SUPABASE_URL does not look like a Supabase project API.\n' + wrong.join('\n')
+            + '\n  Use the Project URL from Supabase → Project Settings → API'
+            + ' (https://<project-ref>.supabase.co) — not your website address.');
+    }
+    log('preflight: REST and Auth both answered JSON');
 
     const report = [];
     let parents = [], snacksBefore;

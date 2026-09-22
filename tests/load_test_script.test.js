@@ -242,3 +242,306 @@ test('the script has no dependencies and refuses to touch a live camp silently',
     assert.match(src, /payload->>loadTest=eq\.true/);
     assert.match(src, /\/\^Load Camper \\d\+\$\//);
 });
+
+// ── the sign-in bug the first real run exposed ──────────────────────────────
+// The run reported "could not sign in ... HTTP 200" for 300 synthetic parents
+// AND for the owner's real account. HTTP 200 is SUCCESS: the code read only a
+// flat data.access_token and treated every other shape as a failure, then threw
+// away the response so the reason was unknowable. Both halves are fixed here —
+// tolerate the shapes, and report what actually arrived.
+
+test('tokenFrom: accepts every shape a sign-in can answer with', async () => {
+    const { tokenFrom } = await load();
+    assert.strictEqual(tokenFrom({ access_token: 'flat' }), 'flat', "GoTrue's own password grant");
+    assert.strictEqual(tokenFrom({ session: { access_token: 'nested' } }), 'nested');
+    assert.strictEqual(tokenFrom({ data: { session: { access_token: 'deep' } } }), 'deep');
+    assert.strictEqual(tokenFrom({ data: { access_token: 'wrapped' } }), 'wrapped');
+    assert.strictEqual(tokenFrom({ access_token: 'wins', session: { access_token: 'other' } }), 'wins',
+        'the flat field is the real one when both are present');
+});
+
+test('tokenFrom: a genuine failure is still null, never a truthy accident', async () => {
+    const { tokenFrom } = await load();
+    for (const bad of [null, undefined, '', 'a string body', 42, {}, { user: { id: 'u1' } },
+                       { error: 'invalid_grant' }, { session: null }, { data: {} }]) {
+        assert.strictEqual(tokenFrom(bad), null, `on ${JSON.stringify(bad)}`);
+    }
+});
+
+test('describeAuthFailure: says what arrived, and never leaks a token or password', async () => {
+    const { describeAuthFailure } = await load();
+    // an error body
+    const e = describeAuthFailure({ status: 400, data: { error: 'invalid_grant', error_description: 'Invalid login credentials' } });
+    assert.match(e, /HTTP 400/);
+    assert.match(e, /Invalid login credentials/);
+    assert.match(e, /fields: error,error_description/);
+    // the case that actually happened: 200 with an unexpected shape
+    const ok = describeAuthFailure({ status: 200, data: { user: { id: 'u1' }, weird: 1 } });
+    assert.match(ok, /HTTP 200/);
+    assert.match(ok, /fields: user,weird/, 'the field names are the diagnosis');
+    // empty body, text body, network error
+    assert.match(describeAuthFailure({ status: 200, data: null }), /empty body/);
+    assert.match(describeAuthFailure({ status: 200, data: {} }), /empty object/);
+    assert.match(describeAuthFailure({ status: 502, data: '<html>bad gateway</html>' }), /body\(text\): <html>/);
+    assert.match(describeAuthFailure({ status: 0, error: 'fetch failed' }), /HTTP 0 · fetch failed/);
+    assert.match(describeAuthFailure({ status: 429, data: { msg: 'too many requests' } }), /too many requests/);
+    // safety: a description must never carry the secret it was diagnosing
+    const safe = describeAuthFailure({ status: 200, data: { access_token: 'SECRET-JWT', refresh_token: 'SECRET-R' } });
+    assert.ok(!safe.includes('SECRET-JWT') && !safe.includes('SECRET-R'),
+        'field NAMES are diagnostic; values are not ours to print');
+    assert.match(safe, /fields: access_token,refresh_token/);
+});
+
+test('both sign-in call sites use the extractor and report the reason', () => {
+    const src = require('node:fs').readFileSync(path.join(__dirname, '..', 'scripts', 'load_test.mjs'), 'utf8');
+    // The parent-setup site sits inside the retry loop now (`jwt = ...`), the
+    // owner site still declares (`const jwt = ...`). Count the call, not the
+    // declaration, or this pins a shape rather than the behaviour.
+    const sites = [...src.matchAll(/jwt = tokenFrom\(s\.data\);/g)];
+    assert.strictEqual(sites.length, 2, 'the parent setup and the canteen owner');
+    assert.ok(!/s\.data\.access_token/.test(src), 'no call site may read the flat field directly again');
+    assert.strictEqual([...src.matchAll(/describeAuthFailure\(s\)/g)].length, 2, 'both must say why');
+});
+
+test('setup failure logging is capped so the reason stays readable', () => {
+    // The first real run printed 300 identical lines and scrolled the useful
+    // fact away. A few, then a count.
+    const src = require('node:fs').readFileSync(path.join(__dirname, '..', 'scripts', 'load_test.mjs'), 'utf8');
+    assert.match(src, /const warn = \(m\) => \{ if \(shown < 5\) \{ shown\+\+; log\(m\); \} else suppressed\+\+; \};/);
+    assert.match(src, /if \(suppressed\) log\(`  ! \.\.\.and \$\{suppressed\} more like the above`\);/);
+    assert.strictEqual([...src.matchAll(/warn\(`  ! could not /g)].length, 3,
+        'create, invite and sign-in all route through the cap');
+});
+
+// ── the false pass: a website answering 200 with HTML ───────────────────────
+// The first real run had SUPABASE_URL pointing at the Vercel-hosted site instead
+// of the project API. Every endpoint returned HTTP 200 with a Next.js HTML page,
+// so nothing reached the database — and the run still reported "300 of 300 ok,
+// 73 rps". These tests exist so that can never be reported as a pass again.
+
+const HTML = '<!DOCTYPE html><html lang="en" data-dpl-id="dpl_Hm"><head><meta charSet="utf-8" data-next-head';
+
+test('isJsonObject: only a parsed JSON object counts', async () => {
+    const { isJsonObject } = await load();
+    assert.strictEqual(isJsonObject({ success: true }), true);
+    assert.strictEqual(isJsonObject({}), true);
+    for (const bad of [HTML, '', null, undefined, 42, true, [1, 2], []]) {
+        assert.strictEqual(isJsonObject(bad), false, `on ${JSON.stringify(bad)}`);
+    }
+});
+
+test('main: a website URL is caught by the preflight, before anything is created', async () => {
+    const { main } = await load();
+    const realFetch = globalThis.fetch;
+    const hits = [];
+    globalThis.fetch = async (url) => {
+        hits.push(String(url));
+        return { ok: true, status: 200, text: async () => HTML };
+    };
+    try {
+        await assert.rejects(
+            () => main(['--parents', '3'], ENV, () => {}),
+            (e) => {
+                assert.match(e.message, /does not look like a Supabase project API/);
+                assert.match(e.message, /Project Settings → API/, 'must say where to get the right URL');
+                assert.match(e.message, /rest\/v1\//);
+                assert.match(e.message, /auth\/v1\/health/);
+                return true;
+            });
+        // and it must have stopped at the two probes — no users, no applications
+        assert.strictEqual(hits.length, 2, `probed then stopped; instead: ${hits.join(' ')}`);
+        assert.ok(!hits.some(h => /admin\/users|camp_applications|rpc\//.test(h)),
+            'nothing may be created before the URL is proven');
+    } finally { globalThis.fetch = realFetch; }
+});
+
+test('main: a real project API passes the preflight', async () => {
+    const { main } = await load();
+    const realFetch = globalThis.fetch;
+    globalThis.fetch = async (url) => ({
+        ok: true, status: 200,
+        // REST root and GoTrue health both answer JSON on a real project
+        text: async () => (/auth\/v1\/health/.test(String(url)) ? '{"name":"GoTrue","version":"2"}'
+                                                                : '{"openapi":"3.0.0"}'),
+    });
+    const lines = [];
+    try {
+        // reg phase only, so the run ends quickly; the point is it gets past preflight
+        await main(['--parents', '1', '--phases', 'reg'], ENV, l => lines.push(l));
+        assert.ok(lines.some(l => /preflight: REST and Auth both answered JSON/.test(l)),
+            `expected the preflight to pass; got:\n${lines.join('\n')}`);
+    } finally { globalThis.fetch = realFetch; }
+});
+
+test('a 200 carrying HTML is counted as a FAILURE, never a success', async () => {
+    // The exact false pass: without this, an HTML body sails through as ok.
+    const { main, summarize, verdict } = await load();
+    const realFetch = globalThis.fetch;
+    let phase = 'preflight';
+    globalThis.fetch = async (url) => {
+        const u = String(url);
+        if (/\/rest\/v1\/$/.test(u)) return { ok: true, status: 200, text: async () => '{"openapi":"3.0.0"}' };
+        if (/auth\/v1\/health/.test(u)) return { ok: true, status: 200, text: async () => '{"name":"GoTrue"}' };
+        phase = 'rpc';
+        return { ok: true, status: 200, text: async () => HTML };   // the website answering an RPC
+    };
+    const lines = [];
+    try {
+        const r = await main(['--parents', '4', '--phases', 'reg'], ENV, l => lines.push(l));
+        const [, s, v] = r.report.find(([name]) => /registration/.test(name));
+        assert.strictEqual(phase, 'rpc', 'the RPC must actually have been attempted');
+        assert.strictEqual(s.count, 4);
+        assert.strictEqual(s.ok, 0, 'not one HTML response may count as ok');
+        assert.strictEqual(v, 'FAIL');
+        assert.strictEqual(r.worst, 'FAIL');
+        const err = Object.keys(s.errors)[0];
+        assert.match(err, /body was not JSON \(html\/text\)/);
+        assert.match(err, /is SUPABASE_URL the project API URL\?/, 'the error must point at the cause');
+    } finally { globalThis.fetch = realFetch; }
+});
+
+test('a genuine JSON refusal is still read as a refusal, not as a bad URL', async () => {
+    const { main } = await load();
+    const realFetch = globalThis.fetch;
+    globalThis.fetch = async (url) => {
+        const u = String(url);
+        if (/\/rest\/v1\/$/.test(u)) return { ok: true, status: 200, text: async () => '{"openapi":"3.0.0"}' };
+        if (/auth\/v1\/health/.test(u)) return { ok: true, status: 200, text: async () => '{"name":"GoTrue"}' };
+        return { ok: true, status: 200, text: async () => '{"success":false,"error":"session_full"}' };
+    };
+    try {
+        const r = await main(['--parents', '2', '--phases', 'reg'], ENV, () => {});
+        const [, s, v] = r.report.find(([name]) => /registration/.test(name));
+        assert.strictEqual(s.ok, 0);
+        assert.match(Object.keys(s.errors)[0], /session_full/);
+        assert.strictEqual(v, 'PASS', 'a full session is a feature, and must not read as a broken URL');
+    } finally { globalThis.fetch = realFetch; }
+});
+
+// ── the auth rate limit: the test's ceiling, not the app's ──────────────────
+// A 100-parent run signed in 32 and then got HTTP 429 "Request rate limit
+// reached" for the rest. Supabase rate-limits its auth endpoint per IP, and this
+// script signs in N parents from one machine in seconds — which no real camp
+// ever does: a parent signs in once, from home, and keeps the session for days.
+// So the sign-ins are paced and retried, and a shortfall says what it is instead
+// of looking like the app failing.
+
+test('rateGate: spaces calls, and the first one is free', async () => {
+    const { rateGate } = await load();
+    const gate = rateGate(20);                   // one every 50ms
+    const t0 = Date.now();
+    await gate();
+    assert.ok(Date.now() - t0 < 40, 'the first call must not wait');
+    for (let i = 0; i < 5; i++) await gate();
+    const ms = Date.now() - t0;
+    assert.ok(ms >= 200, `expected ~250ms of pacing, got ${ms}ms`);
+    assert.ok(ms < 900, `but not much more, got ${ms}ms`);
+});
+
+test('rateGate: paces concurrent callers too, which is the whole point', async () => {
+    const { rateGate } = await load();
+    const gate = rateGate(20);
+    const t0 = Date.now();
+    await Promise.all(Array.from({ length: 8 }, () => gate()));
+    assert.ok(Date.now() - t0 >= 300, 'eight at once must still be spread out');
+});
+
+test('isRateLimited: recognises the limiter by status AND by message', async () => {
+    const { isRateLimited } = await load();
+    assert.strictEqual(isRateLimited({ status: 429, data: {} }), true);
+    // the real body Supabase sent: {code, error_code, msg}
+    assert.strictEqual(isRateLimited({ status: 400, data: { code: 429, error_code: 'over_request_rate_limit', msg: 'Request rate limit reached' } }), true,
+        'a limiter answering 400 with a rate-limit message must still be recognised');
+    assert.strictEqual(isRateLimited({ status: 200, data: { error_description: 'Rate limit exceeded' } }), true);
+    // and NOT anything else — a wrong password must never be retried as a limit
+    assert.strictEqual(isRateLimited({ status: 400, data: { error: 'invalid_grant', error_description: 'Invalid login credentials' } }), false);
+    assert.strictEqual(isRateLimited({ status: 500, data: { msg: 'internal error' } }), false);
+    assert.strictEqual(isRateLimited({ status: 200, data: { access_token: 'x' } }), false);
+    assert.strictEqual(isRateLimited(null), false);
+    assert.strictEqual(isRateLimited({ status: 400, data: 'some html' }), false);
+});
+
+test('the sign-in loop paces, retries only a rate limit, and gives up bounded', () => {
+    const src = require('node:fs').readFileSync(path.join(__dirname, '..', 'scripts', 'load_test.mjs'), 'utf8');
+    assert.match(src, /const signInGate = rateGate\(Math\.max\(1, Number\(process\.env\.LOADTEST_SIGNIN_PER_SEC \|\| 8\)\)\);/,
+        'paced, and tunable when a project has a tighter limit');
+    assert.match(src, /for \(let attempt = 0; attempt < 4 && !jwt; attempt\+\+\) \{/, 'bounded');
+    assert.match(src, /await signInGate\(\);\s*\n\s*s = await c\.signIn/, 'the gate is inside the retry loop');
+    assert.match(src, /if \(jwt \|\| !isRateLimited\(s\)\) break;/,
+        'only a rate limit is retried — a bad password must not be tried four times');
+    assert.match(src, /await new Promise\(r => setTimeout\(r, 2000 \* \(attempt \+ 1\)\)\);/, 'backoff grows');
+});
+
+test('a shortfall from the limiter explains itself as the test\'s ceiling', () => {
+    const src = require('node:fs').readFileSync(path.join(__dirname, '..', 'scripts', 'load_test.mjs'), 'utf8');
+    assert.match(src, /if \(rateLimited\) \{/);
+    assert.match(src, /THIS SCRIPT's ceiling, not your app's/,
+        'the reader must not mistake it for the app falling over');
+    assert.match(src, /Authentication → Rate Limits/, 'and must say how to raise it');
+    assert.match(src, /LOADTEST_SIGNIN_PER_SEC/);
+});
+
+// ── bootOrder: the burst must not be charged to one RPC ─────────────────────
+// The defect this exists to prevent: four sequential calls per parent in a
+// FIXED order, started concurrently, make the first call eat the whole queue
+// wait. That reported get_my_balance at 2096ms when its own service time was a
+// fraction of it — a harness artifact that reads exactly like a slow function.
+test('bootOrder rotates, so every call is first for its share of parents', async () => {
+    const { bootOrder } = await load();
+    const keys = ['a', 'b', 'c', 'd'];
+    assert.deepStrictEqual(bootOrder(keys, 0), ['a', 'b', 'c', 'd']);
+    assert.deepStrictEqual(bootOrder(keys, 1), ['b', 'c', 'd', 'a']);
+    assert.deepStrictEqual(bootOrder(keys, 3), ['d', 'a', 'b', 'c']);
+    assert.deepStrictEqual(bootOrder(keys, 4), ['a', 'b', 'c', 'd'], 'wraps');
+});
+
+test('bootOrder is a permutation — no call dropped or measured twice', async () => {
+    const { bootOrder } = await load();
+    const keys = ['get_my_balance', 'get_canteen_accounts', 'get_my_messages', 'get_camp_broadcasts'];
+    for (let i = 0; i < 40; i++) {
+        const got = bootOrder(keys, i);
+        assert.strictEqual(got.length, keys.length, `i=${i}: every call still fires`);
+        assert.deepStrictEqual([...got].sort(), [...keys].sort(), `i=${i}: same set`);
+    }
+});
+
+test('bootOrder spreads first position evenly across the four calls', async () => {
+    const { bootOrder } = await load();
+    const keys = ['a', 'b', 'c', 'd'];
+    const firsts = {};
+    for (let i = 0; i < 60; i++) {
+        const f = bootOrder(keys, i)[0];
+        firsts[f] = (firsts[f] || 0) + 1;
+    }
+    // 60 parents over 4 calls: each must lead 15 times. A fixed order would
+    // give one call 60 and the rest 0 — which is the bug.
+    for (const k of keys) assert.strictEqual(firsts[k], 15, `${k} leads its share`);
+});
+
+test('bootOrder survives degenerate input rather than throwing mid-run', async () => {
+    const { bootOrder } = await load();
+    assert.deepStrictEqual(bootOrder([], 3), [], 'no calls, no crash');
+    assert.deepStrictEqual(bootOrder(['only'], 7), ['only']);
+    // Deliberately NOT asserting a negative index. `pool` counts up from 0, so
+    // it is unreachable, and it is also untestable as a guard: `i % n` already
+    // reduces |i| below n, and JS's negative slice offsets coincide with the
+    // normalised rotation across that whole range. An assertion here would pass
+    // against either spelling and guard nothing.
+});
+
+test('the boot loop actually uses the rotation and the pool index', () => {
+    const src = require('node:fs').readFileSync(path.join(__dirname, '..', 'scripts', 'load_test.mjs'), 'utf8');
+    // pool must hand the worker its index, or the rotation has nothing to rotate on
+    assert.match(src, /for \(;;\) \{ const n = i\+\+; if \(n >= items\.length\) return; await worker\(items\[n\], n\); \}/,
+        'pool passes the index');
+    assert.match(src, /await pool\(parents, o\.concurrency, async \(p, i\) => \{\s*\n\s*for \(const fn of bootOrder\(bootKeys, i\)\)/,
+        'the boot loop rotates per parent — a fixed Object.keys(boot) is the bug');
+    assert.doesNotMatch(src, /for \(const fn of Object\.keys\(boot\)\) \{\s*\n\s*const res = await c\.rpc/,
+        'the fixed-order loop must be gone, not merely shadowed');
+});
+
+test('the boot output says the burst was shared, so the numbers can be read', () => {
+    const src = require('node:fs').readFileSync(path.join(__dirname, '..', 'scripts', 'load_test.mjs'), 'utf8');
+    assert.match(src, /call order rotated per parent so no single RPC absorbs the whole burst/);
+    assert.match(src, /parents at once/, 'and names the real concurrency reached');
+});
