@@ -46,7 +46,7 @@
   "gatewayUrl": "",
   "tokenizationUrl": ""
 }</textarea>
-<div class="hint">Banquest: sourceKey, pin, tokenizationKey, gatewayUrl, tokenizationUrl. Cardknox/Sola: apiKey, ifieldsKey, checkoutSlug, webhookPin.</div>
+<div class="hint">Banquest: sourceKey, pin, tokenizationKey, gatewayUrl, tokenizationUrl. Cardknox/Sola: apiKey, checkoutSlug, webhookPin (card entry happens on Sola's own hosted checkout page, not an embedded widget, so no iFields key is needed).</div>
 
 <label>Notes (optional)</label>
 <input id="notes" placeholder="e.g. Sandbox test run">
@@ -61,7 +61,7 @@ const CRED_TEMPLATES = {
     sourceKey: "", pin: "", tokenizationKey: "", gatewayUrl: "", tokenizationUrl: ""
   },
   cardknox: {
-    apiKey: "", ifieldsKey: "", checkoutSlug: "", webhookPin: ""
+    apiKey: "", checkoutSlug: "", webhookPin: ""
   }
 };
 // Only swaps the template when the box still looks untouched (either the

@@ -85,10 +85,21 @@ nothing changes unless a camp is explicitly walked through the setup below.
   the same way it already recognized `stripePaymentIntentId` — "Direct
   Refund" on a BYOP-charged payment calls `payments-refund` (authenticated,
   owner/admin session) instead of `stripe-refund`.
-- **Cardknox/Sola's own client-side tokenizer (iFields)**, alongside
-  Banquest's Collect.js — `campistry_card_setup.html` now renders a real
-  form for either processor (`renderCardknoxForm`/`renderBanquestForm`,
-  picked by `get_camp_public_tokenization_key`'s `processorKey`).
+- **⚠️ SUPERSEDED, kept for history only — do not follow this bullet.**
+  Cardknox/Sola card entry does NOT use the embedded iFields widget
+  described below any more. `campistry_card_setup.html`'s own comment says
+  so directly: *"Nothing routes a Sola camp here"* — `renderCardknoxForm`
+  was removed from the file entirely. Every Cardknox/Sola camp collects
+  cards on Sola's own hosted checkout page instead (see the "Cardknox/Sola's
+  real hosted checkout page" bullet further down, and `cardknox-checkout-start`).
+  `ifieldsKey` is consequently DEAD — nothing reads it anywhere in the live
+  code — and is not a required credential. Do not add it when connecting a
+  camp; the admin tool (`admin_connect_processor.html`) no longer asks for it.
+- **Cardknox/Sola's own client-side tokenizer (iFields)** — historical, see
+  the superseded notice just above — alongside Banquest's Collect.js —
+  `campistry_card_setup.html` used to render a real form for either
+  processor (`renderCardknoxForm`/`renderBanquestForm`, picked by
+  `get_camp_public_tokenization_key`'s `processorKey`).
   **⚠️ TOKENIZE→SAVE ROUND-TRIP NOT YET VERIFIED AGAINST A LIVE SANDBOX** —
   written from Cardknox's own published sample
   (`github.com/Cardknox/cardknox-ifields-sample`; each sensitive field is
@@ -368,14 +379,15 @@ plus `tokenizationKey` for the client-side Collect.js widget. A stored
 camp environment-specific hostnames instead of the shared default.)
 
 (For Cardknox/Sola instead: `"processorKey": "cardknox"`,
-`"credentials": { "apiKey": "<the camp's private xKey>", "ifieldsKey":
-"<the camp's public iFields key>", "checkoutSlug": "<the camp's
-secure.cardknox.com/ URL slug>", "webhookPin": "<a fresh 15+ character
-alphanumeric PIN you generate>" }` — `apiKey` for server-side charge/refund
-calls, `ifieldsKey` for the embedded card-entry widget (migration 133),
-`checkoutSlug` + `webhookPin` for the hosted-checkout flow (migration 134,
-see the **per-camp webhook setup** section below — `webhookPin` must be the
-EXACT same value you also paste into that camp's own Sola dashboard). If
+`"credentials": { "apiKey": "<the camp's private xKey>", "checkoutSlug":
+"<the camp's secure.cardknox.com/ URL slug>", "webhookPin": "<a fresh 15+
+character alphanumeric PIN you generate>" }` — `apiKey` for server-side
+charge/refund calls, `checkoutSlug` + `webhookPin` for the hosted-checkout
+flow (migration 134, see the **per-camp webhook setup** section below —
+`webhookPin` must be the EXACT same value you also paste into that camp's
+own Sola dashboard). `ifieldsKey` is NOT needed — see the superseded notice
+above; card entry happens on Sola's own hosted page, not an embedded
+widget, so there is no client-side tokenizer key to store. If
 Banquest gave the camp their own branded gateway hostname rather than the
 shared NMI one, add it as `"gatewayUrl": "https://secure.example.com"`
 inside `credentials`.)
