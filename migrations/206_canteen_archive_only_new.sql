@@ -116,9 +116,13 @@ REVOKE ALL ON FUNCTION public.archive_canteen_transactions() FROM public, anon, 
 
 -- ─── verify ─────────────────────────────────────────────────────────────────
 -- 203's verifier is the check that matters and is unchanged: it compares the
--- archive against the blob and reports anything missing. Run it after this:
+-- archive against the blob and reports anything missing. It takes a camp id and
+-- has NO default, so bare parentheses match no function. Run it per camp:
 --
---   SELECT public.verify_canteen_archive();
+--   SELECT c.id AS camp_id, public.verify_canteen_archive(c.id) AS result
+--     FROM camps c
+--    WHERE EXISTS (SELECT 1 FROM camp_state_kv k
+--                   WHERE k.camp_id = c.id AND k.key = 'campistrySnacks');
 --
 -- inSync:true with missingFromArchive:0 means the narrower trigger still
 -- archives everything a sale adds. If a future write path ever bulk-REPLACES
