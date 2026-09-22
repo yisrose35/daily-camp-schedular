@@ -2270,9 +2270,9 @@
             if (_st) { _st.textContent = 'Only camp owners can edit camp dates.'; _st.style.color = '#dc2626'; }
             return;
         }
-        document.getElementById('campStartDate').value = '';
-        document.getElementById('campEndDate').value = '';
-        document.getElementById('campDatesWeekPreview').style.display = 'none';
+        var _cs = document.getElementById('campStartDate'); if (_cs) _cs.value = '';
+        var _ce = document.getElementById('campEndDate'); if (_ce) _ce.value = '';
+        var _wp = document.getElementById('campDatesWeekPreview'); if (_wp) _wp.style.display = 'none';
         _dashRawCampDatesHalves = { half1End: null, half2Start: null };
         _dashUpdateHalfInfo();
 
@@ -2407,6 +2407,47 @@
         if (!gs.campistryMe) gs.campistryMe = {};
         gs.campistryMe.sessions = _dashSessions;
         if (window.saveGlobalSettings) window.saveGlobalSettings('campistryMe', gs.campistryMe);
+        _dashDeriveCampDatesFromSessions();
+    }
+
+    // There is no separate "Camp Dates" step for the owner to fill in any more —
+    // Sessions ARE the summer schedule. Utils.getCampDates() (scheduler_core_utils.js)
+    // still reads camp_state_kv.campDates.startDate/endDate for older code paths
+    // (and half1End/half2Start as a fallback for a camp with no "1st Half"/"2nd Half"
+    // session yet), so this keeps that record populated automatically: the overall
+    // range is just the earliest session start and latest session end, re-derived
+    // and silently persisted every time a session is added/edited/deleted. The
+    // fallback half1End/half2Start fields are carried forward unchanged.
+    var _dashDeriveCampDatesDebounce = null;
+    function _dashDeriveCampDatesFromSessions() {
+        if (isTeamMember) return; // owner-only write, same guard saveCampDates() used
+        clearTimeout(_dashDeriveCampDatesDebounce);
+        _dashDeriveCampDatesDebounce = setTimeout(async function() {
+            try {
+                var starts = _dashSessions.map(function(s) { return s && s.startDate; }).filter(Boolean);
+                var ends = _dashSessions.map(function(s) { return s && s.endDate; }).filter(Boolean);
+                if (!starts.length || !ends.length) return;
+                var startDate = starts.reduce(function(a, b) { return b < a ? b : a; });
+                var endDate = ends.reduce(function(a, b) { return b > a ? b : a; });
+                var campDates = {
+                    startDate: startDate,
+                    half1End: _dashRawCampDatesHalves.half1End,
+                    half2Start: _dashRawCampDatesHalves.half2Start,
+                    endDate: endDate
+                };
+                var campId = localStorage.getItem('campistry_camp_id') || localStorage.getItem('campistry_user_id') || (currentUser && currentUser.id);
+                if (!campId) return;
+                var { error } = await window.supabase
+                    .from('camp_state_kv')
+                    .upsert({ camp_id: campId, key: 'campDates', value: campDates, updated_at: new Date().toISOString() },
+                             { onConflict: 'camp_id,key' });
+                if (error) throw error;
+                if (window.saveGlobalSettings) window.saveGlobalSettings('campDates', campDates);
+                _dashRawCampDatesHalves = { half1End: campDates.half1End, half2Start: campDates.half2Start };
+            } catch (e) {
+                console.warn('Could not derive camp dates from sessions:', e);
+            }
+        }, 400);
     }
 
     function _dashSaveBundles() {
@@ -2570,8 +2611,6 @@
 
     function _dashFillSessionForm(s) {
         document.getElementById('sesName').value = s.name || '';
-        document.getElementById('sesDatePreset').value = '';
-        document.getElementById('sesDatePresetHint').textContent = '';
         document.getElementById('sesStart').value = s.startDate || '';
         document.getElementById('sesEnd').value = s.endDate || '';
         document.getElementById('sesDates').value = s.dates || '';
@@ -2622,27 +2661,9 @@
         _dashEditingSessionIdx = null;
     };
 
-    // Quick-fill Start/End from the Camp Dates section above — Full Summer only
-    // now. "1st Half"/"2nd Half" presets were removed: those two boundaries no
-    // longer live as separate Camp Dates fields to copy from — a session named
-    // "1st Half"/"2nd Half" IS how those boundaries get set now, so pre-filling
-    // one from the other would be circular. An owner adding those two sessions
-    // just types their dates directly below.
-    window.applySessionDatePreset = function() {
-        var preset = document.getElementById('sesDatePreset').value;
-        var hint = document.getElementById('sesDatePresetHint');
-        if (!preset) { if (hint) hint.textContent = ''; return; }
-        var start = document.getElementById('campStartDate')?.value || '';
-        var end = document.getElementById('campEndDate')?.value || '';
-        var range = { full: [start, end] }[preset];
-        if (!range || !range[0] || !range[1]) {
-            if (hint) hint.textContent = 'Set Camp Dates above first — that boundary isn\'t filled in yet.';
-            return;
-        }
-        document.getElementById('sesStart').value = range[0];
-        document.getElementById('sesEnd').value = range[1];
-        if (hint) hint.textContent = 'Filled from Camp Dates — you can still adjust below.';
-    };
+    // The "Quick-fill from Camp Dates" preset dropdown was removed along with
+    // the Camp Dates step itself — there's no separate Camp Dates range to
+    // copy from any more, sessions define their own dates directly.
 
     window.saveSessionForm = function() {
         var status = document.getElementById('sessionFormStatus');
@@ -2751,30 +2772,27 @@
             wrap.innerHTML = '<span style="font-size:0.8rem; color:var(--slate-400);">Add sessions above first.</span>';
             return;
         }
-        // A plain vertical checkbox-per-label list read cramped once a camp had
-        // more than 2-3 sessions, with no visual separation between rows and no
-        // context (price/dates) to tell two similarly-named sessions apart. This
-        // renders each session as its own bordered row/card — checkbox, name,
-        // and its price + dates for context — in a responsive grid instead.
-        wrap.innerHTML = _dashSessions.map(function(s) {
+        // One row per session, stacked top to bottom (a grid layout here kept
+        // rendering broken — narrow, overlapping columns — so this is deliberately
+        // as plain as possible: a single-column list, no nested flex/grid tricks
+        // that any surrounding CSS could collide with).
+        var rows = _dashSessions.map(function(s) {
             var checked = selectedIds.indexOf(s.id) >= 0 ? ' checked' : '';
             var meta = [];
             if (s.dates) meta.push(_dashEsc(s.dates));
             if (s.tuition) meta.push('$' + Number(s.tuition).toLocaleString());
-            var metaHtml = meta.length
-                ? '<div style="font-size:0.72rem; color:var(--slate-400); margin-top:2px;">' + meta.join(' &middot; ') + '</div>'
-                : '';
-            return '<label style="box-sizing:border-box; width:100%; display:flex; align-items:flex-start; gap:9px; padding:9px 11px; border-radius:8px; border:1px solid var(--slate-200); background:#fff; cursor:pointer; transition:border-color .12s,background .12s;" '
-                + 'onmouseover="this.style.borderColor=\'#a78bfa\'" onmouseout="this.style.borderColor=\'var(--slate-200)\'">'
-                + '<input type="checkbox" value="' + _dashEsc(s.id) + '" class="bunSessionCheck"' + checked + ' style="margin-top:2px; flex-shrink:0;">'
-                + '<span style="min-width:0; flex:1; white-space:normal; word-break:normal; overflow-wrap:break-word;"><span style="display:block; font-size:0.85rem; font-weight:600; color:var(--slate-700);">' + _dashEsc(s.name) + '</span>' + metaHtml + '</span>'
-                + '</label>';
-        }).join('');
-        wrap.style.boxSizing = 'border-box';
-        wrap.style.width = '100%';
-        wrap.style.display = 'grid';
-        wrap.style.gridTemplateColumns = 'repeat(auto-fill, minmax(220px, 1fr))';
-        wrap.style.gap = '8px';
+            var metaText = meta.length ? (' &middot; ' + meta.join(' &middot; ')) : '';
+            return '<tr><td style="width:28px; padding:10px 0 10px 12px; vertical-align:top;">'
+                + '<input type="checkbox" value="' + _dashEsc(s.id) + '" class="bunSessionCheck"' + checked + '>'
+                + '</td><td style="padding:10px 12px 10px 0; vertical-align:top; font-size:0.85rem; color:var(--slate-700);">'
+                + '<strong>' + _dashEsc(s.name) + '</strong>'
+                + '<span style="color:var(--slate-400); font-size:0.78rem;">' + metaText + '</span>'
+                + '</td></tr>';
+        }).join('<tr><td colspan="2" style="border-top:1px solid var(--slate-200);"></td></tr>');
+        // A <table> lays each row out top-to-bottom by definition — no flex/grid
+        // sizing math for a nested span to get wrong.
+        wrap.innerHTML = '<table style="width:100%; border-collapse:collapse;"><tbody>' + rows + '</tbody></table>';
+        wrap.style.display = 'block';
     }
 
     window.addBundleForm = function() {
