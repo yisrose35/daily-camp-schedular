@@ -319,11 +319,17 @@
         });
 
         h += '<div style="margin-top:20px;border-top:1px solid #E2E8F0;padding-top:14px;">';
-        h += '<button id="asToggleAdv" style="border:none;background:none;padding:0;cursor:pointer;' +
-             'font:inherit;font-size:.84rem;font-weight:600;color:#4F46E5;display:flex;align-items:center;gap:6px;">' +
+        // A plain text link here is easy to miss — this is the ONE place an
+        // owner can see and change exactly which sections someone gets, so it
+        // needs to read as a real, clickable control rather than a footnote.
+        h += '<button id="asToggleAdv" style="width:100%;text-align:left;border:1.5px solid ' +
+             (_advanced ? '#4F46E5' : '#E2E8F0') + ';background:' + (_advanced ? '#EEF2FF' : '#F8FAFC') +
+             ';border-radius:10px;padding:11px 14px;cursor:pointer;' +
+             'font:inherit;font-size:.85rem;font-weight:700;color:#4F46E5;display:flex;align-items:center;gap:8px;">' +
              '<span style="display:inline-block;transform:rotate(' + (_advanced ? '90' : '0') + 'deg);transition:transform .15s;">▸</span>' +
              'Fine-tune section by section' +
-             (unconfigured ? '' : ' <span style="font-weight:400;color:#94A3B8;">— ' + onCount + ' of ' + Cc.all().length + ' on</span>') +
+             (unconfigured ? '' : ' <span style="font-weight:500;color:#64748B;">— ' + onCount + ' of ' + Cc.all().length + ' on</span>') +
+             '<span style="margin-left:auto;font-weight:400;color:#94A3B8;font-size:.75rem;">' + (_advanced ? 'Hide' : 'Advanced — apps &amp; sections') + '</span>' +
              '</button>';
 
         if (_advanced) {
@@ -423,6 +429,14 @@
     function wire(m) {
         if (!m) return;
 
+        // The group name field is uncontrolled DOM, but bodyHtml() re-renders
+        // it from _group.name on every redraw() (toggling a preset, a cap, an
+        // app product...). Without syncing keystrokes back into _group.name
+        // as they happen, any redraw wipes out whatever the owner had just
+        // typed before they got to Save.
+        var agName = document.getElementById('agName');
+        if (agName) agName.oninput = function () { _group.name = agName.value; };
+
         var adv = document.getElementById('asToggleAdv');
         if (adv) adv.onclick = function () { _advanced = !_advanced; redraw(); };
 
@@ -447,6 +461,20 @@
                     // someone ends up with access they didn't intend to grant.
                     _preset = k;
                     _overrides = {};
+                    // Group mode's fine-tune matrix only shows apps in
+                    // _groupProducts (visibleApps()) — without this, picking
+                    // a preset that grants e.g. Billing does nothing visible
+                    // if Billing's app checkbox isn't already on, so the
+                    // fine-tune toggles look out of sync with the role just
+                    // picked. Bring every app the preset actually grants
+                    // something in into the group's app list.
+                    if (_mode === 'group') {
+                        var exp = C().expandPreset(k);
+                        C().APPS.forEach(function (app) {
+                            var grantsSomething = C().forApp(app.key).some(function (c) { return (exp[c.key] || 'none') !== 'none'; });
+                            if (grantsSomething && _groupProducts.indexOf(app.key) < 0) _groupProducts.push(app.key);
+                        });
+                    }
                 }
                 redraw();
             };

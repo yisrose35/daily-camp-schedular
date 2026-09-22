@@ -1337,6 +1337,17 @@
         }
 
         const _campDates = (function() {
+            // ★ Half boundaries now resolve through Utils.getCampDates(), which
+            // overrides half1End/half2Start from the "1st Half"/"2nd Half"
+            // Sessions when they exist (see scheduler_core_utils.js) — falls
+            // back to the raw campDates fields when SchedulerCoreUtils isn't
+            // loaded or no matching session exists.
+            try {
+                if (window.SchedulerCoreUtils && typeof window.SchedulerCoreUtils.getCampDates === 'function') {
+                    const resolved = window.SchedulerCoreUtils.getCampDates();
+                    if (resolved) return resolved;
+                }
+            } catch (e) {}
             const cd = globalSettings.campDates || (window.loadGlobalSettings && window.loadGlobalSettings('campDates'));
             if (cd && cd.startDate) return cd;
             return null;

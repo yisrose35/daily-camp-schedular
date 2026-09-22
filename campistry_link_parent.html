@@ -618,6 +618,16 @@
         </button>
     </div>
 
+    <div class="lk-card" id="mailEmailCard" style="margin-top:16px;display:none;">
+        <div class="lk-card-head"><h2>Prefer email?</h2></div>
+        <p style="font-size:.85rem;color:var(--text-muted);margin:0 0 10px;">You can also just email your letter from your own inbox — send it here and it reaches the camp office the same way. Email <strong>from the address you registered with</strong>, and put your camper's name in the subject or first line so it goes to the right child.</p>
+        <div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap;">
+            <code id="mailEmailAddr" style="font-size:.9rem;font-weight:700;background:var(--surface-2,#f1f5f9);padding:8px 12px;border-radius:8px;word-break:break-all;"></code>
+            <button class="btn btn-secondary" onclick="_copyMailEmail()">Copy</button>
+        </div>
+        <div id="mailEmailCodes" style="margin-top:12px;"></div>
+    </div>
+
     <div class="lk-card" style="margin-top:16px;">
         <div class="lk-card-head"><h2>My Letters</h2></div>
         <div id="myMailList"><div class="lk-empty" style="padding:20px 0;"><h3>No letters yet</h3><p>Letters you send appear here with their delivery status.</p></div></div>
@@ -1465,14 +1475,10 @@ function _lkPlanSchedule(plan,balance){
     return out;
 }
 function _lkPlanOfferHtml(cid,d){
-    if(!d.allowParentPaymentPlans) return '';
-    if((Number(d.balance)||0)<=0.005) return '';
-    if(_lkFamPlans(d).length) return ''; // already has a plan — nothing to offer
-    return '<div style="border-top:1px solid var(--border-color,#E2E8F0);margin-top:16px;padding-top:16px;">'
-        +'<div style="font-size:.72rem;font-weight:700;color:var(--link-color);text-transform:uppercase;letter-spacing:.04em;margin-bottom:8px;">Payment Plan</div>'
-        +'<div style="font-size:.78rem;color:var(--text-muted);margin-bottom:10px;">Want to spread this out? Build your own payment schedule.</div>'
-        +'<button class="btn btn-secondary" style="width:100%;font-size:.85rem;" onclick="openPlanBuilder(\''+cid+'\')">Build a payment plan</button>'
-        +'</div>';
+    // Self-serve "build your own payment plan" was removed from Link —
+    // payment plans are set up by camp staff (Me → Billing) only. This
+    // stays as a no-op so call sites below don't need to change.
+    return '';
 }
 function _payCardHtml(cid,campName,d){
     var bal=Number(d.balance)||0; var owed=bal>0.005;
@@ -1605,103 +1611,10 @@ async function startAutopaySetup(cid){
         _lkGoToCheckout(data.url);
     }catch(err){ console.error('[Parent] autopay setup error:',err); toast('Could not start setup: '+(err&&err.message||'error')); }
 }
-// Self-serve payment-plan builder — only reachable when a camp turned on
-// allowParentPaymentPlans and no plan exists yet for this family. A
-// family owes ONE running balance regardless of how many kids it comes
-// from, so this always targets the whole balance — no per-camper picker.
-// The math here (even split, remainder folded into the first payment)
-// mirrors _mpGenRows/_buildInstallmentSchedule in campistry_me.js; the
-// actual balance/eligibility/total checks all happen SERVER-SIDE in
-// set_my_payment_plan — this client-side generation is only a preview,
-// never trusted for the real write.
-var _lkPlanCid=null;
-function openPlanBuilder(cid){
-    var d=_balByCamp[cid]; if(!d){toast('Balance not loaded yet');return;}
-    var bal=Number(d.balance)||0; if(bal<=0.005){toast('Nothing to pay');return;}
-    _lkPlanCid=cid;
-    var sub=document.getElementById('lkPlanSub'); if(sub) sub.textContent='Balance due: '+_lkMoney(bal);
-    var startEl=document.getElementById('lkPlanStart');
-    if(startEl&&!startEl.value){
-        var d1=new Date(); d1.setDate(1); d1.setMonth(d1.getMonth()+1);
-        startEl.value=d1.toISOString().split('T')[0];
-    }
-    _lkPlanRefreshPreview();
-    var ov=document.getElementById('lkPlanOverlay'); if(ov) ov.classList.add('open');
-}
-function lkPlanClose(){ var ov=document.getElementById('lkPlanOverlay'); if(ov) ov.classList.remove('open'); _lkPlanCid=null; }
-function _lkPlanBuildRows(){
-    var cid=_lkPlanCid; var d=cid&&_balByCamp[cid]; if(!d) return [];
-    var bal=Number(d.balance)||0;
-    if(bal<=0.005) return [];
-    var countEl=document.getElementById('lkPlanCount');
-    var count=Math.max(1,Math.min(24,parseInt(countEl&&countEl.value,10)||1));
-    var cadence=(document.getElementById('lkPlanCadence')||{}).value||'monthly';
-    var startVal=(document.getElementById('lkPlanStart')||{}).value;
-    var stepDays=cadence==='weekly'?7:cadence==='biweekly'?14:30;
-    var start=startVal?new Date(startVal+'T12:00:00'):new Date();
-    var per=Math.floor(bal/count*100)/100;
-    var remainder=Math.round((bal-per*count)*100)/100;
-    var rows=[];
-    for(var i=0;i<count;i++){
-        var due=new Date(start); due.setDate(due.getDate()+stepDays*i);
-        var amt=per+(i===0?remainder:0);
-        rows.push({amount:Math.round(amt*100)/100,dueDate:due.toISOString().split('T')[0]});
-    }
-    return rows;
-}
-function _lkPlanRefreshPreview(){
-    var rows=_lkPlanBuildRows();
-    var el=document.getElementById('lkPlanPreview'); if(!el) return;
-    el.innerHTML=rows.map(function(r){
-        return '<div style="display:flex;justify-content:space-between;padding:6px 0;border-bottom:1px solid var(--border-color,#E2E8F0);">'
-            +'<span style="color:var(--text-muted);">'+String(r.dueDate||'').replace(/[<>&]/g,'')+'</span>'
-            +'<span style="font-weight:700;">'+_lkMoney(r.amount)+'</span></div>';
-    }).join('');
-}
-// A double-tap on mobile (or a slow-network retry) could fire this twice
-// before either request resolved -- both hit set_my_payment_plan's row
-// lock, one creates the plan, the other then correctly sees it and
-// rejects with plan_already_exists. The plan itself was fine either way,
-// but the rejection toast landing after/on top of the success one made a
-// perfectly good save look like a failure. Guard against the race itself
-// rather than just explaining it away.
-var _lkPlanSaving=false;
-async function _lkPlanSave(){
-    if(_lkPlanSaving) return;
-    var cid=_lkPlanCid; var d=cid&&_balByCamp[cid]; if(!d){toast('Balance not loaded yet');return;}
-    var rows=_lkPlanBuildRows();
-    if(!rows.length){toast('Add at least one payment');return;}
-    lkPlanClose();
-    _lkPlanSaving=true;
-    try{
-        toast('Saving your payment plan…');
-        var call=window._pRpc?window._pRpc('set_my_payment_plan',{p_enrollment_ids:null,p_installments:rows},cid):null;
-        if(!call) throw new Error('Not available right now');
-        var res=await call;
-        var r=res&&res.data;
-        if(!r||!r.success){
-            var msgs={
-                self_serve_not_enabled:'This camp hasn\'t turned on self-serve payment plans.',
-                plan_already_exists:'A payment plan already exists for your family — contact the camp to change it.',
-                nothing_owed:'Nothing is currently owed.',
-                total_mismatch:'Your balance changed since this loaded — please try again.',
-                no_family_on_file:'We couldn\'t find your family record — contact the camp office.'
-            };
-            throw new Error((r&&msgs[r.error])||(r&&r.error)||'Could not save plan');
-        }
-        toast('Payment plan saved!');
-        loadPayments();
-    }catch(err){ console.error('[Parent] plan save error:',err); toast('Could not save plan: '+(err&&err.message||'error')); }
-    finally{ _lkPlanSaving=false; }
-}
-(function _wirePlanOverlay(){
-    function wire(){
-        var ov=document.getElementById('lkPlanOverlay');
-        if(ov)ov.addEventListener('click',function(e){ if(e.target===ov) lkPlanClose(); });
-        document.addEventListener('keydown',function(e){ if(e.key==='Escape'&&ov&&ov.classList.contains('open')) lkPlanClose(); });
-    }
-    if(document.readyState==='loading') document.addEventListener('DOMContentLoaded',wire); else wire();
-})();
+// Self-serve payment-plan builder (openPlanBuilder / _lkPlanSave / the
+// #lkPlanOverlay modal) was removed from Link — parents no longer set up
+// their own payment plans from the parent portal; that stays a
+// staff-only action from Me → Billing.
 function _renderPayHistory(pt,history){
     if(!pt) return;
     history.sort(function(a,b){return String(b.date||'').localeCompare(String(a.date||''));});
@@ -4247,7 +4160,42 @@ function renderCamperMail(){
         }
     }
     _renderMyMail();
+    _renderMailEmailOption();
 }
+// The camp's own letters@ address, shown only when the camp has turned inbound
+// Camper Mail on. Scoped to the active child's camp so a multi-camp family sees
+// the right address as they switch campers.
+function _renderMailEmailOption(){
+    var card=document.getElementById('mailEmailCard'); if(!card) return;
+    card.style.display='none';
+    var child=children.find(function(c){return c.name===_mailChildName;})||children[0];
+    var cid=child&&child.campId; if(!cid||!window._pRpc) return;
+    window._pRpc('get_camper_mail_inbox_address',{},cid).then(function(res){
+        var d=res&&res.data;
+        if(d&&d.success&&d.available&&d.inboundToken){
+            var addr='letters+'+d.inboundToken+'@'+(window.CAMPISTRY_INBOUND_DOMAIN||'inbound.campistry.org');
+            var a=document.getElementById('mailEmailAddr'); if(a)a.textContent=addr;
+            _renderMailCodes(cid,d.campNumber||'');
+            card.style.display='';
+        }
+    },function(){});
+}
+// Each of this parent's campers at this camp gets a code — <camp number>-<camper
+// id> — that pins an email to them from ANY address. Shown so a parent emailing
+// from a work or shared inbox can still route the letter to the right child.
+function _renderMailCodes(cid,campNumber){
+    var box=document.getElementById('mailEmailCodes'); if(!box) return;
+    box.innerHTML='';
+    if(!campNumber) return;
+    var kids=(children||[]).filter(function(c){ return c.campId===cid && String(c.id||'').replace(/\D/g,''); });
+    if(!kids.length) return;
+    box.innerHTML='<div style="font-size:.76rem;color:var(--text-muted);margin-bottom:6px;">Emailing from a different address? Put your camper’s code in the subject or first line:</div>'
+      +kids.map(function(c){
+          var code=campNumber+'-'+String(c.id).replace(/\D/g,'');
+          return '<div style="display:flex;align-items:center;gap:8px;margin:4px 0;"><code style="font-size:.86rem;font-weight:700;background:var(--surface-2,#f1f5f9);padding:5px 10px;border-radius:6px;">'+code+'</code><span style="font-size:.8rem;color:var(--text-muted);">'+(c.name?String(c.name).replace(/[<>&]/g,''):'')+'</span></div>';
+      }).join('');
+}
+function _copyMailEmail(){ var a=document.getElementById('mailEmailAddr'); if(!a||!a.textContent)return; try{ navigator.clipboard.writeText(a.textContent); toast('Address copied'); }catch(e){ toast(a.textContent); } }
 
 function _renderMyMail(){
     var el=document.getElementById('myMailList'); if(!el)return;
@@ -5021,6 +4969,7 @@ window.addEventListener('storage', function(e) {
 <script src="campistry_face_shared.js?v=20260909-01"></script>
 <script src="campistry_face_engine_v2.js?v=20260909-01"></script>
 <script src="supabase-js@2.js?v=20260909-01"></script>
+<script>window.CAMPISTRY_INBOUND_DOMAIN=window.CAMPISTRY_INBOUND_DOMAIN||'inbound.campistry.org';</script>
 <script src="config.js?v=20260909-01"></script>
 <!-- pdf-lib + pdf.js (vendored) — fill-in-browser + stamp/flatten for PDF
      Forms (Forms & Documents → Complete Online → a sourceType:'pdf' form). -->
@@ -6722,35 +6671,9 @@ if (window.pdfjsLib) { window.pdfjsLib.GlobalWorkerOptions.workerSrc = 'pdfjs-di
     </div>
 </div>
 
-<!-- Self-serve payment plan builder — only offered when the camp has turned
-     on allowParentPaymentPlans (get_my_balance) and no plan exists yet. -->
-<div class="lk-confirm-overlay" id="lkPlanOverlay">
-    <div class="lk-confirm-card" style="max-width:420px;">
-        <h3>Build your payment plan</h3>
-        <p id="lkPlanSub">Balance due: $0.00</p>
-        <div class="lk-field" style="text-align:left;margin-bottom:12px;">
-            <label style="font-size:.78rem;font-weight:600;color:var(--slate-600);display:block;margin-bottom:6px;">How often</label>
-            <select id="lkPlanCadence" class="lk-input" onchange="_lkPlanRefreshPreview()">
-                <option value="monthly" selected>Monthly</option>
-                <option value="biweekly">Every 2 weeks</option>
-                <option value="weekly">Weekly</option>
-            </select>
-        </div>
-        <div class="lk-field" style="text-align:left;margin-bottom:12px;">
-            <label style="font-size:.78rem;font-weight:600;color:var(--slate-600);display:block;margin-bottom:6px;">Number of payments</label>
-            <input type="number" id="lkPlanCount" class="lk-input" value="3" min="1" max="24" oninput="_lkPlanRefreshPreview()">
-        </div>
-        <div class="lk-field" style="text-align:left;margin-bottom:14px;">
-            <label style="font-size:.78rem;font-weight:600;color:var(--slate-600);display:block;margin-bottom:6px;">First payment date</label>
-            <input type="date" id="lkPlanStart" class="lk-input" onchange="_lkPlanRefreshPreview()">
-        </div>
-        <div id="lkPlanPreview" style="text-align:left;font-size:.85rem;margin-bottom:18px;max-height:180px;overflow-y:auto;"></div>
-        <div class="lk-confirm-foot">
-            <button class="btn btn-ghost" type="button" onclick="lkPlanClose()">Cancel</button>
-            <button class="btn btn-primary" type="button" onclick="_lkPlanSave()">Save plan</button>
-        </div>
-    </div>
-</div>
+<!-- Self-serve parent payment-plan builder was removed from Link: parents
+     no longer set up their own payment plans from the parent portal.
+     Payment plans are still staff-managed from Me → Billing. -->
 
 <script>
 // ── Fill-online module ───────────────────────────────────────────────────────

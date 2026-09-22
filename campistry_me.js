@@ -359,7 +359,7 @@ function init(){
     // nav()'s other targets (camperdetail, familydetail, ...) expect a
     // selected record that doesn't exist this early.
     (function(){
-        var SIDEBAR_PAGES={analytics:1,billing:1,campers:1,finance:1,hiring:1,payroll:1,registration:1,reports:1,structure:1};
+        var SIDEBAR_PAGES={analytics:1,billing:1,broadcasts:1,campers:1,finance:1,hiring:1,payroll:1,registration:1,reports:1,structure:1};
         var requested=(window.location.hash||'').replace(/^#/,'');
         nav(Object.prototype.hasOwnProperty.call(SIDEBAR_PAGES,requested)?requested:'campers');
     })();
@@ -1695,6 +1695,11 @@ function managePaymentMethods(){
     h+='<p style="font-size:.78rem;color:var(--s400);margin:0 0 14px">'
       +'A method you turn off still appears on past records, so last season\u2019s '
       +'payments keep reading correctly.</p>';
+    h+='<p style="font-size:.78rem;color:var(--s500);background:var(--s50);border-radius:var(--r);'
+      +'padding:9px 12px;margin:0 0 14px">'
+      +'\ud83d\udcb3 <strong>Already have your own card processor</strong> (Banquest, Sola/Cardknox, etc.)? '
+      +'Bring-Your-Own-Processor is supported \u2014 it isn\u2019t self-service here, so '
+      +'<strong>contact Campistry support</strong> to get it connected.</p>';
 
     (P.CONTEXTS||[]).forEach(function(ctx){
         var all=(P.METHODS||[]).filter(function(m){return m.contexts.indexOf(ctx)>=0});
@@ -1723,6 +1728,38 @@ function managePaymentMethods(){
         save();closeModal('dynModal');
         toast('Accepted payments updated \u2014 '+list.length+' method'
               +(list.length===1?'':'s')+', everywhere');
+    },'Save');
+}
+
+/**
+ * PARENT SELF-SERVE PAYMENT PLANS — camp-wide toggle.
+ *
+ * This used to be a checkbox on the Dashboard, inside Sessions & Pricing. It
+ * moved here because it's a Billing policy, not a session detail — same
+ * reasoning as managePaymentMethods() above. It reads/writes the SAME
+ * underlying setting Dashboard used (`enrollSettings.allowParentPaymentPlans`),
+ * so flipping it here has the same effect the old Dashboard checkbox had:
+ * once accepted, a family can build their own installment schedule from Link
+ * (set_my_payment_plan RPC, migration 115) instead of the office building one
+ * manually via Billing -> Monthly Plan.
+ */
+function manageParentPaymentPlanSetting(){
+    if(!_secEdit('billing','Changing payment plan settings'))return;
+    var on=!!enrollSettings.allowParentPaymentPlans;
+    var h='<div class="me-modal-form">';
+    h+='<label class="ops-check" style="display:flex;align-items:flex-start;gap:9px;font-size:.85rem;'
+      +'font-weight:500;color:var(--s700);cursor:pointer">'
+      +'<input type="checkbox" id="ppAllowChk" style="margin-top:2px"'+(on?' checked':'')+'> '
+      +'<span>Let parents set up their own payment plan in Link'
+      +'<span style="display:block;font-weight:400;margin-top:3px;font-size:.78rem;color:var(--s500)">'
+      +'Once accepted. When off, an application asking for a payment plan flags the office to '
+      +'set one up instead.</span></span></label>';
+    h+='</div>';
+    showModal('Parent payment plans',h,function(){
+        var checked=!!(document.getElementById('ppAllowChk')||{}).checked;
+        enrollSettings.allowParentPaymentPlans=checked;
+        save();closeModal('dynModal');
+        toast('Parent payment plans '+(checked?'enabled':'disabled'));
     },'Save');
 }
 
@@ -3182,7 +3219,7 @@ function ff(label,id,val,type,opts){
 
 // ═══ RENDERERS ═══════════════════════════════════════════════════
 function render(p){
-    var m={campers:renderCampers,camperdetail:renderCamperDetailPage,staffdetail:renderStaffDetailPage,structure:renderStructure,bunkbuilder:renderBB,registration:renderRegistrationPage,hiring:renderHiringPage,leads:renderLeads,billing:renderBilling,familydetail:renderFamilyDetailPage,payroll:renderPayroll,analytics:renderAnalytics,finance:renderFinance,reports:renderReports,printsheets:renderPrintSheets};
+    var m={campers:renderCampers,camperdetail:renderCamperDetailPage,staffdetail:renderStaffDetailPage,structure:renderStructure,bunkbuilder:renderBB,registration:renderRegistrationPage,hiring:renderHiringPage,leads:renderLeads,billing:renderBilling,familydetail:renderFamilyDetailPage,payroll:renderPayroll,analytics:renderAnalytics,finance:renderFinance,reports:renderReports,printsheets:renderPrintSheets,broadcasts:renderBroadcasts};
     if(m[p])m[p]();else renderSoon(p);
 }
 
@@ -4546,7 +4583,7 @@ function renderCampers(filter){
     // staged an application). No "+ Add Camper" button here anymore.
     var _sliceLabel=(showUnenrolled||_whenNow==='all')?''
         :(_whenNow==='today'?' in camp today':' on '+_whenNow.replace(/^session:/,''));
-    var h='<div class="sec-hd"><div><h2 class="sec-title">Roster</h2><p class="sec-desc">'+enrolledEntries.length+' camper'+(enrolledEntries.length!==1?'s':'')+_sliceLabel+(canStaff?' · '+allStaffRows.length+' staff':'')+(unenrolledEntries.length?' · '+unenrolledEntries.length+' unenrolled':'')+'</p></div><div class="sec-actions"><button class="me-btn me-btn--ghost me-btn--sm" onclick="CampistryMe.manageCustomFields()" title="Define custom fields">⚙ Custom Fields</button><button class="me-btn me-btn--sec me-btn--sm" onclick="CampistryMe.downloadTemplate()">Template</button><button class="me-btn me-btn--sec me-btn--sm" onclick="CampistryMe.openCsv()">Import</button></div></div>';
+    var h='<div class="sec-hd"><div><h2 class="sec-title">Roster</h2><p class="sec-desc">'+enrolledEntries.length+' camper'+(enrolledEntries.length!==1?'s':'')+_sliceLabel+(canStaff?' · '+allStaffRows.length+' staff':'')+(unenrolledEntries.length?' · '+unenrolledEntries.length+' unenrolled':'')+'</p></div><div class="sec-actions"><button class="me-btn me-btn--ghost me-btn--sm" onclick="CampistryMe.manageCustomFields()" title="Define custom fields">⚙ Custom Fields</button><button class="me-btn me-btn--sec me-btn--sm" onclick="CampistryMe.downloadTemplate()">Template</button><button class="me-btn me-btn--sec me-btn--sm" onclick="CampistryMe.openCsv()">Import</button><button class="me-btn me-btn--sec me-btn--sm" onclick="CampistryMe.archiveSeasonNow()" title="Snapshot the current roster/staff under a season label so it survives a CSV re-import or next year\'s reset">Archive Season</button></div></div>';
     // Silent duplicate detection: a quiet warning banner appears here only when
     // likely-duplicate camper records are found (no button triggers it).
     h+=_dupCamperBannerHtml();
@@ -6232,10 +6269,14 @@ function renderStructure(){
             var rollup=_divisionHeadRollup(dn,grades);
             var dHeadChip=rollup.heads.length
                 ?rollup.heads.map(function(s){return esc(s.name);}).join(', ')
-                :(rollup.editable?'+ Assign division head':(rollup.mixed?'Set per grade below':'+ Assign per grade'));
-            var dHeadAttrs=rollup.editable
-                ?' onclick="event.stopPropagation();CampistryMe.openDivisionHeadModal(\''+je(dn)+'\')" style="cursor:pointer"'
-                :' style="cursor:default"';
+                :(rollup.mixed?'Mixed — click to set division-wide':'+ Assign division head');
+            // A division head can always be assigned directly at the division
+            // level, even when grades already have their own heads set — the
+            // rollup above only controls what's SHOWN (derived from grades
+            // when they're uniform), not whether the division-level record
+            // itself is editable. Without this, a division with grades could
+            // only ever get a head assigned per-grade.
+            var dHeadAttrs=' onclick="event.stopPropagation();CampistryMe.openDivisionHeadModal(\''+je(dn)+'\')" style="cursor:pointer"';
             var bodyId='structBody'+ix;
             var openKey='struct_'+dn;
             var isOpen=Object.prototype.hasOwnProperty.call(_accOpenState,openKey)?_accOpenState[openKey]:false;
@@ -6261,7 +6302,7 @@ function renderStructure(){
                 +'</div>'
                 +'</div>'
                 +'<div style="display:flex;gap:10px;align-items:center;flex-shrink:0">'
-                +'<span'+dHeadAttrs+' title="'+(rollup.editable?'Who gets notified for this division':'Assigned per grade below')+' " style="font-size:.74rem;'+(rollup.heads.length?'color:var(--s600)':'color:var(--me)')+';font-weight:600;white-space:nowrap">'
+                +'<span'+dHeadAttrs+' title="Who gets notified for this division — grade heads below can still override per grade" style="font-size:.74rem;'+(rollup.heads.length?'color:var(--s600)':'color:var(--me)')+';font-weight:600;white-space:nowrap">'
                 +'<span style="color:var(--s400);font-weight:600">Head:</span> '+dHeadChip+'</span>'
                 +'<button class="me-btn me-btn--ghost me-btn--sm" onclick="CampistryMe.editDiv(\''+je(dn)+'\')">Edit</button>'
                 +'<button class="me-btn me-btn--danger me-btn--sm" onclick="CampistryMe.deleteDiv(\''+je(dn)+'\')">Delete</button>'
@@ -6281,9 +6322,14 @@ function renderStructure(){
                 var gBunks=gd.bunks||[];
                 var gBunksId='structGB'+ix+'_'+gix;
                 var gOpenKey='structgb_'+dn+'_'+gn;
+                // Grades default to CLOSED when a division is first opened — with
+                // several grades each carrying their own bunk chips, an
+                // all-expanded division is a wall of bunks before you've even
+                // decided which grade you came in to look at. The user's
+                // explicit expand/collapse choice (_accOpenState) still wins.
                 var gOpen=Object.prototype.hasOwnProperty.call(_accOpenState,gOpenKey)
                     ?_accOpenState[gOpenKey]
-                    :(gBunks.length<=8);
+                    :false;
                 var gCampers=Object.values(roster).filter(function(c){return c.grade===gn&&c.division===dn}).length;
                 var gHeads=divisionHeads[gn]||[];
                 var gHeadChip=gHeads.length?gHeads.map(function(s){return esc(s.name);}).join(', '):'+ Assign';
@@ -8933,7 +8979,7 @@ function addDivisionHead(divName){
     else divisionHeads[divName].push(rec);
     save();
     renderStructure();
-    _renderDivisionHeadModalBody(divName);
+    closeModal('dynModal');
     toast((idx>=0?'Saved ':'Added ')+name);
 }
 function removeDivisionHead(divName,idx){
@@ -16268,6 +16314,7 @@ function renderBilling(){
         +'<button onclick="CampistryMe.manageLateFees()">Late-fee policy\u2026</button>'
         +'<button onclick="CampistryMe.issueCredit()">Issue Credit/Refund</button>'
         +'<button onclick="CampistryMe.managePaymentMethods()">Accepted payments</button>'
+        +'<button onclick="CampistryMe.manageParentPaymentPlanSetting()">Parent self-serve payment plans</button>'
         +'<button onclick="CampistryMe.managePayers()">Payers &amp; Organizations</button>'
         +'<button onclick="CampistryMe.openMergeFamiliesTool()">Merge Families</button>'
         +'<button onclick="CampistryMe.openActivityLog()">Activity Log</button>'
@@ -18002,7 +18049,7 @@ function monthlyPlan(famKey,planId){
         else{ plans.push(newPlan); }
         save();closeModal('dynModal');if(curPage==='familydetail')renderFamilyDetailPage();else renderBilling();
         toast('Payment plan saved — '+insts.length+' payment'+(insts.length>1?'s':'')+(auto?', autopay on':''));
-    },{maxWidth:920,maxHeight:'94vh',minHeight:'80vh'});
+    },{maxWidth:920,maxHeight:'94vh',minHeight:'80vh',saveLabel:existingPlan?'Update Plan':'Create Plan'});
     _mpSwitchTab(startTab);
 }
 function _mpSwitchTab(tab){
@@ -20856,6 +20903,28 @@ function _defaultSeasonLabel(){
 // it works from either caller without needing roster/staffApplications
 // loaded into this page's memory — save() already keeps the cloud copy
 // current on every edit, so there's nothing this page needs to send.
+// Manual trigger — used to be Dashboard's "Attendance History" card
+// (Archive Current Season button); moved here so Attendance History lives
+// only in Me. Same RPC/label default as the automatic pre-CSV-import call.
+function archiveSeasonNow(){
+    if(!_secEdit('campers','Archiving the current season'))return;
+    var h='<div class="me-modal-form">';
+    h+='<p style="font-size:.83rem;color:var(--s500);margin:0 0 12px">'
+      +'Snapshot everyone currently on the roster and hired staff under a season '
+      +'label, so their attendance survives a CSV re-import or next year’s reset. '
+      +'This never changes today’s roster — it only adds a record to look back on.</p>';
+    h+='<div class="form-group dash-field"><label for="archSeasonLabel">Season Label</label>'
+      +'<input type="text" id="archSeasonLabel" class="dash-input" value="'+esc(_defaultSeasonLabel())+'"></div>';
+    h+='</div>';
+    showModal('Archive Current Season',h,async function(){
+        var label=(document.getElementById('archSeasonLabel').value||'').trim()||_defaultSeasonLabel();
+        var res=await archiveCurrentSeason(label);
+        if(!res||res.success===false){toast('Error archiving — '+((res&&res.error)||'try again'),'error');return}
+        closeModal('dynModal');
+        toast('Archived '+(res.saved||0)+' — "'+label+'" saved');
+    },'Archive');
+}
+
 async function archiveCurrentSeason(label){
     var db=window.CampistryDB&&window.CampistryDB.getClient?window.CampistryDB.getClient():null;
     var campId=window.CampistryDB&&window.CampistryDB.getCampId?window.CampistryDB.getCampId():null;
@@ -21840,7 +21909,7 @@ window.CampistryMe={
     finReconcileCharges:finReconcileCharges,
     _dpToggle:_dpToggle,_cpToggle:_cpToggle,_cfToggle:_cfToggle,_fbRetryPreview:_fbRetryPreview,markDepositPaid:markDepositPaid,chargeDepositNow:chargeDepositNow,
     managePayers:managePayers,togglePayerArchived:togglePayerArchived,
-    managePaymentMethods:managePaymentMethods,setArQuery:setArQuery,
+    managePaymentMethods:managePaymentMethods,manageParentPaymentPlanSetting:manageParentPaymentPlanSetting,archiveSeasonNow:archiveSeasonNow,setArQuery:setArQuery,
     toggleAging:toggleAging,
     runInstallments:runInstallments,
     _riToggleAll:_riToggleAll,
