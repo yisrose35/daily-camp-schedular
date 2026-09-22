@@ -9704,7 +9704,7 @@ async function _sendContractOfferNow(id){
     var subject='Your offer from '+(campName||'Camp');
     var body='Hi '+firstName+',\n\nWe\'d like to offer you a position for the upcoming season! Please review and accept your offer here:\n\n'+url+'\n\nWe look forward to having you on the team.';
     try{
-        await callEdgeFunctionAuthed('send-broadcast',{campId:getCampId(),to:[{email:a.email,name:a.name||''}],subject:subject,body:body,method:'email',campName:campName});
+        await callEdgeFunctionAuthed('send-broadcast',{campId:getCampId(),to:[{email:a.email,name:a.name||''}],subject:subject,body:body,method:'email',campName:campName,branding:(typeof _getLinkBranding==='function')?_getLinkBranding():undefined});
         a.contract.emailSentAt=new Date().toISOString();
         save();
         toast('Contract offer emailed to '+a.email);
@@ -10362,17 +10362,29 @@ function getPostAcceptFormConfig(){
 // The Post-Acceptance FORM is just the form; THIS is the builder for what's sent
 // out. Auto-send lives here now (moved off the form). Seeds auto-send from the
 // old form setting so nothing a camp already turned on is lost.
+var PKT_ITEMS=['form','zelle','camperMail'];
 function getAcceptancePacketConfig(){
     if(acceptancePacketConfig)return acceptancePacketConfig;
     return {
         autoSend:!!(paFormConfig&&paFormConfig.autoSend),
         subject:'',
         message:'',
+        order:PKT_ITEMS.slice(),
         form:{enabled:true},
         zelle:{enabled:false,sendTo:'',showMemo:true},
-        camperMail:{enabled:false,address:''}
+        camperMail:{enabled:false,address:'',showCode:false}
     };
 }
+// The order the included items appear in, validated to the known keys with any
+// missing ones appended (older saved configs).
+function _pktResolveOrder(ord){
+    var out=[]; (ord||[]).forEach(function(k){ if(PKT_ITEMS.indexOf(k)>=0&&out.indexOf(k)<0)out.push(k); });
+    PKT_ITEMS.forEach(function(k){ if(out.indexOf(k)<0)out.push(k); });
+    return out;
+}
+// The included items' current order (reorderable in the builder) and the last
+// rendered preview HTML (for the "Preview" button's new tab).
+var _pktOrder=PKT_ITEMS.slice(), _pktPreviewHtml='';
 // Reads the builder's live inputs into a config shape (before Save), so the
 // preview reflects exactly what's on screen.
 function _pktLiveConfig(){
@@ -10382,16 +10394,54 @@ function _pktLiveConfig(){
         autoSend:g('pktAutoSend'),
         subject:v('pktSubject').trim(),
         message:v('pktMessage'),
+        order:_pktOrder.slice(),
         form:{enabled:g('pktForm')},
         zelle:{enabled:g('pktZelle'),sendTo:v('pktZelleTo').trim(),showMemo:g('pktZelleMemo')},
-        camperMail:{enabled:g('pktMail'),address:v('pktMailAddr').trim()}
+        camperMail:{enabled:g('pktMail'),address:v('pktMailAddr').trim(),showCode:g('pktMailCode')}
     };
 }
-// Live email preview — same split-view format as the form builders, but the
-// right pane shows the composed acceptance email (with a sample camper) instead
-// of a form iframe.
+// One includable item's toggle row (with up/down reorder) + its fields.
+function _pktBlockHtml(k,cfg,idx,count){
+    function ctrls(){
+        var up=idx>0, dn=idx<count-1;
+        var bs='width:22px;height:15px;padding:0;line-height:13px;border:1px solid var(--s200);background:#fff;border-radius:4px;font-size:8px;color:var(--s500);';
+        return '<span style="display:inline-flex;flex-direction:column;gap:2px;margin-left:auto;flex-shrink:0" onclick="event.preventDefault();event.stopPropagation()">'
+          +'<button type="button" '+(up?'':'disabled ')+'onclick="CampistryMe._pktMove(\''+k+'\',-1)" style="'+bs+(up?'cursor:pointer':'opacity:.3')+'" title="Move up">▲</button>'
+          +'<button type="button" '+(dn?'':'disabled ')+'onclick="CampistryMe._pktMove(\''+k+'\',1)" style="'+bs+(dn?'cursor:pointer':'opacity:.3')+'" title="Move down">▼</button></span>';
+    }
+    function rowc(id,checked,title,desc){
+        return '<label style="display:flex;align-items:flex-start;gap:10px;padding:6px 0;cursor:pointer">'
+          +'<input type="checkbox" id="'+id+'" '+(checked?'checked':'')+' style="accent-color:var(--me);flex-shrink:0;width:16px;height:16px;margin-top:2px">'
+          +'<div style="flex:1;min-width:0"><div style="font-size:.85rem;font-weight:600;color:var(--s800)">'+title+'</div>'
+          +'<div style="font-size:.72rem;color:var(--s400)">'+desc+'</div></div>'+ctrls()+'</label>';
+    }
+    var mailDefault=_defaultMailAddr();
+    if(k==='form') return rowc('pktForm',cfg.form.enabled,'Post-Acceptance Form','Include a link to the form (bunkmate requests, t-shirt size, consent, etc.).');
+    if(k==='zelle') return rowc('pktZelle',cfg.zelle.enabled,'Zelle deposit instructions','Tell the family how to pay their deposit by Zelle.')
+      +'<div id="pktZelleFields" style="padding:2px 0 8px 26px;'+(cfg.zelle.enabled?'':'display:none')+'">'
+      +'<div class="fg"><label class="fl">Send Zelle to (email or phone)</label><input class="fi" id="pktZelleTo" value="'+esc(cfg.zelle.sendTo||'')+'" placeholder="e.g. payments@yourcamp.org"></div>'
+      +'<label style="display:flex;align-items:center;gap:8px;font-size:.8rem;color:var(--s600);cursor:pointer"><input type="checkbox" id="pktZelleMemo" '+(cfg.zelle.showMemo!==false?'checked':'')+' style="accent-color:var(--me);width:15px;height:15px">Show each family their deposit reference to put in the Zelle memo</label></div>';
+    if(k==='camperMail') return rowc('pktMail',cfg.camperMail.enabled,'Camper mail address','Tell the family the email address to send printed letters to.')
+      +'<div id="pktMailFields" style="padding:2px 0 8px 26px;'+(cfg.camperMail.enabled?'':'display:none')+'">'
+      +'<div class="fg"><label class="fl">Letters email address</label><input class="fi" id="pktMailAddr" value="'+esc(cfg.camperMail.address||'')+'" placeholder="'+esc(mailDefault||'Leave blank to use your Campistry letters address')+'"><div style="font-size:.7rem;color:var(--s400);margin-top:4px">Leave blank to use your Campistry letters address'+(mailDefault?' ('+esc(mailDefault)+')':'')+'.</div></div>'
+      +'<label style="display:flex;align-items:center;gap:8px;font-size:.8rem;color:var(--s600);cursor:pointer"><input type="checkbox" id="pktMailCode" '+(cfg.camperMail.showCode?'checked':'')+' style="accent-color:var(--me);width:15px;height:15px">Show each family their code to include when emailing from another address</label></div>';
+    return '';
+}
+function _pktIncludedHtml(cfg){
+    return _pktOrder.map(function(k,i){ return _pktBlockHtml(k,cfg,i,_pktOrder.length); }).join('');
+}
+function _pktMove(k,dir){
+    var i=_pktOrder.indexOf(k); if(i<0)return; var j=i+dir; if(j<0||j>=_pktOrder.length)return;
+    var cfg=_pktLiveConfig();                     // capture edits before the re-render
+    var t=_pktOrder[i]; _pktOrder[i]=_pktOrder[j]; _pktOrder[j]=t;
+    var host=document.getElementById('pktIncluded'); if(host)host.innerHTML=_pktIncludedHtml(cfg);
+    _pktRenderPreview();
+}
+// Live email preview — same split-view format as the form builders, and it
+// renders the ACTUAL branded email (logo/colour/footer) via the shared
+// LinkBranding template, so what's on the right is what recipients receive.
 function _pktRenderPreview(){
-    var el=document.getElementById('packetPreview'); if(!el)return;
+    var host=document.getElementById('packetPreview'); if(!host)return;
     var p=_pktLiveConfig();
     var sampleName='Jordan Miller';
     var campName='';try{var ss=JSON.parse(localStorage.getItem('campGlobalSettings_v1')||'{}');campName=ss.campName||ss.camp_name||'Your Camp';}catch(_){}
@@ -10400,24 +10450,30 @@ function _pktRenderPreview(){
     var mailAddr=p.camperMail.address||_defaultMailAddr()||('letters+yourcamp@'+(window.CAMPISTRY_INBOUND_DOMAIN||'inbound.campistry.org'));
     var formUrl=window.location.origin+'/campistry_postaccept.html?id=SAMPLE&camp='+encodeURIComponent((window.getCampId?getCampId():'')||'');
     var body=_composeBodyFromParts(p,{camperName:sampleName,formUrl:formUrl,memo:sampleMemo,mailAddr:mailAddr});
-    el.innerHTML='<div style="width:100%;max-width:640px;align-self:flex-start;background:#fff;border:1px solid var(--s200);border-radius:10px;box-shadow:0 4px 24px rgba(0,0,0,.08);overflow:hidden">'
-      +'<div style="padding:14px 20px;border-bottom:1px solid var(--s100);background:var(--s50)">'
-        +'<div style="font-size:.72rem;color:var(--s400);margin-bottom:3px">From <strong style="color:var(--s600)">'+esc(campName)+'</strong> · To <strong style="color:var(--s600)">a newly-accepted family</strong></div>'
-        +'<div style="font-size:.95rem;font-weight:700;color:var(--s800)">'+esc(subject)+'</div></div>'
-      +'<div style="padding:20px;font-size:.9rem;line-height:1.7;color:var(--s800);white-space:pre-wrap">'+esc(body)+'</div>'
-      +'<div style="padding:10px 20px;border-top:1px solid var(--s100);font-size:.7rem;color:var(--s400)">Preview — shown with a sample camper (Jordan Miller). Each family sees their own name'+((p.zelle&&p.zelle.enabled&&p.zelle.showMemo)?' and deposit reference':'')+'.</div>'
-      +'</div>';
+    var branding=(typeof _getLinkBranding==='function')?_getLinkBranding():{};
+    _pktPreviewHtml=(window.LinkBranding&&window.LinkBranding.buildEmailHtml)
+      ? window.LinkBranding.buildEmailHtml({subject:subject,body:body,branding:branding,campName:campName||'Your Camp'})
+      : ('<div style="padding:20px;white-space:pre-wrap;font-family:sans-serif">'+esc(body)+'</div>');
+    var f=document.getElementById('pktPreviewFrame');
+    if(!f){ host.innerHTML='<iframe id="pktPreviewFrame" title="Email preview" style="width:100%;max-width:640px;height:100%;min-height:560px;border:1px solid var(--s200);border-radius:10px;background:#fff;box-shadow:0 4px 24px rgba(0,0,0,.08)"></iframe>'; f=document.getElementById('pktPreviewFrame'); }
+    try{ f.srcdoc=_pktPreviewHtml; }catch(_){ try{ f.contentWindow.document.open(); f.contentWindow.document.write(_pktPreviewHtml); f.contentWindow.document.close(); }catch(__){} }
+}
+function _pktOpenPreview(){
+    if(!_pktPreviewHtml)_pktRenderPreview();
+    var w=window.open('','_blank'); if(!w){ toast('Allow pop-ups to preview the email','error'); return; }
+    w.document.open(); w.document.write(_pktPreviewHtml||''); w.document.close();
 }
 function openAcceptancePacket(){
     if(typeof _toggleMenu==='function')_toggleMenu('pplFormsMenu');
     var p=getAcceptancePacketConfig();
-    var mailDefault=_defaultMailAddr();
+    _pktOrder=_pktResolveOrder(p.order);
     function row(id,checked,title,desc){
         return '<label style="display:flex;align-items:flex-start;gap:10px;padding:6px 0;cursor:pointer">'
           +'<input type="checkbox" id="'+id+'" '+(checked?'checked':'')+' style="accent-color:var(--me);flex-shrink:0;width:16px;height:16px;margin-top:2px">'
           +'<div><div style="font-size:.85rem;font-weight:600;color:var(--s800)">'+title+'</div>'
           +'<div style="font-size:.72rem;color:var(--s400)">'+desc+'</div></div></label>';
     }
+    var initCfg={form:{enabled:p.form&&p.form.enabled!==false},zelle:{enabled:!!(p.zelle&&p.zelle.enabled),sendTo:(p.zelle&&p.zelle.sendTo)||'',showMemo:!(p.zelle&&p.zelle.showMemo===false)},camperMail:{enabled:!!(p.camperMail&&p.camperMail.enabled),address:(p.camperMail&&p.camperMail.address)||'',showCode:!!(p.camperMail&&p.camperMail.showCode)}};
     var h='<p style="font-size:.82rem;color:var(--s500);margin:0 0 14px;line-height:1.5">What a family receives the moment you accept them. The <strong>Post-Acceptance Form</strong> button sets up the form itself; this controls the message and what goes in it.</p>';
 
     // Your message — first, and easy to edit. {camper} fills in each child's name.
@@ -10427,17 +10483,8 @@ function openAcceptancePacket(){
       +'<div style="font-size:.7rem;color:var(--s400);margin-top:4px">Type <code>{camper}</code> anywhere to drop in the child’s name. Leave blank for the default greeting. The items you turn on below are added under your message.</div></div>';
 
     h+='<div style="border-top:1px solid var(--s100);margin:14px 0 8px"></div>';
-    h+='<div style="font-size:.78rem;font-weight:700;color:var(--s700);text-transform:uppercase;letter-spacing:.04em;margin:0 0 4px">What’s included</div>';
-    h+=row('pktForm',p.form&&p.form.enabled!==false,'Post-Acceptance Form','Include the link to the form (bunkmate requests, t-shirt size, consent, etc.).');
-
-    h+=row('pktZelle',!!(p.zelle&&p.zelle.enabled),'Zelle deposit instructions','Tell the family how to pay their deposit by Zelle.');
-    h+='<div id="pktZelleFields" style="padding:4px 0 6px 26px;'+((p.zelle&&p.zelle.enabled)?'':'display:none')+'">'
-      +'<div class="fg"><label class="fl">Send Zelle to (email or phone)</label><input class="fi" id="pktZelleTo" value="'+esc((p.zelle&&p.zelle.sendTo)||'')+'" placeholder="e.g. payments@yourcamp.org"></div>'
-      +'<label style="display:flex;align-items:center;gap:8px;font-size:.8rem;color:var(--s600);cursor:pointer"><input type="checkbox" id="pktZelleMemo" '+((p.zelle&&p.zelle.showMemo!==false)?'checked':'')+' style="accent-color:var(--me);width:15px;height:15px">Show each family their deposit reference to put in the Zelle memo</label></div>';
-
-    h+=row('pktMail',!!(p.camperMail&&p.camperMail.enabled),'Camper mail address','Tell the family the email address to send printed letters to.');
-    h+='<div id="pktMailFields" style="padding:4px 0 6px 26px;'+((p.camperMail&&p.camperMail.enabled)?'':'display:none')+'">'
-      +'<div class="fg" style="margin-bottom:0"><label class="fl">Letters email address</label><input class="fi" id="pktMailAddr" value="'+esc((p.camperMail&&p.camperMail.address)||'')+'" placeholder="'+esc(mailDefault||'Leave blank to use your Campistry letters address')+'"><div style="font-size:.7rem;color:var(--s400);margin-top:4px">Leave blank to use your Campistry letters address'+(mailDefault?' ('+esc(mailDefault)+')':'')+'. Enter a different address only if letters should go somewhere else.</div></div></div>';
+    h+='<div style="font-size:.78rem;font-weight:700;color:var(--s700);text-transform:uppercase;letter-spacing:.04em;margin:0 0 2px">What’s included <span style="font-weight:500;text-transform:none;letter-spacing:0;color:var(--s400)">— drag order with ▲▼</span></div>';
+    h+='<div id="pktIncluded">'+_pktIncludedHtml(initCfg)+'</div>';
 
     h+='<div style="border-top:1px solid var(--s100);margin:14px 0 8px"></div>';
     h+='<div style="font-size:.78rem;font-weight:700;color:var(--s700);text-transform:uppercase;letter-spacing:.04em;margin:0 0 4px">Delivery</div>';
@@ -10464,9 +10511,10 @@ function saveAcceptancePacket(){
         autoSend:c.autoSend,
         subject:c.subject,
         message:c.message,
+        order:_pktResolveOrder(c.order),
         form:{enabled:c.form.enabled},
         zelle:{enabled:c.zelle.enabled,sendTo:c.zelle.sendTo,showMemo:c.zelle.showMemo},
-        camperMail:{enabled:c.camperMail.enabled,address:c.camperMail.address}
+        camperMail:{enabled:c.camperMail.enabled,address:c.camperMail.address,showCode:c.camperMail.showCode}
     };
     // Keep the legacy field in step so anything still reading it agrees.
     if(paFormConfig)paFormConfig.autoSend=acceptancePacketConfig.autoSend;
@@ -12660,16 +12708,23 @@ function _composeBodyFromParts(p,parts){
     var nm=parts.camperName||'your camper';
     var intro=(p.message&&p.message.trim())?p.message.replace(/\{camper\}/gi,nm):('Congratulations — '+nm+' is accepted!');
     var out=[intro];
-    if(p.form&&p.form.enabled!==false&&parts.formUrl){
-        out.push('','Please complete a few more choices here:',parts.formUrl);
-    }
-    if(p.zelle&&p.zelle.enabled&&(p.zelle.sendTo||'').trim()){
-        out.push('','To pay your deposit by Zelle, send it to: '+p.zelle.sendTo.trim()+'.');
-        if(p.zelle.showMemo!==false&&parts.memo)out.push('Put this reference in the Zelle memo so it’s credited to you: '+parts.memo+'.');
-    }
-    if(p.camperMail&&p.camperMail.enabled&&parts.mailAddr){
-        out.push('','You can email letters to your camper any time — the office prints them and hands them out. Send them to: '+parts.mailAddr+'.');
-    }
+    _pktResolveOrder(p.order).forEach(function(k){
+        if(k==='form'){
+            if(p.form&&p.form.enabled!==false&&parts.formUrl){
+                out.push('','Please complete a few more choices here:',parts.formUrl);
+            }
+        }else if(k==='zelle'){
+            if(p.zelle&&p.zelle.enabled&&(p.zelle.sendTo||'').trim()){
+                out.push('','To pay your deposit by Zelle, send it to: '+p.zelle.sendTo.trim()+'.');
+                if(p.zelle.showMemo!==false&&parts.memo)out.push('Put this reference in the Zelle memo so it’s credited to you: '+parts.memo+'.');
+            }
+        }else if(k==='camperMail'){
+            if(p.camperMail&&p.camperMail.enabled&&parts.mailAddr){
+                out.push('','You can email letters to your camper any time — the office prints them and hands them out. Send them to: '+parts.mailAddr+'.');
+                if(p.camperMail.showCode&&parts.memo)out.push('Emailing from a different address? Add your camper’s code to the subject so it reaches the right child: '+parts.memo+'.');
+            }
+        }
+    });
     return out.join('\n');
 }
 function _composeAcceptanceBody(id){
@@ -12704,7 +12759,7 @@ async function _sendPostAcceptNow(id){
     var btn=document.getElementById('slSendBtn');
     if(btn){btn.disabled=true;btn.textContent='Sending…';}
     try{
-        await callEdgeFunctionAuthed('send-broadcast',{campId:getCampId(),to:[{email:e.parentEmail,name:e.parentName||''}],subject:subject,body:body,method:'email',campName:campName});
+        await callEdgeFunctionAuthed('send-broadcast',{campId:getCampId(),to:[{email:e.parentEmail,name:e.parentName||''}],subject:subject,body:body,method:'email',campName:campName,branding:(typeof _getLinkBranding==='function')?_getLinkBranding():undefined});
         e.postAcceptSentDate=new Date().toISOString();
         save();
         toast('Post-acceptance form sent to '+e.parentEmail);
@@ -12730,7 +12785,7 @@ async function _autoSendPostAccept(id){
     var subject=_acceptanceSubject(id);
     var body=_composeAcceptanceBody(id);
     try{
-        await callEdgeFunctionAuthed('send-broadcast',{campId:getCampId(),to:[{email:e.parentEmail,name:e.parentName||''}],subject:subject,body:body,method:'email',campName:campName});
+        await callEdgeFunctionAuthed('send-broadcast',{campId:getCampId(),to:[{email:e.parentEmail,name:e.parentName||''}],subject:subject,body:body,method:'email',campName:campName,branding:(typeof _getLinkBranding==='function')?_getLinkBranding():undefined});
         e.postAcceptSentDate=new Date().toISOString();
         save();
         toast('Post-acceptance form auto-sent to '+e.parentEmail);
@@ -12770,7 +12825,7 @@ async function _sendPostHireNow(id){
     var btn=document.getElementById('slSendBtn');
     if(btn){btn.disabled=true;btn.textContent='Sending…';}
     try{
-        await callEdgeFunctionAuthed('send-broadcast',{campId:getCampId(),to:[{email:a.email,name:a.name||''}],subject:subject,body:body,method:'email',campName:campName});
+        await callEdgeFunctionAuthed('send-broadcast',{campId:getCampId(),to:[{email:a.email,name:a.name||''}],subject:subject,body:body,method:'email',campName:campName,branding:(typeof _getLinkBranding==='function')?_getLinkBranding():undefined});
         a.postHireSentDate=new Date().toISOString();
         save();
         toast('Post-hire form sent to '+a.email);
@@ -12791,7 +12846,7 @@ async function _autoSendPostHire(id){
     var subject='A few more details for '+(a.name||'your onboarding');
     var body='Welcome to the team, '+((a.first||a.name||'').split(' ')[0]||'')+'! Please complete a few more details here:\n\n'+url;
     try{
-        await callEdgeFunctionAuthed('send-broadcast',{campId:getCampId(),to:[{email:a.email,name:a.name||''}],subject:subject,body:body,method:'email',campName:campName});
+        await callEdgeFunctionAuthed('send-broadcast',{campId:getCampId(),to:[{email:a.email,name:a.name||''}],subject:subject,body:body,method:'email',campName:campName,branding:(typeof _getLinkBranding==='function')?_getLinkBranding():undefined});
         a.postHireSentDate=new Date().toISOString();
         save();
         toast('Post-hire form auto-sent to '+a.email);
@@ -13888,7 +13943,7 @@ async function _sendInviteEmailNow(which,btnEl){
     var origLabel=btn?btn.textContent:'';
     if(btn){btn.disabled=true;btn.textContent='Sending…';}
     try{
-        await callEdgeFunctionAuthed('send-broadcast',{campId:getCampId(),to:[{email:p.email,name:p.name||''}],subject:subject,body:body,method:'email',campName:campName});
+        await callEdgeFunctionAuthed('send-broadcast',{campId:getCampId(),to:[{email:p.email,name:p.name||''}],subject:subject,body:body,method:'email',campName:campName,branding:(typeof _getLinkBranding==='function')?_getLinkBranding():undefined});
         toast('Invite emailed to '+p.email);
         if(btn){btn.textContent='Sent ✓';}
     }catch(err){
@@ -22239,7 +22294,7 @@ window.CampistryMe={
     openFormConfig:openFormConfig,saveFormConfig:saveFormConfig,addCustomQ:addCustomQ,addPromoRow:addPromoRow,
     openStaffFormConfig:openStaffFormConfig,saveStaffFormConfig:saveStaffFormConfig,addStaffCustomQ:addStaffCustomQ,
     openPostAcceptFormConfig:openPostAcceptFormConfig,savePostAcceptFormConfig:savePostAcceptFormConfig,addPafCustomQ:addPafCustomQ,
-    openAcceptancePacket:openAcceptancePacket,saveAcceptancePacket:saveAcceptancePacket,closeAcceptancePacket:closeAcceptancePacket,
+    openAcceptancePacket:openAcceptancePacket,saveAcceptancePacket:saveAcceptancePacket,closeAcceptancePacket:closeAcceptancePacket,_pktMove:_pktMove,_pktOpenPreview:_pktOpenPreview,
     openPostHireFormConfig:openPostHireFormConfig,savePostHireFormConfig:savePostHireFormConfig,addPhfCustomQ:addPhfCustomQ,
     _phfHandbookPick:_phfHandbookPick,_phfHandbookClear:_phfHandbookClear,addPhfPolicyRow:addPhfPolicyRow,
     addCustomSection:addCustomSection,addSectionField:addSectionField,addCustomQToSection:addCustomQToSection,_toggleSectionQuestions:_toggleSectionQuestions,

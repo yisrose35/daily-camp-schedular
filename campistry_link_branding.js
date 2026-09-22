@@ -51,6 +51,18 @@
     }
     LinkBranding.esc = esc;
 
+    // Turn plain URLs in an already-escaped string into clickable links, so a
+    // form link (or any link) in a message body is actually clickable. Mirrors
+    // linkifyHtml() in supabase/functions/send-broadcast so the preview matches
+    // what recipients receive.
+    function linkify(escaped) {
+        return String(escaped == null ? '' : escaped).replace(
+            /(https?:\/\/[^\s<]+[^\s<.,;:!?)\]])/g,
+            function (u) { return '<a href="' + u + '" style="color:#2563eb;text-decoration:underline;">' + u + '</a>'; }
+        );
+    }
+    LinkBranding.linkify = linkify;
+
     function clamp(n, lo, hi, dflt) {
         n = parseFloat(n);
         if (!isFinite(n)) return dflt;
@@ -212,7 +224,7 @@
             '<tr><td>' + headerHtml(b, campName, { logoWidth: 170, logoHeight: 52 }) + '</td></tr>' +
             '<tr><td style="' + bodyBg + 'padding:26px 28px 30px;">' +
             (o.subject ? '<div style="font-size:17px;font-weight:700;color:#0f172a;margin:0 0 12px;">' + esc(o.subject) + '</div>' : '') +
-            '<div style="font-size:14.5px;line-height:1.65;color:#334155;white-space:pre-wrap;">' + esc(o.body || '') + '</div>' +
+            '<div style="font-size:14.5px;line-height:1.65;color:#334155;white-space:pre-wrap;">' + linkify(esc(o.body || '')) + '</div>' +
             cta +
             footerHtml(b) +
             '</td></tr>' +
@@ -264,7 +276,7 @@
             headerHtml(b, campName, { logoWidth: 140, logoHeight: 40 }) +
             '<div style="' + (wm ? wm : '') + 'padding:16px 18px 20px;">' +
             (o.subject ? '<div style="font-size:14px;font-weight:700;color:#0f172a;margin:0 0 8px;">' + esc(o.subject) + '</div>' : '') +
-            '<div style="font-size:13px;line-height:1.6;color:#334155;white-space:pre-wrap;">' + esc(o.body || '') + '</div>' +
+            '<div style="font-size:13px;line-height:1.6;color:#334155;white-space:pre-wrap;">' + linkify(esc(o.body || '')) + '</div>' +
             footerHtml(b) +
             '</div></div>';
     };
