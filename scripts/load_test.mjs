@@ -250,6 +250,8 @@ function mkClient(env) {
                 return { ok: res.ok, status: res.status, ms: Date.now() - t0 };
             } catch (e) { return { ok: false, status: 0, ms: Date.now() - t0, error: e.message }; }
         },
+        // unauthenticated-ish GET, for the preflight below
+        probe: (path) => call('GET', path, undefined),
         adminCreateUser: (email, password) => call('POST', '/auth/v1/admin/users', { email, password, email_confirm: true, user_metadata: { loadTest: true } }, svc, svc),
         adminDeleteUser: (id) => call('DELETE', `/auth/v1/admin/users/${id}`, undefined, svc, svc),
         signIn: (email, password) => call('POST', '/auth/v1/token?grant_type=password', { email, password }),
@@ -257,9 +259,27 @@ function mkClient(env) {
 }
 
 /** RPC result → sample. A JSON {success:false,error} is an error even on HTTP 200. */
+/** True only for a parsed JSON object — what every RPC in this app answers with. */
+export function isJsonObject(d) { return !!d && typeof d === 'object' && !Array.isArray(d); }
+
+/**
+ * RPC result → sample.
+ *
+ * THREE ways to fail, and the third is the one that mattered. A JSON
+ * {success:false,error} is a failure even on HTTP 200 — the app reports refusals
+ * that way. And a 200 whose body is NOT JSON is a failure too: on the first real
+ * run SUPABASE_URL pointed at the Vercel-hosted website instead of the project
+ * API, so every request got a 200 with an HTML page, and this counted 300 of 300
+ * "ok" at 73 rps for traffic that never reached the database. A load test that
+ * reports PASS when nothing happened is worse than no load test.
+ */
 function sample(res, fn) {
-    if (!res.ok) return { ms: res.ms, ok: false, error: `${fn}: HTTP ${res.status}${res.error ? ' ' + res.error : ''}${res.data && res.data.message ? ' ' + res.data.message : ''}` };
-    if (res.data && typeof res.data === 'object' && res.data.success === false) return { ms: res.ms, ok: false, error: `${fn}: ${res.data.error || 'success:false'}` };
+    if (!res.ok) return { ms: res.ms, ok: false, error: `${fn}: HTTP ${res.status}${res.error ? ' ' + res.error : ''}${isJsonObject(res.data) && res.data.message ? ' ' + res.data.message : ''}` };
+    if (!isJsonObject(res.data)) {
+        return { ms: res.ms, ok: false,
+                 error: `${fn}: HTTP ${res.status} but the body was not JSON (${typeof res.data === 'string' ? 'html/text' : String(res.data)}) — is SUPABASE_URL the project API URL?` };
+    }
+    if (res.data.success === false) return { ms: res.ms, ok: false, error: `${fn}: ${res.data.error || 'success:false'}` };
     return { ms: res.ms, ok: true };
 }
 
@@ -413,6 +433,22 @@ export async function main(argv, env, log) {
     if (o.dryRun) { log('dry run — nothing created'); return { dryRun: true, plan: o }; }
 
     const c = mkClient(env);
+
+    // ── preflight: is SUPABASE_URL actually the project API? ────────────────
+    // The first real run pointed at the Vercel-hosted website. Every endpoint
+    // answered HTTP 200 with an HTML page, so nothing reached the database and
+    // the run still printed a throughput figure. Prove both APIs answer JSON
+    // before creating a single thing.
+    const [rest, auth] = await Promise.all([c.probe('/rest/v1/'), c.probe('/auth/v1/health')]);
+    const wrong = [];
+    if (!isJsonObject(rest.data)) wrong.push(`  ${env.SUPABASE_URL}/rest/v1/ answered ${describeAuthFailure(rest)}`);
+    if (!isJsonObject(auth.data)) wrong.push(`  ${env.SUPABASE_URL}/auth/v1/health answered ${describeAuthFailure(auth)}`);
+    if (wrong.length) {
+        throw new Error('SUPABASE_URL does not look like a Supabase project API.\n' + wrong.join('\n')
+            + '\n  Use the Project URL from Supabase → Project Settings → API'
+            + ' (https://<project-ref>.supabase.co) — not your website address.');
+    }
+    log('preflight: REST and Auth both answered JSON');
 
     const report = [];
     let parents = [], snacksBefore;

@@ -309,3 +309,108 @@ test('setup failure logging is capped so the reason stays readable', () => {
     assert.strictEqual([...src.matchAll(/warn\(`  ! could not /g)].length, 3,
         'create, invite and sign-in all route through the cap');
 });
+
+// ── the false pass: a website answering 200 with HTML ───────────────────────
+// The first real run had SUPABASE_URL pointing at the Vercel-hosted site instead
+// of the project API. Every endpoint returned HTTP 200 with a Next.js HTML page,
+// so nothing reached the database — and the run still reported "300 of 300 ok,
+// 73 rps". These tests exist so that can never be reported as a pass again.
+
+const HTML = '<!DOCTYPE html><html lang="en" data-dpl-id="dpl_Hm"><head><meta charSet="utf-8" data-next-head';
+
+test('isJsonObject: only a parsed JSON object counts', async () => {
+    const { isJsonObject } = await load();
+    assert.strictEqual(isJsonObject({ success: true }), true);
+    assert.strictEqual(isJsonObject({}), true);
+    for (const bad of [HTML, '', null, undefined, 42, true, [1, 2], []]) {
+        assert.strictEqual(isJsonObject(bad), false, `on ${JSON.stringify(bad)}`);
+    }
+});
+
+test('main: a website URL is caught by the preflight, before anything is created', async () => {
+    const { main } = await load();
+    const realFetch = globalThis.fetch;
+    const hits = [];
+    globalThis.fetch = async (url) => {
+        hits.push(String(url));
+        return { ok: true, status: 200, text: async () => HTML };
+    };
+    try {
+        await assert.rejects(
+            () => main(['--parents', '3'], ENV, () => {}),
+            (e) => {
+                assert.match(e.message, /does not look like a Supabase project API/);
+                assert.match(e.message, /Project Settings → API/, 'must say where to get the right URL');
+                assert.match(e.message, /rest\/v1\//);
+                assert.match(e.message, /auth\/v1\/health/);
+                return true;
+            });
+        // and it must have stopped at the two probes — no users, no applications
+        assert.strictEqual(hits.length, 2, `probed then stopped; instead: ${hits.join(' ')}`);
+        assert.ok(!hits.some(h => /admin\/users|camp_applications|rpc\//.test(h)),
+            'nothing may be created before the URL is proven');
+    } finally { globalThis.fetch = realFetch; }
+});
+
+test('main: a real project API passes the preflight', async () => {
+    const { main } = await load();
+    const realFetch = globalThis.fetch;
+    globalThis.fetch = async (url) => ({
+        ok: true, status: 200,
+        // REST root and GoTrue health both answer JSON on a real project
+        text: async () => (/auth\/v1\/health/.test(String(url)) ? '{"name":"GoTrue","version":"2"}'
+                                                                : '{"openapi":"3.0.0"}'),
+    });
+    const lines = [];
+    try {
+        // reg phase only, so the run ends quickly; the point is it gets past preflight
+        await main(['--parents', '1', '--phases', 'reg'], ENV, l => lines.push(l));
+        assert.ok(lines.some(l => /preflight: REST and Auth both answered JSON/.test(l)),
+            `expected the preflight to pass; got:\n${lines.join('\n')}`);
+    } finally { globalThis.fetch = realFetch; }
+});
+
+test('a 200 carrying HTML is counted as a FAILURE, never a success', async () => {
+    // The exact false pass: without this, an HTML body sails through as ok.
+    const { main, summarize, verdict } = await load();
+    const realFetch = globalThis.fetch;
+    let phase = 'preflight';
+    globalThis.fetch = async (url) => {
+        const u = String(url);
+        if (/\/rest\/v1\/$/.test(u)) return { ok: true, status: 200, text: async () => '{"openapi":"3.0.0"}' };
+        if (/auth\/v1\/health/.test(u)) return { ok: true, status: 200, text: async () => '{"name":"GoTrue"}' };
+        phase = 'rpc';
+        return { ok: true, status: 200, text: async () => HTML };   // the website answering an RPC
+    };
+    const lines = [];
+    try {
+        const r = await main(['--parents', '4', '--phases', 'reg'], ENV, l => lines.push(l));
+        const [, s, v] = r.report.find(([name]) => /registration/.test(name));
+        assert.strictEqual(phase, 'rpc', 'the RPC must actually have been attempted');
+        assert.strictEqual(s.count, 4);
+        assert.strictEqual(s.ok, 0, 'not one HTML response may count as ok');
+        assert.strictEqual(v, 'FAIL');
+        assert.strictEqual(r.worst, 'FAIL');
+        const err = Object.keys(s.errors)[0];
+        assert.match(err, /body was not JSON \(html\/text\)/);
+        assert.match(err, /is SUPABASE_URL the project API URL\?/, 'the error must point at the cause');
+    } finally { globalThis.fetch = realFetch; }
+});
+
+test('a genuine JSON refusal is still read as a refusal, not as a bad URL', async () => {
+    const { main } = await load();
+    const realFetch = globalThis.fetch;
+    globalThis.fetch = async (url) => {
+        const u = String(url);
+        if (/\/rest\/v1\/$/.test(u)) return { ok: true, status: 200, text: async () => '{"openapi":"3.0.0"}' };
+        if (/auth\/v1\/health/.test(u)) return { ok: true, status: 200, text: async () => '{"name":"GoTrue"}' };
+        return { ok: true, status: 200, text: async () => '{"success":false,"error":"session_full"}' };
+    };
+    try {
+        const r = await main(['--parents', '2', '--phases', 'reg'], ENV, () => {});
+        const [, s, v] = r.report.find(([name]) => /registration/.test(name));
+        assert.strictEqual(s.ok, 0);
+        assert.match(Object.keys(s.errors)[0], /session_full/);
+        assert.strictEqual(v, 'PASS', 'a full session is a feature, and must not read as a broken URL');
+    } finally { globalThis.fetch = realFetch; }
+});
