@@ -76,9 +76,31 @@
             return null;
         }
 
+        // A session's discount tiers: "N kids enrolled -> X% off". The
+        // HIGHEST tier whose count is <= the family's enrolled size applies —
+        // so a family of 4 with tiers at 2 and 3 kids still gets the 3-kid
+        // rate, rather than nothing because there's no exact "4" row. Falls
+        // back to the older flat siblingDiscount % for a session saved before
+        // tiers existed (tiers, once present, always win).
+        function tierPct(ses, familySize) {
+            if (!ses) return 0;
+            var tiers = Array.isArray(ses.siblingDiscountTiers) ? ses.siblingDiscountTiers : [];
+            if (tiers.length) {
+                var bestCount = 0, bestPct = 0;
+                tiers.forEach(function (t) {
+                    var c = num(t && t.count), d = Math.max(0, num(t && t.discount));
+                    if (c > 0 && c <= familySize && c > bestCount) { bestCount = c; bestPct = d; }
+                });
+                return bestPct;
+            }
+            return Math.max(0, num(ses.siblingDiscount));
+        }
+
         // Every live enrollment belonging to this family, with the tuition it
         // is priced from. Live tuition wins over the snapshot, the same rule
-        // the rest of the app uses.
+        // the rest of the app uses. The tier lookup needs the family's total
+        // enrolled size, which is just this array's own length — computed
+        // once below, then applied back onto each record.
         var live = [];
         Object.keys(enrollments).forEach(function (eid) {
             var e = enrollments[eid];
@@ -87,11 +109,9 @@
             var ses = sessionOf(e.session);
             var liveT = ses && ses.tuition != null ? num(ses.tuition) : 0;
             var tuition = liveT > 0 ? liveT : num(e.sessionTuition);
-            live.push({
-                id: eid, camperName: e.camperName, tuition: round2(tuition),
-                pct: ses ? Math.max(0, num(ses.siblingDiscount)) : 0
-            });
+            live.push({ id: eid, camperName: e.camperName, tuition: round2(tuition), session: ses });
         });
+        live.forEach(function (r) { r.pct = tierPct(r.session, live.length); });
 
         var byEnrollment = {};
         if (live.length <= 1) {

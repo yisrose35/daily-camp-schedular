@@ -9,7 +9,7 @@
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
     <link href="https://fonts.googleapis.com/css2?family=DM+Sans:opsz,wght@9..40,300;9..40,400;9..40,500;9..40,600;9..40,700;9..40,800&family=Fraunces:opsz,wght@9..144,400;9..144,500;9..144,600;9..144,700&display=swap" rel="stylesheet">
     <style>html:not(.css-ready) body { opacity: 0; } html.css-ready body { transition: opacity 0.15s ease; }</style>
-    <link rel="stylesheet" href="dashboard.css?v=20260922-03" onload="document.documentElement.classList.add('css-ready')">
+    <link rel="stylesheet" href="dashboard.css?v=20260922-04" onload="document.documentElement.classList.add('css-ready')">
     <link rel="stylesheet" href="mobile-responsive.css?v=20260903-03">
     <noscript><style>html body { opacity: 1 !important; }</style></noscript>
 </head>
@@ -559,98 +559,124 @@
                     </div>
                 </div>
 
-                <div id="sessionEditForm" style="display:none; position:fixed; inset:0; z-index:9500; background:rgba(15,23,42,.45); backdrop-filter:blur(2px); align-items:flex-start; justify-content:center; overflow-y:auto; padding:32px 16px;">
-                  <div style="width:100%; max-width:720px; margin:0 auto 40px; background:#fff; border-radius:14px; border:1px solid var(--slate-200); box-shadow:0 20px 60px rgba(15,23,42,.25); padding:24px 28px 20px;">
-                    <h3 id="sessionFormTitle" style="margin:0 0 16px; font-size:1.15rem; font-weight:700; color:var(--slate-700);">Add Session</h3>
-                    <div class="form-group dash-field">
-                        <label for="sesName">Session Name</label>
-                        <input type="text" id="sesName" placeholder="e.g., Summer 2026 — Full Season" class="dash-input">
-                    </div>
-                    <div style="display:grid; grid-template-columns:1fr 1fr; gap:14px;">
+                <!-- True full-screen: fixed to the viewport, its own scroller, no
+                     dimmed backdrop or floating card — this IS the page while open,
+                     not an overlay on top of one. Sections give the long form a
+                     shape to scan instead of one unbroken run of fields. -->
+                <div id="sessionEditForm" style="display:none; position:fixed; inset:0; z-index:9500; background:#fff; flex-direction:column;">
+                  <div style="flex-shrink:0; display:flex; align-items:center; justify-content:space-between; padding:18px 28px; border-bottom:1px solid var(--slate-200);">
+                    <h3 id="sessionFormTitle" style="margin:0; font-size:1.25rem; font-weight:700; color:var(--slate-700);">Add Session</h3>
+                    <button type="button" class="btn-secondary" onclick="cancelSessionForm()" aria-label="Close">✕ Close</button>
+                  </div>
+                  <div style="flex:1; overflow-y:auto; padding:24px 28px 40px;">
+                    <div style="max-width:680px; margin:0 auto; display:flex; flex-direction:column; gap:22px;">
+
+                      <section class="ses-section">
+                        <h4 class="ses-section-title">Session</h4>
                         <div class="form-group dash-field">
-                            <label for="sesStart">Start Date</label>
-                            <input type="date" id="sesStart" class="dash-input">
+                            <label for="sesName">Session Name</label>
+                            <input type="text" id="sesName" placeholder="e.g., Summer 2026 — Full Season" class="dash-input">
+                        </div>
+                        <div style="display:grid; grid-template-columns:1fr 1fr; gap:14px;">
+                            <div class="form-group dash-field">
+                                <label for="sesStart">Start Date</label>
+                                <input type="date" id="sesStart" class="dash-input">
+                            </div>
+                            <div class="form-group dash-field">
+                                <label for="sesEnd">End Date</label>
+                                <input type="date" id="sesEnd" class="dash-input">
+                            </div>
                         </div>
                         <div class="form-group dash-field">
-                            <label for="sesEnd">End Date</label>
-                            <input type="date" id="sesEnd" class="dash-input">
-                        </div>
-                    </div>
-                    <div class="form-group dash-field">
-                        <label for="sesDates">Date Range Label (optional)</label>
-                        <input type="text" id="sesDates" placeholder="e.g., June 22 – August 14" class="dash-input">
-                    </div>
-                    <div style="display:grid; grid-template-columns:1fr 1fr; gap:14px;">
-                        <div class="form-group dash-field">
-                            <label for="sesCap">Capacity</label>
-                            <input type="number" id="sesCap" placeholder="Leave blank for unlimited" min="0" class="dash-input">
+                            <label for="sesDates">Date Range Label (optional)</label>
+                            <input type="text" id="sesDates" placeholder="e.g., June 22 – August 14" class="dash-input">
                         </div>
                         <div class="form-group dash-field">
-                            <label for="sesTuition">Tuition ($)</label>
-                            <input type="number" id="sesTuition" placeholder="0.00" step="0.01" min="0" class="dash-input">
+                            <label style="display:flex; align-items:flex-start; gap:8px; font-size:0.85rem; color:var(--slate-600);">
+                                <input type="checkbox" id="sesOvernight" style="width:auto; margin:2px 0 0;">
+                                <span><strong>Overnight / sleepaway session</strong><br>
+                                <span style="font-size:0.78rem; color:var(--slate-500);">Campers sleep at camp. Overnight camp is never a qualifying childcare expense, so this session is excluded from the year-end tax statements parents use for IRS Form 2441. Leave unticked for day camp.</span></span>
+                            </label>
                         </div>
-                    </div>
-                    <div style="display:grid; grid-template-columns:1fr 1fr; gap:14px;">
-                        <div class="form-group dash-field">
-                            <label for="sesEarly">Early Bird Price ($)</label>
-                            <input type="number" id="sesEarly" placeholder="Optional" step="0.01" min="0" class="dash-input">
+                      </section>
+
+                      <section class="ses-section">
+                        <h4 class="ses-section-title">Pricing</h4>
+                        <div style="display:grid; grid-template-columns:1fr 1fr; gap:14px;">
+                            <div class="form-group dash-field">
+                                <label for="sesCap">Capacity</label>
+                                <input type="number" id="sesCap" placeholder="Leave blank for unlimited" min="0" class="dash-input">
+                            </div>
+                            <div class="form-group dash-field">
+                                <label for="sesTuition">Tuition ($)</label>
+                                <input type="number" id="sesTuition" placeholder="0.00" step="0.01" min="0" class="dash-input">
+                            </div>
                         </div>
-                        <div class="form-group dash-field">
-                            <label for="sesEarlyDate">Early Bird Deadline</label>
-                            <input type="date" id="sesEarlyDate" class="dash-input">
+                        <div style="display:grid; grid-template-columns:1fr 1fr; gap:14px;">
+                            <div class="form-group dash-field">
+                                <label for="sesEarly">Early Bird Price ($)</label>
+                                <input type="number" id="sesEarly" placeholder="Optional" step="0.01" min="0" class="dash-input">
+                            </div>
+                            <div class="form-group dash-field">
+                                <label for="sesEarlyDate">Early Bird Deadline</label>
+                                <input type="date" id="sesEarlyDate" class="dash-input">
+                            </div>
                         </div>
-                    </div>
-                    <div class="form-group dash-field">
-                        <label for="sesSibDisc">Sibling Discount (%)</label>
-                        <input type="number" id="sesSibDisc" placeholder="e.g., 10 for 10% off siblings" min="0" max="100" class="dash-input">
-                        <p style="font-size:0.78rem; color:var(--slate-500); margin-top:5px; line-height:1.4;">
+                        <p class="dash-hint" style="margin-top:-8px;">Registration checks today's date against the deadline automatically — a family sees and is charged the early-bird price only up through that date, then the regular tuition, with no staff action needed.</p>
+                      </section>
+
+                      <section class="ses-section">
+                        <h4 class="ses-section-title">Sibling Discount</h4>
+                        <p class="dash-hint">
                             "Siblings" are all campers linked to the <strong>same family account</strong>,
-                            counted <strong>camp-wide</strong> — they don't need to share this session;
-                            a child here and a sibling in a different session still count together.
-                            Whichever sibling has the <strong>single highest tuition</strong> across the
-                            whole family is always billed in full; every other sibling is discounted at
-                            <strong>their own session's</strong> percentage. So if this session's rate is
-                            <strong>10%</strong>, any camper enrolled here who is <em>not</em> the family's
-                            most expensive camper gets 10% off their tuition for this session — sessions
-                            with different rates can apply different discounts to different siblings in
-                            the same family. It's who pays full price that can change (not "1st child"
-                            vs "2nd child" — it's always the priciest one), and it re-prices automatically
-                            whenever a sibling enrolls or withdraws. It stacks with Early Bird pricing on
-                            the same invoice.
+                            counted <strong>camp-wide</strong> across every session they're enrolled in.
+                            Whichever sibling has the <strong>single highest tuition</strong> in the family
+                            always pays full price; every other sibling gets the discount for the tier
+                            matching <strong>how many of the family's kids are enrolled in total</strong>
+                            &mdash; e.g. a row of "2 kids → 10%" and another of "3 kids → 12%" means a
+                            family with 3 enrolled kids discounts every sibling but the priciest one at
+                            12%. The highest matching row applies (a 4th kid still uses the "3 kids" row
+                            if that's the highest one you've set). Stacks with Early Bird pricing.
                         </p>
+                        <div id="sesSibTiersWrap" style="display:flex; flex-direction:column; gap:8px;"></div>
+                        <button type="button" class="btn-secondary" style="align-self:flex-start; margin-top:8px;" onclick="addSiblingTierRow()">+ Add tier</button>
+                      </section>
+
+                      <section class="ses-section">
+                        <h4 class="ses-section-title">Payment Plan</h4>
+                        <div class="form-group dash-field">
+                            <label for="sesPayPlan">How families pay for this session</label>
+                            <select id="sesPayPlan" onchange="document.getElementById('sesDepositWrap').style.display=this.value==='deposit'?'block':'none'" class="dash-input">
+                                <option value="full">Full payment required</option>
+                                <option value="2">2 installments (50/50)</option>
+                                <option value="3">3 installments (34/33/33)</option>
+                                <option value="4">4 installments (25 each)</option>
+                                <option value="monthly">Monthly (recurring)</option>
+                                <option value="12">12 monthly installments</option>
+                                <option value="deposit">Down payment + remaining tuition</option>
+                            </select>
+                            <p class="dash-hint">This is the billing schedule generated for a family the moment they enroll in this session — it produces the actual due dates/amounts on their invoice (see Billing), not just a label. "Full payment required" bills the whole tuition once; every other option splits it into real scheduled installments. It only takes effect where the camp's Accepted Payments settings (Me → Billing) allow payment plans at all.</p>
+                        </div>
+                        <div class="form-group" id="sesDepositWrap" style="display:none;">
+                            <label for="sesDeposit">Down Payment Amount ($)</label>
+                            <input type="number" id="sesDeposit" step="0.01" min="0" class="dash-input">
+                        </div>
+                      </section>
+
+                      <section class="ses-section">
+                        <h4 class="ses-section-title">Notes</h4>
+                        <div class="form-group dash-field">
+                            <label for="sesNotes">Description / Notes</label>
+                            <textarea id="sesNotes" placeholder="Optional session description for parents" class="dash-input" style="min-height:60px; resize:vertical;"></textarea>
+                        </div>
+                      </section>
+
                     </div>
-                    <div class="form-group dash-field">
-                        <label style="display:flex; align-items:flex-start; gap:8px; font-size:0.85rem; color:var(--slate-600);">
-                            <input type="checkbox" id="sesOvernight" style="width:auto; margin:2px 0 0;">
-                            <span><strong>Overnight / sleepaway session</strong><br>
-                            <span style="font-size:0.78rem; color:var(--slate-500);">Campers sleep at camp. Overnight camp is never a qualifying childcare expense, so this session is excluded from the year-end tax statements parents use for IRS Form 2441. Leave unticked for day camp.</span></span>
-                        </label>
-                    </div>
-                    <div class="form-group dash-field">
-                        <label for="sesPayPlan">Payment Plan</label>
-                        <select id="sesPayPlan" onchange="document.getElementById('sesDepositWrap').style.display=this.value==='deposit'?'block':'none'" class="dash-input">
-                            <option value="full">Full payment required</option>
-                            <option value="2">2 installments (50/50)</option>
-                            <option value="3">3 installments (34/33/33)</option>
-                            <option value="4">4 installments (25 each)</option>
-                            <option value="monthly">Monthly (recurring)</option>
-                            <option value="12">12 monthly installments</option>
-                            <option value="deposit">Down payment + remaining tuition</option>
-                        </select>
-                    </div>
-                    <div class="form-group" id="sesDepositWrap" style="display:none;">
-                        <label for="sesDeposit">Down Payment Amount ($)</label>
-                        <input type="number" id="sesDeposit" step="0.01" min="0" class="dash-input">
-                    </div>
-                    <div class="form-group dash-field">
-                        <label for="sesNotes">Description / Notes</label>
-                        <textarea id="sesNotes" placeholder="Optional session description for parents" class="dash-input" style="min-height:60px; resize:vertical;"></textarea>
-                    </div>
-                    <div style="display:flex; gap:10px; align-items:center;">
+                  </div>
+                  <div style="flex-shrink:0; display:flex; gap:10px; align-items:center; padding:16px 28px; border-top:1px solid var(--slate-200);">
                         <button type="button" class="btn-secondary" onclick="cancelSessionForm()">Cancel</button>
                         <button type="button" class="btn-primary" onclick="saveSessionForm()">Save Session</button>
                         <span id="sessionFormStatus" style="font-size:0.82rem; color:var(--slate-400);"></span>
-                    </div>
                   </div>
                 </div>
             </div>
@@ -907,8 +933,8 @@ if (window.location.protocol === 'file:') {
 <script src="campistry_workspace_admin.js?v=20260917-02"></script>
 
     <script src="cloud_sync_helpers.js?v=20260903-03"></script>
-    <script src="dashboard.js?v=20260922-03"></script>
-    <script src="campistry_setup_checklist.js?v=20260918-09"></script>
+    <script src="dashboard.js?v=20260922-04"></script>
+    <script src="campistry_setup_checklist.js?v=20260922-03"></script>
     <script src="campistry_enrollment_window.js?v=20260917-02"></script>
 <script src="campistry_presence.js?v=20260918-05"></script>
 <!-- The master key: which session the whole program is showing. Pure rule; the
