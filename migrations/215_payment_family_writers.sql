@@ -1287,10 +1287,23 @@ SELECT 'migration 215 applied' AS status,
          WHERE n.nspname = 'public' AND p.prokind = 'f'
            AND pg_get_functiondef(p.oid) ~ 'key = ''campistryMe''[^;]*FOR UPDATE')
                                                                     AS campistryme_locks_left,
+       -- THE NUMBER THAT MATTERS: a writer that still puts FAMILIES or PAYMENTS
+       -- into the document, because the triggers would project that back over the
+       -- rows. This must be 0.
+       (SELECT count(*) FROM pg_proc p JOIN pg_namespace n ON n.oid = p.pronamespace
+         WHERE n.nspname = 'public' AND p.prokind = 'f'
+           AND pg_get_functiondef(p.oid) ~ 'UPDATE camp_state_kv[^;]*campistryMe'
+           AND pg_get_functiondef(p.oid) ~ 'jsonb_set\([^;]{0,60}(ARRAY\[''families''|''\{families\}''|''\{payments\}''|''\{finance\}''|ARRAY\[''finance'')')
+                                                                    AS money_writers_left,
+       -- And the benign remainder, reported so a non-zero count is not alarming:
+       -- accept_staff_contract, submit_postaccept_response,
+       -- submit_posthire_response and set_card_fee_policy write
+       -- staffApplications / enrollments / enrollSettings, branches that have NOT
+       -- moved to rows. Writing them in the document is correct.
        (SELECT count(*) FROM pg_proc p JOIN pg_namespace n ON n.oid = p.pronamespace
          WHERE n.nspname = 'public' AND p.prokind = 'f'
            AND pg_get_functiondef(p.oid) ~ 'UPDATE camp_state_kv[^;]*campistryMe')
-                                                                    AS campistryme_writers_left,
+                                                                    AS other_branch_writers,
        to_regprocedure('public.camp_payments_array(uuid)') IS NOT NULL      AS array_accessor_ready,
        to_regprocedure('public.camp_payment_add(uuid, jsonb)') IS NOT NULL  AS add_accessor_ready,
        -- The shop and canteen locks must STILL be there; those blobs are read-

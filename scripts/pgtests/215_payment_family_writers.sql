@@ -21,13 +21,22 @@ BEGIN
        AND pg_get_functiondef(p.oid) ~ 'key = ''campistryMe''[^;]*FOR UPDATE';
     IF n <> 0 THEN RAISE EXCEPTION 'still locking the camp document: %', who; END IF;
 
+    -- NOT "nothing writes the document" — four functions legitimately still write
+    -- staffApplications, enrollments and enrollSettings, branches that have not
+    -- moved to rows. The live database reported 5 of those while this check said
+    -- 0, because the sandbox does not contain them: the assertion was wrong, not
+    -- the database. What must be zero is a writer that puts FAMILIES or PAYMENTS
+    -- back into the document, because the triggers would project that over the rows.
     SELECT count(*), COALESCE(string_agg(p.proname, ', '), '')
       INTO n, who
       FROM pg_proc p JOIN pg_namespace nsp ON nsp.oid = p.pronamespace
      WHERE nsp.nspname = 'public' AND p.prokind = 'f'
-       AND pg_get_functiondef(p.oid) ~ 'UPDATE camp_state_kv[^;]*campistryMe';
-    IF n <> 0 THEN RAISE EXCEPTION 'still writing the camp document: %', who; END IF;
-    RAISE NOTICE 'ok  NOTHING in the schema locks or writes campistryMe any more';
+       AND pg_get_functiondef(p.oid) ~ 'UPDATE camp_state_kv[^;]*campistryMe'
+       AND pg_get_functiondef(p.oid) ~ 'jsonb_set\([^;]{0,60}(ARRAY\[''families''|''\{families\}''|''\{payments\}''|''\{finance\}''|ARRAY\[''finance'')';
+    IF n <> 0 THEN
+        RAISE EXCEPTION 'these still write families/payments into the document, which the triggers would project over the rows: %', who;
+    END IF;
+    RAISE NOTICE 'ok  nothing locks campistryMe, and nothing writes families or payments into it';
 END $$;
 
 -- ── and the shop / canteen locks are still there ──────────────────────────

@@ -190,15 +190,20 @@ test('the accessors keep order, never return null, and are granted to nobody', (
 test('the confirmation scans the WHOLE schema, and survives an aggregate', () => {
     const tail = SQL.slice(SQL.indexOf("SELECT 'migration 215 applied'"));
     assert.match(tail, /AS campistryme_locks_left/);
-    assert.match(tail, /AS campistryme_writers_left/);
+    assert.match(tail, /AS money_writers_left/,
+        'the count that matters is writers of FAMILIES or PAYMENTS, not of the document');
+    assert.match(tail, /AS other_branch_writers/,
+        'the benign remainder is reported separately, so a non-zero count is not alarming');
     assert.match(tail, /AS other_blob_locks_kept/, 'the shop/canteen locks are reported, not assumed');
     // pg_get_functiondef THROWS on an aggregate, and this scans every function in
     // the schema rather than a named list. Without prokind the paste dies on
     // whatever aggregate happens to live in public — it did, on "array_agg".
-    const scans = (tail.match(/pg_get_functiondef\(p\.oid\)/g) || []).length;
+    // One prokind guard per SUBQUERY, not per pg_get_functiondef call — the money
+    // check calls it twice in one subquery, which needs the guard once.
+    const subqueries = (tail.match(/FROM pg_proc p JOIN pg_namespace n/g) || []).length;
     const guards = (tail.match(/p\.prokind = 'f'/g) || []).length;
-    assert.strictEqual(guards, scans,
-        'every pg_get_functiondef scan needs prokind = \'f\', or an aggregate aborts the paste');
+    assert.strictEqual(guards, subqueries,
+        "every pg_proc scan needs prokind = 'f', or an aggregate aborts the paste");
     const lines = SQL.trimEnd().split('\n');
     assert.ok(!lines[lines.length - 1].trim().startsWith('--'));
 });
