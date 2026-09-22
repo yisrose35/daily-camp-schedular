@@ -1795,6 +1795,47 @@ function manageParentPaymentPlanSetting(){
     },'Save');
 }
 
+/**
+ * DEFAULT PAYMENT PLAN STRUCTURE — camp-wide, replacing a per-session field.
+ *
+ * This used to live on every Session (Full/2/3/4/monthly/12/deposit), which
+ * meant the same choice got made once per session for no reason -- it's a
+ * Billing policy the office decides once, not a property of any individual
+ * session. It's a different thing from manageParentPaymentPlanSetting()
+ * above: that toggle is whether a FAMILY can build their OWN plan in Link;
+ * this is what schedule the OFFICE'S side auto-generates for every session
+ * once a family enrolls (_buildInstallmentSchedule, read camp-wide from
+ * enrollSettings.paymentPlan/paymentPlanDepositAmount instead of a session's
+ * own field, which is now gone).
+ */
+function managePaymentPlanStructure(){
+    if(!_secEdit('billing','Changing the payment plan structure'))return;
+    var plan=enrollSettings.paymentPlan||'full';
+    var dep=enrollSettings.paymentPlanDepositAmount||'';
+    var h='<div class="me-modal-form">';
+    h+='<div class="me-field"><label>How a family\'s tuition is split when they enroll</label>'
+      +'<select id="ppStructSel" class="me-input" onchange="document.getElementById(\'ppStructDepWrap\').style.display=this.value===\'deposit\'?\'\':\'none\'">'
+      +'<option value="full"'+(plan==='full'?' selected':'')+'>Full payment required</option>'
+      +'<option value="2"'+(plan==='2'?' selected':'')+'>2 installments (50/50)</option>'
+      +'<option value="3"'+(plan==='3'?' selected':'')+'>3 installments (34/33/33)</option>'
+      +'<option value="4"'+(plan==='4'?' selected':'')+'>4 installments (25 each)</option>'
+      +'<option value="monthly"'+(plan==='monthly'?' selected':'')+'>Monthly (recurring)</option>'
+      +'<option value="12"'+(plan==='12'?' selected':'')+'>12 monthly installments</option>'
+      +'<option value="deposit"'+(plan==='deposit'?' selected':'')+'>Down payment + remaining tuition</option>'
+      +'</select></div>';
+    h+='<div class="me-field" id="ppStructDepWrap" style="'+(plan==='deposit'?'':'display:none')+'">'
+      +'<label>Down Payment Amount ($)</label><input type="number" id="ppStructDep" class="me-input" step="0.01" min="0" value="'+esc(dep)+'"></div>';
+    h+='<p style="font-size:.78rem;color:var(--s500);margin:4px 0 0">Applies to every session — this is what actually generates the due dates/amounts on a family\'s invoice the moment they enroll (see Billing). It\'s separate from the toggle above: that\'s whether a family can build their own plan in Link, this is the plan the office\'s side uses automatically.</p>';
+    h+='</div>';
+    showModal('Payment Plan',h,function(){
+        var sel=document.getElementById('ppStructSel').value||'full';
+        enrollSettings.paymentPlan=sel;
+        enrollSettings.paymentPlanDepositAmount=parseFloat((document.getElementById('ppStructDep')||{}).value)||0;
+        save();closeModal('dynModal');
+        toast('Payment plan structure saved');
+    },'Save');
+}
+
 /** The close-out rule, or null on a page that did not load it. */
 function _closeoutAPI(){return (typeof window!=='undefined'&&window.CampistryCloseout)||null}
 
@@ -14315,6 +14356,19 @@ function enrollCamper(id){
  * The fallback is the old shape, for a page that did not load the rule.
  */
 function _buildInstallmentSchedule(sesObj,tuition){
+    // The installment STRUCTURE (full/2/3/4/monthly/12/deposit) used to be set
+    // per-session, which put the same choice in front of the office once per
+    // session for no reason -- it's a Billing policy, one thing a camp decides
+    // for itself, not a property of any one session. It now lives camp-wide in
+    // enrollSettings.paymentPlan (Me -> Billing -> Payment Plan), overriding
+    // whatever the session object carries here so nothing downstream has to
+    // change. A session saved before this move keeps working exactly the same
+    // -- enrollSettings.paymentPlan just decides for every session now,
+    // instead of each session's own (now-removed) field.
+    sesObj=Object.assign({},sesObj,{
+        paymentPlan:enrollSettings.paymentPlan||'full',
+        depositAmount:enrollSettings.paymentPlanDepositAmount||0
+    });
     var R=(typeof window!=='undefined'&&window.CampistryInstallments)||null;
     if(R)return R.build({session:sesObj,tuition:tuition});
     if(!sesObj||!sesObj.paymentPlan||sesObj.paymentPlan==='full')return null;
@@ -16763,6 +16817,7 @@ function renderBilling(){
         +'<button onclick="CampistryMe.issueCredit()">Issue Credit/Refund</button>'
         +'<button onclick="CampistryMe.managePaymentMethods()">Accepted payments</button>'
         +'<button onclick="CampistryMe.manageParentPaymentPlanSetting()">Parent self-serve payment plans</button>'
+        +'<button onclick="CampistryMe.managePaymentPlanStructure()">Payment plan structure</button>'
         +'<button onclick="CampistryMe.managePayers()">Payers &amp; Organizations</button>'
         +'<button onclick="CampistryMe.openMergeFamiliesTool()">Merge Families</button>'
         +'<button onclick="CampistryMe.openActivityLog()">Activity Log</button>'
@@ -22367,7 +22422,7 @@ window.CampistryMe={
     finReconcileCharges:finReconcileCharges,
     _dpToggle:_dpToggle,_cpToggle:_cpToggle,_cfToggle:_cfToggle,_fbRetryPreview:_fbRetryPreview,markDepositPaid:markDepositPaid,chargeDepositNow:chargeDepositNow,
     managePayers:managePayers,togglePayerArchived:togglePayerArchived,
-    managePaymentMethods:managePaymentMethods,manageParentPaymentPlanSetting:manageParentPaymentPlanSetting,archiveSeasonNow:archiveSeasonNow,setArQuery:setArQuery,
+    managePaymentMethods:managePaymentMethods,manageParentPaymentPlanSetting:manageParentPaymentPlanSetting,managePaymentPlanStructure:managePaymentPlanStructure,archiveSeasonNow:archiveSeasonNow,setArQuery:setArQuery,
     toggleAging:toggleAging,
     runInstallments:runInstallments,
     _riToggleAll:_riToggleAll,

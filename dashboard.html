@@ -9,7 +9,7 @@
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
     <link href="https://fonts.googleapis.com/css2?family=DM+Sans:opsz,wght@9..40,300;9..40,400;9..40,500;9..40,600;9..40,700;9..40,800&family=Fraunces:opsz,wght@9..144,400;9..144,500;9..144,600;9..144,700&display=swap" rel="stylesheet">
     <style>html:not(.css-ready) body { opacity: 0; } html.css-ready body { transition: opacity 0.15s ease; }</style>
-    <link rel="stylesheet" href="dashboard.css?v=20260922-06" onload="document.documentElement.classList.add('css-ready')">
+    <link rel="stylesheet" href="dashboard.css?v=20260922-07" onload="document.documentElement.classList.add('css-ready')">
     <link rel="stylesheet" href="mobile-responsive.css?v=20260903-03">
     <noscript><style>html body { opacity: 1 !important; }</style></noscript>
 </head>
@@ -655,26 +655,14 @@
                         <button type="button" class="btn-secondary" style="align-self:flex-start; margin-top:8px;" onclick="addSiblingTierRow()">+ Add tier</button>
                       </section>
 
-                      <section class="ses-section">
-                        <h4 class="ses-section-title">Payment Plan</h4>
-                        <div class="form-group dash-field">
-                            <label for="sesPayPlan">How families pay for this session</label>
-                            <select id="sesPayPlan" onchange="document.getElementById('sesDepositWrap').style.display=this.value==='deposit'?'block':'none'" class="dash-input">
-                                <option value="full">Full payment required</option>
-                                <option value="2">2 installments (50/50)</option>
-                                <option value="3">3 installments (34/33/33)</option>
-                                <option value="4">4 installments (25 each)</option>
-                                <option value="monthly">Monthly (recurring)</option>
-                                <option value="12">12 monthly installments</option>
-                                <option value="deposit">Down payment + remaining tuition</option>
-                            </select>
-                            <p class="dash-hint">This is the billing schedule generated for a family the moment they enroll in this session — it produces the actual due dates/amounts on their invoice (see Billing), not just a label. "Full payment required" bills the whole tuition once; every other option splits it into real scheduled installments. It only takes effect where the camp's Accepted Payments settings (Me → Billing) allow payment plans at all.</p>
-                        </div>
-                        <div class="form-group" id="sesDepositWrap" style="display:none;">
-                            <label for="sesDeposit">Down Payment Amount ($)</label>
-                            <input type="number" id="sesDeposit" step="0.01" min="0" class="dash-input">
-                        </div>
-                      </section>
+                      <!-- Payment Plan (how tuition splits into installments) moved to
+                           Me -> Billing -> "Payment plan structure" -- it's a camp-wide
+                           Billing policy, not a per-session detail; asking the office to
+                           pick it once per session put the same choice in front of them
+                           over and over for no reason. Sessions still get an installment
+                           schedule generated on enrollment (_buildInstallmentSchedule) --
+                           it just reads the one camp-wide setting now instead of a field
+                           that used to live here. -->
 
                       <section class="ses-section">
                         <h4 class="ses-section-title">Notes</h4>
@@ -700,15 +688,17 @@
         <!-- ===== PAYMENT (Owners only) ===== -->
         <div id="dash-setup-payment" class="dash-setup-panel" style="display: none;">
             <div class="dashboard-card" style="max-width:700px;">
-                <div class="card-header"><h2>💳 Payment Processing (Stripe)</h2></div>
-                <p class="card-desc">Connect your Stripe account to accept credit card payments, save cards on file, and auto-charge installments — nothing to type here, just connect below.</p>
+                <div class="card-header"><h2>💳 Payment Processing</h2></div>
+                <p class="card-desc">Accept credit card payments, save cards on file, and auto-charge installments. There are two ways to set this up — neither is the "default," pick whichever fits your camp.</p>
                 <div style="display:flex; flex-direction:column; gap:14px;">
                     <div>
-                        <h3 style="font-size:0.9rem; margin:0 0 8px; font-weight:600;">Where tuition money lands</h3>
+                        <h3 style="font-size:0.9rem; margin:0 0 8px; font-weight:600;">Option 1 — Set up Stripe yourself</h3>
+                        <p style="font-size:0.78rem; color:var(--slate-400); margin:0 0 8px;">Self-serve, a couple of minutes, no call needed. Tuition payments go straight to your own bank account.</p>
                         <div id="campStripeConnectBox" style="font-size:0.85rem; color:var(--slate-600);">Loading…</div>
                     </div>
                     <div>
-                        <h3 style="font-size:0.9rem; margin:0 0 8px; font-weight:600;">Payment processor</h3>
+                        <h3 style="font-size:0.9rem; margin:0 0 8px; font-weight:600;">Option 2 — Bring your own processor</h3>
+                        <p style="font-size:0.78rem; color:var(--slate-400); margin:0 0 8px;">Already use Banquest, Sola/Cardknox, or another processor? Contact Campistry to connect it — this one needs a quick verification call, so it isn't self-serve.</p>
                         <div id="campPaymentProcessorBox" style="font-size:0.85rem; color:var(--slate-600);">Loading…</div>
                     </div>
                     <!-- Only shown for camps on their own processor (Banquest/
@@ -946,7 +936,7 @@ if (window.location.protocol === 'file:') {
 <script src="campistry_workspace_admin.js?v=20260917-02"></script>
 
     <script src="cloud_sync_helpers.js?v=20260903-03"></script>
-    <script src="dashboard.js?v=20260922-06"></script>
+    <script src="dashboard.js?v=20260922-07"></script>
     <script src="campistry_setup_checklist.js?v=20260922-04"></script>
     <script src="campistry_enrollment_window.js?v=20260917-02"></script>
 <script src="campistry_presence.js?v=20260918-05"></script>

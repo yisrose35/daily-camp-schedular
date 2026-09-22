@@ -1605,9 +1605,8 @@
                 ? '<button type="button" class="btn-secondary" style="margin-left:8px;" onclick="disconnectCampStripe(this)">Disconnect</button>' : '';
 
             if (!data.connected) {
-                box.innerHTML = '<p style="margin:0 0 10px;">Right now tuition payments deposit into Campistry\'s account. Connect your camp\'s own Stripe account so payments go straight to your bank.</p>' +
-                    (canConnect ? '<button type="button" class="btn-primary" onclick="startCampStripeConnect(this)">Connect your Stripe account</button>' : '') + ownerNote +
-                    '<p style="margin:10px 0 0;font-size:0.78rem;color:var(--slate-400);">Want to bring your own processor (Banquest, Sola/Cardknox, etc.) instead of Stripe? Contact the office — connecting a different processor needs a quick verification call.</p>';
+                box.innerHTML = '<p style="margin:0 0 10px;">Not connected — tuition payments deposit into Campistry\'s account until you connect your own. This is entirely self-serve, no call needed.</p>' +
+                    (canConnect ? '<button type="button" class="btn-primary" onclick="startCampStripeConnect(this)">Connect your Stripe account</button>' : '') + ownerNote;
             } else if (data.charges_enabled) {
                 box.innerHTML = '<p style="margin:0 0 10px;color:#059669;"><strong>Connected</strong> — tuition payments go directly to your bank account' +
                     (data.connected_at ? ' since ' + new Date(data.connected_at).toLocaleDateString() : '') + '.</p>' + disconnectBtn;
@@ -1673,24 +1672,23 @@
                 if (showCff && window.renderCampCardFormFields) window.renderCampCardFormFields();
             }
             if (data.processorKey === 'none' || data.status === 'not_connected') {
-                // Stripe is no longer the default, so this is a real state now:
-                // no processor connected means no online tuition or canteen
-                // payments at all. Say so plainly instead of letting the camp
-                // assume payments work.
-                box.innerHTML = '<p style="margin:0 0 8px;color:#b45309;"><strong>No payment processor connected.</strong> Online tuition payments, saved cards and canteen deposits are switched off until one is set up.</p>' +
-                    '<p style="margin:0;font-size:0.78rem;color:var(--slate-400);">Connect <strong>Stripe</strong> using the "Where tuition money lands" card above, or use your own processor (Banquest, Sola/Cardknox) — contact the office, since connecting one needs a quick verification call.</p>';
+                // Neither option is connected. Say so plainly rather than let the
+                // camp assume payments work, but don't repeat Option 1's own
+                // messaging — just point at it and cover Option 2 (this box)
+                // on its own terms.
+                box.innerHTML = '<p style="margin:0 0 8px;color:#b45309;"><strong>No payment processor connected.</strong> Online tuition payments, saved cards and canteen deposits are switched off until one is set up — either option above.</p>' +
+                    '<p style="margin:0;font-size:0.78rem;color:var(--slate-400);">To bring your own (Banquest, Sola/Cardknox, etc.), contact Campistry — it needs a quick verification call.</p>';
             } else if (data.processorKey === 'stripe') {
-                box.innerHTML = '<p style="margin:0 0 8px;">On <strong>Stripe</strong>' +
+                box.innerHTML = '<p style="margin:0;">On <strong>Stripe</strong>' +
                     (data.status === 'verified' ? '' : ' — <span style="color:#b45309;">not finished setting up yet</span>') +
-                    '. The "Where tuition money lands" card above covers this.</p>' +
-                    '<p style="margin:0;font-size:0.78rem;color:var(--slate-400);">Prefer your own processor (Banquest, Sola/Cardknox)? Contact the office — connecting a different processor needs a quick verification call.</p>';
+                    '. See Option 1 above.</p>';
             } else if (data.status === 'verified') {
                 box.innerHTML = '<p style="margin:0 0 10px;color:#059669;">Connected to your own <strong>' + escTelnyx(data.processorLabel || data.processorKey) + '</strong> account' +
-                    (data.connectedAt ? ' since ' + new Date(data.connectedAt).toLocaleDateString() : '') + '. Payments run through your own processor, not Stripe.</p>' +
-                    '<button type="button" class="btn-secondary" onclick="disconnectCampProcessor(this)">Disconnect &amp; switch back to Stripe</button>';
+                    (data.connectedAt ? ' since ' + new Date(data.connectedAt).toLocaleDateString() : '') + '. Payments run through your own processor.</p>' +
+                    '<button type="button" class="btn-secondary" onclick="disconnectCampProcessor(this)">Disconnect &amp; use Stripe instead</button>';
             } else {
                 box.innerHTML = '<p style="margin:0 0 10px;color:#dc2626;">Connected to <strong>' + escTelnyx(data.processorLabel || data.processorKey) + '</strong> but not yet verified (status: ' + escTelnyx(data.status) + '). Contact Campistry support.</p>' +
-                    '<button type="button" class="btn-secondary" onclick="disconnectCampProcessor(this)">Disconnect &amp; switch back to Stripe</button>';
+                    '<button type="button" class="btn-secondary" onclick="disconnectCampProcessor(this)">Disconnect &amp; use Stripe instead</button>';
             }
         } catch (e) {
             console.error('[Dashboard] loadCampPaymentProcessorStatus threw:', e);
@@ -2708,9 +2706,6 @@
             : (s.siblingDiscount > 0 ? [{ count: 2, discount: s.siblingDiscount }] : []);
         renderSiblingTiers(tiers);
         document.getElementById('sesOvernight').checked = !!s.overnight;
-        document.getElementById('sesPayPlan').value = s.paymentPlan || 'full';
-        document.getElementById('sesDeposit').value = s.depositAmount || '';
-        document.getElementById('sesDepositWrap').style.display = (s.paymentPlan === 'deposit') ? 'block' : 'none';
         document.getElementById('sesNotes').value = s.notes || '';
     }
 
@@ -2841,8 +2836,10 @@
             // the safe default: a session wrongly marked overnight silently
             // strips a family's whole claim off their tax statement.
             overnight: !!document.getElementById('sesOvernight').checked,
-            paymentPlan: document.getElementById('sesPayPlan').value || 'full',
-            depositAmount: parseFloat(document.getElementById('sesDeposit').value) || 0,
+            // paymentPlan/depositAmount moved to a camp-wide Billing setting
+            // (Me -> Billing -> "Payment plan structure") -- no longer a
+            // per-session field. _buildInstallmentSchedule() in campistry_me.js
+            // reads enrollSettings.paymentPlan for every session now.
             notes: (document.getElementById('sesNotes').value || '').trim(),
             registrationOpen: existing ? (existing.registrationOpen !== false) : true
         };
