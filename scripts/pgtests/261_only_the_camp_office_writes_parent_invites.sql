@@ -189,3 +189,40 @@ BEGIN
 END $$;
 RESET ROLE;
 ROLLBACK;
+
+-- ════════════════════════════════════════════════════════════════════════════
+-- (TED-047) "Is this family still at camp?" by number. The Katz family's Avi
+-- #1 has left; a DIFFERENT Avi Katz (#3) is enrolled. The Katz family is
+-- switched off, the new Avi's family stays on, and an invitation that has no
+-- number yet is still decided by its names.
+-- ════════════════════════════════════════════════════════════════════════════
+BEGIN;
+INSERT INTO auth.users (id, email) VALUES ('a6100000-0000-0000-0000-0000000000a3', 'owner3@261.test');
+INSERT INTO camps (id, name, owner) VALUES
+    ('a6100000-0000-0000-0000-000000000003', '261 camp three', 'a6100000-0000-0000-0000-0000000000a3');
+INSERT INTO link_parent_invites (id, camp_id, parent_email, camper_names, person_ids, status, camp_connected) VALUES
+    ('a6100000-aaaa-0000-0000-000000000031', 'a6100000-0000-0000-0000-000000000003', 'katz@261.test', '["Avi Katz"]', '[1]', 'active', true),
+    ('a6100000-aaaa-0000-0000-000000000033', 'a6100000-0000-0000-0000-000000000003', 'katz2@261.test', '["Avi Katz #3"]', '[3]', 'active', true),
+    ('a6100000-aaaa-0000-0000-000000000034', 'a6100000-0000-0000-0000-000000000003', 'old@261.test', '["Rina Stone"]', '[null]', 'active', true);
+CREATE OR REPLACE FUNCTION auth.uid() RETURNS uuid LANGUAGE sql STABLE
+  AS $f$ SELECT NULLIF(current_setting('t261.uid', true), '')::uuid $f$;
+SET LOCAL t261.uid = 'a6100000-0000-0000-0000-0000000000a3';
+DO $$
+DECLARE v jsonb;
+BEGIN
+    -- the page sends the roster as the plain name "Avi Katz" (it has not yet
+    -- adopted the new Avi's own label) and the enrolled numbers
+    v := public.revoke_orphaned_parent_invites('a6100000-0000-0000-0000-000000000003',
+            '["Avi Katz","Rina Stone"]', '[3]');
+    IF (v ->> 'success')::boolean IS NOT TRUE THEN RAISE EXCEPTION 'sweep refused: %', v; END IF;
+    IF (SELECT camp_connected FROM link_parent_invites WHERE id = 'a6100000-aaaa-0000-0000-000000000031') THEN
+        RAISE EXCEPTION 'TED-047: the departed Avi #1''s family is still connected because a new child shares his name';
+    END IF;
+    IF NOT (SELECT camp_connected FROM link_parent_invites WHERE id = 'a6100000-aaaa-0000-0000-000000000033') THEN
+        RAISE EXCEPTION 'the new Avi #3''s family was switched off';
+    END IF;
+    IF NOT (SELECT camp_connected FROM link_parent_invites WHERE id = 'a6100000-aaaa-0000-0000-000000000034') THEN
+        RAISE EXCEPTION 'an invitation with no number yet was switched off although its child''s name is on the roster';
+    END IF;
+END $$;
+ROLLBACK;

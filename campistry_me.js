@@ -14204,7 +14204,15 @@ function _sweepOrphanedParentInvites(){
     var campId=window.CampistryDB&&window.CampistryDB.getCampId?window.CampistryDB.getCampId():null;
     if(!db||!campId)return;
     var rosterNames=Object.keys(roster).filter(function(n){return !roster[n].unenrolled;});
-    db.rpc('revoke_orphaned_parent_invites',{p_camp_id:campId,p_roster_names:rosterNames}).then(function(res){
+    // Decided by number (261): the numbers of every camper still enrolled.
+    var rosterIds=Object.values(roster).filter(function(c){return c&&!c.unenrolled;})
+        .map(function(c){return normalizePersonId(c.camperId);}).filter(Boolean).map(Number);
+    db.rpc('revoke_orphaned_parent_invites',{p_camp_id:campId,p_roster_names:rosterNames,p_roster_ids:rosterIds}).then(function(res){
+        // A database without 261 yet has only the by-name version.
+        if(res&&res.error&&/PGRST202|could not find the function|does not exist/i.test(res.error.message||res.error.code||''))
+            return db.rpc('revoke_orphaned_parent_invites',{p_camp_id:campId,p_roster_names:rosterNames});
+        return res;
+    }).then(function(res){
         var rev=res&&res.data&&res.data.revoked;
         if(rev)console.log('[Me] Parent sign-up: disconnected '+rev+' invite'+(rev===1?'':'s')+' (children no longer enrolled)');
     }).catch(function(){});

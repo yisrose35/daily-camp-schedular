@@ -15,6 +15,9 @@
 -- an invitation that names no children (which would cover the whole camp):
 -- a missing list is written as an empty one, which covers nobody.
 --
+-- AND (TED-047) whether a family is still at camp is decided by its children's
+-- numbers, not their names.
+--
 -- THE SAME HOLE FROM INSIDE (TED-028). The office's list of invitations —
 -- with every family's access code — was open to ANY member of the camp, a
 -- counselor or a viewer too, who could then claim a family's code on their own
@@ -161,6 +164,64 @@ BEGIN
         END LOOP;
     END LOOP;
 END $$;
+
+-- ─── "is this family still at camp?" goes by number (TED-047) ───────────────
+-- When a family's last child leaves, their parent app is switched off for live
+-- camp features (122). That was decided by NAME — a new child with the same
+-- name kept a departed child's family switched on. Now by number: an
+-- invitation stays connected while one of its children's numbers is still an
+-- enrolled camper. Only an invitation that carries no number at all (written
+-- before its child was numbered) is still decided by its names.
+CREATE OR REPLACE FUNCTION public.revoke_orphaned_parent_invites(
+    p_camp_id      uuid,
+    p_roster_names jsonb,
+    p_roster_ids   jsonb             -- the numbers of every camper still enrolled
+)
+RETURNS jsonb
+LANGUAGE plpgsql SECURITY DEFINER
+SET search_path = public, pg_catalog
+AS $$
+DECLARE
+    caller uuid := auth.uid();
+    n      int := 0;
+    v_ids  bigint[];
+BEGIN
+    IF caller IS NULL THEN RETURN jsonb_build_object('success', false, 'error', 'not_authenticated'); END IF;
+    IF NOT public._is_camp_office(p_camp_id, caller) THEN
+        RETURN jsonb_build_object('success', false, 'error', 'not_camp_office');
+    END IF;
+    -- Safety: never mass-disconnect when we were handed an empty roster.
+    IF p_roster_ids IS NULL OR jsonb_typeof(p_roster_ids) <> 'array' OR jsonb_array_length(p_roster_ids) = 0 THEN
+        RETURN jsonb_build_object('success', true, 'revoked', 0, 'skipped', 'empty_roster');
+    END IF;
+    v_ids := ARRAY(SELECT public._stated_person_id(x #>> '{}') FROM jsonb_array_elements(p_roster_ids) x);
+
+    WITH stale AS (
+        SELECT i.id
+          FROM link_parent_invites i
+         WHERE i.camp_id = p_camp_id
+           AND i.camp_connected = true
+           AND CASE
+                 -- the invitation's children by number
+                 WHEN EXISTS (SELECT 1 FROM jsonb_array_elements(CASE WHEN jsonb_typeof(i.person_ids) = 'array'
+                                                                      THEN i.person_ids ELSE '[]'::jsonb END) x
+                               WHERE public._stated_person_id(x #>> '{}') IS NOT NULL)
+                 THEN NOT EXISTS (SELECT 1 FROM jsonb_array_elements(i.person_ids) x
+                                   WHERE public._stated_person_id(x #>> '{}') = ANY (v_ids))
+                 -- no number on it yet: its names, as before
+                 ELSE jsonb_typeof(p_roster_names) = 'array' AND jsonb_array_length(p_roster_names) > 0
+                      AND NOT EXISTS (SELECT 1 FROM jsonb_array_elements_text(COALESCE(i.camper_names, '[]'::jsonb)) cn
+                                       WHERE p_roster_names ? cn)
+               END
+    )
+    UPDATE link_parent_invites SET camp_connected = false
+     WHERE id IN (SELECT id FROM stale);
+    GET DIAGNOSTICS n = ROW_COUNT;
+    RETURN jsonb_build_object('success', true, 'revoked', n);
+END;
+$$;
+REVOKE ALL ON FUNCTION public.revoke_orphaned_parent_invites(uuid, jsonb, jsonb) FROM public, anon;
+GRANT EXECUTE ON FUNCTION public.revoke_orphaned_parent_invites(uuid, jsonb, jsonb) TO authenticated;
 
 -- ─── reading the invitations table itself (TED-028) ─────────────────────────
 -- The table's staff read rule (098) let a scheduler read every column —
