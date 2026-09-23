@@ -1,5 +1,5 @@
 -- ============================================================================
--- Confirm migrations 222-238 are in and doing their job.
+-- Confirm migrations 222-241 are in and doing their job.
 --
 -- Paste the whole thing into the Supabase SQL Editor. It is READ ONLY — one
 -- SELECT, nothing is created, changed or deleted, and the two purge functions
@@ -259,6 +259,71 @@
 
 UNION ALL
 
+  -- ─── 1b. 239-241, read off the DEPLOYED function bodies ───────────────────
+  -- A separate block, and the bodies are computed in a subquery rather than
+  -- through 239's _prosrc_code helper, for one reason that cost a rewrite:
+  -- POSTGRES RESOLVES FUNCTION NAMES WHEN IT PLANS THE STATEMENT, not when it
+  -- reaches them. A reference to _prosrc_code anywhere in this script — even in a
+  -- CASE branch that cannot be taken — makes the WHOLE script fail with "function
+  -- does not exist" on a database that has not applied 239. Which is exactly the
+  -- database this script exists to describe.
+  --
+  -- prosrc includes COMMENTS, so the bodies have their line comments stripped:
+  -- 239's own header quotes the unsafe comparison it removes, and a plain text
+  -- match would find the prose and report the defect as still present.
+  SELECT '1 is it there', x.item, x.result
+    FROM (SELECT (SELECT regexp_replace(p.prosrc, '--[^' || chr(10) || ']*', '', 'g')
+                    FROM pg_proc p JOIN pg_namespace n ON n.oid = p.pronamespace
+                   WHERE n.nspname = 'public' AND p.proname = 'settle_shop_order'
+                   LIMIT 1) AS settle,
+                 (SELECT regexp_replace(p.prosrc, '--[^' || chr(10) || ']*', '', 'g')
+                    FROM pg_proc p JOIN pg_namespace n ON n.oid = p.pronamespace
+                   WHERE n.nspname = 'public' AND p.proname = 'canteen_office_credit'
+                   LIMIT 1) AS credit,
+                 (SELECT regexp_replace(p.prosrc, '--[^' || chr(10) || ']*', '', 'g')
+                    FROM pg_proc p JOIN pg_namespace n ON n.oid = p.pronamespace
+                   WHERE n.nspname = 'public'
+                     AND p.proname = 'use_family_card_for_canteen_auto_reload'
+                   LIMIT 1) AS card) b
+    CROSS JOIN LATERAL (VALUES
+    -- ⚠ THE ONE TO READ FIRST. Until 239, a signed-in user who belongs to no camp
+    -- could call settle_shop_order with ANY camp's id and debit a camper's canteen
+    -- balance. The gate compared the caller's camp with <>, and <> against the NULL
+    -- that get_user_camp_id returns for such a caller is NULL, so the IF never
+    -- fired. Reproduced against a real Postgres: $7.00 off a camper at a camp the
+    -- caller had nothing to do with.
+    ('239  a stranger cannot settle another camp''s order',
+     CASE WHEN b.settle IS NOT NULL
+           AND b.settle ~ 'IS DISTINCT FROM get_user_camp_id'
+           AND b.settle ~ 'NOT camp_staff_member'
+           AND b.settle !~ '<> get_user_camp_id'
+          THEN 'ok' ELSE 'A STRANGER CAN STILL DEBIT A CAMPER — apply 239 NOW' END),
+
+    -- The desk's own money. Its deposit, cash-out and limit writers wrote a
+    -- document branch that is stripped before the upsert, so the office took cash
+    -- in hand and the next hydration put the camper back to where they were.
+    ('240  the canteen desk writes to the cloud',
+     CASE WHEN to_regprocedure('public.canteen_office_credit(uuid,text,numeric,text,text,text,bigint)') IS NOT NULL
+           AND to_regprocedure('public.canteen_office_cash_out(uuid,text,numeric,text,text,text,bigint)') IS NOT NULL
+           AND to_regprocedure('public.canteen_office_set_limit(uuid,text,numeric,bigint)') IS NOT NULL
+           -- and the credit writer posts a LEDGER row, not just a balance: a
+           -- balance with nothing behind it is erased by the next reconcile.
+           AND b.credit ~ 'canteen_post'
+          THEN 'ok' ELSE 'A DESK DEPOSIT STILL GOES NOWHERE — apply 240' END),
+
+    -- A card attached for auto-reload has to be one the charger can find.
+    -- canteen-auto-reload skips a camper unless autoReload carries byopCustomerRef
+    -- or stripeCustomerId; 234 wrote a paymentMethodId instead, so the parent was
+    -- told the card was on file and the nightly run passed the camper by.
+    ('241  a family card the charger can find',
+     CASE WHEN to_regprocedure('public.verify_family_card_autoreload(uuid)') IS NOT NULL
+           AND b.card ~ 'byopCustomerRef'
+           AND b.card ~ 'camp_family_key_for_person'
+          THEN 'ok' ELSE 'AN ATTACHED FAMILY CARD STILL NEVER RELOADS — apply 241' END)
+    ) AS x(item, result)
+
+UNION ALL
+
   -- ─── 2. what the verifiers found ──────────────────────────────────────────
   -- Facts about your data. Several of these are SUPPOSED to be non-zero — read
   -- the notes in each migration's header. The ones worth acting on are called
@@ -311,7 +376,32 @@ UNION ALL
   SELECT '3 what to do next', r.item, r.result
     FROM (VALUES
     ('orphaned camp data',   public.purge_orphaned_camp_data()::text),
-    ('withdrawn face data',  public.purge_revoked_face_data()::text)
+    ('withdrawn face data',  public.purge_revoked_face_data()::text),
+    -- Not a repair — a count. Every camper here has a parent who believes a card
+    -- is attached for auto-reload and an account that will never reload, because
+    -- 234 wrote a paymentMethodId the charger does not read. Re-attaching is one
+    -- click per family; 241 makes the click work. Nothing is guessed at here
+    -- because which autoReload blocks 234 wrote is not knowable after the fact.
+    -- Every camper here has a parent who believes a card is attached for
+    -- auto-reload and an account that will never reload: 234 wrote a
+    -- paymentMethodId where canteen-auto-reload reads byopCustomerRef or
+    -- stripeCustomerId. Re-attaching is one click per family and 241 makes the
+    -- click work; nothing is guessed at, because which autoReload blocks 234 wrote
+    -- is not knowable after the fact.
+    --
+    -- Counted inline rather than through 241's verifier, for the same
+    -- resolved-at-plan-time reason as the block above.
+    ('family cards that cannot reload',
+     COALESCE((SELECT jsonb_object_agg(c.name, n.bad)
+                 FROM camps c
+                 CROSS JOIN LATERAL (
+                     SELECT count(*) AS bad FROM camp_canteen_accounts a
+                      WHERE a.camp_id = c.id AND a.deleted_at IS NULL
+                        AND COALESCE((a.payload -> 'autoReload' ->> 'enabled')::boolean, false)
+                        AND COALESCE(a.payload -> 'autoReload' ->> 'paymentMethodId', '') <> ''
+                        AND COALESCE(a.payload -> 'autoReload' ->> 'byopCustomerRef', '') = ''
+                        AND COALESCE(a.payload -> 'autoReload' ->> 'stripeCustomerId', '') = '') n
+                WHERE n.bad > 0), '{}'::jsonb)::text)
     ) AS r(item, result)
 
 ORDER BY part, item;
