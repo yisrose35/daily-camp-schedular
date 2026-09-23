@@ -1140,7 +1140,7 @@
 <script src="demo_mode.js?v=20260903-03"></script>
 <script src="config.js?v=20260903-03"></script>
 <script src="supabase-js@2.js?v=20260903-03"></script>
-<script src="campistry_camper_id_rpc.js?v=20260923-04"></script>
+<script src="campistry_camper_id_rpc.js?v=20260923-20"></script>
 <script src="supabase_client.js?v=20260923-02"></script>
 <script src="campistry_security.js?v=20260903-03"></script>
 <script src="campistry_finance_merge.js?v=20260918-10"></script>
@@ -1150,11 +1150,11 @@
 <!-- Branding/watermark renderer — must load BEFORE link_data, which seeds and
      normalizes settings.branding through it on store load. -->
 <script src="campistry_link_branding.js?v=20260903-03"></script>
-<script src="campistry_link_data.js?v=20260903-03"></script>
-<script src="face_match_core.js?v=20260903-03"></script>
+<script src="campistry_link_data.js?v=20260923-20"></script>
+<script src="face_match_core.js?v=20260923-20"></script>
 <script src="campistry_face_shared.js?v=20260903-03"></script>
 <script src="campistry_face_engine_v2.js?v=20260903-03"></script>
-<script src="campistry_link_photos.js?v=20260903-03"></script>
+<script src="campistry_link_photos.js?v=20260923-20"></script>
 <script src="campistry_link_export.js?v=20260903-03"></script>
 <script>
 'use strict';
@@ -1532,7 +1532,7 @@ function renderSentList() {
     }
     el.innerHTML = all.map(function(m) {
         var toLabel = m.to || (m.recipients ? m.recipients.length + ' recipients' : 'All');
-        var camper = (m.metadata && m.metadata.camperName) ? ' · ' + m.metadata.camperName : '';
+        var camper = (m.metadata && m.metadata.camperName) ? ' · ' + (window.campistryName || String)(m.metadata.camperName) : '';
         var preview = (m.body || '').slice(0, 100);
         var isMsg = m.direction === 'out'; // broadcasts live in link_broadcasts, not link_messages — no archive/important/delete there
         var actions = isMsg ?
@@ -1643,7 +1643,7 @@ function _getFsTargets() {
             (scope === 'division' && values.indexOf(c.division) >= 0) ||
             (scope === 'grade'    && values.indexOf(c.grade)    >= 0) ||
             (scope === 'bunk'     && values.indexOf(c.bunk)     >= 0);
-        if (match) out.push({ camperName: name, parentName: c.parentName, parentEmail: c.parentEmail || '', bunk: c.bunk || '', division: c.division || '', grade: c.grade || '', familyName: c.familyName || '' });
+        if (match) out.push({ camperName: name, camperId: c.camperId != null ? c.camperId : null, parentName: c.parentName, parentEmail: c.parentEmail || '', bunk: c.bunk || '', division: c.division || '', grade: c.grade || '', familyName: c.familyName || '' });
     });
     return out;
 }
@@ -2597,7 +2597,7 @@ function _getComposeTargets() {
             entry.children.forEach(function(child) {
                 if (inactive[child.name]) return; // withdrawn/declined — no message
                 targets.push({
-                    camperName:  child.name,
+                    camperName:  child.name, camperId: child.camperId != null ? child.camperId : null,
                     parentName:  entry.parentName,
                     parentEmail: entry.parentEmail || '',
                     parentPhone: entry.parentPhone || '',
@@ -2625,7 +2625,7 @@ function _getComposeTargets() {
             (scope === 'bunk'     && values.indexOf(c.bunk)     >= 0);
         if (!match) return;
         targets.push({
-            camperName:  name,
+            camperName:  name, camperId: c.camperId != null ? c.camperId : null,
             parentName:  c.parentName,
             parentEmail: c.parentEmail || '',
             parentPhone: c.parentPhone || '',
@@ -2659,7 +2659,7 @@ function _buildBusRouteMap() {
 function _applyMergeTags(template, d, busMap) {
     busMap = busMap || {};
     return template
-        .replace(/\{\{child_name\}\}/gi,   d.camperName  || '')
+        .replace(/\{\{child_name\}\}/gi,   ((typeof window !== 'undefined' && window.campistryName) || String)(d.camperName || ''))
         .replace(/\{\{parent_name\}\}/gi,  d.parentName  || '')
         .replace(/\{\{bunk\}\}/gi,         d.bunk        || '(unassigned)')
         .replace(/\{\{division\}\}/gi,     d.division    || '')
@@ -2899,7 +2899,7 @@ async function sendCompose() {
             subject: _applyMergeTags(subj, t, busMap),
             body:    _applyMergeTags(body, t, busMap) + refs,
             channels: compChannels,
-            metadata: { parentEmail: t.parentEmail, camperName: t.camperName, massSend: isGroup, formId: attachFormId || undefined, listId: attachListId || undefined, isFormRequest: attachFormId ? true : undefined }
+            metadata: { parentEmail: t.parentEmail, camperName: t.camperName, camperId: t.camperId != null ? t.camperId : null, massSend: isGroup, formId: attachFormId || undefined, listId: attachListId || undefined, isFormRequest: attachFormId ? true : undefined }
         });
     });
     toast(targets.length + ' message' + (targets.length === 1 ? '' : 's') + ' sent!');
@@ -2968,7 +2968,7 @@ function _resolveTargetsFor(scope, values, individualNames, audience, session) {
             entry.children.forEach(function(child) {
                 if (inactive[child.name]) return;
                 targets.push({
-                    camperName: child.name, parentName: entry.parentName,
+                    camperName: child.name, camperId: child.camperId != null ? child.camperId : null, parentName: entry.parentName,
                     parentEmail: entry.parentEmail || '', parentPhone: entry.parentPhone || '',
                     smsEmailConsent: !!child.smsEmailConsent,
                     bunk: child.bunk || '', division: child.division || '', grade: child.grade || '',
@@ -2990,7 +2990,7 @@ function _resolveTargetsFor(scope, values, individualNames, audience, session) {
             (scope === 'bunk'     && values.indexOf(c.bunk)     >= 0);
         if (!match) return;
         targets.push({
-            camperName: name, parentName: c.parentName,
+            camperName: name, camperId: c.camperId != null ? c.camperId : null, parentName: c.parentName,
             parentEmail: c.parentEmail || '', parentPhone: c.parentPhone || '',
             smsEmailConsent: !!c.smsEmailConsent,
             bunk: c.bunk || '', division: c.division || '', grade: c.grade || '',
@@ -3027,7 +3027,7 @@ function _deliverScheduledBroadcast(rec) {
             subject: _applyMergeTags(rec.subject, t, busMap),
             body:    _applyMergeTags(rec.body, t, busMap),
             channels: rec.channels || ['app'],
-            metadata: { parentEmail: t.parentEmail, camperName: t.camperName, massSend: isGroup, scheduledBroadcast: rec.id }
+            metadata: { parentEmail: t.parentEmail, camperName: t.camperName, camperId: t.camperId != null ? t.camperId : null, massSend: isGroup, scheduledBroadcast: rec.id }
         });
     });
     return targets.length;
@@ -3130,7 +3130,7 @@ function sendTestToMe() {
     var snap = _getComposeScopeSnapshot();
     var targets = _resolveTargetsFor(snap.scope, snap.values, snap.individualNames);
     var sample = targets[0] || {
-        camperName: 'Sample Camper', parentName: 'Sample Parent', bunk: 'B3',
+        camperName: 'Sample Camper', parentName: 'Sample Parent', bunk: 'B3', // name-ok: a sample for a test message
         division: 'Seniors', grade: '8', familyName: 'Sample Family'
     };
     var busMap = _buildBusRouteMap();
@@ -3318,7 +3318,7 @@ function renderAdminMsgs(filter) {
     c.innerHTML = '';
     list.forEach(function(m) {
         var from   = m.from || 'Parent';
-        var camper = (m.metadata && m.metadata.camperName) ? ' · ' + m.metadata.camperName : '';
+        var camper = (m.metadata && m.metadata.camperName) ? ' · ' + (window.campistryName || String)(m.metadata.camperName) : '';
         var preview = (m.body || '').slice(0, 80);
         var id = esc(m.id);
         c.innerHTML += '<div class="msg-swipe" style="--msg-actions-w:210px;">' +

@@ -367,7 +367,9 @@
                     if (tpl) { templates[model] = tpl; if (!bestModel || model !== 'faceapi-128') bestModel = model; }
                 });
                 if (Object.keys(templates).length) {
-                    var entry = { name: name, templates: templates };
+                    // The child's number (258's face index carries it): what a
+                    // tag is filed under, whatever the name says.
+                    var entry = { name: name, camperId: faces[i].person_id != null ? faces[i].person_id : null, templates: templates };
                     var div = roster[name] && roster[name].division;
                     if (div && strictDivs.indexOf(div) >= 0) entry.strict = true;
                     if (siblingSet[name]) { entry.strict = true; entry.sibling = true; }
@@ -378,7 +380,7 @@
                     if (div2.narrow) _store.narrowGalleries.push(name);
                     entry.narrow = div2.narrow;
                     _camperTemplates.push(entry);
-                    _store.faceIndex[name] = { descriptors: descList, updatedAt: new Date().toISOString() };
+                    _store.faceIndex[name] = { descriptors: descList, camperId: entry.camperId, updatedAt: new Date().toISOString() };
                     indexed++;
                 } else {
                     skipped++;
@@ -457,7 +459,7 @@
                 if (tpl) templates[model] = tpl;
             });
             if (Object.keys(templates).length) {
-                var entry = { name: name, templates: templates };
+                var entry = { name: name, camperId: data.camperId != null ? data.camperId : null, templates: templates };
                 var div = roster[name] && roster[name].division;
                 if (div && strictDivs.indexOf(div) >= 0) entry.strict = true;
                 if (siblingSet[name]) { entry.strict = true; entry.sibling = true; }
@@ -603,7 +605,7 @@
             var prof = core.MODEL_PROFILES[a.model] || {};
             var confidence = Math.round(core.confidenceFor(a.dist, prof) * 100) / 100;
             var rec = {
-                camperName: a.camperName,
+                camperName: a.camperName, camperId: a.camperId != null ? a.camperId : null,
                 confidence: confidence,
                 dist: a.dist,
                 model: a.model,
@@ -611,7 +613,7 @@
             };
             if (a.status === 'auto') {
                 matches.push(rec);
-                routed.push({ faceId: a.faceId, camperName: a.camperName, status: 'auto' });
+                routed.push({ faceId: a.faceId, camperName: a.camperName, camperId: a.camperId != null ? a.camperId : null, status: 'auto' });
                 return;
             }
             // review band → owner dials decide; strict (youngest) campers need
@@ -625,7 +627,7 @@
                 rec.autoAccepted = true;
                 matches.push(rec);
                 _store.stats.autoAccepted++;
-                routed.push({ faceId: a.faceId, camperName: a.camperName, status: 'accept' });
+                routed.push({ faceId: a.faceId, camperName: a.camperName, camperId: a.camperId != null ? a.camperId : null, status: 'accept' });
             } else if (route === 'reject') {
                 rejected++;
                 _store.stats.autoRejected++;
@@ -633,7 +635,7 @@
                 rec.faceThumb = f ? f.thumb : null;
                 rec.descriptors = f ? f.descriptors : null;  // kept for promote-on-approve
                 pending.push(rec);
-                routed.push({ faceId: a.faceId, camperName: a.camperName, status: 'review' });
+                routed.push({ faceId: a.faceId, camperName: a.camperName, camperId: a.camperId != null ? a.camperId : null, status: 'review' });
             }
         });
 
@@ -810,7 +812,7 @@
                             // (camp uniforms make clothing ambiguous between kids)
                             if (s.result.pending.some(function(p) { return p.camperName === x.camperName; })) return;
                             s.result.pending.push({
-                                camperName: x.camperName,
+                                camperName: x.camperName, camperId: x.camperId != null ? x.camperId : null,
                                 confidence: x.torsoSim != null ? Math.round(x.torsoSim * 0.4 * 100) / 100 : 0.2,
                                 model: null, via: 'torso',
                                 faceThumb: xf ? xf.thumb : null,
@@ -820,7 +822,7 @@
                         }
                         var prof = core.MODEL_PROFILES[x.model] || {};
                         s.result.matches.push({
-                            camperName: x.camperName,
+                            camperName: x.camperName, camperId: x.camperId != null ? x.camperId : null,
                             confidence: Math.round(core.confidenceFor(x.dist, prof) * 100) / 100,
                             dist: x.dist, model: x.model,
                             autoAccepted: true, via: 'burst'
@@ -1078,7 +1080,7 @@
                     photoId: p.id,
                     photoThumb: p.dataUrl,
                     uploadDate: p.uploadDate,
-                    camperName: t.camperName,
+                    camperName: t.camperName, camperId: t.camperId != null ? t.camperId : null,
                     confidence: t.confidence,
                     model: t.model,
                     faceThumb: t.faceThumb || null
@@ -1132,7 +1134,7 @@
         var db = _db();
         if (approve) {
             photo.tags.push({
-                camperName: tag.camperName, confidence: tag.confidence,
+                camperName: tag.camperName, camperId: tag.camperId != null ? tag.camperId : null, confidence: tag.confidence,
                 dist: tag.dist, model: tag.model, box: tag.box, confirmed: true
             });
             // grow the camper's descriptor gallery from the confirmed face
@@ -1185,7 +1187,7 @@
                 var route = core.routeConfidence(tag.confidence, dials);
                 if (route === 'accept') {
                     photo.tags.push({
-                        camperName: tag.camperName, confidence: tag.confidence,
+                        camperName: tag.camperName, camperId: tag.camperId != null ? tag.camperId : null, confidence: tag.confidence,
                         dist: tag.dist, model: tag.model, box: tag.box, autoAccepted: true
                     });
                     accepted++; _store.stats.autoAccepted++;
@@ -1274,7 +1276,8 @@
         // Avoid duplicates
         if (photo.tags.some(function(t) { return t.camperName === camperName; })) return false;
         if (photo.manualTags.some(function(t) { return t.camperName === camperName; })) return false;
-        photo.manualTags.push({ camperName: camperName, confidence: 1.0, manual: true });
+        var camperId = window.campistryCamperId ? window.campistryCamperId(camperName) : null;
+        photo.manualTags.push({ camperName: camperName, camperId: camperId, confidence: 1.0, manual: true });
         saveStore();
         return true;
     }
@@ -1410,16 +1413,18 @@
             var photos = getPhotosForCamper(camperName, weekKey);
             if (!photos.length) return;
 
-            var firstName = camperName.split(' ')[0];
+            // The words a parent reads: never the roster's internal "#number".
+            var shownName = (window.campistryName || String)(camperName);
+            var firstName = shownName.split(' ')[0];
             var parentFirst = (info.parentName || '').split(' ')[0];
 
             var resolvedSubject = subject
-                .replace(/{camperName}/g, camperName)
+                .replace(/{camperName}/g, shownName)
                 .replace(/{camperFirstName}/g, firstName)
                 .replace(/{parentName}/g, info.parentName || 'Parent');
 
             var resolvedBody = bodyTemplate
-                .replace(/{camperName}/g, camperName)
+                .replace(/{camperName}/g, shownName)
                 .replace(/{camperFirstName}/g, firstName)
                 .replace(/{parentName}/g, info.parentName || 'Parent')
                 .replace(/{parentFirstName}/g, parentFirst)
@@ -1428,7 +1433,7 @@
                 .replace(/{campName}/g, campName);
 
             notifications.push({
-                camperName: camperName,
+                camperName: camperName, camperId: info.camperId != null ? info.camperId : null,
                 parentName: info.parentName,
                 parentEmail: info.parentEmail,
                 parentPhone: info.parentPhone,

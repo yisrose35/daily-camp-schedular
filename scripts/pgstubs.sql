@@ -418,3 +418,17 @@ CREATE TABLE IF NOT EXISTS public.link_tips (
     stripe_payment_intent_id text, fee_amount numeric(8,2),
     staff_account_id uuid, stripe_transfer_id text,
     created_at timestamptz NOT NULL DEFAULT now());
+
+-- Supabase Storage, as far as 080 (the camp-photos bucket and its policies)
+-- touches it: a bucket row, an objects table to hang policies on, and the
+-- helper that splits an object path.
+CREATE SCHEMA IF NOT EXISTS storage;
+CREATE TABLE IF NOT EXISTS storage.buckets (
+    id text PRIMARY KEY, name text NOT NULL, public boolean DEFAULT false,
+    file_size_limit bigint, allowed_mime_types text[]);
+CREATE TABLE IF NOT EXISTS storage.objects (
+    id uuid PRIMARY KEY DEFAULT gen_random_uuid(), bucket_id text, name text,
+    owner uuid, created_at timestamptz DEFAULT now(), metadata jsonb);
+ALTER TABLE storage.objects ENABLE ROW LEVEL SECURITY;
+CREATE OR REPLACE FUNCTION storage.foldername(name text) RETURNS text[]
+LANGUAGE sql IMMUTABLE AS $$ SELECT (string_to_array(name, '/'))[1:array_length(string_to_array(name, '/'), 1) - 1] $$;

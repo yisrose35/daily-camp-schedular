@@ -14,15 +14,17 @@ every number here is zero.
 - **The canteen** finds a camper's account by number on the Snacks page, so a rename no longer shows an empty account.
 - `scripts/verify_identity_chain.sql` checks all of this on the live database.
 
-## What is still by name: 559 places
+## What is still by name: 469 places
+
+Not counted: 13 places where a name is not how a camper is identified (a lead who is not a camper yet, a sample, the words of a message). Each is marked `// name-ok:` in the code with its reason.
 
 | # | Kind | Places | Files |
 |---|---|---|---|
-| 1 | Pages: Records saved with a camper name and no number | 79 | 25 |
-| 2 | Pages: Enrollments tied to a camper by name | 33 | 10 |
+| 1 | Pages: Records saved with a camper name and no number | 0 | 0 |
+| 2 | Pages: Enrollments tied to a camper by name | 32 | 10 |
 | 3 | Pages: Family membership listed by name | 71 | 5 |
 | 4 | Pages: Bunk lists of names | 53 | 6 |
-| 5 | Pages: Roster looked up by name | 189 | 16 |
+| 5 | Pages: Roster looked up by name | 179 | 17 |
 | 6 | Edge functions: a camper named without their number | 130 | 28 |
 | 7 | Database: storage keyed by a camper's name | 4 | — |
 
@@ -30,39 +32,13 @@ every number here is zero.
 
 Each step is safe on its own and leaves the app working. The order is by risk: money and records first, the roster key last, because everything else must stop depending on it before it can change.
 
-### 1. Records saved with a camper name and no number (79)
+### 1. Records saved with a camper name and no number (0)
 
 A record (health log, message, order…) that carries only a name is matched to a camper later by that name. It should carry camperId from the moment it is written.
 
-| File | Places |
-|---|---|
-| `campistry_link_photos.js` | 11 |
-| `campistry_link_admin.html` | 10 |
-| `campistry_link_parent.html` | 10 |
-| `campistry_me.js` | 10 |
-| `face_match_core.js` | 7 |
-| `campistry_link_data.js` | 4 |
-| `campistry_card_setup.html` | 3 |
-| `campistry_lite.js` | 3 |
-| `campistry_presence.js` | 2 |
-| `campistry_register.html` | 2 |
-| `campistry_sibling_discount.js` | 2 |
-| `campistry_tax_statement.js` | 2 |
-| `campistry_bus_routes.js` | 1 |
-| `campistry_enrollment_window.js` | 1 |
-| `campistry_go_luggage.js` | 1 |
-| `campistry_go_neighborhoods.js` | 1 |
-| `campistry_health.js` | 1 |
-| `campistry_inquiry.html` | 1 |
-| `campistry_live_locator.js` | 1 |
-| `campistry_luggage_core.js` | 1 |
-| `campistry_postaccept.html` | 1 |
-| `campistry_session_transfer.js` | 1 |
-| `campistry_snacks.js` | 1 |
-| `campistry_snacks_pos.js` | 1 |
-| `campistry_snacks_shop.js` | 1 |
+None left.
 
-### 2. Enrollments tied to a camper by name (33)
+### 2. Enrollments tied to a camper by name (32)
 
 An enrollment finds its camper by comparing camperName. Billing and the family ledger hang off this.
 
@@ -72,9 +48,9 @@ An enrollment finds its camper by comparing camperName. Billing and the family l
 | `campistry_link_parent.html` | 7 |
 | `campistry_me.js` | 6 |
 | `campistry_go_neighborhoods.js` | 3 |
-| `campistry_link_data.js` | 2 |
 | `campistry_go.js` | 1 |
 | `campistry_go_luggage.js` | 1 |
+| `campistry_link_data.js` | 1 |
 | `campistry_live.html` | 1 |
 | `campistry_snacks_pos.js` | 1 |
 | `campistry_snacks_shop.js` | 1 |
@@ -104,27 +80,28 @@ Bunk Builder keeps each bunk as a list of names.
 | `total_solver_engine.js` | 2 |
 | `integration_hooks.js` | 1 |
 
-### 5. Roster looked up by name (189)
+### 5. Roster looked up by name (179)
 
 The roster itself is keyed by the camper's roster key. Everything else can move to numbers first; re-keying the roster is the last step.
 
 | File | Places |
 |---|---|
-| `campistry_me.js` | 138 |
+| `campistry_me.js` | 129 |
 | `campistry_health.js` | 12 |
-| `campistry_go.js` | 9 |
+| `campistry_go.js` | 7 |
 | `campistry_live.html` | 5 |
-| `campistry_snacks.js` | 5 |
 | `campistry_link_photos.js` | 4 |
 | `campistry_lite.js` | 4 |
+| `campistry_snacks.js` | 4 |
 | `camper_locator.js` | 2 |
+| `campistry_enrollment_window.js` | 2 |
 | `campistry_link_data.js` | 2 |
 | `campistry_live_locator.js` | 2 |
 | `campistry_birthdays.js` | 1 |
 | `campistry_camper_identity.js` | 1 |
 | `campistry_deposits_ui.js` | 1 |
-| `campistry_enrollment_window.js` | 1 |
 | `campistry_live.js` | 1 |
+| `campistry_presence.js` | 1 |
 | `scheduler_core_leagues.js` | 1 |
 
 ### 6. Edge functions: a camper named without their number (130)

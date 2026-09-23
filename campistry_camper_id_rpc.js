@@ -217,6 +217,18 @@
     function displayName(s) { return String(s == null ? '' : s).replace(/\s#\d+(?:-\d+)?$/, ''); }
     window.campistryName = displayName;
 
+    // The number of the camper a page holds by roster key, or null — for a
+    // page writing a record that should carry it. Only an answer the page
+    // already has (the staff roster); never waits, never guesses.
+    function camperIdOf(name, campId) {
+        var n = String(name == null ? '' : name).trim();
+        if (!n || typeof window.__camperIdResolve !== 'function') return null;
+        var r = null;
+        try { r = window.__camperIdResolve(campId || null, n); } catch (_) { r = null; }
+        return (r && typeof r.then !== 'function' && isId(r)) ? Number(r) : null;
+    }
+    window.campistryCamperId = camperIdOf;
+
     window.CampistryCamperIdRpc = { wrap: wrap, wrapFetch: wrapFetch, wrapFrom: wrapFrom, stampRow: stampRow, stampDoc: stampDoc, camperNameIn: camperNameIn, isId: isId };
 
     // Loaded AFTER the staff client was created (a page that loads

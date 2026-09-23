@@ -1931,7 +1931,9 @@ window.refundCanteenDeposit = async function() {
     const fnName = processorKey === 'stripe' ? 'stripe-canteen-refund' : 'payments-canteen-refund';
     if (warn) warn.style.display = 'none';
     if (btn) { btn.disabled = true; btn.textContent = 'Refunding…'; }
-    client.functions.invoke(fnName, { body: { camperName: name, amount: amount } })
+    const _rc = getRoster()[name];
+    const _rcid = _rc && /^\d+$/.test(String(_rc.camperId == null ? '' : _rc.camperId)) ? Number(_rc.camperId) : undefined;
+    client.functions.invoke(fnName, { body: { camperName: name, camperId: _rcid, amount: amount } })
         .then(async function(res) {
             if (btn) { btn.disabled = false; btn.textContent = 'Refund'; }
             var data = res && res.data;

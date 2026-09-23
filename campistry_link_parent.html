@@ -1008,6 +1008,10 @@
 
 var parent = { name: '', email: '' };
 var children = [];
+// A child's camper number, or null. `id` on a child is its place in this list
+// ("child_0") — never a camper number; `camperId` is, from the camp's own data
+// or the numbers on this parent's invitations (get_my_camper_ids, 249).
+function _numOrNull(v){ return (v!=null && /^\d+$/.test(String(v))) ? Number(v) : null; }
 var messages = [];
 var payments = [];
 var canteenTxByChild = {};
@@ -1205,6 +1209,7 @@ function _lkCardSetupUrl(cid,opts){
     if(opts.familyKey)  q.push('familyKey='+encodeURIComponent(opts.familyKey));
     if(opts.familyName) q.push('familyName='+encodeURIComponent(opts.familyName));
     if(opts.camperName) q.push('camperName='+encodeURIComponent(opts.camperName));
+    if(opts.camperId!=null&&/^\d+$/.test(String(opts.camperId))) q.push('camperId='+encodeURIComponent(opts.camperId));
     if(opts.amount)     q.push('amount='+encodeURIComponent(opts.amount));
     if(opts.desc)       q.push('desc='+encodeURIComponent(opts.desc));
     if(opts.save)       q.push('mode=save');
@@ -2190,7 +2195,7 @@ async function addFunds(){
         var addBtn=document.getElementById('canteenAddBtn');
         if(addBtn){addBtn.disabled=true;addBtn.textContent='Opening secure checkout…';}
         try{
-            var ckRes2=await _lkCallEdge('cardknox-checkout-start',{campId:c.campId,kind:'canteen_deposit',camperName:c.name,amount:amt,description:'Canteen funds — '+(window.campistryName||String)(c.name)});
+            var ckRes2=await _lkCallEdge('cardknox-checkout-start',{campId:c.campId,kind:'canteen_deposit',camperName:c.name,camperId:c.camperId,amount:amt,description:'Canteen funds — '+(window.campistryName||String)(c.name)});
             _lkGoToCheckout(ckRes2.url);
         }catch(err){ toast('Could not start checkout: '+(err&&err.message||'error')); if(addBtn){addBtn.disabled=false;addBtn.textContent='Add Funds';} }
         return;
@@ -2199,7 +2204,7 @@ async function addFunds(){
     // charges the card and credits the canteen balance.
     if(processorKey==='banquest'){
         _lkGoToCheckout(_lkCardSetupUrl(c.campId,{
-            camperName:c.name, amount:amt, desc:'Canteen funds — '+(window.campistryName||String)(c.name),
+            camperName:c.name, camperId:c.camperId, amount:amt, desc:'Canteen funds — '+(window.campistryName||String)(c.name),
             returnUrl:_lkReturnUrl('success','canteen')
         }));
         return;
@@ -2213,7 +2218,7 @@ async function addFunds(){
     try{
         var email=(parent&&parent.email)||'';
         var res=await _lkCheckout({
-            campId:c.campId, camperName:c.name, amount:amt, email:email,
+            campId:c.campId, camperName:c.name, camperId:c.camperId, amount:amt, email:email,
             description:'Canteen funds — '+(window.campistryName||String)(c.name),
             source:'campistry-canteen-deposit',
             successUrl:_lkReturnUrl('success','canteen'),
@@ -2327,7 +2332,7 @@ function _lkCanteenChargeSaved(){
         _lkChargeBusy=true;
         try{
             toast('Charging your card…');
-            var res=await _lkCallEdgeAuthed('charge-saved-card',{campId:c.campId,kind:'canteen_deposit',camperName:c.name,amount:amt,idempotencyKey:'can_'+c.campId+'_'+c.id+'_'+Date.now()+'_'+Math.random().toString(36).slice(2,8)});
+            var res=await _lkCallEdgeAuthed('charge-saved-card',{campId:c.campId,kind:'canteen_deposit',camperName:c.name,camperId:c.camperId,amount:amt,idempotencyKey:'can_'+c.campId+'_'+c.id+'_'+Date.now()+'_'+Math.random().toString(36).slice(2,8)});
             toast('Charged '+_lkMoney(res.amount)+' — thank you!');
             // Refreshing the on-screen balance is best-effort — the charge
             // already succeeded and was toasted above, so a failure here
@@ -2777,7 +2782,7 @@ async function _startCanteenAutoReloadCheckout(c){
     if(processorKey==='cardknox'){
         try{
             toast('Opening secure checkout…');
-            var ckRes=await _lkCallEdge('cardknox-checkout-start',{campId:c.campId,kind:'canteen_autoreload_setup',camperName:c.name,description:'Save a card for auto-reload — '+(window.campistryName||String)(c.name)});
+            var ckRes=await _lkCallEdge('cardknox-checkout-start',{campId:c.campId,kind:'canteen_autoreload_setup',camperName:c.name,camperId:c.camperId,description:'Save a card for auto-reload — '+(window.campistryName||String)(c.name)});
             _lkGoToCheckout(ckRes.url);
         }catch(err){ console.error('[Parent] canteen auto-reload cardknox setup error:',err); toast('Could not start setup: '+(err&&err.message||'error')); }
         return;
@@ -2787,7 +2792,7 @@ async function _startCanteenAutoReloadCheckout(c){
         // no amount, so it saves rather than charges); payments-save-method
         // puts the token on this camper's autoReload block.
         _lkGoToCheckout(_lkCardSetupUrl(c.campId,{
-            camperName:c.name, save:true,
+            camperName:c.name, camperId:c.camperId, save:true,
             returnUrl:_lkReturnUrl('success','canteen-autoreload')
         }));
         return;
@@ -2803,7 +2808,7 @@ async function _startCanteenAutoReloadCheckout(c){
         var s=_lkSupa(); if(!s.url) throw new Error('Payments are not set up for this camp yet.');
         var resp=await fetch(s.url+'/functions/v1/stripe-canteen-autoreload-setup',{method:'POST',headers:{'Content-Type':'application/json','Authorization':'Bearer '+(s.anonKey||''),'apikey':s.anonKey||''},body:JSON.stringify({
             campId:c.campId,
-            camperName:c.name,
+            camperName:c.name, camperId:c.camperId,
             email:(parent&&parent.email)||undefined,
             successUrl:_lkReturnUrl('success','canteen-autoreload'),
             cancelUrl:_lkReturnUrl('cancelled','canteen-autoreload')
@@ -3024,7 +3029,7 @@ function handleFormReturn(rowId,camperName,formName,input,formId){
         if (window._submitFormResponseCloud) {
             window._submitFormResponseCloud({
                 formId: formId||rowId, formName: formName, mode: 'upload',
-                camperName: camperName, camperId: child.id||'',
+                camperName: camperName, camperId: child.camperId!=null?child.camperId:'',
                 answers: { 'File': file.name },
                 fileName: file.name, fileData: fileDataUrl,
                 division: child.division||'', grade: child.grade||'', bunk: child.bunk||''
@@ -4965,12 +4970,12 @@ window.addEventListener('storage', function(e) {
 <script src="campistry_keyboard.js?v=20260909-01"></script>
 <script src="campistry_notes_quick.js?v=20260909-01"></script>
 <script src="campistry_link_capacitor.js?v=20260909-01"></script>
-<script src="face_match_core.js?v=20260909-01"></script>
+<script src="face_match_core.js?v=20260923-20"></script>
 <script src="campistry_face_shared.js?v=20260909-01"></script>
 <script src="campistry_face_engine_v2.js?v=20260909-01"></script>
 <script src="supabase-js@2.js?v=20260909-01"></script>
 <script>window.CAMPISTRY_INBOUND_DOMAIN=window.CAMPISTRY_INBOUND_DOMAIN||'inbound.campistry.org';</script>
-<script src="campistry_camper_id_rpc.js?v=20260923-04"></script>
+<script src="campistry_camper_id_rpc.js?v=20260923-20"></script>
 <script src="config.js?v=20260909-01"></script>
 <!-- pdf-lib + pdf.js (vendored) — fill-in-browser + stamp/flatten for PDF
      Forms (Forms & Documents → Complete Online → a sourceType:'pdf' form). -->
@@ -5034,6 +5039,19 @@ if (window.pdfjsLib) { window.pdfjsLib.GlobalWorkerOptions.workerSrc = 'pdfjs-di
             }, function () { mapP = null; return { byCamp: {}, byName: {} }; });
             return mapP;
         }
+        // Every child on screen learns their number as soon as it is known —
+        // called again whenever the list of children is rebuilt.
+        window._stampChildIds = function () {
+            return load().then(function (m) {
+                (children || []).forEach(function (ch) {
+                    if (!ch || ch.camperId != null) return;
+                    var k = String(ch.campId || '') + '|' + ch.name;
+                    var id = (ch.campId && k in m.byCamp) ? m.byCamp[k] : m.byName[ch.name];
+                    if (id != null) ch.camperId = _numOrNull(id);
+                });
+            });
+        };
+        window._stampChildIds();
         var resolve = function (campId, name) {
             return load().then(function (m) {
                 var k = String(campId || '') + '|' + name;
@@ -5055,7 +5073,10 @@ if (window.pdfjsLib) { window.pdfjsLib.GlobalWorkerOptions.workerSrc = 'pdfjs-di
     var _cloudSubs = []; // [{form_id, camper_name, ...}] — my submissions from the cloud
     window._submitFormResponseCloud = function(p, done) {
         // Multi-camp: scope to the camper's own camp (falls back to primary).
-        var _fc=(typeof children!=='undefined')?children.find(function(k){return k.name===(p.camperName||'')||String(k.campersId||k.id)===String(p.camperId||'');}):null;
+        var _pid=_numOrNull(p.camperId);
+        var _fc=(typeof children!=='undefined')?(_pid!=null
+            ? children.find(function(k){return k.camperId===_pid;})
+            : children.find(function(k){return k.name===(p.camperName||'');})):null;
         var _fcamp=(_fc&&_fc.campId)||((typeof parent!=='undefined'&&parent)?parent.campId:null);
         var _formArgs={
             p_form_id:     p.formId || '',
@@ -5437,6 +5458,7 @@ if (window.pdfjsLib) { window.pdfjsLib.GlobalWorkerOptions.workerSrc = 'pdfjs-di
             if (c.parent2Name)   ec.push({name:c.parent2Name,   rel:'Parent',                    phone:c.parent2Phone||''});
             return {
                 id:'child_'+idx, name:name, initials:initials, age:age,
+                camperId:_numOrNull(c.camperId),
                 campId:d.camp_id||null, campName:'',   // multi-camp: which camp this kid is at
                 division:c.division||'', grade:c.grade||'', bunk:c.bunk||'',
                 session:c.session||'', counselor:c.counselor||'', staff:c.staff||[], teacher:c.teacher||'',
@@ -5447,6 +5469,7 @@ if (window.pdfjsLib) { window.pdfjsLib.GlobalWorkerOptions.workerSrc = 'pdfjs-di
             };
         });
         console.log('[Parent] Children built:', realChildren.length);
+        setTimeout(function(){ if (window._stampChildIds) window._stampChildIds(); }, 0);
         if (realChildren.length) {
             children = realChildren;
             var newTx = {}; realChildren.forEach(function(c){newTx[c.id]=[];}); canteenTxByChild = newTx;
@@ -5571,6 +5594,7 @@ if (window.pdfjsLib) { window.pdfjsLib.GlobalWorkerOptions.workerSrc = 'pdfjs-di
                     if (c.parent2Name)   ec.push({name:c.parent2Name,   rel:'Parent',                    phone:c.parent2Phone||''});
                     children.push({
                         id:'child_'+children.length, name:name, initials:initials, age:age,
+                        camperId:_numOrNull(c.camperId),
                         campId:cp.camp_id, campName:cp.camp_name||'', campIsCurrent:cp.isCurrent,
                         division:c.division||'', grade:c.grade||'', bunk:c.bunk||'',
                         session:c.session||'', counselor:c.counselor||'', staff:c.staff||[], teacher:c.teacher||'',
@@ -5589,6 +5613,7 @@ if (window.pdfjsLib) { window.pdfjsLib.GlobalWorkerOptions.workerSrc = 'pdfjs-di
                 var kids = children.filter(function(c){ return c.campId === cp.camp_id; });
                 if (kids.length) _syncCanteenFromCloud(kids, cp.camp_id);
             });
+            if (window._stampChildIds) window._stampChildIds();
             init(); // rebuild every child-tab list now that all camps are in
             initPickupTabs(); // init() doesn't touch the pickup forms' own tab rows
             _afterMergeReloadCloud();
@@ -7378,7 +7403,7 @@ function _copyTip(text) {
 
 function openTipSheet(name, role, suggested) {
     var child = _activeTipChild();
-    _tipTarget = { name: name, role: role, campId: child ? child.campId : null, camperName: child ? child.name : null };
+    _tipTarget = { name: name, role: role, campId: child ? child.campId : null, camperName: child ? child.name : null, camperId: child ? child.camperId : null };
     document.getElementById('tipsSheetTitle').textContent = 'Tip ' + name;
     document.getElementById('tipsSheetSub').textContent = role;
     suggested = parseInt(suggested, 10) || 0;
@@ -7487,7 +7512,7 @@ function addTipToCart() {
     window._tipCart[_tipTarget.accountId] = {
         accountId: _tipTarget.accountId, campId: _tipTarget.campId,
         name: _tipTarget.name, role: _tipTarget.role,
-        camperName: _tipTarget.camperName, amount: amt
+        camperName: _tipTarget.camperName, camperId: _tipTarget.camperId, amount: amt
     };
     toast('Added $' + amt.toFixed(2) + ' for ' + _tipTarget.name);
     closeTipSheet();
@@ -7602,7 +7627,7 @@ async function payTipCart() {
             headers: { 'Content-Type': 'application/json', 'Authorization': 'Bearer ' + token, 'apikey': s.anonKey || '' },
             body: JSON.stringify({
                 items: t.entries.map(function(e) {
-                    return { campId: e.campId, accountId: e.accountId, tipAmount: e.amount, camperName: e.camperName };
+                    return { campId: e.campId, accountId: e.accountId, tipAmount: e.amount, camperName: e.camperName, camperId: e.camperId };
                 }),
                 parentName: pName, parentEmail: pEmail
             }),

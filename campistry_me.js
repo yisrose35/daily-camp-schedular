@@ -192,7 +192,7 @@ function _hereToday(name){
     var W=_presenceAPI();
     if(!W)return true;
     _freshSessions();
-    return W.presenceOf({camperName:name,enrollments:enrollments,sessions:sessions,
+    return W.presenceOf({camperName:name,camperId:_camperIdOf(name),enrollments:enrollments,sessions:sessions,
                          roster:roster,on:W.today()}).state==='active';
 }
 /** True only when some session has dates, i.e. when presence can mean anything. */
@@ -2852,7 +2852,7 @@ function _planRows(ledgers){
         out.push({
             key:fk+'|'+eid, famKey:fk, eid:eid,
             famName:((ledgers[fk].family||{}).name)||fk,
-            camperName:_camperLabel(e.camperName||''),
+            camperName:_camperLabel(e.camperName||''),camperId:e.camperId!=null?e.camperId:null,
             name:(((ledgers[fk].family||{}).name)||fk)+' \u2014 '+_camperLabel(e.camperName||''),
             schedule:e.installments
         });
@@ -3681,7 +3681,8 @@ function _famAddr(street, city, state, zip){
     return [street, city, state, zip].join(' ').toLowerCase().replace(/[^a-z0-9]/g, '');
 }
 function _famItemRaw(name, street, city, state, zip, parentName, parentEmail){
-    var parts = (name || '').trim().split(/\s+/);
+    // The surname of the name a person reads — never the "#702" of a roster key.
+    var parts = String(name || '').trim().replace(/\s#\d+(?:-\d+)?$/, '').split(/\s+/);
     var lastName = parts.length > 1 ? parts[parts.length - 1] : '';
     return {
         name: name, lastName: lastName, last: lastName.toLowerCase(),
@@ -9945,7 +9946,7 @@ function addLead(){
         var name=document.getElementById('ldN').value.trim();
         if(!name){toast('Enter a parent name','error');return;}
         var id='lead_'+Date.now()+'_'+Math.random().toString(36).slice(2,6);
-        leads[id]={parentName:name,email:document.getElementById('ldE').value.trim(),phone:document.getElementById('ldP').value.trim(),camperName:document.getElementById('ldC').value.trim(),camperGrade:document.getElementById('ldG').value.trim(),interests:document.getElementById('ldI').value.trim(),source:document.getElementById('ldS').value.trim()||'Manual',status:'new',createdDate:today(),createdAt:new Date().toISOString(),notes:'',activity:[]};
+        leads[id]={parentName:name,email:document.getElementById('ldE').value.trim(),phone:document.getElementById('ldP').value.trim(),camperName:document.getElementById('ldC').value.trim(),camperGrade:document.getElementById('ldG').value.trim(),interests:document.getElementById('ldI').value.trim(),source:document.getElementById('ldS').value.trim()||'Manual',status:'new',createdDate:today(),createdAt:new Date().toISOString(),notes:'',activity:[]}; // name-ok: a lead, not a camper yet
         save();closeModal('dynModal');renderLeads();toast('Lead added');
     });
 }
@@ -11106,7 +11107,7 @@ function _pktRenderPreview(){
     var sampleMemo=(_pktSettings&&_pktSettings.campNumber)?(String(_pktSettings.campNumber).replace(/\D/g,'')+'-2087'):'1234-2087';
     var mailAddr=p.camperMail.address||_defaultMailAddr()||('letters+yourcamp@'+(window.CAMPISTRY_INBOUND_DOMAIN||'inbound.campistry.org'));
     var formUrl=window.location.origin+'/campistry_postaccept.html?id=SAMPLE&camp='+encodeURIComponent((window.getCampId?getCampId():'')||'');
-    var body=_composeBodyFromParts(p,{camperName:sampleName,formUrl:formUrl,memo:sampleMemo,mailAddr:mailAddr});
+    var body=_composeBodyFromParts(p,{camperName:sampleName,formUrl:formUrl,memo:sampleMemo,mailAddr:mailAddr}); // name-ok: a sample
     var branding=(typeof _getLinkBranding==='function')?_getLinkBranding():{};
     _pktPreviewHtml=(window.LinkBranding&&window.LinkBranding.buildEmailHtml)
       ? window.LinkBranding.buildEmailHtml({subject:subject,body:body,branding:branding,campName:campName||'Your Camp'})
@@ -13388,7 +13389,7 @@ function _composeBodyFromParts(p,parts){
 function _composeAcceptanceBody(id){
     var e=enrollments[id]||{}; var p=getAcceptancePacketConfig();
     var addr=(p.camperMail&&(p.camperMail.address||'').trim())||_defaultMailAddr();
-    return _composeBodyFromParts(p,{camperName:e.camperName||'your camper',formUrl:_postAcceptUrl(id),memo:_acceptanceMemo(e),mailAddr:addr});
+    return _composeBodyFromParts(p,{camperName:_lbl(e.camperName||'')||'your camper',formUrl:_postAcceptUrl(id),memo:_acceptanceMemo(e),mailAddr:addr}); // name-ok: the words of an email
 }
 function _acceptanceSubject(id){
     var e=enrollments[id]||{}; var p=getAcceptancePacketConfig();
@@ -13758,7 +13759,7 @@ function addApplication(){
 
         var id='enr_'+Date.now()+'_'+Math.random().toString(36).substr(2,4);
         var rec={
-            camperName:camperName,camperFirst:first,camperLast:last,
+            camperName:camperName,camperFirst:first,camperLast:last, // name-ok: an applicant — enrolling gives them their number (_rosterKeyForApplication)
             dob:values.dob||'',gender:values.gender||'',school:values.school||'',schoolGrade:values.schoolGrade||'',teacher:values.teacher||'',camperPhoto:values.photo||'',
             parentName:parentName,parentRelation:values.parentRelation||'',parentPhone:values.parentPhone||'',parentEmail:values.parentEmail||'',
             maritalStatus:values.maritalStatus||'',
@@ -14649,8 +14650,40 @@ function _sessionCapacityOf(sessionName){
     return {capacity:cap,taken:taken,remaining:Math.max(0,cap-taken),full:taken>=cap};
 }
 
+// Which roster camper an application is for. Names do not decide it: an
+// application that carries a camper number is that camper; one that does not,
+// whose name is already on the roster, is the SAME child only when nothing
+// says otherwise. A different date of birth, or a parent email that matches
+// neither of the camper's parents, is a different child who shares the name —
+// they get their own roster entry and number, not the other child's record.
+// Returns the roster key to use (the application is re-pointed to it).
+function _rosterKeyForApplication(e){
+    if(!e)return '';
+    var name=String(e.camperName||'').trim();
+    if(e.camperId!=null&&e.camperId!==''){
+        var ks=Object.keys(roster);
+        for(var i=0;i<ks.length;i++){var r=roster[ks[i]];if(r&&r.camperId!=null&&String(r.camperId)===String(e.camperId))return ks[i];}
+    }
+    var cur=roster[name];
+    if(!cur)return name;
+    var dobA=String(e.dob||'').trim(),dobB=String(cur.dob||'').trim();
+    var em=String(e.parentEmail||'').trim().toLowerCase();
+    var ems=[cur.parent1Email,cur.parent2Email].map(function(x){return String(x||'').trim().toLowerCase()}).filter(Boolean);
+    var different=(dobA&&dobB)?dobA!==dobB:(em&&ems.length?ems.indexOf(em)<0:false);
+    if(!different)return name;
+    var _ID=(typeof window!=='undefined'&&window.CamperIdentity)||null;
+    var key=_ID?_ID.uniqueKey(roster,name,nextPersonId):(name+' #'+nextPersonId);
+    return key&&!roster[key]?key:name;
+}
+
 function enrollCamper(id){
     var e=enrollments[id];if(!e)return;
+    // Point the application at its own camper before anything below reads
+    // roster[e.camperName].
+    var _rk=_rosterKeyForApplication(e);
+    var _newDup=_rk&&_rk!==e.camperName&&!roster[_rk];
+    var _typedName=String(e.camperName||'').trim();
+    if(_rk&&_rk!==e.camperName)e.camperName=_rk;
     // Over capacity is the office's call to make, not ours — a camp does
     // squeeze one more in. But it has to be a call, made knowingly: the
     // number was collected by the dashboard and read by nothing, so a camp
@@ -14671,8 +14704,10 @@ function enrollCamper(id){
     // Auto-create camper in roster with ALL application data
     if(!roster[e.camperName]){
         var newId=nextPersonId;nextPersonId++;
+        e.camperId=newId;
         roster[e.camperName]={
             camperId:newId,
+            displayName:_newDup?_typedName:undefined,
             dob:e.dob||'',gender:e.gender||'',
             school:e.school||'',schoolGrade:e.schoolGrade||'',teacher:e.teacher||'',
             division:'',grade:'',bunk:'',teams:{},team:'',
@@ -14697,10 +14732,13 @@ function enrollCamper(id){
         // Enroll was clicked, this camper would otherwise show no bunk
         // requests until the next full page load.
         _syncPostAcceptBunkRequests();
-        toast('Enrolled — camper added to roster with all info');
+        if(!_newDup)delete roster[e.camperName].displayName;
+        toast(_newDup?'Enrolled — a new camper who shares the name '+_typedName+' (different birthday or parents)'
+                     :'Enrolled — camper added to roster with all info');
     }else{
         // Update existing camper with any missing data from application
         var c=roster[e.camperName];
+        if(e.camperId==null&&c.camperId!=null)e.camperId=c.camperId;
         if(!c.dob&&e.dob)c.dob=e.dob;
         if(!c.gender&&e.gender)c.gender=e.gender;
         if(!c.school&&e.school)c.school=e.school;
@@ -14735,7 +14773,7 @@ function enrollCamper(id){
     }
     // Auto-family: join an EXISTING family only on a 3-of-4 match (last name,
     // address, parent email, parent name) — not on a shared last name alone.
-    var lastName=e.camperName.split(' ').pop();
+    var lastName=_lbl(e.camperName).split(' ').pop();
     var addr=[e.street,e.city,e.state,e.zip].filter(Boolean).join(', ');
     var famKey=_resolveFamilyKey(e.camperName,_famItemRaw(e.camperName,e.street,e.city,e.state,e.zip,e.parentName,e.parentEmail));
     var sesObj=sessions.find(function(s){return s.name===e.session});
@@ -15915,7 +15953,7 @@ function buildFamilyLedgers(){
             // ledger rather than dropping it (revenue would vanish from
             // Billing) or guessing at a family (the wrong parent gets billed).
             if(!e.parentName&&!e.camperName) return;
-            var lastName=(e.camperName||'').split(' ').pop();
+            var lastName=_lbl(e.camperName||'').split(' ').pop();
             fk='pending_'+lastName.toLowerCase().replace(/[^a-z0-9]/g,'')+'_'+eid;
             if(!ledgers[fk]){
                 var parents=[];
@@ -18313,7 +18351,7 @@ async function printTaxStatement(famKey,year){
         var e=(enrollments||{})[eid];
         if(!e)return{};
         var ses=(sessions||[]).find(function(x){return x.name===e.session});
-        return{camperName:e.camperName||'',session:e.session||'',overnight:!!(ses&&ses.overnight)};
+        return{camperName:e.camperName||'',camperId:e.camperId!=null?e.camperId:_camperIdOf(e.camperName),session:e.session||'',overnight:!!(ses&&ses.overnight)};
     }
     var camperDobs={};
     ((l.family.camperIds)||[]).concat(l.pendingCamperIds||[]).forEach(function(n){
@@ -20585,7 +20623,7 @@ function _reportSources(){
             rows:function(){
                 return Object.keys(enrollments).map(function(k){
                     var e=enrollments[k]||{};
-                    return {camperName:e.camperName||'',session:e.session||'',status:e.status||'',appliedDate:e.appliedDate||'',
+                    return {camperName:_lbl(e.camperName||''),camperId:e.camperId!=null?e.camperId:'',session:e.session||'',status:e.status||'',appliedDate:e.appliedDate||'',
                         sessionTuition:e.sessionTuition||0,paymentStatus:e.paymentStatus||'',formsCompleted:e.formsCompleted||0,
                         formsRequired:e.formsRequired||0,parentName:e.parentName||'',parentEmail:e.parentEmail||''};
                 });
@@ -21386,7 +21424,7 @@ async function sendAutoNotification(type,enrollmentId){
     var e=enrollments[enrollmentId];if(!e)return;
     var campName='';try{var ss=JSON.parse(localStorage.getItem('campGlobalSettings_v1')||'{}');campName=ss.camp_name||ss.campName||'Camp'}catch(ex){}
     if(!e.parentEmail)return;
-    try{await callEdgeFunction('auto-notify',{campId:getCampId(),recipients:[{email:e.parentEmail,name:e.parentName||''}],type:type,data:{campName:campName,camperName:e.camperName||'',parentName:e.parentName||'',amount:fm(e.sessionTuition||0)}})}catch(err){console.error('[Me] Auto-notify:',err)}
+    try{await callEdgeFunction('auto-notify',{campId:getCampId(),recipients:[{email:e.parentEmail,name:e.parentName||''}],type:type,data:{campName:campName,camperName:_lbl(e.camperName||''),parentName:e.parentName||'',amount:fm(e.sessionTuition||0)}})}catch(err){console.error('[Me] Auto-notify:',err)} // name-ok: the words of an email
 }
 async function sendPaymentReminders(){
     var svcPr=await _emailServiceOn();
@@ -21395,7 +21433,7 @@ async function sendPaymentReminders(){
     var today=new Date().toISOString().split('T')[0];var sevenDays=new Date(Date.now()+7*86400000).toISOString().split('T')[0];
     // ★ pre-collect recipients so we can CONFIRM before emailing real parents (no silent mass-send).
     var jobs=[];
-    Object.entries(enrollments).forEach(function([eid,e]){if(e.status!=='enrolled'||!e.installments)return;e.installments.forEach(function(inst){if(inst.status!=='pending')return;if(inst.dueDate===sevenDays||inst.dueDate===today||(inst.dueDate&&inst.dueDate<today)){if(e.parentEmail){var type=inst.dueDate<today?'payment_overdue':'payment_reminder';jobs.push({email:e.parentEmail,name:e.parentName||'',type:type,data:{campName:campName,camperName:e.camperName||'',parentName:e.parentName||'',amount:fm(inst.amount||0),dueDate:inst.dueDate}})}}})});
+    Object.entries(enrollments).forEach(function([eid,e]){if(e.status!=='enrolled'||!e.installments)return;e.installments.forEach(function(inst){if(inst.status!=='pending')return;if(inst.dueDate===sevenDays||inst.dueDate===today||(inst.dueDate&&inst.dueDate<today)){if(e.parentEmail){var type=inst.dueDate<today?'payment_overdue':'payment_reminder';jobs.push({email:e.parentEmail,name:e.parentName||'',type:type,data:{campName:campName,camperName:_lbl(e.camperName||''),parentName:e.parentName||'',amount:fm(inst.amount||0),dueDate:inst.dueDate}})}}})}); // name-ok: the words of an email
     if(!jobs.length){toast('No payment reminders due','error');return}
     var okPr=await confirmDialog({title:'Send Payment Reminders?',message:'Send '+jobs.length+' payment reminder email'+(jobs.length!==1?'s':'')+' to parents now? This emails them immediately.',confirmLabel:'Send',danger:false});
     if(!okPr)return;
@@ -21408,7 +21446,7 @@ async function sendFormReminders(){
     var campName='';try{var ss=JSON.parse(localStorage.getItem('campGlobalSettings_v1')||'{}');campName=ss.camp_name||ss.campName||'Camp'}catch(ex){}
     loadForms();
     var jobs=[];
-    campForms.filter(function(f){return f.required}).forEach(function(f){var completed=new Set((f.responses||[]).map(function(r){return r.camper}));Object.entries(roster).forEach(function([name,c]){if(completed.has(name))return;if(!c.parent1Email)return;jobs.push({email:c.parent1Email,name:c.parent1Name||'',data:{campName:campName,camperName:name,parentName:c.parent1Name||'',formName:f.name}})})});
+    campForms.filter(function(f){return f.required}).forEach(function(f){var completed=new Set((f.responses||[]).map(function(r){return r.camper}));Object.entries(roster).forEach(function([name,c]){if(completed.has(name))return;if(!c.parent1Email)return;jobs.push({email:c.parent1Email,name:c.parent1Name||'',data:{campName:campName,camperName:_lbl(name),parentName:c.parent1Name||'',formName:f.name}})})}); // name-ok: the words of an email
     if(!jobs.length){toast('No form reminders to send','error');return}
     var okFr=await confirmDialog({title:'Send Form Reminders?',message:'Send '+jobs.length+' form reminder email'+(jobs.length!==1?'s':'')+' to parents now? This emails them immediately.',confirmLabel:'Send',danger:false});
     if(!okFr)return;
@@ -21498,7 +21536,7 @@ function reEnrollCamper(camperName){
     showModal('Re-Enroll Camper',h,function(){
         var session=document.getElementById('reSession').value;var sesObj=sessions.find(function(s){return s.name===session});
         var id='enr_'+Date.now()+'_'+Math.random().toString(36).substr(2,4);
-        enrollments[id]={camperName:camperName,camperId:d.camperId!=null?d.camperId:null,camperLast:camperName.split(' ').pop(),parentName:d.parent1Name||'',parentEmail:d.parent1Email||'',parentPhone:d.parent1Phone||'',dob:d.dob||'',gender:d.gender||'',school:d.school||'',schoolGrade:d.schoolGrade||'',street:d.street||'',city:d.city||'',state:d.state||'',zip:d.zip||'',allergies:d.allergies||'',medications:d.medications||'',session:session,sessionTuition:sesObj?sesObj.tuition:0,status:'accepted',appliedDate:new Date().toISOString().split('T')[0],formsRequired:3,formsCompleted:0,paymentStatus:'pending',notes:'Re-enrollment — returning camper',isReturning:true};
+        enrollments[id]={camperName:camperName,camperId:d.camperId!=null?d.camperId:null,camperLast:_lbl(camperName).split(' ').pop(),parentName:d.parent1Name||'',parentEmail:d.parent1Email||'',parentPhone:d.parent1Phone||'',dob:d.dob||'',gender:d.gender||'',school:d.school||'',schoolGrade:d.schoolGrade||'',street:d.street||'',city:d.city||'',state:d.state||'',zip:d.zip||'',allergies:d.allergies||'',medications:d.medications||'',session:session,sessionTuition:sesObj?sesObj.tuition:0,status:'accepted',appliedDate:new Date().toISOString().split('T')[0],formsRequired:3,formsCompleted:0,paymentStatus:'pending',notes:'Re-enrollment — returning camper',isReturning:true};
         save();closeModal('dynModal');_refreshPplIfActive();toast(camperName+' re-enrolled (auto-accepted)');
         if(d.parent1Email)sendAutoNotification('enrollment_confirmation',id);
     });

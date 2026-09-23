@@ -59,7 +59,7 @@ body{font-family:var(--font);background:var(--s50);color:var(--s800);-webkit-fon
 
 <script src="config.js?v=20260903-03" onerror="console.log('[Inquiry] config not loaded — local only')"></script>
 <script src="supabase-js@2.js?v=20260903-03" onerror="console.log('[Inquiry] supabase-js not loaded')"></script>
-<script src="campistry_camper_id_rpc.js?v=20260923-04"></script>
+<script src="campistry_camper_id_rpc.js?v=20260923-20"></script>
 <script src="supabase_client.js?v=20260923-02" onerror="console.log('[Inquiry] supabase_client not loaded')"></script>
 <script>
 (function(){
@@ -74,7 +74,7 @@ window.submitInquiry=function(){
     if(!name)return showErr('Please enter your name.');
     if(!email)return showErr('Please enter your email so we can reach you.');
     var id='lead_'+Date.now()+'_'+Math.random().toString(36).slice(2,6);
-    var rec={parentName:name,email:email,phone:v('qP'),camperName:v('qC'),camperGrade:v('qG'),interests:v('qI'),source:v('qS')||'Website inquiry',message:v('qM'),status:'new',createdDate:new Date().toISOString().split('T')[0],createdAt:new Date().toISOString(),notes:'',activity:[]};
+    var rec={parentName:name,email:email,phone:v('qP'),camperName:v('qC'),camperGrade:v('qG'),interests:v('qI'),source:v('qS')||'Website inquiry',message:v('qM'),status:'new',createdDate:new Date().toISOString().split('T')[0],createdAt:new Date().toISOString(),notes:'',activity:[]}; // name-ok: a lead, not a camper yet
     try{
         var g=JSON.parse(localStorage.getItem('campGlobalSettings_v1')||'{}');
         if(!g.campistryMe)g.campistryMe={};

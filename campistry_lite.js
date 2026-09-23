@@ -644,7 +644,7 @@
             try {
                 const { data, error } = await window.supabase
                     .from('link_messages')
-                    .select('id,thread_id,direction,parent_name,parent_email,camper_name,subject,body,read,archived,important,hidden_for_admin,created_at')
+                    .select('id,thread_id,direction,parent_name,parent_email,camper_name,person_id,subject,body,read,archived,important,hidden_for_admin,created_at')
                     .eq('camp_id', campId).order('created_at', { ascending: true }).limit(500);
                 if (error) throw error;
                 // Exclude anything hidden from the admin/staff inbox (soft delete).
@@ -680,6 +680,7 @@
             id, camp_id: campId, thread_id: opts.threadId || id, direction: 'out',
             parent_name: opts.parentName || '', parent_email: opts.parentEmail || '',
             camper_name: opts.camperName || null, subject: opts.subject || '',
+            ...(/^\d+$/.test(String(opts.camperId == null ? '' : opts.camperId)) ? { person_id: Number(opts.camperId) } : {}),
             body: opts.body || '', channels: ['app'], read: false
         };
         const { error } = await window.supabase.from('link_messages').insert(row);
@@ -4645,7 +4646,7 @@
         const map = new Map();
         (linkMsgs || []).forEach(m => {
             const key = m.thread_id || ((m.parent_name || '') + '|' + (m.camper_name || ''));
-            if (!map.has(key)) map.set(key, { key, parentName: m.parent_name || '', parentEmail: m.parent_email || '', camperName: m.camper_name || '', msgs: [] });
+            if (!map.has(key)) map.set(key, { key, parentName: m.parent_name || '', parentEmail: m.parent_email || '', camperName: m.camper_name || '', camperId: m.person_id != null ? m.person_id : null, msgs: [] });
             const t = map.get(key);
             t.msgs.push(m);
             if (m.parent_name && !t.parentName) t.parentName = m.parent_name;
@@ -4842,7 +4843,7 @@
             if (!text) return;
             sendBtn.disabled = true; sendBtn.textContent = 'Sending…';
             try {
-                await sendLinkMessage({ threadId: t.key.includes('|') ? undefined : t.key, parentName: t.parentName, parentEmail: t.parentEmail, camperName: t.camperName, subject: t.last.subject ? ('Re: ' + t.last.subject.replace(/^Re:\s*/i, '')) : 'Message', body: text });
+                await sendLinkMessage({ threadId: t.key.includes('|') ? undefined : t.key, parentName: t.parentName, parentEmail: t.parentEmail, camperName: t.camperName, camperId: t.camperId, subject: t.last.subject ? ('Re: ' + t.last.subject.replace(/^Re:\s*/i, '')) : 'Message', body: text });
                 toast('Reply sent');
                 closeSheet();
                 paintLinkThreads();
@@ -5002,7 +5003,7 @@
                 let body = baseBody;
                 if (attach.form) body += `\n\n[[form:${attach.form.id}:${t.camperName || ''}]]`;
                 if (attach.list) body += `\n\n[[list:${attach.list.id}]]`;
-                await sendLinkMessage({ parentName: t.parentName, parentEmail: t.parentEmail, camperName: t.camperName, subject: subj, body });
+                await sendLinkMessage({ parentName: t.parentName, parentEmail: t.parentEmail, camperName: t.camperName, camperId: t.camperId, subject: subj, body });
             }
             toast(targets.length === 1 ? ('Message sent to ' + (targets[0].parentName || targets[0].camperName))
                 : ('Sent to ' + targets.length + ' parents'));

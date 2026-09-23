@@ -1,5 +1,5 @@
 -- ============================================================================
--- Confirm migrations 222-257 are in and doing their job.
+-- Confirm migrations 222-258 are in and doing their job.
 --
 -- Paste the whole thing into the Supabase SQL Editor. It is READ ONLY — one
 -- SELECT, nothing is created, changed or deleted, and the two purge functions
@@ -451,7 +451,25 @@ UNION ALL
           WHEN public.verify_number_round_trip() -> 'numbers_that_miss_their_camper' = '[]'::jsonb
            AND public.verify_number_round_trip() -> 'enrolled_names_that_miss_their_camper' = '[]'::jsonb
            AND public.verify_number_round_trip() -> 'functions_that_do_not_pin' = '[]'::jsonb THEN 'ok'
-          ELSE 'PROBLEMS: ' || (public.verify_number_round_trip() - 'campers_checked')::text END)
+          ELSE 'PROBLEMS: ' || (public.verify_number_round_trip() - 'campers_checked')::text END),
+
+    -- A parent's health documents, photos and face card: by the row's camper
+    -- number; one face row, and one reference photo per pose, per child.
+    ('258  a parent''s documents, photos and faces go by camper number',
+     CASE WHEN to_regprocedure('public.verify_parent_reads_by_number()') IS NULL THEN 'apply 258'
+          WHEN EXISTS (SELECT 1 FROM pg_proc p JOIN pg_namespace n ON n.oid = p.pronamespace
+                        WHERE n.nspname = 'public'
+                          AND p.prosrc ~ '_parent_owns_camper\s*\(\s*[^,]+,\s*[a-z_]+\.camper_name'
+                          AND p.prosrc !~ '_parent_owns_person\s*\(')
+            THEN 'STILL BY NAME: ' || (SELECT string_agg(p.proname, ', ') FROM pg_proc p JOIN pg_namespace n ON n.oid = p.pronamespace
+                        WHERE n.nspname = 'public'
+                          AND p.prosrc ~ '_parent_owns_camper\s*\(\s*[^,]+,\s*[a-z_]+\.camper_name'
+                          AND p.prosrc !~ '_parent_owns_person\s*\(')
+          WHEN to_regclass('public.link_camper_faces_one_per_person') IS NULL
+            THEN 'face rows are still one per NAME — re-apply 258'
+          WHEN to_regclass('public.idx_lcfd_parent_pose') IS NOT NULL
+            THEN 'reference photos are still one per NAME — re-apply 258'
+          ELSE 'ok' END)
     ) AS x(item, result)
 
 UNION ALL

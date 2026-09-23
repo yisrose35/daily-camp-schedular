@@ -332,7 +332,7 @@ window._regSetLang = function(loc) {
 </script>
 <script src="config.js?v=20260903-03" onerror="console.log('[Register] Supabase config (config.js) not loaded — local only')"></script>
 <script src="supabase-js@2.js?v=20260903-03" onerror="console.log('[Register] Supabase client not loaded — local only')"></script>
-<script src="campistry_camper_id_rpc.js?v=20260923-04"></script>
+<script src="campistry_camper_id_rpc.js?v=20260923-20"></script>
 <script src="supabase_client.js?v=20260923-02" onerror="console.log('[Register] Supabase config not loaded — local only')"></script>
 <script src="local_cache_idb.js?v=20260903-03" onerror="console.log('[Register] LocalCacheIDB not loaded — falling back to localStorage')"></script>
 <script src="integration_hooks.js?v=20260918-10" onerror="console.log('[Register] Integration hooks not loaded — local only')"></script>
@@ -340,7 +340,7 @@ window._regSetLang = function(loc) {
 <script src="campistry_deposit_policy.js?v=20260916-01" onerror="console.log('[Register] Deposit policy not loaded — the form simply will not mention a deposit')"></script>
 <script src="campistry_card_fees.js?v=20260916-01" onerror="console.log('[Register] Card fee policy not loaded — the form simply will not mention a card fee')"></script>
 <script src="campistry_card_capture.js?v=20260916-01" onerror="console.log('[Register] Card capture not loaded — the form will fall back to paying after submit')"></script>
-<script src="campistry_sibling_discount.js?v=20260922-01" onerror="console.log('[Register] Sibling discount not loaded — the form will not apply one')"></script>
+<script src="campistry_sibling_discount.js?v=20260923-20" onerror="console.log('[Register] Sibling discount not loaded — the form will not apply one')"></script>
 <script>
 // Keep the payment options on this form in step with the camp's policy. The
 // markup above is the default (credit yes, debit no); this only has to do
@@ -1315,7 +1315,7 @@ function updatePrice(){
             });
             var _enr={},_names=[];
             rows.forEach(function(r,i){
-                _enr['r'+i]={camperName:r.label,session:r.session,
+                _enr['r'+i]={camperName:r.label,session:r.session, // name-ok: a price quote for children not registered yet
                              status:'enrolled',sessionTuition:r.price};
                 _names.push(r.label);
             });
@@ -2352,7 +2352,7 @@ window.submitApp=async function(){
             });
 
             g.campistryMe.enrollments[id]={
-                camperName:cam.first+' '+cam.last,camperFirst:cam.first,camperLast:cam.last,
+                camperName:cam.first+' '+cam.last,camperFirst:cam.first,camperLast:cam.last, // name-ok: an applicant — enrolling gives them their number
                 dob:cam.dob,gender:cam.gender,school:cam.school,schoolGrade:cam.schoolGrade,teacher:cam.teacher,camperPhoto:cam.photo||'',
                 parentName:parentName,parentRelation:v('rRel'),parentPhone:ph,homePhone:v('rHomePh'),parentEmail:em,
                 parent2Name:parent2Name,parent2Relation:v('rP2Rel'),parent2Phone:v('rP2Ph'),parent2Email:v('rP2Em'),

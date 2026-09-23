@@ -387,7 +387,7 @@
             (p.assignments || []).forEach(function (a) {
                 if (a.status !== 'auto' && a.status !== 'accept') return;
                 var f = faceById[a.faceId];
-                if (f && f.descriptors) anchors.push({ camperName: a.camperName, descriptors: f.descriptors, torso: f.torso || null });
+                if (f && f.descriptors) anchors.push({ camperName: a.camperName, camperId: a.camperId != null ? a.camperId : null, descriptors: f.descriptors, torso: f.torso || null });
             });
         });
         if (!anchors.length) return [];
@@ -411,7 +411,7 @@
                             var d = distanceFor(prof.metric, f.descriptors[model], anchor.descriptors[model]);
                             if (d > prof.autoDist * factor) return;
                             var norm = d / prof.autoDist;
-                            if (!best || norm < best.norm) best = { norm: norm, dist: d, model: model, camperName: anchor.camperName };
+                            if (!best || norm < best.norm) best = { norm: norm, dist: d, model: model, camperName: anchor.camperName, camperId: anchor.camperId };
                         });
                     }
                     // torso path — same clothing, face inconclusive
@@ -428,21 +428,21 @@
                                     if (distanceFor(prof.metric, f.descriptors[model], anchor.descriptors[model]) > prof.reviewDist * 1.15) contradicts = true;
                                 });
                             }
-                            if (!contradicts) torsoBest = { sim: sim, camperName: anchor.camperName };
+                            if (!contradicts) torsoBest = { sim: sim, camperName: anchor.camperName, camperId: anchor.camperId };
                         }
                     }
                 });
                 if (best) {
                     assignedFaces[f.id] = true; assignedCampers[best.camperName] = true;
                     extras.push({
-                        photoId: p.photoId, faceId: f.id, camperName: best.camperName,
+                        photoId: p.photoId, faceId: f.id, camperName: best.camperName, camperId: best.camperId != null ? best.camperId : null,
                         dist: Math.round(best.dist * 1000) / 1000, model: best.model,
                         status: 'accept', via: 'burst'
                     });
                 } else if (torsoBest) {
                     assignedFaces[f.id] = true; assignedCampers[torsoBest.camperName] = true;
                     extras.push({
-                        photoId: p.photoId, faceId: f.id, camperName: torsoBest.camperName,
+                        photoId: p.photoId, faceId: f.id, camperName: torsoBest.camperName, camperId: torsoBest.camperId != null ? torsoBest.camperId : null,
                         torsoSim: Math.round(torsoBest.sim * 100) / 100,
                         status: 'review', via: 'torso'
                     });
@@ -661,7 +661,7 @@
                 });
                 if (best) {
                     pairs.push({
-                        faceId: face.id, camperName: camper.name,
+                        faceId: face.id, camperName: camper.name, camperId: camper.camperId != null ? camper.camperId : null,
                         dist: best.dist, norm: best.norm, model: best.model,
                         auto: best.auto && face.tier === 'good'
                     });
@@ -676,7 +676,7 @@
             usedFaces[p.faceId] = true;
             usedCampers[p.camperName] = true;
             out.push({
-                faceId: p.faceId, camperName: p.camperName,
+                faceId: p.faceId, camperName: p.camperName, camperId: p.camperId != null ? p.camperId : null,
                 dist: Math.round(p.dist * 1000) / 1000, model: p.model,
                 status: p.auto ? 'auto' : 'review'
             });

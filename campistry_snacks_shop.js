@@ -133,9 +133,12 @@ function camperList() {
     var r = roster();
     return Object.keys(r).map(function (name) {
         var c = r[name] || {};
-        return { name: name, bunk: c.bunk || '', division: c.division || '', shirtSize: c.shirtSize || '' };
+        return { name: name, camperId: c.camperId != null ? c.camperId : null, bunk: c.bunk || '', division: c.division || '', shirtSize: c.shirtSize || '' };
     }).sort(function (a, b) { return a.name.localeCompare(b.name); });
 }
+// A camper's name as a person reads it — never the roster's internal "#702".
+function _lbl(key) { return String(key == null ? '' : key).replace(/\s#\d+(?:-\d+)?$/, ''); }
+function _camperIdOf(key) { var c = roster()[key]; return c && c.camperId != null && c.camperId !== '' ? c.camperId : null; }
 
 // ── helpers ─────────────────────────────────────────────────────────────────
 function esc(s) { var d = document.createElement('div'); d.textContent = s == null ? '' : s; return d.innerHTML.replace(/"/g, '&quot;'); }
@@ -336,7 +339,7 @@ function renderOrders() {
                       : o.status === 'delivered' ? 'ops-badge--ok'
                       : o.status === 'packed' ? 'ops-badge--info' : '';
             h += '<tr class="click" onclick="shopEditOrder(\'' + esc(o.id) + '\')">' +
-                '<td class="bold">' + esc(o.camperName || '—') +
+                '<td class="bold">' + esc(_lbl(o.camperName) || '—') +
                     (o.source === 'parent' ? ' <span class="ops-badge ops-badge--info">From parent</span>' : '') + '</td>' +
                 '<td>' + esc(o.bunk || '—') + '</td>' +
                 '<td>' + t.itemCount + '</td>' +
@@ -386,7 +389,7 @@ function renderFulfil() {
                 return esc(l.name || 'Item') + (l.size ? ' · ' + esc(SC.SIZE_LABELS[l.size] || l.size) : '') +
                     (l.color ? ' · ' + esc(l.color) : '') + ' ×' + (parseInt(l.qty, 10) || 0);
             }).join('<br>');
-            h += '<tr><td class="bold">' + esc(o.camperName || '—') + '</td>' +
+            h += '<tr><td class="bold">' + esc(_lbl(o.camperName) || '—') + '</td>' +
                 '<td style="font-size:.8rem">' + items + '</td>' +
                 '<td><span class="ops-badge">' + esc(SC.STATUS_LABELS[o.status] || o.status) + '</span></td>' +
                 '<td style="text-align:right">' +
@@ -669,7 +672,7 @@ window.shopEditOrder = function (id) {
         '<option value="">— Select —</option>' +
         campers.map(function (c) {
             return '<option value="' + esc(c.name) + '"' + (o.camperName === c.name ? ' selected' : '') + '>' +
-                esc(c.name) + (c.bunk ? ' (' + esc(c.bunk) + ')' : '') + '</option>';
+                esc(_lbl(c.name)) + (c.bunk ? ' (' + esc(c.bunk) + ')' : '') + '</option>';
         }).join('') + '</select></div>' +
         '<div class="ops-field"><label>Bunk</label><input class="ops-input" id="oBunk" value="' + esc(o.bunk || '') + '"></div></div>';
 
@@ -776,7 +779,7 @@ function drawLines() {
 
 function draftOrder() {
     return {
-        camperName: val('oCamper'), bunk: val('oBunk'),
+        camperName: val('oCamper'), camperId: _camperIdOf(val('oCamper')), bunk: val('oBunk'),
         lines: draftLines.map(function (l) {
             var p = productById(l.productId);
             return {
@@ -963,7 +966,7 @@ function applyStockAcross(order, direction) {
 
 window.shopDeleteOrder = function (id) {
     var o = orderById(id); if (!o) return;
-    if (!confirm('Delete this order for ' + (o.camperName || 'this camper') + '?')) return;
+    if (!confirm('Delete this order for ' + (_lbl(o.camperName) || 'this camper') + '?')) return;
 
     function removeLocally() {
         // Put the stock back if it had already been taken out.

@@ -147,3 +147,29 @@ test('an enrollment belongs to a camper by number; by name only when it has none
     assert.strictEqual(is({ camperName: 'Old', camperId: 5 }, 'Old'), true, 'a camper with no number falls back to the name');
     assert.strictEqual(is(null, 'x'), false);
 });
+
+test('enrolling an application: a different child who shares a name gets their own camper, not the other child\'s record', () => {
+    const start = SRC.indexOf('function _rosterKeyForApplication(e){');
+    const end = SRC.indexOf('function enrollCamper(id){');
+    assert.ok(start > 0 && end > start, 'anchors moved');
+    const I = require('../campistry_camper_identity.js');
+    const ctx = {
+        roster: {
+            'Rivka Stern': { camperId: 701, dob: '2015-04-01', parent1Email: 'one@x.test' },
+            'Chaya Gold #9': { camperId: 9, displayName: 'Chaya Gold' },
+        },
+        nextPersonId: 800, String, Object, window: { CamperIdentity: I },
+    };
+    vm.runInNewContext(SRC.slice(start, end), ctx);
+    const key = ctx._rosterKeyForApplication;
+    assert.strictEqual(key({ camperName: 'Rivka Stern', dob: '2016-09-09' }), 'Rivka Stern #800',
+        'a different birthday was merged into the other Rivka');
+    assert.strictEqual(key({ camperName: 'Rivka Stern', parentEmail: 'two@x.test' }), 'Rivka Stern #800',
+        'different parents were merged into the other Rivka');
+    assert.strictEqual(key({ camperName: 'Rivka Stern', dob: '2015-04-01', parentEmail: 'two@x.test' }), 'Rivka Stern',
+        'same birthday: the returning camper (a parent may apply from another email)');
+    assert.strictEqual(key({ camperName: 'Rivka Stern', parentEmail: 'ONE@x.test' }), 'Rivka Stern', 'same parent: same child');
+    assert.strictEqual(key({ camperName: 'Rivka Stern' }), 'Rivka Stern', 'nothing says otherwise: same child');
+    assert.strictEqual(key({ camperName: 'Chaya Gold', camperId: 9 }), 'Chaya Gold #9', 'a number finds its own camper');
+    assert.strictEqual(key({ camperName: 'New Kid' }), 'New Kid');
+});

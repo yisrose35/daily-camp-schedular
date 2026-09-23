@@ -776,7 +776,7 @@ window.charge = function() {
                 // would otherwise sit unresolved until the next 30-min cron
                 // tick (CANTEEN_AUTORELOAD_SETUP.md).
                 if (d.needsReloadCheck && client.functions && client.functions.invoke) {
-                    client.functions.invoke('canteen-auto-reload', { body: { campId: campId, camperName: camperName } }).catch(() => {});
+                    client.functions.invoke('canteen-auto-reload', { body: { campId: campId, camperName: camperName, camperId: _cid != null && !isNaN(_cid) ? _cid : undefined } }).catch(() => {});
                 }
             }, e => { toast('Charge failed — connection error', true); });
         return;

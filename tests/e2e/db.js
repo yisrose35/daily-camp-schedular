@@ -67,10 +67,17 @@ const MIGRATIONS = [
     // 020  link_messages — Lite and Link write parent messages there
     //      (tests/lite_health_numbers.e2e.js)
     '020_link_messages',
+    // 028-030: the photo matcher's face index, which 258 corrects.
+    '028_facial_recognition',
+    '029_face_recognition_v2',
+    '030_face_freshness',
     // 037  get_camp_health_documents — the Health page reads it on load
     '037_health_documents',
     '048_section_access',
     '063_camp_timezone',
+    // 080/081: what a parent's photo gallery shows, which 258 corrects.
+    '080_photo_storage',
+    '081_link_photo_purchases',
     '100_pos_pin_login',
     '101_pos_pin_manual_unlock',
     '104_pos_roster_read',
@@ -97,9 +104,13 @@ const MIGRATIONS = [
     '200_applications_out_of_the_blob',
     '202_ledger_projection',
     '203_canteen_archive',
+    // 204/209: the post-acceptance form's Camper Mail code, which 258 corrects
+    // (scripts/pgtests/258).
+    '204_camper_mail_inbox',
     '205_parent_balance_off_the_blob',
     '206_canteen_archive_only_new',
     '208_payments_into_rows',
+    '209_postaccept_camper_mail',
     '210_payments_read_from_rows',
     '211_families_into_rows',
     '212_families_read_from_rows',
@@ -148,6 +159,7 @@ const MIGRATIONS = [
     '255_a_parents_family_is_found_by_camper_number',
     '256_faces_and_photos_go_by_camper_number',
     '257_a_number_reaches_its_own_camper',
+    '258_a_parent_sees_only_their_own_child',
 ];
 
 // The one thing the stubs deliberately get wrong for our purposes: they define

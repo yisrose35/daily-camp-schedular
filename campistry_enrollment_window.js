@@ -99,7 +99,7 @@
      * Where one camper stands on one date.
      *
      * o = {
-     *   camperName,
+     *   camperName, camperId (optional — else read from the roster),
      *   enrollments: { id: {camperName, session, status} },
      *   sessions:    [ {name, startDate, endDate} ],
      *   roster:      { 'Eli Klein': {unenrolled:true} },   // optional
@@ -111,6 +111,8 @@
      * which is what lets a caller say "arrives 13 July" rather than just "not
      * yet".
      */
+    function isNum(v) { return v != null && v !== '' && /^\d+$/.test(String(v)); }
+
     W.presenceOf = function (o) {
         o = o || {};
         var name = String(o.camperName == null ? '' : o.camperName);
@@ -122,6 +124,12 @@
         // A hand-unenrolled camper is out, whatever the calendar says. That flag
         // is a decision somebody made; a date is only a circumstance.
         var r = roster[name];
+        // The camper's number decides which enrollments are theirs: given, or
+        // read from their roster entry. Two campers may share a name; an
+        // enrollment with a number belongs only to that number, and one with
+        // none (written before numbers) falls back to the name.
+        var id = isNum(o.camperId) ? String(o.camperId)
+               : (r && isNum(r.camperId) ? String(r.camperId) : null);
         if (r && r.unenrolled) {
             return { state: 'none', reason: 'unenrolled_by_office', session: '',
                      from: null, to: null, sessions: [] };
@@ -137,7 +145,9 @@
         var mine = [];
         Object.keys(enrollments).forEach(function (eid) {
             var e = enrollments[eid];
-            if (!e || String(e.camperName) !== name) return;
+            if (!e) return;
+            if (id != null && isNum(e.camperId)) { if (String(e.camperId) !== id) return; }
+            else if (String(e.camperName) !== name) return;
             if (!W.LIVE_STATUS[String(e.status)]) return;
             var w = W.sessionWindow(sessionByName(e.session));
             mine.push({ id: eid, session: e.session || '', from: w.from, to: w.to,
@@ -216,8 +226,9 @@
         var names = Array.isArray(o.camperNames) ? o.camperNames : [];
         var out = { byCamper: {}, active: [], upcoming: [], ended: [], none: [] };
         names.forEach(function (n) {
+            var r = o.roster && o.roster[n];
             var p = W.presenceOf({
-                camperName: n, enrollments: o.enrollments, sessions: o.sessions,
+                camperName: n, camperId: r ? r.camperId : null, enrollments: o.enrollments, sessions: o.sessions,
                 roster: o.roster, on: o.on
             });
             out.byCamper[n] = p;

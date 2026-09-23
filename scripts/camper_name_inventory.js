@@ -27,6 +27,9 @@ const OUT = path.join(REPO, 'docs', 'CAMPER_NAME_INVENTORY.md');
 // that ADDS numbers to everything reads camperName by design.
 const SKIP = /^(supabase-js@2\.js|jsqr@1\.4\.0\.js|.*\.min\.js|campistry_camper_id_rpc\.js)$/;
 
+// The camper number on the same line: `camperId` (not the family list camperIds).
+const NUMBER_TOO = /\bcamperId\b/;
+
 // Each kind of name-keyed use, in the order they should be moved.
 const KINDS = [
     { id: 'records', title: 'Records saved with a camper name and no number',
@@ -35,7 +38,9 @@ const KINDS = [
       test: (line, near) => /\bcamperName\s*:/.test(line) && !/camperId/.test(near || line) },
     { id: 'enrollments', title: 'Enrollments tied to a camper by name',
       why: 'An enrollment finds its camper by comparing camperName. Billing and the family ledger hang off this.',
-      test: line => /\bcamperName\s*[!=]==|[!=]==\s*[\w.$\]\[]*\bcamperName\b/.test(line) },
+      // A line that also carries the number (camperId) goes by the number and
+      // falls back to the name only for a record written before numbers.
+      test: line => /\bcamperName\s*[!=]==|[!=]==\s*[\w.$\]\[]*\bcamperName\b/.test(line) && !NUMBER_TOO.test(line) },
     { id: 'families', title: 'Family membership listed by name',
       why: 'A family lists its children in camperIds, which holds NAMES. The server already stamps the numbers (234); the page does not use them yet.',
       test: line => /\bcamperIds\b/.test(line) },
@@ -44,7 +49,9 @@ const KINDS = [
       test: line => /\bbunkAsgn\b|\bbunkAssignments\b/.test(line) },
     { id: 'roster', title: 'Roster looked up by name',
       why: 'The roster itself is keyed by the camper\'s roster key. Everything else can move to numbers first; re-keying the roster is the last step.',
-      test: line => /\b(?:roster|camperRoster|rosterAll)\s*\[/.test(line) },
+      // A line that reads or matches the camper NUMBER through the roster is
+      // the bridge from a key to the number, not a lookup by name.
+      test: line => /\b(?:roster|camperRoster|rosterAll)\s*\[/.test(line) && !NUMBER_TOO.test(line) },
 ];
 
 // Superseded edge functions: they import ../_shared, cannot be deployed from
@@ -78,6 +85,10 @@ const DB_NAME_KEYS = [
       present: sql => /camp_state_kv/.test(sql) },
 ];
 
+// `// name-ok: <reason>` on a line: the name there is not how a camper is
+// identified. Each needs a reason, and the total is shown in the document.
+const NAME_OK = /\/\/\s*name-ok:\s*\S/;
+
 function clientFiles() {
     return fs.readdirSync(REPO)
         .filter(f => /\.(js|html)$/.test(f) && !SKIP.test(f))
@@ -88,10 +99,12 @@ function count() {
     const byKind = {};
     KINDS.forEach(k => { byKind[k.id] = { total: 0, files: {} }; });
     byKind.edge = { total: 0, files: {} };
+    byKind.nameOk = { total: 0, files: {} };
     for (const f of edgeFiles()) {
         for (const raw of fs.readFileSync(path.join(REPO, f), 'utf8').split('\n')) {
             const line = raw.replace(/\/\/.*$/, '');
             if (/^\s*\*/.test(line) || /console\.|displayName\(/.test(line)) continue;   // logs and display
+            if (NAME_OK.test(raw)) { byKind.nameOk.total++; byKind.nameOk.files[f] = (byKind.nameOk.files[f] || 0) + 1; continue; }
             if (/\b(p_camper_name|camper_name|camperName|camperNames)\b/.test(line)
                 && !/camperId|camperIds|person_id|p_camper_id|camperIdIn/.test(line)) {
                 byKind.edge.total++;
@@ -108,6 +121,9 @@ function count() {
         for (let i = 0; i < lines.length; i++) {
             const line = lines[i].replace(/\/\/.*$/, '');      // not comments
             if (/^\s*\*/.test(line)) continue;                   // nor block-comment lines
+            // A name that is not a camper on the roster (a lead, a sample, the
+            // text of a message) is marked in the code with its reason.
+            if (NAME_OK.test(lines[i])) { byKind.nameOk.total++; byKind.nameOk.files[f] = (byKind.nameOk.files[f] || 0) + 1; continue; }
             const near = lines.slice(Math.max(0, i - 3), i + 4).join('\n');
             for (const k of KINDS) {
                 if (k.test(line, near)) {
@@ -140,6 +156,9 @@ function render(byKind) {
     out.push('- `scripts/verify_identity_chain.sql` checks all of this on the live database.');
     out.push('');
     out.push('## What is still by name: ' + total + ' places');
+    out.push('');
+    out.push('Not counted: ' + byKind.nameOk.total + ' place' + (byKind.nameOk.total === 1 ? '' : 's') +
+             ' where a name is not how a camper is identified (a lead who is not a camper yet, a sample, the words of a message). Each is marked `// name-ok:` in the code with its reason.');
     out.push('');
     out.push('| # | Kind | Places | Files |');
     out.push('|---|---|---|---|');

@@ -333,7 +333,7 @@ function _lbl(key) { return String(key == null ? '' : key).replace(/\s#\d+$/, ''
     // Cloud submissions (authoritative) merged with any legacy localStorage-only rows.
     function getSubmissions(){
         var cloud=(_cloudDocs||[]).map(function(d){
-            return { id:d.id, camperName:d.camper_name, fileName:d.file_name, fileType:d.file_type,
+            return { id:d.id, camperName:d.camper_name, camperId:d.person_id!=null?d.person_id:null, fileName:d.file_name, fileType:d.file_type,
                      fileData:d.file_data, note:d.note, status:d.status, reviewNotes:d.review_notes,
                      submittedAt:d.created_at?new Date(d.created_at).getTime():0, _cloud:true };
         });
@@ -380,6 +380,16 @@ function _lbl(key) { return String(key == null ? '' : key).replace(/\s#\d+$/, ''
         return (d.getMonth()+1)+'/'+d.getDate();
     }
 
+    // Which child a parent's document is for: the camper with the document's
+    // number. Two campers can share a name, so their bunk tells the nurse
+    // which one; a document from a camper no longer on the roster says so.
+    function docWhoHint(doc){
+        if(doc.camperId==null)return '';
+        var g=readGlobal(), r=(g.app1&&g.app1.camperRoster)||{}, hit=null;
+        Object.keys(r).some(function(k){ if(r[k]&&String(r[k].camperId)===String(doc.camperId)){hit=r[k];return true;} return false; });
+        if(!hit)return '<div style="font-size:.7rem;font-weight:500;color:var(--slate-500);">no longer on the roster</div>';
+        return hit.bunk?'<div style="font-size:.7rem;font-weight:500;color:var(--slate-500);">'+esc(hit.bunk)+'</div>':'';
+    }
     function renderParentDocs(){
         var section=document.getElementById('parentDocsSection'); if(!section)return;
         var docs=getSubmissions();
@@ -401,7 +411,7 @@ function _lbl(key) { return String(key == null ? '' : key).replace(/\s#\d+$/, ''
                 '<button class="btn btn-sm btn-danger" onclick="CampistryHealth.flagParentDoc(\''+je(doc.id)+'\')">Flag</button>':
                 viewBtn;
             h+='<tr>'+
-                '<td style="font-weight:700;">'+esc(_lbl(doc.camperName)||'—')+'</td>'+
+                '<td style="font-weight:700;">'+esc(_lbl(doc.camperName)||'—')+docWhoHint(doc)+'</td>'+
                 '<td><span style="font-size:.75rem;">'+esc(doc.fileName||'—')+'</span></td>'+
                 '<td style="font-size:.75rem;color:var(--slate-500);">'+fmtDocTime(doc.submittedAt)+'</td>'+
                 '<td>'+statusBdg+'</td>'+

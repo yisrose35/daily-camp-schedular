@@ -14,7 +14,12 @@ const vm = require('node:vm');
 const inv = require('../scripts/camper_name_inventory.js');
 
 // Counts on 2026-09-23. Lower these as places move to numbers. Never raise them.
-const BASELINE = { records: 79, enrollments: 33, families: 71, bunks: 53, roster: 189, edge: 130, database: 4 };
+const BASELINE = { records: 0, enrollments: 32, families: 71, bunks: 53, roster: 179, edge: 130, database: 4 };
+
+// `// name-ok: <reason>` marks a name that is not how a camper is identified
+// (a lead, a sample, the words of a message). Each needs a reason, and there
+// may not be more of them than this without someone deciding so here.
+const NAME_OK_CEILING = 13;
 
 test('the inventory document matches the code', () => {
     const want = inv.render(inv.count());
@@ -30,6 +35,19 @@ test('no new place identifies a camper by name', () => {
         'New name-keyed code. Use camperId (the camper number) instead:\n  ' + grew.join('\n  '));
 });
 
+test('a name marked as not identifying a camper says why, and there are few', () => {
+    const c = inv.count();
+    assert.ok(c.nameOk.total <= NAME_OK_CEILING,
+        c.nameOk.total + ' places are marked name-ok (ceiling ' + NAME_OK_CEILING + '). Use the camper number instead.');
+    const bare = [];
+    for (const f of fs.readdirSync(path.join(__dirname, '..')).filter(x => /\.(js|html)$/.test(x))) {
+        fs.readFileSync(path.join(__dirname, '..', f), 'utf8').split('\n').forEach((l, i) => {
+            if (/\/\/\s*name-ok:\s*$/.test(l)) bare.push(f + ':' + (i + 1));
+        });
+    }
+    assert.deepStrictEqual(bare, [], 'a name-ok marker without a reason');
+});
+
 test('the counter sees what it claims to', () => {
     const k = Object.fromEntries(inv.KINDS.map(x => [x.id, x.test]));
     assert.ok(k.records("log.push({ camperName: n, medication: m })"));
@@ -39,6 +57,10 @@ test('the counter sees what it claims to', () => {
     assert.ok(k.bunks("bunkAsgn[b].push(n)"));
     assert.ok(k.roster("var c = roster[name];"));
     assert.ok(!k.roster("rosterCount = 3"));
+    // number-first: a line that goes by the number is not by name
+    assert.ok(!k.enrollments("if (hasId ? e.camperId === id : e.camperName === name) {"));
+    assert.ok(!k.roster("var id = roster[key].camperId;"));
+    assert.ok(k.enrollments("f.camperIds.filter(c => c !== e.camperName)"), 'camperIds (a list of names) is not a number');
 });
 
 test('the inventory covers the edge functions and the database, not only the pages', () => {
