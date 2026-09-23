@@ -287,6 +287,8 @@ function personIdHolder(id,exceptCamper,exceptStaffId){
     if(who)return who;
     // Held by a camper who left and has not been erased (migration 253).
     if(_serverHeldNumbers[want])return _lbl(_serverHeldNumbers[want])+' (removed — still holds the number)';
+    // A number a camper was moved off stays theirs (260).
+    if(_serverMovedNumbers[want])return 'the camper now numbered #'+_serverMovedNumbers[want]+' (their old number)';
     var staff='';
     Object.keys(staffApplications).forEach(function(k){
         var a=staffApplications[k];
@@ -317,6 +319,8 @@ function reservePersonId(id){
 //     number is free again. Queued in localStorage so a tab closed in between
 //     finishes it on the next load.
 var _serverHeldNumbers={};
+// Numbers a camper was renumbered off: {old: new}. Never given to anyone else.
+var _serverMovedNumbers={};
 // Roster keys that belong to a child other than whoever shows them now (a
 // departed child, or a renamed child's old name): {key: their number}. A new
 // child is never filed under one (259) — they get "<name> #<number>".
@@ -369,6 +373,12 @@ function _reconcileCamperNumbers(){
             adopted.push(_lbl(k));
         });
         if(adopted.length)console.warn('[Me] filed under their own roster key by the server:',adopted);
+        // A renumber the server has made: its hint has done its job.
+        Object.entries(roster).forEach(function([k,r]){
+            if(r&&r.renumberedFrom!=null&&(k in server)&&String(server[k])===String(normalizePersonId(r.camperId)))delete r.renumberedFrom;
+        });
+        // A number that moved to another child is taken, like a departed one.
+        _serverMovedNumbers=d.moved&&typeof d.moved==='object'?d.moved:{};
         Object.keys(roster).forEach(function(k){var l=normalizePersonId((roster[k]||{}).camperId);if(l)localCount[l]=(localCount[l]||0)+1});
         var fixed=[];
         Object.keys(roster).forEach(function(k){
@@ -377,7 +387,7 @@ function _reconcileCamperNumbers(){
             if(l===s)return;
             // Only where OUR number is wrong. A number typed here and not yet
             // saved is left alone: it is free, and the next save will claim it.
-            if(!l||localCount[l]>1||_serverHeldNumbers[l]||(holderOf[l]&&holderOf[l]!==k)){
+            if(!l||localCount[l]>1||_serverHeldNumbers[l]||_serverMovedNumbers[l]||(holderOf[l]&&holderOf[l]!==k)){
                 fixed.push(_lbl(k)+' → #'+s);
                 roster[k].camperId=Number(s);
                 // This camper's enrollments carry the number too: move them with it.
@@ -5805,6 +5815,14 @@ function saveCamper(){
     // and history are preserved through an edit (they aren't on this form).
     var _key=_dupKey||full;
     if(_dupKey)_core.displayName=full;
+    // A renumber tells the server which number the child had, so a rename and
+    // a renumber in this one edit stay ONE child (260; the server never stores
+    // it, and the next number check drops it here). A new child says when it
+    // was added, so a freed number typed for them is not mistaken for a stale
+    // copy of an erased child.
+    var _wasId=normalizePersonId(_oldRec.camperId);
+    if(editingCamper&&_wasId&&String(_wasId)!==String(existingId))_core.renumberedFrom=Number(_wasId);
+    if(!editingCamper)_core.addedAt=Date.now();
     roster[_key]=Object.assign({},_oldRec,_core);
     // Change log: diff the tracked fields old→new and append a history entry.
     var _changes=_diffCamperFields(_oldRec,_core);
@@ -14381,6 +14399,8 @@ function _syncParentInviteSnapshot(enrollId,silent,opts){
             var r=roster[en.camperName]||{};
             var _w=_linkCamperWindow(en.camperName);
             camperData[en.camperName]={
+                // The number decides which child this slot is (260), not the name.
+                camperId:normalizePersonId(r.camperId)?Number(normalizePersonId(r.camperId)):(normalizePersonId(en.camperId)?Number(normalizePersonId(en.camperId)):null),
                 name:en.camperName,dob:en.dob||r.dob||'',gender:en.gender||r.gender||'',
                 division:r.division||'',grade:r.grade||'',bunk:r.bunk||'',bunkAlias:bunkAlias(r.bunk),
                 session:en.session||'',
@@ -21754,7 +21774,7 @@ function _returningCamper(prev,r,claimed){
         if(dA&&dB)return dA===dB;
         return _sameCamperSignal(c,r);
     });
-    return hits.length===1?{key:hits[0],id:Number(normalizePersonId(prev[hits[0]].camperId))}:null;
+    return hits.length===1?{key:hits[0],id:Number(normalizePersonId(prev[hits[0]].camperId)),rec:prev[hits[0]]}:null;
 }
 function _sameCamperSignal(a,b){
     var emA=(a.parent1Email||'').trim().toLowerCase(),emB=(b.parent1Email||'').trim().toLowerCase();
@@ -22275,7 +22295,7 @@ function importRows(rows,mode){
             team:Object.values(r.teams)[0]||''
         };
     }
-    var _claimedPrev={},_importKept=0,_importNotMatched=[];
+    var _claimedPrev={},_claimedCur={},_importKept=0,_importNotMatched=[];
     rows.forEach(function(r){
         var targetName=r.name,camperId,oldBunk=null,isUpdate=false;
         if(_prevRoster&&!r.camperId){
@@ -22307,7 +22327,16 @@ function importRows(rows,mode){
             targetName=_to;
         }else{
         var existing=roster[r.name], _needOwnKey=false;
-        if(mode==='update'&&existing&&_sameCamperSignal(existing,r)){
+        // Update mode, no ID column: the row is the ONE camper shown with that
+        // name who is the same child (birthday, else parent email/address) —
+        // whichever key they are filed under ("Avi Katz" or "Avi Katz #11").
+        var _cur=(mode==='update'&&!r.camperId)?_returningCamper(roster,r,_claimedCur):null;
+        if(_cur){
+            isUpdate=true;
+            targetName=_cur.key;_claimedCur[_cur.key]=1;
+            camperId=_cur.id;
+            oldBunk=_cur.rec.bunk;
+        }else if(mode==='update'&&existing&&_sameCamperSignal(existing,r)){
             // Same camper (name + same family) — update in place, keep
             // their camperId, and move them off any OLD bunk they're no
             // longer listed in.
@@ -22352,7 +22381,9 @@ function importRows(rows,mode){
         // enrollments. A CSV import creates roster entries and no enrollments, so
         // an imported camper is not on any invite to be stamped into. They reach a
         // parent portal when they are enrolled, and enrollCamper refreshes it then.
-        roster[targetName]=_buildCamperRecord(r,camperId);
+        // A new child says when it was added: a freed number the file gives
+        // them is then not mistaken for a stale copy of an erased child (260).
+        roster[targetName]=Object.assign(_buildCamperRecord(r,camperId),isUpdate?{}:{addedAt:Date.now()});
         if(targetName!==r.name)roster[targetName].displayName=r.name;
         if(oldBunk&&oldBunk!==r.bunk&&bunkAsgn[oldBunk]){
             var oi=bunkAsgn[oldBunk].indexOf(targetName);

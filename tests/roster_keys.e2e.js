@@ -20,6 +20,13 @@
 //   5. The roster is re-imported with the spreadsheet's Replace option and no
 //      Camper ID column (Ted, TED-013): a returning child keeps her number,
 //      her key and her money; a new child gets a new number.
+//   4b. (TED-016/017) Dov gets a new Camper ID through the form. The Me page
+//      saves the roster and its own document in one statement; both reach
+//      the database, another page's record and the family invitation follow
+//      him, and a later edit still saves.
+//   4c. (TED-020) Renamed and renumbered in one edit: still one child.
+//   4d. (TED-022) A spreadsheet Update with no Camper ID column updates the
+//      child filed as "Avi Katz #<n>", rather than adding a third Avi.
 //
 // It SKIPS with exit 0 when Playwright or Postgres is missing, like the other
 // browser tests.
@@ -90,6 +97,15 @@ function seed(db) {
         'Leah Fox': { name: 'Leah Fox', camperId: 20, division: 'Boys', grade: 'Junior', bunk: 'J1',
                       dob: '2015-05-05', parent1Email: 'fox@keys.test' },
     } });
+    // Dov is enrolled (the Me page's own document), has a health record (another
+    // page's document), and a family invitation — all on his number.
+    kvWrite(db, 'campistryMe', { enrollments: {
+        enr_dov: { id: 'enr_dov', camperName: 'Dov Stern', camperId: 3, status: 'enrolled' },
+    } });
+    kvWrite(db, 'campistryHealth', { sickVisits: [{ camperName: 'Dov Stern', camperId: 3, complaint: 'cough' }] });
+    db.sql(`INSERT INTO link_parent_invites (id, camp_id, parent_email, camper_names, person_ids, status)
+            VALUES ('53000000-aaaa-0000-0000-000000000001', '${CAMP}', 'stern@keys.test',
+                    '["Dov Stern"]', '[3]', 'active');`);
     // Leah has money on her canteen account — it is on her number.
     db.sql(`INSERT INTO camp_canteen_accounts (camp_id, account_key, person_id, camper_name, balance)
             VALUES ('${CAMP}', 'Leah Fox', 20, 'Leah Fox', 30.00);`);
@@ -110,6 +126,8 @@ function seed(db) {
     const page = await browser.newPage({ viewport: { width: 1600, height: 1000 } });
     const pageErrors = [];
     page.on('pageerror', e => pageErrors.push(String(e).split('\n')[0]));
+    const syncErrors = [];
+    page.on('console', m => { if (/Failed to sync|cannot affect row a second time/i.test(m.text())) syncErrors.push(m.text()); });
     await page.route('**/*', r =>
         r.request().url().startsWith('http://localhost:' + PORT) ? r.continue() : r.abort());
     await page.addInitScript(shim + `
@@ -185,6 +203,7 @@ function seed(db) {
 
         await openCamperForm(newAvi.key);
         await page.fill('#ceSchool', 'Yeshiva Test');
+        await page.fill('#ceP1Em', 'katz@keys.test');
         await saveCamperForm();
         await waitFor('the edit to reach the database', () => {
             const r = (kvRead(db, 'app1') || {}).camperRoster || {};
@@ -208,6 +227,72 @@ function seed(db) {
         check('his identity moved with him and is not departed',
             p3.length === 1 && p3[0].source_key === 'Dov Sterne' && !p3[0].gone, JSON.stringify(p3));
         check('no new number was issued for him', !people(db).some(p => p.source_key === 'Dov Sterne' && p.person_id !== 3),
+            JSON.stringify(people(db)));
+
+        step('4b', 'Dov is given a new Camper ID through the form (3 → 40) — the Me page saves several documents in one go (TED-016)');
+        await openCamperForm('Dov Sterne');
+        await page.fill('#ceCamperId', '40');
+        await saveCamperForm();
+        await waitFor('the renumber to reach the database', () =>
+            people(db).some(p => p.person_id === 40 && p.source_key === 'Dov Sterne'), 30000);
+        await waitFor('the enrollment to follow', () => {
+            const m = kvRead(db, 'campistryMe') || {};
+            return m.enrollments && m.enrollments.enr_dov && Number(m.enrollments.enr_dov.camperId) === 40;
+        }, 30000);
+        check('the roster in the database says #40', Number(kvRead(db, 'app1').camperRoster['Dov Sterne'].camperId) === 40);
+        check('his enrollment in the database says #40', true);
+        check('another page\'s record (Health) follows him to #40',
+            Number(kvRead(db, 'campistryHealth').sickVisits[0].camperId) === 40, JSON.stringify(kvRead(db, 'campistryHealth')));
+        const inv = db.json(`SELECT person_ids FROM link_parent_invites WHERE id = '53000000-aaaa-0000-0000-000000000001'`);
+        check('his family\'s invitation follows him to #40', JSON.stringify(inv[0].person_ids) === '[40]', JSON.stringify(inv));
+        check('number 3 is nobody\'s now', !people(db).some(p => p.person_id === 3), JSON.stringify(people(db)));
+        // A later, unrelated edit still reaches the database.
+        await openCamperForm('Leah Fox');
+        await page.fill('#ceSchool', 'After The Renumber');
+        await saveCamperForm();
+        await waitFor('a later edit to reach the database', () => {
+            const r = (kvRead(db, 'app1') || {}).camperRoster || {};
+            return r['Leah Fox'] && r['Leah Fox'].school === 'After The Renumber';
+        }, 30000);
+        check('a later edit reaches the database', true);
+        check('the page reports no failed cloud save', !syncErrors.length, syncErrors.slice(0, 3).join(' | '));
+
+        step('4c', 'Dov is renamed AND renumbered in one edit (Sterne #40 → Stone #41): one child (TED-020)');
+        await openCamperForm('Dov Sterne');
+        await page.fill('#ceLast', 'Stone');
+        await page.fill('#ceCamperId', '41');
+        await saveCamperForm();
+        await waitFor('the edit to reach the database', () =>
+            people(db).some(p => p.person_id === 41 && p.source_key === 'Dov Stone'), 30000);
+        const dovs = people(db).filter(p => /^Dov/.test(p.source_key));
+        check('still one Dov, live, on #41', dovs.length === 1 && dovs[0].person_id === 41 && !dovs[0].gone, JSON.stringify(dovs));
+        await waitFor('his records to follow', () =>
+            Number(kvRead(db, 'campistryHealth').sickVisits[0].camperId) === 41, 30000);
+        check('his records followed him to #41', true);
+        check('the renumber hint is not stored', !('renumberedFrom' in kvRead(db, 'app1').camperRoster['Dov Stone']));
+
+        step('4d', 'a spreadsheet Update (no Camper ID column) has a row for the new Avi Katz, filed as "' + newAvi.key + '" (TED-022)');
+        const csvU = '"First Name","Last Name","Date of Birth","Division","Grade","Bunk","Parent 1 Email"\n'
+                   + '"Avi","Katz","2016-02-02","Boys","Junior","J1","katz@keys.test"\n';
+        await page.evaluate(() => { window.CampistryMe.nav('campers'); window.CampistryMe.openCsv(); });
+        await page.setInputFiles('#csvFI', { name: 'update.csv', mimeType: 'text/csv', buffer: Buffer.from(csvU) });
+        await page.waitForSelector('#csvBtn:not([disabled])', { timeout: 10000 });
+        await page.click('#csvBtn');
+        await page.waitForSelector('#confirmDlgOk', { timeout: 10000 });
+        await page.check('input[name="csvImportMode"][value="update"]');
+        await page.fill('#csvArchiveLabel', '');
+        await page.click('#confirmDlgOk');
+        await waitFor('the update to reach the database', () => {
+            const r = (kvRead(db, 'app1') || {}).camperRoster || {};
+            return Object.keys(r).some(k => /^Avi Katz/.test(k) && r[k].dob === '2016-02-02');
+        }, 40000);
+        await new Promise(r => setTimeout(r, 1500));
+        const r4d = kvRead(db, 'app1').camperRoster;
+        const aviKeys = Object.keys(r4d).filter(k => /^Avi Katz/.test(k));
+        check('the row updated that Avi, under his own key and number',
+            aviKeys.length === 1 && aviKeys[0] === newAvi.key && r4d[newAvi.key].dob === '2016-02-02'
+            && Number(r4d[newAvi.key].camperId) === Number(newAvi.rec.camperId), JSON.stringify(aviKeys));
+        check('no third Avi Katz was made', people(db).filter(p => /^Avi Katz/.test(p.source_key)).length === 2,
             JSON.stringify(people(db)));
 
         step(5, 'the office re-imports the roster with the spreadsheet\'s Replace option, with no Camper ID column');
@@ -235,7 +320,7 @@ function seed(db) {
         const bal = db.json(`SELECT balance FROM camp_canteen_accounts WHERE camp_id = '${CAMP}' AND person_id = 20`);
         check('her $30 is still on her number', bal.length === 1 && Number(bal[0].balance) === 30, JSON.stringify(bal));
         check('a new child in the file got a new number', Number(r5['Newt Ray'].camperId) > 0
-            && ![3, 4, 10, 20].includes(Number(r5['Newt Ray'].camperId)), JSON.stringify(r5['Newt Ray'].camperId));
+            && ![3, 4, 10, 20, 40, 41].includes(Number(r5['Newt Ray'].camperId)), JSON.stringify(r5['Newt Ray'].camperId));
 
         const v = db.json(`SELECT public.verify_roster_keys() AS v`)[0].v;
         check('no key is shown by the wrong child', JSON.stringify(v.keys_shown_by_the_wrong_child) === '[]', JSON.stringify(v));

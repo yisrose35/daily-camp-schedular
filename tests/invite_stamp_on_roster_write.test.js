@@ -106,7 +106,8 @@ test('the ones that put a camper on an invite refresh it', () => {
 test('and the one that does not says why, in the source', () => {
     // "It does not need one" is precisely what was assumed about enrollCamper, so
     // the exemption has to carry its reason where the next reader will find it.
-    const at = ME.indexOf('roster[targetName]=_buildCamperRecord');
+    const m = /roster\[targetName\]=(?:Object\.assign\()?_buildCamperRecord/.exec(ME);
+    const at = m ? m.index : -1;
     assert.ok(at >= 0, 'importRows no longer writes a roster entry that way');
     const before = ME.slice(Math.max(0, at - 1200), at);
     assert.match(before, /ENROLLMENT-based|not on any invite/,
