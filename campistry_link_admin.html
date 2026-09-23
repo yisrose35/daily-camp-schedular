@@ -1141,7 +1141,7 @@
 <script src="config.js?v=20260903-03"></script>
 <script src="supabase-js@2.js?v=20260903-03"></script>
 <script src="campistry_camper_id_rpc.js?v=20260923-20"></script>
-<script src="supabase_client.js?v=20260923-07"></script>
+<script src="supabase_client.js?v=20260923-08"></script>
 <script src="campistry_security.js?v=20260903-03"></script>
 <script src="campistry_finance_merge.js?v=20260918-10"></script>
 <script src="integration_hooks.js?v=20260923-22"></script>
@@ -4205,13 +4205,24 @@ function _pgCamperData(children){
     return out;
 }
 
+// Plain words for the reasons the database gives when it refuses an
+// invitation or a join request, instead of its internal codes.
+function _pgReason(res){
+    var code = (res && res.data && res.data.error) || (res && res.error && res.error.message) || '';
+    if (code === 'not_camp_office') return 'only the camp office (owner, admin or manager) can do this';
+    if (code === 'not_authenticated') return 'you are signed out — sign in again';
+    if (/network|fetch|timeout/i.test(code)) return 'no connection — try again';
+    if (/reloading/i.test(code)) return 'this page is reloading — try again after it loads';
+    return code || 'unknown problem';
+}
+
 async function bulkInviteAll(){
     var db = _dbc2(); if (!db) { toast('Not signed in'); return; }
     var fams = _pgFamilies();
     if (!fams.length) { toast('No families with parent emails on the roster'); return; }
     var prog = document.getElementById('bulkInviteProg');
     prog.style.display = 'block';
-    var ok = 0, fail = 0;
+    var ok = 0, fail = 0, reasons = {};
     var expires = new Date(); expires.setFullYear(expires.getFullYear() + 1);
     // Each family may invite up to two DISTINCT parent emails — each gets its
     // own link_parent_invites row (own token/access code), so both parents can
@@ -4236,10 +4247,10 @@ async function bulkInviteAll(){
                 p_camper_data: _pgCamperData(j.children),
                 p_expires_at: expires.toISOString()
             });
-            if (res.error || !res.data || !res.data.success) fail++; else ok++;
-        } catch(e) { fail++; }
+            if (res.error || !res.data || !res.data.success) { fail++; var why = _pgReason(res); reasons[why] = (reasons[why] || 0) + 1; } else ok++;
+        } catch(e) { fail++; var why2 = _pgReason({ error: e }); reasons[why2] = (reasons[why2] || 0) + 1; }
     }
-    prog.innerHTML = '<div style="color:var(--green-600);font-size:.82rem;">' + ok + ' parent logins invited' + (fail ? ' · <span style="color:var(--red-500);">' + fail + ' failed</span>' : '') + '</div>';
+    prog.innerHTML = '<div style="color:var(--green-600);font-size:.82rem;">' + ok + ' parent logins invited' + (fail ? ' · <span style="color:var(--red-500);">' + fail + ' failed: ' + esc(Object.keys(reasons).map(function(r){ return r + (reasons[r] > 1 ? ' (' + reasons[r] + ')' : ''); }).join('; ')) + '</span>' : '') + '</div>';
     refreshParentsPage();
 }
 
@@ -4250,6 +4261,7 @@ function refreshParentsPage(){
 
     db.client.rpc('get_camp_parent_invites', { p_camp_id: db.campId }).then(function(res){
         _parentInvitesByEmail = {};
+        _pgOfficeOnly = !!(res && res.data && res.data.error === 'not_camp_office');
         // Only the camp office sees families' invitations and codes (migration 261).
         if (res && res.data && res.data.error === 'not_camp_office') {
             var host = document.getElementById('portalShareUrl');
@@ -4278,7 +4290,11 @@ function refreshParentsPage(){
 // Renders a status badge for one parent's invite and counts it into the
 // invited/claimed page-level stats — called once per parent (up to 2 per
 // family row), so the stats reflect LOGINS, not just families.
+var _pgOfficeOnly = false;
 function _pgStatusBadge(inv, counters){
+    // Staff outside the office cannot see invitations at all (261): show
+    // nothing rather than a "No invite" that may not be true.
+    if (_pgOfficeOnly) return '<span class="badge badge-neutral" title="Only the camp office can see invitations">—</span>';
     if (inv) counters.invited++;
     if (inv && inv.claimed) counters.claimed++;
     return !inv ? '<span class="badge badge-neutral">No invite</span>'
@@ -4331,8 +4347,8 @@ function _renderParentFamilies(){
         var mailSvg = '<svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M4 4h16c1.1 0 2 .9 2 2v12c0 1.1-.9 2-2 2H4c-1.1 0-2-.9-2-2V6c0-1.1.9-2 2-2z"/><polyline points="22,6 12,13 2,6"/></svg>';
         var checkSvg = '<svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="20 6 9 17 4 12"/></svg>';
         stats.innerHTML = stat('blue', famSvg, fams.length, 'Families')
-                        + stat('amber', mailSvg, counters.invited, 'Invited')
-                        + stat('green', checkSvg, counters.claimed, 'Signed up');
+                        + stat('amber', mailSvg, _pgOfficeOnly ? '—' : counters.invited, 'Invited')
+                        + stat('green', checkSvg, _pgOfficeOnly ? '—' : counters.claimed, 'Signed up');
     }
 }
 
@@ -4400,7 +4416,7 @@ async function resolveJoinReq(reqId, action){
     }
     var res = await db.client.rpc('resolve_join_request', { p_request_id: reqId, p_action: action, p_parent_email: email });
     if (res.error || !res.data || !res.data.success) {
-        toast('Could not resolve: ' + ((res.data && res.data.error) || (res.error && res.error.message) || 'unknown'));
+        toast('Could not resolve the request: ' + _pgReason(res));
         return;
     }
     toast(action === 'approve' ? 'Approved — parent now has access' : 'Request declined');
@@ -4453,7 +4469,7 @@ function downloadParentMailMerge(){
                 csv(name || ''), csv(email), csv(phone || ''), csv(kids),
                 csv(inv ? _pgPortalUrl(inv.token) : ''),
                 csv(inv ? (inv.access_code || '') : ''),
-                csv(!inv ? 'no invite' : (inv.claimed ? 'signed up' : 'invited'))
+                csv(_pgOfficeOnly ? 'office only' : !inv ? 'no invite' : (inv.claimed ? 'signed up' : 'invited'))
             ].join(','));
         }
         addRow(f.parentName, f.parentEmail, f.parentPhone);
@@ -4467,7 +4483,8 @@ function downloadParentMailMerge(){
     a.download = 'campistry_parent_invites.csv';
     a.click();
     URL.revokeObjectURL(a.href);
-    if (missing) toast(missing + ' parent login' + (missing === 1 ? '' : 's') + ' with no invite yet — run Generate first');
+    if (_pgOfficeOnly) toast('Links and access codes are left out: only the camp office (owner, admin or manager) can see them');
+    else if (missing) toast(missing + ' parent login' + (missing === 1 ? '' : 's') + ' with no invite yet — run Generate first');
 }
 
 // ─── PHOTOS ───────────────────────────────────────────────────────────────────

@@ -82,9 +82,9 @@
         // it may be sent — not a queued save, not the save-on-leave (TED-037).
         window.__campistryStalePage = true;
         try { localStorage.setItem(_egStoreKey(camp), String(server)); } catch (_) {}
-        try { console.warn('[SupabaseClient] a camper was erased or merged on another computer — clearing this page\'s copy and reloading'); } catch (_) {}
+        try { console.warn('[SupabaseClient] a camper was erased or merged in another tab or on another computer — clearing this page\'s copy and reloading'); } catch (_) {}
         try {
-            const msg = 'A camper was erased on another computer. Reloading to get the latest…';
+            const msg = 'A camper was erased or merged in another tab or on another computer. Reloading to get the latest…';
             if (typeof window.showToast === 'function') window.showToast(msg, 'warning');
             else if (typeof window.toast === 'function') window.toast(msg, 'warning');
         } catch (_) {}
@@ -176,7 +176,7 @@
             const write = method !== 'GET' && method !== 'HEAD' && method !== 'OPTIONS';
             const isRpcRead = /\/rest\/v1\/rpc\/get_camp_cache_epoch/.test(url);
             if (ours && write && !isRpcRead && (_EG.reloading || window.__campistryStalePage)) {
-                return Promise.resolve(new Response(JSON.stringify({ message: 'This page is reloading: a camper was erased on another computer.' }),
+                return Promise.resolve(new Response(JSON.stringify({ message: 'This page is reloading: a camper was erased or merged in another tab or on another computer.' }),
                     { status: 409, headers: { 'Content-Type': 'application/json' } }));
             }
             if (ours && write && /\/functions\/v1\//.test(url)) {
@@ -195,7 +195,7 @@
         if (!client || client.__eraseGuarded || typeof client.from !== 'function' || typeof client.rpc !== 'function') return client;
         client.__eraseGuarded = true;
         const rawRpc = client.rpc;
-        const blocked = { data: null, error: { message: 'A camper was erased on another computer — this page is reloading.' } };
+        const blocked = { data: null, error: { message: 'A camper was erased or merged in another tab or on another computer — this page is reloading.' } };
         // Hold a request until the check says this page's copy is current.
         function guardThen(builder, maxAgeMs) {
             if (!builder || typeof builder.then !== 'function') return builder;
@@ -259,7 +259,7 @@
                     const args = arguments;
                     return _eraseGuardCheck(rawRpc, client, 0).then(function (ok) {
                         return ok ? rawInvoke.apply(null, args)
-                                  : { data: null, error: { message: 'This page is reloading: a camper was erased on another computer.' } };
+                                  : { data: null, error: { message: 'This page is reloading: a camper was erased or merged in another tab or on another computer.' } };
                     });
                 };
                 fns.__eraseGuarded = true;
