@@ -1,21 +1,25 @@
 # Ted's ledger
 
 ## Last commit checked
-`0909cee` (2026-09-23)
+`b92dcdc` (2026-09-23)
 
 ## Open findings
 | ID | Severity | Description | Found | Status |
 |----|----------|-------------|-------|--------|
-| TED-021 | 🔴 | Erase → the camp auto-gives the next new child (Sara) the erased #2 → a stale Me tab saves app1+campistryMe: Sara vanishes, #2 becomes "Avi Gold", Sara's parent owns him. 0909cee's name-based detach only covers Me/Health docs saved without the roster; also misses records with no/different-case name and Go addresses keyed by name | 2026-09-23 | Open (worse than thought) |
-| TED-028 | 🟠 | Counselors/viewers fixed. Schedulers can still SELECT `access_code`/`token` from `link_parent_invites` (098 select policy) and claim any unclaimed family | 2026-09-23 | Open (narrower) |
-| TED-031 | 🟠 | 261's new TED-028 part only takes effect if 261 is re-run; `verify_identity_chain.sql` says 261 "ok" even when the invite list is ungated | 2026-09-23 | Open |
-| TED-032 | 🟡 | Non-office staff: parent-email change silently doesn't reach the invite; Link admin Parents shows "No invite" for all (suspected) | 2026-09-23 | Open (suspected) |
-| TED-002 | 🟡 | Camper-number transition not complete. Inventory A = 0 (`--check` up to date). Go `_camperId` now carried. Remaining: TED-021, TED-028 | 2026-09-23 | Open |
-| TED-005 | 🟠 | 14 auto-scheduler tests fail (`auto_full_day.test.js`); still 14 at 0909cee. Owner deferred. | 2026-09-23 | Open (deferred by owner) |
+| TED-033 | 🟠 | A Me tab opened earlier removes children added since (no erase, or added before the erase ran): they show as departed. Fix only covers children added after an erase | 2026-09-23 | Open |
+| TED-034 | 🟠 | Any parent can call `get_camper_numbers` and get every child's name + number, departed children, and (new) erased children's names | 2026-09-23 | Open |
+| TED-035 | 🟡 | Erased #2 typed on purpose for a new child + stale save: a record with only `camperId: 2` and no name lands on the new child | 2026-09-23 | Open |
+| TED-036 | 🟡 | verify_identity_chain's 261 table check only looks for "scheduler" in one named rule; says ok with RLS off or another broad rule | 2026-09-23 | Open |
+| TED-005 | 🟠 | 14 auto-scheduler tests fail (`auto_full_day.test.js`); still 14 at b92dcdc. Owner deferred. | 2026-09-23 | Open (deferred by owner) |
 
 ## Closed findings
 | ID | What it was | Closed | Proof |
 |----|-------------|--------|-------|
+| TED-021 | Erase → new child auto-given the erased number → stale tab brought the erased child back on it, owned by the new child's parent | 2026-09-23 | At b92dcdc: my unchanged `t031.sql` → Sara auto #3, Avi not back, `_parent_owns_person(camp,2)` = f; pgtest 260 fails with the mint skip or the put-back step removed. |
+| TED-028 | Schedulers could read access codes from `link_parent_invites` | 2026-09-23 | At b92dcdc, scratch DB as `authenticated`: scheduler 0 rows, counselor 0, manager 1, owner 1; scheduler UPDATE 0 rows; pgtest 261 fails with scheduler put back. |
+| TED-031 | Check script said 261 ok when the invite functions were ungated | 2026-09-23 | At b92dcdc: 032's list function put back → "run 261 again"; 261 re-run twice ok → ok. |
+| TED-032 | Non-office staff got silent failure on parent email / "No invite" in Link admin | 2026-09-23 | At b92dcdc (code read): `campistry_me.js:5911`, `campistry_link_admin.html:4253-4263`. Leftovers noted in the report (badges, bulk "N failed", join request raw code). |
+| TED-002 | Camper-number transition not complete | 2026-09-23 | At b92dcdc: inventory part A = 0, `--check` up to date; the remaining items TED-021/028 are closed. |
 | TED-001 | A payment/refund carrying a departed camper's number landed on an enrolled camper with the same name | 2026-09-23 | pgtest 257 fails without the fix; `npm run test:pg` passes. |
 | TED-003 | Campistry Lite sent no camper numbers; loaded scripts without `?v=` | 2026-09-23 | `campistry_lite.html:29` loads the wrapper first; Lite chain versioned. |
 | TED-004 | No test covered two campers sharing a name | 2026-09-23 | `scripts/pgtests/257_…sql` covers it and fails without the fix. |
@@ -46,8 +50,8 @@
 ## Areas audited
 | Area | Last deep audit |
 |------|-----------------|
-| Camper ID / camper number model (migrations 223-260, roster trigger, renumber, erase/merge, split repair, roster keys, invites, CSV import, Health entry) | 2026-09-23 (sixth pass) |
-| Parent invitations (`link_parent_invites`, `upsert_parent_invite`, claim functions, stamp trigger, `restamp_parent_invite`) | 2026-09-23 (numbers; who may write them; staff access to codes via RPC and table policy — TED-028/031) |
+| Camper ID / camper number model (migrations 223-260, roster trigger, renumber, erase/merge, split repair, roster keys, invites, CSV import, Health entry) | 2026-09-23 (seventh pass) |
+| Parent invitations (`link_parent_invites`, `upsert_parent_invite`, claim functions, stamp trigger, `restamp_parent_invite`) | 2026-09-23 (numbers; who may write them; staff access to codes via RPC and table policy, re-checked as `authenticated` at b92dcdc) |
 | Me page cloud save (`integration_hooks.js` batch upsert) | 2026-09-23 (only against the renumber trigger) |
 | Auto Builder (solver, layers, grid) | never (only test results seen) |
 | Manual Builder | never |
@@ -72,3 +76,4 @@
 | 2026-09-23 | Check my work: reworked 260 (TED-011, 016-022) | 19cb120 | unit 3270/14 · pg 49/0 · keys 29/0 (×4) · lite 12/0 · smoke 32/0 · scale 24/0 | 🔴 | [report](reports/2026-09-23-camper-id-reworked-260.md) |
 | 2026-09-23 | Check my work: 261 + 260 repairs (TED-021, 023-027) | bd61488 | unit 3270/14 · pg 50/0 · keys 31/0 · lite 12/0 · smoke 32/0 · scale 24/0 | 🟡 | [report](reports/2026-09-23-camper-id-261-recheck.md) |
 | 2026-09-23 | Check my work: TED-021, 028-030 fixes | 0909cee | unit 3270/14 · pg 50/0 · keys 31/0 · lite 12/0 · smoke 32/0 · scale 24/0 | 🔴 | [report](reports/2026-09-23-camper-id-ted028-recheck.md) |
+| 2026-09-23 | Check my work: TED-021, 028, 031, 032 fixes | b92dcdc | unit 3270/14 · pg 50/0 · keys 31/0 · lite 12/0 · smoke 32/0 · scale 24/0 | 🟡 | [report](reports/2026-09-23-camper-id-ninth-recheck.md) |
