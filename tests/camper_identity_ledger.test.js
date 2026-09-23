@@ -169,6 +169,11 @@ const FUNCTIONS_ON_NAMES = [
     'canteen_office_cash_out',
     'canteen_office_credit',
     'canteen_office_set_limit',
+    // 243's existence check for the payment edge functions. It answers "is this
+    // a camper here?" and moves nothing; the name is what those callers are
+    // handed by the processor's metadata, and it is resolved through
+    // camp_person_by_name — the same rule the writer they call next applies.
+    'canteen_camper_known',
     'create_cardknox_checkout_intent',
     'credit_canteen_balance_from_processor',
     'credit_canteen_balance_from_stripe',
@@ -265,6 +270,7 @@ const WHY_THE_NAME_IS_SAFE = {
     _camper_mail_record: 'resolves it',
     _latest_pickup_alert: 'resolves it',
     get_canteen_history: 'resolves it',
+    canteen_camper_known: 'resolves it',
 
     // Reach the row through the canteen lock, which translates.
     credit_canteen_balance_from_processor: 'lock translates',

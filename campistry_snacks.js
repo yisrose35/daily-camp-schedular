@@ -396,6 +396,13 @@ function cloudSaveSnacks(data) {
                 // from before the writers moved to rows, so they are stripped
                 // rather than written back.
                 _cloudUpsertSnacks(_withoutRowBackedBranches(merged));
+                // …and they must not come back into THIS TAB either. The merge
+                // reconciles every balance from the ledger it was handed, which
+                // is the frozen document's list — so without this, saving an
+                // inventory change reset every balance on screen to a number
+                // from before 219. The rows this tab last read stay what it shows.
+                if (data && data.accounts) merged.accounts = data.accounts;
+                if (data && data.transactions) merged.transactions = data.transactions;
                 // Keep local mirror consistent with what we just wrote.
                 try { var g = JSON.parse(localStorage.getItem(STORE_KEY) || '{}'); g.campistrySnacks = merged; localStorage.setItem(STORE_KEY, JSON.stringify(g)); } catch (_) {}
                 snacks = merged;

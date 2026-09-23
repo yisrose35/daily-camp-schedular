@@ -19,6 +19,16 @@ CREATE OR REPLACE FUNCTION public.camp_parent_campers(p_camp_id uuid) RETURNS js
 LANGUAGE sql STABLE SECURITY DEFINER SET search_path = public, pg_catalog
 AS $$ SELECT COALESCE(NULLIF(current_setting('test.campers', true), '')::jsonb, '[]'::jsonb) $$;
 
+-- 245 matches a parent's children by ID through camp_parent_camper_ids (227),
+-- which reads a real invite. This test has no invite — the parent is the names
+-- in test.campers — so the ids are those names resolved, the same resolution
+-- 227 falls back to for an unstamped slot.
+CREATE OR REPLACE FUNCTION public.camp_parent_camper_ids(p_camp_id uuid) RETURNS bigint[]
+LANGUAGE sql STABLE SECURITY DEFINER SET search_path = public, pg_catalog
+AS $$ SELECT COALESCE(array_agg(x.pid) FILTER (WHERE x.pid IS NOT NULL), '{}')
+        FROM (SELECT public.camp_person_by_name(p_camp_id, n) AS pid
+                FROM jsonb_array_elements_text(public.camp_parent_campers(p_camp_id)) n) x $$;
+
 -- The fixture below writes accounts into the snacks DOCUMENT and reads them back
 -- as rows. 219 dropped the trigger that made that happen (the writers moved to
 -- rows), so against the full chain the rows were empty and the first check

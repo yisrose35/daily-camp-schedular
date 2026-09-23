@@ -181,10 +181,18 @@ async function getFamily(service: ReturnType<typeof createClient>, campId: strin
   return fams[familyKey];
 }
 async function campHasCamper(service: ReturnType<typeof createClient>, campId: string, camperName: string) {
-  const { data } = await service.from("camp_state_kv").select("value")
-    .eq("camp_id", campId).eq("key", "campistrySnacks").maybeSingle();
-  const accts = (data?.value && typeof data.value === "object") ? (data.value as Record<string, any>).accounts : null;
-  return !!(accts && typeof accts === "object" && Object.prototype.hasOwnProperty.call(accts, camperName));
+  // The canteen accounts are ROWS since 219, and the page strips `accounts`
+  // out of every campistrySnacks document save — so reading the document said
+  // "no such camper" for everyone, and every canteen card deposit was refused.
+  // canteen_camper_known (migration 243) asks the roster and the account rows.
+  const { data, error } = await service.rpc("canteen_camper_known", {
+    p_camp_id: campId, p_camper_name: camperName,
+  });
+  if (error) {
+    console.error("[campHasCamper] canteen_camper_known failed:", error.message);
+    return false;   // fail closed: money is never taken for a camper we cannot confirm
+  }
+  return data === true;
 }
 
 serve(async (req) => {

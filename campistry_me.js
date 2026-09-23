@@ -1855,11 +1855,41 @@ function _closeoutAPI(){return (typeof window!=='undefined'&&window.CampistryClo
 function _camperLabel(key){
     return String(key==null?'':key).replace(/\s#\d+$/,'');
 }
+// The canteen accounts as the ROWS hold them, read fresh for each close-out.
+// ★ This read campistrySnacks.accounts out of the settings document, which the
+// Snacks page strips from every save since migration 219 — so every family's
+// close-out said "no unspent canteen money" and the parents' canteen balances
+// were never offered back. get_canteen_accounts serves the rows; migration 245
+// puts each account's camperId on it, which is what this matches on.
+var _closeoutCanteen=null;
+function _loadCloseoutCanteen(then){
+    try{
+        var client=window.CampistryDB&&window.CampistryDB.getClient?window.CampistryDB.getClient():window.supabase;
+        var campId=window.CampistryDB&&window.CampistryDB.getCampId?window.CampistryDB.getCampId():null;
+        if(!client||typeof client.rpc!=='function'||!campId){then(false);return}
+        client.rpc('get_canteen_accounts',{p_camp_id:campId}).then(function(res){
+            var d=res&&res.data;
+            if(!d||d.success!==true){then(false);return}
+            _closeoutCanteen=d.accounts||{};
+            then(true);
+        },function(){then(false)});
+    }catch(e){then(false)}
+}
 function _canteenAvailableFor(camperName){
     try{
-        var g=(typeof loadGlobalSettings==='function')?loadGlobalSettings():null;
-        var acc=g&&g.campistrySnacks&&g.campistrySnacks.accounts
-                &&g.campistrySnacks.accounts[camperName];
+        var accts=_closeoutCanteen||{};
+        // The PERSON first: after a rename the account is still keyed by the old
+        // spelling, and a different child may carry the old spelling now.
+        var cid=roster&&roster[camperName]&&roster[camperName].camperId;
+        var acc=null;
+        if(cid!=null&&cid!==''){
+            Object.keys(accts).some(function(k){
+                if(accts[k]&&accts[k].camperId!=null&&String(accts[k].camperId)===String(cid)){acc=accts[k];return true}
+                return false;
+            });
+        }
+        // An account with no id at all (never attributed) — by name, and only then.
+        if(!acc&&accts[camperName]&&accts[camperName].camperId==null)acc=accts[camperName];
         if(!acc)return 0;
         var avail=(Number(acc.balance)||0)-(Number(acc.balanceFloor)||0);
         return Math.max(0,Math.round(avail*100)/100);
@@ -1891,8 +1921,18 @@ function _closeoutCardCeiling(f){
  * applied until the office agrees to the whole disposition, because a card refund
  * that can only be partly done changes what happens to the rest.
  */
-function closeOutFamily(famKey){
+function closeOutFamily(famKey,_haveCanteen){
     if(!_secEdit('billing','Closing out a family'))return;
+    // The canteen money is part of what is being closed out, so it is read from
+    // the rows first — and a close-out that cannot see it does not proceed on a
+    // guess of zero.
+    if(!_haveCanteen){
+        _loadCloseoutCanteen(function(ok){
+            if(!ok){toast('Could not read canteen balances — not closing out without them. Check the connection and try again.','error');return}
+            closeOutFamily(famKey,true);
+        });
+        return;
+    }
     var C=_closeoutAPI();
     if(!C){toast('The close-out module did not load','error');return}
     var f=families[famKey];

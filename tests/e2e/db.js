@@ -119,6 +119,9 @@ const MIGRATIONS = [
     '240_the_canteen_desk_writes_to_the_cloud',
     '241_a_family_card_the_charger_can_find',
     '242_offline_register_sales_reach_the_ledger',
+    '243_the_nightly_reload_reads_the_rows',
+    '244_a_new_child_does_not_inherit_a_renamed_childs_account',
+    '245_the_canteen_ledger_is_read_from_its_rows',
 ];
 
 // The one thing the stubs deliberately get wrong for our purposes: they define

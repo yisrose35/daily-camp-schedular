@@ -279,24 +279,43 @@ test('the card ceiling comes from the SAME helper the refund screen uses', () =>
     assert.match(ME, /refundableToCard:_closeoutCardCeiling\(f\),/);
 });
 
-test('canteen money is read defensively from a key this page does not own', () => {
-    const fn = ME.slice(ME.indexOf('function _canteenAvailableFor(camperName)'));
-    const body = fn.slice(0, 800);
-    assert.match(body, /campistrySnacks/);
+/** One `function name(` body, bounded by its own braces. */
+function meBody(name) {
+    const at = ME.indexOf('function ' + name + '(');
+    if (at < 0) return null;
+    let depth = 0;
+    for (let j = ME.indexOf('{', at); j < ME.length; j++) {
+        if (ME[j] === '{') depth++;
+        else if (ME[j] === '}' && --depth === 0) return ME.slice(at, j + 1);
+    }
+    return ME.slice(at);
+}
+
+test('canteen money comes from the rows, below the floor excluded, never guessed', () => {
+    // This test used to REQUIRE the read from campistrySnacks — the document
+    // whose accounts the Snacks page strips on every save since 219. So it
+    // passed while every family's close-out said there was no canteen money.
+    // The rows are read fresh per close-out (_loadCloseoutCanteen) and matched
+    // by camper id; see tests/canteen_rows_everywhere.test.js.
+    const body = meBody('_canteenAvailableFor');
+    assert.ok(body, '_canteenAvailableFor is gone');
+    assert.doesNotMatch(body.replace(/\/\/[^\n]*/g, ''), /campistrySnacks/,
+        'the close-out reads canteen money from the stripped document again');
+    assert.match(body, /_closeoutCanteen/, 'it reads the rows the close-out loaded');
     assert.match(body, /balanceFloor/, 'money below the floor is not the family\'s to take');
-    assert.match(body, /catch\(e\)\{return 0\}/, 'and a page without it answers 0, not a guess');
+    assert.match(body, /catch\(e\)\{return 0\}/, 'and a failure answers 0, not a guess');
 });
 
 test('close-out is gated and reachable', () => {
-    const fn = ME.slice(ME.indexOf('function closeOutFamily(famKey)'));
-    assert.match(fn.slice(0, 400), /_secEdit\('billing'/);
+    const fn = meBody('closeOutFamily');
+    assert.ok(fn, 'closeOutFamily is gone');
+    assert.match(fn.slice(0, 400), /_secEdit\('billing'/, 'the gate comes first');
     assert.match(ME, /closeOutFamily:closeOutFamily,_closeoutPreview:_closeoutPreview,/);
     assert.match(ME, /CampistryMe\.closeOutFamily\(/, 'and there is a way in');
 });
 
 test('a family with nothing left is told so rather than shown an empty form', () => {
-    const fn = ME.slice(ME.indexOf('function closeOutFamily(famKey)'));
-    assert.match(fn.slice(0, 1600), /no credit balance and no unspent canteen money/);
+    assert.match(meBody('closeOutFamily'), /no credit balance and no unspent canteen money/);
 });
 
 test('the module is loaded before the page that uses it', () => {

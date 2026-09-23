@@ -135,9 +135,14 @@ test('a parent gets their own children, not the camp', () => {
         'the name fallback must apply only to accounts that have no owner yet');
     // The ledger matters as much as the balances: it is a list of what other
     // people's children bought.
-    assert.match(body, /v_mine \? COALESCE\(t->>'camper', ''\)/,
+    // Since 245 the ledger is rows, matched to the caller's children by ID, and
+    // by name only for a row that never had one — the same two-step as accounts.
+    assert.match(parentBranch, /t\.camper_id = ANY \(v_idtxt\)/,
         'the transaction list is returned unfiltered, so a parent still sees ' +
         'every other family’s canteen purchases');
+    assert.match(parentBranch, /t\.camper_id IS NULL AND v_mine \? t\.camper/,
+        'the ledger\'s name fallback must apply only to rows with no camper id — a '
+        + 'bare name match shows a family that reused a name the other child\'s purchases');
     assert.match(body, /'scope', 'parent'/,
         'nothing tells the caller the reply was scoped');
 });

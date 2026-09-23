@@ -4,9 +4,11 @@
 // Meant to be called on a recurring schedule by pg_cron (see
 // CANTEEN_AUTORELOAD_SETUP.md) — every 30 minutes during camp hours is the
 // suggested cadence, since a low canteen balance should resolve same-day, not
-// wait for a once-a-day job. For every camp it scans
-// campistrySnacks.accounts for camper accounts that have autoReload.enabled
-// === true and a saved card, then charges AT MOST ONE reload per run, based
+// wait for a once-a-day job. For every camp it reads the canteen account ROWS
+// (canteen_autoreload_accounts, migration 243 — never the campistrySnacks
+// document, whose accounts are stripped since 219) for camper accounts that
+// have autoReload.enabled === true and a saved card, then charges AT MOST ONE
+// reload per run, based
 // on whichever trigger is due:
 //   - THRESHOLD: thresholdEnabled && balance < thresholdAmount
 //   - SCHEDULE:  scheduleEnabled && today matches scheduleFrequency/scheduleDay
@@ -330,14 +332,39 @@ serve(async (req) => {
   let charged = 0, failed = 0;
   const details: Record<string, unknown>[] = [];
 
-  let kvQuery = supabase.from("camp_state_kv").select("camp_id, value").eq("key", "campistrySnacks");
-  if (scopeCampId) kvQuery = kvQuery.eq("camp_id", scopeCampId);
-  const { data: rows, error } = await kvQuery;
+  // The accounts come from camp_canteen_accounts, through
+  // canteen_autoreload_accounts (migration 243) — NOT from
+  // campistrySnacks.accounts. 219 made the rows the truth and the page strips
+  // `accounts` out of every document save, so reading the document found
+  // nobody after a camp's first save and this job charged no one, every night.
+  //
+  // Each account is keyed here by the camper's CURRENT name, which every
+  // canteen writer resolves to that person's account. The account key is not
+  // used: after a rename it is the old spelling, and if another child now
+  // carries it the writers would resolve it to them.
+  const { data: acctRows, error } = await supabase.rpc("canteen_autoreload_accounts",
+    scopeCampId ? { p_camp_id: scopeCampId } : {});
   if (error) {
     return new Response(JSON.stringify({ error: error.message }), {
       status: 500, headers: { ...corsHeaders, "Content-Type": "application/json" },
     });
   }
+  const unresolvable: Record<string, unknown>[] = [];
+  const byCamp = new Map<string, Record<string, any>>();
+  for (const a of (acctRows || []) as Record<string, any>[]) {
+    if (!a.resolvable) {
+      // An unattributed account whose key is now somebody else's name. Charging
+      // its card would credit the wrong child — skipped, and reported.
+      unresolvable.push({ camp: a.camp_id, camper: a.account_key, result: "skipped_unresolvable_account" });
+      continue;
+    }
+    const campKey = String(a.camp_id);
+    if (!byCamp.has(campKey)) byCamp.set(campKey, {});
+    byCamp.get(campKey)![String(a.camper_name)] = a.account || {};
+  }
+  // The shape the loop below was written against: one entry per camp with an
+  // accounts map. Kept so the charging logic is untouched by this change.
+  const rows = [...byCamp.entries()].map(([camp_id, accounts]) => ({ camp_id, value: { accounts } }));
 
   const { data: connectedCamps } = await supabase
     .from("camps")
@@ -389,6 +416,8 @@ serve(async (req) => {
       console.warn(`[canteen-auto-reload] autoReload-state write failed for ${campId}/${camperName}: ${res.error?.message || res.data?.error}`);
     }
   }
+
+  details.push(...unresolvable);
 
   for (const row of (rows || [])) {
     const snacks = (row.value && typeof row.value === "object") ? row.value as Record<string, any> : null;

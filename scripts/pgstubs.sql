@@ -178,11 +178,6 @@ CREATE OR REPLACE FUNCTION public._ts_or_null(p text) RETURNS timestamptz
 LANGUAGE plpgsql IMMUTABLE SET search_path = public, pg_catalog AS $$
 BEGIN RETURN p::timestamptz; EXCEPTION WHEN OTHERS THEN RETURN NULL; END; $$;
 
-CREATE OR REPLACE FUNCTION public.camp_reader(p_camp_id uuid) RETURNS boolean
-LANGUAGE sql STABLE SECURITY DEFINER SET search_path = public, pg_catalog AS $$
-    SELECT EXISTS (SELECT 1 FROM camps c WHERE c.id = p_camp_id AND c.owner = auth.uid())
-$$;
-
 -- 097's admin gate, copied verbatim rather than simplified: 232 refuses a
 -- restamp from anyone who is not an owner or admin, and a stub that always said
 -- yes would make that refusal untestable — which is how a gate ships open.
@@ -208,6 +203,31 @@ SET search_path = public, pg_catalog AS $$
          WHERE camp_id = p_camp_id AND user_id = auth.uid()
            AND accepted_at IS NOT NULL
     );
+$$;
+
+-- 183's parent side, verbatim, and its camp_reader built from the two. Before
+-- these were here every reader's PARENT branch failed on the stubs with
+-- "function does not exist" and was caught by its own EXCEPTION handler — so
+-- no test in this repo had ever exercised what a parent is shown.
+CREATE OR REPLACE FUNCTION public.camp_parent_campers(p_camp_id uuid)
+RETURNS jsonb LANGUAGE sql STABLE SECURITY DEFINER
+SET search_path = public, pg_catalog AS $$
+    SELECT COALESCE(
+        (SELECT jsonb_agg(DISTINCT n)
+           FROM link_parent_invites i,
+                LATERAL jsonb_array_elements_text(
+                    CASE WHEN jsonb_typeof(i.camper_names) = 'array'
+                         THEN i.camper_names ELSE '[]'::jsonb END) n
+          WHERE i.camp_id = p_camp_id
+            AND i.user_id = auth.uid()
+            AND (i.status = 'active' OR i.billing_access = true)
+            AND (i.expires_at IS NULL OR i.expires_at > now())),
+        '[]'::jsonb);
+$$;
+CREATE OR REPLACE FUNCTION public.camp_reader(p_camp_id uuid) RETURNS boolean
+LANGUAGE sql STABLE SECURITY DEFINER SET search_path = public, pg_catalog AS $$
+    SELECT public.camp_staff_member(p_camp_id)
+        OR jsonb_array_length(public.camp_parent_campers(p_camp_id)) > 0;
 $$;
 
 CREATE OR REPLACE FUNCTION public.user_section_level(p_camp_id uuid, p_section text)

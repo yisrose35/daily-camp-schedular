@@ -1,5 +1,5 @@
 -- ============================================================================
--- Confirm migrations 222-242 are in and doing their job.
+-- Confirm migrations 222-245 are in and doing their job.
 --
 -- Paste the whole thing into the Supabase SQL Editor. It is READ ONLY — one
 -- SELECT, nothing is created, changed or deleted, and the two purge functions
@@ -259,7 +259,7 @@
 
 UNION ALL
 
-  -- ─── 1b. 239-242, read off the DEPLOYED function bodies ───────────────────
+  -- ─── 1b. 239-245, read off the DEPLOYED function bodies ───────────────────
   -- A separate block, and the bodies are computed in a subquery rather than
   -- through 239's _prosrc_code helper, for one reason that cost a rewrite:
   -- POSTGRES RESOLVES FUNCTION NAMES WHEN IT PLANS THE STATEMENT, not when it
@@ -289,7 +289,15 @@ UNION ALL
                     FROM pg_proc p JOIN pg_namespace n ON n.oid = p.pronamespace
                    WHERE n.nspname = 'public'
                      AND p.proname = 'canteen_office_import_offline'
-                   LIMIT 1) AS offl) b
+                   LIMIT 1) AS offl,
+                 (SELECT regexp_replace(p.prosrc, '--[^' || chr(10) || ']*', '', 'g')
+                    FROM pg_proc p JOIN pg_namespace n ON n.oid = p.pronamespace
+                   WHERE n.nspname = 'public' AND p.proname = 'canteen_account_key_for'
+                   LIMIT 1) AS keyfor,
+                 (SELECT regexp_replace(p.prosrc, '--[^' || chr(10) || ']*', '', 'g')
+                    FROM pg_proc p JOIN pg_namespace n ON n.oid = p.pronamespace
+                   WHERE n.nspname = 'public' AND p.proname = 'get_canteen_accounts'
+                   LIMIT 1) AS ledger) b
     CROSS JOIN LATERAL (VALUES
     -- ⚠ THE ONE TO READ FIRST. Until 239, a signed-in user who belongs to no camp
     -- could call settle_shop_order with ANY camp's id and debit a camper's canteen
@@ -334,7 +342,26 @@ UNION ALL
            AND b.offl ~ '''offline:'''
            AND b.offl ~ 'sig\s*=\s*v_sig'
            AND b.offl ~ 'camp_person_label'
-          THEN 'ok' ELSE 'OFFLINE SALES STILL GO NOWHERE — apply 242' END)
+          THEN 'ok' ELSE 'OFFLINE SALES STILL GO NOWHERE — apply 242' END),
+
+    -- The nightly auto-reload found its campers in the document's accounts,
+    -- which are stripped since 219, so it charged nobody. The SQL half; the
+    -- four edge functions it names must also be redeployed.
+    ('243  the nightly reload reads the rows (and redeploy 4 edge functions)',
+     CASE WHEN to_regprocedure('public.canteen_autoreload_accounts(uuid)') IS NOT NULL
+           AND to_regprocedure('public.canteen_camper_known(uuid,text)') IS NOT NULL
+          THEN 'ok' ELSE 'AUTO-RELOAD STILL CHARGES NOBODY — apply 243' END),
+
+    -- A renamed child's account is keyed by the old spelling; a new child with
+    -- that spelling used to be handed it.
+    ('244  a new child does not inherit a renamed child''s account',
+     CASE WHEN b.keyfor ~ '''\s*#'''
+          THEN 'ok' ELSE 'A NEW CHILD CAN SPEND A RENAMED CHILD''S MONEY — apply 244' END),
+
+    -- The ledger both the office and parents read came from the frozen document.
+    ('245  the canteen ledger is read from its rows',
+     CASE WHEN b.ledger ~ 'FROM canteen_transactions' AND b.ledger !~ '''campistrySnacks'''
+          THEN 'ok' ELSE 'CANTEEN HISTORY IS FROZEN AT 219 — apply 245' END)
     ) AS x(item, result)
 
 UNION ALL
