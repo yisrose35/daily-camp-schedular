@@ -78,6 +78,17 @@ CREATE TABLE IF NOT EXISTS public.camp_erased_people (
 ALTER TABLE public.camp_erased_people ENABLE ROW LEVEL SECURITY;
 REVOKE ALL ON public.camp_erased_people FROM anon, authenticated;
 
+-- A roster key or a name as the pages show it, for comparing two names:
+-- without the " #<number>" a shared name is filed under, case and spaces aside.
+CREATE OR REPLACE FUNCTION public._name_base(p text)
+RETURNS text
+LANGUAGE sql
+IMMUTABLE
+SET search_path = public, pg_catalog
+AS $$
+    SELECT lower(btrim(regexp_replace(COALESCE(p, ''), '\s#\d+(?:-\d+)?\s*$', '')))
+$$;
+
 -- The number a child has today, following any move.
 CREATE OR REPLACE FUNCTION public._current_person_number(p_camp_id uuid, p_id bigint)
 RETURNS bigint
@@ -198,16 +209,21 @@ BEGIN
     IF jsonb_typeof(p_doc) = 'object' THEN
         v_own := COALESCE(p_name, '') <> '' AND EXISTS (
                    SELECT 1 FROM jsonb_each_text(p_doc) f
-                    WHERE f.key IN ('camperName', 'camper', 'name')
-                      AND regexp_replace(f.value, '\s#\d+(?:-\d+)?$', '') = p_name)
+                    WHERE f.key IN ('camperName', 'camper', 'name', 'displayName')
+                      AND public._name_base(f.value) = p_name)
                  AND EXISTS (
                    SELECT 1 FROM jsonb_each(p_doc) f
                     WHERE f.key IN ('camperId', '_camperId', 'personId', 'person_id', 'camper_id')
                       AND jsonb_typeof(f.value) IN ('number', 'string')
                       AND public._stated_person_id(f.value #>> '{}') = p_id);
         SELECT COALESCE(jsonb_object_agg(e.key,
-                 CASE WHEN jsonb_typeof(e.value) IN ('object', 'array')
-                      THEN public._detach_named_json(e.value, p_id, p_name) ELSE e.value END), '{}'::jsonb)
+                 CASE -- a record filed UNDER the erased child's name (Go's addresses)
+                      WHEN jsonb_typeof(e.value) = 'object' AND COALESCE(p_name, '') <> ''
+                           AND public._name_base(e.key) = p_name
+                        THEN public._detach_person_json(e.value, p_id)
+                      WHEN jsonb_typeof(e.value) IN ('object', 'array')
+                        THEN public._detach_named_json(e.value, p_id, p_name)
+                      ELSE e.value END), '{}'::jsonb)
           INTO v_out FROM jsonb_each(p_doc) e
          WHERE NOT (v_own AND e.key IN ('camperId', '_camperId', 'personId', 'person_id', 'camper_id')
                     AND jsonb_typeof(e.value) IN ('number', 'string')
@@ -271,12 +287,11 @@ BEGIN
     END LOOP;
     -- …and once a NEW child holds it: only the erased child's own records,
     -- by number AND name, lose the number.
-    FOR r IN SELECT e.person_id, regexp_replace(COALESCE(e.key, ''), '\s#\d+(?:-\d+)?$', '') AS base
+    FOR r IN SELECT e.person_id, public._name_base(e.key) AS base
                FROM camp_erased_people e
               WHERE e.camp_id = p_camp_id AND e.person_id = ANY (v_seen) AND COALESCE(e.key, '') <> ''
                 AND EXISTS (SELECT 1 FROM camp_people p WHERE p.camp_id = e.camp_id AND p.person_id = e.person_id
-                                                          AND regexp_replace(p.source_key, '\s#\d+(?:-\d+)?$', '')
-                                                              <> regexp_replace(e.key, '\s#\d+(?:-\d+)?$', ''))
+                                                          AND public._name_base(p.source_key) <> public._name_base(e.key))
     LOOP
         v_body := public._detach_named_json(v_body, r.person_id, r.base);
     END LOOP;
@@ -432,7 +447,10 @@ BEGIN
         RETURNING next_id - 1 INTO v_id;
 
         EXIT WHEN NOT EXISTS (SELECT 1 FROM camp_people WHERE camp_id = p_camp_id AND person_id = v_id)
-              AND NOT EXISTS (SELECT 1 FROM camp_person_renumbers WHERE camp_id = p_camp_id AND from_id = v_id);
+              AND NOT EXISTS (SELECT 1 FROM camp_person_renumbers WHERE camp_id = p_camp_id AND from_id = v_id)
+              -- an erased child's number is free, but only when a person
+              -- gives it out on purpose — never by itself (TED-021)
+              AND NOT EXISTS (SELECT 1 FROM camp_erased_people WHERE camp_id = p_camp_id AND person_id = v_id);
     END LOOP;
 
     RETURN v_id;
@@ -482,6 +500,7 @@ DECLARE
     v_from   bigint;
     v_was    bigint;
     v_hinted jsonb := '{}'::jsonb;
+    v_stale  timestamptz;
 BEGIN
     IF TG_OP = 'UPDATE' AND NOT v_all AND jsonb_typeof(OLD.value -> 'camperRoster') = 'object' THEN
         v_old := OLD.value -> 'camperRoster';
@@ -510,22 +529,29 @@ BEGIN
                 AND public._stated_person_id(n.value ->> 'camperId') IS NOT NULL
     LOOP
         v_id := public._stated_person_id(e.value ->> 'camperId');
-        CONTINUE WHEN EXISTS (SELECT 1 FROM camp_people p WHERE p.camp_id = NEW.camp_id AND p.person_id = v_id);
         -- An erased child: their number, under their name. A saved copy of
-        -- them (a tab opened before the erase) does not bring them back; a
-        -- child added again on purpose, after the erase (addedAt), does. A
-        -- different child given the freed number is simply given it.
-        SELECT erased_at INTO v_when FROM camp_erased_people
-         WHERE camp_id = NEW.camp_id AND person_id = v_id
-           AND regexp_replace(COALESCE(key, ''), '\s#\d+(?:-\d+)?$', '') = regexp_replace(e.key, '\s#\d+(?:-\d+)?$', '');
+        -- them (a tab opened before the erase) does not bring them back —
+        -- whether the number is still free or a NEW child holds it now (the
+        -- stale copy never takes it over: TED-021). A child added again on
+        -- purpose, after the erase (addedAt), does come back. A different
+        -- child given the freed number is simply given it.
+        SELECT erased_at INTO v_when FROM camp_erased_people x
+         WHERE x.camp_id = NEW.camp_id AND x.person_id = v_id
+           AND public._name_base(x.key) = public._name_base(COALESCE(NULLIF(e.value ->> 'displayName', ''), e.key))
+           AND NOT EXISTS (SELECT 1 FROM camp_people p WHERE p.camp_id = NEW.camp_id AND p.person_id = v_id
+                                                        AND public._name_base(p.source_key) = public._name_base(x.key));
         IF FOUND THEN
             IF public._entry_added_at(e.value) > v_when THEN
                 DELETE FROM camp_erased_people WHERE camp_id = NEW.camp_id AND person_id = v_id;
             ELSE
                 v_new := v_new - e.key;
+                -- This save comes from a tab opened before that erase: a child
+                -- added since is not missing from it on purpose.
+                v_stale := LEAST(COALESCE(v_stale, v_when), v_when);
                 CONTINUE;
             END IF;
         END IF;
+        CONTINUE WHEN EXISTS (SELECT 1 FROM camp_people p WHERE p.camp_id = NEW.camp_id AND p.person_id = v_id);
         -- A number that moved: this entry is either that child (it gets their
         -- number today) or somebody else (who gets a number of their own).
         v_to := public._current_person_number(NEW.camp_id, v_id);
@@ -549,6 +575,18 @@ BEGIN
             END IF;
         END IF;
     END LOOP;
+
+    -- A save from a tab opened before an erase never removes a child added
+    -- after it (it could not have known them): they are kept as they were.
+    IF v_stale IS NOT NULL THEN
+        FOR e IN SELECT p.source_key AS key, p.payload AS value FROM camp_people p
+                  WHERE p.camp_id = NEW.camp_id AND p.kind = 'camper' AND p.deleted_at IS NULL
+                    AND p.first_seen >= v_stale AND jsonb_typeof(p.payload) = 'object'
+                    AND NOT (v_new ? p.source_key)
+        LOOP
+            v_new := v_new || jsonb_build_object(e.key, COALESCE(v_prev -> e.key, e.value));
+        END LOOP;
+    END IF;
 
     -- 0b. (260) Renamed AND renumbered in one edit: the page says which number
     --     the child had. The child takes the new key first, so the numbering
@@ -665,9 +703,17 @@ BEGIN
                                FROM camp_people
                               WHERE camp_id = p_camp_id AND kind = 'camper'
                                 AND deleted_at IS NULL), '{}'::jsonb),
+        -- The page hands this out to a new child by itself: never below an
+        -- erased child's number (TED-021).
         'next', GREATEST(
                   COALESCE((SELECT max(person_id) + 1 FROM camp_people WHERE camp_id = p_camp_id), 1),
-                  COALESCE((SELECT next_id FROM camp_person_seq WHERE camp_id = p_camp_id), 1)),
+                  COALESCE((SELECT next_id FROM camp_person_seq WHERE camp_id = p_camp_id), 1),
+                  COALESCE((SELECT max(person_id) + 1 FROM camp_erased_people WHERE camp_id = p_camp_id), 1),
+                  COALESCE((SELECT max(from_id) + 1 FROM camp_person_renumbers WHERE camp_id = p_camp_id), 1)),
+        -- {number: name} of erased children: free, but the page warns before
+        -- one is typed for a new child.
+        'erased', COALESCE((SELECT jsonb_object_agg(person_id::text, key)
+                              FROM camp_erased_people WHERE camp_id = p_camp_id), '{}'::jsonb),
         'departed', COALESCE((SELECT jsonb_object_agg(person_id::text, source_key)
                                 FROM camp_people
                                WHERE camp_id = p_camp_id AND deleted_at IS NOT NULL), '{}'::jsonb),

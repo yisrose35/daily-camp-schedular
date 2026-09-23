@@ -130,3 +130,62 @@ BEGIN
     END IF;
 END $$;
 ROLLBACK;
+
+-- ════════════════════════════════════════════════════════════════════════════
+-- (TED-028) Reading the invitations TABLE, as a logged-in user under its real
+-- read rules: a scheduler sees no family's access code (so cannot claim one);
+-- the owner does; a parent sees their own invitation only.
+-- ════════════════════════════════════════════════════════════════════════════
+BEGIN;
+INSERT INTO auth.users (id, email) VALUES
+    ('a6100000-0000-0000-0000-0000000000a2', 'owner2@261.test'),
+    ('a6100000-0000-0000-0000-0000000000e2', 'scheduler2@261.test'),
+    ('a6100000-0000-0000-0000-0000000000f2', 'parent2@261.test');
+INSERT INTO camps (id, name, owner) VALUES
+    ('a6100000-0000-0000-0000-000000000002', '261 camp two', 'a6100000-0000-0000-0000-0000000000a2');
+INSERT INTO camp_users (camp_id, user_id, role, accepted_at) VALUES
+    ('a6100000-0000-0000-0000-000000000002', 'a6100000-0000-0000-0000-0000000000e2', 'scheduler', now());
+INSERT INTO link_parent_invites (camp_id, parent_email, camper_names, person_ids, status, access_code, token, user_id) VALUES
+    ('a6100000-0000-0000-0000-000000000002', 'gold2@261.test', '["Moshe Gold"]', '[5]', 'active', 'GOLD-CODE', 'tok-gold2', NULL),
+    ('a6100000-0000-0000-0000-000000000002', 'parent2@261.test', '["Dina Gold"]', '[6]', 'active', 'DINA-CODE', 'tok-dina2',
+     'a6100000-0000-0000-0000-0000000000f2');
+-- A parent's own read rule, exactly as 009 has it live (009 is not in the chain).
+CREATE POLICY link_parent_invites_parent_select ON public.link_parent_invites
+    FOR SELECT USING (user_id = auth.uid());
+GRANT USAGE ON SCHEMA auth TO authenticated;
+GRANT SELECT ON public.link_parent_invites TO authenticated;
+CREATE OR REPLACE FUNCTION auth.uid() RETURNS uuid LANGUAGE sql STABLE
+  AS $f$ SELECT NULLIF(current_setting('t261.uid', true), '')::uuid $f$;
+
+SET LOCAL t261.uid = 'a6100000-0000-0000-0000-0000000000e2';
+SET LOCAL ROLE authenticated;
+DO $$
+BEGIN
+    IF EXISTS (SELECT 1 FROM public.link_parent_invites WHERE access_code IS NOT NULL) THEN
+        RAISE EXCEPTION 'TED-028: a scheduler read families'' access codes from the table: %',
+            (SELECT jsonb_agg(access_code) FROM public.link_parent_invites);
+    END IF;
+END $$;
+RESET ROLE;
+
+SET LOCAL t261.uid = 'a6100000-0000-0000-0000-0000000000a2';
+SET LOCAL ROLE authenticated;
+DO $$
+BEGIN
+    IF (SELECT count(*) FROM public.link_parent_invites) <> 2 THEN
+        RAISE EXCEPTION 'the owner cannot read the camp''s invitations';
+    END IF;
+END $$;
+RESET ROLE;
+
+SET LOCAL t261.uid = 'a6100000-0000-0000-0000-0000000000f2';
+SET LOCAL ROLE authenticated;
+DO $$
+BEGIN
+    IF (SELECT array_agg(access_code) FROM public.link_parent_invites) IS DISTINCT FROM ARRAY['DINA-CODE'] THEN
+        RAISE EXCEPTION 'a parent does not see exactly their own invitation: %',
+            (SELECT array_agg(access_code) FROM public.link_parent_invites);
+    END IF;
+END $$;
+RESET ROLE;
+ROLLBACK;

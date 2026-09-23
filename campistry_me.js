@@ -324,6 +324,9 @@ function reservePersonId(id){
 var _serverHeldNumbers={};
 // Numbers a camper was renumbered off: {old: new}. Never given to anyone else.
 var _serverMovedNumbers={};
+// Numbers of erased campers: {number: name}. Free, but never handed out by
+// itself (260) — typing one for a new camper gets a warning.
+var _serverErasedNumbers={};
 // Roster keys that belong to a child other than whoever shows them now (a
 // departed child, or a renamed child's old name): {key: their number}. A new
 // child is never filed under one (259) — they get "<name> #<number>".
@@ -382,6 +385,7 @@ function _reconcileCamperNumbers(){
         });
         // A number that moved to another child is taken, like a departed one.
         _serverMovedNumbers=d.moved&&typeof d.moved==='object'?d.moved:{};
+        _serverErasedNumbers=d.erased&&typeof d.erased==='object'?d.erased:{};
         Object.keys(roster).forEach(function(k){var l=normalizePersonId((roster[k]||{}).camperId);if(l)localCount[l]=(localCount[l]||0)+1});
         var fixed=[];
         Object.keys(roster).forEach(function(k){
@@ -5749,6 +5753,8 @@ function saveCamper(){
         if(!_typedId){toast('Camper ID must be a number','error');return}
         var _holder=personIdHolder(_typedId,editingCamper||full);
         if(_holder){toast('ID '+_typedId+' already belongs to '+_holder,'error');return}
+        if(_serverErasedNumbers[_typedId]&&String(normalizePersonId(_oldRec.camperId))!==String(_typedId))
+            toast('Note: #'+_typedId+' belonged to '+_lbl(_serverErasedNumbers[_typedId])+', who was erased. It is free, but a new number is safer.');
         // A new number for this camper: every record this page holds for them
         // moves with it (the server does the same for the tables and every
         // saved document — 237/260), or the next save would put the old one back.
@@ -5902,6 +5908,7 @@ function saveCamper(){
                     var d=res&&res.data;
                     if(d&&d.success&&d.moved)toast('Parent portal email updated');
                     else if(d&&d.error==='target_email_exists')toast('Note: an invite already exists for '+_newParentEmail);
+                    else if(d&&d.error==='not_camp_office')toast('The parent portal still uses the old email — only the camp office (owner, admin or manager) can change it.','error');
                 }).catch(function(){});
             }
         }catch(_){}

@@ -22,7 +22,9 @@
 -- invitation, is the office's too now.
 --
 -- Standalone. Does NOT need 260 — paste it into the Supabase SQL Editor and
--- run it as soon as you can. Safe to run twice. NOT part of APPLY_BUNDLE.sql.
+-- run it as soon as you can. Safe to run twice — and if you ran an EARLIER
+-- copy of this file, run this one again: it closes more (the verify script's
+-- 261 row says "run 261 again" until you do). NOT part of APPLY_BUNDLE.sql.
 -- Afterwards, run the read-only check at the bottom of this file.
 -- ============================================================================
 
@@ -159,6 +161,20 @@ BEGIN
         END LOOP;
     END LOOP;
 END $$;
+
+-- ─── reading the invitations table itself (TED-028) ─────────────────────────
+-- The table's staff read rule (098) let a scheduler read every column —
+-- every family's access code and token — straight from the table, and claim
+-- a family with it. Staff reads are the office's now, like the functions
+-- above. (A parent still reads their OWN invitation: 009's parent rule.)
+ALTER TABLE public.link_parent_invites ENABLE ROW LEVEL SECURITY;   -- as it is live (008)
+DROP POLICY IF EXISTS link_parent_invites_select ON public.link_parent_invites;
+CREATE POLICY link_parent_invites_select ON public.link_parent_invites
+    FOR SELECT
+    USING (
+        camp_id = get_user_camp_id()
+        AND get_user_role() = ANY (ARRAY['owner'::text, 'admin'::text, 'manager'::text])
+    );
 
 -- ─── read-only check: was the hole used? ────────────────────────────────────
 -- Every claimed invitation that covers a whole camp (it names no children).

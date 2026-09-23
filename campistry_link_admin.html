@@ -4250,6 +4250,17 @@ function refreshParentsPage(){
 
     db.client.rpc('get_camp_parent_invites', { p_camp_id: db.campId }).then(function(res){
         _parentInvitesByEmail = {};
+        // Only the camp office sees families' invitations and codes (migration 261).
+        if (res && res.data && res.data.error === 'not_camp_office') {
+            var host = document.getElementById('portalShareUrl');
+            if (host && host.parentNode && !document.getElementById('pgOfficeOnlyNote')) {
+                var note = document.createElement('div');
+                note.id = 'pgOfficeOnlyNote';
+                note.style.cssText = 'margin:8px 0;color:#b45309;font-size:.85rem';
+                note.textContent = 'Only the camp office (owner, admin or manager) can see families\' invitations and access codes.';
+                host.parentNode.appendChild(note);
+            }
+        }
         if (!res.error && res.data && res.data.success) {
             (res.data.invites || []).forEach(function(inv){
                 _parentInvitesByEmail[(inv.parent_email || '').toLowerCase()] = inv;

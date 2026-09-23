@@ -514,6 +514,16 @@ UNION ALL
      CASE WHEN to_regprocedure('public._is_camp_office(uuid,uuid)') IS NULL
                OR pg_get_functiondef('public.upsert_parent_invite(uuid,text,text,text,jsonb,jsonb,timestamptz)'::regprocedure)
                   !~ '_is_camp_office' THEN 'apply 261 — ANY logged-in account can make itself a parent of any child'
+          -- every function that hands out, binds or changes a family's
+          -- invitation, and the table's own read rule, must be office-only
+          WHEN EXISTS (SELECT 1 FROM pg_proc p JOIN pg_namespace ns ON ns.oid = p.pronamespace
+                        WHERE ns.nspname = 'public'
+                          AND p.proname IN ('get_camp_parent_invites', 'resolve_join_request', 'set_parent_invite_email',
+                                            'set_parent_billing_access', 'revoke_orphaned_parent_invites')
+                          AND pg_get_functiondef(p.oid) !~ '_is_camp_office')
+               OR EXISTS (SELECT 1 FROM pg_policies WHERE schemaname = 'public' AND tablename = 'link_parent_invites'
+                             AND policyname = 'link_parent_invites_select' AND qual ~ 'scheduler')
+            THEN 'run 261 again — staff outside the office can still read families'' access codes and claim a child'
           WHEN EXISTS (SELECT 1 FROM link_parent_invites WHERE user_id IS NOT NULL AND camper_names IS NULL)
             THEN (SELECT count(*) FROM link_parent_invites WHERE user_id IS NOT NULL AND camper_names IS NULL)
                  || ' claimed invitation(s) cover a WHOLE camp — look at them: SELECT camp_id, parent_email, created_at FROM link_parent_invites WHERE user_id IS NOT NULL AND camper_names IS NULL;'

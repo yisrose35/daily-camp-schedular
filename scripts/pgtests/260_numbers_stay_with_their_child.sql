@@ -498,6 +498,109 @@ END $$;
 ROLLBACK;
 
 -- ════════════════════════════════════════════════════════════════════════════
+-- 6d. (TED-021) Ted's order, with the old tab's ROSTER save: Avi #2 is erased;
+--     a new child, Sara, gets a number by herself; her mother is invited;
+--     then a tab opened that morning saves the roster (Avi, no Sara) and the
+--     Me document together. Avi must not come back, Sara must not vanish,
+--     and Sara's mother must never own Avi. Then the same with #2 typed for
+--     Sara on purpose.
+-- ════════════════════════════════════════════════════════════════════════════
+BEGIN;
+INSERT INTO camps (id, name, owner) VALUES ('a6000000-0000-0000-0000-000000000036', '260 camp six-d',
+                                            'a6000000-0000-0000-0000-0000000000a6');
+INSERT INTO auth.users (id, email) VALUES ('a6000000-0000-0000-0000-0000000000b6', 'levi@260.test');
+INSERT INTO camp_state_kv (camp_id, key, value) VALUES
+    ('a6000000-0000-0000-0000-000000000036', 'app1',
+     '{"camperRoster":{"Moshe Gold":{"name":"Moshe Gold","camperId":1},"Avi Gold":{"name":"Avi Gold","camperId":2}}}'),
+    ('a6000000-0000-0000-0000-000000000036', 'campistryMe',
+     '{"enrollments":{"e2":{"camperName":"Avi Gold","camperId":2,"status":"enrolled"}},
+       "payments":[{"camperName":"Avi Gold","camperId":2,"amount":900}]}');
+CREATE TEMP TABLE t260_morning AS
+SELECT key, value FROM camp_state_kv WHERE camp_id = 'a6000000-0000-0000-0000-000000000036';
+UPDATE camp_state_kv SET value = '{"camperRoster":{"Moshe Gold":{"name":"Moshe Gold","camperId":1}}}'
+ WHERE camp_id = 'a6000000-0000-0000-0000-000000000036' AND key = 'app1';
+SELECT public.erase_camper('a6000000-0000-0000-0000-000000000036', 2, true);
+CREATE OR REPLACE FUNCTION auth.uid() RETURNS uuid LANGUAGE sql STABLE
+  AS 'SELECT ''a6000000-0000-0000-0000-0000000000a6''::uuid';
+DO $$
+DECLARE v jsonb;
+BEGIN
+    v := public.get_camper_numbers('a6000000-0000-0000-0000-000000000036');
+    IF (v ->> 'next')::int <= 2 THEN
+        RAISE EXCEPTION 'TED-021: the page would hand the erased #2 to the next new child: %', v;
+    END IF;
+END $$;
+-- Sara, number left blank: the camp numbers her.
+UPDATE camp_state_kv SET value = jsonb_set(value, '{camperRoster,Sara Levi}', '{"name":"Sara Levi"}')
+ WHERE camp_id = 'a6000000-0000-0000-0000-000000000036' AND key = 'app1';
+DO $$
+DECLARE c uuid := 'a6000000-0000-0000-0000-000000000036'; v_sara bigint;
+BEGIN
+    SELECT person_id INTO v_sara FROM camp_people WHERE camp_id = c AND source_key = 'Sara Levi';
+    IF v_sara = 2 THEN RAISE EXCEPTION 'TED-021: the erased #2 was handed out by itself'; END IF;
+    INSERT INTO link_parent_invites (camp_id, user_id, parent_email, camper_names, camper_data, status)
+    VALUES (c, 'a6000000-0000-0000-0000-0000000000b6', 'levi@260.test', '["Sara Levi"]',
+            jsonb_build_object('Sara Levi', jsonb_build_object('camperId', v_sara)), 'active');
+END $$;
+-- The morning tab saves roster + Me document in one statement.
+INSERT INTO camp_state_kv (camp_id, key, value)
+SELECT 'a6000000-0000-0000-0000-000000000036'::uuid, key, value FROM t260_morning
+ON CONFLICT (camp_id, key) DO UPDATE SET value = EXCLUDED.value;
+CREATE OR REPLACE FUNCTION auth.uid() RETURNS uuid LANGUAGE sql STABLE
+  AS 'SELECT ''a6000000-0000-0000-0000-0000000000b6''::uuid';
+DO $$
+DECLARE c uuid := 'a6000000-0000-0000-0000-000000000036'; r jsonb;
+BEGIN
+    SELECT value -> 'camperRoster' INTO r FROM camp_state_kv WHERE camp_id = c AND key = 'app1';
+    IF r ? 'Avi Gold' OR EXISTS (SELECT 1 FROM camp_people WHERE camp_id = c AND source_key LIKE 'Avi Gold%') THEN
+        RAISE EXCEPTION 'TED-021: the morning tab brought the erased Avi back: %', r;
+    END IF;
+    IF NOT (r ? 'Sara Levi')
+       OR NOT EXISTS (SELECT 1 FROM camp_people WHERE camp_id = c AND source_key = 'Sara Levi' AND deleted_at IS NULL) THEN
+        RAISE EXCEPTION 'TED-021: the morning tab made Sara vanish: %', r;
+    END IF;
+    IF public._parent_owns_person(c, 2) THEN
+        RAISE EXCEPTION 'TED-021: Sara''s mother owns #2';
+    END IF;
+    IF (SELECT value::text FROM camp_state_kv WHERE camp_id = c AND key = 'campistryMe') ~ '"camperId": 2[,}]' THEN
+        RAISE EXCEPTION 'TED-021: the morning tab put #2 back on Avi''s records';
+    END IF;
+END $$;
+ROLLBACK;
+
+-- …and with #2 typed for Sara on purpose (then the morning tab saves).
+BEGIN;
+INSERT INTO camps (id, name) VALUES ('a6000000-0000-0000-0000-000000000046', '260 camp six-e');
+INSERT INTO camp_state_kv (camp_id, key, value) VALUES
+    ('a6000000-0000-0000-0000-000000000046', 'app1',
+     '{"camperRoster":{"Moshe Gold":{"name":"Moshe Gold","camperId":1},"Avi Gold":{"name":"Avi Gold","camperId":2}}}'),
+    ('a6000000-0000-0000-0000-000000000046', 'campistryMe',
+     '{"enrollments":{"e2":{"camperName":"Avi Gold","camperId":2,"status":"enrolled"}}}');
+CREATE TEMP TABLE t260_morning2 AS
+SELECT key, value FROM camp_state_kv WHERE camp_id = 'a6000000-0000-0000-0000-000000000046';
+UPDATE camp_state_kv SET value = '{"camperRoster":{"Moshe Gold":{"name":"Moshe Gold","camperId":1}}}'
+ WHERE camp_id = 'a6000000-0000-0000-0000-000000000046' AND key = 'app1';
+SELECT public.erase_camper('a6000000-0000-0000-0000-000000000046', 2, true);
+UPDATE camp_state_kv SET value = jsonb_set(value, '{camperRoster,Sara Levi}', '{"name":"Sara Levi","camperId":2}')
+ WHERE camp_id = 'a6000000-0000-0000-0000-000000000046' AND key = 'app1';
+INSERT INTO camp_state_kv (camp_id, key, value)
+SELECT 'a6000000-0000-0000-0000-000000000046'::uuid, key, value FROM t260_morning2
+ON CONFLICT (camp_id, key) DO UPDATE SET value = EXCLUDED.value;
+DO $$
+DECLARE c uuid := 'a6000000-0000-0000-0000-000000000046';
+BEGIN
+    IF NOT EXISTS (SELECT 1 FROM camp_people WHERE camp_id = c AND person_id = 2 AND source_key = 'Sara Levi' AND deleted_at IS NULL)
+       OR EXISTS (SELECT 1 FROM camp_people WHERE camp_id = c AND source_key LIKE 'Avi Gold%') THEN
+        RAISE EXCEPTION 'TED-021: #2 is no longer Sara''s after the morning tab saved: %',
+            (SELECT jsonb_agg(to_jsonb(p) - 'payload') FROM camp_people p WHERE camp_id = c);
+    END IF;
+    IF (SELECT value::text FROM camp_state_kv WHERE camp_id = c AND key = 'campistryMe') ~ '"camperId": 2[,}]' THEN
+        RAISE EXCEPTION 'TED-021: Avi''s enrollment landed on Sara''s #2';
+    END IF;
+END $$;
+ROLLBACK;
+
+-- ════════════════════════════════════════════════════════════════════════════
 -- 7. (TED-018) An invitation written before the child was enrolled: the
 --    office's next save, which now carries the child's number, fills it.
 --    (TED-019) The office's repair never picks a departed child by name.
