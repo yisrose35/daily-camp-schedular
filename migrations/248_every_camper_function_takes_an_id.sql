@@ -197,6 +197,14 @@ SELECT pg_temp.wrap_with_camper_id('update_canteen_autoreload_state',       'p_c
 SELECT pg_temp.wrap_with_camper_id('merge_canteen_autoreload_card',         'p_camper',      'p_camp_id') AS "248";
 SELECT pg_temp.wrap_with_camper_id('get_canteen_history',                   'p_camper',      'p_camp_id') AS "248";
 SELECT pg_temp.wrap_with_camper_id('canteen_camper_known',                  'p_camper_name', 'p_camp_id') AS "248";
+-- verify_my_camper has TWO name-only versions on a database that ran 081:
+-- 081's (p_camp_id uuid, …) and 110/224's (p_camp_id text, …). 224's is the
+-- one that decides on ids and accepts a blank camp; 081's only called
+-- _parent_owns_camper, which 224's does for any uuid it is given. Both having
+-- the same parameter names, PostgREST could not choose between them anyway.
+-- 081's goes; its callers (link-photo-checkout, submit-pdf-form-response)
+-- reach 224's with the same arguments.
+DROP FUNCTION IF EXISTS public.verify_my_camper(uuid, text);
 SELECT pg_temp.wrap_with_camper_id('verify_my_camper',                      'p_camper_name', 'NULLIF(p_camp_id, '''')') AS "248";
 SELECT pg_temp.wrap_with_camper_id('_camper_mail_record',                   'p_camper_name', 'p_camp_id') AS "248";
 SELECT pg_temp.wrap_with_camper_id('_invite_covers_camper',                 'p_camper_name',

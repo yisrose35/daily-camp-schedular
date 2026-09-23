@@ -88,3 +88,24 @@ BEGIN
 END $$;
 
 ROLLBACK;
+
+-- ─── a database that ran 081: two name-only verify_my_camper ────────────────
+-- 081 made verify_my_camper(uuid, text); 110/224 made (text, text). A real
+-- camp has both, and 248 refused to run ("more than one signature without an
+-- id"). Recreate that state and apply 248 again.
+BEGIN;
+SELECT public.unwrap_camper_id_functions();
+CREATE OR REPLACE FUNCTION public.verify_my_camper(p_camp_id uuid, p_camper_name text)
+RETURNS boolean LANGUAGE sql SECURITY DEFINER STABLE SET search_path = public, pg_catalog
+AS $$ SELECT public._parent_owns_camper(p_camp_id, p_camper_name) $$;
+\ir ../../migrations/248_every_camper_function_takes_an_id.sql
+DO $$
+BEGIN
+    IF to_regprocedure('public.verify_my_camper(uuid,text)') IS NOT NULL THEN
+        RAISE EXCEPTION '081''s verify_my_camper survived beside the wrapper';
+    END IF;
+    IF to_regprocedure('public.verify_my_camper(text,text,bigint)') IS NULL THEN
+        RAISE EXCEPTION 'verify_my_camper was not wrapped with an id';
+    END IF;
+END $$;
+ROLLBACK;
