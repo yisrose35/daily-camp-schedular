@@ -226,3 +226,95 @@ BEGIN
     END IF;
 END $$;
 ROLLBACK;
+
+-- ════════════════════════════════════════════════════════════════════════════
+-- (TED-049) The by-number switch never turns off a family whose child is still
+-- at camp: a sibling whose number is not filled in yet, a page that holds a
+-- child's old number for a few seconds, and a list with no usable number.
+-- ════════════════════════════════════════════════════════════════════════════
+BEGIN;
+INSERT INTO auth.users (id, email) VALUES ('a6100000-0000-0000-0000-0000000000a4', 'owner4@261.test');
+INSERT INTO camps (id, name, owner) VALUES
+    ('a6100000-0000-0000-0000-000000000004', '261 camp four', 'a6100000-0000-0000-0000-0000000000a4');
+-- the database's own roster copy: #6 enrolled, #1 unenrolled, #7 removed
+INSERT INTO camp_people (camp_id, person_id, kind, source_key, name, payload, deleted_at) VALUES
+    ('a6100000-0000-0000-0000-000000000004', 6, 'camper', 'Dov Ross',  'Dov Ross',  '{}', NULL),
+    ('a6100000-0000-0000-0000-000000000004', 1, 'camper', 'Avi Tal',   'Avi Tal',   '{"unenrolled":true}', NULL),
+    ('a6100000-0000-0000-0000-000000000004', 7, 'camper', 'Moe Gone',  'Moe Gone',  '{}', now());
+INSERT INTO link_parent_invites (id, camp_id, parent_email, camper_names, person_ids, status, camp_connected) VALUES
+    -- Avi #1 left; his sister Sara was added a moment ago, no number yet
+    ('a6100000-aaaa-0000-0000-000000000041', 'a6100000-0000-0000-0000-000000000004', 'tal@261.test',  '["Avi Tal","Sara Tal"]', '[1,null]', 'active', true),
+    -- Dov is #6 on the server; the page still holds an old number for him
+    ('a6100000-aaaa-0000-0000-000000000042', 'a6100000-0000-0000-0000-000000000004', 'ross@261.test', '["Dov Ross"]', '[6]', 'active', true),
+    -- Moe #7 was removed from the roster: really gone
+    ('a6100000-aaaa-0000-0000-000000000043', 'a6100000-0000-0000-0000-000000000004', 'gone@261.test', '["Moe Gone"]', '[7]', 'active', true),
+    -- Avi #1 alone, unenrolled, and an unnumbered slot whose name is not on the roster
+    ('a6100000-aaaa-0000-0000-000000000044', 'a6100000-0000-0000-0000-000000000004', 'tal2@261.test', '["Avi Tal","Ghost Tal"]', '[1,null]', 'active', true);
+CREATE OR REPLACE FUNCTION auth.uid() RETURNS uuid LANGUAGE sql STABLE
+  AS $f$ SELECT NULLIF(current_setting('t261.uid', true), '')::uuid $f$;
+SET LOCAL t261.uid = 'a6100000-0000-0000-0000-0000000000a4';
+DO $$
+DECLARE v jsonb; c uuid := 'a6100000-0000-0000-0000-000000000004';
+BEGIN
+    -- a list with no usable number is empty: nothing is switched off
+    v := public.revoke_orphaned_parent_invites(c, '["Sara Tal","Dov Ross"]', '[null]');
+    IF COALESCE((v ->> 'revoked')::int, -1) <> 0 OR v ->> 'skipped' IS DISTINCT FROM 'empty_roster' THEN
+        RAISE EXCEPTION 'TED-049: a list of numbers with no usable number switched families off: %', v;
+    END IF;
+    v := public.revoke_orphaned_parent_invites(c, '["Sara Tal","Dov Ross"]', '[4,5]');
+    IF (v ->> 'success')::boolean IS NOT TRUE THEN RAISE EXCEPTION 'sweep refused: %', v; END IF;
+    IF NOT (SELECT camp_connected FROM link_parent_invites WHERE id = 'a6100000-aaaa-0000-0000-000000000041') THEN
+        RAISE EXCEPTION 'TED-049: the Tal family was switched off although Sara (no number yet) is on the roster';
+    END IF;
+    IF NOT (SELECT camp_connected FROM link_parent_invites WHERE id = 'a6100000-aaaa-0000-0000-000000000042') THEN
+        RAISE EXCEPTION 'TED-049: the Ross family was switched off although the database has Dov #6 enrolled';
+    END IF;
+    IF (SELECT camp_connected FROM link_parent_invites WHERE id = 'a6100000-aaaa-0000-0000-000000000043') THEN
+        RAISE EXCEPTION 'a family whose only child was removed from the roster stayed connected';
+    END IF;
+    IF (SELECT camp_connected FROM link_parent_invites WHERE id = 'a6100000-aaaa-0000-0000-000000000044') THEN
+        RAISE EXCEPTION 'an unenrolled child kept his family connected (or an unnumbered name not on the roster did)';
+    END IF;
+END $$;
+ROLLBACK;
+
+-- ════════════════════════════════════════════════════════════════════════════
+-- (TED-048) The owner's checking script, run for real: its 261 row says "ok"
+-- on today's 261, and "run 261 again" on an earlier copy — without the
+-- by-number switch, or with the one that ignores the database's own roster.
+-- ════════════════════════════════════════════════════════════════════════════
+\set verify_q `cat scripts/verify_identity_chain.sql`
+BEGIN;
+CREATE TEMP TABLE v261 AS :verify_q
+DO $$
+DECLARE r text;
+BEGIN
+    SELECT result INTO r FROM v261 WHERE item LIKE '261%';
+    IF r IS DISTINCT FROM 'ok' THEN RAISE EXCEPTION 'the checking script''s 261 row on today''s 261: %', r; END IF;
+END $$;
+-- the copy of 261 before TED-049: by number, but not the database's roster
+CREATE OR REPLACE FUNCTION public.revoke_orphaned_parent_invites(p_camp_id uuid, p_roster_names jsonb, p_roster_ids jsonb)
+RETURNS jsonb LANGUAGE plpgsql SECURITY DEFINER AS $f$
+BEGIN
+    IF NOT public._is_camp_office(p_camp_id, auth.uid()) THEN RETURN '{}'::jsonb; END IF;
+    RETURN '{}'::jsonb;
+END $f$;
+DROP TABLE v261;
+CREATE TEMP TABLE v261 AS :verify_q
+DO $$
+DECLARE r text;
+BEGIN
+    SELECT result INTO r FROM v261 WHERE item LIKE '261%';
+    IF r NOT LIKE 'run 261 again%' THEN RAISE EXCEPTION 'TED-048: the checking script says "%" on an earlier copy of 261', r; END IF;
+END $$;
+-- the first copy of 261: no by-number switch at all
+DROP FUNCTION public.revoke_orphaned_parent_invites(uuid, jsonb, jsonb);
+DROP TABLE v261;
+CREATE TEMP TABLE v261 AS :verify_q
+DO $$
+DECLARE r text;
+BEGIN
+    SELECT result INTO r FROM v261 WHERE item LIKE '261%';
+    IF r NOT LIKE 'run 261 again%' THEN RAISE EXCEPTION 'TED-048: the checking script says "%" without the by-number switch', r; END IF;
+END $$;
+ROLLBACK;

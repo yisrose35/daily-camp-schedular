@@ -172,6 +172,14 @@ END $$;
 -- invitation stays connected while one of its children's numbers is still an
 -- enrolled camper. Only an invitation that carries no number at all (written
 -- before its child was numbered) is still decided by its names.
+--
+-- A number counts as enrolled when the page says so OR the database's own
+-- roster copy (camp_people: on the roster, not unenrolled) says so — the page
+-- can hold a child's old number for a few seconds after a save, and a family
+-- must never be switched off on that (TED-049). A slot whose number is not
+-- filled in yet (a sibling added a moment ago) keeps the family on when that
+-- slot's name is on the roster. A list of numbers with no usable number in it
+-- counts as empty.
 CREATE OR REPLACE FUNCTION public.revoke_orphaned_parent_invites(
     p_camp_id      uuid,
     p_roster_names jsonb,
@@ -190,11 +198,19 @@ BEGIN
     IF NOT public._is_camp_office(p_camp_id, caller) THEN
         RETURN jsonb_build_object('success', false, 'error', 'not_camp_office');
     END IF;
-    -- Safety: never mass-disconnect when we were handed an empty roster.
-    IF p_roster_ids IS NULL OR jsonb_typeof(p_roster_ids) <> 'array' OR jsonb_array_length(p_roster_ids) = 0 THEN
+    -- Safety: never mass-disconnect when we were handed an empty roster —
+    -- counted in usable numbers, not list items ('[null]' is empty).
+    IF p_roster_ids IS NOT NULL AND jsonb_typeof(p_roster_ids) = 'array' THEN
+        v_ids := ARRAY(SELECT DISTINCT public._stated_person_id(x #>> '{}') FROM jsonb_array_elements(p_roster_ids) x
+                        WHERE public._stated_person_id(x #>> '{}') IS NOT NULL);
+    END IF;
+    IF COALESCE(cardinality(v_ids), 0) = 0 THEN
         RETURN jsonb_build_object('success', true, 'revoked', 0, 'skipped', 'empty_roster');
     END IF;
-    v_ids := ARRAY(SELECT public._stated_person_id(x #>> '{}') FROM jsonb_array_elements(p_roster_ids) x);
+    -- plus every camper the database itself has on the roster and enrolled
+    v_ids := v_ids || ARRAY(SELECT p.person_id FROM camp_people p
+                             WHERE p.camp_id = p_camp_id AND p.kind = 'camper' AND p.deleted_at IS NULL
+                               AND lower(COALESCE(p.payload ->> 'unenrolled', '')) NOT IN ('true', '1', 'yes'));
 
     WITH stale AS (
         SELECT i.id
@@ -208,6 +224,11 @@ BEGIN
                                WHERE public._stated_person_id(x #>> '{}') IS NOT NULL)
                  THEN NOT EXISTS (SELECT 1 FROM jsonb_array_elements(i.person_ids) x
                                    WHERE public._stated_person_id(x #>> '{}') = ANY (v_ids))
+                      -- a child on it whose number is not filled in yet, still on the roster
+                      AND NOT (jsonb_typeof(p_roster_names) = 'array' AND jsonb_typeof(i.camper_names) = 'array'
+                               AND EXISTS (SELECT 1 FROM jsonb_array_elements_text(i.camper_names) WITH ORDINALITY cn(name, ord)
+                                            WHERE public._stated_person_id(i.person_ids ->> (cn.ord - 1)::int) IS NULL
+                                              AND p_roster_names ? cn.name))
                  -- no number on it yet: its names, as before
                  ELSE jsonb_typeof(p_roster_names) = 'array' AND jsonb_array_length(p_roster_names) > 0
                       AND NOT EXISTS (SELECT 1 FROM jsonb_array_elements_text(COALESCE(i.camper_names, '[]'::jsonb)) cn

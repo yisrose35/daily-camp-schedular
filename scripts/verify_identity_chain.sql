@@ -525,6 +525,13 @@ UNION ALL
      CASE WHEN to_regprocedure('public._is_camp_office(uuid,uuid)') IS NULL
                OR pg_get_functiondef('public.upsert_parent_invite(uuid,text,text,text,jsonb,jsonb,timestamptz)'::regprocedure)
                   !~ '_is_camp_office' THEN 'apply 261 — ANY logged-in account can make itself a parent of any child'
+          -- an earlier copy of 261: "is this family still at camp?" by
+          -- number (TED-047), and with the database's own roster (TED-049)
+          WHEN to_regprocedure('public.revoke_orphaned_parent_invites(uuid,jsonb,jsonb)') IS NULL
+               -- to_regprocedure, not ::regprocedure: a missing function must
+               -- read as this row, not stop the whole script
+               OR pg_get_functiondef(to_regprocedure('public.revoke_orphaned_parent_invites(uuid,jsonb,jsonb)')) !~ 'camp_people'
+            THEN 'run 261 again — this is an earlier copy: a family can stay switched on because a new child shares a departed child''s name, or be switched off while their child is still at camp'
           -- every function that hands out, binds or changes a family's
           -- invitation, and the table's own read rule, must be office-only
           WHEN EXISTS (SELECT 1 FROM pg_proc p JOIN pg_namespace ns ON ns.oid = p.pronamespace
