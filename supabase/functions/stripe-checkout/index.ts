@@ -100,9 +100,20 @@ async function lookupCampDestination(campId: string | undefined, familyKey: stri
 // JSON balance to a possibly-fabricated camper name — a ledger-integrity
 // problem, not just a routing one (tuition's fallback only risks a wrong
 // *destination*, money still lands somewhere real either way).
-async function campOwnsCamper(campId: string | undefined, camperName: string | undefined): Promise<boolean> {
-  if (!campId || !camperName || !SUPABASE_URL || !SUPABASE_SERVICE_KEY) return false;
+//
+// Returns the camper's roster key, or null when they are not on this camp's
+// roster. The camper NUMBER decides when the page sends one (resolved to that
+// person's current roster key by camp_person_label); the name is only the
+// fallback for a caller that sends no number.
+async function resolveCamper(campId: string | undefined, camperName: unknown, camperId: number | null): Promise<string | null> {
+  if (!campId || !SUPABASE_URL || !SUPABASE_SERVICE_KEY) return null;
   const supabase = createClient(SUPABASE_URL, SUPABASE_SERVICE_KEY);
+  let key: string | null = camperId == null && typeof camperName === "string" && camperName ? camperName : null;
+  if (camperId != null) {
+    const { data: label, error } = await supabase.rpc("camp_person_label", { p_camp_id: campId, p_person_id: camperId });
+    key = !error && typeof label === "string" && label ? label : null;
+  }
+  if (!key) return null;
   const { data } = await supabase
     .from("camp_state_kv")
     .select("value")
@@ -110,7 +121,7 @@ async function campOwnsCamper(campId: string | undefined, camperName: string | u
     .eq("key", "app1")
     .maybeSingle();
   const roster = data?.value && typeof data.value === "object" ? (data.value as Record<string, any>).camperRoster : null;
-  return !!(roster && typeof roster === "object" && Object.prototype.hasOwnProperty.call(roster, camperName));
+  return roster && typeof roster === "object" && Object.prototype.hasOwnProperty.call(roster, key) ? key : null;
 }
 
 // Camp-wide "does this camp even run a canteen" gate (migration 106) — no
@@ -127,7 +138,7 @@ async function canteenProgramEnabled(campId: string | undefined): Promise<boolea
   return !data || data.canteen_enabled !== false;
 }
 
-async function lookupCampDestinationForCamper(campId: string | undefined, camperName: string | undefined): Promise<string | null> {
+async function lookupCampDestinationForCanteen(campId: string | undefined): Promise<string | null> {
   if (!campId || !SUPABASE_URL || !SUPABASE_SERVICE_KEY) return null;
   const supabase = createClient(SUPABASE_URL, SUPABASE_SERVICE_KEY);
   const { data: camp } = await supabase
@@ -153,7 +164,7 @@ async function stripePost(endpoint: string, body: Record<string, string>) {
 
 /** A camper id sent by the page (campistry_camper_id_rpc.js adds it), or null. */
 function camperIdIn(v: unknown): number | null {
-  return v != null && /^\d+$/.test(String(v)) ? Number(v) : null;
+  return v != null && /^\d+$/.test(String(v)) && Number(v) > 0 ? Number(v) : null;
 }
 
 
@@ -179,8 +190,9 @@ serve(async (req) => {
 
     const {
       campId, familyKey, familyName, email, amount, description,
-      enrollmentId, successUrl, cancelUrl, source, camperName, camperId,
+      enrollmentId, successUrl, cancelUrl, source, camperName, camperId: bodyCamperId,
     } = await req.json();
+    const camperId = camperIdIn(bodyCamperId);
 
     if (!amount || Number(amount) <= 0) {
       return new Response(JSON.stringify({ error: "A positive amount is required" }), {
@@ -197,6 +209,8 @@ serve(async (req) => {
       });
     }
     const isCanteenDeposit = checkoutSource === "campistry-canteen-deposit";
+    // A canteen deposit's camper, as their roster key: the number decides.
+    let camperKey: string | null = null;
 
     if (isCanteenDeposit) {
       if (!(await canteenProgramEnabled(campId))) {
@@ -205,7 +219,8 @@ serve(async (req) => {
           headers: { ...corsHeaders, "Content-Type": "application/json" },
         });
       }
-      if (!camperName || !(await campOwnsCamper(campId, camperName))) {
+      camperKey = await resolveCamper(campId, camperName, camperId);
+      if (!camperKey) {
         return new Response(JSON.stringify({ error: "Camper not found for this camp" }), {
           status: 400,
           headers: { ...corsHeaders, "Content-Type": "application/json" },
@@ -228,7 +243,7 @@ serve(async (req) => {
     } catch (_) { /* a missing name must never stop a payment */ }
     const who = campLabel || "Camp";
     const label = description || (isCanteenDeposit
-      ? `${who} — canteen funds for ${displayName(camperName)}`
+      ? `${who} — canteen funds for ${displayName(camperKey)}`
       : `${who} — payment${familyName ? " (" + familyName + ")" : ""}`);
     const origin = req.headers.get("origin") || "";
     const success = successUrl || `${origin}/campistry_pay_thanks.html?status=success`;
@@ -243,10 +258,9 @@ serve(async (req) => {
       enrollmentId: String(enrollmentId || ""),
       source: checkoutSource,
     };
-    if (isCanteenDeposit) meta.camperName = String(camperName);
     // The camper's ID travels to stripe-webhook beside the name, and decides
     // who is credited when the payment lands.
-    if (isCanteenDeposit && camperIdIn(camperId) != null) meta.camperId = String(camperIdIn(camperId));
+    if (isCanteenDeposit) Object.assign(meta, camperId != null ? { camperId: String(camperId), camperName: String(camperKey) } : { camperName: String(camperKey) });
 
     const params: Record<string, string> = {
       "mode": "payment",
@@ -267,7 +281,7 @@ serve(async (req) => {
     });
 
     const destinationAccountId = isCanteenDeposit
-      ? await lookupCampDestinationForCamper(campId, camperName)
+      ? await lookupCampDestinationForCanteen(campId)
       : await lookupCampDestination(campId, familyKey);
 
     // Tuition's Pay Link works fine with no destination (money still lands

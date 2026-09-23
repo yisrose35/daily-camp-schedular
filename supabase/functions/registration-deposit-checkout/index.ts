@@ -110,6 +110,13 @@ function bqErrDetail(d: unknown): string {
   return String(d);
 }
 
+/** A camper's name as a person reads it: without the roster's internal
+ *  " #<number>" that tells two campers with one name apart. For what a parent
+ *  sees; never for identifying the camper. */
+function displayName(s: unknown): string {
+  return String(s ?? "").replace(/\s#\d+(?:-\d+)?$/, "");
+}
+
 serve(async (req) => {
   if (req.method === "OPTIONS") return new Response("ok", { headers: corsHeaders });
 
@@ -146,7 +153,7 @@ serve(async (req) => {
     }
 
     const label = String(owedRes.label || "Registration deposit") +
-      (owedRes.camperName ? ` — ${owedRes.camperName}` : "");
+      (owedRes.camperName ? ` — ${displayName(owedRes.camperName)}` : "");
 
     // Which rail this camp is on. Exactly the same test the autopay cron uses,
     // so a camp cannot be on one processor here and another there.

@@ -164,15 +164,14 @@ type DepositRemainder = { externalTransactionId: string; remaining: number; time
 // switched) are deliberately excluded: that transaction id means nothing to the
 // gateway we would be calling.
 function depositsFor(
-  camperName: string,
+  who: { camperId: number | null; camperName: string },
   transactions: Record<string, any>[],
   processorKey: string,
-  camperId: number | null = null,
 ): DepositRemainder[] {
   // By camper ID when the account has one (250): the account's key is the
   // spelling at the time, and a renamed or same-named child shares spellings.
-  const mine = (t: Record<string, any>) => camperId != null && t.camperId != null
-    ? String(t.camperId) === String(camperId) : t.camper === camperName;
+  // The name is compared only when the account or the ledger row has no number.
+  const mine = (t: Record<string, any>) => (who.camperId != null && t.camperId != null) ? String(t.camperId) === String(who.camperId) : t.camper === who.camperName;
   return transactions
     .filter((t) => t && mine(t) && t.kind === "deposit" && t.method === processorKey && t.byopTransactionId)
     .map((dep) => {
@@ -194,19 +193,19 @@ async function refundOneCamper(
   campId: string,
   processorKey: string,
   credentials: Record<string, string>,
-  camperName: string,
+  who: { camperId: number | null; camperName: string },
   walletAvailable: number,
   transactions: Record<string, any>[],
   batchKey: string | null,
-  camperId: number | null = null,
-): Promise<{ camperName: string; refunded: number; skipped?: string; error?: string }> {
-  const deposits = depositsFor(camperName, transactions, processorKey, camperId);
+): Promise<{ camperId: number | null; camperName: string; refunded: number; skipped?: string; error?: string }> {
+  const { camperId, camperName } = who;
+  const deposits = depositsFor(who, transactions, processorKey);
   const processorCapacity = round2(deposits.reduce((sum, d) => sum + d.remaining, 0));
   const targetAmount = round2(Math.min(walletAvailable, processorCapacity));
 
   if (targetAmount <= 0) {
     return {
-      camperName,
+      camperId, camperName,
       refunded: 0,
       skipped: processorCapacity <= 0
         ? "no online deposits on this processor (cash/manual, or a processor the camp has since left)"
@@ -228,8 +227,10 @@ async function refundOneCamper(
       // gets run twice — and without a claim the campers it already reached would
       // be refunded again. Keyed per camper AND per deposit chunk so a resumed run
       // skips exactly what it finished.
+      // The camper part of the key is their number when the account has one:
+      // two children who share a name must not share a claim.
       const chunkKey = batchKey
-        ? `${batchKey}:${camperName}:${dep.externalTransactionId}:${chunkCents}` : null;
+        ? `${batchKey}:${camperId != null ? "#" + camperId : camperName}:${dep.externalTransactionId}:${chunkCents}` : null;
       if (chunkKey) {
         const { data: claim } = await service.rpc("claim_refund_intent", {
           p_camp_id: campId, p_key: chunkKey, p_amount: chunk,
@@ -269,8 +270,7 @@ async function refundOneCamper(
 
       const { error: creditErr } = await service.rpc("refund_canteen_deposit_from_processor", {
         p_camp_id: campId,
-        p_camper_name: camperName,
-        p_camper_id: camperId,
+        p_camper_id: camperId, p_camper_name: camperName,
         p_amount: chunk,
         p_processor_key: processorKey,
         p_external_transaction_id: dep.externalTransactionId,
@@ -278,7 +278,7 @@ async function refundOneCamper(
       });
       if (creditErr) {
         console.error(`[payments-canteen-refund-all] refund ${refundResult.externalTransactionId} succeeded ` +
-          `but the canteen ledger was not updated for ${camperName}: ${creditErr.message}`);
+          `but the canteen ledger was not updated for camper ${camperId ?? "(no number)"} ${camperName}: ${creditErr.message}`);
       }
 
       refunded = round2(refunded + chunk);
@@ -287,11 +287,11 @@ async function refundOneCamper(
       // Keep whatever succeeded for this camper before the error — real money
       // already moved for those chunks — and report the rest as a partial
       // failure rather than losing track of it.
-      return { camperName, refunded, error: (chunkErr as Error).message };
+      return { camperId, camperName, refunded, error: (chunkErr as Error).message };
     }
   }
 
-  return { camperName, refunded };
+  return { camperId, camperName, refunded };
 }
 
 async function mapWithConcurrency<T, R>(items: T[], limit: number, fn: (item: T) => Promise<R>): Promise<R[]> {
@@ -346,11 +346,13 @@ serve(async (req) => {
     const accounts: Record<string, any> = accountsData.accounts || {};
     const transactions: Record<string, any>[] = accountsData.transactions || [];
 
-    const candidates = Object.keys(accounts)
-      .map((camperName) => {
-        const a = accounts[camperName] || {};
+    // Each account with its camper number (250); the account key rides along
+    // as the name, for the fallback of an account with no number.
+    const candidates = Object.entries(accounts)
+      .map(([accountKey, acct]) => {
+        const a = acct || {};
         const walletAvailable = Math.max(0, round2((Number(a.balance) || 0) - (Number(a.balanceFloor) || 0)));
-        return { camperName, walletAvailable, camperId: a.camperId != null ? Number(a.camperId) : null };
+        return { who: { camperId: a.camperId != null ? Number(a.camperId) : null, camperName: accountKey }, walletAvailable };
       })
       .filter((c) => c.walletAvailable > 0);
 
@@ -366,7 +368,7 @@ serve(async (req) => {
 
     const results = await mapWithConcurrency(candidates, CONCURRENCY, (c) =>
       refundOneCamper(service, authedCampId, processorKey, credResult.credentials,
-                      c.camperName, c.walletAvailable, transactions, batchKey, c.camperId)
+                      c.who, c.walletAvailable, transactions, batchKey)
     );
 
     let totalRefunded = 0, refundedCount = 0, skippedCount = 0, failedCount = 0;

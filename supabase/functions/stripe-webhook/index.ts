@@ -224,17 +224,17 @@ async function handleCanteenDeposit(
     return;
   }
   const meta = pi.metadata || {};
-  const camperName = meta.camperName;
-  if (!camperName) {
-    console.error(`[stripe-webhook] canteen deposit ${pi.id} has no camperName in metadata — skipping`);
-    return;
-  }
   // The camper's ID, when the page that started the checkout sent one (it is
   // stamped into the metadata beside the name) — it decides who is credited.
+  // The name is the fallback for a checkout started before numbers.
+  const camperId = camperIdIn(meta.camperId), camperName = String(meta.camperName || "");
+  if (camperId == null && !camperName) {
+    console.error(`[stripe-webhook] canteen deposit ${pi.id} has no camperId/camperName in metadata — skipping`);
+    return;
+  }
   const { data, error } = await supabase.rpc("credit_canteen_balance_from_stripe", {
     p_camp_id: campId,
-    p_camper_name: camperName,
-    p_camper_id: camperIdIn(meta.camperId),
+    p_camper_id: camperId, p_camper_name: camperName,
     p_amount: (pi.amount || 0) / 100,
     p_payment_intent_id: pi.id,
   });
@@ -324,13 +324,13 @@ async function handleLinkPhotoPurchase(
   }
 
   if (meta.kind === "facial_recognition") {
-    let names: string[] = [];
-    try { names = JSON.parse(meta.camperNames || "[]"); } catch { names = []; }
-    // Position for position with camperNames, when the checkout was given them.
-    let ids: unknown[] = [];
-    try { ids = JSON.parse(meta.camperIds || "[]"); } catch { ids = []; }
-    if (!Array.isArray(ids)) ids = [];
-    if (!Array.isArray(names) || !names.length) {
+    const parseList = (s: unknown): unknown[] => {
+      try { const v = JSON.parse(String(s || "[]")); return Array.isArray(v) ? v : []; } catch { return []; }
+    };
+    // Position for position: each camper's number (which decides who the
+    // purchase is for) and their name (the fallback for a slot with no number).
+    const ids = parseList(meta.camperIds), names = parseList(meta.camperNames).map((n) => String(n ?? ""));
+    if (!names.length) {
       console.error(`[stripe-webhook] link photo purchase ${pi.id} missing camperNames in metadata — skipping`);
       return;
     }
@@ -340,8 +340,7 @@ async function handleLinkPhotoPurchase(
         p_camp_id: campId,
         p_parent_user_id: meta.parentUserId,
         p_kind: "facial_recognition",
-        p_camper_name: name,
-        p_camper_id: camperIdIn(ids[ni]),
+        p_camper_id: camperIdIn(ids[ni]), p_camper_name: name,
         p_photo_id: null,
         p_amount_cents: FACIAL_RECOGNITION_FEE_CENTS, // per-camper share, NOT pi.amount (that's the whole batch)
         p_payment_intent_id: pi.id,
@@ -355,7 +354,7 @@ async function handleLinkPhotoPurchase(
     p_camp_id: campId,
     p_parent_user_id: meta.parentUserId,
     p_kind: meta.kind,
-    p_camper_name: null,
+    p_camper_id: null, p_camper_name: null,   // an HD photo is bought for a photo, not a camper
     p_photo_id: meta.photoId || null,
     p_amount_cents: pi.amount || 0,
     p_payment_intent_id: pi.id,
@@ -569,9 +568,11 @@ async function handleCanteenAutoReloadSetup(
 ) {
   const meta = si.metadata || {};
   const campId = meta.campId;
-  const camperName = meta.camperName;
-  if (!campId || !camperName) {
-    console.error(`[stripe-webhook] canteen auto-reload setup ${si.id} missing campId/camperName in metadata — skipping`);
+  // The number decides whose account the card is saved on; the name is the
+  // fallback for a setup started before numbers.
+  const camperId = camperIdIn(meta.camperId), camperName = String(meta.camperName || "");
+  if (!campId || (camperId == null && !camperName)) {
+    console.error(`[stripe-webhook] canteen auto-reload setup ${si.id} missing campId/camperId in metadata — skipping`);
     return;
   }
   const customerId = si.customer;
@@ -606,8 +607,7 @@ async function handleCanteenAutoReloadSetup(
   // did not just lose a card field, it erased a sale and the money with it.
   const { data: merged, error: mergeErr } = await supabase.rpc("merge_canteen_autoreload_card", {
     p_camp_id: campId,
-    p_camper: camperName,
-    p_camper_id: camperIdIn(meta.camperId),
+    p_camper_id: camperId, p_camper: camperName,
     // Only the card/attempt bookkeeping fields. The parent's trigger config
     // (enabled, threshold*, schedule*), set via set_canteen_auto_reload
     // (migration 109), is left untouched by merging rather than overwriting.
@@ -912,7 +912,7 @@ serve(async (req) => {
           what,
           method: "Card",
           familyKey: pi.metadata?.familyKey || null,
-          camperName: pi.metadata?.camperName || null,
+          camperId: camperIdIn(pi.metadata?.camperId), camperName: pi.metadata?.camperName || null,
           enrollmentId: pi.metadata?.enrollmentId || null,
         });
       }

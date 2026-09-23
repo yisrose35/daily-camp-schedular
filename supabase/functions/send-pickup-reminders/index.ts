@@ -39,6 +39,13 @@ const corsHeaders = {
   "Access-Control-Allow-Headers": "authorization, x-client-info, apikey, content-type, x-cron-secret",
 };
 
+/** A camper's name as a person reads it: without the roster's internal
+ *  " #<number>" that tells two campers with one name apart. For what a parent
+ *  sees; never for identifying the camper. */
+function displayName(s: unknown): string {
+  return String(s ?? "").replace(/\s#\d+(?:-\d+)?$/, "");
+}
+
 serve(async (req) => {
   if (req.method === "OPTIONS") return new Response("ok", { headers: corsHeaders });
 
@@ -64,7 +71,7 @@ serve(async (req) => {
     .is("reminder_fired_at", null)
     .not("pickup_at", "is", null)
     .lte("pickup_at", cutoff)
-    .select("id, camp_id, camper_name, camper_bunk, pickup_time, pickup_at");
+    .select("id, camp_id, person_id, camper_name, camper_bunk, pickup_time, pickup_at");
 
   if (claimErr) {
     return new Response(JSON.stringify({ error: claimErr.message }), {
@@ -79,7 +86,7 @@ serve(async (req) => {
       .eq("alert_id", alert.id)
       .neq("recipient_email", "");
     if (recErr || !recipients || !recipients.length) {
-      details.push({ alertId: alert.id, camper: alert.camper_name, error: recErr?.message || "no_recipients" });
+      details.push({ alertId: alert.id, camperId: alert.person_id ?? null, camper: alert.camper_name, error: recErr?.message || "no_recipients" });
       continue;
     }
 
@@ -104,16 +111,16 @@ serve(async (req) => {
           campId: alert.camp_id,
           pref: "pickupAlert",
           staffEmails: emails,
-          title: `Pickup in 5 min — ${alert.camper_name}`,
+          title: `Pickup in 5 min — ${displayName(alert.camper_name)}`,
           body: `Scheduled for ${alert.pickup_time}${alert.camper_bunk ? " · " + alert.camper_bunk : ""}`,
           data: { page: "campistry_lite.html", alertId: alert.id },
         }),
       });
       const sendResult = await res.json().catch(() => ({}));
       if (sendResult?.success) remindersSent += (sendResult.sent || 0);
-      details.push({ alertId: alert.id, camper: alert.camper_name, recipients: emails.length, sendResult });
+      details.push({ alertId: alert.id, camperId: alert.person_id ?? null, camper: alert.camper_name, recipients: emails.length, sendResult });
     } catch (e) {
-      details.push({ alertId: alert.id, camper: alert.camper_name, error: String((e as Error)?.message || e) });
+      details.push({ alertId: alert.id, camperId: alert.person_id ?? null, camper: alert.camper_name, error: String((e as Error)?.message || e) });
     }
   }
 

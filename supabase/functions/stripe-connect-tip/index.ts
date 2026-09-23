@@ -207,10 +207,9 @@ serve(async (req) => {
       staffAccountId: String(acct.id),
       staffName: String(acct.staff_name || ""),
       staffRole: String(acct.role || ""),
-      camperName: String(camperName || ""),
-      // Beside the name, to stripe-connect-webhook, which records the tip on
-      // this camper by ID.
-      camperId: camperIdIn(camperId) != null ? String(camperIdIn(camperId)) : "",
+      // To stripe-connect-webhook, which records the tip on this camper by ID;
+      // the name beside it is for display.
+      camperId: camperIdIn(camperId) != null ? String(camperIdIn(camperId)) : "", camperName: String(camperName || ""),
       parentUserId: String(authUser?.user?.id || ""),
       parentName: String(parentName || invite.parent_name || ""),
       parentEmail: String(parentEmail || invite.parent_email || ""),

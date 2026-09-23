@@ -121,11 +121,11 @@ type DepositRemainder = { paymentIntentId: string; remaining: number; timestamp:
 
 // Everything this camper's Stripe deposits can still be refunded from,
 // oldest first — same math as stripe-canteen-refund's per-request version.
-function depositsFor(camperName: string, transactions: Record<string, any>[], camperId: number | null = null): DepositRemainder[] {
+function depositsFor(who: { camperId: number | null; camperName: string }, transactions: Record<string, any>[]): DepositRemainder[] {
   // By camper ID when the account has one (250): the account's key is the
   // spelling at the time, and a renamed or same-named child shares spellings.
-  const mine = (t: Record<string, any>) => camperId != null && t.camperId != null
-    ? String(t.camperId) === String(camperId) : t.camper === camperName;
+  // The name is compared only when the account or the ledger row has no number.
+  const mine = (t: Record<string, any>) => (who.camperId != null && t.camperId != null) ? String(t.camperId) === String(who.camperId) : t.camper === who.camperName;
   return transactions
     .filter((t) => t && mine(t) && t.kind === "deposit" && t.method === "stripe" && t.stripePaymentIntentId)
     .map((dep) => {
@@ -141,18 +141,18 @@ function depositsFor(camperName: string, transactions: Record<string, any>[], ca
 async function refundOneCamper(
   supabase: ReturnType<typeof createClient>,
   campId: string,
-  camperName: string,
+  who: { camperId: number | null; camperName: string },
   walletAvailable: number,
   transactions: Record<string, any>[],
-  camperId: number | null = null,
-): Promise<{ camperName: string; refunded: number; skipped?: string; error?: string }> {
-  const deposits = depositsFor(camperName, transactions, camperId);
+): Promise<{ camperId: number | null; camperName: string; refunded: number; skipped?: string; error?: string }> {
+  const { camperId, camperName } = who;
+  const deposits = depositsFor(who, transactions);
   const stripeCapacity = round2(deposits.reduce((sum, d) => sum + d.remaining, 0));
   const targetAmount = round2(Math.min(walletAvailable, stripeCapacity));
 
   if (targetAmount <= 0) {
     return {
-      camperName,
+      camperId, camperName,
       refunded: 0,
       skipped: stripeCapacity <= 0 ? "no Stripe-paid deposits (cash/manual only)" : "nothing available",
     };
@@ -180,8 +180,7 @@ async function refundOneCamper(
 
       const { error: creditErr } = await supabase.rpc("refund_canteen_deposit_from_stripe", {
         p_camp_id: campId,
-        p_camper_name: camperName,
-        p_camper_id: camperId,
+        p_camper_id: camperId, p_camper_name: camperName,
         p_amount: chunk,
         p_payment_intent_id: dep.paymentIntentId,
         p_refund_id: refund.id,
@@ -194,11 +193,11 @@ async function refundOneCamper(
       // Keep whatever succeeded for this camper before the error — real
       // money already moved for those chunks — and report the rest as a
       // partial failure rather than losing track of it.
-      return { camperName, refunded, error: (chunkErr as Error).message };
+      return { camperId, camperName, refunded, error: (chunkErr as Error).message };
     }
   }
 
-  return { camperName, refunded };
+  return { camperId, camperName, refunded };
 }
 
 async function mapWithConcurrency<T, R>(items: T[], limit: number, fn: (item: T) => Promise<R>): Promise<R[]> {
@@ -234,11 +233,13 @@ serve(async (req) => {
     const accounts: Record<string, any> = accountsData.accounts || {};
     const transactions: Record<string, any>[] = accountsData.transactions || [];
 
-    const candidates = Object.keys(accounts)
-      .map((camperName) => {
-        const a = accounts[camperName] || {};
+    // Each account with its camper number (250); the account key rides along
+    // as the name, for the fallback of an account with no number.
+    const candidates = Object.entries(accounts)
+      .map(([accountKey, acct]) => {
+        const a = acct || {};
         const walletAvailable = Math.max(0, round2((Number(a.balance) || 0) - (Number(a.balanceFloor) || 0)));
-        return { camperName, walletAvailable, camperId: a.camperId != null ? Number(a.camperId) : null };
+        return { who: { camperId: a.camperId != null ? Number(a.camperId) : null, camperName: accountKey }, walletAvailable };
       })
       .filter((c) => c.walletAvailable > 0);
 
@@ -247,7 +248,7 @@ serve(async (req) => {
     }
 
     const results = await mapWithConcurrency(candidates, CONCURRENCY, (c) =>
-      refundOneCamper(supabase, authedCampId, c.camperName, c.walletAvailable, transactions, c.camperId)
+      refundOneCamper(supabase, authedCampId, c.who, c.walletAvailable, transactions)
     );
 
     let totalRefunded = 0, refundedCount = 0, skippedCount = 0, failedCount = 0;

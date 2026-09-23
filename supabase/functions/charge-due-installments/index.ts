@@ -829,7 +829,7 @@ serve(async (req) => {
               // It goes in with the patch, in one transaction: see
               // recordInstallment's header for why they cannot be two writes.
               const recorded = await recordInstallment(String(row.camp_id), famKey, plan, planIndex, inst, patch, {
-                id: "auto_byop_" + res.externalTransactionId, family: camperName, familyKey: famKey,
+                id: "auto_byop_" + res.externalTransactionId, family: camperName, familyKey: famKey,   // name-ok: family payment label; familyKey identifies the family
                 amount: amount, date: today, method: "Autopay (card)",
                 reference: res.externalTransactionId,
                 notes: capped ? "Autopay installment — " + cappedNote : "Autopay installment",
@@ -864,7 +864,7 @@ serve(async (req) => {
           const pi = await stripeCharge(
             f.stripeCustomerId, f.stripePaymentMethodId || null, amount,
             `Autopay installment — ${f.name || famKey}`,
-            { campId: String(row.camp_id), familyKey: famKey, familyName: camperName, planId: plan.id || "", source: "autopay" },
+            { campId: String(row.camp_id), familyKey: famKey, familyName: camperName, planId: plan.id || "", source: "autopay" },   // name-ok: label in metadata; familyKey identifies the family
             campDestinations.get(String(row.camp_id)) || null,
           );
 
@@ -884,7 +884,7 @@ serve(async (req) => {
               patch.note = cappedNote;
             }
             const recorded = await recordInstallment(String(row.camp_id), famKey, plan, planIndex, inst, patch, {
-              id: "auto_" + pi.id, family: camperName, familyKey: famKey,
+              id: "auto_" + pi.id, family: camperName, familyKey: famKey,   // name-ok: family payment label; familyKey identifies the family
               amount: amount, date: today, method: "Autopay (card)",
               reference: pi.id,
               notes: capped ? "Monthly autopay installment — " + cappedNote : "Monthly autopay installment",
