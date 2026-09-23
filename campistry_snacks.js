@@ -376,13 +376,26 @@ function _accountsUnderCurrentNames(accounts) {
             if (id != null && /^\d+$/.test(String(id))) keyOf[String(id)] = k;
         });
     } catch (_) { return accounts; }
-    const out = Object.assign({}, accounts);
+    const out = {};
+    const rest = [];
+    // Campers on the roster first: each account under its camper's current key.
     Object.keys(accounts).forEach(k => {
         const a = accounts[k];
         const cur = a && a.camperId != null ? keyOf[String(a.camperId)] : null;
-        if (!cur || cur === k || out[cur]) return;   // already right, or the key is taken
-        out[cur] = Object.assign({}, a, { accountKey: k });
-        delete out[k];
+        if (cur && !out[cur]) out[cur] = (cur === k) ? a : Object.assign({}, a, { accountKey: k });
+        else rest.push(k);
+    });
+    // Then everything else (a camper who has left, an account with no number)
+    // under its own key — unless an enrolled camper now has that name, so the
+    // two never share a slot. Such a key is internal only: every place this
+    // page shows a name strips anything after the name (_lbl).
+    rest.forEach(k => {
+        const a = accounts[k];
+        let slot = k;
+        if (out[slot]) slot = k + ' #' + (a && a.camperId != null ? a.camperId : 'x');
+        let i = 2;
+        while (out[slot]) slot = k + ' #' + (a && a.camperId != null ? a.camperId : 'x') + '-' + (i++);
+        out[slot] = (slot === k) ? a : Object.assign({}, a, { accountKey: k });
     });
     return out;
 }

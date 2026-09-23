@@ -1,17 +1,19 @@
 #!/usr/bin/env node
 // =============================================================================
-// camper_name_inventory.js — every place the pages still identify a camper by
-// NAME rather than by camper number.                        (Ted, TED-002)
+// camper_name_inventory.js — every place Campistry still identifies a camper
+// by NAME rather than by camper number: pages, edge functions and database
+// storage.                                                   (Ted, TED-002)
 //
 //   node scripts/camper_name_inventory.js          # rewrite docs/CAMPER_NAME_INVENTORY.md
 //   node scripts/camper_name_inventory.js --check  # exit 1 if the document is out of date
 //
-// The server side is done: every database function that names a camper takes
-// the number and the number decides (248, 255-257), and the verify script
-// proves it on the live database. What is left is in the browser, where the
-// roster and most of what hangs off it are keyed by the camper's roster key —
-// a unique string that is USUALLY their name. This counts each kind of use,
-// file by file, so the move can be planned, done in order, and seen to shrink.
+// Every database function that names a camper takes the number and the number
+// decides (248, 255-257), and the verify script proves it on the live
+// database. What is left: pages whose data is keyed by the camper's roster key
+// (a unique string that is usually their name), edge-function lines that carry
+// a name with no number beside it, and database storage whose KEY is a name.
+// This counts each, file by file, so the move can be planned, done in order,
+// and seen to shrink.
 // tests/camper_name_inventory.test.js fails if any count goes UP.
 // =============================================================================
 'use strict';
@@ -43,6 +45,37 @@ const KINDS = [
       test: line => /\b(?:roster|camperRoster|rosterAll)\s*\[/.test(line) },
 ];
 
+// Superseded edge functions: they import ../_shared, cannot be deployed from
+// the Dashboard, and nothing calls them.
+const SUPERSEDED_EDGE = new Set(['payments-checkout', 'payments-canteen-checkout', 'payments-charge']);
+
+function edgeFiles() {
+    const root = path.join(REPO, 'supabase', 'functions');
+    if (!fs.existsSync(root)) return [];
+    return fs.readdirSync(root)
+        .filter(d => !SUPERSEDED_EDGE.has(d) && fs.existsSync(path.join(root, d, 'index.ts')))
+        .sort()
+        .map(d => 'supabase/functions/' + d + '/index.ts');
+}
+
+// Database storage that is still KEYED by a camper's name — where the name is
+// the identity, not a label beside a number. Each is checked against the
+// migrations so the list cannot quietly go stale.
+const DB_NAME_KEYS = [
+    { what: 'Canteen accounts are keyed by name (camp_canteen_accounts.account_key)',
+      plan: 'Key accounts by person_id; keep the name as a label. 227 explains why the key stayed: old sales that carry only a name join through it — stamp those with the number first.',
+      present: sql => /account_key\s+text\s+NOT NULL/.test(sql) },
+    { what: 'Parent invitations list children by name (link_parent_invites.camper_names)',
+      plan: 'Make person_ids the list and camper_names a label; 223 already stamps the numbers position by position.',
+      present: sql => /camper_names/.test(sql) },
+    { what: 'Families list children by name (camp_families.camper_ids)',
+      plan: 'Make person_ids (234) the membership list and drop the name list once the Me page writes numbers.',
+      present: sql => /camper_ids\s+jsonb/.test(sql) },
+    { what: 'Saved camp documents keyed by the roster key (camp_state_kv: roster, bunks, health, go addresses)',
+      plan: 'Follows the page steps below: when the pages key by number, the documents do too.',
+      present: sql => /camp_state_kv/.test(sql) },
+];
+
 function clientFiles() {
     return fs.readdirSync(REPO)
         .filter(f => /\.(js|html)$/.test(f) && !SKIP.test(f))
@@ -52,6 +85,22 @@ function clientFiles() {
 function count() {
     const byKind = {};
     KINDS.forEach(k => { byKind[k.id] = { total: 0, files: {} }; });
+    byKind.edge = { total: 0, files: {} };
+    for (const f of edgeFiles()) {
+        for (const raw of fs.readFileSync(path.join(REPO, f), 'utf8').split('\n')) {
+            const line = raw.replace(/\/\/.*$/, '');
+            if (/^\s*\*/.test(line) || /console\.|displayName\(/.test(line)) continue;   // logs and display
+            if (/\b(p_camper_name|camper_name|camperName|camperNames)\b/.test(line)
+                && !/camperId|camperIds|person_id|p_camper_id|camperIdIn/.test(line)) {
+                byKind.edge.total++;
+                byKind.edge.files[f] = (byKind.edge.files[f] || 0) + 1;
+            }
+        }
+    }
+    const allSql = fs.readdirSync(path.join(REPO, 'migrations')).filter(x => /^\d.*\.sql$/.test(x))
+        .map(x => fs.readFileSync(path.join(REPO, 'migrations', x), 'utf8')).join('\n');
+    byKind.database = { total: 0, items: [] };
+    DB_NAME_KEYS.forEach(d => { if (d.present(allSql)) { byKind.database.total++; byKind.database.items.push(d); } });
     for (const f of clientFiles()) {
         const lines = fs.readFileSync(path.join(REPO, f), 'utf8').split('\n');
         for (const raw of lines) {
@@ -69,9 +118,9 @@ function count() {
 }
 
 function render(byKind) {
-    const total = KINDS.reduce((n, k) => n + byKind[k.id].total, 0);
+    const total = KINDS.reduce((n, k) => n + byKind[k.id].total, 0) + byKind.edge.total + byKind.database.total;
     const out = [];
-    out.push('# Where the pages still identify a camper by name');
+    out.push('# Where Campistry still identifies a camper by name');
     out.push('');
     out.push('Generated by `node scripts/camper_name_inventory.js`. Do not edit by hand:');
     out.push('`tests/camper_name_inventory.test.js` fails when this file is out of date, and');
@@ -92,9 +141,12 @@ function render(byKind) {
     out.push('| # | Kind | Places | Files |');
     out.push('|---|---|---|---|');
     KINDS.forEach((k, i) => {
-        out.push('| ' + (i + 1) + ' | ' + k.title + ' | ' + byKind[k.id].total + ' | ' +
+        out.push('| ' + (i + 1) + ' | Pages: ' + k.title + ' | ' + byKind[k.id].total + ' | ' +
                  Object.keys(byKind[k.id].files).length + ' |');
     });
+    out.push('| ' + (KINDS.length + 1) + ' | Edge functions: a camper named without their number | ' + byKind.edge.total + ' | ' +
+             Object.keys(byKind.edge.files).length + ' |');
+    out.push('| ' + (KINDS.length + 2) + ' | Database: storage keyed by a camper\'s name | ' + byKind.database.total + ' | — |');
     out.push('');
     out.push('## The plan, in order');
     out.push('');
@@ -112,6 +164,20 @@ function render(byKind) {
         files.forEach(([f, n]) => out.push('| `' + f + '` | ' + n + ' |'));
         out.push('');
     });
+    out.push('### ' + (KINDS.length + 1) + '. Edge functions: a camper named without their number (' + byKind.edge.total + ')');
+    out.push('');
+    out.push('Lines in the server functions that carry a camper\'s name with no number beside them (logs and parent-facing text excluded). Most are the name arriving from the page, where the number now rides alongside on another line; each should read and pass the number.');
+    out.push('');
+    const ef = Object.entries(byKind.edge.files).sort((a, b) => b[1] - a[1] || (a[0] < b[0] ? -1 : 1));
+    if (!ef.length) out.push('None left.');
+    else { out.push('| File | Places |'); out.push('|---|---|'); ef.forEach(([f, n]) => out.push('| `' + f + '` | ' + n + ' |')); }
+    out.push('');
+    out.push('### ' + (KINDS.length + 2) + '. Database: storage keyed by a camper\'s name (' + byKind.database.total + ')');
+    out.push('');
+    out.push('Every table that stores a camper also stores their number (223) and every function decides by it (248, 255-257). These are the places where the NAME is still the key:');
+    out.push('');
+    byKind.database.items.forEach(d => { out.push('- **' + d.what + '.** ' + d.plan); });
+    out.push('');
     return out.join('\n') + '\n';
 }
 
@@ -128,4 +194,4 @@ if (require.main === module) {
     }
 }
 
-module.exports = { count, render, KINDS, OUT };
+module.exports = { count, render, KINDS, OUT, DB_NAME_KEYS };

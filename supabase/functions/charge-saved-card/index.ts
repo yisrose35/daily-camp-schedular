@@ -172,6 +172,14 @@ function camperIdIn(v: unknown): number | null {
   return v != null && /^\d+$/.test(String(v)) ? Number(v) : null;
 }
 
+
+/** A camper's name as a person reads it: without the roster's internal
+ *  " #<number>" that tells two campers with one name apart. For what a parent
+ *  sees; never for identifying the camper. */
+function displayName(s: unknown): string {
+  return String(s ?? "").replace(/\s#\d+(?:-\d+)?$/, "");
+}
+
 serve(async (req) => {
   if (req.method === "OPTIONS") return new Response("ok", { headers: corsHeaders });
 
@@ -345,7 +353,7 @@ serve(async (req) => {
       const campLabel = String(camp?.name || "").trim() || "Camp";
       const pi = await stripeCharge(
         chargeStripeCustomerId, chargeToken || null, amountCents,
-        (kind === "canteen_deposit" ? `${campLabel} — canteen funds for ${camperName}` : `${campLabel} — payment`),
+        (kind === "canteen_deposit" ? `${campLabel} — canteen funds for ${displayName(camperName)}` : `${campLabel} — payment`),
         { campId: String(campId), familyKey, kind, idempotencyKey },
         destinationAccountId,
       );

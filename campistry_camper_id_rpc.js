@@ -178,6 +178,13 @@
         window.fetch = wrapped;
     }
 
+    // A camper's name as a person reads it. Two campers may share a name; the
+    // roster tells them apart with an internal key ("Malky Stein #102") that
+    // must never be shown. Use this wherever a camper's name reaches a screen,
+    // a receipt or a message — never where it identifies the camper.
+    function displayName(s) { return String(s == null ? '' : s).replace(/\s#\d+(?:-\d+)?$/, ''); }
+    window.campistryName = displayName;
+
     window.CampistryCamperIdRpc = { wrap: wrap, wrapFetch: wrapFetch, wrapFrom: wrapFrom, stampRow: stampRow, camperNameIn: camperNameIn, isId: isId };
 
     // Loaded AFTER the staff client was created (a page that loads

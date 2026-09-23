@@ -4449,7 +4449,7 @@
                 btn.disabled = true; btn.textContent = 'Saving…';
                 try {
                     await logMedGiven(btn.dataset.giveName, btn.dataset.giveMed);
-                    toast(btn.dataset.giveMed + ' given to ' + btn.dataset.giveName);
+                    toast(btn.dataset.giveMed + ' given to ' + _lbl(btn.dataset.giveName));
                     rerender();
                 } catch (e) {
                     btn.disabled = false; btn.textContent = 'Give';
@@ -4486,7 +4486,7 @@
         if (!chips.includes(healthDivision)) healthDivision = 'All';
 
         const withMeds = Object.entries(camp.roster || {})
-            .map(([n, c]) => ({ name: n, ...c }))
+            .map(([n, c]) => ({ ...c, name: n }))   // the roster KEY identifies; c.name is only the display name
             .filter(c => camperMeds(c).length);
         const totalDoses = withMeds.reduce((s, c) => s + camperMeds(c).length, 0);
         const givenToday = gmap.size;
@@ -4568,7 +4568,7 @@
 
         if (q) {
             const hits = Object.entries(camp.roster || {})
-                .map(([n, c]) => ({ name: n, ...c }))
+                .map(([n, c]) => ({ ...c, name: n }))   // the roster KEY identifies; c.name is only the display name
                 .filter(c => meCamperMatches(c, q))
                 .sort((a, b) => a.name.localeCompare(b.name)).slice(0, 60);
             body.innerHTML = (hits.length ? `<div class="lite-section-label">${hits.length} match${hits.length === 1 ? '' : 'es'}</div>`

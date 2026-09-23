@@ -173,7 +173,7 @@ function _lbl(key) { return String(key == null ? '' : key).replace(/\s#\d+$/, ''
             else {
                 var vh = '';
                 (hd.sickVisits||[]).slice(-5).reverse().forEach(function(v) {
-                    vh += '<div class="visit-card"><div class="visit-time">'+esc(v.time||'')+'</div><div class="visit-body"><div class="visit-header"><span class="visit-camper">'+esc(v.camperName)+'</span>'+bdg(v.disposition||'Logged',v.disposition==='Returned to activity'?'green':'blue')+'</div><div class="visit-complaint">'+esc(v.complaint||'')+'</div>'+(v.treatment?'<div class="visit-treatment"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="20 6 9 17 4 12"/></svg> '+esc(v.treatment)+'</div>':'')+'</div></div>';
+                    vh += '<div class="visit-card"><div class="visit-time">'+esc(v.time||'')+'</div><div class="visit-body"><div class="visit-header"><span class="visit-camper">'+esc(_lbl(v.camperName))+'</span>'+bdg(v.disposition||'Logged',v.disposition==='Returned to activity'?'green':'blue')+'</div><div class="visit-complaint">'+esc(v.complaint||'')+'</div>'+(v.treatment?'<div class="visit-treatment"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="20 6 9 17 4 12"/></svg> '+esc(v.treatment)+'</div>':'')+'</div></div>';
                 });
                 vEl.innerHTML = vh;
             }
@@ -215,7 +215,7 @@ function _lbl(key) { return String(key == null ? '' : key).replace(/\s#\d+$/, ''
         if (!(hd.sickVisits||[]).length) { tbody.innerHTML = '<tr><td colspan="7" class="empty-state">No sick visits logged yet.</td></tr>'; return; }
         var h = '';
         (hd.sickVisits||[]).slice().reverse().forEach(function(v) {
-            h += '<tr><td style="font-weight:600;color:var(--slate-500)">'+esc(v.time||v.date||'')+'</td><td style="font-weight:700">'+esc(v.camperName)+'</td><td>'+esc(v.bunk||'—')+'</td><td>'+esc(v.complaint||'')+'</td><td>'+esc(v.treatment||'—')+'</td><td>'+bdg(v.disposition||'Logged',v.disposition==='Returned to activity'?'green':'blue')+'</td><td>'+esc(v.nurse||'—')+'</td></tr>';
+            h += '<tr><td style="font-weight:600;color:var(--slate-500)">'+esc(v.time||v.date||'')+'</td><td style="font-weight:700">'+esc(_lbl(v.camperName))+'</td><td>'+esc(v.bunk||'—')+'</td><td>'+esc(v.complaint||'')+'</td><td>'+esc(v.treatment||'—')+'</td><td>'+bdg(v.disposition||'Logged',v.disposition==='Returned to activity'?'green':'blue')+'</td><td>'+esc(v.nurse||'—')+'</td></tr>';
         });
         tbody.innerHTML = h;
     }
@@ -225,7 +225,7 @@ function _lbl(key) { return String(key == null ? '' : key).replace(/\s#\d+$/, ''
         if (!(hd.doctorVisits||[]).length) { tbody.innerHTML = '<tr><td colspan="6" class="empty-state">No doctor visits logged.</td></tr>'; return; }
         var h = '';
         (hd.doctorVisits||[]).slice().reverse().forEach(function(v) {
-            h += '<tr><td style="font-weight:600;color:var(--slate-500)">'+esc(v.date||'')+'</td><td style="font-weight:700">'+esc(v.camperName)+'</td><td>'+esc(v.reason||'')+'</td><td>'+esc(v.diagnosis||'—')+'</td><td>'+(v.restrictions?bdg(v.restrictions,'amber'):'—')+'</td><td>'+bdg(v.cleared?'Cleared':'Pending',v.cleared?'green':'amber')+'</td></tr>';
+            h += '<tr><td style="font-weight:600;color:var(--slate-500)">'+esc(v.date||'')+'</td><td style="font-weight:700">'+esc(_lbl(v.camperName))+'</td><td>'+esc(v.reason||'')+'</td><td>'+esc(v.diagnosis||'—')+'</td><td>'+(v.restrictions?bdg(v.restrictions,'amber'):'—')+'</td><td>'+bdg(v.cleared?'Cleared':'Pending',v.cleared?'green':'amber')+'</td></tr>';
         });
         tbody.innerHTML = h;
     }
@@ -401,7 +401,7 @@ function _lbl(key) { return String(key == null ? '' : key).replace(/\s#\d+$/, ''
                 '<button class="btn btn-sm btn-danger" onclick="CampistryHealth.flagParentDoc(\''+je(doc.id)+'\')">Flag</button>':
                 viewBtn;
             h+='<tr>'+
-                '<td style="font-weight:700;">'+esc(doc.camperName||'—')+'</td>'+
+                '<td style="font-weight:700;">'+esc(_lbl(doc.camperName)||'—')+'</td>'+
                 '<td><span style="font-size:.75rem;">'+esc(doc.fileName||'—')+'</span></td>'+
                 '<td style="font-size:.75rem;color:var(--slate-500);">'+fmtDocTime(doc.submittedAt)+'</td>'+
                 '<td>'+statusBdg+'</td>'+
@@ -415,13 +415,13 @@ function _lbl(key) { return String(key == null ? '' : key).replace(/\s#\d+$/, ''
     function approveParentDoc(id){
         var doc=getSubmissions().find(function(d){return d.id===id;});
         _setDocStatus(id,'approved');
-        toast((doc?doc.camperName:'Camper')+' — document approved','ok');
+        toast((doc?_lbl(doc.camperName):'Camper')+' — document approved','ok');
     }
 
     function flagParentDoc(id){
         var doc=getSubmissions().find(function(d){return d.id===id;});
         _setDocStatus(id,'flagged');
-        toast((doc?doc.camperName:'Camper')+' — document flagged','err');
+        toast((doc?_lbl(doc.camperName):'Camper')+' — document flagged','err');
     }
 
     function renderIntake() {
@@ -455,7 +455,7 @@ function _lbl(key) { return String(key == null ? '' : key).replace(/\s#\d+$/, ''
     function logDispensing(camperName, medName) {
         var hd = getHealth(); if (!hd.dispensingLog) hd.dispensingLog = [];
         hd.dispensingLog.push({ camperName:camperName, camperId:camperIdOf(camperName), medication:medName, status:'Given', nurse:nurse(), timestamp:new Date().toISOString(), date:todayISO(), time:nowTime() });
-        saveHealth(hd); toast(medName+' — Given to '+camperName,'ok'); renderDashboard(); renderMedications();
+        saveHealth(hd); toast(medName+' — Given to '+_lbl(camperName),'ok'); renderDashboard(); renderMedications();
     }
 
     function saveSickVisit() {

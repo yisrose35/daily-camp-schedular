@@ -304,6 +304,14 @@ async function callerIsStaffOfCamp(req: Request, campId: string): Promise<boolea
   return !!membership;
 }
 
+
+/** A camper's name as a person reads it: without the roster's internal
+ *  " #<number>" that tells two campers with one name apart. For what a parent
+ *  sees; never for identifying the camper. */
+function displayName(s: unknown): string {
+  return String(s ?? "").replace(/\s#\d+(?:-\d+)?$/, "");
+}
+
 serve(async (req) => {
   if (req.method === "OPTIONS") return new Response("ok", { headers: corsHeaders });
 
@@ -500,7 +508,7 @@ serve(async (req) => {
       }
       const pi = await stripeCharge(
         ar.stripeCustomerId, ar.stripePaymentMethodId || null, due.amount,
-        `${campNames.get(String(row.camp_id)) || "Camp"} — canteen auto-reload (${due.kind}), ${camperName}`,
+        `${campNames.get(String(row.camp_id)) || "Camp"} — canteen auto-reload (${due.kind}), ${displayName(camperName)}`,
         { campId: String(row.camp_id), camperName, camperId: acct.camperId != null ? String(acct.camperId) : "", source: "campistry-canteen-deposit", auto: "true" },
         campDestinations.get(String(row.camp_id)) || null,
       );

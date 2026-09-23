@@ -156,6 +156,14 @@ function camperIdIn(v: unknown): number | null {
   return v != null && /^\d+$/.test(String(v)) ? Number(v) : null;
 }
 
+
+/** A camper's name as a person reads it: without the roster's internal
+ *  " #<number>" that tells two campers with one name apart. For what a parent
+ *  sees; never for identifying the camper. */
+function displayName(s: unknown): string {
+  return String(s ?? "").replace(/\s#\d+(?:-\d+)?$/, "");
+}
+
 serve(async (req) => {
   if (req.method === "OPTIONS") {
     return new Response("ok", { headers: corsHeaders });
@@ -220,7 +228,7 @@ serve(async (req) => {
     } catch (_) { /* a missing name must never stop a payment */ }
     const who = campLabel || "Camp";
     const label = description || (isCanteenDeposit
-      ? `${who} — canteen funds for ${camperName}`
+      ? `${who} — canteen funds for ${displayName(camperName)}`
       : `${who} — payment${familyName ? " (" + familyName + ")" : ""}`);
     const origin = req.headers.get("origin") || "";
     const success = successUrl || `${origin}/campistry_pay_thanks.html?status=success`;

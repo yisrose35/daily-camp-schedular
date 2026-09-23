@@ -358,3 +358,29 @@ test('every page loading the database client dynamically asks for a versioned co
     const bare = pages.filter(f => /\.src = 'supabase_client\.js'/.test(fs.readFileSync(path.join(REPO, f), 'utf8')));
     assert.deepStrictEqual(bare, []);
 });
+
+// ── names are shown without numbers ─────────────────────────────────────────
+
+test('a camper\'s name is shown without the roster\'s internal number', () => {
+    const window = {};
+    vm.runInNewContext(MODULE, { window, Promise, Object, String, Number, RegExp });
+    const show = window.campistryName;
+    assert.strictEqual(show('Malky Stein #102'), 'Malky Stein');
+    assert.strictEqual(show('Malky Stein'), 'Malky Stein');
+    assert.strictEqual(show('Avi Katz #10-2'), 'Avi Katz');
+    assert.strictEqual(show('Room #4B'), 'Room #4B', 'only a trailing " #<number>" is internal');
+    assert.strictEqual(show(null), '');
+});
+
+test('the parent portal and Live show names through it, and never raw keys', () => {
+    const portal = fs.readFileSync(path.join(REPO, 'campistry_link_parent.html'), 'utf8');
+    const live = fs.readFileSync(path.join(REPO, 'campistry_live.html'), 'utf8');
+    assert.ok(!/lk-child-name">'\+c\.name\+/.test(portal), 'the portal child card shows the raw key');
+    assert.ok(!/esc\(m\.camper\)/.test(live), 'Live camper mail shows the raw key');
+    assert.ok(!/esc\(r\.childName\)/.test(live), 'Live pickup requests show the raw key');
+    assert.ok(!/esc\(a\.camper_name\)/.test(live), 'Live pickup alerts show the raw key');
+    for (const f of ['auto-notify', 'canteen-auto-reload', 'charge-saved-card', 'payments-charge-nonce', 'stripe-checkout', 'send-payment-receipt']) {
+        const src = fs.readFileSync(path.join(REPO, 'supabase/functions', f, 'index.ts'), 'utf8');
+        assert.match(src, /function displayName\(/, f + ' writes a parent-facing name without stripping the internal number');
+    }
+});

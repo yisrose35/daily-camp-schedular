@@ -341,7 +341,7 @@ UNION ALL
      CASE WHEN b.offl IS NOT NULL
            AND b.offl ~ '''offline:'''
            AND b.offl ~ 'sig\s*=\s*v_sig'
-           AND b.offl ~ 'camp_person_label'
+           AND b.offl ~ 'camp_person_(label|name_for)'
           THEN 'ok' ELSE 'OFFLINE SALES STILL GO NOWHERE — apply 242' END),
 
     -- The nightly auto-reload found its campers in the document's accounts,
@@ -448,8 +448,10 @@ UNION ALL
     -- For every camper, enrolled or departed: does their number come back to them?
     ('257  every camper''s number reaches that camper',
      CASE WHEN to_regprocedure('public.verify_number_round_trip()') IS NULL THEN 'apply 257'
-          WHEN public.verify_number_round_trip() -> 'numbers_that_miss_their_camper' = '[]'::jsonb THEN 'ok'
-          ELSE 'NUMBERS THAT MISS THEIR CAMPER: ' || (public.verify_number_round_trip() ->> 'numbers_that_miss_their_camper') END)
+          WHEN public.verify_number_round_trip() -> 'numbers_that_miss_their_camper' = '[]'::jsonb
+           AND public.verify_number_round_trip() -> 'enrolled_names_that_miss_their_camper' = '[]'::jsonb
+           AND public.verify_number_round_trip() -> 'functions_that_do_not_pin' = '[]'::jsonb THEN 'ok'
+          ELSE 'PROBLEMS: ' || (public.verify_number_round_trip() - 'campers_checked')::text END)
     ) AS x(item, result)
 
 UNION ALL

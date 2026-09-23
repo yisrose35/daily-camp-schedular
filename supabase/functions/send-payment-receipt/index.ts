@@ -120,7 +120,7 @@ function receiptHtml(o: {
   rows.push(row("Amount", `<strong style="font-size:16px">${esc(money(o.amount))}</strong>`));
   rows.push(row("Date", esc(prettyDate(o.when))));
   if (o.what) rows.push(row("For", esc(o.what)));
-  if (o.camperName) rows.push(row("Camper", esc(o.camperName)));
+  if (o.camperName) rows.push(row("Camper", esc(displayName(o.camperName))));
   if (o.method) rows.push(row("Paid with", esc(o.method)));
   if (o.ref) rows.push(row("Reference", `<span style="font-family:monospace;font-size:12px">${esc(o.ref)}</span>`));
   // Only ever stated when the caller actually knows it. A receipt that guesses
@@ -155,6 +155,14 @@ function receiptHtml(o: {
 /** A camper id (from the page, or from metadata), or null. */
 function camperIdIn(v: unknown): number | null {
   return v != null && /^\d+$/.test(String(v)) ? Number(v) : null;
+}
+
+
+/** A camper's name as a person reads it: without the roster's internal
+ *  " #<number>" that tells two campers with one name apart. For what a parent
+ *  sees; never for identifying the camper. */
+function displayName(s: unknown): string {
+  return String(s ?? "").replace(/\s#\d+(?:-\d+)?$/, "");
 }
 
 Deno.serve(async (req: Request) => {

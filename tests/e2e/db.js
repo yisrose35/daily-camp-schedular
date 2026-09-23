@@ -64,6 +64,9 @@ const MIGRATIONS = [
     //   190  _session_taken             — 200 needs it
     //   193  list_workspaces            — the workspace banner reads it on every page
     //   200  get_camp_applications      — campistry_me.js reads it on hydration
+    // 020  link_messages — Lite and Link write parent messages there
+    //      (tests/lite_health_numbers.e2e.js)
+    '020_link_messages',
     // 037  get_camp_health_documents — the Health page reads it on load
     '037_health_documents',
     '048_section_access',

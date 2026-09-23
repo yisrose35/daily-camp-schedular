@@ -73,7 +73,7 @@ async function callerCampId(req: Request): Promise<string | null> {
 
 function template(type: string, data: Record<string, string>): { subject: string; html: string } {
   const campName = data.campName || "Camp";
-  const camperName = data.camperName || "";
+  const camperName = displayName(data.camperName || "");
   const parentName = data.parentName || "Parent";
   const amount = data.amount || "$0";
   const dueDate = data.dueDate || "";
@@ -155,6 +155,14 @@ function template(type: string, data: Record<string, string>): { subject: string
         html: wrap("Camp Update", `<p>${data.message || "You have a new notification."}</p>`),
       };
   }
+}
+
+
+/** A camper's name as a person reads it: without the roster's internal
+ *  " #<number>" that tells two campers with one name apart. For what a parent
+ *  sees; never for identifying the camper. */
+function displayName(s: unknown): string {
+  return String(s ?? "").replace(/\s#\d+(?:-\d+)?$/, "");
 }
 
 serve(async (req) => {

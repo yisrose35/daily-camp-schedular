@@ -1828,7 +1828,7 @@ function _renderCampSwitch(containerId, camps, onSelect, activeId){
         chip.type = 'button';
         chip.className = 'lk-camper-chip lk-camp-chip' + (isActive ? ' active' : '');
         chip.dataset.campId = c.id;
-        chip.innerHTML = '<span class="lk-camper-chip-name">'+_escHtml(c.name)+'</span>'+(c.owed?'<span class="lk-camp-chip-dot" aria-label="Balance due"></span>':'');
+        chip.innerHTML = '<span class="lk-camper-chip-name">'+_escHtml((window.campistryName||String)(c.name))+'</span>'+(c.owed?'<span class="lk-camp-chip-dot" aria-label="Balance due"></span>':'');
         chip.onclick = function(){
             el.querySelectorAll('.lk-camper-chip').forEach(function(b){ b.classList.remove('active'); });
             chip.classList.add('active');
@@ -2190,7 +2190,7 @@ async function addFunds(){
         var addBtn=document.getElementById('canteenAddBtn');
         if(addBtn){addBtn.disabled=true;addBtn.textContent='Opening secure checkout…';}
         try{
-            var ckRes2=await _lkCallEdge('cardknox-checkout-start',{campId:c.campId,kind:'canteen_deposit',camperName:c.name,amount:amt,description:'Canteen funds — '+c.name});
+            var ckRes2=await _lkCallEdge('cardknox-checkout-start',{campId:c.campId,kind:'canteen_deposit',camperName:c.name,amount:amt,description:'Canteen funds — '+(window.campistryName||String)(c.name)});
             _lkGoToCheckout(ckRes2.url);
         }catch(err){ toast('Could not start checkout: '+(err&&err.message||'error')); if(addBtn){addBtn.disabled=false;addBtn.textContent='Add Funds';} }
         return;
@@ -2199,7 +2199,7 @@ async function addFunds(){
     // charges the card and credits the canteen balance.
     if(processorKey==='banquest'){
         _lkGoToCheckout(_lkCardSetupUrl(c.campId,{
-            camperName:c.name, amount:amt, desc:'Canteen funds — '+c.name,
+            camperName:c.name, amount:amt, desc:'Canteen funds — '+(window.campistryName||String)(c.name),
             returnUrl:_lkReturnUrl('success','canteen')
         }));
         return;
@@ -2214,7 +2214,7 @@ async function addFunds(){
         var email=(parent&&parent.email)||'';
         var res=await _lkCheckout({
             campId:c.campId, camperName:c.name, amount:amt, email:email,
-            description:'Canteen funds — '+c.name,
+            description:'Canteen funds — '+(window.campistryName||String)(c.name),
             source:'campistry-canteen-deposit',
             successUrl:_lkReturnUrl('success','canteen'),
             cancelUrl:_lkReturnUrl('cancelled','canteen'),
@@ -2777,7 +2777,7 @@ async function _startCanteenAutoReloadCheckout(c){
     if(processorKey==='cardknox'){
         try{
             toast('Opening secure checkout…');
-            var ckRes=await _lkCallEdge('cardknox-checkout-start',{campId:c.campId,kind:'canteen_autoreload_setup',camperName:c.name,description:'Save a card for auto-reload — '+c.name});
+            var ckRes=await _lkCallEdge('cardknox-checkout-start',{campId:c.campId,kind:'canteen_autoreload_setup',camperName:c.name,description:'Save a card for auto-reload — '+(window.campistryName||String)(c.name)});
             _lkGoToCheckout(ckRes.url);
         }catch(err){ console.error('[Parent] canteen auto-reload cardknox setup error:',err); toast('Could not start setup: '+(err&&err.message||'error')); }
         return;
@@ -2847,7 +2847,7 @@ function init(){
     var cl=document.getElementById('childrenList');cl.innerHTML='';
     // Multi-camp: show which camp each child is at when the family spans >1 camp.
     var _multiCamp=children.length && children.some(function(c){ return c.campId!==children[0].campId; });
-    if(children.length){children.forEach(function(c,i){var campChip=(_multiCamp&&c.campName)?('<span class="badge badge-info" style="font-size:.62rem;margin-right:6px;">'+String(c.campName).replace(/[<>&]/g,'')+'</span>'):'';cl.innerHTML+='<div class="lk-child-card" data-accent="'+childAccent(i)+'" onclick="showChild(\''+c.id+'\')"><div class="lk-child-avatar lk-avatar-accent">'+c.initials+'</div><div class="lk-child-info"><div class="lk-child-name">'+c.name+'</div><div class="lk-child-meta">'+campChip+[c.age?'Age '+c.age:'',c.division,c.bunk].filter(Boolean).join(' · ')+'</div></div><span class="badge badge-neutral">'+c.grade+'</span><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="var(--slate-300)" stroke-width="2"><polyline points="9 18 15 12 9 6"/></svg></div>';});}
+    if(children.length){children.forEach(function(c,i){var campChip=(_multiCamp&&c.campName)?('<span class="badge badge-info" style="font-size:.62rem;margin-right:6px;">'+String(c.campName).replace(/[<>&]/g,'')+'</span>'):'';cl.innerHTML+='<div class="lk-child-card" data-accent="'+childAccent(i)+'" onclick="showChild(\''+c.id+'\')"><div class="lk-child-avatar lk-avatar-accent">'+c.initials+'</div><div class="lk-child-info"><div class="lk-child-name">'+_escHtml((window.campistryName||String)(c.name))+'</div><div class="lk-child-meta">'+campChip+[c.age?'Age '+c.age:'',c.division,c.bunk].filter(Boolean).join(' · ')+'</div></div><span class="badge badge-neutral">'+c.grade+'</span><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="var(--slate-300)" stroke-width="2"><polyline points="9 18 15 12 9 6"/></svg></div>';});}
     else{cl.innerHTML='<div class="lk-empty"><h3>No campers linked yet</h3></div>';}
 
     // Payments
@@ -3056,8 +3056,8 @@ function switchHealth(id){
     var c=children.find(function(k){return k.id===id});if(!c)return;
     var idx=children.indexOf(c);
     var camperNum='#'+String(idx+1).padStart(4,'0');
-    var hcb=document.getElementById('healthCamperBadge');if(hcb)hcb.textContent=c.name+' · '+camperNum;
-    var hdb=document.getElementById('healthDocBadge');if(hdb)hdb.textContent=c.name+' · '+camperNum;
+    var hcb=document.getElementById('healthCamperBadge');if(hcb)hcb.textContent=(window.campistryName||String)(c.name)+' · '+camperNum;
+    var hdb=document.getElementById('healthDocBadge');if(hdb)hdb.textContent=(window.campistryName||String)(c.name)+' · '+camperNum;
 }
 
 // One RPC per (pose, model): 128-D always, 512-D added when the modern engine
@@ -3330,7 +3330,7 @@ function _loadParentPhotos(){
                 var card=document.createElement('div');
                 card.className='lk-card'; card.style.marginTop='16px';
                 var head=document.createElement('div'); head.className='lk-card-head';
-                head.innerHTML='<h2>'+_escHtml(c.name)+"'s Photos</h2><span style=\"font-size:.76rem;color:var(--text-muted);\">"+mine.length+' found</span>';
+                head.innerHTML='<h2>'+_escHtml((window.campistryName||String)(c.name))+"'s Photos</h2><span style=\"font-size:.76rem;color:var(--text-muted);\">"+mine.length+' found</span>';
                 card.appendChild(head);
                 var grid=document.createElement('div');
                 grid.style.cssText='display:grid;grid-template-columns:repeat(auto-fill,minmax(130px,1fr));gap:8px;';
@@ -3348,7 +3348,7 @@ function _loadParentPhotos(){
                 var rows=unpurchased.map(function(c){
                     return '<label style="display:flex;align-items:center;gap:8px;font-size:.85rem;padding:4px 0;">'+
                         '<input type="checkbox" class="photoFrCheck" checked value="'+_escHtml(c.name)+'" data-camp-id="'+_escHtml(String(c.campId||parent.campId))+'" onchange="_lkPhotoFrUpdateBtn()"> '+
-                        _escHtml(c.name)+'</label>';
+                        _escHtml((window.campistryName||String)(c.name))+'</label>';
                 }).join('');
                 upsell.innerHTML='<div class="lk-card" style="padding:16px;">'+
                     '<div style="font-weight:700;font-size:1.05rem;margin-bottom:6px;">Facial Recognition</div>'+
@@ -4156,7 +4156,7 @@ function renderCamperMail(){
         } else {
             ct.innerHTML='';
             _mailChildName=children.length?children[0].name:null;
-            if(children.length===1)ct.innerHTML='<span style="font-size:.8rem;color:var(--text-muted);">To: <strong>'+_mailEsc(children[0].name)+'</strong></span>';
+            if(children.length===1)ct.innerHTML='<span style="font-size:.8rem;color:var(--text-muted);">To: <strong>'+_mailEsc((window.campistryName||String)(children[0].name))+'</strong></span>';
         }
     }
     _renderMyMail();
@@ -4192,7 +4192,7 @@ function _renderMailCodes(cid,campNumber){
     box.innerHTML='<div style="font-size:.76rem;color:var(--text-muted);margin-bottom:6px;">Emailing from a different address? Put your camper’s code in the subject or first line:</div>'
       +kids.map(function(c){
           var code=campNumber+'-'+String(c.id).replace(/\D/g,'');
-          return '<div style="display:flex;align-items:center;gap:8px;margin:4px 0;"><code style="font-size:.86rem;font-weight:700;background:var(--surface-2,#f1f5f9);padding:5px 10px;border-radius:6px;">'+code+'</code><span style="font-size:.8rem;color:var(--text-muted);">'+(c.name?String(c.name).replace(/[<>&]/g,''):'')+'</span></div>';
+          return '<div style="display:flex;align-items:center;gap:8px;margin:4px 0;"><code style="font-size:.86rem;font-weight:700;background:var(--surface-2,#f1f5f9);padding:5px 10px;border-radius:6px;">'+code+'</code><span style="font-size:.8rem;color:var(--text-muted);">'+(c.name?String((window.campistryName||String)(c.name)).replace(/[<>&]/g,''):'')+'</span></div>';
       }).join('');
 }
 function _copyMailEmail(){ var a=document.getElementById('mailEmailAddr'); if(!a||!a.textContent)return; try{ navigator.clipboard.writeText(a.textContent); toast('Address copied'); }catch(e){ toast(a.textContent); } }
@@ -4886,7 +4886,7 @@ var _PICKUP_FOR   = {early:'pickupEarlyFor',  change:'pickupChangeFor',  bus:'pi
 function _updatePickupFor(type, childId) {
     var forEl = document.getElementById(_PICKUP_FOR[type]); if (!forEl) return;
     var c = children.find(function(k){ return k.id===childId; }) || children[0];
-    forEl.textContent = c ? ('For '+c.name) : '';
+    forEl.textContent = c ? ('For '+(window.campistryName||String)(c.name)) : '';
 }
 // Init pickup child tabs
 function initPickupTabs() {
@@ -4970,7 +4970,7 @@ window.addEventListener('storage', function(e) {
 <script src="campistry_face_engine_v2.js?v=20260909-01"></script>
 <script src="supabase-js@2.js?v=20260909-01"></script>
 <script>window.CAMPISTRY_INBOUND_DOMAIN=window.CAMPISTRY_INBOUND_DOMAIN||'inbound.campistry.org';</script>
-<script src="campistry_camper_id_rpc.js?v=20260923-02"></script>
+<script src="campistry_camper_id_rpc.js?v=20260923-03"></script>
 <script src="config.js?v=20260909-01"></script>
 <!-- pdf-lib + pdf.js (vendored) — fill-in-browser + stamp/flatten for PDF
      Forms (Forms & Documents → Complete Online → a sourceType:'pdf' form). -->

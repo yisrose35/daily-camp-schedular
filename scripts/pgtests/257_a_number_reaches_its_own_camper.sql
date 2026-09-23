@@ -217,11 +217,54 @@ INSERT INTO camp_people (camp_id, person_id, kind, source_key, name, deleted_at)
     ('a5700000-0000-0000-0000-000000000003', 32, 'camper', 'dov stern', 'dov stern', now());
 DO $$
 BEGIN
-    IF public.verify_number_round_trip() -> 'numbers_that_miss_their_camper' <> '[]'::jsonb THEN
+    IF public.verify_number_round_trip() -> 'numbers_that_miss_their_camper' <> '[]'::jsonb
+       OR public.verify_number_round_trip() -> 'enrolled_names_that_miss_their_camper' <> '[]'::jsonb THEN
         RAISE EXCEPTION 'two departed look-alikes: %', public.verify_number_round_trip();
     END IF;
-    IF public.camp_person_label('a5700000-0000-0000-0000-000000000003', 31) <> 'Dov Stern #31' THEN
-        RAISE EXCEPTION 'unexpected label: %', public.camp_person_label('a5700000-0000-0000-0000-000000000003', 31);
+    -- No number is ever added to a name.
+    IF public.camp_person_label('a5700000-0000-0000-0000-000000000003', 31) <> 'Dov Stern' THEN
+        RAISE EXCEPTION 'a number was added to a name: %', public.camp_person_label('a5700000-0000-0000-0000-000000000003', 31);
     END IF;
 END $$;
+ROLLBACK;
+
+-- ════════════════════════════════════════════════════════════════════════════
+-- Ted's TED-006 case: "Sam Cohen" is #2 and another child is stored as
+-- "Sam Cohen #2", who is #5. The name "Sam Cohen #2" means #5 — whatever
+-- number happens to follow it — and each child's money reaches them by name
+-- and by number. No number is ever added to anybody's name.
+-- ════════════════════════════════════════════════════════════════════════════
+BEGIN;
+INSERT INTO auth.users (id, email) VALUES ('a5700000-0000-0000-0000-0000000000a4', 'owner4@257.test');
+INSERT INTO camps (id, name, owner) VALUES
+    ('a5700000-0000-0000-0000-000000000004', '257 camp four', 'a5700000-0000-0000-0000-0000000000a4');
+INSERT INTO camp_state_kv (camp_id, key, value) VALUES ('a5700000-0000-0000-0000-000000000004', 'app1',
+    '{"camperRoster":{"Sam Cohen":{"name":"Sam Cohen","camperId":2},"Sam Cohen #2":{"name":"Sam Cohen","camperId":5}}}');
+SET "request.jwt.claims" = '{"sub":"a5700000-0000-0000-0000-0000000000a4"}';
+DO $$
+DECLARE c uuid := 'a5700000-0000-0000-0000-000000000004';
+BEGIN
+    IF public.camp_person_by_name(c, 'Sam Cohen #2') IS DISTINCT FROM 5 THEN
+        RAISE EXCEPTION 'the name "Sam Cohen #2" does not mean #5: %', public.camp_person_by_name(c, 'Sam Cohen #2');
+    END IF;
+    PERFORM public.canteen_office_credit(c, 'Sam Cohen #2', 9);
+    PERFORM public.canteen_office_credit(c, 'Sam Cohen', 1);
+    PERFORM public.canteen_office_credit(c, 'Sam Cohen #2', 20, p_camper_id => 5);
+    PERFORM public.canteen_office_credit(c, 'Sam Cohen', 300, p_camper_id => 2);
+    IF (SELECT balance FROM camp_canteen_accounts WHERE camp_id = c AND person_id = 5) IS DISTINCT FROM 29
+       OR (SELECT balance FROM camp_canteen_accounts WHERE camp_id = c AND person_id = 2) IS DISTINCT FROM 301 THEN
+        RAISE EXCEPTION 'money reached the wrong child: %',
+            (SELECT jsonb_agg(jsonb_build_object('p', person_id, 'key', account_key, 'b', balance)) FROM camp_canteen_accounts WHERE camp_id = c);
+    END IF;
+    IF EXISTS (SELECT 1 FROM camp_canteen_accounts WHERE camp_id = c AND (account_key ~ '#\d+ #\d+$' OR camper_name ~ '#\d+ #\d+$')) THEN
+        RAISE EXCEPTION 'a number was added to a name: %',
+            (SELECT jsonb_agg(account_key) FROM camp_canteen_accounts WHERE camp_id = c);
+    END IF;
+    IF public.verify_number_round_trip() -> 'numbers_that_miss_their_camper' <> '[]'::jsonb
+       OR public.verify_number_round_trip() -> 'enrolled_names_that_miss_their_camper' <> '[]'::jsonb
+       OR public.verify_number_round_trip() -> 'functions_that_do_not_pin' <> '[]'::jsonb THEN
+        RAISE EXCEPTION 'the check reports: %', public.verify_number_round_trip();
+    END IF;
+END $$;
+RESET "request.jwt.claims";
 ROLLBACK;
