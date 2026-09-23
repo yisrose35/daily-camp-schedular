@@ -122,6 +122,7 @@ const MIGRATIONS = [
     '243_the_nightly_reload_reads_the_rows',
     '244_a_new_child_does_not_inherit_a_renamed_childs_account',
     '245_the_canteen_ledger_is_read_from_its_rows',
+    '246_balances_read_payments_from_their_rows',
 ];
 
 // The one thing the stubs deliberately get wrong for our purposes: they define

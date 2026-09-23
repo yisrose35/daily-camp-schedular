@@ -1,5 +1,5 @@
 -- ============================================================================
--- Confirm migrations 222-245 are in and doing their job.
+-- Confirm migrations 222-246 are in and doing their job.
 --
 -- Paste the whole thing into the Supabase SQL Editor. It is READ ONLY — one
 -- SELECT, nothing is created, changed or deleted, and the two purge functions
@@ -259,7 +259,7 @@
 
 UNION ALL
 
-  -- ─── 1b. 239-245, read off the DEPLOYED function bodies ───────────────────
+  -- ─── 1b. 239-246, read off the DEPLOYED function bodies ───────────────────
   -- A separate block, and the bodies are computed in a subquery rather than
   -- through 239's _prosrc_code helper, for one reason that cost a rewrite:
   -- POSTGRES RESOLVES FUNCTION NAMES WHEN IT PLANS THE STATEMENT, not when it
@@ -361,7 +361,17 @@ UNION ALL
     -- The ledger both the office and parents read came from the frozen document.
     ('245  the canteen ledger is read from its rows',
      CASE WHEN b.ledger ~ 'FROM canteen_transactions' AND b.ledger !~ '''campistrySnacks'''
-          THEN 'ok' ELSE 'CANTEEN HISTORY IS FROZEN AT 219 — apply 245' END)
+          THEN 'ok' ELSE 'CANTEEN HISTORY IS FROZEN AT 219 — apply 245' END),
+
+    -- A parent's balance counted payments from a branch gone since 158.
+    ('246  a parent''s balance counts what they paid',
+     CASE WHEN NOT EXISTS (
+              SELECT 1 FROM pg_proc p JOIN pg_namespace n ON n.oid = p.pronamespace
+               WHERE n.nspname = 'public'
+                 AND p.proname IN ('get_my_balance_derived', 'report_plan_undercollection')
+                 AND regexp_replace(p.prosrc, '--[^' || chr(10) || ']*', '', 'g')
+                     ~ '''finance''\s*->\s*''payments''')
+          THEN 'ok' ELSE 'A PARENT CAN BE SHOWN MONEY THEY ALREADY PAID — apply 246' END)
     ) AS x(item, result)
 
 UNION ALL
