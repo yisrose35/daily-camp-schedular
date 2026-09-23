@@ -1,5 +1,5 @@
 -- ============================================================================
--- Confirm migrations 222-254 are in and doing their job.
+-- Confirm migrations 222-256 are in and doing their job.
 --
 -- Paste the whole thing into the Supabase SQL Editor. It is READ ONLY — one
 -- SELECT, nothing is created, changed or deleted, and the two purge functions
@@ -433,7 +433,17 @@ UNION ALL
      CASE WHEN to_regprocedure('public.erase_camper(uuid,bigint,boolean)') IS NOT NULL
            AND to_regprocedure('public.merge_campers(uuid,bigint,bigint)') IS NOT NULL
            AND to_regclass('public.camp_erased_files') IS NOT NULL
-          THEN 'ok' ELSE 'A DELETED CAMPER''S DATA IS NEVER ERASED — apply 254' END)
+          THEN 'ok' ELSE 'A DELETED CAMPER''S DATA IS NEVER ERASED — apply 254' END),
+
+    ('255  a parent''s family and bill are found by camper number',
+     CASE WHEN to_regprocedure('public.verify_parent_matching_on_numbers()') IS NULL THEN 'apply 255'
+          WHEN public.verify_parent_matching_on_numbers() -> 'still_matching_children_by_name' = '[]'::jsonb THEN 'ok'
+          ELSE 'STILL BY NAME: ' || (public.verify_parent_matching_on_numbers() ->> 'still_matching_children_by_name') END),
+
+    ('256  faces, photo tags and forms go by camper number',
+     CASE WHEN to_regprocedure('public.verify_rows_matched_by_number()') IS NULL THEN 'apply 256'
+          WHEN public.verify_rows_matched_by_number() -> 'still_matching_rows_by_name_or_number' = '[]'::jsonb THEN 'ok'
+          ELSE 'STILL BY NAME: ' || (public.verify_rows_matched_by_number() ->> 'still_matching_rows_by_name_or_number') END)
     ) AS x(item, result)
 
 UNION ALL

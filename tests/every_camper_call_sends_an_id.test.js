@@ -259,3 +259,55 @@ test('the tip cart and its webhook carry the camper id to link_tips', () => {
     assert.match(hook, /person_id:\s*item\.person_id/);
     assert.match(hook, /person_id:\s*camperIdIn\(meta\.camperId\)/);
 });
+
+// ── rows written straight to a table ────────────────────────────────────────
+
+function fakeTableClient() {
+    const writes = [];
+    return {
+        writes,
+        rpc() { return Promise.resolve({ data: null, error: null }); },
+        from(table) {
+            const qb = {};
+            ['insert', 'upsert', 'update'].forEach(op => {
+                qb[op] = (values, opts) => { writes.push({ table, op, values: JSON.parse(JSON.stringify(values)), opts }); return qb; };
+            });
+            qb.eq = () => qb; qb.select = () => qb;
+            return qb;
+        },
+    };
+}
+
+test('a row written with camper_name also carries person_id', () => {
+    const M = load(), c = fakeTableClient();
+    M.wrap(c, fromRoster);
+    c.from('link_messages').insert({ camp_id: 'c1', camper_name: 'Ayala Weiss', body: 'hi' });
+    c.from('link_photo_tags').upsert([{ camper_name: 'Dov Lerner' }, { camper_name: 'Nobody' }], { onConflict: 'x' });
+    assert.strictEqual(c.writes[0].values.person_id, 880);
+    assert.strictEqual(c.writes[1].values[0].person_id, 881);
+    assert.ok(!('person_id' in c.writes[1].values[1]), 'an insert naming nobody we know is left for the server');
+    assert.deepStrictEqual(c.writes[1].opts, { onConflict: 'x' }, 'the options pass through');
+});
+
+test('re-assigning a row to another camper cannot keep the old camper\'s number', () => {
+    // Live's "assign letter to a camper" updates camper_name only. The server
+    // stamps a number only where there is none, so the letter kept the number
+    // of whoever it was filed under before.
+    const M = load(), c = fakeTableClient();
+    M.wrap(c, fromRoster);
+    c.from('link_camper_mail').update({ camper_name: 'Dov Lerner', bunk: 'B2' }).eq('id', 'm1');
+    c.from('link_camper_mail').update({ camper_name: 'Somebody New' }).eq('id', 'm2');
+    c.from('link_camper_mail').update({ status: 'printed' }).eq('id', 'm3');
+    assert.strictEqual(c.writes[0].values.person_id, 881);
+    assert.strictEqual(c.writes[1].values.person_id, null, 'an unknown name must clear the old number so the server resolves it afresh');
+    assert.ok(!('person_id' in c.writes[2].values), 'an update that names nobody leaves the number alone');
+});
+
+test('a number the page already sent is kept; an async resolver never blocks a write', () => {
+    const M = load(), c = fakeTableClient();
+    M.wrap(c, () => Promise.resolve(5));
+    c.from('link_messages').insert({ camper_name: 'Ayala Weiss' });
+    c.from('link_messages').insert({ camper_name: 'Ayala Weiss', person_id: 42 });
+    assert.ok(!('person_id' in c.writes[0].values));
+    assert.strictEqual(c.writes[1].values.person_id, 42);
+});

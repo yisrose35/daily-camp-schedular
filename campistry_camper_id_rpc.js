@@ -73,7 +73,53 @@
         };
         client.__camperIdRpc = true;
         client.__rawRpc = raw;
+        wrapFrom(client, resolve);
         return client;
+    }
+
+    // ── Rows written straight to a table, too ────────────────────────────────
+    // A page that inserts, upserts or updates a row with camper_name (camper
+    // mail, messages, photo tags, outbox…) sends person_id beside it. Only a
+    // resolver that answers at once can do this — the query builder is built
+    // synchronously — which the staff roster does; the parent portal writes
+    // no such rows. An UPDATE that names a camper we cannot find sends
+    // person_id: null, so the server resolves the new name afresh (223's
+    // stamp) instead of keeping the number of whoever the row was about before.
+    function stampRow(row, op, resolveNow) {
+        if (!row || typeof row !== 'object' || Array.isArray(row)) return row;
+        var name = typeof row.camper_name === 'string' ? row.camper_name.trim() : '';
+        if (!name || isId(row.person_id)) return row;
+        var id = null;
+        try { id = resolveNow ? resolveNow(row.camp_id || null, name) : null; } catch (_) { id = null; }
+        var out = Object.assign({}, row);
+        if (isId(id)) out.person_id = Number(id);
+        else if (op === 'update') out.person_id = null;
+        return out;
+    }
+    function wrapFrom(client, resolve) {
+        if (!client || typeof client.from !== 'function' || client.__camperIdFrom) return;
+        var resolveNow = function (campId, name) {
+            var r = resolve(campId, name);
+            return (r && typeof r.then === 'function') ? null : r;
+        };
+        var rawFrom = client.from.bind(client);
+        client.from = function (table) {
+            var qb = rawFrom(table);
+            if (!qb || typeof qb !== 'object') return qb;
+            ['insert', 'upsert', 'update'].forEach(function (op) {
+                if (typeof qb[op] !== 'function') return;
+                var rawOp = qb[op].bind(qb);
+                qb[op] = function (values) {
+                    var rest = Array.prototype.slice.call(arguments, 1);
+                    var v = Array.isArray(values)
+                        ? values.map(function (r) { return stampRow(r, op, resolveNow); })
+                        : stampRow(values, op, resolveNow);
+                    return rawOp.apply(null, [v].concat(rest));
+                };
+            });
+            return qb;
+        };
+        client.__camperIdFrom = true;
     }
 
     // ── Edge functions, too ──────────────────────────────────────────────────
@@ -132,7 +178,7 @@
         window.fetch = wrapped;
     }
 
-    window.CampistryCamperIdRpc = { wrap: wrap, wrapFetch: wrapFetch, camperNameIn: camperNameIn, isId: isId };
+    window.CampistryCamperIdRpc = { wrap: wrap, wrapFetch: wrapFetch, wrapFrom: wrapFrom, stampRow: stampRow, camperNameIn: camperNameIn, isId: isId };
 
     // Loaded AFTER the staff client was created (a page that loads
     // supabase_client.js dynamically, or puts this tag later): wrap it now.
