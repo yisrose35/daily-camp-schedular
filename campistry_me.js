@@ -19170,7 +19170,13 @@ function monthlyPlan(famKey,planId){
     // Starting rows: the existing plan's own installments when editing (so
     // the office sees exactly what's there and can tweak individual rows),
     // otherwise a 3-monthly scaffold from the current balance.
-    var startRows=existingPlan?existingPlan.installments.map(function(i){return{amount:i.amount,dueDate:i.dueDate}}):_mpGenRows(targetTotal||1,3,defStart,'monthly');
+    // Only the payments still to come are editable; what has been collected
+    // stays on the plan's history (TED-056 — reopening a parent-built plan used
+    // to read .installments, which a ledger plan does not have).
+    var startRows=existingPlan
+        ?_planSchedule(existingPlan,curBalance).filter(function(i){return i.status!=='paid'}).map(function(i){return{amount:i.amount,dueDate:i.dueDate}})
+        :_mpGenRows(targetTotal||1,3,defStart,'monthly');
+    if(existingPlan&&!startRows.length)startRows=_mpGenRows(targetTotal||1,3,defStart,'monthly');
 
     // Two tabs instead of one long scroll: "Generate" only ever produces
     // rows and drops you into "Edit" to review them — it never saves
@@ -19245,6 +19251,7 @@ function monthlyPlan(famKey,planId){
     h+='<div style="font-size:.7rem;font-weight:700;color:var(--s500);text-transform:uppercase;letter-spacing:.05em;margin-bottom:6px">Payments — edit any date or amount, add or remove rows freely</div>';
     h+='<div id="mpRowsBody" style="margin-bottom:8px">'+_mpRowsHtml(startRows)+'</div>';
     h+='<button type="button" class="me-btn me-btn--ghost me-btn--sm" onclick="CampistryMe._mpAddRow()">+ Add payment</button>';
+    h+='<div style="font-size:.75rem;color:var(--s500);margin:6px 0 0">The dates are kept exactly. Each payment\'s amount is worked out on its due date from what the family still owes then, split evenly over the payments left — so a payment made in between, or a new charge, is taken into account automatically.</div>';
     h+='<div style="text-align:right;font-size:.8rem;color:var(--s500);margin:8px 0 14px">Total scheduled: <strong id="mpRunningTotal" style="color:var(--s800)">'+fm(startRows.reduce(function(s,r){return s+(Number(r.amount)||0)},0))+'</strong></div>';
     h+='</div>';
 
@@ -19271,13 +19278,41 @@ function monthlyPlan(famKey,planId){
         insts.forEach(function(inst,idx){inst.n=idx+1});
         var total=insts.reduce(function(s,i){return s+i.amount},0);
         var auto=hasCard&&document.getElementById('mpAuto')&&document.getElementById('mpAuto').checked;
-        var newPlan={id:existingPlan?existingPlan.id:('plan_'+Date.now().toString(36)+Math.random().toString(36).slice(2,6)),enrollmentIds:null,installments:insts,autopay:!!auto,total:Math.round(total*100)/100,createdAt:new Date().toISOString(),source:'office'};
+        var newPlan=_mpBuildLedgerPlan(existingPlan,insts,!!auto,total);
         if(existingPlan){ plans[plans.indexOf(existingPlan)]=newPlan; }
         else{ plans.push(newPlan); }
         save();closeModal('dynModal');if(curPage==='familydetail')renderFamilyDetailPage();else renderBilling();
         toast('Payment plan saved — '+insts.length+' payment'+(insts.length>1?'s':'')+(auto?', autopay on':''));
     },{maxWidth:920,maxHeight:'94vh',minHeight:'80vh',saveLabel:existingPlan?'Update Plan':'Create Plan'});
     _mpSwitchTab(startTab);
+}
+// ONE plan model (TED-056): the office writes the same ledger plan a parent's
+// does (dates only; the amount is worked out at charge time from what is still
+// owed), so both get the same autopay, retries and alerts. What an existing plan
+// already collected is kept as its history and never rewritten — including an
+// old-style installments[] plan, whose paid instalments become that history.
+function _mpBuildLedgerPlan(existingPlan,insts,auto,total){
+    var done=[],hist=[],nextIdx=0;
+    if(existingPlan&&Array.isArray(existingPlan.dueDates)){
+        nextIdx=Number(existingPlan.nextIndex)||0;
+        done=existingPlan.dueDates.slice().sort().slice(0,nextIdx);
+        hist=Array.isArray(existingPlan.history)?existingPlan.history.slice():[];
+    }else if(existingPlan&&Array.isArray(existingPlan.installments)){
+        existingPlan.installments.filter(function(i){return i&&i.status==='paid'})
+            .sort(function(a,b){return String(a.dueDate||'').localeCompare(String(b.dueDate||''))})
+            .forEach(function(i,idx){
+                done.push(i.dueDate);
+                hist.push({index:idx,dueDate:i.dueDate,charged:Number(i.amount)||0,reason:'paid',
+                           paymentId:i.paymentId||i.stripePaymentIntentId||i.byopTransactionId||null,at:i.paidDate||null});
+            });
+        nextIdx=done.length;
+    }
+    var future=insts.map(function(i){return i.dueDate}).sort();
+    return {id:existingPlan&&existingPlan.id?existingPlan.id:('plan_'+Date.now().toString(36)+Math.random().toString(36).slice(2,6)),
+        enrollmentIds:null,dueDates:done.concat(future),
+        count:done.length+future.length,nextIndex:nextIdx,history:hist,
+        autopay:!!auto,paused:false,total:Math.round(total*100)/100,
+        createdAt:existingPlan&&existingPlan.createdAt||new Date().toISOString(),source:existingPlan&&existingPlan.source||'office'};
 }
 function _mpSwitchTab(tab){
     var gen=document.getElementById('mpTabGenerate'), edit=document.getElementById('mpTabEdit');
