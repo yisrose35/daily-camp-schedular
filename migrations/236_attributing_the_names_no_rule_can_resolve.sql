@@ -41,6 +41,13 @@
 -- eventually be clicked through by somebody in a hurry. A candidate list is only
 -- useful if everything on it is plausible.
 --
+-- WHICH COLUMNS COUNT AS A CAMPER'S NAME. camper_name, which is what 223 hung a
+-- person_id on, and camp_canteen_accounts.account_key, which is what 217 keyed
+-- that table on. Two more were in an earlier draft and are deliberately gone:
+-- pickup_alert_recipients.recipient_name is a league captain or a staff member,
+-- not a camper, and canteen_transactions.camper has no person_id to stamp. Both
+-- matched nothing and only widened what a mistake could reach.
+--
 -- WHY attribute_camper_name TOUCHES EVERY TABLE AT ONCE. The same name appears in
 -- a canteen account, a mail record, a pickup alert, a photo tag and a health
 -- submission. Attributing it once per table is five decisions where there is one,
@@ -295,21 +302,36 @@ BEGIN
     -- Every ordinary public table with a camper_name and a person_id — the same
     -- discovery 223 used to add the column in the first place.
     FOR t IN
-        SELECT c.relname::text AS table_name, a.attname::text AS name_col
+        SELECT DISTINCT ON (c.relname)
+               c.relname::text AS table_name, a.attname::text AS name_col
           FROM pg_class c
           JOIN pg_namespace n ON n.oid = c.relnamespace
           JOIN pg_attribute a ON a.attrelid = c.oid
          WHERE n.nspname = 'public' AND c.relkind = 'r'
            AND a.attnum > 0 AND NOT a.attisdropped
            AND a.atttypid = 'text'::regtype
-           AND a.attname IN ('camper_name', 'account_key', 'camper', 'recipient_name')
+           AND a.attname IN ('camper_name', 'account_key')
            AND EXISTS (SELECT 1 FROM pg_attribute p WHERE p.attrelid = c.oid
                         AND p.attname = 'person_id' AND p.attnum > 0
                         AND NOT p.attisdropped)
            AND EXISTS (SELECT 1 FROM pg_attribute q WHERE q.attrelid = c.oid
                         AND q.attname = 'camp_id' AND q.attnum > 0
                         AND NOT q.attisdropped)
-         ORDER BY c.relname, a.attname
+         -- ONE column per table, and account_key wins where both exist.
+         --
+         -- camp_canteen_accounts carries account_key AND camper_name, and the
+         -- first version of this loop visited it once per column. Counting it
+         -- twice was the visible symptom — 863 rows against 223's 488 for the
+         -- same question. The real hazard was the second UPDATE: 227 keeps the
+         -- account KEY fixed and lets the camper_name LABEL follow a rename, so
+         -- the two columns can name different accounts, and stamping both with
+         -- one person_id violates uq_canteen_accounts_person. The clash check
+         -- above looks for an account already holding the id, not for two
+         -- accounts arriving in one call, so it would not have caught it.
+         --
+         -- account_key is the right one: it is the identity 217 keyed the table
+         -- on, and camper_name there is a display label.
+         ORDER BY c.relname, CASE a.attname WHEN 'account_key' THEN 0 ELSE 1 END
     LOOP
         IF p_confirm THEN
             EXECUTE format(
@@ -430,18 +452,24 @@ DECLARE
     v_money  numeric;
 BEGIN
     FOR t IN
-        SELECT c.relname::text AS table_name, a.attname::text AS name_col
+        SELECT DISTINCT ON (c.relname)
+               c.relname::text AS table_name, a.attname::text AS name_col
           FROM pg_class c
           JOIN pg_namespace n ON n.oid = c.relnamespace
           JOIN pg_attribute a ON a.attrelid = c.oid
          WHERE n.nspname = 'public' AND c.relkind = 'r'
            AND a.attnum > 0 AND NOT a.attisdropped
            AND a.atttypid = 'text'::regtype
-           AND a.attname IN ('camper_name', 'account_key', 'camper', 'recipient_name')
+           AND a.attname IN ('camper_name', 'account_key')
            AND EXISTS (SELECT 1 FROM pg_attribute p WHERE p.attrelid = c.oid
                         AND p.attname = 'person_id' AND p.attnum > 0 AND NOT p.attisdropped)
            AND EXISTS (SELECT 1 FROM pg_attribute q WHERE q.attrelid = c.oid
                         AND q.attname = 'camp_id' AND q.attnum > 0 AND NOT q.attisdropped)
+         -- One column per table, same rule as attribute_camper_name. Counting a
+         -- table once per matching column made this report 863 rows where 223's
+         -- verifier reported 488, for the same question — two numbers that
+         -- disagree are two numbers nobody trusts.
+         ORDER BY c.relname, CASE a.attname WHEN 'account_key' THEN 0 ELSE 1 END
     LOOP
         EXECUTE format('SELECT count(*), count(person_id) FROM public.%I'
                        || ' WHERE COALESCE(btrim(%I), '''') <> ''''',

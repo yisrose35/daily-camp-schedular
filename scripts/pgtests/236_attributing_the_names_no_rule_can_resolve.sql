@@ -65,7 +65,21 @@ VALUES ('e3600000-0000-0000-0000-000000000001', 'Gone Long Ago', 'Gone Long Ago'
        -- Chana here, and somebody in a hurry would accept it — which is one
        -- child's $16 moved onto another. Without this row, loosening the rule to
        -- include surnames is a mutation no assertion notices.
-       ('e3600000-0000-0000-0000-000000000001', 'Sara Rosenfeld', 'Sara Rosenfeld', 16.00);
+       ('e3600000-0000-0000-0000-000000000001', 'Sara Rosenfeld', 'Sara Rosenfeld', 16.00),
+       -- THE TWO-COLUMN TRAP. 227 keeps an account's KEY fixed and lets the
+       -- camper_name LABEL follow a rename, so one account can be keyed one way
+       -- and labelled another. This row is keyed 'Different Key' but LABELLED
+       -- 'Sara Schepansky' — the same label as the account being attributed
+       -- below.
+       --
+       -- An attribution loop that visited camp_canteen_accounts once per
+       -- matching name column would stamp the account keyed 'Sara Schepansky'
+       -- AND this one, two rows with one person_id, and
+       -- uq_canteen_accounts_person would abort the whole call. The clash check
+       -- does not catch it: it looks for an account already holding the id, not
+       -- for two arriving together.
+       ('e3600000-0000-0000-0000-000000000001', 'Different Key',
+        'Sara Schepansky', 2.00);
 
 DO $$
 DECLARE v bigint;
@@ -224,6 +238,20 @@ BEGIN
     END IF;
 END $$;
 
+-- And the account merely LABELLED with that name was not stamped. Only the key
+-- counts, which is what makes attributing a name a single row in this table.
+DO $$
+DECLARE v bigint;
+BEGIN
+    SELECT person_id INTO v FROM camp_canteen_accounts
+     WHERE camp_id = 'e3600000-0000-0000-0000-000000000001'
+       AND account_key = 'Different Key';
+    IF v IS NOT NULL THEN
+        RAISE EXCEPTION 'the account labelled with the name was stamped too, which is one '
+                        'person_id on two accounts: %', v;
+    END IF;
+END $$;
+
 -- The money followed. This is the $10.72.
 DO $$
 DECLARE v numeric;
@@ -303,9 +331,10 @@ BEGIN
         RAISE EXCEPTION 'expected one empty unattributable account, got %: %',
                         v->>'empty_accounts_with_no_camper', v;
     END IF;
-    IF (v->>'accounts_holding_money_with_no_camper')::bigint <> 3 THEN
-        RAISE EXCEPTION 'expected three money-holding unattributable accounts '
-                        '(Gone With Money, Sara Rosenfeld, Schepasnky Sara), got %: %',
+    IF (v->>'accounts_holding_money_with_no_camper')::bigint <> 4 THEN
+        RAISE EXCEPTION 'expected four money-holding unattributable accounts '
+                        '(Gone With Money, Sara Rosenfeld, Different Key, '
+                        'Schepasnky Sara), got %: %',
                         v->>'accounts_holding_money_with_no_camper', v;
     END IF;
 
