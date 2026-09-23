@@ -285,6 +285,8 @@ function personIdHolder(id,exceptCamper,exceptStaffId){
     if(!want)return'';
     var who=camperNameById(want,exceptCamper);
     if(who)return who;
+    // Held by a camper who left and has not been erased (migration 253).
+    if(_serverHeldNumbers[want])return _lbl(_serverHeldNumbers[want])+' (removed — still holds the number)';
     var staff='';
     Object.keys(staffApplications).forEach(function(k){
         var a=staffApplications[k];
@@ -298,6 +300,139 @@ function reservePersonId(id){
     var n=Number(normalizePersonId(id)||0);
     if(n>=nextPersonId)nextPersonId=n+1;
     return n;
+}
+
+// ── Camper numbers are the server's (migrations 253/254) ────────────────────
+// The server decides every camper's number when the roster is saved: a number
+// two campers asked for goes to one of them, and a departed camper's number is
+// never re-issued until they are erased. It writes the result back into the
+// saved roster. These keep THIS tab in step with that:
+//   * _reconcileCamperNumbers: after a save (and on load) adopt the server's
+//     number wherever ours is missing, duplicated, or somebody else's; and move
+//     nextPersonId above every number anyone holds, departed or not.
+//   * _serverHeldNumbers: numbers departed campers still hold, so the ID field
+//     says "taken" before the server has to refuse it.
+//   * _queueCamperErase: deleting a camper erases them on the server once the
+//     Undo window has passed — every row tied to their number goes, and the
+//     number is free again. Queued in localStorage so a tab closed in between
+//     finishes it on the next load.
+var _serverHeldNumbers={};
+function _meRpc(){
+    var client=window.CampistryDB&&window.CampistryDB.getClient?window.CampistryDB.getClient():window.supabase;
+    var campId=window.CampistryDB&&window.CampistryDB.getCampId?window.CampistryDB.getCampId():null;
+    return (client&&typeof client.rpc==='function'&&campId)?{client:client,campId:campId}:null;
+}
+var _numberReconcileTimer=null;
+function _scheduleNumberReconcile(ms){
+    clearTimeout(_numberReconcileTimer);
+    _numberReconcileTimer=setTimeout(_reconcileCamperNumbers,ms||7000);
+}
+function _reconcileCamperNumbers(){
+    var c=_meRpc(); if(!c)return;
+    // A save still on its way would be compared against the old cloud copy.
+    if(Date.now()<_saveLockUntil){_scheduleNumberReconcile(3000);return}
+    c.client.rpc('get_camper_numbers',{p_camp_id:c.campId}).then(function(res){
+        var d=res&&res.data; if(!d||d.success!==true)return;
+        _serverHeldNumbers=d.departed&&typeof d.departed==='object'?d.departed:{};
+        var server=d.campers||{}, holderOf={}, localCount={};
+        Object.keys(server).forEach(function(k){holderOf[String(server[k])]=k});
+        Object.keys(roster).forEach(function(k){var l=normalizePersonId((roster[k]||{}).camperId);if(l)localCount[l]=(localCount[l]||0)+1});
+        var fixed=[];
+        Object.keys(roster).forEach(function(k){
+            if(!(k in server)||!roster[k])return;
+            var s=String(server[k]), l=normalizePersonId(roster[k].camperId);
+            if(l===s)return;
+            // Only where OUR number is wrong. A number typed here and not yet
+            // saved is left alone: it is free, and the next save will claim it.
+            if(!l||localCount[l]>1||_serverHeldNumbers[l]||(holderOf[l]&&holderOf[l]!==k)){
+                fixed.push(_lbl(k)+' → #'+s);
+                roster[k].camperId=Number(s);
+            }
+        });
+        var next=Number(d.next)||0;
+        Object.keys(_serverHeldNumbers).forEach(function(n){if(Number(n)>=next)next=Number(n)+1});
+        if(next>nextPersonId)nextPersonId=next;
+        if(fixed.length){
+            console.warn('[Me] camper numbers corrected by the server:',fixed);
+            save();render(curPage);
+            toast(fixed.length+' camper number'+(fixed.length===1?' was':'s were')+' already taken and '
+                  +(fixed.length===1?'has':'have')+' been changed: '+fixed.slice(0,3).join(', ')
+                  +(fixed.length>3?'…':''),'error');
+        }
+    },function(){});
+}
+var _ERASE_QUEUE_KEY='campistry_camper_erase_queue';
+function _readEraseQueue(){try{var q=JSON.parse(localStorage.getItem(_ERASE_QUEUE_KEY)||'[]');return Array.isArray(q)?q:[]}catch(_){return[]}}
+function _writeEraseQueue(q){try{localStorage.setItem(_ERASE_QUEUE_KEY,JSON.stringify(q))}catch(_){}}
+function _queueCamperErase(id,label,kind,keepId){
+    id=Number(normalizePersonId(id)||0); if(!id)return;
+    var q=_readEraseQueue().filter(function(x){return x.id!==id});
+    q.push({id:id,label:label||'',kind:kind||'erase',keep:keepId?Number(keepId):null,tries:0,at:Date.now()});
+    _writeEraseQueue(q);
+}
+function _cancelCamperErase(id){
+    id=Number(normalizePersonId(id)||0);
+    _writeEraseQueue(_readEraseQueue().filter(function(x){return x.id!==id}));
+}
+var _eraseRunning=false;
+function _runCamperErases(){
+    var c=_meRpc(); if(!c||_eraseRunning)return;
+    var q=_readEraseQueue(); if(!q.length)return;
+    // Only numbers that are no longer on this roster: an Undo, or the camper
+    // being re-added, cancels the erase.
+    var live={};Object.keys(roster).forEach(function(k){var l=normalizePersonId((roster[k]||{}).camperId);if(l)live[l]=1});
+    _eraseRunning=true;
+    var left=[];
+    var jobs=q.map(function(x){
+        if(live[String(x.id)])return Promise.resolve();
+        var call=x.kind==='merge'
+            ? c.client.rpc('merge_campers',{p_camp_id:c.campId,p_keep:x.keep,p_gone:x.id})
+            : c.client.rpc('erase_camper',{p_camp_id:c.campId,p_person_id:x.id,p_confirm:true});
+        return call.then(function(res){
+            var d=res&&res.data, err=d&&d.error;
+            if(d&&d.success===true){
+                if(x.kind!=='merge'&&d.files_queued>0)_eraseStoredFiles(c);
+                return;
+            }
+            if(err==='no_such_camper')return;                       // already done
+            if(err==='still_enrolled'&&x.tries<20){x.tries++;left.push(x);return}   // the save has not landed yet
+            if(err==='canteen_balance'){
+                toast((x.label||('Camper #'+x.id))+' was removed, but their canteen account still holds '
+                      +_fmtMoney(Number(d.balance)||0)+'. Refund or zero it, then delete again to free number #'+x.id+'.','error');
+                return;
+            }
+            if(err==='both_have_canteen_accounts'){
+                toast('Merged, but both campers have a canteen account — combine them in Snacks. Number #'+x.id+' stays held until then.','error');
+                return;
+            }
+            if(err){console.warn('[Me] erase #'+x.id+':',err);return}
+            x.tries++;if(x.tries<20)left.push(x);
+        },function(){x.tries++;if(x.tries<20)left.push(x)});
+    });
+    Promise.all(jobs).then(function(){
+        _eraseRunning=false;
+        // Merge with anything queued while this ran.
+        var now=_readEraseQueue(), ids={};
+        q.forEach(function(x){ids[x.id]=1});
+        _writeEraseQueue(left.concat(now.filter(function(x){return !ids[x.id]})));
+        if(left.length)setTimeout(_runCamperErases,5000);
+        _scheduleNumberReconcile(1500);
+    });
+}
+function _eraseStoredFiles(c){
+    try{
+        var url=(c.client&&c.client.supabaseUrl)||(window.__CAMPISTRY_SUPABASE__&&window.__CAMPISTRY_SUPABASE__.url)||'';
+        if(!url||!c.client.auth)return;
+        c.client.auth.getSession().then(function(r){
+            var token=r&&r.data&&r.data.session&&r.data.session.access_token;
+            if(!token)return;
+            fetch(url.replace(/\/$/,'')+'/functions/v1/erase-camper-files',{
+                method:'POST',
+                headers:{'Content-Type':'application/json','Authorization':'Bearer '+token},
+                body:JSON.stringify({campId:c.campId})
+            }).catch(function(){});
+        });
+    }catch(_){}
 }
 // Bunk auto-generator settings — camp-wide policy for friend requests,
 // do-not-bunk-with requests, and bunk size, consumed by autoGenerateBunks()
@@ -616,6 +751,9 @@ function loadData(){
         // them without anyone having to go dig up the original application.
         _syncPostAcceptBunkRequests();
         _syncCampTimezone();
+        // The server's camper numbers, and any erase a closed tab left behind.
+        _scheduleNumberReconcile(3000);
+        setTimeout(_runCamperErases,5000);
     }catch(e){console.warn('[Me]',e)}
 }
 // The camp's timezone (used by the pickup-alert reminder — see migration
@@ -874,6 +1012,8 @@ function save(){
         //   email makes that family claimable in the Link parent app the moment
         //   they're saved (debounced + signature-guarded, so repeat saves are free).
         try{_scheduleAutoParentInvites()}catch(ex){}
+        // The server may have changed a number (253): pick that up.
+        try{_scheduleNumberReconcile(7000)}catch(ex){}
     }catch(e){
         console.error('[Me] Save:',e);
         // ★ #V2-7: surface the failure instead of swallowing it. A throw out of the
@@ -3873,7 +4013,12 @@ function mergeCampers(keyA,keyB){
     // 5. Dedup arrays the rename may have doubled (A was already present).
     try{Object.values(families).forEach(function(f){if(Array.isArray(f.camperIds))f.camperIds=f.camperIds.filter(function(c,i,arr){return arr.indexOf(c)===i})});}catch(_){}
     try{Object.keys(bunkAsgn).forEach(function(bn){if(Array.isArray(bunkAsgn[bn]))bunkAsgn[bn]=bunkAsgn[bn].filter(function(c,i,arr){return arr.indexOf(c)===i})});}catch(_){}
-    // 6. Remove the duplicate roster record.
+    // 6. Remove the duplicate roster record — and on the server, move every
+    // record on B's number to A's and free B's number (254 merge_campers).
+    try{
+        var _gone=normalizePersonId((roster[keyB]||{}).camperId), _keep=normalizePersonId((roster[keyA]||{}).camperId);
+        if(_gone&&_keep&&_gone!==_keep){_queueCamperErase(_gone,_lbl(keyB),'merge',_keep);setTimeout(_runCamperErases,4000)}
+    }catch(_){}
     delete roster[keyB];
     _meAudit('camper.merge',{into:_lbl(keyA),from:_lbl(keyB)});
     save();
@@ -6179,7 +6324,7 @@ async function deleteCamper(n){
     // be told that rather than discovering it later. Warn, don't block: a hard
     // block gets worked around by resetting the roster instead, which had the
     // same effect and no warning at all.
-    var _msg='<strong>'+esc(_lbl(n))+'</strong> will be permanently deleted.';
+    var _msg='<strong>'+esc(_lbl(n))+'</strong> will be permanently deleted, with everything tied to their camper number (canteen history, health and form submissions, photos, mail, pickup records). Their number becomes free for a new camper.';
     var _owed=_outstandingForCamper(n);
     if(_owed>0.005){
         _msg+='<br><br>⚠ <strong>'+esc(_famNameForCamper(n))+'</strong> still owes '
@@ -6218,6 +6363,10 @@ async function deleteCamper(n){
         }
     });
     _meAudit('camper.delete',{name:_lbl(n)});
+    // Erased on the server once Undo has had its chance: every record tied to
+    // this camper's number goes, and the number is free again (254).
+    var _erasedId=normalizePersonId(capturedRoster&&capturedRoster.camperId);
+    if(_erasedId){_queueCamperErase(_erasedId,_lbl(n));setTimeout(_runCamperErases,8000)}
     delete roster[n];
     cascadeCamperDelete(n);
     save();
@@ -6231,6 +6380,7 @@ async function deleteCamper(n){
     // head back to the list instead of rendering a "not found" page.
     if(curPage==='camperdetail'&&_camperDetailName===n)nav('campers');else render(curPage);
     toast('Camper deleted','ok',{actionLabel:'Undo',onAction:function(){
+        if(_erasedId)_cancelCamperErase(_erasedId);
         roster[n]=capturedRoster;
         capturedFamilyLinks.forEach(function(fk){
             if(!families[fk]&&capturedFamilies[fk])families[fk]=capturedFamilies[fk];
@@ -10724,7 +10874,11 @@ async function rescindEnrollment(id){
     // record) to 'withdrawn' itself, so `e.status` may already be
     // 'withdrawn' by the time we get here — reading prev first keeps the
     // audit entry below accurate instead of logging a no-op 'withdrawn'→'withdrawn'.
-    if(e.camperName && roster[e.camperName]){ delete roster[e.camperName]; cascadeCamperDelete(e.camperName); }
+    if(e.camperName && roster[e.camperName]){
+        var _rid=normalizePersonId(roster[e.camperName].camperId);
+        if(_rid){_queueCamperErase(_rid,_lbl(e.camperName));setTimeout(_runCamperErases,8000)}
+        delete roster[e.camperName]; cascadeCamperDelete(e.camperName);
+    }
     if(e.status!=='withdrawn'){
         e.status='withdrawn';
         e.statusHistory=e.statusHistory||[];

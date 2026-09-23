@@ -1,5 +1,5 @@
 -- ============================================================================
--- Confirm migrations 222-252 are in and doing their job.
+-- Confirm migrations 222-254 are in and doing their job.
 --
 -- Paste the whole thing into the Supabase SQL Editor. It is READ ONLY — one
 -- SELECT, nothing is created, changed or deleted, and the two purge functions
@@ -238,7 +238,7 @@
                           AND pg_get_expr(i.indpred, i.indrelid) ~ 'deleted_at IS NULL')
            -- and the lookup excludes the departed
            AND EXISTS (SELECT 1 FROM pg_proc p JOIN pg_namespace n ON n.oid = p.pronamespace
-                        WHERE n.nspname = 'public' AND p.proname = '_project_people'
+                        WHERE n.nspname = 'public' AND p.proname IN ('_project_people', '_number_people')
                           AND p.prosrc ~ 'source_key = r\.k[^;]*deleted_at IS NULL'
                           AND p.prosrc ~ '_move_person_references')
           THEN 'ok' ELSE 'A REUSED NAME STILL STEALS AN IDENTITY — re-apply 237' END),
@@ -412,7 +412,28 @@ UNION ALL
               SELECT 1 FROM information_schema.columns
                WHERE table_schema = 'public' AND table_name = 'link_tip_cart_items'
                  AND column_name = 'person_id')
-          THEN 'ok' ELSE 'A CART TIP IS FILED BY NAME — apply 252' END)
+          THEN 'ok' ELSE 'A CART TIP IS FILED BY NAME — apply 252' END),
+
+    -- The server numbers every camper, before the save, and writes it back.
+    ('253  one number, one camper',
+     CASE WHEN EXISTS (SELECT 1 FROM pg_trigger WHERE tgname = 'trg_zz_number_camp_campers'
+                          AND tgrelid = 'public.camp_state_kv'::regclass)
+           AND NOT EXISTS (SELECT 1 FROM pg_trigger WHERE tgname = 'trg_project_camp_campers'
+                              AND tgrelid = 'public.camp_state_kv'::regclass)
+           AND to_regprocedure('public.camper_number_problems()') IS NOT NULL
+          THEN 'ok' ELSE 'THE BROWSER STILL HANDS OUT CAMPER NUMBERS — apply 253' END),
+
+    -- And today, in every camp: nobody shows a number that is not theirs.
+    ('253  every camper shows their own, unique number',
+     CASE WHEN to_regprocedure('public.camper_number_problems()') IS NULL THEN 'apply 253'
+          ELSE COALESCE((SELECT 'PROBLEMS: ' || count(*) || ' — see SELECT * FROM public.camper_number_problems();'
+                           FROM public.camper_number_problems() HAVING count(*) > 0), 'ok') END),
+
+    ('254  erasing a camper frees their number',
+     CASE WHEN to_regprocedure('public.erase_camper(uuid,bigint,boolean)') IS NOT NULL
+           AND to_regprocedure('public.merge_campers(uuid,bigint,bigint)') IS NOT NULL
+           AND to_regclass('public.camp_erased_files') IS NOT NULL
+          THEN 'ok' ELSE 'A DELETED CAMPER''S DATA IS NEVER ERASED — apply 254' END)
     ) AS x(item, result)
 
 UNION ALL
