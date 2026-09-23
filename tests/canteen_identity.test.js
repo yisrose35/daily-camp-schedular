@@ -249,10 +249,34 @@ test('the roster feed carries camperId, or nothing can be stamped', () => {
 });
 
 test('new transactions are stamped with the camper id', () => {
-    for (const f of ['campistry_snacks.js', 'campistry_snacks_pos.js']) {
-        assert.match(read(f), /camperId: \(snacks(\.accounts|\s*&&\s*snacks\.accounts)/,
-            f + ' writes transactions with no camperId — D4 would return for new data');
+    // THE REGISTER still writes one locally — localCharge, its offline fallback —
+    // and that row has to carry the stamp itself, because no server saw it.
+    assert.match(read('campistry_snacks_pos.js'),
+        /camperId: \(snacks(\.accounts|\s*&&\s*snacks\.accounts)/,
+        'campistry_snacks_pos.js writes transactions with no camperId — D4 would '
+        + 'return for new data');
+
+    // THE MANAGER PAGE no longer writes one at all. Since migration 240 its three
+    // desk writers are RPCs, and canteen_post does the stamping —
+    //   (SELECT person_id::text FROM camp_canteen_accounts WHERE …)
+    // — from the account row rather than from this tab's copy of it. Asserting a
+    // local `camperId:` here would now be asserting the defect 240 removed: a
+    // transaction built in the browser never reached the cloud, stamp or no stamp.
+    //
+    // What has to hold instead is that the desk hands the server an id to stamp
+    // WITH, so a renamed camper's deposit lands on their own account.
+    const snacks = read('campistry_snacks.js');
+    for (const rpc of ['canteen_office_credit', 'canteen_office_cash_out',
+                       'canteen_office_set_limit']) {
+        const at = snacks.indexOf("rpc('" + rpc + "'");
+        assert.ok(at >= 0, 'campistry_snacks.js no longer calls ' + rpc
+            + ' — see tests/canteen_desk_writers.test.js');
+        assert.match(snacks.slice(at, at + 400), /p_camper_id:\s*_deskCamperId\(/,
+            rpc + ' is called without a camper id, so the server can only go on the '
+            + 'name — and a renamed camper would get a second account');
     }
+    assert.match(snacks, /function _deskCamperId/,
+        'campistry_snacks.js lost _deskCamperId, so nothing reads the id off the account');
 });
 
 // ── the last one: two campers sharing a name can now coexist ───────────────

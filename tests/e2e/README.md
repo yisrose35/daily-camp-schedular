@@ -19,13 +19,19 @@ Migration **233** lived in that gap. `settle_shop_order` called a
 Shop order could reach a camp bill — and the whole suite stayed green, because
 each layer was correct on its own.
 
-Its first run found three more, none of which any existing test could see:
+Its first run found five more, none of which any existing test could see:
 
 | What | Where | Symptom |
 |---|---|---|
 | `loadData()` and the two row loaders called each other without end | `campistry_me.js` | ~350 `get_camp_payments` + ~350 `get_camp_families` in six seconds, for as long as the tab stayed open |
 | Four pages read the roster out of a snapshot that does not contain it | `campistry_snacks.js`, `campistry_snacks_shop.js`, `campistry_health.js`, `campistry_go_luggage.js` | no campers in the canteen, the shop, the medication sheet or the luggage form |
 | The shop settled an order the server had not been told about yet | `campistry_snacks_shop.js` | `order_not_found` on the first save of every order — the charge never landed |
+| The canteen desk's deposit, cash-out and limit writers wrote a document branch that is stripped on the way out | migration 240 | the office took $40 in cash, the screen said so, and the next hydration put the camper back to zero |
+| A guard that compared the caller's camp with `<>` did nothing when the caller had no camp | migration 239 | a signed-in stranger could debit any camper's canteen balance at any camp |
+
+The fourth was found by clicking "+ Add Deposit" and then looking in the
+database. The fifth was found while writing 240's own gate, by asking what the
+copied comparison does when the resolver answers `NULL` — and then reproducing it.
 
 ## The pieces
 

@@ -153,7 +153,8 @@ function kvRead(db, key) {
     const page = await browser.newPage({ viewport: { width: 1600, height: 1000 } });
 
     const pageErrors = [];
-    page.on('pageerror', e => pageErrors.push(String(e).split('\n')[0]));
+    page.on('pageerror', e => pageErrors.push(
+        process.env.SMOKE_STACK ? String(e.stack || e) : String(e).split('\n')[0]));
 
     // Nothing outside the harness. An external request here is a TLS stall, and
     // a page that reaches the internet during a test is not under test.
@@ -268,16 +269,43 @@ function kvRead(db, key) {
         const familyKey = fams.length ? fams[0].family_key : null;
 
         // ── 3. the canteen desk takes a deposit ─────────────────────────────
-        step(3, 'the camper has canteen money to spend');
-        // TEMPORARY while the office deposit path is being fixed: put the money on
-        // the account through the row writers the server itself uses.
-        db.sql(`SET "request.jwt.claims" = '{"sub":"${OWNER}","role":"authenticated"}';
-          SELECT public.canteen_account_save('${CAMP}'::uuid, ` + literal(CAMPER) + `,
-              '{"balance":${DEPOSIT},"dailyLimit":0,"spentToday":0}'::jsonb);
-          SELECT public.canteen_post('${CAMP}'::uuid, ` + literal(CAMPER) + `,
-              jsonb_build_object('time','9:00 AM','camper',` + literal(CAMPER) + `,
-                  'items','Deposit','amount',${DEPOSIT},'type','credit',
-                  'date', to_char(now(),'YYYY-MM-DD')));`);
+        step(3, 'the canteen desk takes a $' + DEPOSIT + ' deposit');
+        await open('campistry_snacks.html', () => !!window.CampistrySnacks);
+        await page.waitForFunction(
+            (n) => (window.CampistrySnacks.getCamperList() || []).some(c => c.name === n),
+            CAMPER, { timeout: 30000 });
+
+        await snacksNav('accounts');
+        await page.click('button[onclick="openM(\'dep\')"]');
+        await page.waitForSelector('#m-dep', { state: 'visible', timeout: 10000 });
+        await page.selectOption('#depCamper', CAMPER);
+        await page.fill('#depAmt', String(DEPOSIT));
+        await page.selectOption('#depMethod', 'cash');
+        const depCalls = bridge.calls.length;
+        await page.click('button[onclick="addDep()"]');
+
+        // Assert the RPC BEFORE the modal, so a failure names the cause. Without
+        // migration 240 there is no canteen_office_credit at all, and the only
+        // symptom at the modal is "it never closed".
+        await waitFor('the desk deposit to reach the server', () =>
+            bridge.calls.slice(depCalls).some(c => c.fn === 'canteen_office_credit'), 20000);
+        const dep = bridge.calls.slice(depCalls).filter(c => c.fn === 'canteen_office_credit');
+        check('canteen_office_credit accepted the deposit',
+            dep.length === 1 && !dep[0].error && dep[0].value && dep[0].value.success === true,
+            dep.length ? (dep[0].error || JSON.stringify(dep[0].value)) : 'never called');
+
+        await page.waitForSelector('#m-dep', { state: 'hidden', timeout: 15000 });
+
+        // Migration 240. Before it, the desk's deposit wrote the campistrySnacks
+        // DOCUMENT and cloudSaveSnacks strips accounts and transactions out of every
+        // document write — so this wait found an empty account table and the camper
+        // was $40 short.
+        await waitFor('the deposit to reach the canteen account row', () => {
+            const a = db.json(`SELECT balance FROM camp_canteen_accounts
+                                WHERE camp_id = '${CAMP}' AND account_key = ` + literal(CAMPER));
+            return a.length === 1 && Number(a[0].balance) === DEPOSIT;
+        }, 30000);
+
         const acct = db.json(`SELECT balance, person_id FROM camp_canteen_accounts
                                WHERE camp_id = '${CAMP}' AND account_key = ` + literal(CAMPER))[0];
         check('the canteen account holds the deposit', Number(acct.balance) === DEPOSIT,
@@ -285,6 +313,19 @@ function kvRead(db, key) {
         check('the canteen account is joined to the PERSON, not just the name',
             Number(acct.person_id) === Number(personId),
             'account.person_id=' + acct.person_id + ' camp_people=' + personId);
+
+        const credits = db.json(
+            `SELECT amount, camper_id, payload ->> 'kind' AS kind, payload ->> 'method' AS method
+               FROM canteen_transactions
+              WHERE camp_id = '${CAMP}' AND tx_type = 'credit'`);
+        check('the deposit is a row in the ledger, not only a balance',
+            credits.length === 1 && Number(credits[0].amount) === DEPOSIT, JSON.stringify(credits));
+        check("the ledger row carries the camper's person id",
+            credits.length === 1 && String(credits[0].camper_id) === String(personId),
+            credits.length ? 'camper_id=' + credits[0].camper_id : 'no row');
+        check('the ledger row says how it was paid',
+            credits.length === 1 && credits[0].kind === 'deposit' && credits[0].method === 'cash',
+            credits.length ? credits[0].kind + '/' + credits[0].method : 'no row');
 
         // ── 4. the register charges a purchase, server-side ─────────────────
         step(4, 'the register charges $' + PURCHASE + ' through submit_canteen_purchase');
