@@ -1,17 +1,17 @@
 # Ted's ledger
 
 ## Last commit checked
-`bd61488` (2026-09-23)
+`0909cee` (2026-09-23)
 
 ## Open findings
 | ID | Severity | Description | Found | Status |
 |----|----------|-------------|-------|--------|
-| TED-028 | 🟠 | Any camp member (counselor, viewer) can become the parent of an unclaimed family: `get_camp_parent_invites` (032) hands every member all access codes; `claim_invite_by_code` (010) needs only the code. `set_parent_invite_email` (034) and `resolve_join_request` (032) also accept any member | 2026-09-23 | Open |
-| TED-021 | 🟠 | Erased child: fixed for erase → old tab saves → number reused. Still open for erase → number reused (Sara #2) → old tab saves: Sara gets his $900, enrollment and sick visit | 2026-09-23 | Open (narrower) |
-| TED-029 | 🟡 | `verify_identity_chain.sql` errors out ("verify_invite_numbers() does not exist") when 261 is applied before 260, as 261 recommends | 2026-09-23 | Open |
-| TED-030 | 🟡 | Scheduler with Me access: parent invite now refused by 261; page says "unknown. Run migration 011" (suspected; not checked in browser) | 2026-09-23 | Open (suspected) |
-| TED-002 | 🟡 | Camper-number transition not complete. Inventory A = 0 (`--check` up to date). Remaining: TED-021, TED-028; Go's `_camperId` not carried by a renumber (Go-only camps) | 2026-09-23 | Open |
-| TED-005 | 🟠 | 14 auto-scheduler tests fail (`auto_full_day.test.js`); still 14 at bd61488. Owner deferred. | 2026-09-23 | Open (deferred by owner) |
+| TED-021 | 🔴 | Erase → the camp auto-gives the next new child (Sara) the erased #2 → a stale Me tab saves app1+campistryMe: Sara vanishes, #2 becomes "Avi Gold", Sara's parent owns him. 0909cee's name-based detach only covers Me/Health docs saved without the roster; also misses records with no/different-case name and Go addresses keyed by name | 2026-09-23 | Open (worse than thought) |
+| TED-028 | 🟠 | Counselors/viewers fixed. Schedulers can still SELECT `access_code`/`token` from `link_parent_invites` (098 select policy) and claim any unclaimed family | 2026-09-23 | Open (narrower) |
+| TED-031 | 🟠 | 261's new TED-028 part only takes effect if 261 is re-run; `verify_identity_chain.sql` says 261 "ok" even when the invite list is ungated | 2026-09-23 | Open |
+| TED-032 | 🟡 | Non-office staff: parent-email change silently doesn't reach the invite; Link admin Parents shows "No invite" for all (suspected) | 2026-09-23 | Open (suspected) |
+| TED-002 | 🟡 | Camper-number transition not complete. Inventory A = 0 (`--check` up to date). Go `_camperId` now carried. Remaining: TED-021, TED-028 | 2026-09-23 | Open |
+| TED-005 | 🟠 | 14 auto-scheduler tests fail (`auto_full_day.test.js`); still 14 at 0909cee. Owner deferred. | 2026-09-23 | Open (deferred by owner) |
 
 ## Closed findings
 | ID | What it was | Closed | Proof |
@@ -40,12 +40,14 @@
 | TED-025 | A renumber could not be undone | 2026-09-23 | At bd61488, scratch DB: 1→7→1 leaves one child #1, moves table `7→1`, records back on 1, a new "#7" child gets #3; test:keys 4e passes. |
 | TED-026 | `split_renames` missed a child whose birthday was entered in the rename edit | 2026-09-23 | At bd61488: pgtest 260 §11 (same shape as my case) passes: listed under needs_a_person, not repaired. |
 | TED-027 | A leftover `renumberedFrom` hint re-pointed the old number | 2026-09-23 | At bd61488: pgtest 260 §10 passes (Tova's hint moved nothing; `1→7` kept). |
+| TED-029 | Check script crashed when 261 was applied before 260 | 2026-09-23 | At 0909cee, scratch DB without 260: "apply 260" / "ok", no error; with both: ok / ok. |
+| TED-030 | Scheduler got "unknown. Run migration 011" on invite | 2026-09-23 | At 0909cee: `campistry_me.js:14445`, `:14466` show "Only the camp office (owner, admin or manager) can invite parents." (code read; not seen in browser). |
 
 ## Areas audited
 | Area | Last deep audit |
 |------|-----------------|
 | Camper ID / camper number model (migrations 223-260, roster trigger, renumber, erase/merge, split repair, roster keys, invites, CSV import, Health entry) | 2026-09-23 (sixth pass) |
-| Parent invitations (`link_parent_invites`, `upsert_parent_invite`, claim functions, stamp trigger, `restamp_parent_invite`) | 2026-09-23 (numbers; who may write them; staff access to codes — TED-028) |
+| Parent invitations (`link_parent_invites`, `upsert_parent_invite`, claim functions, stamp trigger, `restamp_parent_invite`) | 2026-09-23 (numbers; who may write them; staff access to codes via RPC and table policy — TED-028/031) |
 | Me page cloud save (`integration_hooks.js` batch upsert) | 2026-09-23 (only against the renumber trigger) |
 | Auto Builder (solver, layers, grid) | never (only test results seen) |
 | Manual Builder | never |
@@ -69,3 +71,4 @@
 | 2026-09-23 | Re-check TED-010..015 + hunt | 2330ff9 | unit 3270/14 · pg 49/0 · keys 17/0 · lite 12/0 · smoke 32/0 · scale 24/0 | 🔴 | [report](reports/2026-09-23-camper-id-recheck.md) |
 | 2026-09-23 | Check my work: reworked 260 (TED-011, 016-022) | 19cb120 | unit 3270/14 · pg 49/0 · keys 29/0 (×4) · lite 12/0 · smoke 32/0 · scale 24/0 | 🔴 | [report](reports/2026-09-23-camper-id-reworked-260.md) |
 | 2026-09-23 | Check my work: 261 + 260 repairs (TED-021, 023-027) | bd61488 | unit 3270/14 · pg 50/0 · keys 31/0 · lite 12/0 · smoke 32/0 · scale 24/0 | 🟡 | [report](reports/2026-09-23-camper-id-261-recheck.md) |
+| 2026-09-23 | Check my work: TED-021, 028-030 fixes | 0909cee | unit 3270/14 · pg 50/0 · keys 31/0 · lite 12/0 · smoke 32/0 · scale 24/0 | 🔴 | [report](reports/2026-09-23-camper-id-ted028-recheck.md) |
