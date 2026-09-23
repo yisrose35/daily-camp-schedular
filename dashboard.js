@@ -2383,16 +2383,33 @@
             var cs = cm.campSettings || {};
             var localeEl = document.getElementById('settLocale');
             if (localeEl) localeEl.value = cm.locale || 'en-US';
+            if (window.CampistryI18n) window.CampistryI18n.applyCampLocale(cm.locale || 'en-US');
             var hebrewEl = document.getElementById('settHebrewDates');
             if (hebrewEl) hebrewEl.checked = !!cs.showHebrewDates;
             var altEl = document.getElementById('settAltNames');
             if (altEl) altEl.checked = cs.showAltNames !== false;
-            var rtlEl = document.getElementById('settRTL');
-            if (rtlEl) rtlEl.checked = !!cs.rtl;
+            _dashUpdateRtlNote();
         } catch (e) {
             console.warn('Could not load camp settings:', e);
         }
     }
+
+    // RTL is derived from the language, not a separate setting (see
+    // campistry_i18n.js's RTL_LANGS) -- this just shows/hides the note
+    // explaining that, and applies dir="rtl" to THIS page immediately when
+    // an owner picks one, so the settings panel itself previews the effect
+    // rather than only taking effect on other pages after a reload.
+    function _dashUpdateRtlNote() {
+        var localeEl = document.getElementById('settLocale');
+        var note = document.getElementById('settRtlNote');
+        if (!localeEl) return;
+        var isRtl = window.CampistryI18n ? window.CampistryI18n.isRTL(localeEl.value) : false;
+        if (note) note.style.display = isRtl ? 'block' : 'none';
+    }
+    document.addEventListener('DOMContentLoaded', function() {
+        var localeEl = document.getElementById('settLocale');
+        if (localeEl) localeEl.addEventListener('change', _dashUpdateRtlNote);
+    });
 
     window.saveLocaleSettings = function() {
         var status = document.getElementById('localeSettingsStatus');
@@ -2403,13 +2420,19 @@
         try {
             var gs = window.loadGlobalSettings ? (window.loadGlobalSettings() || {}) : {};
             if (!gs.campistryMe) gs.campistryMe = {};
-            gs.campistryMe.locale = document.getElementById('settLocale').value || 'en-US';
+            var locale = document.getElementById('settLocale').value || 'en-US';
+            gs.campistryMe.locale = locale;
             gs.campistryMe.campSettings = {
                 showHebrewDates: document.getElementById('settHebrewDates').checked,
                 showAltNames: document.getElementById('settAltNames').checked,
-                rtl: document.getElementById('settRTL').checked
+                // Derived, not a stored owner choice -- see campistry_i18n.js.
+                // Kept as a field (rather than removed outright) purely so any
+                // older reader of campSettings.rtl during rollout still sees a
+                // value consistent with the language actually saved.
+                rtl: window.CampistryI18n ? window.CampistryI18n.isRTL(locale) : false
             };
             if (window.saveGlobalSettings) window.saveGlobalSettings('campistryMe', gs.campistryMe);
+            if (window.CampistryI18n) window.CampistryI18n.applyCampLocale(locale);
             if (status) { status.textContent = 'Saved!'; status.style.color = '#059669'; setTimeout(function() { status.textContent = ''; }, 3000); }
         } catch (e) {
             console.error('Error saving language settings:', e);

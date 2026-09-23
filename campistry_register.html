@@ -88,7 +88,37 @@ body{font-family:var(--font);background:var(--s50);color:var(--s800);-webkit-fon
 </head>
 <body>
 <div class="wrap" id="formWrap">
-<div class="hdr"><img id="campLogo" src="" alt="" style="display:none;max-height:64px;max-width:220px;margin:0 auto 10px;border-radius:8px"><h1 id="campTitle">Camp Registration</h1><div class="cn" id="campNm"></div><p>Complete the form below to apply for enrollment</p></div>
+<div style="max-width:520px;margin:0 auto 6px;text-align:right">
+  <select id="regLangPick" style="font-size:.78rem;padding:4px 8px;border-radius:6px;border:1px solid #e2e8f0" onchange="window._regSetLang(this.value)">
+    <option value="en-US">English</option>
+    <option value="he-IL">עברית</option>
+    <option value="yi">ייִדיש</option>
+    <option value="ru-RU">Русский</option>
+    <option value="es-ES">Español</option>
+  </select>
+</div>
+<div class="hdr"><img id="campLogo" src="" alt="" style="display:none;max-height:64px;max-width:220px;margin:0 auto 10px;border-radius:8px"><h1 id="campTitle" data-i18n="reg.title">Camp Registration</h1><div class="cn" id="campNm"></div><p>Complete the form below to apply for enrollment</p></div>
+<script>
+// A parent picks their OWN language here — this is independent of the
+// camp's staff-facing locale setting in Dashboard (Language & Regional),
+// which only affects date formatting/RTL for the office's own pages.
+// Remembered per-browser so a returning parent doesn't have to re-pick it.
+// Coverage note: only the elements actually tagged data-i18n/data-i18n-ph
+// translate right now (the page title today) — everything else on this
+// long form still renders in English until it's tagged the same way. RTL
+// layout mirroring (for Hebrew/Yiddish) already applies to the WHOLE page
+// immediately, independent of how much text is translated yet.
+window._regSetLang = function(loc) {
+    try { localStorage.setItem('campistry_reg_lang', loc); } catch (e) {}
+    if (window.CampistryI18n) window.CampistryI18n.applyCampLocale(loc);
+};
+(function() {
+    var saved = 'en-US';
+    try { saved = localStorage.getItem('campistry_reg_lang') || 'en-US'; } catch (e) {}
+    var pick = document.getElementById('regLangPick');
+    if (pick) pick.value = saved;
+})();
+</script>
 
 <!-- Session -->
 <div class="cd"><div class="ct"><svg viewBox="0 0 24 24"><rect x="3" y="4" width="18" height="18" rx="2"/><line x1="16" y1="2" x2="16" y2="6"/><line x1="8" y1="2" x2="8" y2="6"/><line x1="3" y1="10" x2="21" y2="10"/></svg>Select Session</div>
@@ -292,6 +322,14 @@ body{font-family:var(--font);background:var(--s50);color:var(--s800);-webkit-fon
 <!-- config.js injects window.__CAMPISTRY_SUPABASE__ (url + anon key). Without it
      supabase_client.js can't initialize a client, so the register page had NO
      cloud access at all and applications never left the device. -->
+<script src="campistry_i18n.js?v=20260923-01"></script>
+<script>
+(function() {
+    var saved = 'en-US';
+    try { saved = localStorage.getItem('campistry_reg_lang') || 'en-US'; } catch (e) {}
+    if (window.CampistryI18n) window.CampistryI18n.applyCampLocale(saved);
+})();
+</script>
 <script src="config.js?v=20260903-03" onerror="console.log('[Register] Supabase config (config.js) not loaded — local only')"></script>
 <script src="supabase-js@2.js?v=20260903-03" onerror="console.log('[Register] Supabase client not loaded — local only')"></script>
 <script src="supabase_client.js?v=20260903-03" onerror="console.log('[Register] Supabase config not loaded — local only')"></script>
