@@ -118,7 +118,10 @@ test('the canteen keys are per CHUNK, not per request', () => {
     // Each chunk is its own processor call against its own deposit, so a resumed
     // run has to be able to skip exactly what it finished.
     assert.match(CANTEEN, /\$\{idempotencyKey\.trim\(\)\}:\$\{dep\.externalTransactionId\}:\$\{chunkCents\}/);
-    assert.match(CANTEEN_ALL, /\$\{batchKey\}:\$\{camperName\}:\$\{dep\.externalTransactionId\}:\$\{chunkCents\}/);
+    // The camper part is their NUMBER when the account has one: two children who
+    // share a name must not share a claim (the second would be skipped as
+    // "already settled"). The name only for an account with no number.
+    assert.match(CANTEEN_ALL, /\$\{batchKey\}:\$\{camperId != null \? "#" \+ camperId : camperName\}:\$\{dep\.externalTransactionId\}:\$\{chunkCents\}/);
 });
 
 test('refund-all can still be called with no body at all', () => {

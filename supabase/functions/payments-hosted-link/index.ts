@@ -78,6 +78,13 @@ function camperIdIn(v: unknown): number | null {
   return v != null && /^\d+$/.test(String(v)) ? Number(v) : null;
 }
 
+/** A camper's name as a person reads it: without the roster's internal
+ *  " #<number>" that tells two campers with one name apart. For what a parent
+ *  sees; never for identifying the camper. */
+function displayName(s: unknown): string {
+  return String(s ?? "").replace(/\s#\d+(?:-\d+)?$/, "");
+}
+
 serve(async (req) => {
   if (req.method === "OPTIONS") return new Response("ok", { headers: corsHeaders });
 
@@ -104,9 +111,10 @@ serve(async (req) => {
     // (camperName); a tuition payment and a family card-save are family-scoped
     // (familyKey). save_card can be either — canteen auto-reload passes a
     // camperName, tuition autopay passes a familyKey.
-    const isCamperScoped = purpose === "canteen" || (purpose === "save_card" && !!camperName);
+    const isCamperScoped = purpose === "canteen" || (purpose === "save_card" && (camperId != null || !!camperName));
     if (isCamperScoped) {
-      if (!camperName || !(await campHasCamper(service, campId, String(camperName), camperId))) {
+      // The number decides (canteen_camper_known resolves it); name only without one.
+      if ((camperId == null && !camperName) || !(await campHasCamper(service, campId, String(camperName ?? ""), camperId))) {
         return json({ success: false, error: "Camper not found for this camp" }, 400);
       }
     } else {
@@ -141,7 +149,9 @@ serve(async (req) => {
       custom_fields: {
         custom1: purpose,
         custom2: familyKey ? String(familyKey) : "",
-        custom3: camperName ? String(camperName) : "",
+        // A label on the Banquest transaction, never read back: the pending row's
+        // person_id is what identifies the camper.
+        custom3: camperName ? displayName(camperName) : "",
         custom4: String(campId),
       },
       general_fields: {
@@ -172,9 +182,8 @@ serve(async (req) => {
       camp_id: campId,
       purpose,
       family_key: familyKey ? String(familyKey) : null,
-      camper_name: camperName ? String(camperName) : null,
       // The camper's ID, which payments-hosted-complete credits by (250).
-      person_id: camperName ? camperId : null,
+      person_id: (isCamperScoped || camperName) ? camperId : null, camper_name: camperName ? String(camperName) : null,
       amount: purpose === "save_card" ? null : Number(Number(amount).toFixed(2)),
     });
     if (insErr) {

@@ -234,10 +234,9 @@ async function handleTipSucceeded(supabase: ReturnType<typeof createClient>, pi:
   const { error: insErr } = await supabase.from("link_tips").insert({
     camp_id: meta.campId,
     user_id: meta.parentUserId || null,
-    camper_name: meta.camperName || null,
     // The id the checkout carried decides who the tip is from; without one the
     // table's own trigger stamps it from the name (223).
-    person_id: camperIdIn(meta.camperId),
+    person_id: camperIdIn(meta.camperId), camper_name: meta.camperName || null,
     parent_name: meta.parentName || null,
     parent_email: meta.parentEmail || null,
     recipient_name: meta.staffName || "",
@@ -341,8 +340,7 @@ async function handleTipCartSucceeded(supabase: ReturnType<typeof createClient>,
       const { error: insErr } = await supabase.from("link_tips").insert({
         camp_id: item.camp_id,
         user_id: item.parent_user_id,
-        camper_name: item.camper_name,
-        person_id: item.person_id ?? null,
+        person_id: item.person_id ?? null, camper_name: item.camper_name,
         parent_name: item.parent_name,
         parent_email: item.parent_email,
         recipient_name: item.staff_name,

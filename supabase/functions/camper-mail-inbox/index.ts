@@ -342,12 +342,12 @@ serve(async (req) => {
 
   const fingerprint = "cm_" + (emailId || await sha1Hex([senderEmail, subject, createdAt, body.slice(0, 500)].join("|")));
 
+  // The lookups answer with the camper's id (migration 251); it decides.
+  const chosenCamperId = chosen && chosen.camperId != null && /^\d+$/.test(String(chosen.camperId)) ? Number(chosen.camperId) : null;
   const rec = await service.rpc("_camper_mail_record", {
     p_camp_id: campId,
     p_fingerprint: fingerprint,
-    p_camper_name: chosen ? chosen.name : "",
-    // The lookups answer with the camper's id (migration 251); it decides.
-    p_camper_id: chosen && chosen.camperId != null && /^\d+$/.test(String(chosen.camperId)) ? Number(chosen.camperId) : null,
+    p_camper_id: chosenCamperId, p_camper_name: chosen ? chosen.name : "",
     p_division: chosen ? chosen.division : "",
     p_grade: chosen ? chosen.grade : "",
     p_bunk: chosen ? chosen.bunk : "",

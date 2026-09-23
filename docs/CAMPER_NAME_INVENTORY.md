@@ -14,9 +14,9 @@ every number here is zero.
 - **The canteen** finds a camper's account by number on the Snacks page, so a rename no longer shows an empty account.
 - `scripts/verify_identity_chain.sql` checks all of this on the live database.
 
-## What is still by name: 469 places
+## What is still by name: 340 places
 
-Not counted: 13 places where a name is not how a camper is identified (a lead who is not a camper yet, a sample, the words of a message). Each is marked `// name-ok:` in the code with its reason.
+Not counted: 17 places where a name is not how a camper is identified (a lead who is not a camper yet, a sample, the words of a message). Each is marked `// name-ok:` in the code with its reason.
 
 | # | Kind | Places | Files |
 |---|---|---|---|
@@ -25,7 +25,7 @@ Not counted: 13 places where a name is not how a camper is identified (a lead wh
 | 3 | Pages: Family membership listed by name | 71 | 5 |
 | 4 | Pages: Bunk lists of names | 53 | 6 |
 | 5 | Pages: Roster looked up by name | 179 | 17 |
-| 6 | Edge functions: a camper named without their number | 130 | 28 |
+| 6 | Edge functions: a camper named without their number | 1 | 1 |
 | 7 | Database: storage keyed by a camper's name | 4 | — |
 
 ## The plan, in order
@@ -104,40 +104,13 @@ The roster itself is keyed by the camper's roster key. Everything else can move 
 | `campistry_presence.js` | 1 |
 | `scheduler_core_leagues.js` | 1 |
 
-### 6. Edge functions: a camper named without their number (130)
+### 6. Edge functions: a camper named without their number (1)
 
 Lines in the server functions that carry a camper's name with no number beside them (logs and parent-facing text excluded). Most are the name arriving from the page, where the number now rides alongside on another line; each should read and pass the number.
 
 | File | Places |
 |---|---|
-| `supabase/functions/canteen-auto-reload/index.ts` | 13 |
-| `supabase/functions/auto-notify/index.ts` | 11 |
-| `supabase/functions/payments-canteen-refund-all/index.ts` | 11 |
-| `supabase/functions/stripe-webhook/index.ts` | 10 |
-| `supabase/functions/stripe-canteen-autoreload-setup/index.ts` | 8 |
-| `supabase/functions/stripe-canteen-refund-all/index.ts` | 8 |
-| `supabase/functions/cardknox-checkout-start/index.ts` | 7 |
-| `supabase/functions/stripe-checkout/index.ts` | 7 |
-| `supabase/functions/link-photo-checkout/index.ts` | 6 |
-| `supabase/functions/charge-saved-card/index.ts` | 5 |
-| `supabase/functions/send-pickup-reminders/index.ts` | 5 |
-| `supabase/functions/cardknox-webhook/index.ts` | 4 |
-| `supabase/functions/payments-save-method/index.ts` | 4 |
-| `supabase/functions/submit-pdf-form-response/index.ts` | 4 |
-| `supabase/functions/charge-due-installments/index.ts` | 3 |
-| `supabase/functions/payments-canteen-refund/index.ts` | 3 |
-| `supabase/functions/payments-hosted-complete/index.ts` | 3 |
-| `supabase/functions/payments-hosted-link/index.ts` | 3 |
-| `supabase/functions/send-payment-receipt/index.ts` | 3 |
-| `supabase/functions/stripe-canteen-refund/index.ts` | 3 |
-| `supabase/functions/stripe-connect-webhook/index.ts` | 2 |
-| `supabase/functions/camper-mail-inbox/index.ts` | 1 |
-| `supabase/functions/card-capture-start/index.ts` | 1 |
 | `supabase/functions/deposit-inbox/index.ts` | 1 |
-| `supabase/functions/payments-charge-nonce/index.ts` | 1 |
-| `supabase/functions/registration-deposit-checkout/index.ts` | 1 |
-| `supabase/functions/stripe-connect-tip-cart/index.ts` | 1 |
-| `supabase/functions/stripe-connect-tip/index.ts` | 1 |
 
 ### 7. Database: storage keyed by a camper's name (4)
 

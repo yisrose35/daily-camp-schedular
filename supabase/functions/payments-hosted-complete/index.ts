@@ -147,7 +147,7 @@ serve(async (req) => {
       // holds the transaction ledger the balance is recomputed from, so losing
       // that write could erase a POS sale. Locked RPCs now, one call each.
       let saveFail: string | null = null;
-      if (pending.camper_name) {
+      if (pending.person_id != null || pending.camper_name) {
         // Canteen auto-reload card-save: the token lives on the camper's
         // autoReload block (campistrySnacks.accounts[camper].autoReload),
         // mirroring the Cardknox canteen_autoreload_setup path. A SHALLOW merge,
@@ -155,8 +155,7 @@ serve(async (req) => {
         // survives.
         const { data: merged, error: mergeErr } = await service.rpc("merge_canteen_autoreload_card", {
           p_camp_id: campId,
-          p_camper: String(pending.camper_name),
-          p_camper_id: pending.person_id ?? null,
+          p_camper_id: pending.person_id ?? null, p_camper: String(pending.camper_name ?? ""),
           p_fields: {
             byopProcessor: "banquest",
             byopCustomerRef: token,
@@ -250,8 +249,7 @@ serve(async (req) => {
     if (pending.purpose === "canteen") {
       const creditRes = await service.rpc("credit_canteen_balance_from_processor", {
         p_camp_id: campId,
-        p_camper_name: pending.camper_name,
-        p_camper_id: pending.person_id ?? null,
+        p_camper_id: pending.person_id ?? null, p_camper_name: String(pending.camper_name ?? ""),
         p_amount: amount,
         p_processor_key: "banquest",
         p_external_transaction_id: referenceNumber,

@@ -58,11 +58,21 @@ async function campOwnsFamily(service: ReturnType<typeof createClient>, campId: 
   return !error && !!data && typeof data === "object";
 }
 
-async function campOwnsCamper(service: ReturnType<typeof createClient>, campId: string, camperName: string): Promise<boolean> {
+/** The camper this request is for, as their roster key, or null when they are
+ *  not on this camp's roster. The camper NUMBER decides when the page sends one
+ *  (resolved to that person's current roster key by camp_person_label); the
+ *  name is only the fallback for a caller that sends no number. */
+async function resolveCamper(service: ReturnType<typeof createClient>, campId: string, camperName: unknown, camperId: number | null): Promise<string | null> {
+  let key: string | null = camperId == null && typeof camperName === "string" && camperName ? camperName : null;
+  if (camperId != null) {
+    const { data: label, error } = await service.rpc("camp_person_label", { p_camp_id: campId, p_person_id: camperId });
+    key = !error && typeof label === "string" && label ? label : null;
+  }
+  if (!key) return null;
   const { data } = await service.from("camp_state_kv").select("value")
     .eq("camp_id", campId).eq("key", "app1").maybeSingle();
   const roster = data?.value && typeof data.value === "object" ? (data.value as Record<string, any>).camperRoster : null;
-  return !!(roster && typeof roster === "object" && Object.prototype.hasOwnProperty.call(roster, camperName));
+  return roster && typeof roster === "object" && Object.prototype.hasOwnProperty.call(roster, key) ? key : null;
 }
 
 async function canteenProgramEnabled(service: ReturnType<typeof createClient>, campId: string): Promise<boolean> {
@@ -73,7 +83,14 @@ async function canteenProgramEnabled(service: ReturnType<typeof createClient>, c
 
 /** A camper id sent by the page (campistry_camper_id_rpc.js adds it), or null. */
 function camperIdIn(v: unknown): number | null {
-  return v != null && /^\d+$/.test(String(v)) ? Number(v) : null;
+  return v != null && /^\d+$/.test(String(v)) && Number(v) > 0 ? Number(v) : null;
+}
+
+/** A camper's name as a person reads it: without the roster's internal
+ *  " #<number>" that tells two campers with one name apart. For what a parent
+ *  sees; never for identifying the camper. */
+function displayName(s: unknown): string {
+  return String(s ?? "").replace(/\s#\d+(?:-\d+)?$/, "");
 }
 
 serve(async (req) => {
@@ -102,6 +119,9 @@ serve(async (req) => {
 
     const service = createClient(SUPABASE_URL, SUPABASE_SERVICE_KEY);
 
+    // The camper this is for: their number decides; the name is the fallback.
+    const camperId = camperIdIn(bodyCamperId);
+    let camperKey: string | null = null;
     if (kind === "tuition_charge" || kind === "card_save") {
       if (!familyKey) return json({ success: false, error: "familyKey is required" }, 400);
       if (!(await campOwnsFamily(service, campId, familyKey))) {
@@ -109,11 +129,12 @@ serve(async (req) => {
       }
     } else {
       // canteen_deposit or canteen_autoreload_setup — both per-camper.
-      if (!camperName) return json({ success: false, error: "camperName is required" }, 400);
+      if (camperId == null && !camperName) return json({ success: false, error: "camperName is required" }, 400);
       if (!(await canteenProgramEnabled(service, campId))) {
         return json({ success: false, error: "Canteen isn't available for this camp." }, 400);
       }
-      if (!(await campOwnsCamper(service, campId, camperName))) {
+      camperKey = await resolveCamper(service, campId, camperName, camperId);
+      if (!camperKey) {
         return json({ success: false, error: "Camper not found for this camp" }, 400);
       }
     }
@@ -146,13 +167,13 @@ serve(async (req) => {
       p_kind: kind,
       p_family_key: familyKey || null,
       p_family_name: familyName || null,
-      p_camper_name: camperName || null,
-      // Stored on the intent as person_id; cardknox-webhook credits by it.
-      p_camper_id: camperName ? camperIdIn(bodyCamperId) : null,
+      // Stored on the intent as person_id; cardknox-webhook credits by it. For
+      // a canteen kind the name is the roster key the number resolved to.
+      p_camper_id: (camperKey || camperName) ? camperId : null, p_camper_name: camperKey || camperName || null,
       p_amount_cents: amountCents,
       p_description: description || (kind === "card_save" ? ("Save a card — " + (familyName || familyKey))
-        : kind === "canteen_autoreload_setup" ? ("Save a card for auto-reload — " + camperName)
-        : kind === "canteen_deposit" ? ("Canteen funds — " + camperName) : "Camp payment"),
+        : kind === "canteen_autoreload_setup" ? ("Save a card for auto-reload — " + displayName(camperKey))
+        : kind === "canteen_deposit" ? ("Canteen funds — " + displayName(camperKey)) : "Camp payment"),
     });
     if (intentErr || !intentResult?.success) {
       return json({ success: false, error: intentResult?.error || "Could not start checkout — try again." }, 500);

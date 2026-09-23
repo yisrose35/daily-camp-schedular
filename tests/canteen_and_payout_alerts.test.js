@@ -156,7 +156,9 @@ test('a camper is capped by BOTH their wallet and what their deposits can give b
 
 test('a chunk that fails keeps the chunks that already moved money', () => {
     const byop = read('supabase/functions/payments-canteen-refund-all/index.ts');
-    assert.match(byop, /return \{ camperName, refunded, error: \(chunkErr as Error\)\.message \};/,
+    // The result names the camper by number too (camperId), so the office sees
+    // which of two same-named children a partial failure belongs to.
+    assert.match(byop, /return \{ camperId, camperName, refunded, error: \(chunkErr as Error\)\.message \};/,
         'a mid-camper failure discards refunds that already succeeded');
     // And a camper with nothing refundable is a SKIP, not a failure — otherwise
     // every cash-only camper reads as an error and the real ones are lost.

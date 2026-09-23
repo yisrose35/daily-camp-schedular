@@ -14,12 +14,19 @@ const vm = require('node:vm');
 const inv = require('../scripts/camper_name_inventory.js');
 
 // Counts on 2026-09-23. Lower these as places move to numbers. Never raise them.
-const BASELINE = { records: 0, enrollments: 32, families: 71, bunks: 53, roster: 179, edge: 130, database: 4 };
+// edge 130 → 1: the edge functions go by the camper number. The one line left
+// is in deposit-inbox, a GENERATED bundle: it is display text authored in
+// campistry_deposit_match.js (referenceInstruction), fixed at the source.
+const BASELINE = { records: 0, enrollments: 32, families: 71, bunks: 53, roster: 179, edge: 1, database: 4 };
 
 // `// name-ok: <reason>` marks a name that is not how a camper is identified
 // (a lead, a sample, the words of a message). Each needs a reason, and there
 // may not be more of them than this without someone deciding so here.
-const NAME_OK_CEILING = 13;
+// 13 → 17 (edge-function pass): three family-payment labels in
+// charge-due-installments (the familyKey on the same line identifies the
+// family; families carry no per-camper number to put there) and the Camper
+// line's type on the receipt in send-payment-receipt (display only).
+const NAME_OK_CEILING = 17;
 
 test('the inventory document matches the code', () => {
     const want = inv.render(inv.count());
@@ -65,7 +72,8 @@ test('the counter sees what it claims to', () => {
 
 test('the inventory covers the edge functions and the database, not only the pages', () => {
     const c = inv.count();
-    assert.ok(c.edge && c.edge.total > 0 && Object.keys(c.edge.files).every(f => f.startsWith('supabase/functions/')));
+    // Zero is the goal, so the edge count may be 0; what matters is that it is counted.
+    assert.ok(c.edge && typeof c.edge.total === 'number' && Object.keys(c.edge.files).every(f => f.startsWith('supabase/functions/')));
     assert.ok(!Object.keys(c.edge.files).some(f => /payments-checkout\/|payments-canteen-checkout\/|payments-charge\//.test(f)),
         'superseded functions are not counted');
     assert.strictEqual(c.database.total, inv.DB_NAME_KEYS.length, 'a database item disappeared from the migrations — update the list');

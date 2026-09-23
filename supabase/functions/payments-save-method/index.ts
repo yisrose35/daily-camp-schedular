@@ -223,17 +223,18 @@ serve(async (req) => {
   try {
     const { campId, familyKey, camperName, camperId: bodyCamperId, token, billing, card } = await req.json();
     const camperId = camperIdIn(bodyCamperId);
-    if (!campId || !token || !(familyKey || camperName)) {
-      return json({ success: false, error: "campId, token, and one of familyKey / camperName are required" }, 400);
+    if (!campId || !token || !(familyKey || camperId != null || camperName)) {
+      return json({ success: false, error: "campId, token, and one of familyKey / camperId (or camperName) are required" }, 400);
     }
-    // camperName (without familyKey) is the canteen AUTO-RELOAD card save: the
+    // A camper (without familyKey) is the canteen AUTO-RELOAD card save: the
     // token belongs to that camper's autoReload block, not to a family record.
-    const isCamperScoped = !familyKey && !!camperName;
+    // Their number decides who that is; the name is the fallback without one.
+    const isCamperScoped = !familyKey && (camperId != null || !!camperName);
 
     const service = createClient(SUPABASE_URL, SUPABASE_SERVICE_KEY);
 
     if (isCamperScoped) {
-      if (!(await campHasCamper(service, campId, String(camperName), camperId))) {
+      if (!(await campHasCamper(service, campId, String(camperName ?? ""), camperId))) {
         return json({ success: false, error: "Camper not found for this camp" }, 400);
       }
     } else if (!(await campOwnsFamily(service, campId, familyKey))) {
@@ -289,8 +290,7 @@ serve(async (req) => {
       // the old whole-blob upsert could do right over a POS sale.
       const { data: merged, error: mergeErr } = await service.rpc("merge_canteen_autoreload_card", {
         p_camp_id: campId,
-        p_camper: String(camperName),
-        p_camper_id: camperId,
+        p_camper_id: camperId, p_camper: String(camperName ?? ""),
         p_fields: {
           byopProcessor: processorKey,
           byopCustomerRef: saveResult.customerRef,

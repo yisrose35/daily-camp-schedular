@@ -196,8 +196,8 @@ serve(async (req) => {
     if (kind !== "tuition_charge" && kind !== "canteen_deposit") {
       return json({ success: false, error: "kind must be tuition_charge or canteen_deposit" }, 400);
     }
-    if (kind === "canteen_deposit" && !camperName) {
-      return json({ success: false, error: "camperName is required for a canteen deposit" }, 400);
+    if (kind === "canteen_deposit" && camperId == null && !camperName) {
+      return json({ success: false, error: "camperId (or camperName) is required for a canteen deposit" }, 400);
     }
     const amountCents = Math.round(Number(amount) * 100);
     if (!Number.isFinite(amountCents) || amountCents < 50) {
@@ -222,10 +222,24 @@ serve(async (req) => {
     if (!bal.chargeable || !bal.familyKey || !bal.processorKey) {
       return json({ success: false, error: "No card on file to charge." }, 400);
     }
+    // The camper a canteen deposit is for. Their NUMBER decides: it must be
+    // one of the caller's own children as stamped on their invite
+    // (get_my_camper_ids, 249). Only a caller that sends no number is checked
+    // by name, as before.
+    let camperLabel: string = camperId == null && typeof camperName === "string" ? camperName : "";
     if (kind === "canteen_deposit") {
-      const campers: string[] = Array.isArray(bal.campers) ? bal.campers : [];
-      if (!campers.includes(camperName)) {
-        return json({ success: false, error: "That camper isn't linked to your account." }, 403);
+      if (camperId != null) {
+        const { data: mine, error: mineErr } = await asUser.rpc("get_my_camper_ids", { p_camp_id: campId });
+        const hit = !mineErr && mine?.success && Array.isArray(mine.campers)
+          ? (mine.campers as Array<Record<string, unknown>>).find((c) => camperIdIn(c.camperId) === camperId)
+          : null;
+        if (!hit) return json({ success: false, error: "That camper isn't linked to your account." }, 403);
+        camperLabel = String(hit.name || camperLabel);
+      } else {
+        const campers: string[] = Array.isArray(bal.campers) ? bal.campers : [];
+        if (camperId == null && !campers.includes(camperLabel)) {
+          return json({ success: false, error: "That camper isn't linked to your account." }, 403);
+        }
       }
     }
     const familyKey = bal.familyKey as string;
@@ -353,7 +367,7 @@ serve(async (req) => {
       const campLabel = String(camp?.name || "").trim() || "Camp";
       const pi = await stripeCharge(
         chargeStripeCustomerId, chargeToken || null, amountCents,
-        (kind === "canteen_deposit" ? `${campLabel} — canteen funds for ${displayName(camperName)}` : `${campLabel} — payment`),
+        (kind === "canteen_deposit" ? `${campLabel} — canteen funds for ${displayName(camperLabel)}` : `${campLabel} — payment`),
         { campId: String(campId), familyKey, kind, idempotencyKey },
         destinationAccountId,
       );
@@ -378,8 +392,7 @@ serve(async (req) => {
     if (kind === "canteen_deposit") {
       await service.rpc("credit_canteen_balance_from_processor", {
         p_camp_id: campId,
-        p_camper_name: camperName,
-        p_camper_id: camperId,
+        p_camper_id: camperId, p_camper_name: camperLabel,
         p_amount: amountCents / 100,
         p_processor_key: chargeProcessorKey,
         p_external_transaction_id: externalTransactionId,
@@ -429,7 +442,7 @@ serve(async (req) => {
     // processor's transaction id, which is what the Stripe webhook also keys
     // on — so the Stripe path gets one email, not two.
     await sendReceipt({
-      campId: String(campId), familyKey, camperName: camperName || null,
+      campId: String(campId), familyKey, camperId: kind === "canteen_deposit" ? camperId : null, camperName: camperLabel || null,
       ref: String(externalTransactionId || ""), amount: amountCents / 100,
       what: kind === "canteen_deposit" ? "Canteen funds" : "Camp payment",
       method: "Card on file",

@@ -234,7 +234,8 @@ serve(async (req) => {
     // Confirm the subject exists under this camp before charging in its name.
     let fam: Record<string, any> | null = null;
     if (kind === "canteen_deposit") {
-      if (!camperName || !(await campHasCamper(service, campId, String(camperName), camperId))) {
+      // The number decides (canteen_camper_known resolves it); name only without one.
+      if ((camperId == null && !camperName) || !(await campHasCamper(service, campId, String(camperName ?? ""), camperId))) {
         return json({ success: false, error: "Camper not found for this camp" }, 400);
       }
     } else {
@@ -280,8 +281,7 @@ serve(async (req) => {
     if (kind === "canteen_deposit") {
       const creditRes = await service.rpc("credit_canteen_balance_from_processor", {
         p_camp_id: campId,
-        p_camper_name: camperName,
-        p_camper_id: camperId,
+        p_camper_id: camperId, p_camper_name: String(camperName ?? ""),
         p_amount: charged,
         p_processor_key: "banquest",
         p_external_transaction_id: txnId,

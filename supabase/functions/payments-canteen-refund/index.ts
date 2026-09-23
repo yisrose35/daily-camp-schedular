@@ -167,7 +167,9 @@ serve(async (req) => {
     if (!authedCampId) return json({ error: "Only camp owners/admins can refund a canteen deposit." }, 403);
 
     const { camperName, camperId: body_camperId, amount, reason, idempotencyKey } = await req.json();
-    if (!camperName) return json({ error: "camperName is required" }, 400);
+    // The camper by ID when the page sent one: the account's key is a spelling.
+    const camperIdSent = (body_camperId != null && /^\d+$/.test(String(body_camperId)) && Number(body_camperId) > 0) ? Number(body_camperId) : null;
+    if (camperIdSent == null && !camperName) return json({ error: "camperId (or camperName) is required" }, 400);
 
     const service = createClient(SUPABASE_URL, SUPABASE_SERVICE_KEY);
 
@@ -189,16 +191,15 @@ serve(async (req) => {
     const { data: accountsData, error: acctErr } = await service.rpc("canteen_refund_view", { p_camp_id: authedCampId });
     if (acctErr || !accountsData?.success) return json({ error: "Could not read canteen balance." }, 500);
 
-    // The camper by ID when the page sent one: the account's key is a spelling.
-    const reqCamperId = (body_camperId != null && /^\d+$/.test(String(body_camperId))) ? Number(body_camperId) : null;
+    // The number decides: given one, only the account carrying it; the name
+    // (the account key) is the fallback only for a caller that sent no number.
     const accountsAll: Record<string, any> = accountsData.accounts || {};
-    const account = (reqCamperId != null
-        ? Object.values(accountsAll).find((a: any) => a && String(a.camperId) === String(reqCamperId))
-        : null) || accountsAll[camperName] || {};
-    const camperId: number | null = reqCamperId != null ? reqCamperId
+    const byNumber = (id: number) => Object.values(accountsAll).find((a: any) => a && String(a.camperId) === String(id));
+    const account = (camperIdSent != null ? byNumber(camperIdSent) : accountsAll[String(camperName)]) || {};   // name only when no camperId was sent
+    const camperId: number | null = camperIdSent != null ? camperIdSent
         : (account.camperId != null ? Number(account.camperId) : null);
-    const mine = (t: Record<string, any>) => camperId != null && t.camperId != null
-        ? String(t.camperId) === String(camperId) : t.camper === camperName;
+    // A ledger row with a number matches by its number; by name only when either side has none.
+    const mine = (t: Record<string, any>) => (camperId != null && t.camperId != null) ? String(t.camperId) === String(camperId) : t.camper === camperName;
     const balance = Number(account.balance) || 0;
     const balanceFloor = Number(account.balanceFloor) || 0;
     const walletAvailable = Math.max(0, round2(balance - balanceFloor));
@@ -298,8 +299,7 @@ serve(async (req) => {
 
         const { error: creditErr } = await service.rpc("refund_canteen_deposit_from_processor", {
           p_camp_id: authedCampId,
-          p_camper_name: camperName,
-          p_camper_id: camperId,
+          p_camper_id: camperId, p_camper_name: String(camperName ?? ""),
           p_amount: chunk,
           p_processor_key: processorKey,
           p_external_transaction_id: dep.externalTransactionId,

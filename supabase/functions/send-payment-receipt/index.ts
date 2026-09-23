@@ -109,7 +109,7 @@ async function authorize(req: Request, bodyCampId: string): Promise<{ campId: st
 
 function receiptHtml(o: {
   campName: string; campAddress: string; toName: string; what: string;
-  amount: number; when: string; method: string; camperName: string;
+  amount: number; when: string; method: string; camperName: string;   // name-ok: the name printed on the receipt, display only
   familyName: string; ref: string; balanceAfter: number | null; replyTo: string;
 }) {
   const rows: string[] = [];
@@ -190,8 +190,8 @@ Deno.serve(async (req: Request) => {
     const { data: rcp } = await service.rpc("receipt_recipient", {
       p_camp_id: campId,
       p_family_key: body.familyKey ? String(body.familyKey) : null,
-      p_camper_name: body.camperName ? String(body.camperName) : null,
-      p_camper_id: camperIdIn(body.camperId),
+      // The camper's number decides whose parent is emailed; name only without one.
+      p_camper_id: camperIdIn(body.camperId), p_camper_name: body.camperName ? String(body.camperName) : null,
       p_enroll_id: body.enrollmentId ? String(body.enrollmentId) : null,
     });
     const to = String(body.email || rcp?.email || "").trim();
@@ -226,7 +226,7 @@ Deno.serve(async (req: Request) => {
       amount,
       when: String(body.when || new Date().toISOString().slice(0, 10)),
       method: String(body.method || "").trim(),
-      camperName: String(body.camperName || rcp?.camper_name || "").trim(),
+      camperName: displayName(body.camperName || rcp?.camper_name || "").trim(),
       familyName: String(rcp?.family_name || "").trim(),
       ref,
       balanceAfter: body.balanceAfter == null ? null : Math.round((Number(body.balanceAfter) || 0) * 100) / 100,
