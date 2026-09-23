@@ -1,13 +1,25 @@
 # Ted's ledger
 
 ## Last commit checked
-`4ce2489` (2026-09-23)
+`32c9f59` (2026-09-23)
 
 ## Open findings
 | ID | Severity | Description | Found | Status |
 |----|----------|-------------|-------|--------|
+| TED-051 | 🔴 | Autopay never charges a payment plan a parent built (runner skips plans with dueDates and no installments) | 2026-09-23 | Open |
+| TED-052 | 🔴 | `stripe-refund` has no caller check: anyone with a payment id (printed on receipts) can refund it | 2026-09-23 | Open |
+| TED-053 | 🔴 | Late fees, card surcharges, Add Charge, bulk charges, close-out never posted to the ledger, so neither balance includes them | 2026-09-23 | Open |
+| TED-054 | 🔴 | Office "Charge card" on Banquest/Cardknox calls `payments-charge`, which imports a file that doesn't exist | 2026-09-23 | Open |
+| TED-055 | 🟠 | Declined instalment on an office-built (installments[]) plan is dropped for good, never flagged | 2026-09-23 | Open |
+| TED-056 | 🟠 | Two plan models not reconciled; office still creates old plans and editing a parent plan converts it back | 2026-09-23 | Open |
+| TED-057 | 🟠 | `stripe-webhook` accepts unsigned events when its secret is not set; no timestamp check | 2026-09-23 | Open (owner to check secret) |
+| TED-058 | 🟠 | `stripe-charge` charges another camp's customer (to the platform) instead of refusing; no idempotency key | 2026-09-23 | Open |
+| TED-059 | 🟠 | Batch charge always reports 0 failed | 2026-09-23 | Open |
+| TED-060 | 🟡 | Billing tests can't catch these: test DB chain lacks most billing migrations and two balance helpers; many tests text-only | 2026-09-23 | Open |
+| TED-061 | 🟡 | Unused `stripe-setup` function has no caller check | 2026-09-23 | Open |
+| TED-062 | 🟡 | Negative credit accepted and only half-recorded | 2026-09-23 | Open |
 | TED-050 | 🟡 | No automated test checks that the Me page sends camper numbers (`p_roster_ids`) to the family switch-off, or that it falls back only on PGRST202; a regression would silently return to by-name | 2026-09-23 | Open |
-| TED-005 | 🟠 | 14 auto-scheduler tests fail (`auto_full_day.test.js`); still 14 at 4ce2489. Owner deferred. | 2026-09-23 | Open (deferred by owner) |
+| TED-005 | 🟠 | 14 auto-scheduler tests fail (`auto_full_day.test.js`); still 14 at 32c9f59. Owner deferred. | 2026-09-23 | Open (deferred by owner) |
 
 ## Closed findings
 | ID | What it was | Closed | Proof |
@@ -71,7 +83,8 @@
 | Auto Builder (solver, layers, grid) | never (only test results seen) |
 | Manual Builder | never |
 | Cloud sync / schedules / rotation | never |
-| Billing, payments, payroll | never (camper numbers and "#number" display only) |
+| Billing & payments (edge functions, autopay runner, refunds, late fees/surcharges/credits, plans, parent balance) | 2026-09-23 (first deep pass; not browser, not live processors) |
+| Payroll | never |
 | Bank deposit matching | never |
 | Canteen / Snacks / Shop / POS | never (touched only through camper numbers) |
 | Parent portal (Link) | never in a browser (database-level invite ownership checked 2026-09-23; Parents-page refusal wording run in isolation 2026-09-23) |
@@ -99,3 +112,4 @@
 | 2026-09-23 | Check my work: TED-046 fix | 678e3a2 | unit 3277/14 · pg 50/0 · keys 42/0 · lite 12/0 · smoke 32/0 · scale 24/0 | 🟢 | [report](reports/2026-09-23-camper-id-fourteenth-recheck.md) |
 | 2026-09-23 | Check my work: TED-047 fix | d049454 | unit 3277/14 · pg 50/0 · keys 42/0 · lite 12/0 · smoke 32/0 · scale 24/0 | 🟡 | [report](reports/2026-09-23-camper-id-fifteenth-recheck.md) |
 | 2026-09-23 | Check my work: TED-048, 049 fixes + Parents page wording | 4ce2489 | unit 3280/14 · pg 50/0 · keys 42/0 · lite 12/0 · smoke 32/0 · scale 24/0 | 🟢 | [report](reports/2026-09-23-camper-id-sixteenth-recheck.md) |
+| 2026-09-23 | Audit: billing | 32c9f59 | unit 3280/14 · pg 50/0 · smoke 32/0 · own harness 5 runs | 🔴 | [report](reports/2026-09-23-billing-audit.md) |
