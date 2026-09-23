@@ -14752,6 +14752,32 @@ function enrollCamper(id){
 
     e.enrolledDate=new Date().toISOString().split('T')[0];
     save();_refreshPplIfActive();
+    // ★ REFRESH THIS FAMILY'S INVITE, because this is where the camper first
+    //   EXISTS as a person.
+    //
+    //   An invite's camper list is stamped with camper ids when it is written
+    //   (migration 223), and migration 232 stopped a null slot being re-resolved
+    //   by name at check time — "a matching name that appeared later" cannot be
+    //   told from "a different child with the same name who appeared later", and
+    //   the second one hands a parent somebody else's child.
+    //
+    //   The ordinary Registration flow trips over that on its own:
+    //
+    //     1. Accept  → updateEnrollStatus(id,'accepted') generates the invite and
+    //                  emails the parent. There is no roster entry yet, so there is
+    //                  no camp_people row, so 223 stamps a NULL in her slot.
+    //     2. Enroll  → this function creates the roster entry. Her camp_people row
+    //                  is born now, with first_seen AFTER the invite's stamp.
+    //
+    //   Without this line the parent logs in to the portal and their own child is
+    //   not there — until somebody happens to open her in the Me page, because
+    //   saveCamper refreshes the invite and this did not. Rewriting the invite's
+    //   camper list re-stamps it, which fills the slot.
+    //
+    //   (parent_invites_needing_attention() lists any family already in that state,
+    //   and restamp_parent_invite() repairs one.)
+    try{ _syncInvitesForCamper(e.camperName); }
+    catch(_e){ console.warn('[Me] enroll: could not refresh the parent invite:',_e&&_e.message) }
 }
 
 // Down payment (deposit) vs. the rest of tuition are genuinely different
@@ -22080,6 +22106,12 @@ function importRows(rows,mode){
             }
         }
 
+        // No invite refresh here, unlike saveCamper and enrollCamper, and the
+        // reason is not that it was forgotten: Link access is ENROLLMENT-based
+        // (migration 039) and an invite's camper list is built from accepted
+        // enrollments. A CSV import creates roster entries and no enrollments, so
+        // an imported camper is not on any invite to be stamped into. They reach a
+        // parent portal when they are enrolled, and enrollCamper refreshes it then.
         roster[targetName]=_buildCamperRecord(r,camperId);
         if(oldBunk&&oldBunk!==r.bunk&&bunkAsgn[oldBunk]){
             var oi=bunkAsgn[oldBunk].indexOf(targetName);

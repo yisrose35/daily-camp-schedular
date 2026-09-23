@@ -79,11 +79,27 @@ INSERT INTO link_parent_invites (camp_id, user_id, parent_name, camper_names, st
      'Katz parent B', jsonb_build_array('CHAIM KATZ'),    'active');
 UPDATE link_parent_invites SET expires_at = now() - interval '1 day' WHERE parent_name = 'Expired';
 
--- A pre-223 invite: named, active, and no person_ids at all.
+-- A pre-223 invite: named, active, and no person_ids at all. The trigger is
+-- disabled so the row is genuinely un-stamped, the way one written before 223
+-- existed would be — the reader has to tolerate a NULL person_ids, not just an
+-- array with nulls in it.
 ALTER TABLE public.link_parent_invites DISABLE TRIGGER trg_stamp_invite_person_ids;
 INSERT INTO link_parent_invites (camp_id, user_id, parent_name, camper_names, status)
      VALUES ('f2400000-0000-0000-0000-000000000001', 'f2400000-0000-0000-0000-00000000a008',
              'Pre-223', jsonb_build_array('Dov Lerner'), 'active');
+-- ★ AND THEN WHAT 232'S BACKFILL DID TO EVERY SUCH ROW, which is the part this
+--   fixture was missing. 232 ends with an unconditional
+--       UPDATE link_parent_invites SET … person_ids_resolved_at = now()
+--   over every existing invite, so after 232 there is no invite anywhere with a
+--   NULL mark. Leaving it null here manufactured a state the migration guarantees
+--   cannot exist, and then failed because 232's name fallback requires the mark —
+--   reporting a regression that no live camp can reach.
+--
+--   person_ids is left NULL on purpose: that IS what section 4 tests, and it is
+--   still reachable (232 only fills it when camper_names is an array, and a camp
+--   whose names resolve to nobody keeps a NULL there).
+UPDATE link_parent_invites SET person_ids_resolved_at = now()
+ WHERE parent_name = 'Pre-223';
 ALTER TABLE public.link_parent_invites ENABLE TRIGGER trg_stamp_invite_person_ids;
 
 DO $$
@@ -190,40 +206,164 @@ BEGIN
 END $$;
 
 
--- ── 3. a camper added after the invite still reaches their parent ───────────
+-- ── 3. a camper added after the invite is REFUSED, reported, and repairable ─
+-- THIS SECTION USED TO ASSERT THE OPPOSITE, and the change is deliberate.
+--
+-- 224 shipped with the null slot being re-resolved by name at check time, so a
+-- camper added after her invite was sent became reachable the moment she appeared.
+-- Migration 232 stopped that: "a matching name that appeared later" cannot be told
+-- apart from "a DIFFERENT child with the same name who appeared later", and the
+-- second one hands a parent somebody else's child. Section 3b below is that case,
+-- and it is why the refusal is worth the inconvenience.
+--
+-- So the rule is now three parts, and all three have to hold or the office is
+-- stuck with a parent who cannot see their own child and no way to know:
+--   a. she is refused,
+--   b. parent_invites_needing_attention NAMES her, with the repair,
+--   c. restamping attaches her.
+--
+-- On the app side campistry_me.js closes the window at the source —
+-- enrollCamper refreshes the family's invite when it creates the roster entry —
+-- so the ordinary Accept-then-Enroll flow never reaches state (a).
+-- tests/invite_stamp_on_roster_write.test.js holds that.
 SET test.uid = 'f2400000-0000-0000-0000-00000000a003';
 DO $$
-DECLARE camp uuid := 'f2400000-0000-0000-0000-000000000001';
+DECLARE
+    camp      uuid := 'f2400000-0000-0000-0000-000000000001';
+    v_invite  uuid;
+    v         jsonb;
 BEGIN
+    SELECT id INTO v_invite FROM link_parent_invites WHERE parent_name = 'Not yet';
+
     -- The invite named 'Later Arrival' before she was on the roster, so 223
     -- stamped a null in her slot.
-    IF (SELECT person_ids FROM link_parent_invites WHERE parent_name = 'Not yet')
+    IF (SELECT person_ids FROM link_parent_invites WHERE id = v_invite)
        IS DISTINCT FROM jsonb_build_array(null) THEN
         RAISE EXCEPTION 'expected a null slot, got %',
-            (SELECT person_ids FROM link_parent_invites WHERE parent_name = 'Not yet');
+            (SELECT person_ids FROM link_parent_invites WHERE id = v_invite);
     END IF;
 
-    -- Now the camp adds her.
+    -- ★ BACKDATE THE STAMP, or this whole section proves nothing.
+    --
+    -- 232's test is `p.first_seen <= i.person_ids_resolved_at`, and now() is the
+    -- TRANSACTION clock: an invite and a camper created in the same transaction
+    -- share a timestamp to the microsecond, the <= holds, and she reads as
+    -- reachable no matter what the rule says. (I wrote that version first and it
+    -- passed for exactly that reason.) An hour is not a real interval here — it is
+    -- the difference between "before the stamp" and "after it".
+    UPDATE link_parent_invites SET person_ids_resolved_at = now() - interval '1 hour'
+     WHERE id = v_invite;
+
+    -- Now the camp adds her, which is when her camp_people row is born.
     UPDATE camp_state_kv
        SET value = jsonb_set(value, '{camperRoster,Later Arrival}',
                              jsonb_build_object('camperId', '905', 'name', 'Later Arrival'))
      WHERE camp_id = camp AND key = 'app1';
 
-    -- The stored slot is still null — nothing re-stamps an invite when the
-    -- roster changes — so this only works if the null is re-resolved at check
-    -- time. An id-only check would refuse her own parent forever.
-    IF (SELECT person_ids FROM link_parent_invites WHERE parent_name = 'Not yet')
-       IS DISTINCT FROM jsonb_build_array(null) THEN
-        RAISE EXCEPTION 'the invite was re-stamped, so this test no longer proves the healing';
+    IF NOT EXISTS (SELECT 1 FROM camp_people p, link_parent_invites i
+                    WHERE p.camp_id = camp AND p.person_id = 905 AND i.id = v_invite
+                      AND p.first_seen > i.person_ids_resolved_at) THEN
+        RAISE EXCEPTION 'she did not arrive after the stamp, so the rule under test is not '
+                        'the one being exercised';
     END IF;
+
+    -- a. refused, because the name alone cannot prove she is the child meant.
+    IF public._parent_owns_camper(camp, 'Later Arrival') THEN
+        RAISE EXCEPTION 'a camper who appeared AFTER the invite was stamped was accepted on '
+                        'her name alone — 232''s containment is open again';
+    END IF;
+
+    -- b. and said out loud, by name, with the line that fixes it. A refusal the
+    --    office cannot see is indistinguishable from the portal being broken.
+    --
+    --    AS THE OWNER, not as the parent: 232 gates the report behind _is_camp_admin,
+    --    which is right — a parent must not be able to enumerate a camp's invites.
+    --    Read as the parent it answers {"error":"forbidden"}, and the two checks
+    --    below then compared NULL and did not fire. Same shape as the defect 239
+    --    fixed, in a test about that very shape. So `success` is asserted FIRST and
+    --    everything after it can be trusted.
+    PERFORM set_config('test.uid', 'f2400000-0000-0000-0000-0000000000ff', false);
+    v := public.parent_invites_needing_attention(camp);
+    IF COALESCE((v ->> 'success')::boolean, false) IS NOT TRUE THEN
+        RAISE EXCEPTION 'the report refused the camp owner: %', v;
+    END IF;
+    IF COALESCE((v ->> 'count')::bigint, 0) < 1 THEN
+        RAISE EXCEPTION 'nothing reported her, so the office has no way to find out: %', v;
+    END IF;
+    IF NOT (v -> 'invites') @> jsonb_build_array(
+             jsonb_build_object('camper_name', 'Later Arrival')) THEN
+        RAISE EXCEPTION 'the report does not NAME her: %', v -> 'invites';
+    END IF;
+    IF COALESCE(v -> 'invites' -> 0 ->> 'to_fix', '') = '' THEN
+        RAISE EXCEPTION 'the report names her but does not say how to fix it: %', v;
+    END IF;
+
+    -- c. and a restamp attaches her. Also the owner's to run, for the same reason.
+    IF COALESCE((public.restamp_parent_invite(v_invite) ->> 'success')::boolean, false)
+       IS NOT TRUE THEN
+        RAISE EXCEPTION 'the restamp itself was refused: %',
+            public.restamp_parent_invite(v_invite);
+    END IF;
+
+    -- Back to the parent, because whether SHE can reach her child is a question
+    -- about the parent's session, not the owner's.
+    PERFORM set_config('test.uid', 'f2400000-0000-0000-0000-00000000a003', false);
     IF NOT public._parent_owns_camper(camp, 'Later Arrival') THEN
-        RAISE EXCEPTION 'a camper added after her invite was sent cannot be reached by her own '
-                        'parent';
+        RAISE EXCEPTION 'a restamp did not attach her, so the repair does not repair';
     END IF;
     IF NOT public._parent_owns_person(camp, 905) THEN
-        RAISE EXCEPTION 'the same child is unreachable by id';
+        RAISE EXCEPTION 'attached by name but not by id';
     END IF;
-    RAISE NOTICE '224: a null id slot is re-resolved, not treated as a refusal';
+    IF (SELECT person_ids FROM link_parent_invites WHERE id = v_invite)
+       IS DISTINCT FROM jsonb_build_array(905) THEN
+        RAISE EXCEPTION 'the restamp did not write her id into the slot: %',
+            (SELECT person_ids FROM link_parent_invites WHERE id = v_invite);
+    END IF;
+
+    -- and she is no longer reported, or the office would chase a fixed problem.
+    PERFORM set_config('test.uid', 'f2400000-0000-0000-0000-0000000000ff', false);
+    v := public.parent_invites_needing_attention(camp);
+    IF COALESCE((v ->> 'success')::boolean, false) IS NOT TRUE THEN
+        RAISE EXCEPTION 'the second read of the report refused the owner: %', v;
+    END IF;
+    IF (v -> 'invites') @> jsonb_build_array(
+             jsonb_build_object('camper_name', 'Later Arrival')) THEN
+        RAISE EXCEPTION 'still reported after the repair: %', v -> 'invites';
+    END IF;
+
+    RAISE NOTICE '224: a camper who arrives after the stamp is refused, reported and repairable';
+END $$;
+
+
+-- ── 3b. WHY the refusal is worth it: a stranger's child with the same name ──
+-- The other side of the same rule. Without it, section 3's convenience would let
+-- any later-added camper matching a name on an invite be claimed by that parent.
+DO $$
+DECLARE
+    camp uuid := 'f2400000-0000-0000-0000-000000000001';
+    v_invite uuid;
+BEGIN
+    SELECT id INTO v_invite FROM link_parent_invites WHERE parent_name = 'Not yet';
+    -- Her invite is stamped and current again after the repair above, so push it
+    -- back once more: the question is whether a name that appears LATER can be
+    -- claimed, and that needs the arrival to be after the stamp.
+    UPDATE link_parent_invites SET person_ids_resolved_at = now() - interval '1 hour'
+     WHERE id = v_invite;
+
+    -- A second, unrelated child called 'Later Arrival' joins. This parent's invite
+    -- names that spelling, and she is NOT their child.
+    UPDATE camp_state_kv
+       SET value = jsonb_set(value, '{camperRoster,Later Arrival #2}',
+                             jsonb_build_object('camperId', '906', 'name', 'Later Arrival'))
+     WHERE camp_id = camp AND key = 'app1';
+
+    PERFORM set_config('test.uid', 'f2400000-0000-0000-0000-00000000a003', false);
+    IF public._parent_owns_person(camp, 906) THEN
+        RAISE EXCEPTION 'a parent reached a DIFFERENT family''s child because the name on '
+                        'their invite happened to match — this is the failure 232 exists to '
+                        'prevent, and it is worse than the inconvenience in section 3';
+    END IF;
+    RAISE NOTICE '224: and a stranger''s same-named child added later is still refused';
 END $$;
 
 
