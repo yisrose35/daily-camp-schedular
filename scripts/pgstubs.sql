@@ -77,6 +77,13 @@ CREATE TABLE IF NOT EXISTS public.bank_deposits (
     guardrail text NOT NULL DEFAULT '', matched_by text NOT NULL DEFAULT 'auto',
     resolved_by uuid, resolved_at timestamptz,
     created_at timestamptz NOT NULL DEFAULT now(), updated_at timestamptz NOT NULL DEFAULT now());
+-- Campistry Go's cloud table. No migration creates it — its DDL is a comment in
+-- campistry_go_cloud.js and it was made by hand in the live project — so the
+-- only definition to copy is that one.
+CREATE TABLE IF NOT EXISTS public.go_standalone_data (
+    camp_id text NOT NULL, data_type text NOT NULL,
+    data jsonb NOT NULL DEFAULT '{}', updated_at timestamptz NOT NULL DEFAULT now(),
+    PRIMARY KEY (camp_id, data_type));
 CREATE TABLE IF NOT EXISTS public.notifications (
     id uuid PRIMARY KEY DEFAULT gen_random_uuid(), camp_id uuid, source text,
     source_id text, title text, body text, link_target text,

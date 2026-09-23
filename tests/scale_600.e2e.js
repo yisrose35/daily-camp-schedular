@@ -192,6 +192,10 @@ function check(label, ok, detail) {
         }
         await load('Register', 'campistry_snacks_pos.html',
             (n) => document.querySelectorAll('.camper-item').length >= Math.min(n, 50));
+        await load('Health', 'campistry_health.html',
+            (n) => !!window.CampistryHealth && Object.keys(window.CampistryHealth.getRoster() || {}).length >= n);
+        await load('Go', 'campistry_go.html',
+            () => !!window.CampistryGo && document.readyState === 'complete');
 
         console.log('\n3. nothing broke on the way');
         check('no call fell through unimplemented', bridge.unsupported().length === 0,

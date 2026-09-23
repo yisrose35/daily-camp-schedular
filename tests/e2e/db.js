@@ -64,6 +64,8 @@ const MIGRATIONS = [
     //   190  _session_taken             — 200 needs it
     //   193  list_workspaces            — the workspace banner reads it on every page
     //   200  get_camp_applications      — campistry_me.js reads it on hydration
+    // 037  get_camp_health_documents — the Health page reads it on load
+    '037_health_documents',
     '048_section_access',
     '063_camp_timezone',
     '100_pos_pin_login',
