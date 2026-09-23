@@ -49,13 +49,18 @@ BEGIN
     END IF;
     SELECT pg_get_functiondef(p.oid) INTO d FROM pg_proc p JOIN pg_namespace n ON n.oid=p.pronamespace
      WHERE n.nspname='public' AND p.proname='use_family_card_for_canteen_auto_reload';
-    IF d !~ 'campistrySnacks''[^;]*FOR UPDATE' THEN
+    -- The canteen account must be LOCKED before it is written. At 214 that was
+    -- the campistrySnacks document; from 219 the canteen is rows and the lock is
+    -- canteen_account_lock on the one camper's row (241 is the current body).
+    -- Either satisfies the rule; neither is a lost update waiting to happen.
+    IF d !~ 'campistrySnacks''[^;]*FOR UPDATE' AND d !~ 'canteen_account_lock\s*\(' THEN
         RAISE EXCEPTION 'the canteen lock was removed — a lost update on the snacks ledger';
     END IF;
-    -- and the snacks create-if-missing must still be there, or auto-reload fails
-    -- for a camp that has never sold anything.
-    IF d !~ 'campistrySnacks''' THEN
-        RAISE EXCEPTION 'the campistrySnacks create-if-missing was stripped';
+    -- and the account must be created if missing, or auto-reload fails for a
+    -- camper who has never bought anything: the document's create-if-missing
+    -- before 219, canteen_account_lock's own INSERT … ON CONFLICT after it.
+    IF d !~ 'campistrySnacks''' AND d !~ 'canteen_account_lock\s*\(' THEN
+        RAISE EXCEPTION 'the canteen create-if-missing was stripped';
     END IF;
     RAISE NOTICE 'ok  the shop and canteen locks and creates survived';
 END $$;

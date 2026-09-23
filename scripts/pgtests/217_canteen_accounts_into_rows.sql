@@ -9,6 +9,31 @@ CREATE OR REPLACE FUNCTION public.camp_reader(p_camp_id uuid) RETURNS boolean
 LANGUAGE sql STABLE SECURITY DEFINER SET search_path = public, pg_catalog
 AS $$ SELECT true $$;
 
+-- 219 DROPPED the projection trigger on purpose: the canteen writers moved to
+-- rows and the document became a frozen copy. Against the full chain, then,
+-- writing accounts into the document projects nothing, and this test failed on
+-- its first check — not because 217 regressed, but because its trigger is gone.
+--
+-- Most of what it tests is still LIVE: _attribute_canteen_account runs inside
+-- every canteen_account_lock (227), and backfill_canteen_accounts and
+-- verify_canteen_accounts still ship. So the trigger is put back for the length
+-- of this test — only when it is absent, and dropped again at the end — and the
+-- rest runs against the current bodies.
+CREATE TEMP TABLE _217_reattached AS
+SELECT NOT EXISTS (SELECT 1 FROM pg_trigger
+                    WHERE tgname = 'trg_project_canteen_accounts'
+                      AND tgrelid = 'public.camp_state_kv'::regclass) AS did;
+DO $$
+BEGIN
+    IF (SELECT did FROM _217_reattached) THEN
+        CREATE TRIGGER trg_project_canteen_accounts
+        AFTER INSERT OR UPDATE ON public.camp_state_kv
+        FOR EACH ROW
+        WHEN (NEW.key = 'campistrySnacks')
+        EXECUTE FUNCTION public.project_canteen_accounts();
+    END IF;
+END $$;
+
 DO $$
 DECLARE
     c1 uuid := '33333333-3333-3333-3333-333333333333';
@@ -101,12 +126,20 @@ BEGIN
         RAISE EXCEPTION 'one camper''s sale moved another camper''s balance';
     END IF;
 
-    -- ── 5. an attributed balance is never re-pointed ────────────────────────
-    -- The dangerous case: a roster edit frees up a name, and a later save
-    -- silently moves an existing balance to whoever now answers to it. Money
-    -- that has an owner keeps that owner.
+    -- ── 5. a hand renumber carries the account with the person ──────────────
+    -- The roster keeps "Chaim Katz" and only the ID field changes, 1041 → 9999:
+    -- the office editing a camper's number by hand. At 217 this section asserted
+    -- the account STAYED on 1041, because a name freed for somebody else was
+    -- the danger and the two could not be told apart. 237 settled it: the same
+    -- live roster entry with a new id is the SAME child renumbered, and
+    -- _move_person_references carries every reference with them — otherwise the
+    -- account points at a person who no longer exists. A DIFFERENT child taking
+    -- a departed child's name mints a new id instead; that is 237's own test.
     SELECT person_id INTO pid FROM camp_canteen_accounts
      WHERE camp_id = c1 AND account_key = 'Chaim Katz';
+    IF pid IS DISTINCT FROM 1041 THEN
+        RAISE EXCEPTION 'setup: Chaim Katz should be attributed to 1041 before the renumber, got %', pid;
+    END IF;
     UPDATE camp_state_kv SET value = jsonb_build_object('camperRoster', jsonb_build_object(
             'Chaim Katz',  jsonb_build_object('camperId', '9999', 'name', 'Chaim Katz'),
             'Rivka Stern', jsonb_build_object('camperId', '1042', 'name', 'Rivka Stern')))
@@ -115,9 +148,18 @@ BEGIN
         '{accounts,Chaim Katz}', jsonb_build_object('balance', 10.00, 'dailyLimit', 10,
                                                     'lastSpendDate', '2026-09-22'))
      WHERE camp_id = c1 AND key = 'campistrySnacks';
-    IF (SELECT person_id FROM camp_canteen_accounts
-         WHERE camp_id = c1 AND account_key = 'Chaim Katz') <> pid THEN
-        RAISE EXCEPTION 'an attributed balance was re-pointed at a different person';
+    SELECT person_id INTO pid FROM camp_canteen_accounts
+     WHERE camp_id = c1 AND account_key = 'Chaim Katz';
+    IF pid IS DISTINCT FROM 9999 THEN
+        RAISE EXCEPTION 'the renumbered camper''s account did not follow them (still on %)', pid;
+    END IF;
+    IF NOT EXISTS (SELECT 1 FROM camp_people
+                    WHERE camp_id = c1 AND person_id = pid AND deleted_at IS NULL) THEN
+        RAISE EXCEPTION 'the account points at person %, who does not exist — a dangling reference', pid;
+    END IF;
+    IF (SELECT balance FROM camp_canteen_accounts
+         WHERE camp_id = c1 AND account_key = 'Chaim Katz') <> 10.00 THEN
+        RAISE EXCEPTION 'the renumber moved the account but not its balance';
     END IF;
 
     -- ── 6. an account leaving the document is stamped, not destroyed ────────
@@ -256,4 +298,12 @@ BEGIN
         RAISE EXCEPTION 'an unchanged snacks save rewrote its rows (% → %) — the trigger is not diffing', b, a;
     END IF;
     RAISE NOTICE '217: an unchanged save touches no rows.';
+END $$;
+
+-- Leave the chain as 219 left it.
+DO $$
+BEGIN
+    IF (SELECT did FROM _217_reattached) THEN
+        DROP TRIGGER trg_project_canteen_accounts ON public.camp_state_kv;
+    END IF;
 END $$;

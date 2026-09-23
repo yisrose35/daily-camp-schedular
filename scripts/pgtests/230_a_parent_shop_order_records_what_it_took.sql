@@ -21,14 +21,31 @@
 CREATE OR REPLACE FUNCTION auth.uid() RETURNS uuid
 LANGUAGE sql STABLE AS $$ SELECT NULLIF(current_setting('test.uid', true), '')::uuid $$;
 
+-- 229's camp, roster, canteen balances and parent invite are this test's
+-- fixture. Run on its own, this file used to fail at the first order with
+-- no_active_invite, because nothing had created them; now it builds them by
+-- running 229's test first, which is itself green on the full chain.
+SELECT NOT EXISTS (SELECT 1 FROM camps WHERE id = 'f2900000-0000-0000-0000-000000000001')
+       AS need_229 \gset
+\if :need_229
+    \ir 229_four_canteen_writers_that_always_failed.sql
+\endif
+
+-- A second camp, owned by somebody else, for the refusal in section 6. It used
+-- to be simulated by stubbing get_user_camp_id() from a session setting — a
+-- stub that REPLACED the real resolver for every test run after this one, and
+-- turned 239, 240 and 242 into "not_authorized" in a shared database. The real
+-- resolver (verbatim in scripts/pgstubs.sql) answers from camps.owner, which is
+-- all this needs.
+INSERT INTO auth.users (id, email)
+VALUES ('f2900000-0000-0000-0000-0000000000ee', 'other-owner@230.test')
+ON CONFLICT DO NOTHING;
+INSERT INTO camps (id, owner, name)
+VALUES ('f2900000-0000-0000-0000-00000000dead', 'f2900000-0000-0000-0000-0000000000ee', 'Another camp')
+ON CONFLICT DO NOTHING;
+
 
 -- ── 11. the shop order, placed and settled ──────────────────────────────────
--- The last two the transform rewrote and nothing called. settle_shop_order is
--- staff-side and authorises through get_user_camp_id(), which this chain does not
--- define, so it is stubbed from a session setting.
-CREATE OR REPLACE FUNCTION public.get_user_camp_id() RETURNS uuid
-LANGUAGE sql STABLE SECURITY DEFINER SET search_path = public, pg_catalog
-AS $$ SELECT NULLIF(current_setting('test.camp', true), '')::uuid $$;
 
 DO $$
 DECLARE
@@ -101,7 +118,9 @@ BEGIN
 
     -- ── settle_shop_order, staff side ──────────────────────────────────────
     PERFORM set_config('test.uid', 'f2900000-0000-0000-0000-0000000000ff', false);
-    PERFORM set_config('test.camp', camp::text, false);
+    IF public.get_user_camp_id() IS DISTINCT FROM camp THEN
+        RAISE EXCEPTION 'setup: the owner does not resolve to their camp (%)', public.get_user_camp_id();
+    END IF;
     r := public.settle_shop_order(camp, oid, 'canteen', 25.00, false);
     IF (r ->> 'success') IS DISTINCT FROM 'true' THEN
         RAISE EXCEPTION 'settling the order it already paid for was refused: %', r;
@@ -126,13 +145,16 @@ BEGIN
               WHERE camp_id = camp AND account_key = 'Ayala Weiss');
     END IF;
 
-    -- A camp the caller is not in is refused.
-    PERFORM set_config('test.camp', 'f2900000-0000-0000-0000-00000000dead', false);
+    -- A camp the caller is not in is refused: the owner of ANOTHER camp.
+    PERFORM set_config('test.uid', 'f2900000-0000-0000-0000-0000000000ee', false);
+    IF public.get_user_camp_id() IS DISTINCT FROM 'f2900000-0000-0000-0000-00000000dead'::uuid THEN
+        RAISE EXCEPTION 'setup: the other owner does not resolve to their own camp';
+    END IF;
     IF (public.settle_shop_order(camp, oid, 'canteen', 25.00, false) ->> 'error')
-       <> 'not_authorized' THEN
+       IS DISTINCT FROM 'not_authorized' THEN
         RAISE EXCEPTION 'a caller settled an order in a camp they are not in';
     END IF;
-    PERFORM set_config('test.camp', '', false);
+    PERFORM set_config('test.uid', 'f2900000-0000-0000-0000-0000000000ff', false);
 
     -- 7. The order records the camper's id, not just their name.
     IF (SELECT o ->> 'camperId'

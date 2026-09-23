@@ -19,6 +19,26 @@ CREATE OR REPLACE FUNCTION public.camp_parent_campers(p_camp_id uuid) RETURNS js
 LANGUAGE sql STABLE SECURITY DEFINER SET search_path = public, pg_catalog
 AS $$ SELECT COALESCE(NULLIF(current_setting('test.campers', true), '')::jsonb, '[]'::jsonb) $$;
 
+-- The fixture below writes accounts into the snacks DOCUMENT and reads them back
+-- as rows. 219 dropped the trigger that made that happen (the writers moved to
+-- rows), so against the full chain the rows were empty and the first check
+-- failed — the reader was fine, it had nothing to read. Re-attached for this
+-- test only, when absent, and dropped again at the end; same as 217's test.
+CREATE TEMP TABLE _218_reattached AS
+SELECT NOT EXISTS (SELECT 1 FROM pg_trigger
+                    WHERE tgname = 'trg_project_canteen_accounts'
+                      AND tgrelid = 'public.camp_state_kv'::regclass) AS did;
+DO $$
+BEGIN
+    IF (SELECT did FROM _218_reattached) THEN
+        CREATE TRIGGER trg_project_canteen_accounts
+        AFTER INSERT OR UPDATE ON public.camp_state_kv
+        FOR EACH ROW
+        WHEN (NEW.key = 'campistrySnacks')
+        EXECUTE FUNCTION public.project_canteen_accounts();
+    END IF;
+END $$;
+
 DO $$
 DECLARE
     c uuid := '44444444-4444-4444-4444-444444444444';
@@ -200,4 +220,11 @@ BEGIN
     RAISE NOTICE '218: staff see the camp, parents see only their own — including';
     RAISE NOTICE '218: unattributed accounts and across a rename — payload fields survive,';
     RAISE NOTICE '218: an owned account is never reachable by name, strangers get nothing.';
+END $$;
+
+DO $$
+BEGIN
+    IF (SELECT did FROM _218_reattached) THEN
+        DROP TRIGGER trg_project_canteen_accounts ON public.camp_state_kv;
+    END IF;
 END $$;
