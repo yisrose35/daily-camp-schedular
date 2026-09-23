@@ -6709,9 +6709,9 @@ function renderStructure(){
         +(divs.length?'<p class="sec-desc">'+divs.length+' division'+(divs.length!==1?'s':'')+' · '+totGrades+' grade'+(totGrades!==1?'s':'')+' · '+totBunks+' bunk'+(totBunks!==1?'s':'')+'</p>':'')
         +'</div><div class="sec-actions">'
         +(divs.length>1?'<button class="me-btn me-btn--sec me-btn--sm" onclick="CampistryMe.setAllStructDivsOpen(true)">Expand all</button><button class="me-btn me-btn--sec me-btn--sm" onclick="CampistryMe.setAllStructDivsOpen(false)">Collapse all</button>':'')
-        +'<button class="me-btn me-btn--sec" onclick="CampistryMe.openQuickFillStructure()">⚡ Quick Fill</button>'
+        +'<button class="me-btn me-btn--sec" onclick="CampistryMe.openQuickFillUpload()">⚡ Quick Fill</button>'
         +'<button class="me-btn me-btn--pri" onclick="CampistryMe.addDiv()">+ Add Division</button></div></div>';
-    if(!divs.length){h+='<div class="me-empty"><h3>No divisions yet</h3><p>Create your camp structure to get started — divisions, grades, and bunks.</p><button class="me-btn me-btn--sec" onclick="CampistryMe.openQuickFillStructure()" style="margin-right:8px">⚡ Quick Fill from a spreadsheet</button><button class="me-btn me-btn--pri" onclick="CampistryMe.addDiv()">+ Add Division</button></div>'}
+    if(!divs.length){h+='<div class="me-empty"><h3>No divisions yet</h3><p>Create your camp structure to get started — divisions, grades, and bunks.</p><button class="me-btn me-btn--sec" onclick="CampistryMe.openQuickFillUpload()" style="margin-right:8px">⚡ Quick Fill from a spreadsheet</button><button class="me-btn me-btn--pri" onclick="CampistryMe.addDiv()">+ Add Division</button></div>'}
     else{
         h+='<div id="meDivList"><div style="font-size:.75rem;color:var(--s600);background:var(--me-bg);border:1px solid var(--me-border);border-radius:var(--r);padding:8px 12px;margin-bottom:10px"><strong>Order matters:</strong> Flow, the schedule grid, and print sheets all follow the order set here — set divisions up <strong>youngest to oldest, top to bottom</strong> (grades within a division the same way). Drag the ⋮⋮ handles or any chip to reorder in place.</div>';
         divs.forEach(function([dn,dd],ix){
@@ -7065,24 +7065,26 @@ function _wireBunkChip(chip){
 
 // Division create/edit
 /**
- * QUICK FILL — bulk camp structure from a real, editable spreadsheet grid.
+ * QUICK FILL — bulk camp structure from a downloaded/re-uploaded CSV.
  *
  * Clicking through Add Division -> Add Grade -> Add Bunk once per row of a
  * camp with a dozen divisions is the whole reason this exists. A camp that
  * already has its structure in a spreadsheet (which most do, going into
  * their first season) should be able to bring it in at once instead.
  *
- * A real grid, not a paste-into-a-textarea box: fixed columns (Division,
- * Grade, Bunk, Days Available), native copy/paste (select a range with the
- * mouse, Ctrl+C/Ctrl+V works because these are ordinary contenteditable
- * table cells — the browser's own table-aware clipboard handling does the
- * work), arrow-key/Tab/Enter navigation, and an Excel-style fill handle: a
- * small square at the bottom-right corner of the active cell that, dragged
- * down, copies that cell's value into every cell it passes over.
+ * An in-page editable grid was tried first and dropped: browsers' own
+ * contenteditable/table quirks (cursor placement, column sizing) kept
+ * surfacing bugs that a real spreadsheet app doesn't have. Instead: give
+ * the camp a template CSV with the columns already labeled (Division,
+ * Grade, Bunk, Days Available), let them fill it in Excel/Google Sheets/
+ * Numbers — actual spreadsheet software, with actual fill handles, actual
+ * copy/paste, actual undo — and upload the result back.
  *
- * Days Available accepts any mix of day names/abbreviations ("M,W,F" /
- * "Mon, Wed, Fri" / "Monday Wednesday Friday") — left blank means every day,
- * matching the app's existing "present all days" default.
+ * Days Available accepts any mix of day names/abbreviations ("M W F" /
+ * "Mon Wed Fri" / "Monday Wednesday Friday", space or semicolon separated
+ * so it can live inside one CSV cell without fighting the comma delimiter)
+ * — left blank means every day, matching the app's existing "present all
+ * days" default.
  *
  * Merges into the EXISTING structure rather than replacing it: a division/
  * grade already present gets new bunks appended (skipping exact-name
@@ -7090,286 +7092,70 @@ function _wireBunkChip(chip){
  * the camp's structure is ever deleted by this tool.
  */
 var QF_COLS=['Division','Grade','Bunk','Days Available'];
-var QF_START_ROWS=40;
-var QF_ADD_ROWS=25;
-var _qfActiveCell=null; // {row, col} of the last clicked/focused cell
+var _qfPendingResult=null;
 
-function openQuickFillStructure(){
-    var overlay=document.createElement('div');
-    overlay.id='qfOverlay';
-    overlay.style.cssText='position:fixed;inset:0;z-index:10500;background:#fff;display:flex;flex-direction:column';
-    overlay.innerHTML=
-        '<div style="flex-shrink:0;display:flex;align-items:center;justify-content:space-between;padding:16px 24px;border-bottom:1px solid var(--s200)">'
-          +'<div><h3 style="margin:0;font-size:1.15rem;font-weight:700;color:var(--s700)">⚡ Quick Fill Structure</h3>'
-          +'<p style="margin:2px 0 0;font-size:.78rem;color:var(--s500)">Type directly, or paste a range straight from Excel/Google Sheets — select a cell first, then Ctrl+V. Drag the small square at a cell\'s corner down to fill a column, just like Excel.</p></div>'
-          +'<button class="me-btn me-btn--ghost" onclick="CampistryMe._qfClose()">✕ Close</button>'
-        +'</div>'
-        +'<div style="flex:1;overflow:auto;padding:16px 24px" id="qfGridWrap"></div>'
-        +'<div id="qfPreviewBar" style="flex-shrink:0;padding:10px 24px;border-top:1px solid var(--s100);background:var(--s50);font-size:.82rem;color:var(--s600);display:none"></div>'
-        +'<div style="flex-shrink:0;display:flex;justify-content:space-between;align-items:center;gap:10px;padding:14px 24px;border-top:1px solid var(--s200)">'
-          +'<button class="me-btn me-btn--sec me-btn--sm" onclick="CampistryMe._qfAddRows()">+ Add '+QF_ADD_ROWS+' rows</button>'
-          +'<div style="display:flex;gap:10px;align-items:center">'
-            +'<span id="qfStatus" style="font-size:.82rem;color:var(--s400)"></span>'
-            +'<button class="me-btn me-btn--sec" onclick="CampistryMe._qfClose()">Cancel</button>'
-            +'<button class="me-btn me-btn--pri" onclick="CampistryMe._qfCreate()">Create Structure</button>'
-          +'</div>'
-        +'</div>';
-    document.body.appendChild(overlay);
-    _qfActiveCell=null;
-    _qfBuildGrid(QF_START_ROWS);
-    document.addEventListener('keydown',_qfKeyNav);
+function downloadQuickFillTemplate(){
+    var rows=[
+        QF_COLS,
+        ['Example: Seniors','Grade 8','Bunk 1','Mon Wed Fri'],
+        ['Example: Seniors','Grade 8','Bunk 2','']
+    ];
+    var csv=rows.map(function(r){return r.map(_qfCsvField).join(',')}).join('\r\n');
+    var blob=new Blob([csv],{type:'text/csv;charset=utf-8;'});
+    var url=URL.createObjectURL(blob);
+    var a=document.createElement('a');
+    a.href=url;a.download='campistry_structure_template.csv';
+    document.body.appendChild(a);a.click();document.body.removeChild(a);
+    setTimeout(function(){URL.revokeObjectURL(url)},1000);
 }
-function _qfClose(){
-    var ov=document.getElementById('qfOverlay');
-    if(ov)ov.remove();
-    document.removeEventListener('keydown',_qfKeyNav);
-}
-function _qfBuildGrid(rowCount){
-    var wrap=document.getElementById('qfGridWrap');
-    if(!wrap)return;
-    // table-layout:fixed + a <colgroup> pins every column to an exact width
-    // up front, and white-space:nowrap on each cell keeps a value from ever
-    // word-wrapping inside its cell (a real spreadsheet cell doesn't wrap
-    // either -- text just scrolls/clips) -- without both of these, some
-    // browsers shrink an auto-layout table's columns to fit whatever
-    // container width is available and then break long words letter by
-    // letter to force them to fit, which is what was happening here.
-    var colWidths=QF_COLS.map(function(c,ci){return ci===0?200:ci===3?220:200});
-    var html='<table id="qfTable" style="border-collapse:collapse;font-size:.84rem;table-layout:fixed;width:'+colWidths.reduce(function(a,b){return a+b},0)+'px">';
-    html+='<colgroup>'+colWidths.map(function(w){return '<col style="width:'+w+'px">'}).join('')+'</colgroup>';
-    html+='<thead><tr>'+QF_COLS.map(function(c,ci){
-        return '<th style="position:sticky;top:0;background:var(--s100);color:var(--s700);font-weight:700;text-align:left;padding:7px 10px;border:1px solid var(--s300);white-space:nowrap;overflow:hidden;text-overflow:ellipsis">'+esc(c)+'</th>';
-    }).join('')+'</tr></thead><tbody>';
-    for(var r=0;r<rowCount;r++){
-        html+='<tr>'+QF_COLS.map(function(c,ci){
-            return '<td class="qf-cell" data-row="'+r+'" data-col="'+ci+'" contenteditable="true" spellcheck="false" '
-                +'style="padding:5px 9px;border:1px solid var(--s200);position:relative;outline:none;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">'
-                +'<span class="qf-fill-handle" title="Drag to fill" style="display:none;position:absolute;right:-3px;bottom:-3px;width:7px;height:7px;background:var(--me,#0f766e);cursor:crosshair;border:1px solid #fff"></span>'
-                +'</td>';
-        }).join('')+'</tr>';
-    }
-    html+='</tbody></table>';
-    wrap.innerHTML=html;
-    _qfWireGrid();
-}
-function _qfWireGrid(){
-    var table=document.getElementById('qfTable');
-    if(!table)return;
-    var cells=table.querySelectorAll('.qf-cell');
-    cells.forEach(function(cell){
-        cell.addEventListener('focus',function(){_qfSetActive(cell);cell.style.overflow='visible'});
-        cell.addEventListener('blur',function(){cell.style.overflow='hidden'});
-        // A single click should drop you straight into typing, the way a
-        // spreadsheet cell does -- most browsers already focus + place the
-        // caret on a plain click, but an empty contenteditable <td> whose
-        // only child is the (hidden) fill-handle span confuses some
-        // browsers into needing a second click, so force it explicitly.
-        cell.addEventListener('click',function(){
-            _qfSetActive(cell);
-            if(document.activeElement!==cell)cell.focus();
-            _qfPlaceCaretEnd(cell);
-        });
-        cell.addEventListener('paste',_qfHandlePaste);
-        cell.addEventListener('input',_qfPreviewGrid);
-    });
-    var handles=table.querySelectorAll('.qf-fill-handle');
-    handles.forEach(function(h){
-        h.addEventListener('mousedown',_qfFillStart);
-    });
-}
-function _qfPlaceCaretEnd(cell){
-    var sel=window.getSelection();
-    if(!sel)return;
-    if(sel.rangeCount&&cell.contains(sel.anchorNode)&&sel.anchorNode!==cell.querySelector('.qf-fill-handle'))return; // already has a caret inside
-    var range=document.createRange();
-    range.selectNodeContents(cell);
-    range.collapse(false);
-    sel.removeAllRanges();
-    sel.addRange(range);
-}
-function _qfSetActive(cell){
-    var table=document.getElementById('qfTable');
-    if(table)table.querySelectorAll('.qf-fill-handle').forEach(function(h){h.style.display='none'});
-    _qfActiveCell={row:parseInt(cell.dataset.row,10),col:parseInt(cell.dataset.col,10)};
-    var handle=cell.querySelector('.qf-fill-handle');
-    if(handle)handle.style.display='block';
-    cell.style.boxShadow='inset 0 0 0 2px var(--me,#0f766e)';
-    table.querySelectorAll('.qf-cell').forEach(function(c){if(c!==cell)c.style.boxShadow='none'});
-}
-function _qfCell(row,col){
-    return document.querySelector('.qf-cell[data-row="'+row+'"][data-col="'+col+'"]');
-}
-function _qfCellText(row,col){
-    var c=_qfCell(row,col);
-    if(!c)return '';
-    // Strip the fill-handle span out of the read value -- it's a UI element
-    // living inside the same contenteditable cell, not part of the data.
-    var clone=c.cloneNode(true);
-    var handle=clone.querySelector('.qf-fill-handle');
-    if(handle)handle.remove();
-    return (clone.textContent||'').trim();
-}
-function _qfSetCellText(row,col,text){
-    var c=_qfCell(row,col);
-    if(!c)return;
-    c.innerHTML='';
-    c.appendChild(document.createTextNode(text||''));
-    var handle=document.createElement('span');
-    handle.className='qf-fill-handle';
-    handle.title='Drag to fill';
-    handle.style.cssText='display:none;position:absolute;right:-3px;bottom:-3px;width:7px;height:7px;background:var(--me,#0f766e);cursor:crosshair;border:1px solid #fff';
-    handle.addEventListener('mousedown',_qfFillStart);
-    c.appendChild(handle);
+function _qfCsvField(v){
+    v=String(v==null?'':v);
+    return /[",\r\n]/.test(v)?'"'+v.replace(/"/g,'""')+'"':v;
 }
 
-// Pasting a multi-cell range: the browser hands the whole range over as one
-// tab/newline-separated blob on ANY single cell's paste event (there is no
-// per-cell paste event for a multi-cell range in a plain contenteditable
-// grid) -- so this always intercepts, splits it apart, and writes it across
-// the grid starting at whichever cell has focus, growing the grid with more
-// rows first if the pasted range runs past what's currently rendered.
-function _qfHandlePaste(e){
-    e.preventDefault();
-    var text=(e.clipboardData||window.clipboardData).getData('text');
-    if(!text)return;
-    var startRow=parseInt(e.currentTarget.dataset.row,10),startCol=parseInt(e.currentTarget.dataset.col,10);
-    var rows=text.replace(/\r\n/g,'\n').replace(/\r/g,'\n').split('\n');
-    while(rows.length&&rows[rows.length-1]===''){rows.pop()} // trailing blank line from the copy
-    var neededRows=startRow+rows.length;
-    var currentRows=document.querySelectorAll('#qfTable tbody tr').length;
-    if(neededRows>currentRows)_qfBuildGridPreserving(neededRows);
-    rows.forEach(function(line,ri){
-        var cols=line.split('\t');
-        cols.forEach(function(val,ci){
-            if(startCol+ci<QF_COLS.length)_qfSetCellText(startRow+ri,startCol+ci,val);
-        });
-    });
-    _qfPreviewGrid();
+function openQuickFillUpload(){
+    var body=
+        '<p style="font-size:.85rem;color:var(--s600);margin:0 0 14px;line-height:1.5">Download the template below, fill in one row per bunk in Excel/Google Sheets/Numbers, then upload it here. Divisions and grades that already exist just get new bunks added — nothing existing is overwritten or removed.</p>'
+        +'<button type="button" class="me-btn me-btn--sec" onclick="CampistryMe.downloadQuickFillTemplate()" style="margin-bottom:16px">⬇ Download Template (CSV)</button>'
+        +'<div class="fi-group"><label style="font-size:.8rem;font-weight:600;color:var(--s600);display:block;margin-bottom:6px">Upload filled-in CSV</label><input type="file" id="qfFileInput" accept=".csv,text/csv" class="fi" style="width:100%"></div>'
+        +'<div id="qfUploadPreview" style="margin-top:14px;font-size:.82rem;line-height:1.5;display:none"></div>';
+    _qfPendingResult=null;
+    showModal('Quick Fill Structure',body,function(){
+        if(!_qfPendingResult||!_qfPendingResult.rowCount){toast('Choose a filled-in CSV file first','error');return}
+        var res=_qfPendingResult;
+        _qfCommit(res);
+        closeModal('dynModal');
+        renderStructure();
+        toast('Added '+res.newDivs+' division'+(res.newDivs!==1?'s':'')+', '+res.newGrades+' grade'+(res.newGrades!==1?'s':'')+', '+res.newBunks+' bunk'+(res.newBunks!==1?'s':''));
+    },{saveLabel:'Create Structure'});
+    setTimeout(function(){
+        var inp=document.getElementById('qfFileInput');
+        if(inp)inp.addEventListener('change',_qfHandleFile);
+    },0);
+}
+function _qfHandleFile(e){
+    var file=e.target.files&&e.target.files[0];
+    var preview=document.getElementById('qfUploadPreview');
+    _qfPendingResult=null;
+    if(preview){preview.style.display='none';preview.innerHTML=''}
+    if(!file)return;
+    var reader=new FileReader();
+    reader.onload=function(){
+        var res=_qfParseCSV(String(reader.result||''));
+        if(!preview)return;
+        preview.style.display='block';
+        if(!res.rowCount){
+            preview.style.color='var(--err)';
+            preview.innerHTML='No valid rows found — make sure each row has at least a Division and a Grade filled in.';
+            return;
+        }
+        _qfPendingResult=res;
+        preview.style.color='var(--s600)';
+        preview.innerHTML='Will add: <strong>'+res.newDivs+'</strong> division'+(res.newDivs!==1?'s':'')+', <strong>'+res.newGrades+'</strong> grade'+(res.newGrades!==1?'s':'')+', <strong>'+res.newBunks+'</strong> bunk'+(res.newBunks!==1?'s':'')+'.';
+    };
+    reader.readAsText(file);
 }
 
-// Rebuilds the grid at a new (larger) row count without losing whatever's
-// already typed -- read every existing cell first, resize, write it back.
-function _qfBuildGridPreserving(newRowCount){
-    var oldRows=document.querySelectorAll('#qfTable tbody tr').length;
-    var snapshot=[];
-    for(var r=0;r<oldRows;r++){
-        var row=[];
-        for(var c=0;c<QF_COLS.length;c++)row.push(_qfCellText(r,c));
-        snapshot.push(row);
-    }
-    _qfBuildGrid(newRowCount);
-    snapshot.forEach(function(row,r){row.forEach(function(val,c){if(val)_qfSetCellText(r,c,val)})});
-}
-function _qfAddRows(){
-    var current=document.querySelectorAll('#qfTable tbody tr').length;
-    _qfBuildGridPreserving(current+QF_ADD_ROWS);
-}
-
-// Fill handle drag: mirrors Excel's corner-drag-to-copy exactly (copy, not
-// pattern/sequence detection -- "copy the value down" covers this form's
-// actual use case, repeating a Division/Grade name or a Days pattern down
-// many bunk rows, without the surprise of Excel's number-increment behavior
-// where it isn't wanted).
-var _qfFillState=null;
-function _qfFillStart(e){
-    e.preventDefault();e.stopPropagation();
-    var cell=e.target.closest('.qf-cell');
-    _qfFillState={col:parseInt(cell.dataset.col,10),startRow:parseInt(cell.dataset.row,10),value:_qfCellText(parseInt(cell.dataset.row,10),parseInt(cell.dataset.col,10)),lastRow:parseInt(cell.dataset.row,10)};
-    document.addEventListener('mousemove',_qfFillMove);
-    document.addEventListener('mouseup',_qfFillEnd);
-}
-function _qfFillMove(e){
-    if(!_qfFillState)return;
-    var el=document.elementFromPoint(e.clientX,e.clientY);
-    var cell=el&&el.closest?el.closest('.qf-cell'):null;
-    if(!cell||parseInt(cell.dataset.col,10)!==_qfFillState.col)return;
-    _qfFillState.lastRow=parseInt(cell.dataset.row,10);
-    // Live highlight of the range about to be filled.
-    document.querySelectorAll('.qf-cell').forEach(function(c){
-        var r=parseInt(c.dataset.row,10),cc=parseInt(c.dataset.col,10);
-        var inRange=cc===_qfFillState.col&&r>=Math.min(_qfFillState.startRow,_qfFillState.lastRow)&&r<=Math.max(_qfFillState.startRow,_qfFillState.lastRow);
-        c.style.background=inRange?'rgba(15,118,110,.08)':'';
-    });
-}
-function _qfFillEnd(){
-    if(_qfFillState){
-        var lo=Math.min(_qfFillState.startRow,_qfFillState.lastRow),hi=Math.max(_qfFillState.startRow,_qfFillState.lastRow);
-        for(var r=lo;r<=hi;r++){if(r!==_qfFillState.startRow)_qfSetCellText(r,_qfFillState.col,_qfFillState.value)}
-        document.querySelectorAll('.qf-cell').forEach(function(c){c.style.background=''});
-        _qfPreviewGrid();
-    }
-    _qfFillState=null;
-    document.removeEventListener('mousemove',_qfFillMove);
-    document.removeEventListener('mouseup',_qfFillEnd);
-}
-
-// Arrow keys / Tab / Enter move between cells the way a spreadsheet does --
-// without this, arrow keys would just move the text cursor within a cell's
-// own content, which is what a plain contenteditable does by default.
-function _qfKeyNav(e){
-    if(!_qfActiveCell)return;
-    var active=document.activeElement;
-    if(!active||!active.classList||!active.classList.contains('qf-cell'))return;
-    var row=_qfActiveCell.row,col=_qfActiveCell.col,moved=null;
-    if(e.key==='ArrowDown'){moved=[row+1,col]}
-    else if(e.key==='ArrowUp'){moved=[row-1,col]}
-    else if(e.key==='ArrowLeft'&&_qfCaretAtEdge(active,'start')){moved=[row,col-1]}
-    else if(e.key==='ArrowRight'&&_qfCaretAtEdge(active,'end')){moved=[row,col+1]}
-    else if(e.key==='Tab'){moved=[row,col+(e.shiftKey?-1:1)];e.preventDefault()}
-    else if(e.key==='Enter'){moved=[row+1,col];e.preventDefault()}
-    else if(e.key==='Escape'){active.blur();return}
-    else if((e.ctrlKey||e.metaKey)&&e.key==='Home'){moved=[0,0];e.preventDefault()}
-    else if((e.ctrlKey||e.metaKey)&&e.key==='End'){
-        var lastRow=document.querySelectorAll('#qfTable tbody tr').length-1;
-        moved=[lastRow,QF_COLS.length-1];e.preventDefault();
-    }
-    if(!moved)return;
-    var nr=moved[0],nc=moved[1];
-    if(nc<0||nc>=QF_COLS.length)return;
-    if(nr<0)return;
-    var currentRows=document.querySelectorAll('#qfTable tbody tr').length;
-    if(nr>=currentRows)_qfBuildGridPreserving(nr+5);
-    var next=_qfCell(nr,nc);
-    if(next){e.preventDefault();next.focus();_qfPlaceCaretEnd(next);_qfSetActive(next);_qfPreviewGrid()}
-}
-// Only hop to the next/previous cell on Left/Right when the caret is
-// already at that edge of the current cell's text -- otherwise Left/Right
-// just moves the caret through the cell's own content, like Excel's
-// in-cell edit mode.
-function _qfCaretAtEdge(cell,edge){
-    var sel=window.getSelection();
-    if(!sel||!sel.rangeCount||!cell.contains(sel.anchorNode))return true;
-    var range=sel.getRangeAt(0);
-    if(!range.collapsed)return false;
-    var full=document.createRange();
-    full.selectNodeContents(cell);
-    if(edge==='start'){
-        full.setEnd(range.startContainer,range.startOffset);
-        return full.toString().length===0;
-    }
-    full.setStart(range.startContainer,range.startOffset);
-    return full.toString().length===0;
-}
-
-/** Reads every cell in the grid and refreshes the bottom preview bar --
- *  called after any paste/fill/close-enough-to-commit action so the office
- *  sees the running total without opening a separate step. */
-function _qfPreviewGrid(){
-    var res=_qfReadGrid();
-    var bar=document.getElementById('qfPreviewBar');
-    if(!bar)return;
-    if(!res.rowCount){bar.style.display='none';return}
-    bar.style.display='block';
-    bar.innerHTML='Will add: <strong>'+res.newDivs+'</strong> division'+(res.newDivs!==1?'s':'')+', <strong>'+res.newGrades+'</strong> grade'+(res.newGrades!==1?'s':'')+', <strong>'+res.newBunks+'</strong> bunk'+(res.newBunks!==1?'s':'')+'.';
-}
-function _qfCreate(){
-    var res=_qfReadGrid();
-    if(!res.rowCount){toast('Fill in at least one row first (Division + Grade required)','error');return}
-    _qfCommit(res);
-    _qfClose();
-    renderStructure();
-    toast('Added '+res.newDivs+' division'+(res.newDivs!==1?'s':'')+', '+res.newGrades+' grade'+(res.newGrades!==1?'s':'')+', '+res.newBunks+' bunk'+(res.newBunks!==1?'s':''));
-}
 
 // Recognizes a day cell in any of the app's own shapes so a pasted sheet
 // doesn't have to match DM_DAYS' exact spelling: first 2-3 letters,
@@ -7405,20 +7191,50 @@ function _qfParseDays(cell){
     return out.length?out:null;
 }
 
-/** Pure read -- reads every cell in the live grid, never touches
- *  `structure`. Columns are fixed (Division, Grade, Bunk, Days Available),
- *  so unlike the old paste-a-blob version there's no header row to detect
- *  or column-order ambiguity to resolve. Returns
+// A small hand-rolled CSV parser -- handles quoted fields (so a value that
+// itself contains a comma or a newline survives round-tripping through
+// Excel/Sheets/Numbers, all of which quote such fields on export) without
+// pulling in a dependency for four columns of plain text.
+function _qfParseCSVLines(text){
+    var rows=[],row=[],field='',inQuotes=false;
+    text=text.replace(/\r\n/g,'\n').replace(/\r/g,'\n');
+    for(var i=0;i<text.length;i++){
+        var c=text[i];
+        if(inQuotes){
+            if(c==='"'){ if(text[i+1]==='"'){field+='"';i++} else inQuotes=false; }
+            else field+=c;
+        }else{
+            if(c==='"')inQuotes=true;
+            else if(c===','){row.push(field);field=''}
+            else if(c==='\n'){row.push(field);rows.push(row);row=[];field=''}
+            else field+=c;
+        }
+    }
+    row.push(field);rows.push(row);
+    return rows;
+}
+
+/** Pure parse -- reads the uploaded CSV's text, never touches `structure`.
+ *  Columns are fixed (Division, Grade, Bunk, Days Available); a header row
+ *  matching that is auto-detected and skipped, and the template's own
+ *  "Example: ..." rows are ignored. Returns
  *  {rowCount, newDivs, newGrades, newBunks, byDivision, divOrder}. */
-function _qfReadGrid(){
-    var rowCount0=document.querySelectorAll('#qfTable tbody tr').length;
+function _qfParseCSV(text){
+    var lines=_qfParseCSVLines(text||'').filter(function(r){return r.some(function(v){return (v||'').trim()!==''})});
     var byDivision={}; // name -> {grades: {name: {bunks:[], days:[]|null}}, order:[]}
     var divOrder=[],rowCount=0;
-    for(var r=0;r<rowCount0;r++){
-        var divName=_qfCellText(r,0),gradeName=_qfCellText(r,1);
-        if(!divName||!gradeName)continue; // a blank row in the grid -- skip, don't error the whole thing
-        var bunkName=_qfCellText(r,2);
-        var days=_qfParseDays(_qfCellText(r,3));
+    if(!lines.length)return {rowCount:0,byDivision:byDivision,divOrder:divOrder,newDivs:0,newGrades:0,newBunks:0};
+    var start=0;
+    var first=(lines[0][0]||'').trim().toLowerCase();
+    if(first==='division')start=1;
+    for(var r=start;r<lines.length;r++){
+        var row=lines[r];
+        var divName=(row[0]||'').trim();
+        if(!divName||/^example[:]/i.test(divName))continue; // blank row or the template's own example -- skip, don't error the whole thing
+        var gradeName=(row[1]||'').trim();
+        if(!gradeName)continue;
+        var bunkName=(row[2]||'').trim();
+        var days=_qfParseDays(row[3]||'');
         if(!byDivision[divName]){byDivision[divName]={grades:{},order:[]};divOrder.push(divName)}
         var dv=byDivision[divName];
         if(!dv.grades[gradeName]){dv.grades[gradeName]={bunks:[],days:days};dv.order.push(gradeName)}
@@ -23074,7 +22890,7 @@ window.CampistryMe={
     _colResizeStart:_colResizeStart,_colHeaderDragStart:_colHeaderDragStart,_colHeaderDragOver:_colHeaderDragOver,_colHeaderDrop:_colHeaderDrop,_colHeaderDragEnd:_colHeaderDragEnd,
     addSectionTextBlock:addSectionTextBlock,_richTextExec:_richTextExec,
     addDiv:function(){openDivForm(null)},editDiv:function(n){openDivForm(n)},deleteDiv:deleteDiv,
-    openQuickFillStructure:openQuickFillStructure,_qfClose:_qfClose,_qfAddRows:_qfAddRows,_qfCreate:_qfCreate,
+    openQuickFillUpload:openQuickFillUpload,downloadQuickFillTemplate:downloadQuickFillTemplate,
     openCsv:function(){openModal('csvModal')},downloadTemplate:downloadTemplate,
     finReconcileCharges:finReconcileCharges,
     _dpToggle:_dpToggle,_cpToggle:_cpToggle,_cfToggle:_cfToggle,_fbRetryPreview:_fbRetryPreview,markDepositPaid:markDepositPaid,chargeDepositNow:chargeDepositNow,
