@@ -1,5 +1,5 @@
 -- ============================================================================
--- Confirm migrations 222-256 are in and doing their job.
+-- Confirm migrations 222-257 are in and doing their job.
 --
 -- Paste the whole thing into the Supabase SQL Editor. It is READ ONLY — one
 -- SELECT, nothing is created, changed or deleted, and the two purge functions
@@ -443,7 +443,13 @@ UNION ALL
     ('256  faces, photo tags and forms go by camper number',
      CASE WHEN to_regprocedure('public.verify_rows_matched_by_number()') IS NULL THEN 'apply 256'
           WHEN public.verify_rows_matched_by_number() -> 'still_matching_rows_by_name_or_number' = '[]'::jsonb THEN 'ok'
-          ELSE 'STILL BY NAME: ' || (public.verify_rows_matched_by_number() ->> 'still_matching_rows_by_name_or_number') END)
+          ELSE 'STILL BY NAME: ' || (public.verify_rows_matched_by_number() ->> 'still_matching_rows_by_name_or_number') END),
+
+    -- For every camper, enrolled or departed: does their number come back to them?
+    ('257  every camper''s number reaches that camper',
+     CASE WHEN to_regprocedure('public.verify_number_round_trip()') IS NULL THEN 'apply 257'
+          WHEN public.verify_number_round_trip() -> 'numbers_that_miss_their_camper' = '[]'::jsonb THEN 'ok'
+          ELSE 'NUMBERS THAT MISS THEIR CAMPER: ' || (public.verify_number_round_trip() ->> 'numbers_that_miss_their_camper') END)
     ) AS x(item, result)
 
 UNION ALL

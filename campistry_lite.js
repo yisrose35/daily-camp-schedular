@@ -410,6 +410,11 @@
                 ? app1.divisionOrder
                 : (Array.isArray(app1.manualColumnOrder) ? app1.manualColumnOrder : []);
             camp.roster = app1.camperRoster || {};
+            // Every call Lite makes that names a camper carries their number too
+            // (campistry_camper_id_rpc.js). Lite does not use the staff pages'
+            // local settings, so it hands the lookup the roster it just read —
+            // the full one, not the "here today" filter below.
+            window.__camperIdRoster = camp.roster;
             // WHO IS ACTUALLY HERE. A counsellor's bunk list, the medication
             // list and every head count on this page were showing campers who
             // have not arrived yet, because `unenrolled` is a hand-set flag and
@@ -606,8 +611,11 @@
         const fresh = await loadHealth(true);
         const hd = Object.assign({ dispensingLog: [], sickVisits: [], doctorVisits: [], bedwettingLog: [], medicalForms: {} }, fresh);
         if (!Array.isArray(hd.dispensingLog)) hd.dispensingLog = [];
+        const rc = (camp.rosterAll || camp.roster || {})[camperName] || {};
         hd.dispensingLog.push({
             camperName, medication, status: 'Given',
+            // The number identifies the child; the name is for reading.
+            camperId: /^\d+$/.test(String(rc.camperId || '')) ? Number(rc.camperId) : null,
             nurse: userName || 'Staff',
             timestamp: new Date().toISOString(),
             date: healthTodayISO(), time: healthNowTime()

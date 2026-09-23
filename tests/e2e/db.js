@@ -144,6 +144,7 @@ const MIGRATIONS = [
     '254_erasing_a_camper_frees_their_number',
     '255_a_parents_family_is_found_by_camper_number',
     '256_faces_and_photos_go_by_camper_number',
+    '257_a_number_reaches_its_own_camper',
 ];
 
 // The one thing the stubs deliberately get wrong for our purposes: they define

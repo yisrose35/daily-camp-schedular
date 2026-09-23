@@ -358,12 +358,41 @@ function _loadCanteenRows(then) {
     } catch (_) { then(null); }
 }
 
+// ── An account is found by its camper's NUMBER (Ted, TED-002) ─────────────────
+// The server keeps each account under the key it was opened with, and a rename
+// does not move that key (227: older sales that carry only a name are joined
+// through it). This page reads accounts by the camper's CURRENT roster key, so
+// a renamed child's account was not found — the page showed them an empty new
+// one. Each account the server sends carries camperId (245); here it is filed
+// under its camper's current key. Writes still reach the right row: every
+// canteen call carries the camper's number (campistry_camper_id_rpc.js).
+function _accountsUnderCurrentNames(accounts) {
+    if (!accounts || typeof accounts !== 'object') return accounts;
+    const keyOf = {};
+    try {
+        const roster = getRoster() || {};
+        Object.keys(roster).forEach(k => {
+            const id = roster[k] && roster[k].camperId;
+            if (id != null && /^\d+$/.test(String(id))) keyOf[String(id)] = k;
+        });
+    } catch (_) { return accounts; }
+    const out = Object.assign({}, accounts);
+    Object.keys(accounts).forEach(k => {
+        const a = accounts[k];
+        const cur = a && a.camperId != null ? keyOf[String(a.camperId)] : null;
+        if (!cur || cur === k || out[cur]) return;   // already right, or the key is taken
+        out[cur] = Object.assign({}, a, { accountKey: k });
+        delete out[k];
+    });
+    return out;
+}
+
 // Overlay the row-backed truth onto whatever the document gave us. The
 // document still owns inventory, POS configuration and the rest.
 function _overlayCanteenRows(target, done) {
     _loadCanteenRows(function (rows) {
         if (rows && target && typeof target === 'object') {
-            target.accounts = rows.accounts;
+            target.accounts = _accountsUnderCurrentNames(rows.accounts);
             target.transactions = rows.transactions;
             // The server sends a recent WINDOW of the ledger (migration 245),
             // not the season. Marking where it starts is what makes the

@@ -58,6 +58,12 @@
     // its roster, so every downstream list — medication sheets, allergy sheets,
     // the forms table — inherits it. A medication sheet listing a child who
     // arrives in three weeks is a sheet a nurse has to second-guess.
+    // The camper's number for a roster key, or null. Every record written below
+    // carries it: the number identifies the child, the name is for reading.
+    function camperIdOf(name) {
+        var g = readGlobal(), r = (g.app1 && g.app1.camperRoster) || {}, c = r[name] || {};
+        return /^\d+$/.test(String(c.camperId || '')) ? Number(c.camperId) : null;
+    }
     function getRoster()    { var g = readGlobal(), all = (g.app1 && g.app1.camperRoster) || {}, out = {};
         var P = window.CampistryPresence, gate = !!(P && P.hasDates());
         Object.keys(all).forEach(function(n){ if(all[n].unenrolled) return; if(gate && !P.isHere(n)) return; out[n] = all[n]; });
@@ -448,7 +454,7 @@ function _lbl(key) { return String(key == null ? '' : key).replace(/\s#\d+$/, ''
 
     function logDispensing(camperName, medName) {
         var hd = getHealth(); if (!hd.dispensingLog) hd.dispensingLog = [];
-        hd.dispensingLog.push({ camperName:camperName, medication:medName, status:'Given', nurse:nurse(), timestamp:new Date().toISOString(), date:todayISO(), time:nowTime() });
+        hd.dispensingLog.push({ camperName:camperName, camperId:camperIdOf(camperName), medication:medName, status:'Given', nurse:nurse(), timestamp:new Date().toISOString(), date:todayISO(), time:nowTime() });
         saveHealth(hd); toast(medName+' — Given to '+camperName,'ok'); renderDashboard(); renderMedications();
     }
 
@@ -462,7 +468,7 @@ function _lbl(key) { return String(key == null ? '' : key).replace(/\s#\d+$/, ''
         var temp = (document.getElementById('visitTemp')||{}).value||'';
         if (temp) complaint += ' ('+temp+'°F)';
         var hd = getHealth(); if (!hd.sickVisits) hd.sickVisits=[];
-        hd.sickVisits.push({ camperName:name, bunk:c.bunk||'', complaint:complaint, treatment:((document.getElementById('visitTreatment')||{}).value||'').trim(), disposition:(document.getElementById('visitDisposition')||{}).value||'', nurse:nurse(), date:todayISO(), time:nowTime(), timestamp:new Date().toISOString() });
+        hd.sickVisits.push({ camperName:name, camperId:camperIdOf(name), bunk:c.bunk||'', complaint:complaint, treatment:((document.getElementById('visitTreatment')||{}).value||'').trim(), disposition:(document.getElementById('visitDisposition')||{}).value||'', nurse:nurse(), date:todayISO(), time:nowTime(), timestamp:new Date().toISOString() });
         saveHealth(hd); closeModal('visitModal'); toast('Visit logged for '+name,'ok');
         renderDashboard(); renderSickVisits();
         // clear form
@@ -476,7 +482,7 @@ function _lbl(key) { return String(key == null ? '' : key).replace(/\s#\d+$/, ''
         var inp=document.getElementById('medCamperInput');
         if (!inp||!inp.value.trim()) { toast('Enter camper name','err'); return; }
         var hd=getHealth(); if(!hd.dispensingLog) hd.dispensingLog=[];
-        hd.dispensingLog.push({ camperName:inp.value.trim(), medication:(document.getElementById('medSelect')||{}).value||'', status:(document.getElementById('medStatus')||{}).value||'Given', nurse:nurse(), time:(document.getElementById('medTime')||{}).value||'', notes:((document.getElementById('medNotes')||{}).value||'').trim(), timestamp:new Date().toISOString(), date:todayISO() });
+        hd.dispensingLog.push({ camperName:inp.value.trim(), camperId:camperIdOf(inp.value.trim()), medication:(document.getElementById('medSelect')||{}).value||'', status:(document.getElementById('medStatus')||{}).value||'Given', nurse:nurse(), time:(document.getElementById('medTime')||{}).value||'', notes:((document.getElementById('medNotes')||{}).value||'').trim(), timestamp:new Date().toISOString(), date:todayISO() });
         saveHealth(hd); closeModal('medModal'); toast('Dispensing logged','ok'); renderDashboard(); renderMedications();
     }
 
