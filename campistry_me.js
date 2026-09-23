@@ -6959,7 +6959,16 @@ function _qfWireGrid(){
     var cells=table.querySelectorAll('.qf-cell');
     cells.forEach(function(cell){
         cell.addEventListener('focus',function(){_qfSetActive(cell)});
-        cell.addEventListener('click',function(){_qfSetActive(cell)});
+        // A single click should drop you straight into typing, the way a
+        // spreadsheet cell does -- most browsers already focus + place the
+        // caret on a plain click, but an empty contenteditable <td> whose
+        // only child is the (hidden) fill-handle span confuses some
+        // browsers into needing a second click, so force it explicitly.
+        cell.addEventListener('click',function(){
+            _qfSetActive(cell);
+            if(document.activeElement!==cell)cell.focus();
+            _qfPlaceCaretEnd(cell);
+        });
         cell.addEventListener('paste',_qfHandlePaste);
         cell.addEventListener('input',_qfPreviewGrid);
     });
@@ -6967,6 +6976,16 @@ function _qfWireGrid(){
     handles.forEach(function(h){
         h.addEventListener('mousedown',_qfFillStart);
     });
+}
+function _qfPlaceCaretEnd(cell){
+    var sel=window.getSelection();
+    if(!sel)return;
+    if(sel.rangeCount&&cell.contains(sel.anchorNode)&&sel.anchorNode!==cell.querySelector('.qf-fill-handle'))return; // already has a caret inside
+    var range=document.createRange();
+    range.selectNodeContents(cell);
+    range.collapse(false);
+    sel.removeAllRanges();
+    sel.addRange(range);
 }
 function _qfSetActive(cell){
     var table=document.getElementById('qfTable');
@@ -7094,8 +7113,16 @@ function _qfKeyNav(e){
     var row=_qfActiveCell.row,col=_qfActiveCell.col,moved=null;
     if(e.key==='ArrowDown'){moved=[row+1,col]}
     else if(e.key==='ArrowUp'){moved=[row-1,col]}
+    else if(e.key==='ArrowLeft'&&_qfCaretAtEdge(active,'start')){moved=[row,col-1]}
+    else if(e.key==='ArrowRight'&&_qfCaretAtEdge(active,'end')){moved=[row,col+1]}
     else if(e.key==='Tab'){moved=[row,col+(e.shiftKey?-1:1)];e.preventDefault()}
     else if(e.key==='Enter'){moved=[row+1,col];e.preventDefault()}
+    else if(e.key==='Escape'){active.blur();return}
+    else if((e.ctrlKey||e.metaKey)&&e.key==='Home'){moved=[0,0];e.preventDefault()}
+    else if((e.ctrlKey||e.metaKey)&&e.key==='End'){
+        var lastRow=document.querySelectorAll('#qfTable tbody tr').length-1;
+        moved=[lastRow,QF_COLS.length-1];e.preventDefault();
+    }
     if(!moved)return;
     var nr=moved[0],nc=moved[1];
     if(nc<0||nc>=QF_COLS.length)return;
@@ -7103,7 +7130,25 @@ function _qfKeyNav(e){
     var currentRows=document.querySelectorAll('#qfTable tbody tr').length;
     if(nr>=currentRows)_qfBuildGridPreserving(nr+5);
     var next=_qfCell(nr,nc);
-    if(next){e.preventDefault();next.focus();_qfSetActive(next);_qfPreviewGrid()}
+    if(next){e.preventDefault();next.focus();_qfPlaceCaretEnd(next);_qfSetActive(next);_qfPreviewGrid()}
+}
+// Only hop to the next/previous cell on Left/Right when the caret is
+// already at that edge of the current cell's text -- otherwise Left/Right
+// just moves the caret through the cell's own content, like Excel's
+// in-cell edit mode.
+function _qfCaretAtEdge(cell,edge){
+    var sel=window.getSelection();
+    if(!sel||!sel.rangeCount||!cell.contains(sel.anchorNode))return true;
+    var range=sel.getRangeAt(0);
+    if(!range.collapsed)return false;
+    var full=document.createRange();
+    full.selectNodeContents(cell);
+    if(edge==='start'){
+        full.setEnd(range.startContainer,range.startOffset);
+        return full.toString().length===0;
+    }
+    full.setStart(range.startContainer,range.startOffset);
+    return full.toString().length===0;
 }
 
 /** Reads every cell in the grid and refreshes the bottom preview bar --
