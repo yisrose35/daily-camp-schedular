@@ -6519,8 +6519,9 @@ function renderStructure(){
         +(divs.length?'<p class="sec-desc">'+divs.length+' division'+(divs.length!==1?'s':'')+' · '+totGrades+' grade'+(totGrades!==1?'s':'')+' · '+totBunks+' bunk'+(totBunks!==1?'s':'')+'</p>':'')
         +'</div><div class="sec-actions">'
         +(divs.length>1?'<button class="me-btn me-btn--sec me-btn--sm" onclick="CampistryMe.setAllStructDivsOpen(true)">Expand all</button><button class="me-btn me-btn--sec me-btn--sm" onclick="CampistryMe.setAllStructDivsOpen(false)">Collapse all</button>':'')
+        +'<button class="me-btn me-btn--sec" onclick="CampistryMe.openQuickFillStructure()">⚡ Quick Fill</button>'
         +'<button class="me-btn me-btn--pri" onclick="CampistryMe.addDiv()">+ Add Division</button></div></div>';
-    if(!divs.length){h+='<div class="me-empty"><h3>No divisions yet</h3><p>Create your camp structure to get started — divisions, grades, and bunks.</p><button class="me-btn me-btn--pri" onclick="CampistryMe.addDiv()">+ Add Division</button></div>'}
+    if(!divs.length){h+='<div class="me-empty"><h3>No divisions yet</h3><p>Create your camp structure to get started — divisions, grades, and bunks.</p><button class="me-btn me-btn--sec" onclick="CampistryMe.openQuickFillStructure()" style="margin-right:8px">⚡ Quick Fill from a spreadsheet</button><button class="me-btn me-btn--pri" onclick="CampistryMe.addDiv()">+ Add Division</button></div>'}
     else{
         h+='<div id="meDivList"><div style="font-size:.75rem;color:var(--s600);background:var(--me-bg);border:1px solid var(--me-border);border-radius:var(--r);padding:8px 12px;margin-bottom:10px"><strong>Order matters:</strong> Flow, the schedule grid, and print sheets all follow the order set here — set divisions up <strong>youngest to oldest, top to bottom</strong> (grades within a division the same way). Drag the ⋮⋮ handles or any chip to reorder in place.</div>';
         divs.forEach(function([dn,dd],ix){
@@ -6873,6 +6874,181 @@ function _wireBunkChip(chip){
 }
 
 // Division create/edit
+/**
+ * QUICK FILL — bulk camp structure from a pasted spreadsheet.
+ *
+ * Clicking through Add Division -> Add Grade -> Add Bunk once per row of a
+ * camp with a dozen divisions is the whole reason this exists. A camp that
+ * already has its structure in a spreadsheet (which most do, going into
+ * their first season) should be able to paste it in once instead.
+ *
+ * Format: a header row, then one row per BUNK (a grade with no bunks yet
+ * still gets a row with the Bunk cell left empty). Columns are matched by
+ * NAME, not position, so the sheet can be in any column order:
+ *   Division | Grade | Bunk | Days Available
+ * Days Available is optional and accepts any mix of day names/abbreviations
+ * ("M,W,F" / "Mon, Wed, Fri" / "Monday Wednesday Friday") — left blank means
+ * every day, matching the app's existing "present all days" default.
+ *
+ * Pasting straight from Excel/Sheets works as-is: a copied range pastes as
+ * tab-separated text into the textarea, which this parses the same as CSV.
+ *
+ * Merges into the EXISTING structure rather than replacing it: a division/
+ * grade already present gets new bunks appended (skipping exact-name
+ * duplicates); a new division/grade is created fresh. Nothing already in
+ * the camp's structure is ever deleted by this tool.
+ */
+function openQuickFillStructure(){
+    var h='<div class="me-modal-form">';
+    h+='<p style="font-size:.82rem;color:var(--s600);line-height:1.6;margin:0 0 12px">'
+      +'Copy a range from Excel/Google Sheets (or type it below) with these columns, in any order, then paste it in. '
+      +'One row per <strong>bunk</strong> — leave Bunk blank for a grade with no bunks yet. Days Available is optional; blank means every day.</p>';
+    h+='<div style="overflow-x:auto;margin-bottom:10px"><table style="width:100%;border-collapse:collapse;font-size:.78rem" id="qfExample">'
+      +'<thead><tr style="background:var(--s50)">'+['Division','Grade','Bunk','Days Available'].map(function(c){return '<th style="text-align:left;padding:6px 8px;border:1px solid var(--s200);font-weight:700;color:var(--s600)">'+c+'</th>'}).join('')+'</tr></thead>'
+      +'<tbody>'
+      +'<tr>'+['Seniors','1st Grade','Bunk 1','M,T,W,T,F'].map(function(c){return '<td style="padding:6px 8px;border:1px solid var(--s200);color:var(--s400)">'+esc(c)+'</td>'}).join('')+'</tr>'
+      +'<tr>'+['Seniors','1st Grade','Bunk 2','M,T,W,T,F'].map(function(c){return '<td style="padding:6px 8px;border:1px solid var(--s200);color:var(--s400)">'+esc(c)+'</td>'}).join('')+'</tr>'
+      +'<tr>'+['Seniors','2nd Grade','Bunk 3',''].map(function(c){return '<td style="padding:6px 8px;border:1px solid var(--s200);color:var(--s400)">'+esc(c)+'</td>'}).join('')+'</tr>'
+      +'</tbody></table></div>';
+    h+='<div class="me-field"><label>Paste your sheet here</label>'
+      +'<textarea id="qfPaste" class="me-input" style="min-height:180px;font-family:monospace;font-size:.82rem;white-space:pre" placeholder="Division\tGrade\tBunk\tDays Available\nSeniors\t1st Grade\tBunk 1\tM,T,W,T,F" oninput="CampistryMe._qfPreview()"></textarea></div>';
+    h+='<div id="qfPreviewWrap" style="display:none">'
+      +'<div style="font-size:.72rem;font-weight:700;letter-spacing:.04em;text-transform:uppercase;color:var(--s500);margin:14px 0 6px">Preview</div>'
+      +'<div id="qfPreview" style="font-size:.82rem;color:var(--s700);line-height:1.6"></div>'
+      +'</div>';
+    h+='<div id="qfError" style="display:none;font-size:.82rem;color:var(--err);margin-top:8px"></div>';
+    h+='</div>';
+    showModal('Quick Fill Structure',h,function(){
+        var res=_qfParse((document.getElementById('qfPaste').value||''));
+        if(res.error){toast(res.error,'error');return}
+        if(!res.rowCount){toast('Paste at least one row first','error');return}
+        _qfCommit(res);
+        closeModal('dynModal');
+        renderStructure();
+        toast('Added '+res.newDivs+' division'+(res.newDivs!==1?'s':'')+', '+res.newGrades+' grade'+(res.newGrades!==1?'s':'')+', '+res.newBunks+' bunk'+(res.newBunks!==1?'s':''));
+    },{saveLabel:'Create Structure',maxWidth:760});
+}
+
+// Recognizes a day cell in any of the app's own shapes so a pasted sheet
+// doesn't have to match DM_DAYS' exact spelling: first 2-3 letters,
+// case-insensitive, is enough ("Mon"/"mon"/"M" -> Monday). Tuesday and
+// Thursday both start with "T", and a bare single-letter "T,T" (as in the
+// modal's own "M,T,W,T,F" example) can't be told apart by spelling alone --
+// `lastIdx` (the previously resolved day's position in DM_DAYS) is used to
+// pick whichever of the two comes NEXT in week order, so a run of single
+// letters resolves the way a human reads them: in sequence.
+function _qfMatchDay(token,lastIdx){
+    var t=(token||'').trim().toLowerCase();
+    if(!t)return -1;
+    if(t.charAt(0)==='t'&&t.length<=1){
+        // Ambiguous bare "T": Tuesday is index 2, Thursday is index 4.
+        // Pick Thursday only once we're already past Tuesday's slot.
+        return lastIdx>=2?4:2;
+    }
+    if(t==='th')return 4;
+    if(t==='tu')return 2;
+    for(var i=0;i<DM_DAYS.length;i++){
+        if(DM_DAYS[i].toLowerCase().indexOf(t)===0)return i;
+    }
+    return -1;
+}
+function _qfParseDays(cell){
+    if(!cell||!cell.trim())return null; // null = every day, same as the manual form's default
+    var tokens=cell.split(/[,/;]+|\s+/).filter(Boolean);
+    var out=[],lastIdx=-1;
+    tokens.forEach(function(tok){
+        var idx=_qfMatchDay(tok,lastIdx);
+        if(idx>=0){lastIdx=idx;if(out.indexOf(DM_DAYS[idx])<0)out.push(DM_DAYS[idx])}
+    });
+    return out.length?out:null;
+}
+
+/** Pure parse -- reads the pasted text, never touches `structure`. Returns
+ *  {error} or {rows, rowCount, newDivs, newGrades, newBunks, byDivision}. */
+function _qfParse(text){
+    var errBox=document.getElementById('qfError'),prevBox=document.getElementById('qfPreviewWrap');
+    if(errBox)errBox.style.display='none';
+    text=(text||'').trim();
+    if(!text)return {rowCount:0};
+    var lines=text.split(/\r\n|\r|\n/).filter(function(l){return l.trim()!==''});
+    if(!lines.length)return {rowCount:0};
+    var delim=lines[0].indexOf('\t')>=0?'\t':',';
+    var header=lines[0].split(delim).map(function(c){return c.trim().toLowerCase()});
+    var colIdx={division:-1,grade:-1,bunk:-1,days:-1};
+    header.forEach(function(c,i){
+        if(/division/.test(c))colIdx.division=i;
+        else if(/grade/.test(c))colIdx.grade=i;
+        else if(/bunk/.test(c))colIdx.bunk=i;
+        else if(/day/.test(c))colIdx.days=i;
+    });
+    if(colIdx.division<0||colIdx.grade<0){
+        var msg='Could not find a "Division" and "Grade" column in the first row — make sure the header row is included.';
+        if(errBox){errBox.textContent=msg;errBox.style.display='block'}
+        return {error:msg};
+    }
+    var byDivision={}; // name -> {grades: {name: {bunks:[], days:[]|null}}}
+    var divOrder=[],rowCount=0;
+    for(var li=1;li<lines.length;li++){
+        var cells=lines[li].split(delim).map(function(c){return c.trim()});
+        var divName=cells[colIdx.division]||'';
+        var gradeName=cells[colIdx.grade]||'';
+        if(!divName||!gradeName)continue; // a stray blank row from the sheet -- skip, don't error the whole paste
+        var bunkName=colIdx.bunk>=0?(cells[colIdx.bunk]||''):'';
+        var days=colIdx.days>=0?_qfParseDays(cells[colIdx.days]):null;
+        if(!byDivision[divName]){byDivision[divName]={grades:{},order:[]};divOrder.push(divName)}
+        var dv=byDivision[divName];
+        if(!dv.grades[gradeName]){dv.grades[gradeName]={bunks:[],days:days};dv.order.push(gradeName)}
+        else if(days&&!dv.grades[gradeName].days)dv.grades[gradeName].days=days; // first non-blank Days cell for a grade wins
+        if(bunkName&&dv.grades[gradeName].bunks.indexOf(bunkName)<0)dv.grades[gradeName].bunks.push(bunkName);
+        rowCount++;
+    }
+    // Preview + new-vs-existing counts, computed against the CURRENT structure
+    // so the office sees exactly what will change before committing.
+    var newDivs=0,newGrades=0,newBunks=0,previewHtml='';
+    divOrder.forEach(function(dn){
+        var existing=structure[dn];
+        if(!existing)newDivs++;
+        var gradeLines=[];
+        byDivision[dn].order.forEach(function(gn){
+            var g=byDivision[dn].grades[gn];
+            var existingGrade=existing&&existing.grades&&existing.grades[gn];
+            if(!existingGrade)newGrades++;
+            var existingBunks=(existingGrade&&existingGrade.bunks)||[];
+            var addBunks=g.bunks.filter(function(b){return existingBunks.indexOf(b)<0});
+            newBunks+=addBunks.length;
+            gradeLines.push('&nbsp;&nbsp;'+esc(gn)+(g.bunks.length?' — '+g.bunks.map(esc).join(', '):' <span style="color:var(--s400)">(no bunks)</span>')+(existingGrade?' <span style="color:var(--s400)">(existing grade)</span>':''));
+        });
+        previewHtml+='<div style="margin-bottom:6px"><strong>'+esc(dn)+'</strong>'+(existing?' <span style="color:var(--s400);font-size:.76rem">(existing division)</span>':' <span style="color:#059669;font-size:.76rem">(new)</span>')+'<br>'+gradeLines.join('<br>')+'</div>';
+    });
+    if(prevBox){
+        prevBox.style.display=rowCount?'block':'none';
+        var pv=document.getElementById('qfPreview');
+        if(pv)pv.innerHTML=previewHtml+'<div style="margin-top:8px;font-weight:600">Will add: '+newDivs+' division'+(newDivs!==1?'s':'')+', '+newGrades+' grade'+(newGrades!==1?'s':'')+', '+newBunks+' bunk'+(newBunks!==1?'s':'')+'.</div>';
+    }
+    return {rowCount:rowCount,byDivision:byDivision,divOrder:divOrder,newDivs:newDivs,newGrades:newGrades,newBunks:newBunks};
+}
+function _qfPreview(){ _qfParse(document.getElementById('qfPaste').value||''); }
+
+/** Writes the parsed result into `structure` and saves. Split from _qfParse
+ *  so the live preview (fired on every keystroke) never touches real data --
+ *  only the Create Structure button does. */
+function _qfCommit(res){
+    res.divOrder.forEach(function(dn){
+        if(!structure[dn])structure[dn]={color:COLORS[Object.keys(structure).length%COLORS.length],grades:{}};
+        var dv=structure[dn];
+        if(!dv.grades)dv.grades={};
+        res.byDivision[dn].order.forEach(function(gn){
+            var g=res.byDivision[dn].grades[gn];
+            if(!dv.grades[gn])dv.grades[gn]={bunks:[]};
+            var target=dv.grades[gn];
+            if(!target.bunks)target.bunks=[];
+            g.bunks.forEach(function(b){if(target.bunks.indexOf(b)<0)target.bunks.push(b)});
+            if(g.days&&!target.daysPresent)target.daysPresent=g.days;
+        });
+    });
+    save();
+}
+
 function openDivForm(name){
     editingDiv=name;
     var d=name?structure[name]:{color:COLORS[Object.keys(structure).length%COLORS.length],grades:{}};
@@ -6887,7 +7063,7 @@ function openDivForm(name){
 
     var h='<div style="display:grid;grid-template-columns:260px minmax(0,1fr);gap:24px;align-items:start" id="dmGrid">';
 
-    h+='<div>'
+    h+='<div style="border-right:1px solid var(--s100);padding-right:24px" id="dmLeftCol">'
         +'<div style="font-size:.72rem;font-weight:700;letter-spacing:.04em;text-transform:uppercase;color:var(--s500);margin-bottom:10px">The division</div>'
         +ff('Division Name','dmName',name||'')
         +'<div class="fg"><label class="fl">Colour</label><div class="swatch-row">';
@@ -6916,15 +7092,25 @@ function openDivForm(name){
 
     h+='</div>';
     document.getElementById('dmBody').innerHTML=h;
-    // One column on a narrow window: a 260px sidebar beside grade chips is
-    // worse than stacking once there is no room for both.
-    var _dmGrid=document.getElementById('dmGrid');
-    if(_dmGrid&&_dmGrid.clientWidth<720)_dmGrid.style.gridTemplateColumns='minmax(0,1fr)';
     var dmGrades=document.getElementById('dmGrades');
     _meReorderInit(dmGrades,'.dm-grade-row');
     dmGrades.querySelectorAll('.dm-grade-row').forEach(_wireGradeRow);
     document.getElementById('dmSave').onclick=saveDiv;
+    // ★ BUG FIX: this modal starts hidden, so #dmGrid had zero width at the
+    // moment this ran -- every division, on every screen, always measured
+    // "narrow" and collapsed to one column, which is why the two-column
+    // layout never actually appeared and the modal read as a single bare
+    // stack. openModal() must run FIRST so the grid has real, laid-out
+    // width to measure.
     openModal('divModal');
+    var _dmGrid=document.getElementById('dmGrid');
+    if(_dmGrid&&_dmGrid.clientWidth<720){
+        _dmGrid.style.gridTemplateColumns='minmax(0,1fr)';
+        // The divider between columns only makes sense side-by-side; stacked,
+        // it would read as a stray line under "The division" instead.
+        var _dmLeft=document.getElementById('dmLeftCol');
+        if(_dmLeft){_dmLeft.style.borderRight='none';_dmLeft.style.paddingRight='0';_dmLeft.style.marginBottom='18px';_dmLeft.style.paddingBottom='18px';_dmLeft.style.borderBottom='1px solid var(--s100)'}
+    }
 }
 function _addGradeRow(){
     var cont=document.getElementById('dmGrades');
@@ -22438,6 +22624,7 @@ window.CampistryMe={
     _colResizeStart:_colResizeStart,_colHeaderDragStart:_colHeaderDragStart,_colHeaderDragOver:_colHeaderDragOver,_colHeaderDrop:_colHeaderDrop,_colHeaderDragEnd:_colHeaderDragEnd,
     addSectionTextBlock:addSectionTextBlock,_richTextExec:_richTextExec,
     addDiv:function(){openDivForm(null)},editDiv:function(n){openDivForm(n)},deleteDiv:deleteDiv,
+    openQuickFillStructure:openQuickFillStructure,_qfPreview:_qfPreview,
     openCsv:function(){openModal('csvModal')},downloadTemplate:downloadTemplate,
     finReconcileCharges:finReconcileCharges,
     _dpToggle:_dpToggle,_cpToggle:_cpToggle,_cfToggle:_cfToggle,_fbRetryPreview:_fbRetryPreview,markDepositPaid:markDepositPaid,chargeDepositNow:chargeDepositNow,
