@@ -9,7 +9,8 @@
     "test:smoke": "node tests/money_path.e2e.js",
     "test:pg": "bash scripts/run_pgtests.sh",
     "test:scale": "node tests/scale_600.e2e.js",
-    "test:lite": "node tests/lite_health_numbers.e2e.js"
+    "test:lite": "node tests/lite_health_numbers.e2e.js",
+    "test:keys": "node tests/roster_keys.e2e.js"
   },
   "devDependencies": {
     "playwright": "^1.63.0"
