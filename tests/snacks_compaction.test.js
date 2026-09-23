@@ -528,11 +528,32 @@ test('archived history is rendered, never written back into the ledger', () => {
     assert.match(sourceOf(SNACKS, '_archivedHistoryHtml'), /if \(!w\) return '';/, 'no button until something is archived');
 });
 
+/**
+ * The date part of a `<file>?v=YYYYMMDD-NN` reference, compared against a floor.
+ *
+ * A cache-bust only ever moves forward, so "no older than" is the honest
+ * assertion: it proves the change shipped with a bump without freezing the value
+ * for everyone who bumps it next.
+ */
+function bustAtLeast(html, file, minDate) {
+    const m = html.match(new RegExp(file.replace('.', '\\.') + '\\?v=(\\d{8})'));
+    return !!m && m[1] >= minDate;
+}
+
 test('the settings card exists and the caches are busted', () => {
     const html = read('campistry_snacks.html');
     assert.match(html, /id="ledgerCompactBox"/);
-    assert.match(html, /campistry_snacks\.js\?v=20260922-219/);
-    assert.match(read('campistry_snacks_pos.html'), /campistry_snacks_pos\.js\?v=20260920-01/);
+    // NOT the literal version this shipped with. Pinning `?v=20260922-219` made
+    // this test a tripwire on every LATER bump — migration 240 changed
+    // campistry_snacks.js, the bump that ships it is mandatory, and this line then
+    // failed for doing the right thing. What the test actually wants is that the
+    // reference carries a cache-bust NO OLDER than the change it guards.
+    assert.ok(bustAtLeast(html, 'campistry_snacks.js', '20260922'),
+        'campistry_snacks.html must load campistry_snacks.js with a ?v= no older than '
+        + 'the compaction change, or a stale tab runs the ledger without it');
+    assert.ok(bustAtLeast(read('campistry_snacks_pos.html'), 'campistry_snacks_pos.js', '20260920'),
+        'campistry_snacks_pos.html must load campistry_snacks_pos.js with a ?v= no older '
+        + 'than the compaction change — the register shares the compaction block');
     assert.match(SNACKS, /loadPosPinStatus\(\);\s*\n\s*_renderCompactionCard\(\);/, 'rendered with the rest of Settings');
     assert.match(sourceOf(SNACKS, '_renderCompactionCard'), /min="7"/);
 });
