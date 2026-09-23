@@ -227,7 +227,7 @@ serve(async (req) => {
         xInvoice = row.reference;
         intent = {
           success: true, campId: row.camp_id, kind: row.kind, familyKey: row.family_key,
-          familyName: row.family_name, camperName: row.camper_name,
+          familyName: row.family_name, camperName: row.camper_name, camperId: row.person_id ?? null,
           // Sola does not echo xInvoice back, so this amount-matched path is
           // the NORMAL one for a hosted-checkout payment. Leaving this out
           // would resolve a registration deposit to an intent with no
@@ -465,6 +465,7 @@ serve(async (req) => {
       const { data: merged, error: mergeErr } = await service.rpc("merge_canteen_autoreload_card", {
         p_camp_id: campId,
         p_camper: String(intent.camperName || ""),
+        p_camper_id: intent.camperId ?? null,
         p_fields: {
           byopProcessor: "cardknox",
           byopCustomerRef: vaulted,
@@ -503,6 +504,7 @@ serve(async (req) => {
       const { data: creditResult, error: creditErr } = await service.rpc("credit_canteen_balance_from_processor", {
         p_camp_id: campId,
         p_camper_name: intent.camperName,
+        p_camper_id: intent.camperId ?? null,
         p_amount: intent.amountCents / 100,
         p_processor_key: "cardknox",
         p_external_transaction_id: xRefNum,

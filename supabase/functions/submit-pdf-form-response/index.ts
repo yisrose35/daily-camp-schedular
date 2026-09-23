@@ -45,6 +45,12 @@ function decodeBase64(b64: string): Uint8Array {
   return bytes;
 }
 
+
+/** A camper id (from the page, or from metadata), or null. */
+function camperIdIn(v: unknown): number | null {
+  return v != null && /^\d+$/.test(String(v)) ? Number(v) : null;
+}
+
 serve(async (req) => {
   if (req.method === "OPTIONS") return new Response("ok", { headers: corsHeaders });
 
@@ -65,7 +71,7 @@ serve(async (req) => {
     if (!userData?.user?.id) return json({ error: "unauthorized" }, 401);
 
     // Never trust the client's claim that this camper is theirs.
-    const { data: owns, error: ownErr } = await asUser.rpc("verify_my_camper", { p_camp_id: campId, p_camper_name: camperName });
+    const { data: owns, error: ownErr } = await asUser.rpc("verify_my_camper", { p_camp_id: campId, p_camper_name: camperName, p_camper_id: camperIdIn(camperId) });
     if (ownErr) throw new Error(ownErr.message);
     if (!owns) return json({ error: `"${camperName}" isn't linked to your account for this camp.` }, 403);
 
@@ -98,7 +104,7 @@ serve(async (req) => {
       p_form_name: String(formName || ""),
       p_mode: "digital",
       p_camper_name: String(camperName),
-      p_camper_id: camperId != null ? String(camperId) : null,
+      p_camper_id: camperIdIn(camperId) != null ? String(camperIdIn(camperId)) : null,
       p_answers: {},
       p_signature: null,
       p_file_name: null,

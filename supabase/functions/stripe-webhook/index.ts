@@ -61,6 +61,12 @@ import { Resend } from "npm:resend@2.0.0";
 // so a receipt that fails must never fail — or retry — the charge. send-payment-
 // receipt is idempotent on the payment reference, so several callers racing for
 // the same payment produce exactly one email.
+
+/** A camper id carried in Stripe metadata (always a string there), or null. */
+function camperIdIn(v: unknown): number | null {
+  return v != null && /^\d+$/.test(String(v)) ? Number(v) : null;
+}
+
 async function sendReceipt(o: Record<string, unknown>) {
   try {
     if (!SUPABASE_URL || !SUPABASE_SERVICE_KEY) return;
@@ -223,9 +229,12 @@ async function handleCanteenDeposit(
     console.error(`[stripe-webhook] canteen deposit ${pi.id} has no camperName in metadata — skipping`);
     return;
   }
+  // The camper's ID, when the page that started the checkout sent one (it is
+  // stamped into the metadata beside the name) — it decides who is credited.
   const { data, error } = await supabase.rpc("credit_canteen_balance_from_stripe", {
     p_camp_id: campId,
     p_camper_name: camperName,
+    p_camper_id: camperIdIn(meta.camperId),
     p_amount: (pi.amount || 0) / 100,
     p_payment_intent_id: pi.id,
   });
@@ -317,16 +326,22 @@ async function handleLinkPhotoPurchase(
   if (meta.kind === "facial_recognition") {
     let names: string[] = [];
     try { names = JSON.parse(meta.camperNames || "[]"); } catch { names = []; }
+    // Position for position with camperNames, when the checkout was given them.
+    let ids: unknown[] = [];
+    try { ids = JSON.parse(meta.camperIds || "[]"); } catch { ids = []; }
+    if (!Array.isArray(ids)) ids = [];
     if (!Array.isArray(names) || !names.length) {
       console.error(`[stripe-webhook] link photo purchase ${pi.id} missing camperNames in metadata — skipping`);
       return;
     }
-    for (const name of names) {
+    for (let ni = 0; ni < names.length; ni++) {
+      const name = names[ni];
       const { data, error } = await supabase.rpc("record_link_photo_purchase", {
         p_camp_id: campId,
         p_parent_user_id: meta.parentUserId,
         p_kind: "facial_recognition",
         p_camper_name: name,
+        p_camper_id: camperIdIn(ids[ni]),
         p_photo_id: null,
         p_amount_cents: FACIAL_RECOGNITION_FEE_CENTS, // per-camper share, NOT pi.amount (that's the whole batch)
         p_payment_intent_id: pi.id,
@@ -592,6 +607,7 @@ async function handleCanteenAutoReloadSetup(
   const { data: merged, error: mergeErr } = await supabase.rpc("merge_canteen_autoreload_card", {
     p_camp_id: campId,
     p_camper: camperName,
+    p_camper_id: camperIdIn(meta.camperId),
     // Only the card/attempt bookkeeping fields. The parent's trigger config
     // (enabled, threshold*, schedule*), set via set_canteen_auto_reload
     // (migration 109), is left untouched by merging rather than overwriting.

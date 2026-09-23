@@ -508,6 +508,16 @@ function kvRead(db, key) {
         check('no call came back with a database error', failed.length === 0,
             [...new Set(failed.map(c => (c.fn || c.table) + ': ' + c.error))].join(' | '));
 
+        // Every call the pages made that named a camper carried the camper's id
+        // too (campistry_camper_id_rpc.js, migration 248) — whatever page made it.
+        const byName = bridge.calls.filter(c => c.args
+            && (c.args.includes('p_camper_name') || c.args.includes('p_camper')));
+        const noId = byName.filter(c => !c.args.includes('p_camper_id'));
+        check('every call that named a camper also sent the camper id',
+            byName.length > 0 && noId.length === 0,
+            byName.length + ' calls named a camper' + (noId.length
+                ? '; without an id: ' + [...new Set(noId.map(c => c.fn))].join(', ') : ''));
+
         check('no uncaught page errors', pageErrors.length === 0,
             [...new Set(pageErrors)].slice(0, 5).join(' | '));
 

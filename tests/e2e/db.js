@@ -136,6 +136,10 @@ const MIGRATIONS = [
     '246_balances_read_payments_from_their_rows',
     '247_the_register_charges_a_person',
     '248_every_camper_function_takes_an_id',
+    '249_a_parent_knows_their_childrens_ids',
+    '250_canteen_refunds_can_read_what_they_refund',
+    '251_camper_mail_finds_the_camper_by_id',
+    '252_a_tip_cart_remembers_the_camper',
 ];
 
 // The one thing the stubs deliberately get wrong for our purposes: they define

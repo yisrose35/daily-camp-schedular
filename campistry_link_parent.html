@@ -4970,6 +4970,7 @@ window.addEventListener('storage', function(e) {
 <script src="campistry_face_engine_v2.js?v=20260909-01"></script>
 <script src="supabase-js@2.js?v=20260909-01"></script>
 <script>window.CAMPISTRY_INBOUND_DOMAIN=window.CAMPISTRY_INBOUND_DOMAIN||'inbound.campistry.org';</script>
+<script src="campistry_camper_id_rpc.js?v=20260923-01"></script>
 <script src="config.js?v=20260909-01"></script>
 <!-- pdf-lib + pdf.js (vendored) — fill-in-browser + stamp/flatten for PDF
      Forms (Forms & Documents → Complete Online → a sourceType:'pdf' form). -->
@@ -5005,6 +5006,46 @@ if (window.pdfjsLib) { window.pdfjsLib.GlobalWorkerOptions.workerSrc = 'pdfjs-di
     var db = supabase.createClient(cfg.url, cfg.anonKey);
     var urlToken = new URLSearchParams(window.location.search).get('invite') || '';
     window._parentDB = db; // shared with the fill-online module (script below)
+
+    // ── Every call that names a child carries the child's camper ID ─────────
+    // campistry_camper_id_rpc.js wraps rpc() once, so all ~50 call sites send
+    // p_camper_id without each having to. The ids are the ones stamped on this
+    // parent's own invites (get_my_camper_ids, migration 249), matched by camp
+    // and by the name the portal shows. Nothing is guessed: a child with no
+    // stamped id is sent by name, as before, through the server's own gates.
+    (function () {
+        if (!window.CampistryCamperIdRpc) return;
+        var raw = db.rpc.bind(db);
+        var mapP = null;
+        function load() {
+            if (mapP) return mapP;
+            mapP = Promise.resolve(raw('get_my_camper_ids', {})).then(function (res) {
+                var d = res && res.data, byCamp = {}, byName = {};
+                ((d && d.success && d.campers) || []).forEach(function (c) {
+                    if (c.camperId == null) return;
+                    byCamp[String(c.campId) + '|' + c.name] = c.camperId;
+                    // By name alone only when it is unambiguous across camps.
+                    byName[c.name] = (c.name in byName && byName[c.name] !== c.camperId) ? null : c.camperId;
+                });
+                // An empty answer (not signed in yet, or 249 not applied) is not
+                // cached: the next call asks again.
+                if (!Object.keys(byCamp).length) mapP = null;
+                return { byCamp: byCamp, byName: byName };
+            }, function () { mapP = null; return { byCamp: {}, byName: {} }; });
+            return mapP;
+        }
+        var resolve = function (campId, name) {
+            return load().then(function (m) {
+                var k = String(campId || '') + '|' + name;
+                if (campId && k in m.byCamp) return m.byCamp[k];
+                return m.byName[name] != null ? m.byName[name] : null;
+            });
+        };
+        window.CampistryCamperIdRpc.wrap(db, resolve);
+        // …and every edge-function request that names a child (card deposits,
+        // auto-reload setup, photo checkout, form uploads).
+        window.CampistryCamperIdRpc.wrapFetch(resolve);
+    })();
 
     // ── Cloud form-response bridge ────────────────────────────────────────────
     // Sends a submission to link_form_responses via the submit_link_form_response

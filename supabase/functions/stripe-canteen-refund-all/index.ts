@@ -121,9 +121,13 @@ type DepositRemainder = { paymentIntentId: string; remaining: number; timestamp:
 
 // Everything this camper's Stripe deposits can still be refunded from,
 // oldest first — same math as stripe-canteen-refund's per-request version.
-function depositsFor(camperName: string, transactions: Record<string, any>[]): DepositRemainder[] {
+function depositsFor(camperName: string, transactions: Record<string, any>[], camperId: number | null = null): DepositRemainder[] {
+  // By camper ID when the account has one (250): the account's key is the
+  // spelling at the time, and a renamed or same-named child shares spellings.
+  const mine = (t: Record<string, any>) => camperId != null && t.camperId != null
+    ? String(t.camperId) === String(camperId) : t.camper === camperName;
   return transactions
-    .filter((t) => t && t.camper === camperName && t.kind === "deposit" && t.method === "stripe" && t.stripePaymentIntentId)
+    .filter((t) => t && mine(t) && t.kind === "deposit" && t.method === "stripe" && t.stripePaymentIntentId)
     .map((dep) => {
       const refundedSoFar = transactions
         .filter((t) => t && t.kind === "refund" && t.stripePaymentIntentId === dep.stripePaymentIntentId)
@@ -140,8 +144,9 @@ async function refundOneCamper(
   camperName: string,
   walletAvailable: number,
   transactions: Record<string, any>[],
+  camperId: number | null = null,
 ): Promise<{ camperName: string; refunded: number; skipped?: string; error?: string }> {
-  const deposits = depositsFor(camperName, transactions);
+  const deposits = depositsFor(camperName, transactions, camperId);
   const stripeCapacity = round2(deposits.reduce((sum, d) => sum + d.remaining, 0));
   const targetAmount = round2(Math.min(walletAvailable, stripeCapacity));
 
@@ -176,6 +181,7 @@ async function refundOneCamper(
       const { error: creditErr } = await supabase.rpc("refund_canteen_deposit_from_stripe", {
         p_camp_id: campId,
         p_camper_name: camperName,
+        p_camper_id: camperId,
         p_amount: chunk,
         p_payment_intent_id: dep.paymentIntentId,
         p_refund_id: refund.id,
@@ -218,7 +224,11 @@ serve(async (req) => {
     if (!authedCampId) return json({ error: "Only camp owners/admins can refund canteen balances." }, 403);
 
     const supabase = createClient(SUPABASE_URL, SUPABASE_SERVICE_KEY);
-    const { data: accountsData, error: acctErr } = await supabase.rpc("get_canteen_accounts", { p_camp_id: authedCampId });
+    // canteen_refund_view (migration 250), not get_canteen_accounts: that one
+    // decides what to show from the signed-in caller, which the service role is
+    // not — it answered not_authorized, so every refund stopped here — and its
+    // ledger is a 7-day window. This has every deposit, and each account's id.
+    const { data: accountsData, error: acctErr } = await supabase.rpc("canteen_refund_view", { p_camp_id: authedCampId });
     if (acctErr || !accountsData?.success) return json({ error: "Could not read canteen balances." }, 500);
 
     const accounts: Record<string, any> = accountsData.accounts || {};
@@ -228,7 +238,7 @@ serve(async (req) => {
       .map((camperName) => {
         const a = accounts[camperName] || {};
         const walletAvailable = Math.max(0, round2((Number(a.balance) || 0) - (Number(a.balanceFloor) || 0)));
-        return { camperName, walletAvailable };
+        return { camperName, walletAvailable, camperId: a.camperId != null ? Number(a.camperId) : null };
       })
       .filter((c) => c.walletAvailable > 0);
 
@@ -237,7 +247,7 @@ serve(async (req) => {
     }
 
     const results = await mapWithConcurrency(candidates, CONCURRENCY, (c) =>
-      refundOneCamper(supabase, authedCampId, c.camperName, c.walletAvailable, transactions)
+      refundOneCamper(supabase, authedCampId, c.camperName, c.walletAvailable, transactions, c.camperId)
     );
 
     let totalRefunded = 0, refundedCount = 0, skippedCount = 0, failedCount = 0;

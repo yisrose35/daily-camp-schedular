@@ -156,6 +156,7 @@ serve(async (req) => {
         const { data: merged, error: mergeErr } = await service.rpc("merge_canteen_autoreload_card", {
           p_camp_id: campId,
           p_camper: String(pending.camper_name),
+          p_camper_id: pending.person_id ?? null,
           p_fields: {
             byopProcessor: "banquest",
             byopCustomerRef: token,
@@ -250,6 +251,7 @@ serve(async (req) => {
       const creditRes = await service.rpc("credit_canteen_balance_from_processor", {
         p_camp_id: campId,
         p_camper_name: pending.camper_name,
+        p_camper_id: pending.person_id ?? null,
         p_amount: amount,
         p_processor_key: "banquest",
         p_external_transaction_id: referenceNumber,

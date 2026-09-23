@@ -27,7 +27,7 @@
 // added as its own combined "Card & platform fees" line item rather than
 // being split (arbitrarily) across recipients.
 //
-// Request:  { items: [{ campId, accountId, tipAmount, camperName? }, ...],
+// Request:  { items: [{ campId, accountId, tipAmount, camperName?, camperId? }, ...],
 //             parentName?, parentEmail? }
 //           (accountId = link_staff_accounts.id, from get_link_tip_targets;
 //           campId is per-item because a parent's cart can span camps)
@@ -78,6 +78,12 @@ async function stripePost(endpoint: string, body: Record<string, string>) {
     body: new URLSearchParams(body).toString(),
   });
   return resp.json();
+}
+
+
+/** A camper id (from the page, or from metadata), or null. */
+function camperIdIn(v: unknown): number | null {
+  return v != null && /^\d+$/.test(String(v)) ? Number(v) : null;
 }
 
 serve(async (req) => {
@@ -214,6 +220,8 @@ serve(async (req) => {
         staff_role: acct.role || "",
         stripe_account_id: acct.stripe_account_id,
         camper_name: it.camperName || null,
+        // The camper by ID (252); the webhook carries it to link_tips.
+        person_id: camperIdIn(it.camperId),
         parent_user_id: authUser.user.id,
         parent_name: parentName || null,
         parent_email: parentEmail || null,

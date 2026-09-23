@@ -57,13 +57,13 @@ async function campOwnsFamily(service: ReturnType<typeof createClient>, campId: 
   return !error && !!data && typeof data === "object";
 }
 
-async function campHasCamper(service: ReturnType<typeof createClient>, campId: string, camperName: string): Promise<boolean> {
+async function campHasCamper(service: ReturnType<typeof createClient>, campId: string, camperName: string, camperId: number | null = null): Promise<boolean> {
   // The canteen accounts are ROWS since 219, and the page strips `accounts`
   // out of every campistrySnacks document save — so reading the document said
   // "no such camper" for everyone, and every canteen card deposit was refused.
   // canteen_camper_known (migration 243) asks the roster and the account rows.
   const { data, error } = await service.rpc("canteen_camper_known", {
-    p_camp_id: campId, p_camper_name: camperName,
+    p_camp_id: campId, p_camper_name: camperName, p_camper_id: camperId,
   });
   if (error) {
     console.error("[campHasCamper] canteen_camper_known failed:", error.message);
@@ -72,11 +72,18 @@ async function campHasCamper(service: ReturnType<typeof createClient>, campId: s
   return data === true;
 }
 
+
+/** A camper id sent by the page (campistry_camper_id_rpc.js adds it), or null. */
+function camperIdIn(v: unknown): number | null {
+  return v != null && /^\d+$/.test(String(v)) ? Number(v) : null;
+}
+
 serve(async (req) => {
   if (req.method === "OPTIONS") return new Response("ok", { headers: corsHeaders });
 
   try {
-    const { campId, purpose, familyKey, camperName, amount, returnUrl, description } = await req.json();
+    const { campId, purpose, familyKey, camperName, camperId: bodyCamperId, amount, returnUrl, description } = await req.json();
+    const camperId = camperIdIn(bodyCamperId);
     if (!campId || !purpose || !returnUrl) {
       return json({ success: false, error: "campId, purpose, and returnUrl are required" }, 400);
     }
@@ -99,7 +106,7 @@ serve(async (req) => {
     // camperName, tuition autopay passes a familyKey.
     const isCamperScoped = purpose === "canteen" || (purpose === "save_card" && !!camperName);
     if (isCamperScoped) {
-      if (!camperName || !(await campHasCamper(service, campId, String(camperName)))) {
+      if (!camperName || !(await campHasCamper(service, campId, String(camperName), camperId))) {
         return json({ success: false, error: "Camper not found for this camp" }, 400);
       }
     } else {
@@ -166,6 +173,8 @@ serve(async (req) => {
       purpose,
       family_key: familyKey ? String(familyKey) : null,
       camper_name: camperName ? String(camperName) : null,
+      // The camper's ID, which payments-hosted-complete credits by (250).
+      person_id: camperName ? camperId : null,
       amount: purpose === "save_card" ? null : Number(Number(amount).toFixed(2)),
     });
     if (insErr) {

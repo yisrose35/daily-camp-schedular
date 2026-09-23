@@ -360,7 +360,9 @@ serve(async (req) => {
     }
     const campKey = String(a.camp_id);
     if (!byCamp.has(campKey)) byCamp.set(campKey, {});
-    byCamp.get(campKey)![String(a.camper_name)] = a.account || {};
+    // The camper's ID rides with the account, and every write below sends it.
+    byCamp.get(campKey)![String(a.camper_name)] = Object.assign({}, a.account || {},
+      { camperId: a.person_id != null ? Number(a.person_id) : null });
   }
   // The shape the loop below was written against: one entry per camp with an
   // accounts map. Kept so the charging logic is untouched by this change.
@@ -408,9 +410,9 @@ serve(async (req) => {
   // blob: on the Cardknox path credit_canteen_balance_from_processor has
   // already committed the balance+deposit to this row, and a full-blob upsert
   // of the pre-credit in-memory snapshot would erase it (confirmed live).
-  async function persistAr(campId: string, camperName: string, ar: Record<string, any>) {
+  async function persistAr(campId: string, camperName: string, ar: Record<string, any>, camperId: number | null = null) {
     const res = await supabase.rpc("update_canteen_autoreload_state", {
-      p_camp_id: campId, p_camper_name: camperName, p_autoreload: ar,
+      p_camp_id: campId, p_camper_name: camperName, p_camper_id: camperId, p_autoreload: ar,
     });
     if (res.error || !res.data?.success) {
       console.warn(`[canteen-auto-reload] autoReload-state write failed for ${campId}/${camperName}: ${res.error?.message || res.data?.error}`);
@@ -459,12 +461,13 @@ serve(async (req) => {
           markFailure(ar, today, res.error || "Declined");
           failed++;
           details.push({ camp: row.camp_id, camper: camperName, amount: due.amount, kind: due.kind, result: "failed", reason: res.error || "Declined" });
-          await persistAr(String(row.camp_id), camperName, ar);
+          await persistAr(String(row.camp_id), camperName, ar, acct.camperId ?? null);
           continue;
         }
         const creditRes = await supabase.rpc("credit_canteen_balance_from_processor", {
           p_camp_id: row.camp_id,
           p_camper_name: camperName,
+          p_camper_id: acct.camperId ?? null,
           p_amount: due.amount,
           p_processor_key: processorKey,
           p_external_transaction_id: res.externalTransactionId,
@@ -486,7 +489,7 @@ serve(async (req) => {
         details.push({ camp: row.camp_id, camper: camperName, amount: due.amount, kind: due.kind, result: "charged", processor: processorKey });
         // persist autoReload bookkeeping ONLY — the balance/deposit was
         // already committed by credit_canteen_balance_from_processor above.
-        await persistAr(String(row.camp_id), camperName, ar);
+        await persistAr(String(row.camp_id), camperName, ar, acct.camperId ?? null);
         continue;
       }
 
@@ -498,7 +501,7 @@ serve(async (req) => {
       const pi = await stripeCharge(
         ar.stripeCustomerId, ar.stripePaymentMethodId || null, due.amount,
         `${campNames.get(String(row.camp_id)) || "Camp"} — canteen auto-reload (${due.kind}), ${camperName}`,
-        { campId: String(row.camp_id), camperName, source: "campistry-canteen-deposit", auto: "true" },
+        { campId: String(row.camp_id), camperName, camperId: acct.camperId != null ? String(acct.camperId) : "", source: "campistry-canteen-deposit", auto: "true" },
         campDestinations.get(String(row.camp_id)) || null,
       );
 
@@ -507,7 +510,7 @@ serve(async (req) => {
         markFailure(ar, today, reason);
         failed++;
         details.push({ camp: row.camp_id, camper: camperName, amount: due.amount, kind: due.kind, result: "failed", reason });
-        await persistAr(String(row.camp_id), camperName, ar);
+        await persistAr(String(row.camp_id), camperName, ar, acct.camperId ?? null);
       } else if (pi.status === "succeeded" || pi.status === "processing") {
         // Balance crediting happens asynchronously via stripe-webhook's
         // handleCanteenDeposit once Stripe confirms payment_intent.succeeded
@@ -517,13 +520,13 @@ serve(async (req) => {
         // receipt for the same reason an instalment does. Keyed on the
         // PaymentIntent, so the webhook's copy and this one are one email.
         await sendReceipt({
-          campId: String(row.camp_id), camperName, ref: String(pi.id || ""),
+          campId: String(row.camp_id), camperName, camperId: acct.camperId ?? null, ref: String(pi.id || ""),
           amount: due.amount, when: today, method: "Card on file",
           what: "Canteen auto-reload (" + due.kind + ")",
         });
         charged++;
         details.push({ camp: row.camp_id, camper: camperName, amount: due.amount, kind: due.kind, result: "charged", stripeStatus: pi.status });
-        await persistAr(String(row.camp_id), camperName, ar);
+        await persistAr(String(row.camp_id), camperName, ar, acct.camperId ?? null);
       } else {
         details.push({ camp: row.camp_id, camper: camperName, amount: due.amount, kind: due.kind, result: pi.status });
       }

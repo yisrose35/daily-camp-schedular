@@ -179,13 +179,13 @@ async function getFamily(service: ReturnType<typeof createClient>, campId: strin
   if (error || !data || typeof data !== "object") return null;
   return data as Record<string, any>;
 }
-async function campHasCamper(service: ReturnType<typeof createClient>, campId: string, camperName: string) {
+async function campHasCamper(service: ReturnType<typeof createClient>, campId: string, camperName: string, camperId: number | null = null) {
   // The canteen accounts are ROWS since 219, and the page strips `accounts`
   // out of every campistrySnacks document save — so reading the document said
   // "no such camper" for everyone, and every canteen card deposit was refused.
   // canteen_camper_known (migration 243) asks the roster and the account rows.
   const { data, error } = await service.rpc("canteen_camper_known", {
-    p_camp_id: campId, p_camper_name: camperName,
+    p_camp_id: campId, p_camper_name: camperName, p_camper_id: camperId,
   });
   if (error) {
     console.error("[campHasCamper] canteen_camper_known failed:", error.message);
@@ -194,11 +194,18 @@ async function campHasCamper(service: ReturnType<typeof createClient>, campId: s
   return data === true;
 }
 
+
+/** A camper id sent by the page (campistry_camper_id_rpc.js adds it), or null. */
+function camperIdIn(v: unknown): number | null {
+  return v != null && /^\d+$/.test(String(v)) ? Number(v) : null;
+}
+
 serve(async (req) => {
   if (req.method === "OPTIONS") return new Response("ok", { headers: corsHeaders });
 
   try {
-    const { campId, kind, token, amount, familyKey, familyName, camperName, description, billing, card } = await req.json();
+    const { campId, kind, token, amount, familyKey, familyName, camperName, camperId: bodyCamperId, description, billing, card } = await req.json();
+    const camperId = camperIdIn(bodyCamperId);
     if (!campId || !kind || !token || !(Number(amount) > 0)) {
       return json({ success: false, error: "campId, kind, token, and a positive amount are required" }, 400);
     }
@@ -219,7 +226,7 @@ serve(async (req) => {
     // Confirm the subject exists under this camp before charging in its name.
     let fam: Record<string, any> | null = null;
     if (kind === "canteen_deposit") {
-      if (!camperName || !(await campHasCamper(service, campId, String(camperName)))) {
+      if (!camperName || !(await campHasCamper(service, campId, String(camperName), camperId))) {
         return json({ success: false, error: "Camper not found for this camp" }, 400);
       }
     } else {
@@ -266,6 +273,7 @@ serve(async (req) => {
       const creditRes = await service.rpc("credit_canteen_balance_from_processor", {
         p_camp_id: campId,
         p_camper_name: camperName,
+        p_camper_id: camperId,
         p_amount: charged,
         p_processor_key: "banquest",
         p_external_transaction_id: txnId,

@@ -1,5 +1,5 @@
 -- ============================================================================
--- Confirm migrations 222-248 are in and doing their job.
+-- Confirm migrations 222-252 are in and doing their job.
 --
 -- Paste the whole thing into the Supabase SQL Editor. It is READ ONLY — one
 -- SELECT, nothing is created, changed or deleted, and the two purge functions
@@ -387,7 +387,32 @@ UNION ALL
                  AND pg_get_function_identity_arguments(p.oid) ~ '\mp_camper(_name)?\M'
                  AND pg_get_function_identity_arguments(p.oid) !~ '(p_camper_id|p_person_id)'
                  AND p.proname !~ '__by_name$')
-          THEN 'ok' ELSE 'SOME FUNCTIONS STILL TAKE ONLY A NAME — apply 248' END)
+          THEN 'ok' ELSE 'SOME FUNCTIONS STILL TAKE ONLY A NAME — apply 248' END),
+
+    -- The parent portal can learn its children's ids, to send them.
+    ('249  a parent knows their children''s ids',
+     CASE WHEN to_regprocedure('public.get_my_camper_ids(uuid)') IS NOT NULL
+          THEN 'ok' ELSE 'THE PORTAL NAMES CHILDREN BY SPELLING — apply 249' END),
+
+    -- The refund functions (service role) can read what they refund.
+    ('250  canteen refunds can read what they refund',
+     CASE WHEN to_regprocedure('public.canteen_refund_view(uuid)') IS NOT NULL
+          THEN 'ok' ELSE 'EVERY CANTEEN REFUND FAILS — apply 250' END),
+
+    -- A coded letter finds the camper in camp_people, not a roster that is not there.
+    ('251  camper mail finds the camper by id',
+     CASE WHEN EXISTS (
+              SELECT 1 FROM pg_proc p JOIN pg_namespace n ON n.oid = p.pronamespace
+               WHERE n.nspname = 'public' AND p.proname = '_camper_mail_by_camper_number'
+                 AND p.prosrc ~ 'camp_people')
+          THEN 'ok' ELSE 'A LETTER WITH THE RIGHT CODE NEVER REACHES THE CAMPER — apply 251' END),
+
+    ('252  a tip cart remembers the camper',
+     CASE WHEN to_regclass('public.link_tip_cart_items') IS NULL OR EXISTS (
+              SELECT 1 FROM information_schema.columns
+               WHERE table_schema = 'public' AND table_name = 'link_tip_cart_items'
+                 AND column_name = 'person_id')
+          THEN 'ok' ELSE 'A CART TIP IS FILED BY NAME — apply 252' END)
     ) AS x(item, result)
 
 UNION ALL

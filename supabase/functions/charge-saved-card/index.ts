@@ -166,6 +166,12 @@ async function banquestCharge(creds: Record<string, string>, amountCents: number
   return { success: true, externalTransactionId: ref };
 }
 
+
+/** A camper id sent by the page (campistry_camper_id_rpc.js adds it), or null. */
+function camperIdIn(v: unknown): number | null {
+  return v != null && /^\d+$/.test(String(v)) ? Number(v) : null;
+}
+
 serve(async (req) => {
   if (req.method === "OPTIONS") return new Response("ok", { headers: corsHeaders });
 
@@ -174,7 +180,8 @@ serve(async (req) => {
     const jwt = authHeader.replace(/^Bearer\s+/i, "");
     if (!jwt) return json({ success: false, error: "Sign in required." }, 401);
 
-    const { campId, kind, camperName, amount, idempotencyKey, paymentMethodId } = await req.json();
+    const { campId, kind, camperName, camperId: bodyCamperId, amount, idempotencyKey, paymentMethodId } = await req.json();
+    const camperId = camperIdIn(bodyCamperId);
     if (!campId || !kind || !amount || !idempotencyKey) {
       return json({ success: false, error: "campId, kind, amount, and idempotencyKey are required" }, 400);
     }
@@ -364,6 +371,7 @@ serve(async (req) => {
       await service.rpc("credit_canteen_balance_from_processor", {
         p_camp_id: campId,
         p_camper_name: camperName,
+        p_camper_id: camperId,
         p_amount: amountCents / 100,
         p_processor_key: chargeProcessorKey,
         p_external_transaction_id: externalTransactionId,

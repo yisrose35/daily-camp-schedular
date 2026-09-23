@@ -151,6 +151,12 @@ function receiptHtml(o: {
 </div></body></html>`;
 }
 
+
+/** A camper id (from the page, or from metadata), or null. */
+function camperIdIn(v: unknown): number | null {
+  return v != null && /^\d+$/.test(String(v)) ? Number(v) : null;
+}
+
 Deno.serve(async (req: Request) => {
   if (req.method === "OPTIONS") return new Response("ok", { headers: corsHeaders });
   if (req.method !== "POST") return json({ error: "method_not_allowed" }, 405);
@@ -177,6 +183,7 @@ Deno.serve(async (req: Request) => {
       p_camp_id: campId,
       p_family_key: body.familyKey ? String(body.familyKey) : null,
       p_camper_name: body.camperName ? String(body.camperName) : null,
+      p_camper_id: camperIdIn(body.camperId),
       p_enroll_id: body.enrollmentId ? String(body.enrollmentId) : null,
     });
     const to = String(body.email || rcp?.email || "").trim();

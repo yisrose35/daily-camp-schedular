@@ -166,7 +166,7 @@ serve(async (req) => {
     const authedCampId = await callerCampId(req);
     if (!authedCampId) return json({ error: "Only camp owners/admins can refund a canteen deposit." }, 403);
 
-    const { camperName, amount, reason, idempotencyKey } = await req.json();
+    const { camperName, camperId: body_camperId, amount, reason, idempotencyKey } = await req.json();
     if (!camperName) return json({ error: "camperName is required" }, 400);
 
     const service = createClient(SUPABASE_URL, SUPABASE_SERVICE_KEY);
@@ -182,10 +182,23 @@ serve(async (req) => {
     const { data: credResult } = await service.rpc("_admin_get_processor_credential", { p_camp_id: authedCampId });
     if (!credResult?.success) return json({ error: credResult?.error || "This camp's processor isn't connected/verified yet." }, 400);
 
-    const { data: accountsData, error: acctErr } = await service.rpc("get_canteen_accounts", { p_camp_id: authedCampId });
+    // canteen_refund_view (migration 250), not get_canteen_accounts: that one
+    // decides what to show from the signed-in caller, which the service role is
+    // not — it answered not_authorized, so every refund stopped here — and its
+    // ledger is a 7-day window. This has every deposit, and each account's id.
+    const { data: accountsData, error: acctErr } = await service.rpc("canteen_refund_view", { p_camp_id: authedCampId });
     if (acctErr || !accountsData?.success) return json({ error: "Could not read canteen balance." }, 500);
 
-    const account = (accountsData.accounts || {})[camperName] || {};
+    // The camper by ID when the page sent one: the account's key is a spelling.
+    const reqCamperId = (body_camperId != null && /^\d+$/.test(String(body_camperId))) ? Number(body_camperId) : null;
+    const accountsAll: Record<string, any> = accountsData.accounts || {};
+    const account = (reqCamperId != null
+        ? Object.values(accountsAll).find((a: any) => a && String(a.camperId) === String(reqCamperId))
+        : null) || accountsAll[camperName] || {};
+    const camperId: number | null = reqCamperId != null ? reqCamperId
+        : (account.camperId != null ? Number(account.camperId) : null);
+    const mine = (t: Record<string, any>) => camperId != null && t.camperId != null
+        ? String(t.camperId) === String(camperId) : t.camper === camperName;
     const balance = Number(account.balance) || 0;
     const balanceFloor = Number(account.balanceFloor) || 0;
     const walletAvailable = Math.max(0, round2(balance - balanceFloor));
@@ -198,7 +211,7 @@ serve(async (req) => {
     // whatever's already been refunded from each one.
     const transactions: Record<string, any>[] = accountsData.transactions || [];
     const deposits = transactions
-      .filter((t) => t && t.camper === camperName && t.kind === "deposit" && t.method === processorKey && t.byopTransactionId)
+      .filter((t) => t && mine(t) && t.kind === "deposit" && t.method === processorKey && t.byopTransactionId)
       .map((dep) => {
         const refundedSoFar = transactions
           .filter((t) => t && t.kind === "refund" && t.byopTransactionId === dep.byopTransactionId)
@@ -286,6 +299,7 @@ serve(async (req) => {
         const { error: creditErr } = await service.rpc("refund_canteen_deposit_from_processor", {
           p_camp_id: authedCampId,
           p_camper_name: camperName,
+          p_camper_id: camperId,
           p_amount: chunk,
           p_processor_key: processorKey,
           p_external_transaction_id: dep.externalTransactionId,

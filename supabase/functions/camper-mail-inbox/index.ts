@@ -346,6 +346,8 @@ serve(async (req) => {
     p_camp_id: campId,
     p_fingerprint: fingerprint,
     p_camper_name: chosen ? chosen.name : "",
+    // The lookups answer with the camper's id (migration 251); it decides.
+    p_camper_id: chosen && chosen.camperId != null && /^\d+$/.test(String(chosen.camperId)) ? Number(chosen.camperId) : null,
     p_division: chosen ? chosen.division : "",
     p_grade: chosen ? chosen.grade : "",
     p_bunk: chosen ? chosen.bunk : "",

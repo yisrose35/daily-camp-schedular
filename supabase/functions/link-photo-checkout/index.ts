@@ -62,6 +62,12 @@ async function stripePost(endpoint: string, body: Record<string, string>) {
   return resp.json();
 }
 
+
+/** A camper id sent by the page (campistry_camper_id_rpc.js adds it), or null. */
+function camperIdIn(v: unknown): number | null {
+  return v != null && /^\d+$/.test(String(v)) ? Number(v) : null;
+}
+
 serve(async (req) => {
   if (req.method === "OPTIONS") return new Response("ok", { headers: corsHeaders });
 
@@ -71,7 +77,13 @@ serve(async (req) => {
     const jwt = (req.headers.get("Authorization") || "").replace(/^Bearer\s+/i, "");
     if (!jwt) return json({ error: "unauthorized" }, 401);
 
-    const { campId, kind, camperNames, photoId } = await req.json();
+    const { campId, kind, camperNames, camperIds, photoId } = await req.json();
+    // Position for position with camperNames (the portal adds them).
+    const idFor = (name: string): number | null => {
+      if (!Array.isArray(camperNames) || !Array.isArray(camperIds)) return null;
+      const i = (camperNames as string[]).indexOf(name);
+      return i >= 0 ? camperIdIn(camperIds[i]) : null;
+    };
     if (!campId || (kind !== "facial_recognition" && kind !== "hd_photo")) {
       return json({ error: "campId and a valid kind are required" }, 400);
     }
@@ -103,7 +115,7 @@ serve(async (req) => {
     // rather than silently dropping just that name.
     if (kind === "facial_recognition") {
       for (const name of camperNames as string[]) {
-        const { data: owns } = await asUser.rpc("verify_my_camper", { p_camp_id: campId, p_camper_name: name });
+        const { data: owns } = await asUser.rpc("verify_my_camper", { p_camp_id: campId, p_camper_name: name, p_camper_id: idFor(name) });
         if (!owns) return json({ error: `"${name}" isn't linked to your account for this camp.` }, 403);
       }
     } else {
@@ -135,6 +147,7 @@ serve(async (req) => {
       parentUserId: String(parentUserId),
       kind: String(kind),
       camperNames: kind === "facial_recognition" ? JSON.stringify(names) : "",
+      camperIds: kind === "facial_recognition" ? JSON.stringify(names.map(idFor)) : "",
       photoId: String(photoId || ""),
       source: "campistry-link-photo-purchase",
     };

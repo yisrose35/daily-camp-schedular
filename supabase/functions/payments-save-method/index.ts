@@ -190,13 +190,13 @@ function json(body: unknown, status = 200) {
 // or money-moving action never proceeds off campId alone; this only
 // confirms the family actually exists under that camp before writing
 // anything onto its record.
-async function campHasCamper(service: ReturnType<typeof createClient>, campId: string, camperName: string): Promise<boolean> {
+async function campHasCamper(service: ReturnType<typeof createClient>, campId: string, camperName: string, camperId: number | null = null): Promise<boolean> {
   // The canteen accounts are ROWS since 219, and the page strips `accounts`
   // out of every campistrySnacks document save — so reading the document said
   // "no such camper" for everyone, and every canteen card deposit was refused.
   // canteen_camper_known (migration 243) asks the roster and the account rows.
   const { data, error } = await service.rpc("canteen_camper_known", {
-    p_camp_id: campId, p_camper_name: camperName,
+    p_camp_id: campId, p_camper_name: camperName, p_camper_id: camperId,
   });
   if (error) {
     console.error("[campHasCamper] canteen_camper_known failed:", error.message);
@@ -211,11 +211,18 @@ async function campOwnsFamily(service: ReturnType<typeof createClient>, campId: 
   return !error && !!data && typeof data === "object";
 }
 
+
+/** A camper id sent by the page (campistry_camper_id_rpc.js adds it), or null. */
+function camperIdIn(v: unknown): number | null {
+  return v != null && /^\d+$/.test(String(v)) ? Number(v) : null;
+}
+
 serve(async (req) => {
   if (req.method === "OPTIONS") return new Response("ok", { headers: corsHeaders });
 
   try {
-    const { campId, familyKey, camperName, token, billing, card } = await req.json();
+    const { campId, familyKey, camperName, camperId: bodyCamperId, token, billing, card } = await req.json();
+    const camperId = camperIdIn(bodyCamperId);
     if (!campId || !token || !(familyKey || camperName)) {
       return json({ success: false, error: "campId, token, and one of familyKey / camperName are required" }, 400);
     }
@@ -226,7 +233,7 @@ serve(async (req) => {
     const service = createClient(SUPABASE_URL, SUPABASE_SERVICE_KEY);
 
     if (isCamperScoped) {
-      if (!(await campHasCamper(service, campId, String(camperName)))) {
+      if (!(await campHasCamper(service, campId, String(camperName), camperId))) {
         return json({ success: false, error: "Camper not found for this camp" }, 400);
       }
     } else if (!(await campOwnsFamily(service, campId, familyKey))) {
@@ -283,6 +290,7 @@ serve(async (req) => {
       const { data: merged, error: mergeErr } = await service.rpc("merge_canteen_autoreload_card", {
         p_camp_id: campId,
         p_camper: String(camperName),
+        p_camper_id: camperId,
         p_fields: {
           byopProcessor: processorKey,
           byopCustomerRef: saveResult.customerRef,

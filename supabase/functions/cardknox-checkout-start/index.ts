@@ -70,11 +70,17 @@ async function canteenProgramEnabled(service: ReturnType<typeof createClient>, c
   return !data || data.canteen_enabled !== false;
 }
 
+
+/** A camper id sent by the page (campistry_camper_id_rpc.js adds it), or null. */
+function camperIdIn(v: unknown): number | null {
+  return v != null && /^\d+$/.test(String(v)) ? Number(v) : null;
+}
+
 serve(async (req) => {
   if (req.method === "OPTIONS") return new Response("ok", { headers: corsHeaders });
 
   try {
-    const { campId, kind, familyKey, familyName, camperName, amount, description } = await req.json();
+    const { campId, kind, familyKey, familyName, camperName, camperId: bodyCamperId, amount, description } = await req.json();
     // card_save and canteen_autoreload_setup carry no amount — both are
     // Sola's cc:save, which tokenizes a card without charging (migration
     // 136): card_save is keyed to a FAMILY (tuition/autopay),
@@ -141,6 +147,8 @@ serve(async (req) => {
       p_family_key: familyKey || null,
       p_family_name: familyName || null,
       p_camper_name: camperName || null,
+      // Stored on the intent as person_id; cardknox-webhook credits by it.
+      p_camper_id: camperName ? camperIdIn(bodyCamperId) : null,
       p_amount_cents: amountCents,
       p_description: description || (kind === "card_save" ? ("Save a card — " + (familyName || familyKey))
         : kind === "canteen_autoreload_setup" ? ("Save a card for auto-reload — " + camperName)

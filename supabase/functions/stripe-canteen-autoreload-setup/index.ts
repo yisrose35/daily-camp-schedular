@@ -86,6 +86,12 @@ async function stripeGet(endpoint: string) {
   return resp.json();
 }
 
+
+/** A camper id sent by the page (campistry_camper_id_rpc.js adds it), or null. */
+function camperIdIn(v: unknown): number | null {
+  return v != null && /^\d+$/.test(String(v)) ? Number(v) : null;
+}
+
 serve(async (req) => {
   if (req.method === "OPTIONS") return new Response("ok", { headers: corsHeaders });
 
@@ -97,7 +103,7 @@ serve(async (req) => {
     }
 
     const {
-      campId, camperName, email, existingCustomerId, successUrl, cancelUrl,
+      campId, camperName, camperId, email, existingCustomerId, successUrl, cancelUrl,
     } = await req.json();
 
     if (!campId || !camperName) {
@@ -142,6 +148,9 @@ serve(async (req) => {
     const meta: Record<string, string> = {
       campId: String(campId),
       camperName: String(camperName),
+      // Beside the name, to stripe-webhook, which saves the card on this
+      // camper's account by ID.
+      camperId: camperIdIn(camperId) != null ? String(camperIdIn(camperId)) : "",
       source: "campistry-canteen-autoreload-setup",
     };
 

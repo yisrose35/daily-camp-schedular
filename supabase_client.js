@@ -29,6 +29,30 @@
 (function() {
     'use strict';
 
+    // ── Every call that names a camper carries their ID ─────────────────────
+    // campistry_camper_id_rpc.js (loaded before this file) wraps the client's
+    // rpc(); the id comes from the roster, which is keyed by exactly the names
+    // the staff pages send. See that file for what it will and will not do.
+    function _camperIdFromRoster(campId, name) {
+        try {
+            var g = (typeof window.loadGlobalSettings === 'function') ? window.loadGlobalSettings() : null;
+            var r = g && g.app1 && g.app1.camperRoster;
+            var c = r && r[name];
+            return (c && c.camperId != null && /^\d+$/.test(String(c.camperId))) ? c.camperId : null;
+        } catch (_) { return null; }
+    }
+    // Registered globally as well, so the module can wrap a client that was
+    // created before it loaded (pages that load this file dynamically).
+    window.__camperIdResolve = _camperIdFromRoster;
+    function _withCamperIds(client) {
+        if (client && window.CampistryCamperIdRpc) {
+            window.CampistryCamperIdRpc.wrap(client, _camperIdFromRoster);
+            window.CampistryCamperIdRpc.wrapFetch(_camperIdFromRoster);
+        }
+        return client;
+    }
+
+
     console.log('🔌 Campistry Supabase Client v5.3 loading...');
 
     // =========================================================================
@@ -115,14 +139,14 @@
                 });
                 
                 if (_client && _client.auth) {
-                    window.supabase = _client;
+                    window.supabase = _withCamperIds(_client);
                     log('✅ Supabase client created successfully');
                     return _client;
                 } else {
                     logError('Client created but auth is missing!', _client);
                 }
             } else if (window.supabase && window.supabase.auth) {
-                _client = window.supabase;
+                _client = _withCamperIds(window.supabase);
                 log('Using existing window.supabase client');
                 return _client;
             } else {
@@ -803,13 +827,13 @@
                 });
                 
                 if (_client && _client.auth) {
-                    window.supabase = _client;
+                    window.supabase = _withCamperIds(_client);
                     log('✅ Supabase client created successfully');
                 } else {
                     logError('Client created but auth is missing!', _client);
                 }
             } else if (window.supabase && window.supabase.auth) {
-                _client = window.supabase;
+                _client = _withCamperIds(window.supabase);
                 log('Using existing window.supabase client');
             } else {
                 logError('Supabase JS library not loaded. Expected supabase.createClient to be a function.');

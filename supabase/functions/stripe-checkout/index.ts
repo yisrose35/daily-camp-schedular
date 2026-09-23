@@ -150,6 +150,12 @@ async function stripePost(endpoint: string, body: Record<string, string>) {
   return resp.json();
 }
 
+
+/** A camper id sent by the page (campistry_camper_id_rpc.js adds it), or null. */
+function camperIdIn(v: unknown): number | null {
+  return v != null && /^\d+$/.test(String(v)) ? Number(v) : null;
+}
+
 serve(async (req) => {
   if (req.method === "OPTIONS") {
     return new Response("ok", { headers: corsHeaders });
@@ -165,7 +171,7 @@ serve(async (req) => {
 
     const {
       campId, familyKey, familyName, email, amount, description,
-      enrollmentId, successUrl, cancelUrl, source, camperName,
+      enrollmentId, successUrl, cancelUrl, source, camperName, camperId,
     } = await req.json();
 
     if (!amount || Number(amount) <= 0) {
@@ -230,6 +236,9 @@ serve(async (req) => {
       source: checkoutSource,
     };
     if (isCanteenDeposit) meta.camperName = String(camperName);
+    // The camper's ID travels to stripe-webhook beside the name, and decides
+    // who is credited when the payment lands.
+    if (isCanteenDeposit && camperIdIn(camperId) != null) meta.camperId = String(camperIdIn(camperId));
 
     const params: Record<string, string> = {
       "mode": "payment",

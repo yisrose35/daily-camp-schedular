@@ -235,6 +235,9 @@ async function handleTipSucceeded(supabase: ReturnType<typeof createClient>, pi:
     camp_id: meta.campId,
     user_id: meta.parentUserId || null,
     camper_name: meta.camperName || null,
+    // The id the checkout carried decides who the tip is from; without one the
+    // table's own trigger stamps it from the name (223).
+    person_id: camperIdIn(meta.camperId),
     parent_name: meta.parentName || null,
     parent_email: meta.parentEmail || null,
     recipient_name: meta.staffName || "",
@@ -339,6 +342,7 @@ async function handleTipCartSucceeded(supabase: ReturnType<typeof createClient>,
         camp_id: item.camp_id,
         user_id: item.parent_user_id,
         camper_name: item.camper_name,
+        person_id: item.person_id ?? null,
         parent_name: item.parent_name,
         parent_email: item.parent_email,
         recipient_name: item.staff_name,
@@ -392,6 +396,12 @@ async function handleTipCartSucceeded(supabase: ReturnType<typeof createClient>,
       }
     }
   }
+}
+
+
+/** A camper id (from the page, or from metadata), or null. */
+function camperIdIn(v: unknown): number | null {
+  return v != null && /^\d+$/.test(String(v)) ? Number(v) : null;
 }
 
 serve(async (req) => {
