@@ -1,19 +1,17 @@
 # Ted's ledger
 
 ## Last commit checked
-`19cb120` (2026-09-23)
+`bd61488` (2026-09-23)
 
 ## Open findings
 | ID | Severity | Description | Found | Status |
 |----|----------|-------------|-------|--------|
-| TED-023 | 🔴 | Any logged-in account can make itself a parent of any child at any camp: `upsert_parent_invite` (131) has no camp check and lets the caller pick the token. Before 260: by name, or every child with no names. 260 adds: by number alone (`camper_data.camperId`) | 2026-09-23 | Open (pre-existing; 260 widens it) |
-| TED-024 | 🟠 | 260's document carry walks each whole document once per recorded renumber: 200 renumbers in one save took 18.1 s (0.43 s without the new step); an old tab's save after 30 renumbers 2.9 s. Likely over Supabase's statement timeout, so the save fails and repeats | 2026-09-23 | Open |
-| TED-021 | 🟠 | Erased child: the roster entry is now dropped, but an old tab's save brings back his enrollments and payments; a new child given the freed number shows the erased child's $900 payment | 2026-09-23 | Open (changed) |
-| TED-025 | 🟡 | A renumber can never be undone: the page refuses the child's own old number and the server turns it back | 2026-09-23 | Open |
-| TED-026 | 🟡 | `split_renames` does not list a split child whose birthday was filled in during the rename edit (old record: email, no dob); the check says ok | 2026-09-23 | Open |
-| TED-027 | 🟡 | The server trusts a `renumberedFrom` hint on any entry; a leftover hint on another child re-points the old number to them (no page path found) | 2026-09-23 | Open (safety net) |
-| TED-002 | 🟡 | Camper-number transition not complete. Page inventory A = 0 (`--check` up to date). Remaining: TED-021/023/024; Go's `_camperId` is not carried by a renumber (Go-only camps) | 2026-09-23 | Open |
-| TED-005 | 🟠 | 14 auto-scheduler tests fail (`auto_full_day.test.js`); still 14 at 19cb120. Owner deferred. | 2026-09-23 | Open (deferred by owner) |
+| TED-028 | 🟠 | Any camp member (counselor, viewer) can become the parent of an unclaimed family: `get_camp_parent_invites` (032) hands every member all access codes; `claim_invite_by_code` (010) needs only the code. `set_parent_invite_email` (034) and `resolve_join_request` (032) also accept any member | 2026-09-23 | Open |
+| TED-021 | 🟠 | Erased child: fixed for erase → old tab saves → number reused. Still open for erase → number reused (Sara #2) → old tab saves: Sara gets his $900, enrollment and sick visit | 2026-09-23 | Open (narrower) |
+| TED-029 | 🟡 | `verify_identity_chain.sql` errors out ("verify_invite_numbers() does not exist") when 261 is applied before 260, as 261 recommends | 2026-09-23 | Open |
+| TED-030 | 🟡 | Scheduler with Me access: parent invite now refused by 261; page says "unknown. Run migration 011" (suspected; not checked in browser) | 2026-09-23 | Open (suspected) |
+| TED-002 | 🟡 | Camper-number transition not complete. Inventory A = 0 (`--check` up to date). Remaining: TED-021, TED-028; Go's `_camperId` not carried by a renumber (Go-only camps) | 2026-09-23 | Open |
+| TED-005 | 🟠 | 14 auto-scheduler tests fail (`auto_full_day.test.js`); still 14 at bd61488. Owner deferred. | 2026-09-23 | Open (deferred by owner) |
 
 ## Closed findings
 | ID | What it was | Closed | Proof |
@@ -37,12 +35,17 @@
 | TED-020 | Rename + renumber in one save split the child | 2026-09-23 | At 19cb120, scratch DB: one child #9, no departed #1, records moved, hint not stored; test:keys 4c passes. |
 | TED-011 | `split_renames` could pair a child with a removed sibling / abort camp-wide | 2026-09-23 | At 19cb120, scratch DB: sibling case repaired only the child; empty-record and twin cases went to needs_a_person. New gap filed as TED-026. |
 | TED-022 | CSV Update without ID matched only the plain-name key | 2026-09-23 | At 19cb120: test:keys 4d passes (no third Avi, his own key and number). |
+| TED-023 | Any logged-in account could write + claim an invitation for any child at any camp (`upsert_parent_invite`) | 2026-09-23 | At bd61488: 261 refuses non-office (stranger and counselor → `not_camp_office`); pgtest 261 fails with the 131 function swapped back in; 261 applies with and without 260, twice; 260 re-applied keeps the check. |
+| TED-024 | 260's document carry walked each document once per renumber (18.1 s save) | 2026-09-23 | At bd61488, my machine: 200 renumbers in one save 1.86 s, stale save 0.24 s (pgtest 260 §9). |
+| TED-025 | A renumber could not be undone | 2026-09-23 | At bd61488, scratch DB: 1→7→1 leaves one child #1, moves table `7→1`, records back on 1, a new "#7" child gets #3; test:keys 4e passes. |
+| TED-026 | `split_renames` missed a child whose birthday was entered in the rename edit | 2026-09-23 | At bd61488: pgtest 260 §11 (same shape as my case) passes: listed under needs_a_person, not repaired. |
+| TED-027 | A leftover `renumberedFrom` hint re-pointed the old number | 2026-09-23 | At bd61488: pgtest 260 §10 passes (Tova's hint moved nothing; `1→7` kept). |
 
 ## Areas audited
 | Area | Last deep audit |
 |------|-----------------|
 | Camper ID / camper number model (migrations 223-260, roster trigger, renumber, erase/merge, split repair, roster keys, invites, CSV import, Health entry) | 2026-09-23 (sixth pass) |
-| Parent invitations (`link_parent_invites`, `upsert_parent_invite`, claim functions, stamp trigger, `restamp_parent_invite`) | 2026-09-23 (numbers + who may write them) |
+| Parent invitations (`link_parent_invites`, `upsert_parent_invite`, claim functions, stamp trigger, `restamp_parent_invite`) | 2026-09-23 (numbers; who may write them; staff access to codes — TED-028) |
 | Me page cloud save (`integration_hooks.js` batch upsert) | 2026-09-23 (only against the renumber trigger) |
 | Auto Builder (solver, layers, grid) | never (only test results seen) |
 | Manual Builder | never |
@@ -65,3 +68,4 @@
 | 2026-09-23 | Audit: are we 100% on the camper ID number? | 81ace85 | unit 3270/14 · pg 48/0 · keys 13/0 · lite 9/0 · smoke 32/0 · scale 24/0 | 🔴 | [report](reports/2026-09-23-camper-id-100-percent.md) |
 | 2026-09-23 | Re-check TED-010..015 + hunt | 2330ff9 | unit 3270/14 · pg 49/0 · keys 17/0 · lite 12/0 · smoke 32/0 · scale 24/0 | 🔴 | [report](reports/2026-09-23-camper-id-recheck.md) |
 | 2026-09-23 | Check my work: reworked 260 (TED-011, 016-022) | 19cb120 | unit 3270/14 · pg 49/0 · keys 29/0 (×4) · lite 12/0 · smoke 32/0 · scale 24/0 | 🔴 | [report](reports/2026-09-23-camper-id-reworked-260.md) |
+| 2026-09-23 | Check my work: 261 + 260 repairs (TED-021, 023-027) | bd61488 | unit 3270/14 · pg 50/0 · keys 31/0 · lite 12/0 · smoke 32/0 · scale 24/0 | 🟡 | [report](reports/2026-09-23-camper-id-261-recheck.md) |
