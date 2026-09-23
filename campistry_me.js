@@ -7127,14 +7127,23 @@ function _qfClose(){
 function _qfBuildGrid(rowCount){
     var wrap=document.getElementById('qfGridWrap');
     if(!wrap)return;
-    var html='<table id="qfTable" style="border-collapse:collapse;font-size:.84rem;min-width:900px">';
+    // table-layout:fixed + a <colgroup> pins every column to an exact width
+    // up front, and white-space:nowrap on each cell keeps a value from ever
+    // word-wrapping inside its cell (a real spreadsheet cell doesn't wrap
+    // either -- text just scrolls/clips) -- without both of these, some
+    // browsers shrink an auto-layout table's columns to fit whatever
+    // container width is available and then break long words letter by
+    // letter to force them to fit, which is what was happening here.
+    var colWidths=QF_COLS.map(function(c,ci){return ci===0?200:ci===3?220:200});
+    var html='<table id="qfTable" style="border-collapse:collapse;font-size:.84rem;table-layout:fixed;width:'+colWidths.reduce(function(a,b){return a+b},0)+'px">';
+    html+='<colgroup>'+colWidths.map(function(w){return '<col style="width:'+w+'px">'}).join('')+'</colgroup>';
     html+='<thead><tr>'+QF_COLS.map(function(c,ci){
-        return '<th style="position:sticky;top:0;background:var(--s100);color:var(--s700);font-weight:700;text-align:left;padding:7px 10px;border:1px solid var(--s300);'+(ci===0?'width:200px':ci===3?'width:220px':'width:200px')+'">'+esc(c)+'</th>';
+        return '<th style="position:sticky;top:0;background:var(--s100);color:var(--s700);font-weight:700;text-align:left;padding:7px 10px;border:1px solid var(--s300);white-space:nowrap;overflow:hidden;text-overflow:ellipsis">'+esc(c)+'</th>';
     }).join('')+'</tr></thead><tbody>';
     for(var r=0;r<rowCount;r++){
         html+='<tr>'+QF_COLS.map(function(c,ci){
             return '<td class="qf-cell" data-row="'+r+'" data-col="'+ci+'" contenteditable="true" spellcheck="false" '
-                +'style="padding:5px 9px;border:1px solid var(--s200);position:relative;min-width:140px;outline:none">'
+                +'style="padding:5px 9px;border:1px solid var(--s200);position:relative;outline:none;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">'
                 +'<span class="qf-fill-handle" title="Drag to fill" style="display:none;position:absolute;right:-3px;bottom:-3px;width:7px;height:7px;background:var(--me,#0f766e);cursor:crosshair;border:1px solid #fff"></span>'
                 +'</td>';
         }).join('')+'</tr>';
@@ -7148,7 +7157,8 @@ function _qfWireGrid(){
     if(!table)return;
     var cells=table.querySelectorAll('.qf-cell');
     cells.forEach(function(cell){
-        cell.addEventListener('focus',function(){_qfSetActive(cell)});
+        cell.addEventListener('focus',function(){_qfSetActive(cell);cell.style.overflow='visible'});
+        cell.addEventListener('blur',function(){cell.style.overflow='hidden'});
         // A single click should drop you straight into typing, the way a
         // spreadsheet cell does -- most browsers already focus + place the
         // caret on a plain click, but an empty contenteditable <td> whose
