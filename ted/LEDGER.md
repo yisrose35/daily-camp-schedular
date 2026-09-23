@@ -1,22 +1,24 @@
 # Ted's ledger
 
 ## Last commit checked
-`10f4461` (2026-09-23)
+`50f96f6` (2026-09-23)
 
 ## Open findings
 | ID | Severity | Description | Found | Status |
 |----|----------|-------------|-------|--------|
-| TED-037 | 🟠 | A page forced to reload by the erase rule still sends its blocked save on the way out (beforeunload keepalive fetch to /rest/v1/camp_state_kv goes around the guard); test:keys step 6 can't see it (CSP blocks the fake URL) | 2026-09-23 | Open |
-| TED-038 | 🟠 | Campistry Lite's LITE_ASSET_VERSION not bumped: phones keep the old supabase_client.js with no erase guard, and Lite saves camp documents | 2026-09-23 | Open |
-| TED-039 | 🟠 | Verify script says 260 ok with last round's 260 (no cache version, parent-readable numbers, no _rosterSeen); the guard then silently does nothing | 2026-09-23 | Open |
-| TED-035 | 🟡 | Erased #2 reused on purpose + stale save: a record with only `camperId: 2` lands on the new child. Owner's rule (forced reload) built for the normal save; still reachable via TED-037/038 | 2026-09-23 | Open (depends on TED-037/038) |
-| TED-040 | 🟡 | Erase guard doesn't cover edge-function calls (canteen refund / auto-reload carry camperId) and allows other writes for up to 15 s | 2026-09-23 | Open (suspected) |
-| TED-041 | 🟡 | The erasing page's advance jumps to the newest version with Math.max, so it can skip the reload for another computer's erase a few seconds earlier | 2026-09-23 | Open (likely, code read) |
-| TED-005 | 🟠 | 14 auto-scheduler tests fail (`auto_full_day.test.js`); still 14 at 10f4461. Owner deferred. | 2026-09-23 | Open (deferred by owner) |
+| TED-040 | 🟡 | Erase guard: edge-function calls now checked afresh (verified with real supabase-js at 50f96f6); still open for other tables and RPCs (canteen sales, payments carry camperId), which check at most every 15 s | 2026-09-23 | Open (narrowed) |
+| TED-042 | 🟡 | Me page fires several erases/merges at once; if answers arrive out of order the erasing page reloads itself ("erased on another computer") and drops its last-moment edits | 2026-09-23 | Open (reload confirmed; frequency unmeasured) |
+| TED-043 | 🟡 | The new fetch guard lets a write through when the address is a URL object (`fetch(new URL(...), {method:'POST'})` → 200 while stale); no app code writes that way today | 2026-09-23 | Open |
+| TED-005 | 🟠 | 14 auto-scheduler tests fail (`auto_full_day.test.js`); still 14 at 50f96f6. Owner deferred. | 2026-09-23 | Open (deferred by owner) |
 
 ## Closed findings
 | ID | What it was | Closed | Proof |
 |----|-------------|--------|-------|
+| TED-037 | A page forced to reload still sent its old copy on the way out (beforeunload keepalive) | 2026-09-23 | At 50f96f6: my unchanged `v10/leak2.e2e.js` (network-layer recorder, real erase) → 0 requests past the guard, database unchanged; leaving 0/100/300 ms after save (`v11/leak3.e2e.js`) → 0; test:keys fails with the fix removed (1 of 37). |
+| TED-038 | Lite never loaded the guarded supabase_client.js | 2026-09-23 | At 50f96f6: `campistry_lite.html:137` `LITE_ASSET_VERSION = '20260923-08'`; Lite's saveKV goes through `window.supabase`; test:lite 12/12. Native Capacitor build is an owner step. |
+| TED-039 | Verify script said 260 ok on an earlier copy of 260 | 2026-09-23 | At 50f96f6 (`v11/v39.js`): full → ok; 260 from 189d36b and from b92dcdc → "run 260 again"; no 260 → "apply 260". |
+| TED-041 | Erasing page skipped the reload for another computer's erase (Math.max) | 2026-09-23 | At 50f96f6: test:keys fails with Math.max put back ("timed out waiting for the erasing page to reload"); real supabase-js run: 1 then 2 → no reload. Out-of-order follow-up filed as TED-042. |
+| TED-035 | Erased number reused + stale save could land a number-only record on the new child | 2026-09-23 | Under the owner's rule (reload with cleared cache; numbers reusable; money unlinked): TED-037/038 leaks closed with the proof above; residual 15 s window tracked under TED-040. |
 | TED-033 | A Me tab opened earlier removed children added since | 2026-09-23 | At 10f4461, scratch DB (`v10/t33.sql`): tab that saw only #1 saves → Sara #2 kept, edit kept, list not stored; added-before-erase case keeps Sara #3, Avi not back; seen-and-removed still removed; old page unchanged. |
 | TED-034 | Any parent could read every child's name + number via `get_camper_numbers` | 2026-09-23 | At 10f4461, scratch DB (`v10/tpar.sql`): parent → `{"success":false,"error":"not_authorized"}`; owner's erased list `{"2": true}`, no name. |
 | TED-036 | Verify 261 table check only looked for "scheduler" in one rule | 2026-09-23 | At 10f4461 (`v10/t36.js`): RLS off, extra `USING(camp_id = get_user_camp_id())` rule, opened parent rule → "run 261 again"; full build → ok. |
@@ -55,8 +57,8 @@
 ## Areas audited
 | Area | Last deep audit |
 |------|-----------------|
-| Camper ID / camper number model (migrations 223-260, roster trigger, renumber, erase/merge, split repair, roster keys, invites, CSV import, Health entry) | 2026-09-23 (tenth pass) |
-| Erase reload guard (`supabase_client.js` `_withEraseGuard`, camp_cache_epoch) | 2026-09-23 (browser run on scratch DB; Lite and edge functions by code read only) |
+| Camper ID / camper number model (migrations 223-260, roster trigger, renumber, erase/merge, split repair, roster keys, invites, CSV import, Health entry) | 2026-09-23 (eleventh pass) |
+| Erase reload guard (`supabase_client.js` `_withEraseGuard`, fetch guard, camp_cache_epoch) | 2026-09-23 (eleventh pass: Me page on scratch DB; guard with real supabase-js and fake server; Lite by code read; real edge functions never called) |
 | Parent invitations (`link_parent_invites`, `upsert_parent_invite`, claim functions, stamp trigger, `restamp_parent_invite`) | 2026-09-23 (numbers; who may write them; staff access to codes via RPC and table policy, re-checked as `authenticated` at b92dcdc) |
 | Me page cloud save (`integration_hooks.js` batch upsert) | 2026-09-23 (only against the renumber trigger) |
 | Auto Builder (solver, layers, grid) | never (only test results seen) |
@@ -84,3 +86,4 @@
 | 2026-09-23 | Check my work: TED-021, 028-030 fixes | 0909cee | unit 3270/14 · pg 50/0 · keys 31/0 · lite 12/0 · smoke 32/0 · scale 24/0 | 🔴 | [report](reports/2026-09-23-camper-id-ted028-recheck.md) |
 | 2026-09-23 | Check my work: TED-021, 028, 031, 032 fixes | b92dcdc | unit 3270/14 · pg 50/0 · keys 31/0 · lite 12/0 · smoke 32/0 · scale 24/0 | 🟡 | [report](reports/2026-09-23-camper-id-ninth-recheck.md) |
 | 2026-09-23 | Check my work: TED-033..036 fixes + erase reload rule | 10f4461 | unit 3270/14 · pg 50/0 · keys 34/0 · lite 12/0 · smoke 32/0 · scale 24/0 | 🟡 | [report](reports/2026-09-23-camper-id-tenth-recheck.md) |
+| 2026-09-23 | Check my work: TED-037..041 fixes | 50f96f6 | unit 3270/14 · pg 50/0 · keys 37/0 · lite 12/0 · smoke 32/0 · scale 24/0 | 🟡 | [report](reports/2026-09-23-camper-id-eleventh-recheck.md) |
