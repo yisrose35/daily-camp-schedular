@@ -1,5 +1,5 @@
 -- ============================================================================
--- Confirm migrations 222-237 are in and doing their job.
+-- Confirm migrations 222-238 are in and doing their job.
 --
 -- Paste the whole thing into the Supabase SQL Editor. It is READ ONLY — one
 -- SELECT, nothing is created, changed or deleted, and the two purge functions
@@ -241,7 +241,20 @@
                         WHERE n.nspname = 'public' AND p.proname = '_project_people'
                           AND p.prosrc ~ 'source_key = r\.k[^;]*deleted_at IS NULL'
                           AND p.prosrc ~ '_move_person_references')
-          THEN 'ok' ELSE 'A REUSED NAME STILL STEALS AN IDENTITY — re-apply 237' END)
+          THEN 'ok' ELSE 'A REUSED NAME STILL STEALS AN IDENTITY — re-apply 237' END),
+
+    ('238  the canteen ledger moves with the person',
+     CASE WHEN to_regprocedure('public._person_reference_columns()') IS NOT NULL
+           -- The ledger column, which no catalog rule can find: it is called
+           -- camper_id and it is text, and only 227's INSERT proves it holds a
+           -- person id.
+           AND EXISTS (SELECT 1 FROM public._person_reference_columns()
+                        WHERE table_name = 'canteen_transactions'
+                          AND column_name = 'camper_id' AND is_text)
+           -- and the discovered half did not get lost adding the named half
+           AND (SELECT count(*) FROM public._person_reference_columns()
+                 WHERE NOT is_text) >= 10
+          THEN 'ok' ELSE 'A RENUMBER STILL LEAVES THE LEDGER BEHIND — re-apply 238' END)
     ) AS t(item, result)
 
 UNION ALL
