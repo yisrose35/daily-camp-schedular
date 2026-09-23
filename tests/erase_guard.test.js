@@ -24,13 +24,17 @@ const fs = require('node:fs');
 const path = require('node:path');
 
 const SRC = fs.readFileSync(path.join(__dirname, '..', 'supabase_client.js'), 'utf8');
+// The camper-number layer every staff page loads before supabase_client.js:
+// it adds a child's number to a call that names them by name only.
+const ID_SRC = fs.readFileSync(path.join(__dirname, '..', 'campistry_camper_id_rpc.js'), 'utf8');
 const CAMP = 'c0000000-0000-0000-0000-000000000001';
 
 // A deferred promise: the test decides when an answer arrives.
 function later() { let resolve; const p = new Promise(r => { resolve = r; }); return { p, resolve }; }
 const tick = (ms) => new Promise(r => setTimeout(r, ms || 5));
 
-function boot() {
+function boot(opts) {
+    opts = opts || {};
     const store = { campistry_camp_id: CAMP };
     const localStorage = {
         getItem: k => (k in store ? store[k] : null), setItem: (k, v) => { store[k] = String(v); },
@@ -78,6 +82,11 @@ function boot() {
     };
     win.localStorage = localStorage; win.document = ctx.document;
     vm.createContext(ctx);
+    if (opts.idLayer) {
+        // The roster the number layer reads, as the staff pages register it.
+        win.__camperIdRoster = { 'Avi Gold': { camperId: 2 } };
+        vm.runInContext(ID_SRC, ctx);
+    }
     vm.runInContext(SRC, ctx);
     return { win, supa: win.supabase, server, sent, held, store };
 }
@@ -174,6 +183,24 @@ test('TED-044 (Ted\'s case): another computer erases before this page\'s own era
     const r = await save;
     assert.ok(!t.sent.slice(before).some(x => x.name === 'camp_state_kv'), 'the out-of-date save was sent');
     assert.ok(r && r.error, 'the save did not report that it was stopped');
+    await tick(700);
+    assert.ok(t.win.reloads >= 1, 'the page did not reload');
+});
+
+test('TED-046: a staff call that names a child by name only (the number layer adds the number) is checked BEFORE it is sent — after an erase elsewhere nothing goes out and the page reloads', async () => {
+    const t = boot({ idLayer: true });
+    assert.ok(t.win.CampistryCamperIdRpc, 'the camper-number layer did not load');
+    await t.supa.rpc('get_camper_numbers', { p_camp_id: CAMP });
+    // up to date: the call goes out, with the number added
+    await t.supa.rpc('resolve_photo_tag', { p_camp_id: CAMP, p_camper_name: 'Avi Gold', p_tag_id: 't1' });
+    const first = t.sent.filter(x => x.name === 'resolve_photo_tag');
+    assert.strictEqual(first.length, 1, 'an up-to-date call did not go out');
+    assert.strictEqual(first[0].args.p_camper_id, 2, 'the number layer did not add the child\'s number');
+    const before = t.sent.length;
+    t.server.epoch = 1;                        // another computer erases
+    const r = await t.supa.rpc('resolve_photo_tag', { p_camp_id: CAMP, p_camper_name: 'Avi Gold', p_tag_id: 't2' }).then(x => x);
+    assert.strictEqual(t.sent.length, before, 'the call was sent after an erase elsewhere');
+    assert.ok(r && r.error, 'the call did not report that it was stopped');
     await tick(700);
     assert.ok(t.win.reloads >= 1, 'the page did not reload');
 });

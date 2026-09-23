@@ -50,11 +50,16 @@
     // created before it loaded (pages that load this file dynamically).
     window.__camperIdResolve = _camperIdFromRoster;
     function _withCamperIds(client) {
+        // The erase guard goes on FIRST, so it sits closest to the network:
+        // the camper-number layer below adds a child's number to a call that
+        // names them and sends it at once — with the guard outside it, the
+        // call was already gone before the guard could check (TED-046).
+        client = _withEraseGuard(client);
         if (client && window.CampistryCamperIdRpc) {
             window.CampistryCamperIdRpc.wrap(client, _camperIdFromRoster);
             window.CampistryCamperIdRpc.wrapFetch(_camperIdFromRoster);
         }
-        return _withEraseGuard(client);
+        return client;
     }
 
     // ── After an erase or a merge, a page opened before it reloads ───────────
