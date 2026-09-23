@@ -38,6 +38,11 @@
             var g = (typeof window.loadGlobalSettings === 'function') ? window.loadGlobalSettings() : null;
             var r = g && g.app1 && g.app1.camperRoster;
             var c = r && r[name];
+            // A page that keeps its own copy of the roster (Campistry Lite reads
+            // app1 straight from the cloud) registers it here.
+            if (!c && window.__camperIdRoster && typeof window.__camperIdRoster === 'object') {
+                c = window.__camperIdRoster[name];
+            }
             return (c && c.camperId != null && /^\d+$/.test(String(c.camperId))) ? c.camperId : null;
         } catch (_) { return null; }
     }

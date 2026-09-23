@@ -133,6 +133,8 @@
     <script>
         // Non-blocking SDK loader (same pattern as flow.html): load the Supabase
         // SDK, then supabase_client.js in its onload so init order is guaranteed.
+        // Bump when any file in the chain below changes.
+        var LITE_ASSET_VERSION = '20260923-01';
         (function () {
             var s = document.createElement('script');
             // The native app (Capacitor) bundles its own copy: a CDN fetch at
@@ -175,7 +177,11 @@
                 (function next(i) {
                     if (i >= chain.length) return;
                     var t = document.createElement('script');
-                    t.src = chain[i];
+                    // Our own files carry a version so a phone that cached an old
+                    // copy fetches the new one after an update. CDN and bundled
+                    // library files are pinned by their names already.
+                    var own = !/^https?:/.test(chain[i]) && !/@/.test(chain[i]);
+                    t.src = own ? chain[i] + '?v=' + LITE_ASSET_VERSION : chain[i];
                     t.onload = function () { next(i + 1); };
                     t.onerror = function () {
                         console.error('[Lite] Failed to load ' + chain[i]);

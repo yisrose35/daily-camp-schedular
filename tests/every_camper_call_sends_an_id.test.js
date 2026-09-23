@@ -311,3 +311,50 @@ test('a number the page already sent is kept; an async resolver never blocks a w
     assert.ok(!('person_id' in c.writes[0].values));
     assert.strictEqual(c.writes[1].values.person_id, 42);
 });
+
+// ── Campistry Lite (Ted, TED-003) ───────────────────────────────────────────
+
+test('the staff lookup also reads a roster a page registers (Lite keeps its own)', () => {
+    const src = fs.readFileSync(path.join(REPO, 'supabase_client.js'), 'utf8');
+    const start = src.indexOf('function _camperIdFromRoster');
+    const end = src.indexOf('window.__camperIdResolve = _camperIdFromRoster');
+    const window = { __camperIdRoster: { 'Ayala Weiss': { camperId: 880 } } };
+    const fn = vm.runInNewContext('(' + src.slice(start, end).trim().replace(/;?\s*\/\/[^\n]*$/gm, '') + ')', { window, String });
+    assert.strictEqual(fn('c1', 'Ayala Weiss'), 880, 'Lite\'s roster is not consulted');
+    assert.strictEqual(fn('c1', 'Nobody'), null);
+    window.loadGlobalSettings = () => ({ app1: { camperRoster: { 'Ayala Weiss': { camperId: 5 } } } });
+    assert.strictEqual(fn('c1', 'Ayala Weiss'), 5, 'the page\'s own settings still come first');
+});
+
+test('Lite registers its roster for the lookup, and records medication by number', () => {
+    const lite = fs.readFileSync(path.join(REPO, 'campistry_lite.js'), 'utf8');
+    assert.match(lite, /window\.__camperIdRoster = camp\.roster;/);
+    assert.ok(lite.indexOf('window.__camperIdRoster = camp.roster;') < lite.indexOf('camp.rosterAll = camp.roster;'),
+        'the full roster must be registered before the "here today" filter narrows it');
+    const med = lite.slice(lite.indexOf('async function logMedGiven'), lite.indexOf('function healthTodayISO'));
+    assert.match(med, /camperId:/, 'a medication given from Lite is recorded by name only');
+});
+
+test('Lite loads every one of its own scripts with a version, and loads the number module', () => {
+    const html = fs.readFileSync(path.join(REPO, 'campistry_lite.html'), 'utf8');
+    assert.match(html, /var LITE_ASSET_VERSION = '\d{8}-\d{2}';/);
+    assert.match(html, /t\.src = own \? chain\[i\] \+ '\?v=' \+ LITE_ASSET_VERSION : chain\[i\];/);
+    assert.match(html, /campistry_camper_id_rpc\.js\?v=/);
+    // Every static script and stylesheet tag of our own carries ?v=.
+    const bare = [...html.matchAll(/<(?:script src|link rel="stylesheet" href)="([^"]+)"/g)]
+        .map(m => m[1]).filter(u => !/^https?:/.test(u) && !/\?v=/.test(u));
+    assert.deepStrictEqual(bare, [], 'unversioned: ' + bare.join(', '));
+});
+
+test('the Health page records carry the camper number', () => {
+    const h = fs.readFileSync(path.join(REPO, 'campistry_health.js'), 'utf8');
+    const pushes = [...h.matchAll(/hd\.(dispensingLog|sickVisits)\.push\(\{[^\n]*/g)].map(m => m[0]);
+    assert.ok(pushes.length >= 3);
+    pushes.forEach(p => assert.match(p, /camperId:camperIdOf\(/, 'a Health record written by name only: ' + p.slice(0, 60)));
+});
+
+test('every page loading the database client dynamically asks for a versioned copy', () => {
+    const pages = fs.readdirSync(REPO).filter(f => f.endsWith('.html'));
+    const bare = pages.filter(f => /\.src = 'supabase_client\.js'/.test(fs.readFileSync(path.join(REPO, f), 'utf8')));
+    assert.deepStrictEqual(bare, []);
+});
