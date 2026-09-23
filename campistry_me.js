@@ -440,7 +440,11 @@ function _runCamperErases(){
     var live={};Object.keys(roster).forEach(function(k){var l=normalizePersonId((roster[k]||{}).camperId);if(l)live[l]=1});
     _eraseRunning=true;
     var left=[];
-    var jobs=q.map(function(x){
+    // One after another, never at once: each erase or merge moves the camp's
+    // cache version on by one, and this page accepts only its own next step —
+    // answers arriving out of order would read as another computer's erase and
+    // reload this page (TED-042).
+    var one=function(x){
         if(live[String(x.id)])return Promise.resolve();
         var call=x.kind==='merge'
             ? c.client.rpc('merge_campers',{p_camp_id:c.campId,p_keep:x.keep,p_gone:x.id})
@@ -468,8 +472,8 @@ function _runCamperErases(){
             if(err){console.warn('[Me] erase #'+x.id+':',err);return}
             x.tries++;if(x.tries<20)left.push(x);
         },function(){x.tries++;if(x.tries<20)left.push(x)});
-    });
-    Promise.all(jobs).then(function(){
+    };
+    q.reduce(function(p,x){return p.then(function(){return one(x)})},Promise.resolve()).then(function(){
         _eraseRunning=false;
         // Merge with anything queued while this ran.
         var now=_readEraseQueue(), ids={};
@@ -23167,6 +23171,9 @@ function psEditorHtml(s){
 
 window.CampistryMe={
     nav:nav,closeModal:closeModal,
+    // The erase queue runner (deletes past their Undo window) — called on a
+    // timer; exposed so the office can nudge it, and for the browser test.
+    runCamperErases:_runCamperErases,
     viewCamper:viewCamper,editCamper:editCamper,deleteCamper:deleteCamper,unenrollCamper:unenrollCamper,reenrollCamper:reenrollCamper,ceToggleSummer:ceToggleSummer,ceMaritalChanged:ceMaritalChanged,ceToggleOtherParentSummer:ceToggleOtherParentSummer,
     addFamily:function(){openFamilyForm(null)},editFamily:function(id){openFamilyForm(id)},deleteFamily:deleteFamily,removeCamperFromFamily:removeCamperFromFamily,
     setPplStaffSubTab:setPplStaffSubTab,viewStaffMember:viewStaffMember,openEditStaffModal:openEditStaffModal,saveStaffMember:saveStaffMember,

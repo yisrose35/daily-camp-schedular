@@ -29,6 +29,8 @@
 //   6. (TED-035, the owner's rule) A camper erased on another computer: an
 //      office page opened before the erase reloads instead of saving its old
 //      copy; the page that erased keeps working.
+//   7. (TED-042/043) The office erases two campers at once: its own page does
+//      not reload itself; a URL-object write is refused while a page reloads.
 //   4d. (TED-022) A spreadsheet Update with no Camper ID column updates the
 //      child filed as "Avi Katz #<n>", rather than adding a third Avi.
 //
@@ -429,6 +431,59 @@ function seed(db) {
         check('an erasing page that missed another computer\'s erase reloads (#' + e2 + ' in between)', true);
         await page.waitForFunction(() => window.CampistryDB && window.CampistryDB.getCampId && window.CampistryDB.getCampId()
             && window.CampistryMe, null, { timeout: 30000 });
+
+        step(7, 'the office erases two campers at once: its own page does not reload itself (TED-042)');
+        await new Promise(r => setTimeout(r, 9000));      // the reloaded page has checked in
+        const erasable = people(db).filter(p => p.gone && (p.person_id === 10 || p.person_id === 21)).map(p => p.person_id);
+        let reloadsA3 = 0;
+        page.on('load', () => { reloadsA3++; });
+        await page.evaluate((ids) => {
+            // The answer to the FIRST erase comes back late, so if the two were
+            // sent at once their answers would arrive out of order.
+            const c = window.CampistryDB.getClient();
+            const raw = c.rpc.bind(c);
+            let first = true;
+            c.rpc = function (fn, args) {
+                const b = raw(fn, args);
+                if (fn === 'erase_camper' && first) {
+                    first = false;
+                    const sent = Promise.resolve().then(() => b);
+                    return { then: (ok, er) => sent.then(v => new Promise(r => setTimeout(() => r(v), 1500))).then(ok, er) };
+                }
+                return b;
+            };
+            localStorage.setItem('campistry_camper_erase_queue',
+                JSON.stringify(ids.map(id => ({ id: id, label: 'Camper #' + id, kind: 'erase', keep: null, tries: 0, at: Date.now() }))));
+            window.CampistryMe.runCamperErases();
+        }, erasable);
+        await waitFor('both erases to finish', () =>
+            !people(db).some(p => erasable.indexOf(p.person_id) >= 0), 30000);
+        await new Promise(r => setTimeout(r, 2000));
+        check('both campers were erased (' + erasable.join(', ') + ')', erasable.length === 2, JSON.stringify(erasable));
+        check('the page that erased them did not reload itself', reloadsA3 === 0, 'reloads: ' + reloadsA3);
+
+        // (TED-043) A write whose address is a URL object is refused too while
+        // a page is reloading.
+        const urlObjStatus = await page.evaluate(async () => {
+            window.__campistryStalePage = true;
+            try {
+                const u = new URL(window.__CAMPISTRY_SUPABASE__.url + '/rest/v1/camp_state_kv');
+                const r = await fetch(u, { method: 'POST', body: '[]' });
+                return r.status;
+            } catch (e) { return 'sent: ' + e.message; }
+            finally { window.__campistryStalePage = false; }
+        });
+        check('a write addressed with a URL object is refused while the page reloads', urlObjStatus === 409, String(urlObjStatus));
+
+        // (TED-040) Right after a check, another computer erases; this page
+        // then calls a function that names a camper (as a canteen sale does):
+        // it checks afresh — not "within 15 seconds" — and reloads instead.
+        const reloadsA4 = reloadsA3;
+        await page.evaluate(() => window.supabase.rpc('get_camper_numbers', { p_camp_id: window.CampistryDB.getCampId() }));
+        db.json(`SELECT public._bump_cache_epoch('${CAMP}') AS e`);
+        await page.evaluate(() => { window.supabase.rpc('record_canteen_sale_for_test', { p_camper_id: 20, p_amount: 1 }).then(() => {}, () => {}); });
+        await waitFor('the page to reload before a call that names a camper', async () => reloadsA3 > reloadsA4, 20000);
+        check('a call naming a camper checks afresh and reloads after an erase elsewhere', true);
 
         const v = db.json(`SELECT public.verify_roster_keys() AS v`)[0].v;
         check('no key is shown by the wrong child', JSON.stringify(v.keys_shown_by_the_wrong_child) === '[]', JSON.stringify(v));
