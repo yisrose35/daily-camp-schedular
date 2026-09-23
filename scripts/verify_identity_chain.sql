@@ -521,9 +521,19 @@ UNION ALL
                           AND p.proname IN ('get_camp_parent_invites', 'resolve_join_request', 'set_parent_invite_email',
                                             'set_parent_billing_access', 'revoke_orphaned_parent_invites')
                           AND pg_get_functiondef(p.oid) !~ '_is_camp_office')
+               -- the table's own read rules: protection on, and no read rule
+               -- but the office's (owner/admin/manager) and a parent's own row
+               OR NOT (SELECT relrowsecurity FROM pg_class WHERE oid = 'public.link_parent_invites'::regclass)
                OR EXISTS (SELECT 1 FROM pg_policies WHERE schemaname = 'public' AND tablename = 'link_parent_invites'
-                             AND policyname = 'link_parent_invites_select' AND qual ~ 'scheduler')
-            THEN 'run 261 again — staff outside the office can still read families'' access codes and claim a child'
+                             AND cmd IN ('SELECT', 'ALL')
+                             AND NOT (policyname = 'link_parent_invites_select'
+                                      AND qual ~ 'owner' AND qual ~ 'admin' AND qual ~ 'manager'
+                                      AND qual !~ 'scheduler' AND qual !~ 'counselor' AND qual !~ 'viewer')
+                             AND NOT (policyname = 'link_parent_invites_parent_select'
+                                      AND regexp_replace(qual, '[\s()]', '', 'g') = 'user_id=auth.uid'))
+               OR NOT EXISTS (SELECT 1 FROM pg_policies WHERE schemaname = 'public' AND tablename = 'link_parent_invites'
+                                 AND policyname = 'link_parent_invites_select')
+            THEN 'run 261 again — staff outside the office can still read families'' access codes and claim a child (if it still says this after running 261, send the builder the result of: SELECT policyname, cmd, qual FROM pg_policies WHERE tablename = ''link_parent_invites'';)'
           WHEN EXISTS (SELECT 1 FROM link_parent_invites WHERE user_id IS NOT NULL AND camper_names IS NULL)
             THEN (SELECT count(*) FROM link_parent_invites WHERE user_id IS NOT NULL AND camper_names IS NULL)
                  || ' claimed invitation(s) cover a WHOLE camp — look at them: SELECT camp_id, parent_email, created_at FROM link_parent_invites WHERE user_id IS NOT NULL AND camper_names IS NULL;'

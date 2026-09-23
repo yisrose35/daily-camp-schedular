@@ -520,8 +520,10 @@ SELECT key, value FROM camp_state_kv WHERE camp_id = 'a6000000-0000-0000-0000-00
 UPDATE camp_state_kv SET value = '{"camperRoster":{"Moshe Gold":{"name":"Moshe Gold","camperId":1}}}'
  WHERE camp_id = 'a6000000-0000-0000-0000-000000000036' AND key = 'app1';
 SELECT public.erase_camper('a6000000-0000-0000-0000-000000000036', 2, true);
+-- who is logged in, read at every call (a fixed stub would be cached)
 CREATE OR REPLACE FUNCTION auth.uid() RETURNS uuid LANGUAGE sql STABLE
-  AS 'SELECT ''a6000000-0000-0000-0000-0000000000a6''::uuid';
+  AS $f$ SELECT NULLIF(current_setting('t260.uid', true), '')::uuid $f$;
+SET LOCAL t260.uid = 'a6000000-0000-0000-0000-0000000000a6';
 DO $$
 DECLARE v jsonb;
 BEGIN
@@ -546,8 +548,7 @@ END $$;
 INSERT INTO camp_state_kv (camp_id, key, value)
 SELECT 'a6000000-0000-0000-0000-000000000036'::uuid, key, value FROM t260_morning
 ON CONFLICT (camp_id, key) DO UPDATE SET value = EXCLUDED.value;
-CREATE OR REPLACE FUNCTION auth.uid() RETURNS uuid LANGUAGE sql STABLE
-  AS 'SELECT ''a6000000-0000-0000-0000-0000000000b6''::uuid';
+SET LOCAL t260.uid = 'a6000000-0000-0000-0000-0000000000b6';
 DO $$
 DECLARE c uuid := 'a6000000-0000-0000-0000-000000000036'; r jsonb;
 BEGIN
@@ -561,6 +562,10 @@ BEGIN
     END IF;
     IF public._parent_owns_person(c, 2) THEN
         RAISE EXCEPTION 'TED-021: Sara''s mother owns #2';
+    END IF;
+    -- (TED-034) and a parent is not given the camp's list of children's numbers
+    IF (public.get_camper_numbers(c) ->> 'success')::boolean IS NOT FALSE THEN
+        RAISE EXCEPTION 'TED-034: a parent read every child''s name and number: %', public.get_camper_numbers(c);
     END IF;
     IF (SELECT value::text FROM camp_state_kv WHERE camp_id = c AND key = 'campistryMe') ~ '"camperId": 2[,}]' THEN
         RAISE EXCEPTION 'TED-021: the morning tab put #2 back on Avi''s records';
@@ -839,6 +844,48 @@ BEGIN
     IF NOT EXISTS (SELECT 1 FROM jsonb_array_elements(v -> 'needs_a_person') x
                     WHERE x ->> 'original_number' = '1' AND x ->> 'split_number' = '2') THEN
         RAISE EXCEPTION 'TED-026: the child is not shown to a person: %', v;
+    END IF;
+END $$;
+ROLLBACK;
+
+-- ════════════════════════════════════════════════════════════════════════════
+-- 12. (TED-033) A tab opened (or asleep) since before Sara was added saves the
+--     roster without her: she stays. A tab that HAS seen her and removes her:
+--     she leaves, as asked. The list of seen children is never stored.
+-- ════════════════════════════════════════════════════════════════════════════
+BEGIN;
+INSERT INTO camps (id, name) VALUES ('a6000000-0000-0000-0000-000000000012', '260 camp twelve');
+INSERT INTO camp_state_kv (camp_id, key, value) VALUES ('a6000000-0000-0000-0000-000000000012', 'app1',
+    '{"camperRoster":{"Moshe Gold":{"name":"Moshe Gold","camperId":1}}}');
+-- another computer adds Sara
+UPDATE camp_state_kv SET value = jsonb_set(value, '{camperRoster,Sara Levi}', '{"name":"Sara Levi","camperId":3}')
+ WHERE camp_id = 'a6000000-0000-0000-0000-000000000012' AND key = 'app1';
+-- the morning tab (it has seen only Moshe) saves, as the Me page does
+INSERT INTO camp_state_kv (camp_id, key, value) VALUES ('a6000000-0000-0000-0000-000000000012', 'app1',
+    '{"camperRoster":{"Moshe Gold":{"name":"Moshe Gold","camperId":1,"school":"edited"}},"_rosterSeen":[1]}')
+ON CONFLICT (camp_id, key) DO UPDATE SET value = EXCLUDED.value;
+DO $$
+DECLARE c uuid := 'a6000000-0000-0000-0000-000000000012'; v jsonb;
+BEGIN
+    SELECT value INTO v FROM camp_state_kv WHERE camp_id = c AND key = 'app1';
+    IF NOT (v -> 'camperRoster' ? 'Sara Levi')
+       OR NOT EXISTS (SELECT 1 FROM camp_people WHERE camp_id = c AND person_id = 3 AND deleted_at IS NULL) THEN
+        RAISE EXCEPTION 'TED-033: a tab that never saw Sara removed her: %', v;
+    END IF;
+    IF v #>> '{camperRoster,Moshe Gold,school}' IS DISTINCT FROM 'edited' THEN
+        RAISE EXCEPTION 'the morning tab''s own edit was lost: %', v;
+    END IF;
+    IF v ? '_rosterSeen' THEN RAISE EXCEPTION 'the seen list was stored'; END IF;
+END $$;
+-- a tab that has seen Sara removes her on purpose
+INSERT INTO camp_state_kv (camp_id, key, value) VALUES ('a6000000-0000-0000-0000-000000000012', 'app1',
+    '{"camperRoster":{"Moshe Gold":{"name":"Moshe Gold","camperId":1}},"_rosterSeen":[1,3]}')
+ON CONFLICT (camp_id, key) DO UPDATE SET value = EXCLUDED.value;
+DO $$
+BEGIN
+    IF NOT EXISTS (SELECT 1 FROM camp_people WHERE camp_id = 'a6000000-0000-0000-0000-000000000012'
+                    AND person_id = 3 AND deleted_at IS NOT NULL) THEN
+        RAISE EXCEPTION 'TED-033: a deliberate removal was undone';
     END IF;
 END $$;
 ROLLBACK;

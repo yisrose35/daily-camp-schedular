@@ -501,6 +501,7 @@ DECLARE
     v_was    bigint;
     v_hinted jsonb := '{}'::jsonb;
     v_stale  timestamptz;
+    v_seen   bigint[];
 BEGIN
     IF TG_OP = 'UPDATE' AND NOT v_all AND jsonb_typeof(OLD.value -> 'camperRoster') = 'object' THEN
         v_old := OLD.value -> 'camperRoster';
@@ -583,6 +584,25 @@ BEGIN
                   WHERE p.camp_id = NEW.camp_id AND p.kind = 'camper' AND p.deleted_at IS NULL
                     AND p.first_seen >= v_stale AND jsonb_typeof(p.payload) = 'object'
                     AND NOT (v_new ? p.source_key)
+        LOOP
+            v_new := v_new || jsonb_build_object(e.key, COALESCE(v_prev -> e.key, e.value));
+        END LOOP;
+    END IF;
+
+    -- A Me tab says which children it has ever had on screen (_rosterSeen,
+    -- their numbers). A child it never saw is not missing from its save on
+    -- purpose — the tab was opened (or asleep, or offline) before they were
+    -- added — so they are kept as they were (TED-033). Never stored.
+    IF jsonb_typeof(NEW.value -> '_rosterSeen') = 'array' THEN
+        v_seen := ARRAY(SELECT public._current_person_number(NEW.camp_id, public._stated_person_id(x #>> '{}'))
+                          FROM jsonb_array_elements(NEW.value -> '_rosterSeen') x);
+        FOR e IN SELECT p.source_key AS key, p.payload AS value, p.person_id FROM camp_people p
+                  WHERE p.camp_id = NEW.camp_id AND p.kind = 'camper' AND p.deleted_at IS NULL
+                    AND jsonb_typeof(p.payload) = 'object'
+                    AND NOT (v_new ? p.source_key)
+                    AND NOT (p.person_id = ANY (v_seen))
+                    AND NOT EXISTS (SELECT 1 FROM jsonb_each(v_new) n
+                                     WHERE public._stated_person_id(n.value ->> 'camperId') = p.person_id)
         LOOP
             v_new := v_new || jsonb_build_object(e.key, COALESCE(v_prev -> e.key, e.value));
         END LOOP;
@@ -677,6 +697,7 @@ BEGIN
     IF v_new IS DISTINCT FROM COALESCE(NEW.value -> 'camperRoster', '{}'::jsonb) THEN
         NEW.value := jsonb_set(NEW.value, '{camperRoster}', v_new, true);
     END IF;
+    NEW.value := NEW.value - '_rosterSeen';
     -- The rest of this document follows any move now; the other documents
     -- and the invitations follow when this statement is done (apply_moved_numbers).
     NEW.value := public._carry_moved_numbers(NEW.camp_id, NEW.key, NEW.value);
@@ -694,7 +715,9 @@ SECURITY DEFINER
 SET search_path = public, pg_catalog
 AS $$
 BEGIN
-    IF NOT public.camp_reader(p_camp_id) THEN
+    -- The camp's staff only (TED-034). camp_reader also lets in parents, who
+    -- must not get every child's name and number.
+    IF NOT public.camp_staff_member(p_camp_id) THEN
         RETURN jsonb_build_object('success', false, 'error', 'not_authorized');
     END IF;
     RETURN jsonb_build_object(
@@ -710,9 +733,9 @@ BEGIN
                   COALESCE((SELECT next_id FROM camp_person_seq WHERE camp_id = p_camp_id), 1),
                   COALESCE((SELECT max(person_id) + 1 FROM camp_erased_people WHERE camp_id = p_camp_id), 1),
                   COALESCE((SELECT max(from_id) + 1 FROM camp_person_renumbers WHERE camp_id = p_camp_id), 1)),
-        -- {number: name} of erased children: free, but the page warns before
-        -- one is typed for a new child.
-        'erased', COALESCE((SELECT jsonb_object_agg(person_id::text, key)
+        -- Numbers of erased children (no names: nothing about them is kept):
+        -- free, but the page warns before one is typed for a new child.
+        'erased', COALESCE((SELECT jsonb_object_agg(person_id::text, true)
                               FROM camp_erased_people WHERE camp_id = p_camp_id), '{}'::jsonb),
         'departed', COALESCE((SELECT jsonb_object_agg(person_id::text, source_key)
                                 FROM camp_people

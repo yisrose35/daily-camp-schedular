@@ -324,7 +324,7 @@ function reservePersonId(id){
 var _serverHeldNumbers={};
 // Numbers a camper was renumbered off: {old: new}. Never given to anyone else.
 var _serverMovedNumbers={};
-// Numbers of erased campers: {number: name}. Free, but never handed out by
+// Numbers of erased campers: {number: true}. Free, but never handed out by
 // itself (260) — typing one for a new camper gets a warning.
 var _serverErasedNumbers={};
 // Roster keys that belong to a child other than whoever shows them now (a
@@ -646,6 +646,7 @@ function loadData(){
         }
         structure=s.campStructure||{};
         roster=(s.app1&&s.app1.camperRoster)||{};
+        _noteRosterSeen();
         var me=s.campistryMe||{};
         // ★ 211/212: the family rows win when we have them. Same rule and same
         // reason as finPayments below — camp_families is the second home today and
@@ -849,6 +850,11 @@ function save(){
         g.campStructure=structure;
         if(!g.app1)g.app1={};
         g.app1.camperRoster=roster;
+        // Every child this tab has had on screen, by number: the server never
+        // removes a child this tab has never seen (one added on another
+        // computer while this one was asleep or offline) — 260.
+        _noteRosterSeen();
+        g.app1._rosterSeen=Object.keys(_rosterSeenIds).map(Number);
         // app1.divisions is owned exclusively by app1/Flow — it holds grade-keyed
         // entries built from campStructure (startTime, endTime, parentDivision, etc.).
         // campStructure is the authoritative source for division/grade/bunk structure;
@@ -5754,7 +5760,7 @@ function saveCamper(){
         var _holder=personIdHolder(_typedId,editingCamper||full);
         if(_holder){toast('ID '+_typedId+' already belongs to '+_holder,'error');return}
         if(_serverErasedNumbers[_typedId]&&String(normalizePersonId(_oldRec.camperId))!==String(_typedId))
-            toast('Note: #'+_typedId+' belonged to '+_lbl(_serverErasedNumbers[_typedId])+', who was erased. It is free, but a new number is safer.');
+            toast('Note: #'+_typedId+' belonged to a camper who was erased. It is free, but a new number is safer.');
         // A new number for this camper: every record this page holds for them
         // moves with it (the server does the same for the tables and every
         // saved document — 237/260), or the next save would put the old one back.
@@ -5975,6 +5981,11 @@ function _renumberLocal(from,to){
         Object.keys(o).forEach(function(k){if(o[k]&&typeof o[k]==='object')walk(o[k],d+1)});
     }
     [enrollments,families,payments,finPayments].forEach(function(x){walk(x,0)});
+}
+// Numbers of every child this tab has had in its roster since it opened.
+var _rosterSeenIds={};
+function _noteRosterSeen(){
+    try{Object.values(roster||{}).forEach(function(c){var n=c&&normalizePersonId(c.camperId);if(n)_rosterSeenIds[n]=1})}catch(_){}
 }
 // The camper number for a roster key, or null.
 function _camperIdOf(key){var r=roster&&roster[key];return (r&&r.camperId!=null&&r.camperId!=='')?r.camperId:null}
