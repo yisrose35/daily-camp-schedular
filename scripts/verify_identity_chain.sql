@@ -1,5 +1,5 @@
 -- ============================================================================
--- Confirm migrations 222-260 are in and doing their job.
+-- Confirm migrations 222-261 are in and doing their job.
 --
 -- Paste the whole thing into the Supabase SQL Editor. It is READ ONLY — one
 -- SELECT, nothing is created, changed or deleted, and the two purge functions
@@ -504,6 +504,15 @@ UNION ALL
           WHEN jsonb_array_length(public.split_renames() -> 'needs_a_person') > 0
             THEN jsonb_array_length(public.split_renames() -> 'needs_a_person')
                  || ' possibly split children need a person to decide — SELECT public.split_renames(); and read needs_a_person'
+          ELSE 'ok' END),
+    -- Only the camp's office can write a parent invitation (TED-023).
+    ('261  only the camp office writes parent invitations',
+     CASE WHEN to_regprocedure('public._is_camp_office(uuid,uuid)') IS NULL
+               OR pg_get_functiondef('public.upsert_parent_invite(uuid,text,text,text,jsonb,jsonb,timestamptz)'::regprocedure)
+                  !~ '_is_camp_office' THEN 'apply 261 — ANY logged-in account can make itself a parent of any child'
+          WHEN EXISTS (SELECT 1 FROM link_parent_invites WHERE user_id IS NOT NULL AND camper_names IS NULL)
+            THEN (SELECT count(*) FROM link_parent_invites WHERE user_id IS NOT NULL AND camper_names IS NULL)
+                 || ' claimed invitation(s) cover a WHOLE camp — look at them: SELECT camp_id, parent_email, created_at FROM link_parent_invites WHERE user_id IS NOT NULL AND camper_names IS NULL;'
           ELSE 'ok' END)
     ) AS x(item, result)
 

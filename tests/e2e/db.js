@@ -162,6 +162,7 @@ const MIGRATIONS = [
     '258_a_parent_sees_only_their_own_child',
     '259_a_roster_key_belongs_to_one_child',
     '260_numbers_stay_with_their_child',
+    '261_only_the_camp_office_writes_parent_invites',
 ];
 
 // The one thing the stubs deliberately get wrong for our purposes: they define

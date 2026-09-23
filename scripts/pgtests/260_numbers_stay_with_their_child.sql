@@ -371,6 +371,70 @@ END $$;
 ROLLBACK;
 
 -- ════════════════════════════════════════════════════════════════════════════
+-- 6b. (TED-021) The erased child's records in OTHER documents: a tab opened
+--     before the erase saves the roster and the Me document together (his
+--     enrollment and his $900 payment); then a new child, Sara, is given the
+--     freed #2. Sara must not have his payment; the $900 stays in the books.
+-- ════════════════════════════════════════════════════════════════════════════
+BEGIN;
+INSERT INTO camps (id, name) VALUES ('a6000000-0000-0000-0000-000000000016', '260 camp six-b');
+INSERT INTO camp_state_kv (camp_id, key, value) VALUES
+    ('a6000000-0000-0000-0000-000000000016', 'app1',
+     '{"camperRoster":{"Moshe Gold":{"name":"Moshe Gold","camperId":1},"Avi Gold":{"name":"Avi Gold","camperId":2}}}'),
+    ('a6000000-0000-0000-0000-000000000016', 'campistryMe',
+     '{"enrollments":{"e2":{"camperName":"Avi Gold","camperId":2,"status":"enrolled"}},
+       "payments":[{"camperName":"Avi Gold","camperId":2,"amount":900},{"camperName":"Moshe Gold","camperId":1,"amount":50}]}'),
+    ('a6000000-0000-0000-0000-000000000016', 'campistryHealth',
+     '{"sickVisits":[{"camperName":"Avi Gold","camperId":2,"complaint":"cough"}]}');
+UPDATE camp_state_kv SET value = '{"camperRoster":{"Moshe Gold":{"name":"Moshe Gold","camperId":1}}}'
+ WHERE camp_id = 'a6000000-0000-0000-0000-000000000016' AND key = 'app1';
+CREATE TEMP TABLE t260_stale AS
+SELECT key, value FROM camp_state_kv WHERE camp_id = 'a6000000-0000-0000-0000-000000000016';
+DO $$
+DECLARE c uuid := 'a6000000-0000-0000-0000-000000000016'; v jsonb;
+BEGIN
+    v := public.erase_camper(c, 2, true);
+    IF (v ->> 'number_is_free')::boolean IS NOT TRUE THEN RAISE EXCEPTION 'setup: %', v; END IF;
+    IF (SELECT value::text FROM camp_state_kv WHERE camp_id = c AND key = 'campistryMe') ~ '"camperId": 2[,}]' THEN
+        RAISE EXCEPTION 'TED-021: the erase left money on the freed number: %',
+            (SELECT value FROM camp_state_kv WHERE camp_id = c AND key = 'campistryMe');
+    END IF;
+END $$;
+-- The stale tab: roster (with Avi) and Me document, in one statement.
+INSERT INTO camp_state_kv (camp_id, key, value)
+SELECT 'a6000000-0000-0000-0000-000000000016'::uuid, 'app1',
+       '{"camperRoster":{"Moshe Gold":{"name":"Moshe Gold","camperId":1},"Avi Gold":{"name":"Avi Gold","camperId":2}}}'::jsonb
+UNION ALL
+SELECT 'a6000000-0000-0000-0000-000000000016'::uuid, 'campistryMe', value FROM t260_stale WHERE key = 'campistryMe'
+UNION ALL
+SELECT 'a6000000-0000-0000-0000-000000000016'::uuid, 'campistryHealth', value FROM t260_stale WHERE key = 'campistryHealth'
+ON CONFLICT (camp_id, key) DO UPDATE SET value = EXCLUDED.value;
+-- Sara is given the freed #2.
+UPDATE camp_state_kv SET value = jsonb_set(value, '{camperRoster,Sara Levi}', '{"name":"Sara Levi","camperId":2}')
+ WHERE camp_id = 'a6000000-0000-0000-0000-000000000016' AND key = 'app1';
+DO $$
+DECLARE c uuid := 'a6000000-0000-0000-0000-000000000016'; me jsonb;
+BEGIN
+    IF NOT EXISTS (SELECT 1 FROM camp_people WHERE camp_id = c AND person_id = 2 AND source_key = 'Sara Levi') THEN
+        RAISE EXCEPTION 'setup: Sara was not given the freed number';
+    END IF;
+    SELECT value INTO me FROM camp_state_kv WHERE camp_id = c AND key = 'campistryMe';
+    IF me::text ~ '"camperId": 2[,}]' THEN
+        RAISE EXCEPTION 'TED-021: Sara (#2) inherited the erased child''s records: %', me;
+    END IF;
+    IF NOT EXISTS (SELECT 1 FROM jsonb_array_elements(me -> 'payments') p WHERE (p ->> 'amount')::int = 900) THEN
+        RAISE EXCEPTION 'the $900 left the books altogether: %', me;
+    END IF;
+    IF (SELECT value::text FROM camp_state_kv WHERE camp_id = c AND key = 'campistryHealth') ~ '"camperId": 2[,}]' THEN
+        RAISE EXCEPTION 'TED-021: the erased child''s health record came back';
+    END IF;
+    IF NOT EXISTS (SELECT 1 FROM jsonb_array_elements(me -> 'payments') p WHERE (p ->> 'camperId') = '1') THEN
+        RAISE EXCEPTION 'Moshe''s payment was touched';
+    END IF;
+END $$;
+ROLLBACK;
+
+-- ════════════════════════════════════════════════════════════════════════════
 -- 7. (TED-018) An invitation written before the child was enrolled: the
 --    office's next save, which now carries the child's number, fills it.
 --    (TED-019) The office's repair never picks a departed child by name.
@@ -475,6 +539,140 @@ BEGIN
     END IF;
     IF jsonb_array_length(v -> 'needs_a_person') < 1 THEN
         RAISE EXCEPTION 'the uncertain match is not shown to a person: %', v;
+    END IF;
+END $$;
+ROLLBACK;
+
+-- ════════════════════════════════════════════════════════════════════════════
+-- 9. (TED-024) Speed. 600 campers, a large Me document; ONE save (roster +
+--    Me document together, as the page saves) renumbers 200 of them. Then a
+--    save from a tab opened before, carrying the old numbers. Both must stay
+--    far inside Supabase's statement timeout (8 s by default).
+-- ════════════════════════════════════════════════════════════════════════════
+BEGIN;
+INSERT INTO camps (id, name) VALUES ('a6000000-0000-0000-0000-000000000009', '260 camp nine');
+INSERT INTO camp_state_kv (camp_id, key, value)
+SELECT 'a6000000-0000-0000-0000-000000000009', 'app1', jsonb_build_object('camperRoster',
+         (SELECT jsonb_object_agg('Kid ' || g, jsonb_build_object('name', 'Kid ' || g, 'camperId', g, 'bunk', 'B' || (g % 30)))
+            FROM generate_series(1, 600) g));
+INSERT INTO camp_state_kv (camp_id, key, value)
+SELECT 'a6000000-0000-0000-0000-000000000009', 'campistryMe', jsonb_build_object(
+         'enrollments', (SELECT jsonb_object_agg('e' || g, jsonb_build_object('camperName', 'Kid ' || g, 'camperId', g,
+                                 'status', 'enrolled', 'history', jsonb_build_array(jsonb_build_object('ts', 'x', 'note', repeat('n', 80)))))
+                           FROM generate_series(1, 600) g),
+         'payments', (SELECT jsonb_agg(jsonb_build_object('camperId', g % 600 + 1, 'amount', 100, 'memo', repeat('m', 40)))
+                        FROM generate_series(1, 2400) g));
+CREATE TEMP TABLE t260_timing (what text, ms numeric);
+DO $$
+DECLARE t0 timestamptz; r jsonb; m jsonb; c uuid := 'a6000000-0000-0000-0000-000000000009';
+BEGIN
+    SELECT value -> 'camperRoster', value INTO r FROM camp_state_kv WHERE camp_id = c AND key = 'app1';
+    SELECT value INTO m FROM camp_state_kv WHERE camp_id = c AND key = 'campistryMe';
+    SELECT jsonb_object_agg(k, CASE WHEN (v ->> 'camperId')::int <= 200
+                                    THEN jsonb_set(v, '{camperId}', to_jsonb((v ->> 'camperId')::int + 1000)) ELSE v END)
+      INTO r FROM jsonb_each(r) x(k, v);
+    t0 := clock_timestamp();
+    INSERT INTO camp_state_kv (camp_id, key, value) VALUES
+        (c, 'app1', jsonb_build_object('camperRoster', r)),
+        (c, 'campistryMe', m)
+    ON CONFLICT (camp_id, key) DO UPDATE SET value = EXCLUDED.value;
+    INSERT INTO t260_timing VALUES ('200 renumbers in one save', extract(epoch FROM clock_timestamp() - t0) * 1000);
+    -- the tab opened before saves its Me document, still on the old numbers
+    t0 := clock_timestamp();
+    UPDATE camp_state_kv SET value = m WHERE camp_id = c AND key = 'campistryMe';
+    INSERT INTO t260_timing VALUES ('a stale save after 200 renumbers', extract(epoch FROM clock_timestamp() - t0) * 1000);
+
+    IF (SELECT count(*) FROM camp_person_renumbers WHERE camp_id = c) <> 200 THEN
+        RAISE EXCEPTION 'setup: % renumbers recorded', (SELECT count(*) FROM camp_person_renumbers WHERE camp_id = c);
+    END IF;
+    IF EXISTS (SELECT 1 FROM camp_state_kv s, jsonb_each(s.value -> 'enrollments') e
+                WHERE s.camp_id = c AND s.key = 'campistryMe' AND (e.value ->> 'camperId')::int <= 200) THEN
+        RAISE EXCEPTION 'the stale save left enrollments on moved numbers';
+    END IF;
+    IF (SELECT count(*) FROM camp_state_kv s, jsonb_array_elements(s.value -> 'payments') p
+         WHERE s.camp_id = c AND s.key = 'campistryMe' AND (p ->> 'camperId')::int > 1000) <> 800 THEN
+        RAISE EXCEPTION 'payments were not carried to the new numbers';
+    END IF;
+END $$;
+\echo 260 timing:
+SELECT what, round(ms) AS ms FROM t260_timing;
+DO $$
+BEGIN
+    IF EXISTS (SELECT 1 FROM t260_timing WHERE ms > 4000) THEN
+        RAISE EXCEPTION 'TED-024: too slow for Supabase''s statement timeout: %',
+            (SELECT jsonb_object_agg(what, round(ms)) FROM t260_timing);
+    END IF;
+END $$;
+ROLLBACK;
+
+-- ════════════════════════════════════════════════════════════════════════════
+-- 10. (TED-025) A child is put back on the number they were moved off.
+--     (TED-027) A leftover renumber hint on ANOTHER child moves nothing to her.
+-- ════════════════════════════════════════════════════════════════════════════
+BEGIN;
+INSERT INTO camps (id, name) VALUES ('a6000000-0000-0000-0000-000000000010', '260 camp ten');
+INSERT INTO camp_state_kv (camp_id, key, value) VALUES
+    ('a6000000-0000-0000-0000-000000000010', 'app1',
+     '{"camperRoster":{"Moshe Gold":{"name":"Moshe Gold","camperId":1},"Tova Klein":{"name":"Tova Klein","camperId":4}}}'),
+    ('a6000000-0000-0000-0000-000000000010', 'campistryHealth',
+     '{"sickVisits":[{"camperName":"Moshe Gold","camperId":1}]}');
+-- by mistake: 1 → 7
+UPDATE camp_state_kv SET value = jsonb_set(value, '{camperRoster,Moshe Gold,camperId}', '7')
+ WHERE camp_id = 'a6000000-0000-0000-0000-000000000010' AND key = 'app1';
+-- Tova carries a leftover hint naming #1: nothing of #1 may go to her.
+UPDATE camp_state_kv SET value = jsonb_set(value, '{camperRoster,Tova Klein}',
+        '{"name":"Tova Klein","camperId":4,"bunk":"B2","renumberedFrom":1}')
+ WHERE camp_id = 'a6000000-0000-0000-0000-000000000010' AND key = 'app1';
+DO $$
+DECLARE c uuid := 'a6000000-0000-0000-0000-000000000010';
+BEGIN
+    IF NOT EXISTS (SELECT 1 FROM camp_people WHERE camp_id = c AND person_id = 4 AND source_key = 'Tova Klein')
+       OR (SELECT to_id FROM camp_person_renumbers WHERE camp_id = c AND from_id = 1) <> 7
+       OR (SELECT value #>> '{sickVisits,0,camperId}' FROM camp_state_kv WHERE camp_id = c AND key = 'campistryHealth') <> '7' THEN
+        RAISE EXCEPTION 'TED-027: a leftover hint on another child moved records: %',
+            (SELECT jsonb_agg(to_jsonb(r)) FROM camp_person_renumbers r WHERE camp_id = c);
+    END IF;
+END $$;
+-- …and back: 7 → 1, the way the Me page sends it.
+UPDATE camp_state_kv SET value = jsonb_set(value, '{camperRoster,Moshe Gold}',
+        '{"name":"Moshe Gold","camperId":1,"renumberedFrom":7}')
+ WHERE camp_id = 'a6000000-0000-0000-0000-000000000010' AND key = 'app1';
+DO $$
+DECLARE c uuid := 'a6000000-0000-0000-0000-000000000010';
+BEGIN
+    IF NOT EXISTS (SELECT 1 FROM camp_people WHERE camp_id = c AND person_id = 1 AND source_key = 'Moshe Gold' AND deleted_at IS NULL)
+       OR EXISTS (SELECT 1 FROM camp_people WHERE camp_id = c AND person_id = 7) THEN
+        RAISE EXCEPTION 'TED-025: Moshe could not go back to #1: %',
+            (SELECT jsonb_agg(to_jsonb(p) - 'payload') FROM camp_people p WHERE camp_id = c);
+    END IF;
+    IF (SELECT value #>> '{sickVisits,0,camperId}' FROM camp_state_kv WHERE camp_id = c AND key = 'campistryHealth') <> '1' THEN
+        RAISE EXCEPTION 'TED-025: his records did not come back to #1';
+    END IF;
+    IF EXISTS (SELECT 1 FROM camp_person_renumbers WHERE camp_id = c AND from_id = 1) THEN
+        RAISE EXCEPTION 'TED-025: #1 is still written down as moved';
+    END IF;
+END $$;
+ROLLBACK;
+
+-- ════════════════════════════════════════════════════════════════════════════
+-- 11. (TED-026) The birthday was filled in by the same edit that renamed the
+--     child: not repaired automatically, but shown to a person.
+-- ════════════════════════════════════════════════════════════════════════════
+BEGIN;
+INSERT INTO camps (id, name) VALUES ('a6000000-0000-0000-0000-000000000011', '260 camp eleven');
+INSERT INTO camp_people (camp_id, person_id, kind, source_key, name, minted, payload, deleted_at, first_seen, updated_at)
+VALUES ('a6000000-0000-0000-0000-000000000011', 1, 'camper', 'Rivka Stern', 'Rivka Stern', false,
+        '{"name":"Rivka Stern","parent1Email":"stern@x.test"}', '2026-07-01 10:00:00+00', '2026-06-01 10:00:00+00', '2026-07-01 10:00:00+00'),
+       ('a6000000-0000-0000-0000-000000000011', 2, 'camper', 'Rivka Stein', 'Rivka Stein', true,
+        '{"name":"Rivka Stein","dob":"2015-03-03","parent1Email":"stern@x.test"}', NULL, '2026-07-01 10:00:00+00', '2026-07-01 10:00:00+00');
+DO $$
+DECLARE v jsonb;
+BEGIN
+    v := public.split_renames(true);
+    IF (v ->> 'repaired')::int <> 0 THEN RAISE EXCEPTION 'TED-026: a maybe-match was repaired: %', v; END IF;
+    IF NOT EXISTS (SELECT 1 FROM jsonb_array_elements(v -> 'needs_a_person') x
+                    WHERE x ->> 'original_number' = '1' AND x ->> 'split_number' = '2') THEN
+        RAISE EXCEPTION 'TED-026: the child is not shown to a person: %', v;
     END IF;
 END $$;
 ROLLBACK;

@@ -287,8 +287,11 @@ function personIdHolder(id,exceptCamper,exceptStaffId){
     if(who)return who;
     // Held by a camper who left and has not been erased (migration 253).
     if(_serverHeldNumbers[want])return _lbl(_serverHeldNumbers[want])+' (removed — still holds the number)';
-    // A number a camper was moved off stays theirs (260).
-    if(_serverMovedNumbers[want])return 'the camper now numbered #'+_serverMovedNumbers[want]+' (their old number)';
+    // A number a camper was moved off stays theirs (260) — they may go back to it.
+    if(_serverMovedNumbers[want]){
+        if(!(exceptCamper&&String(normalizePersonId(_camperIdOf(exceptCamper)))===String(_serverMovedNumbers[want])))
+            return 'the camper now numbered #'+_serverMovedNumbers[want]+' (their old number)';
+    }
     var staff='';
     Object.keys(staffApplications).forEach(function(k){
         var a=staffApplications[k];
@@ -383,11 +386,12 @@ function _reconcileCamperNumbers(){
         var fixed=[];
         Object.keys(roster).forEach(function(k){
             if(!(k in server)||!roster[k])return;
-            var s=String(server[k]), l=normalizePersonId(roster[k].camperId);
+            var s=String(server[k]), l=normalizePersonId(roster[k].camperId), pend=roster[k].renumberedFrom!=null;
             if(l===s)return;
             // Only where OUR number is wrong. A number typed here and not yet
             // saved is left alone: it is free, and the next save will claim it.
-            if(!l||localCount[l]>1||_serverHeldNumbers[l]||_serverMovedNumbers[l]||(holderOf[l]&&holderOf[l]!==k)){
+            // (A renumber still on its way — renumberedFrom — is left alone too.)
+            if(!l||localCount[l]>1||_serverHeldNumbers[l]||(_serverMovedNumbers[l]&&!pend)||(holderOf[l]&&holderOf[l]!==k)){
                 fixed.push(_lbl(k)+' → #'+s);
                 roster[k].camperId=Number(s);
                 // This camper's enrollments carry the number too: move them with it.

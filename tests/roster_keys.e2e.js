@@ -25,6 +25,7 @@
 //      the database, another page's record and the family invitation follow
 //      him, and a later edit still saves.
 //   4c. (TED-020) Renamed and renumbered in one edit: still one child.
+//   4e. (TED-025) …and put back on the number he was moved off.
 //   4d. (TED-022) A spreadsheet Update with no Camper ID column updates the
 //      child filed as "Avi Katz #<n>", rather than adding a third Avi.
 //
@@ -270,6 +271,19 @@ function seed(db) {
             Number(kvRead(db, 'campistryHealth').sickVisits[0].camperId) === 41, 30000);
         check('his records followed him to #41', true);
         check('the renumber hint is not stored', !('renumberedFrom' in kvRead(db, 'app1').camperRoster['Dov Stone']));
+
+        step('4e', 'the office puts Dov back on the number he was moved off (#41 → #40) (TED-025)');
+        await openCamperForm('Dov Stone');
+        await page.fill('#ceCamperId', '40');
+        await saveCamperForm();
+        await waitFor('the change back to reach the database', () =>
+            people(db).some(p => p.person_id === 40 && p.source_key === 'Dov Stone'), 30000);
+        const dovBack = people(db).filter(p => /^Dov/.test(p.source_key));
+        check('Dov is back on #40, one child', dovBack.length === 1 && dovBack[0].person_id === 40 && !dovBack[0].gone,
+            JSON.stringify(dovBack));
+        await waitFor('his records to come back', () =>
+            Number(kvRead(db, 'campistryHealth').sickVisits[0].camperId) === 40, 30000);
+        check('his records came back to #40', true);
 
         step('4d', 'a spreadsheet Update (no Camper ID column) has a row for the new Avi Katz, filed as "' + newAvi.key + '" (TED-022)');
         const csvU = '"First Name","Last Name","Date of Birth","Division","Grade","Bunk","Parent 1 Email"\n'

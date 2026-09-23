@@ -100,33 +100,38 @@ END;
 $$;
 REVOKE ALL ON FUNCTION public._current_person_number(uuid, bigint) FROM public, anon, authenticated;
 
--- p_doc with every record's number p_from replaced by p_to (camperId,
--- personId, person_id, camper_id — as a number or a string).
-CREATE OR REPLACE FUNCTION public._json_renumber(p_doc jsonb, p_from bigint, p_to bigint)
+-- p_doc with every record's number that is a key of p_map ({"1": 7, …})
+-- replaced by its value (camperId, personId, person_id, camper_id — as a
+-- number or a string). ONE pass over the document, whatever the number of
+-- moves (TED-024): each object is rebuilt with a single aggregate, and only
+-- objects and arrays are descended into.
+CREATE OR REPLACE FUNCTION public._json_renumber_map(p_doc jsonb, p_map jsonb)
 RETURNS jsonb
 LANGUAGE plpgsql
 IMMUTABLE
 SET search_path = public, pg_catalog
 AS $$
-DECLARE
-    v_out jsonb;
-    e     record;
+DECLARE v_out jsonb;
 BEGIN
     IF jsonb_typeof(p_doc) = 'object' THEN
-        v_out := '{}'::jsonb;
-        FOR e IN SELECT key, value FROM jsonb_each(p_doc) LOOP
-            IF e.key IN ('camperId', 'personId', 'person_id', 'camper_id')
-               AND jsonb_typeof(e.value) IN ('number', 'string')
-               AND public._stated_person_id(e.value #>> '{}') = p_from THEN
-                v_out := v_out || jsonb_build_object(e.key,
-                           CASE WHEN jsonb_typeof(e.value) = 'string' THEN to_jsonb(p_to::text) ELSE to_jsonb(p_to) END);
-            ELSE
-                v_out := v_out || jsonb_build_object(e.key, public._json_renumber(e.value, p_from, p_to));
-            END IF;
-        END LOOP;
+        SELECT COALESCE(jsonb_object_agg(e.key,
+                 CASE
+                   WHEN jsonb_typeof(e.value) IN ('object', 'array')
+                     THEN public._json_renumber_map(e.value, p_map)
+                   WHEN e.key IN ('camperId', 'personId', 'person_id', 'camper_id')
+                        AND jsonb_typeof(e.value) IN ('number', 'string')
+                        AND p_map ? COALESCE(public._stated_person_id(e.value #>> '{}')::text, '')
+                     THEN CASE WHEN jsonb_typeof(e.value) = 'string'
+                               THEN to_jsonb(p_map ->> public._stated_person_id(e.value #>> '{}')::text)
+                               ELSE p_map -> public._stated_person_id(e.value #>> '{}')::text END
+                   ELSE e.value
+                 END), '{}'::jsonb)
+          INTO v_out FROM jsonb_each(p_doc) e;
         RETURN v_out;
     ELSIF jsonb_typeof(p_doc) = 'array' THEN
-        SELECT COALESCE(jsonb_agg(public._json_renumber(x.value, p_from, p_to) ORDER BY x.ord), '[]'::jsonb)
+        SELECT COALESCE(jsonb_agg(CASE WHEN jsonb_typeof(x.value) IN ('object', 'array')
+                                       THEN public._json_renumber_map(x.value, p_map) ELSE x.value END
+                                  ORDER BY x.ord), '[]'::jsonb)
           INTO v_out FROM jsonb_array_elements(p_doc) WITH ORDINALITY x(value, ord);
         RETURN v_out;
     END IF;
@@ -134,9 +139,57 @@ BEGIN
 END;
 $$;
 
--- A saved document with every moved number of the camp carried to where it
--- went. The roster inside app1 is left to the roster trigger, which knows
--- which child each entry is. Cheap when nothing matches: one text search.
+-- One move: the same walk with a map of one.
+CREATE OR REPLACE FUNCTION public._json_renumber(p_doc jsonb, p_from bigint, p_to bigint)
+RETURNS jsonb
+LANGUAGE sql
+IMMUTABLE
+SET search_path = public, pg_catalog
+AS $$
+    SELECT public._json_renumber_map(p_doc, jsonb_build_object(p_from::text, p_to))
+$$;
+
+-- p_doc with the number p_id taken off every record that carries it (the
+-- record itself is kept). Used on money an erased child leaves behind: the
+-- amounts stay in the books, but no longer point at a number that can be
+-- given to a new child.
+CREATE OR REPLACE FUNCTION public._detach_person_json(p_doc jsonb, p_id bigint)
+RETURNS jsonb
+LANGUAGE plpgsql
+IMMUTABLE
+SET search_path = public, pg_catalog
+AS $$
+DECLARE v_out jsonb;
+BEGIN
+    IF jsonb_typeof(p_doc) = 'object' THEN
+        SELECT COALESCE(jsonb_object_agg(e.key,
+                 CASE WHEN jsonb_typeof(e.value) IN ('object', 'array')
+                      THEN public._detach_person_json(e.value, p_id) ELSE e.value END), '{}'::jsonb)
+          INTO v_out FROM jsonb_each(p_doc) e
+         WHERE NOT (e.key IN ('camperId', 'personId', 'person_id', 'camper_id')
+                    AND jsonb_typeof(e.value) IN ('number', 'string')
+                    AND public._stated_person_id(e.value #>> '{}') = p_id);
+        RETURN v_out;
+    ELSIF jsonb_typeof(p_doc) = 'array' THEN
+        SELECT COALESCE(jsonb_agg(CASE WHEN jsonb_typeof(x.value) IN ('object', 'array')
+                                       THEN public._detach_person_json(x.value, p_id) ELSE x.value END
+                                  ORDER BY x.ord), '[]'::jsonb)
+          INTO v_out FROM jsonb_array_elements(p_doc) WITH ORDINALITY x(value, ord);
+        RETURN v_out;
+    END IF;
+    RETURN p_doc;
+END;
+$$;
+
+-- A saved document with the camp's numbers put right, in one pass:
+--   * a number that MOVED is carried to where it went (TED-012/017);
+--   * a number whose child was ERASED, and that nobody holds now, is taken
+--     out: records filed under it go (as the erase removed them), and money
+--     keeps its amounts but loses the number (TED-021) — so a copy saved by a
+--     tab opened before the erase brings nothing back, and a new child later
+--     given the freed number inherits nothing.
+-- The roster inside app1 is left to the roster trigger, which knows which
+-- child each entry is. Cheap when nothing matches: one text search.
 CREATE OR REPLACE FUNCTION public._carry_moved_numbers(p_camp_id uuid, p_key text, p_doc jsonb)
 RETURNS jsonb
 LANGUAGE plpgsql
@@ -145,20 +198,34 @@ SECURITY DEFINER
 SET search_path = public, pg_catalog
 AS $$
 DECLARE
-    v_ids  text;
+    v_map  jsonb;
     v_body jsonb;
-    r      record;
+    v_seen bigint[];
+    g      bigint;
 BEGIN
-    IF p_doc IS NULL THEN RETURN p_doc; END IF;
-    SELECT string_agg(from_id::text, '|') INTO v_ids FROM camp_person_renumbers WHERE camp_id = p_camp_id;
-    IF v_ids IS NULL THEN RETURN p_doc; END IF;
-    v_body := CASE WHEN p_key = 'app1' AND jsonb_typeof(p_doc) = 'object' THEN p_doc - 'camperRoster' ELSE p_doc END;
-    IF v_body::text !~ ('"(camperId|personId|person_id|camper_id)": "?0*(' || v_ids || ')"?[,}\]]') THEN
+    IF p_doc IS NULL OR jsonb_typeof(p_doc) NOT IN ('object', 'array') THEN RETURN p_doc; END IF;
+    IF NOT EXISTS (SELECT 1 FROM camp_person_renumbers WHERE camp_id = p_camp_id)
+       AND NOT EXISTS (SELECT 1 FROM camp_erased_people WHERE camp_id = p_camp_id) THEN
         RETURN p_doc;
     END IF;
-    FOR r IN SELECT from_id, to_id FROM camp_person_renumbers WHERE camp_id = p_camp_id LOOP
-        v_body := public._json_renumber(v_body, r.from_id, r.to_id);
+    v_body := CASE WHEN p_key = 'app1' AND jsonb_typeof(p_doc) = 'object' THEN p_doc - 'camperRoster' ELSE p_doc END;
+    -- Every number the document's records carry, read once from its text.
+    SELECT array_agg(DISTINCT public._stated_person_id(m[2])) INTO v_seen
+      FROM regexp_matches(v_body::text, '"(camperId|personId|person_id|camper_id)": "?(\d{1,15})"?[,}\]]', 'g') m;
+    IF v_seen IS NULL THEN RETURN p_doc; END IF;
+
+    SELECT jsonb_object_agg(from_id::text, to_id) INTO v_map
+      FROM camp_person_renumbers WHERE camp_id = p_camp_id AND from_id = ANY (v_seen);
+    IF v_map IS NOT NULL THEN
+        v_body := public._json_renumber_map(v_body, v_map);
+    END IF;
+    FOR g IN SELECT e.person_id FROM camp_erased_people e
+              WHERE e.camp_id = p_camp_id AND e.person_id = ANY (v_seen)
+                AND NOT EXISTS (SELECT 1 FROM camp_people p WHERE p.camp_id = e.camp_id AND p.person_id = e.person_id)
+    LOOP
+        v_body := public._detach_person_json(public._scrub_person_json(v_body, g, NULL), g);
     END LOOP;
+
     IF p_key = 'app1' AND jsonb_typeof(p_doc) = 'object' AND p_doc ? 'camperRoster' THEN
         v_body := jsonb_set(v_body, '{camperRoster}', p_doc -> 'camperRoster', true);
     END IF;
@@ -407,6 +474,16 @@ BEGIN
         -- A number that moved: this entry is either that child (it gets their
         -- number today) or somebody else (who gets a number of their own).
         v_to := public._current_person_number(NEW.camp_id, v_id);
+        -- The office putting the child BACK on a number they were moved off
+        -- (the page says which number they have now): honoured — the move is
+        -- simply undone below (TED-025).
+        IF v_to IS DISTINCT FROM v_id
+           AND public._stated_person_id(e.value ->> 'renumberedFrom') = v_to
+           AND EXISTS (SELECT 1 FROM camp_people p WHERE p.camp_id = NEW.camp_id AND p.person_id = v_to
+                                                  AND p.kind = 'camper' AND p.deleted_at IS NULL
+                                                  AND (p.source_key = e.key OR NOT (v_new ? p.source_key))) THEN
+            CONTINUE;
+        END IF;
         IF v_to IS DISTINCT FROM v_id THEN
             IF EXISTS (SELECT 1 FROM camp_people p WHERE p.camp_id = NEW.camp_id AND p.person_id = v_to
                                                      AND p.kind = 'camper' AND p.source_key = e.key)
@@ -427,14 +504,17 @@ BEGIN
         v_new := jsonb_set(v_new, ARRAY[e.key], e.value - 'renumberedFrom', true);
         v_from := public._stated_person_id(e.value ->> 'renumberedFrom');
         CONTINUE WHEN v_from IS NULL;
-        v_hinted := v_hinted || jsonb_build_object(e.key, v_from);
+        -- Only the child who holds that number now, renamed in this very save
+        -- (their old key was saved, and is gone from the roster now), is this
+        -- entry. A leftover hint on anybody else is ignored (TED-027).
         SELECT p.source_key INTO v_key FROM camp_people p
          WHERE p.camp_id = NEW.camp_id AND p.person_id = v_from AND p.kind = 'camper' AND p.deleted_at IS NULL;
-        CONTINUE WHEN NOT FOUND OR v_key = e.key OR (v_new ? v_key)
+        CONTINUE WHEN NOT FOUND OR v_key = e.key OR (v_new ? v_key) OR NOT (v_prev ? v_key)
                    OR EXISTS (SELECT 1 FROM camp_people p WHERE p.camp_id = NEW.camp_id AND p.kind = 'camper'
                                  AND p.deleted_at IS NULL AND p.source_key = e.key);
         UPDATE camp_people SET source_key = e.key, updated_at = now()
          WHERE camp_id = NEW.camp_id AND person_id = v_from;
+        v_hinted := v_hinted || jsonb_build_object(e.key, v_from);
     END LOOP;
 
     -- 1. A page that has not yet adopted a key this trigger gave (259).
@@ -588,6 +668,12 @@ BEGIN
         ON CONFLICT (camp_id, person_id) DO UPDATE SET key = EXCLUDED.key, erased_at = now();
         -- the numbers this child moved off are free with theirs
         DELETE FROM camp_person_renumbers WHERE camp_id = p_camp_id AND to_id = p_person_id;
+        -- The erase keeps money (254) — but not on this number, which is free
+        -- now and may be given to a new child: the amounts stay, the number goes.
+        UPDATE camp_state_kv s
+           SET value = public._carry_moved_numbers(s.camp_id, s.key, s.value), updated_at = now()
+         WHERE s.camp_id = p_camp_id
+           AND s.value IS DISTINCT FROM public._carry_moved_numbers(s.camp_id, s.key, s.value);
     END IF;
     RETURN v;
 END;
@@ -833,6 +919,19 @@ AS $$
         ELSE false
     END
 $$;
+-- Only ONE of the two records has a birthday (it was filled in by the same
+-- edit that renamed the child), and the parent's email matches: maybe the
+-- same child — never repaired automatically, listed for a person (TED-026).
+CREATE OR REPLACE FUNCTION public._split_maybe_same_child(a jsonb, b jsonb)
+RETURNS boolean
+LANGUAGE sql
+IMMUTABLE
+SET search_path = public, pg_catalog
+AS $$
+    SELECT (COALESCE(a ->> 'dob', '') = '') <> (COALESCE(b ->> 'dob', '') = '')
+       AND COALESCE(lower(btrim(a ->> 'parent1Email')), '') <> ''
+       AND lower(btrim(a ->> 'parent1Email')) = lower(btrim(b ->> 'parent1Email'))
+$$;
 -- A record with nothing to tell a child by: it could be anyone.
 CREATE OR REPLACE FUNCTION public._split_unknown(a jsonb)
 RETURNS boolean
@@ -855,9 +954,12 @@ SECURITY DEFINER
 SET search_path = public, pg_catalog
 AS $$
     SELECT o.camp_id, o.person_id, o.source_key, s.person_id, s.source_key,
-           CASE WHEN COALESCE(o.payload ->> 'dob', '') <> '' THEN 'same date of birth' ELSE 'same parent email' END,
-           -- no other child who left at that instant could be this one…
-           NOT EXISTS (SELECT 1 FROM camp_people o2
+           CASE WHEN COALESCE(o.payload ->> 'dob', '') <> '' AND COALESCE(s.payload ->> 'dob', '') <> ''
+                THEN 'same date of birth' ELSE 'same parent email' END,
+           -- certain only on a real match (a maybe-match is for a person)…
+           public._split_same_child(o.payload, s.payload)
+           -- …no other child who left at that instant could be this one…
+           AND NOT EXISTS (SELECT 1 FROM camp_people o2
                         WHERE o2.camp_id = o.camp_id AND o2.kind = 'camper' AND o2.person_id <> o.person_id
                           AND o2.deleted_at = o.deleted_at
                           AND (public._split_same_child(o2.payload, s.payload) OR public._split_unknown(o2.payload)))
@@ -873,7 +975,8 @@ AS $$
        AND s.deleted_at IS NULL AND s.person_id <> o.person_id
        AND s.first_seen = o.deleted_at
      WHERE o.kind = 'camper' AND o.deleted_at IS NOT NULL
-       AND (public._split_same_child(o.payload, s.payload) OR public._split_unknown(o.payload))
+       AND (public._split_same_child(o.payload, s.payload) OR public._split_unknown(o.payload)
+            OR public._split_maybe_same_child(o.payload, s.payload))
 $$;
 REVOKE ALL ON FUNCTION public._split_rename_pairs() FROM public, anon, authenticated;
 
