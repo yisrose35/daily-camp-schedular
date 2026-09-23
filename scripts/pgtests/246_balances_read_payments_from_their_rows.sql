@@ -83,6 +83,25 @@ BEGIN
     END IF;
 END $$;
 
+-- ─── 2b. and through get_my_balance, which is what the portal calls ─────────
+-- With no posted ledger for this family it falls back to the derived figure —
+-- the path that showed the full amount owing.
+UPDATE camp_billing_config SET blob_updated_at = blob_updated_at - interval '1 day'
+ WHERE camp_id = 'a4600000-0000-0000-0000-000000000001';
+DO $$
+DECLARE v jsonb;
+BEGIN
+    v := public.get_my_balance('a4600000-0000-0000-0000-000000000001');
+    IF NOT COALESCE((v->>'success')::boolean, false) THEN
+        RAISE EXCEPTION 'get_my_balance failed for the parent: %', v;
+    END IF;
+    IF (v->>'balance')::numeric IS DISTINCT FROM 600 THEN
+        RAISE EXCEPTION 'the portal''s balance: expected 600 owing after $400 paid, got % (ledger=%)',
+            v->>'balance', v->>'ledger';
+    END IF;
+END $$;
+
+
 -- ─── 3. nothing left reads the dead branch ──────────────────────────────────
 DO $$
 DECLARE v jsonb := public.verify_no_finance_payments_readers();
