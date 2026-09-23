@@ -1,18 +1,19 @@
 # Ted's ledger
 
 ## Last commit checked
-`70cd931` (2026-09-23)
+`b6115a4` (2026-09-23)
 
 ## Open findings
 | ID | Severity | Description | Found | Status |
 |----|----------|-------------|-------|--------|
-| TED-044 | 🟡 | While this page's own erase awaits its answer, another computer's erase is masked (tab + own); a save in that moment reaches the server, then the page reloads | 2026-09-23 | Open |
-| TED-045 | 🟡 | No test guards "every ordinary-table write checks afresh": test:keys passes 41/41 with the 15 s rule put back for tables | 2026-09-23 | Open |
-| TED-005 | 🟠 | 14 auto-scheduler tests fail (`auto_full_day.test.js`); still 14 at 70cd931. Owner deferred. | 2026-09-23 | Open (deferred by owner) |
+| TED-046 | 🟠 | A staff call naming a child by name only (photo tag approval, Live pickup-alert mark) is sent before the erase check (ID layer sends it at once); the page is told it was stopped | 2026-09-23 | Open |
+| TED-005 | 🟠 | 14 auto-scheduler tests fail (`auto_full_day.test.js`); still 14 at b6115a4. Owner deferred. | 2026-09-23 | Open (deferred by owner) |
 
 ## Closed findings
 | ID | What it was | Closed | Proof |
 |----|-------------|--------|-------|
+| TED-044 | Own erase in flight masked another computer's erase; a save slipped through | 2026-09-23 | At b6115a4, real supabase-js (`v13/probe.e2e.js`): P2 stale save sent 0 (70cd931: 1), reload after answer; P3 own erase alone: save waits, then sent, no reload. Mutations of `erase_guard.test.js`: old tab+own → tests 3,6 fail; no wait → 3; no recheck → 2,6; own before check → 5. |
+| TED-045 | No test guarded fresh checks on ordinary-table writes | 2026-09-23 | At b6115a4: `erase_guard.test.js` test 4 fails with the 15 s table rule put back; file runs under `npm test`. |
 | TED-040 | Other tables and camper-naming RPCs checked at most every 15 s | 2026-09-23 | At 70cd931, real supabase-js (`v12/probe.e2e.js`): canteen_transactions insert after erase elsewhere → 0 sent, reload; nested `camperId` RPC → not sent, reload; test:keys fails with RPC rule at 15 s. Calls with other argument names (e.g. `p_roster_names`) still 15 s. |
 | TED-042 | Several erases sent at once made the erasing page reload itself | 2026-09-23 | At 70cd931: test:keys fails with `Promise.all` back (reloads 1) and with the in-flight count removed (reloads 2); probe P3 own erase + save → no reload. Side effect filed as TED-044. |
 | TED-043 | URL-object write passed the fetch guard | 2026-09-23 | At 70cd931: probe P4 → 409, 0 requests; test:keys fails with the old line. |
@@ -60,7 +61,7 @@
 | Area | Last deep audit |
 |------|-----------------|
 | Camper ID / camper number model (migrations 223-260, roster trigger, renumber, erase/merge, split repair, roster keys, invites, CSV import, Health entry) | 2026-09-23 (twelfth pass) |
-| Erase reload guard (`supabase_client.js` `_withEraseGuard`, fetch guard, camp_cache_epoch) | 2026-09-23 (twelfth pass: real supabase-js + fake server probes P1-P4; mutation runs of test:keys; Lite by code read; real edge functions never called) |
+| Erase reload guard (`supabase_client.js` `_withEraseGuard`, fetch guard, camp_cache_epoch) | 2026-09-23 (thirteenth pass: real supabase-js probes P1-P5; mutation runs of erase_guard.test.js and test:keys; ID layer + guard together found TED-046) |
 | Parent invitations (`link_parent_invites`, `upsert_parent_invite`, claim functions, stamp trigger, `restamp_parent_invite`) | 2026-09-23 (numbers; who may write them; staff access to codes via RPC and table policy, re-checked as `authenticated` at b92dcdc) |
 | Me page cloud save (`integration_hooks.js` batch upsert) | 2026-09-23 (only against the renumber trigger) |
 | Auto Builder (solver, layers, grid) | never (only test results seen) |
@@ -90,3 +91,4 @@
 | 2026-09-23 | Check my work: TED-033..036 fixes + erase reload rule | 10f4461 | unit 3270/14 · pg 50/0 · keys 34/0 · lite 12/0 · smoke 32/0 · scale 24/0 | 🟡 | [report](reports/2026-09-23-camper-id-tenth-recheck.md) |
 | 2026-09-23 | Check my work: TED-037..041 fixes | 50f96f6 | unit 3270/14 · pg 50/0 · keys 37/0 · lite 12/0 · smoke 32/0 · scale 24/0 | 🟡 | [report](reports/2026-09-23-camper-id-eleventh-recheck.md) |
 | 2026-09-23 | Check my work: TED-040, 042, 043 fixes | 70cd931 | unit 3270/14 · pg 50/0 · keys 41/0 · lite 12/0 · smoke 32/0 · scale 24/0 | 🟡 | [report](reports/2026-09-23-camper-id-twelfth-recheck.md) |
+| 2026-09-23 | Check my work: TED-044, 045 fixes | b6115a4 | unit 3276/14 · pg 50/0 · keys 42/0 · lite 12/0 · smoke 32/0 · scale 24/0 | 🟡 | [report](reports/2026-09-23-camper-id-thirteenth-recheck.md) |
