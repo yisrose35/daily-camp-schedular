@@ -317,6 +317,14 @@ function reservePersonId(id){
 //     number is free again. Queued in localStorage so a tab closed in between
 //     finishes it on the next load.
 var _serverHeldNumbers={};
+// Roster keys that belong to a child other than whoever shows them now (a
+// departed child, or a renamed child's old name): {key: their number}. A new
+// child is never filed under one (259) — they get "<name> #<number>".
+var _serverHeldKeys={};
+function _keyHeldByOther(key,myId){
+    var h=_serverHeldKeys&&_serverHeldKeys[key];
+    return h!=null&&String(h)!==String(myId==null?'':myId);
+}
 function _meRpc(){
     var client=window.CampistryDB&&window.CampistryDB.getClient?window.CampistryDB.getClient():window.supabase;
     var campId=window.CampistryDB&&window.CampistryDB.getCampId?window.CampistryDB.getCampId():null;
@@ -334,8 +342,33 @@ function _reconcileCamperNumbers(){
     c.client.rpc('get_camper_numbers',{p_camp_id:c.campId}).then(function(res){
         var d=res&&res.data; if(!d||d.success!==true)return;
         _serverHeldNumbers=d.departed&&typeof d.departed==='object'?d.departed:{};
+        _serverHeldKeys=d.held_keys&&typeof d.held_keys==='object'?d.held_keys:{};
         var server=d.campers||{}, holderOf={}, localCount={};
         Object.keys(server).forEach(function(k){holderOf[String(server[k])]=k});
+        // A key belongs to one child (259): where the server filed one of ours
+        // under its own key ("Avi Katz" → "Avi Katz #11", because "Avi Katz"
+        // is a departed child's), adopt it — by number when ours has one, or
+        // the single server key made from ours when it does not.
+        var adopted=[];
+        Object.keys(roster).forEach(function(k){
+            if(k in server||!roster[k])return;
+            var l=normalizePersonId(roster[k].camperId), to=null;
+            if(l&&holderOf[l]&&!(holderOf[l] in roster))to=holderOf[l];
+            else if(!l){
+                var cand=Object.keys(server).filter(function(sk){
+                    return !(sk in roster)&&sk.replace(/\s#\d+(?:-\d+)?$/,'')===k;
+                });
+                if(cand.length===1)to=cand[0];
+            }
+            if(!to)return;
+            var rec=Object.assign({},roster[k],{camperId:Number(server[to])});
+            if(!rec.displayName)rec.displayName=_lbl(k);
+            cascadeCamperRename(k,to);
+            delete roster[k];
+            roster[to]=rec;
+            adopted.push(_lbl(k));
+        });
+        if(adopted.length)console.warn('[Me] filed under their own roster key by the server:',adopted);
         Object.keys(roster).forEach(function(k){var l=normalizePersonId((roster[k]||{}).camperId);if(l)localCount[l]=(localCount[l]||0)+1});
         var fixed=[];
         Object.keys(roster).forEach(function(k){
@@ -357,6 +390,7 @@ function _reconcileCamperNumbers(){
         var next=Number(d.next)||0;
         Object.keys(_serverHeldNumbers).forEach(function(n){if(Number(n)>=next)next=Number(n)+1});
         if(next>nextPersonId)nextPersonId=next;
+        if(adopted.length&&!fixed.length){save();render(curPage);}
         if(fixed.length){
             console.warn('[Me] camper numbers corrected by the server:',fixed);
             save();render(curPage);
@@ -5680,7 +5714,15 @@ function saveCamper(){
     // payments[].camper / Campistry-Go addresses all reference campers BY NAME. On a
     // rename we must update those refs or the camper is silently detached from their
     // family, bunk assignment, and billing.
-    if(editingCamper&&editingCamper!==full){cascadeCamperRename(editingCamper,full);delete roster[editingCamper]}
+    // A rename onto a key that belongs to another child (a departed camper, or
+    // somebody's old name) is filed under this child's own key instead (259).
+    var _editKey=null;
+    if(editingCamper&&editingCamper!==full){
+        var _rid=normalizePersonId((roster[editingCamper]||{}).camperId);
+        _editKey=_keyHeldByOther(full,_rid)&&_rid?(full+' #'+_rid):full;
+        if(_editKey!==editingCamper){cascadeCamperRename(editingCamper,_editKey);delete roster[editingCamper]}
+        if(_editKey===full)_editKey=null;
+    }
     // Gather teams
     var teams={};document.querySelectorAll('.ceTeamSel').forEach(function(sel){var lg=sel.dataset.league,v=sel.value;if(lg&&v)teams[lg]=v});
     function _v(id){var el=document.getElementById(id);return el?(el.value||''):'';}
@@ -5704,11 +5746,11 @@ function saveCamper(){
     // and carries displayName for every screen to show. Existing campers keep the
     // keys they have — see campistry_camper_identity.js for why the key stays a
     // string rather than becoming the id everywhere at once.
-    var _dupKey=null;
-    if(!editingCamper&&roster[full]){
+    var _dupKey=_editKey;
+    if(!editingCamper&&(roster[full]||_keyHeldByOther(full,existingId))){
         var _ID=(typeof window!=='undefined'&&window.CamperIdentity)||null;
         if(!_ID){toast('Already exists','error');return}
-        _dupKey=_ID.uniqueKey(roster,full,existingId);
+        _dupKey=roster[full]?_ID.uniqueKey(roster,full,existingId):(full+' #'+existingId);
         if(!_dupKey||roster[_dupKey]){toast('Already exists','error');return}
     }
     var _summerSameEl=document.getElementById('ceSummerSame');
@@ -5769,25 +5811,25 @@ function saveCamper(){
     }
     if(roster[_key].history.length>200) roster[_key].history=roster[_key].history.slice(-200);
     // Sync address to Campistry Go format
-    syncAddressToGo(full,roster[_key]);
+    syncAddressToGo(_key,roster[_key]);
     // Every camper belongs to a family. Join an EXISTING family only when the
     // camper matches it on 3+ of {last name, address, parent email, parent
     // name} — a shared last name alone is NOT enough. Otherwise start a new,
     // uniquely-keyed family for them.
     if(last){
-        var famKey=_resolveFamilyKey(full,_famItem(full,roster[_key]));
+        var famKey=_resolveFamilyKey(_key,_famItem(_key,roster[_key]));
         if(!famKey){
             famKey='fam_'+last.toLowerCase().replace(/[^a-z0-9]/g,'')+'_'+(existingId||Date.now());
             var p1e={name:roster[_key].parent1Name||'',phone:roster[_key].parent1Phone||'',email:roster[_key].parent1Email||'',relation:'Parent'};
             families[famKey]={
                 name:last+' Family',
                 households:[{label:'Primary',parents:[p1e],address:[roster[_key].street,roster[_key].city,roster[_key].state,roster[_key].zip].filter(Boolean).join(', '),billingContact:true}],
-                camperIds:[full],
+                camperIds:[_key],
                 balance:0,totalPaid:0,notes:'Added via camper profile'
             };
         } else {
             // Add this camper to the matched family if not already there
-            if(families[famKey].camperIds.indexOf(full)<0)families[famKey].camperIds.push(full);
+            if(families[famKey].camperIds.indexOf(_key)<0)families[famKey].camperIds.push(_key);
             // Backfill parent info if the primary household had none
             var hh0=families[famKey].households&&families[famKey].households[0];
             if(hh0&&hh0.parents&&hh0.parents[0]&&!hh0.parents[0].name&&roster[_key].parent1Name){
@@ -5807,19 +5849,19 @@ function saveCamper(){
     // meant no Link invite could ever be generated for them and Registration
     // undercounted actual campers).
     var wasNew=!editingCamper;
-    if(wasNew)_autoCreateAcceptedEnrollment(full);
+    if(wasNew)_autoCreateAcceptedEnrollment(_key);
     var wasEdit=!!editingCamper;
     // A rename means roster[editingCamper] no longer exists — if their
     // profile page is what's open (which is where Edit is reached from),
     // point it at the new name so the re-render below doesn't hit "not found".
-    if(curPage==='camperdetail'&&_camperDetailName===editingCamper)_camperDetailName=full;
+    if(curPage==='camperdetail'&&_camperDetailName===editingCamper)_camperDetailName=_key;
     save();closeModal('camperEditModal');render(curPage);toast(editingCamper?'Updated':'Added');
     // Keep any already-issued parent portal invite in sync. The invite stores
     // a snapshot of camper_data at creation time (see _syncParentInviteSnapshot)
     // — without this, bunk/division/allergy/etc. edits made here would never
     // reach a parent who already has portal access until someone manually
     // clicked "Get Invite Link" again.
-    _syncInvitesForCamper(full);
+    _syncInvitesForCamper(_key);
     // Fix (b): the camp changed this parent's email on file → move their existing
     // invite to the new email IN PLACE (keeps the signed-up parent connected +
     // preserves token/code), instead of leaving an orphan for the old email.
@@ -14665,7 +14707,9 @@ function _rosterKeyForApplication(e){
         for(var i=0;i<ks.length;i++){var r=roster[ks[i]];if(r&&r.camperId!=null&&String(r.camperId)===String(e.camperId))return ks[i];}
     }
     var cur=roster[name];
-    if(!cur)return name;
+    // A key that belongs to a departed child, or to somebody's old name: this
+    // is a new child, and gets their own (259).
+    if(!cur)return _keyHeldByOther(name,null)&&!roster[name+' #'+nextPersonId]?(name+' #'+nextPersonId):name;
     var dobA=String(e.dob||'').trim(),dobB=String(cur.dob||'').trim();
     var em=String(e.parentEmail||'').trim().toLowerCase();
     var ems=[cur.parent1Email,cur.parent2Email].map(function(x){return String(x||'').trim().toLowerCase()}).filter(Boolean);
@@ -15072,7 +15116,10 @@ function renderFinance(){
         if(_efk)_finFamSeen[_efk]=1;
         var manualPay=finPayments.filter(function(p){
             if(p.enrollmentId===id)return true;                       // recorded against this camper
-            if(p.family===e.camperName||p.camper===e.camperName)return true;
+            // This camper's own payment: by number when the payment and the
+            // enrollment both carry one, by name only for one from before numbers.
+            if(p.camperId!=null&&p.camperId!==''&&e.camperId!=null&&e.camperId!==''){if(String(p.camperId)===String(e.camperId))return true;}
+            else if(p.family===e.camperName||p.camper===e.camperName)return true;
             if(!_efk||!_firstOfFamily)return false;                   // don't pay a family twice
             var pfk=(p.familyKey&&families[p.familyKey])?p.familyKey:_payFamilyByName(p);
             return pfk===_efk&&!p.enrollmentId;
@@ -22196,10 +22243,13 @@ function importRows(rows,mode){
             isUpdate=true;
             camperId=roster[byId].camperId;
             oldBunk=roster[byId].bunk;
-            if(byId!==r.name){cascadeCamperRename(byId,r.name);delete roster[byId];_importRenamedById.push(byId+' \u2192 '+r.name);}
-            targetName=r.name;
+            // Renamed onto a key that belongs to someone else (a departed child,
+            // or somebody's old name): filed under their own key (259).
+            var _to=_keyHeldByOther(r.name,camperId)?(r.name+' #'+camperId):r.name;
+            if(byId!==_to){cascadeCamperRename(byId,_to);delete roster[byId];_importRenamedById.push(_lbl(byId)+' \u2192 '+r.name);}
+            targetName=_to;
         }else{
-        var existing=roster[r.name];
+        var existing=roster[r.name], _needOwnKey=false;
         if(mode==='update'&&existing&&_sameCamperSignal(existing,r)){
             // Same camper (name + same family) — update in place, keep
             // their camperId, and move them off any OLD bunk they're no
@@ -22213,8 +22263,9 @@ function importRows(rows,mode){
             // roster; in Replace mode it's two rows in THIS file sharing a
             // name (the earlier de-dupe pass only collapses TRUE duplicates
             // — same name AND same family). Either way, don't overwrite —
-            // give them their own roster slot.
-            targetName=_disambiguateRosterName(r.name);
+            // give them their own roster slot — their own key, made from their
+            // number below, shown as their plain name.
+            _needOwnKey=true;
             _importDupeNames.push(r.name);
         }
         }
@@ -22230,6 +22281,12 @@ function importRows(rows,mode){
                 if(r.camperId)_importIdClashes.push(r.name+' (#'+r.camperId+')');
                 camperId=nextPersonId;nextPersonId++;
             }
+            // A new child never takes a key that belongs to someone else: a
+            // camper on the roster, a departed child, or somebody's old name (259).
+            if(_needOwnKey||roster[targetName]||_keyHeldByOther(targetName,camperId)){
+                var _ID2=(typeof window!=='undefined'&&window.CamperIdentity)||null;
+                targetName=(_ID2&&roster[r.name])?_ID2.uniqueKey(roster,r.name,camperId):(r.name+' #'+camperId);
+            }
         }
 
         // No invite refresh here, unlike saveCamper and enrollCamper, and the
@@ -22239,6 +22296,7 @@ function importRows(rows,mode){
         // an imported camper is not on any invite to be stamped into. They reach a
         // parent portal when they are enrolled, and enrollCamper refreshes it then.
         roster[targetName]=_buildCamperRecord(r,camperId);
+        if(targetName!==r.name)roster[targetName].displayName=r.name;
         if(oldBunk&&oldBunk!==r.bunk&&bunkAsgn[oldBunk]){
             var oi=bunkAsgn[oldBunk].indexOf(targetName);
             if(oi!==-1)bunkAsgn[oldBunk].splice(oi,1);

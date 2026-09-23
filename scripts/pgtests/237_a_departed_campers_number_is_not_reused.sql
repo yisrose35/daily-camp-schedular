@@ -79,9 +79,11 @@ UPDATE camp_state_kv
 DO $$
 DECLARE v_live bigint; v_dead bigint; v_bal numeric;
 BEGIN
+    -- Since 259 the new child is filed under a key of their own
+    -- ("John Smith #<n>", shown as "John Smith"): the departed child keeps his.
     SELECT person_id INTO v_live FROM camp_people
      WHERE camp_id = 'f3700000-0000-0000-0000-000000000001' AND kind = 'camper'
-       AND source_key = 'John Smith' AND deleted_at IS NULL;
+       AND regexp_replace(source_key, '\s#\d+(?:-\d+)?$', '') = 'John Smith' AND deleted_at IS NULL;
     SELECT person_id INTO v_dead FROM camp_people
      WHERE camp_id = 'f3700000-0000-0000-0000-000000000001' AND kind = 'camper'
        AND source_key = 'John Smith' AND deleted_at IS NOT NULL;
@@ -180,10 +182,12 @@ END $$;
 INSERT INTO camp_canteen_accounts (camp_id, account_key, person_id, camper_name, balance)
 VALUES ('f3700000-0000-0000-0000-000000000002', 'Rivka Stern 2', 8, 'Rivka Stern', 5.00);
 
+-- Since 259 the new Rivka is filed under her own key, "Rivka Stern #8" (the
+-- departed #7 keeps "Rivka Stern"); the page saves her under it.
 UPDATE camp_state_kv
    SET value = jsonb_build_object('camperRoster', jsonb_build_object(
-        'Rivka Stern', jsonb_build_object('name', 'Rivka Stern', 'camperId', 12,
-                                          'bunk', 'Soloists 2')))
+        'Rivka Stern #8', jsonb_build_object('name', 'Rivka Stern', 'camperId', 12,
+                                             'bunk', 'Soloists 2')))
  WHERE camp_id = 'f3700000-0000-0000-0000-000000000002' AND key = 'app1';
 
 DO $$
@@ -221,7 +225,7 @@ DECLARE v jsonb;
 BEGIN
     -- Dry run first, and it must change nothing.
     v := public.camper_returns_as('f3700000-0000-0000-0000-000000000002'::uuid,
-                                  'Rivka Stern', 7);
+                                  'Rivka Stern #8', 7);
     IF (v->>'dry_run')::boolean IS NOT TRUE THEN
         RAISE EXCEPTION 'camper_returns_as is not dry by default: %', v;
     END IF;
@@ -243,7 +247,7 @@ BEGIN
        AND account_key = 'Rivka Stern';        -- the departed one's, freeing 7
 
     v := public.camper_returns_as('f3700000-0000-0000-0000-000000000002'::uuid,
-                                  'Rivka Stern', 7, true);
+                                  'Rivka Stern #8', 7, true);
     IF (v->>'success')::boolean IS NOT TRUE THEN
         RAISE EXCEPTION 'the merge failed: %', v;
     END IF;
@@ -272,7 +276,7 @@ END $$;
 DO $$
 DECLARE v_id text;
 BEGIN
-    SELECT value #>> ARRAY['camperRoster', 'Rivka Stern', 'camperId'] INTO v_id
+    SELECT value #>> ARRAY['camperRoster', 'Rivka Stern #8', 'camperId'] INTO v_id
       FROM camp_state_kv
      WHERE camp_id = 'f3700000-0000-0000-0000-000000000002' AND key = 'app1';
     IF v_id IS DISTINCT FROM '7' THEN
@@ -303,7 +307,7 @@ BEGIN
     VALUES ('f3700000-0000-0000-0000-000000000002', 99, 'camper',
             'Somebody Else', 'Somebody Else');
     v := public.camper_returns_as('f3700000-0000-0000-0000-000000000002'::uuid,
-                                  'Rivka Stern', 99, true);
+                                  'Rivka Stern #8', 99, true);
     IF v->>'error' IS DISTINCT FROM 'that_camper_is_still_enrolled' THEN
         RAISE EXCEPTION 'it merged a child onto somebody who is still here: %', v;
     END IF;

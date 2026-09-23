@@ -1012,6 +1012,13 @@ var children = [];
 // ("child_0") — never a camper number; `camperId` is, from the camp's own data
 // or the numbers on this parent's invitations (get_my_camper_ids, 249).
 function _numOrNull(v){ return (v!=null && /^\d+$/.test(String(v))) ? Number(v) : null; }
+function _childIdByName(name){ var k=(children||[]).find(function(c){ return c.name===name; }); return k ? k.camperId : null; }
+// A saved row is this child's: by number when both carry one; by name only
+// for a row from before numbers.
+function _sameChild(rowId, rowName, id, name){
+    var a=_numOrNull(rowId), b=_numOrNull(id);
+    return (a!=null && b!=null) ? a===b : rowName===name;
+}
 var messages = [];
 var payments = [];
 var canteenTxByChild = {};
@@ -5109,8 +5116,11 @@ if (window.pdfjsLib) { window.pdfjsLib.GlobalWorkerOptions.workerSrc = 'pdfjs-di
             if (cb) cb();
         });
     }
-    window._isFormSubmittedCloud = function(formId, camperName) {
-        return _cloudSubs.some(function(s) { return s.form_id === formId && s.camper_name === camperName; });
+    // Sent for THIS child: by camper number when both sides carry one (259
+    // returns it), by name only for a response from before numbers.
+    window._isFormSubmittedCloud = function(formId, camperName, camperId) {
+        if (camperId == null) camperId = _childIdByName(camperName);
+        return _cloudSubs.some(function(s) { return s.form_id === formId && _sameChild(s.person_id, s.camper_name, camperId, camperName); });
     };
 
     // ── Camper Mail bridge (migration 015) ────────────────────────────────────
@@ -5821,8 +5831,9 @@ if (window.pdfjsLib) { window.pdfjsLib.GlobalWorkerOptions.workerSrc = 'pdfjs-di
         // local (this device) merged with cloud (any device)
         var mySubs = (typeof _foGetMySubmissions === 'function') ? _foGetMySubmissions() : [];
         function isSubmitted(formId, camperName) {
-            return mySubs.some(function(s){ return s.formId === formId && s.camper === camperName; })
-                || _cloudSubs.some(function(s){ return s.form_id === formId && s.camper_name === camperName; });
+            var cid = _childIdByName(camperName);
+            return mySubs.some(function(s){ return s.formId === formId && _sameChild(s.camperId, s.camper, cid, camperName); })
+                || _cloudSubs.some(function(s){ return s.form_id === formId && _sameChild(s.person_id, s.camper_name, cid, camperName); });
         }
         // Multi-camp: a form only pairs with children at the form's own camp.
         function _kidsForForm(f) {

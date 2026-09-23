@@ -159,6 +159,8 @@ test('enrolling an application: a different child who shares a name gets their o
             'Chaya Gold #9': { camperId: 9, displayName: 'Chaya Gold' },
         },
         nextPersonId: 800, String, Object, window: { CamperIdentity: I },
+        // "Old Name" belongs to a departed child (259).
+        _keyHeldByOther: (k) => k === 'Old Name',
     };
     vm.runInNewContext(SRC.slice(start, end), ctx);
     const key = ctx._rosterKeyForApplication;
@@ -172,4 +174,37 @@ test('enrolling an application: a different child who shares a name gets their o
     assert.strictEqual(key({ camperName: 'Rivka Stern' }), 'Rivka Stern', 'nothing says otherwise: same child');
     assert.strictEqual(key({ camperName: 'Chaya Gold', camperId: 9 }), 'Chaya Gold #9', 'a number finds its own camper');
     assert.strictEqual(key({ camperName: 'New Kid' }), 'New Kid');
+    assert.strictEqual(key({ camperName: 'Old Name' }), 'Old Name #800',
+        'a departed child\'s key is not given to a new child');
+});
+
+test('a key belongs to one child (259): the page adopts the key the server filed its camper under', async () => {
+    const renamed = [];
+    const roster = {
+        'Avi Katz': { name: 'Avi Katz', camperId: 11, bunk: 'B1' },   // stated number, old key
+        'Sara Levi': { name: 'Sara Levi' },                           // no number yet, old key
+        'Dov Stern': { name: 'Dov Stern', camperId: 3 },              // untouched
+    };
+    const { ctx } = load({ roster, next: 20, reply: () => ({
+        success: true, next: 20,
+        campers: { 'Avi Katz #11': 11, 'Sara Levi #14': 14, 'Dov Stern': 3 },
+        departed: { 10: 'Avi Katz', 9: 'Sara Levi' },
+        held_keys: { 'Avi Katz': 10, 'Sara Levi': 9 },
+    }) });
+    ctx.cascadeCamperRename = (a, b) => renamed.push(a + ' → ' + b);
+    ctx._reconcileCamperNumbers();
+    await tick(); await tick();
+    assert.ok(!('Avi Katz' in roster) && roster['Avi Katz #11'], 'the page did not adopt "Avi Katz #11"');
+    assert.strictEqual(roster['Avi Katz #11'].camperId, 11);
+    assert.strictEqual(roster['Avi Katz #11'].displayName, 'Avi Katz', 'shown as the plain name');
+    assert.strictEqual(roster['Avi Katz #11'].bunk, 'B1', 'with all of their data');
+    assert.ok(!('Sara Levi' in roster) && roster['Sara Levi #14'] && roster['Sara Levi #14'].camperId === 14,
+        'a camper without a number is adopted by the one key made from theirs');
+    assert.deepStrictEqual(renamed, ['Avi Katz → Avi Katz #11', 'Sara Levi → Sara Levi #14'],
+        'every reference moved with them');
+    assert.ok(roster['Dov Stern'] && roster['Dov Stern'].camperId === 3);
+    assert.strictEqual(ctx._keyHeldByOther('Avi Katz', null), true, 'a new child may not take "Avi Katz"');
+    assert.strictEqual(ctx._keyHeldByOther('Avi Katz', 10), false, 'its own child may');
+    assert.strictEqual(ctx._keyHeldByOther('Nobody', null), false);
+    assert.ok(ctx.saved > 0, 'the adoption is saved');
 });

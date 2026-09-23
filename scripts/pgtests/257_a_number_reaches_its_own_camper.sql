@@ -49,7 +49,9 @@ END $$;
 DO $$
 DECLARE c uuid := 'a5700000-0000-0000-0000-000000000001'; v jsonb;
 BEGIN
-    IF (SELECT person_id FROM camp_people WHERE camp_id = c AND source_key = 'Avi Katz' AND deleted_at IS NULL)
+    -- (since 259 the new Avi is filed under "Avi Katz #11", shown as "Avi Katz")
+    IF (SELECT person_id FROM camp_people WHERE camp_id = c AND deleted_at IS NULL
+         AND regexp_replace(source_key, '\s#\d+(?:-\d+)?$', '') = 'Avi Katz')
        IS DISTINCT FROM 11 THEN
         RAISE EXCEPTION 'setup: the new Avi Katz is not #11';
     END IF;
@@ -101,9 +103,13 @@ BEGIN
     PERFORM pg_temp.expect('an office credit for #11', 0, 8);
     PERFORM public.submit_canteen_purchase(c, 'Avi Katz', 2, 'Chips', p_camper_id => 11);
     PERFORM pg_temp.expect('a purchase for #11', 0, 6);
-    -- and by name alone, the enrolled child is the one meant
+    -- and by key alone (a page from before numbers): each key reaches the
+    -- child it belongs to — since 259 the new Avi is "Avi Katz #11" and
+    -- "Avi Katz" stays the departed #10's.
+    PERFORM public.canteen_office_credit(c, 'Avi Katz #11', 1);
+    PERFORM pg_temp.expect('an office credit by the new Avi''s key', 0, 7);
     PERFORM public.canteen_office_credit(c, 'Avi Katz', 1);
-    PERFORM pg_temp.expect('an office credit by name', 0, 7);
+    PERFORM pg_temp.expect('an office credit by the departed Avi''s key', 1, 7);
 END $$;
 RESET "request.jwt.claims";
 
@@ -293,8 +299,13 @@ BEGIN
     IF NOT public.verify_my_camper(c, 'Avi Katz', 11) THEN
         RAISE EXCEPTION 'the parent is not told they own their own child #11';
     END IF;
-    IF NOT public.verify_my_camper(c, 'Avi Katz') THEN
-        RAISE EXCEPTION 'by name alone the enrolled child is the parent''s';
+    -- By key alone: since 259 the parent's child is "Avi Katz #11"; the key
+    -- "Avi Katz" is the departed #10's and is not theirs.
+    IF NOT public.verify_my_camper(c, 'Avi Katz #11') THEN
+        RAISE EXCEPTION 'by their own key the child is not the parent''s';
+    END IF;
+    IF public.verify_my_camper(c, 'Avi Katz') THEN
+        RAISE EXCEPTION 'the departed Avi''s key reaches the new Avi''s parent';
     END IF;
 END $$;
 RESET "request.jwt.claims";

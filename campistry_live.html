@@ -591,7 +591,7 @@ var ParentRequests = (function(){
                 if(res.error){ console.warn('[Live] parent requests load:',res.error.message); if(cb)cb(); return; }
                 var mapped=(res.data||[]).map(function(m){
                     return Object.assign({}, m.details||{}, {
-                        id:m.id, type:m.type, label:m.label, childName:m.camper_name, childBunk:m.camper_bunk||'',
+                        id:m.id, type:m.type, label:m.label, childName:m.camper_name, childId:m.person_id!=null?m.person_id:null, childBunk:m.camper_bunk||'',
                         parentName:m.parent_name||'', parentEmail:m.parent_email||'',
                         submittedAt:new Date(m.created_at).getTime(), requestDate:m.request_date||'',
                         status:m.status||'Pending', officeMessage:m.office_message||'', staffNote:m.staff_notes||'',
@@ -624,7 +624,7 @@ var ParentRequests = (function(){
                 if(res.error){ console.warn('[Live] dismissal changes report query failed:',res.error.message); return []; }
                 return (res.data||[]).map(function(m){
                     return Object.assign({}, m.details||{}, {
-                        id:m.id, type:m.type, label:m.label, childName:m.camper_name, childBunk:m.camper_bunk||'',
+                        id:m.id, type:m.type, label:m.label, childName:m.camper_name, childId:m.person_id!=null?m.person_id:null, childBunk:m.camper_bunk||'',
                         status:m.status||'Pending', requestDate:m.request_date||''
                     });
                 });
@@ -751,7 +751,7 @@ var ParentRequests = (function(){
                 // migration 064) — this is the one place that acknowledgment
                 // status still shows, same as before Messages/Changes/Pickup
                 // Alerts were three separate pages.
-                (r.status==='Confirmed'&&r.type==='early'&&window.PickupAlerts?window.PickupAlerts.statusStripHtml(r.childName):'')+
+                (r.status==='Confirmed'&&r.type==='early'&&window.PickupAlerts?window.PickupAlerts.statusStripHtml(r.childName,r.childId):'')+
                 '<textarea class="form-input" rows="1" placeholder="Staff note (not shared with parent)" style="margin-top:6px;font-size:.76rem;" onblur="ParentRequests.saveNote('+i+',this.value)">'+esc(r.staffNote||'')+'</textarea>'+
                 actions+
             '</div>'+
@@ -1170,8 +1170,12 @@ var PickupAlerts = (function(){
 
     // Inline status strip shown on a Confirmed early-pickup row in
     // ParentRequests' Activity view (see _activityReqRowHtml).
-    function statusStripHtml(camperName){
-        var a=_alerts.filter(function(x){return x.camper_name===camperName;})
+    // The alert for this child: by camper number when both carry one, by
+    // name only for a row from before numbers.
+    function statusStripHtml(camperName,camperId){
+        var a=_alerts.filter(function(x){
+                return (camperId!=null&&x.person_id!=null)?String(x.person_id)===String(camperId):x.camper_name===camperName;
+            })
             .sort(function(x,y){return (y.created_at||'').localeCompare(x.created_at||'');})[0];
         if(!a||!a.recipients||!a.recipients.length)return '';
         var rows=a.recipients.map(function(r){
@@ -1216,7 +1220,7 @@ var PickupAlerts = (function(){
                     '<span class="badge '+(allAcked?'badge-ok':'badge-warn')+'" style="margin-left:auto;">'+(allAcked?'All acknowledged':'Awaiting acknowledgment')+'</span>'+
                 '</div>'+
                 '<div style="font-size:.78rem;color:var(--slate-500);margin-top:4px;">Pickup at '+esc(_fmtTime12(a.pickup_time))+(a.camper_division?' · '+esc(a.camper_division):'')+'</div>'+
-                statusStripHtml(a.camper_name)+
+                statusStripHtml(a.camper_name,a.person_id)+
             '</div></div>';
         }).join('');
     }

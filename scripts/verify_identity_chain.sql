@@ -1,5 +1,5 @@
 -- ============================================================================
--- Confirm migrations 222-258 are in and doing their job.
+-- Confirm migrations 222-259 are in and doing their job.
 --
 -- Paste the whole thing into the Supabase SQL Editor. It is READ ONLY — one
 -- SELECT, nothing is created, changed or deleted, and the two purge functions
@@ -469,6 +469,16 @@ UNION ALL
             THEN 'face rows are still one per NAME — re-apply 258'
           WHEN to_regclass('public.idx_lcfd_parent_pose') IS NOT NULL
             THEN 'reference photos are still one per NAME — re-apply 258'
+          ELSE 'ok' END),
+
+    -- A roster key belongs to one child while anything about them exists,
+    -- and a rename keeps the camper's number.
+    ('259  a roster key belongs to one child; a rename keeps the number',
+     CASE WHEN to_regprocedure('public.verify_roster_keys()') IS NULL THEN 'apply 259'
+          WHEN public.verify_roster_keys() -> 'keys_shown_by_the_wrong_child' <> '[]'::jsonb
+            THEN 'KEY ON THE WRONG CHILD: ' || (public.verify_roster_keys() ->> 'keys_shown_by_the_wrong_child')
+          WHEN (public.verify_roster_keys() ->> 'unrecorded_keys')::int <> 0
+            THEN (public.verify_roster_keys() ->> 'unrecorded_keys') || ' keys not recorded — re-apply 259'
           ELSE 'ok' END)
     ) AS x(item, result)
 
@@ -485,6 +495,9 @@ UNION ALL
     ('parent ownership',   public.verify_camper_ownership()::text),
     ('face consent',       public.verify_face_consent()::text),
     ('canteen identity',   public.verify_canteen_identity()::text),
+    -- keys_shared_before_259: where a departed child's old records may sit under
+    -- a live child's key (from before 259). Worth a look; not an error.
+    ('roster keys',        public.verify_roster_keys()::text),
     -- slots_a_later_arrival_could_claim must be 0. slots_awaiting_a_decision is
     -- a queue for the office, not a defect — work it with
     -- parent_invites_needing_attention() and restamp_parent_invite().

@@ -44,14 +44,15 @@ UPDATE camp_state_kv SET value = '{"camperRoster":{"Avi Katz":{"name":"Avi Katz"
  WHERE camp_id = 'a5800000-0000-0000-0000-000000000001' AND key = 'app1';
 INSERT INTO link_parent_invites (camp_id, user_id, parent_email, camper_names, person_ids, status) VALUES
     ('a5800000-0000-0000-0000-000000000001', 'a5800000-0000-0000-0000-0000000000b2', 'new@258.test', '["Avi Katz"]', '[11]', 'active');
--- A document from before numbers, for the child who is here now.
+-- A document from before numbers, for the child who is here now — filed
+-- under his key, which since 259 is "Avi Katz #11" ("Avi Katz" is #10's).
 INSERT INTO link_health_submissions (id, camp_id, camper_name, person_id, file_name, file_type, file_data, note)
-VALUES (gen_random_uuid(), 'a5800000-0000-0000-0000-000000000001', 'Avi Katz', NULL, 'legacy.pdf', 'application/pdf', 'AA', '');
+VALUES (gen_random_uuid(), 'a5800000-0000-0000-0000-000000000001', 'Avi Katz #11', NULL, 'legacy.pdf', 'application/pdf', 'AA', '');
 
 DO $$
 BEGIN
     IF (SELECT person_id FROM camp_people WHERE camp_id = 'a5800000-0000-0000-0000-000000000001'
-         AND source_key = 'Avi Katz' AND deleted_at IS NULL) IS DISTINCT FROM 11 THEN
+         AND regexp_replace(source_key, '\s#\d+(?:-\d+)?$', '') = 'Avi Katz' AND deleted_at IS NULL) IS DISTINCT FROM 11 THEN
         RAISE EXCEPTION 'setup: the new Avi Katz is not #11';
     END IF;
     IF public.verify_parent_reads_by_number() <> '[]'::jsonb THEN

@@ -27,6 +27,15 @@
 // =============================================================================
 (function() {
     'use strict';
+
+    // Which child a tag, suggestion or template is for: by camper NUMBER when
+    // both sides carry one; by name only for one written before numbers.
+    function _idOf(name) { return window.campistryCamperId ? window.campistryCamperId(name) : null; }
+    function _isCamper(t, name, id) {
+        if (!t) return false;
+        if (id != null && id !== '' && t.camperId != null && t.camperId !== '') return String(t.camperId) === String(id);
+        return (t.camperName != null ? t.camperName : t.name) === name;
+    }
     console.log('[LinkPhotos] Photo Recognition Engine v2.0 loading...');
 
     const PHOTO_STORE = 'campistry_link_photos_v1';
@@ -810,7 +819,7 @@
                         if (x.via === 'torso') {
                             // same clothing, face inconclusive → human suggestion only
                             // (camp uniforms make clothing ambiguous between kids)
-                            if (s.result.pending.some(function(p) { return p.camperName === x.camperName; })) return;
+                            if (s.result.pending.some(function(p) { return _isCamper(p, x.camperName, x.camperId); })) return;
                             s.result.pending.push({
                                 camperName: x.camperName, camperId: x.camperId != null ? x.camperId : null,
                                 confidence: x.torsoSim != null ? Math.round(x.torsoSim * 0.4 * 100) / 100 : 0.2,
@@ -828,7 +837,7 @@
                             autoAccepted: true, via: 'burst'
                         });
                         // a burst tag outranks a pending suggestion for the same camper
-                        s.result.pending = s.result.pending.filter(function(p) { return p.camperName !== x.camperName; });
+                        s.result.pending = s.result.pending.filter(function(p) { return !_isCamper(p, x.camperName, x.camperId); });
                         burstExtra++;
                         _store.stats.burstTagged++;
                     });
@@ -1125,7 +1134,8 @@
     async function resolvePendingTag(photoId, camperName, approve) {
         var photo = _store.photos.find(function(p) { return p.id === photoId; });
         if (!photo) return { success: false, error: 'photo_not_found' };
-        var idx = (photo.pendingTags || []).findIndex(function(t) { return t.camperName === camperName; });
+        var camperId = _idOf(camperName);
+        var idx = (photo.pendingTags || []).findIndex(function(t) { return _isCamper(t, camperName, camperId); });
         if (idx < 0) return { success: false, error: 'tag_not_pending' };
         var tag = photo.pendingTags[idx];
         photo.pendingTags.splice(idx, 1);
@@ -1249,7 +1259,8 @@
             if (!descriptors[model]) continue;
             entry.descriptors.push({ descriptor: Array.from(descriptors[model]), model: model, pose: 'confirmed', source: 'confirmed' });
         }
-        var camper = _camperTemplates.find(function(c) { return c.name === camperName; });
+        var _cid = _idOf(camperName);
+        var camper = _camperTemplates.find(function(c) { return _isCamper(c, camperName, _cid); });
         if (camper) {
             var byModel = {};
             entry.descriptors.forEach(function(d) {
@@ -1274,9 +1285,9 @@
         var photo = _store.photos.find(function(p) { return p.id === photoId; });
         if (!photo) return false;
         // Avoid duplicates
-        if (photo.tags.some(function(t) { return t.camperName === camperName; })) return false;
-        if (photo.manualTags.some(function(t) { return t.camperName === camperName; })) return false;
-        var camperId = window.campistryCamperId ? window.campistryCamperId(camperName) : null;
+        var camperId = _idOf(camperName);
+        if (photo.tags.some(function(t) { return _isCamper(t, camperName, camperId); })) return false;
+        if (photo.manualTags.some(function(t) { return _isCamper(t, camperName, camperId); })) return false;
         photo.manualTags.push({ camperName: camperName, camperId: camperId, confidence: 1.0, manual: true });
         saveStore();
         return true;
@@ -1288,9 +1299,10 @@
     function removeTag(photoId, camperName) {
         var photo = _store.photos.find(function(p) { return p.id === photoId; });
         if (!photo) return false;
-        photo.tags = photo.tags.filter(function(t) { return t.camperName !== camperName; });
-        photo.manualTags = photo.manualTags.filter(function(t) { return t.camperName !== camperName; });
-        photo.pendingTags = (photo.pendingTags || []).filter(function(t) { return t.camperName !== camperName; });
+        var camperId = _idOf(camperName);
+        photo.tags = photo.tags.filter(function(t) { return !_isCamper(t, camperName, camperId); });
+        photo.manualTags = photo.manualTags.filter(function(t) { return !_isCamper(t, camperName, camperId); });
+        photo.pendingTags = (photo.pendingTags || []).filter(function(t) { return !_isCamper(t, camperName, camperId); });
         saveStore();
         return true;
     }
@@ -1303,10 +1315,11 @@
      * Get all photos for a specific camper (auto + manual tags; NOT pending)
      */
     function getPhotosForCamper(camperName, weekKey) {
+        var camperId = _idOf(camperName);
         return _store.photos.filter(function(p) {
             if (weekKey && p.week !== weekKey) return false;
             var allTags = (p.tags || []).concat(p.manualTags || []);
-            return allTags.some(function(t) { return t.camperName === camperName; });
+            return allTags.some(function(t) { return _isCamper(t, camperName, camperId); });
         });
     }
 
