@@ -1,20 +1,25 @@
 # Ted's ledger
 
 ## Last commit checked
-`b92dcdc` (2026-09-23)
+`10f4461` (2026-09-23)
 
 ## Open findings
 | ID | Severity | Description | Found | Status |
 |----|----------|-------------|-------|--------|
-| TED-033 | 🟠 | A Me tab opened earlier removes children added since (no erase, or added before the erase ran): they show as departed. Fix only covers children added after an erase | 2026-09-23 | Open |
-| TED-034 | 🟠 | Any parent can call `get_camper_numbers` and get every child's name + number, departed children, and (new) erased children's names | 2026-09-23 | Open |
-| TED-035 | 🟡 | Erased #2 typed on purpose for a new child + stale save: a record with only `camperId: 2` and no name lands on the new child | 2026-09-23 | Open |
-| TED-036 | 🟡 | verify_identity_chain's 261 table check only looks for "scheduler" in one named rule; says ok with RLS off or another broad rule | 2026-09-23 | Open |
-| TED-005 | 🟠 | 14 auto-scheduler tests fail (`auto_full_day.test.js`); still 14 at b92dcdc. Owner deferred. | 2026-09-23 | Open (deferred by owner) |
+| TED-037 | 🟠 | A page forced to reload by the erase rule still sends its blocked save on the way out (beforeunload keepalive fetch to /rest/v1/camp_state_kv goes around the guard); test:keys step 6 can't see it (CSP blocks the fake URL) | 2026-09-23 | Open |
+| TED-038 | 🟠 | Campistry Lite's LITE_ASSET_VERSION not bumped: phones keep the old supabase_client.js with no erase guard, and Lite saves camp documents | 2026-09-23 | Open |
+| TED-039 | 🟠 | Verify script says 260 ok with last round's 260 (no cache version, parent-readable numbers, no _rosterSeen); the guard then silently does nothing | 2026-09-23 | Open |
+| TED-035 | 🟡 | Erased #2 reused on purpose + stale save: a record with only `camperId: 2` lands on the new child. Owner's rule (forced reload) built for the normal save; still reachable via TED-037/038 | 2026-09-23 | Open (depends on TED-037/038) |
+| TED-040 | 🟡 | Erase guard doesn't cover edge-function calls (canteen refund / auto-reload carry camperId) and allows other writes for up to 15 s | 2026-09-23 | Open (suspected) |
+| TED-041 | 🟡 | The erasing page's advance jumps to the newest version with Math.max, so it can skip the reload for another computer's erase a few seconds earlier | 2026-09-23 | Open (likely, code read) |
+| TED-005 | 🟠 | 14 auto-scheduler tests fail (`auto_full_day.test.js`); still 14 at 10f4461. Owner deferred. | 2026-09-23 | Open (deferred by owner) |
 
 ## Closed findings
 | ID | What it was | Closed | Proof |
 |----|-------------|--------|-------|
+| TED-033 | A Me tab opened earlier removed children added since | 2026-09-23 | At 10f4461, scratch DB (`v10/t33.sql`): tab that saw only #1 saves → Sara #2 kept, edit kept, list not stored; added-before-erase case keeps Sara #3, Avi not back; seen-and-removed still removed; old page unchanged. |
+| TED-034 | Any parent could read every child's name + number via `get_camper_numbers` | 2026-09-23 | At 10f4461, scratch DB (`v10/tpar.sql`): parent → `{"success":false,"error":"not_authorized"}`; owner's erased list `{"2": true}`, no name. |
+| TED-036 | Verify 261 table check only looked for "scheduler" in one rule | 2026-09-23 | At 10f4461 (`v10/t36.js`): RLS off, extra `USING(camp_id = get_user_camp_id())` rule, opened parent rule → "run 261 again"; full build → ok. |
 | TED-021 | Erase → new child auto-given the erased number → stale tab brought the erased child back on it, owned by the new child's parent | 2026-09-23 | At b92dcdc: my unchanged `t031.sql` → Sara auto #3, Avi not back, `_parent_owns_person(camp,2)` = f; pgtest 260 fails with the mint skip or the put-back step removed. |
 | TED-028 | Schedulers could read access codes from `link_parent_invites` | 2026-09-23 | At b92dcdc, scratch DB as `authenticated`: scheduler 0 rows, counselor 0, manager 1, owner 1; scheduler UPDATE 0 rows; pgtest 261 fails with scheduler put back. |
 | TED-031 | Check script said 261 ok when the invite functions were ungated | 2026-09-23 | At b92dcdc: 032's list function put back → "run 261 again"; 261 re-run twice ok → ok. |
@@ -50,7 +55,8 @@
 ## Areas audited
 | Area | Last deep audit |
 |------|-----------------|
-| Camper ID / camper number model (migrations 223-260, roster trigger, renumber, erase/merge, split repair, roster keys, invites, CSV import, Health entry) | 2026-09-23 (seventh pass) |
+| Camper ID / camper number model (migrations 223-260, roster trigger, renumber, erase/merge, split repair, roster keys, invites, CSV import, Health entry) | 2026-09-23 (tenth pass) |
+| Erase reload guard (`supabase_client.js` `_withEraseGuard`, camp_cache_epoch) | 2026-09-23 (browser run on scratch DB; Lite and edge functions by code read only) |
 | Parent invitations (`link_parent_invites`, `upsert_parent_invite`, claim functions, stamp trigger, `restamp_parent_invite`) | 2026-09-23 (numbers; who may write them; staff access to codes via RPC and table policy, re-checked as `authenticated` at b92dcdc) |
 | Me page cloud save (`integration_hooks.js` batch upsert) | 2026-09-23 (only against the renumber trigger) |
 | Auto Builder (solver, layers, grid) | never (only test results seen) |
@@ -77,3 +83,4 @@
 | 2026-09-23 | Check my work: 261 + 260 repairs (TED-021, 023-027) | bd61488 | unit 3270/14 · pg 50/0 · keys 31/0 · lite 12/0 · smoke 32/0 · scale 24/0 | 🟡 | [report](reports/2026-09-23-camper-id-261-recheck.md) |
 | 2026-09-23 | Check my work: TED-021, 028-030 fixes | 0909cee | unit 3270/14 · pg 50/0 · keys 31/0 · lite 12/0 · smoke 32/0 · scale 24/0 | 🔴 | [report](reports/2026-09-23-camper-id-ted028-recheck.md) |
 | 2026-09-23 | Check my work: TED-021, 028, 031, 032 fixes | b92dcdc | unit 3270/14 · pg 50/0 · keys 31/0 · lite 12/0 · smoke 32/0 · scale 24/0 | 🟡 | [report](reports/2026-09-23-camper-id-ninth-recheck.md) |
+| 2026-09-23 | Check my work: TED-033..036 fixes + erase reload rule | 10f4461 | unit 3270/14 · pg 50/0 · keys 34/0 · lite 12/0 · smoke 32/0 · scale 24/0 | 🟡 | [report](reports/2026-09-23-camper-id-tenth-recheck.md) |
