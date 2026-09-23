@@ -1,18 +1,19 @@
 # Ted's ledger
 
 ## Last commit checked
-`d049454` (2026-09-23)
+`4ce2489` (2026-09-23)
 
 ## Open findings
 | ID | Severity | Description | Found | Status |
 |----|----------|-------------|-------|--------|
-| TED-048 | 🟠 | Verify script says "261 ok" on a database with the earlier 261 (no 3-arg `revoke_orphaned_parent_invites`); page then silently falls back to names | 2026-09-23 | Open |
-| TED-049 | 🟡 | By-number family switch-off trusts the page's number list: turns off a family with an enrolled child when a sibling slot is null (self-heals ~4 s), when the page's number is briefly stale (stays off until reload), or on a list like `[null]` | 2026-09-23 | Open |
-| TED-005 | 🟠 | 14 auto-scheduler tests fail (`auto_full_day.test.js`); still 14 at d049454. Owner deferred. | 2026-09-23 | Open (deferred by owner) |
+| TED-050 | 🟡 | No automated test checks that the Me page sends camper numbers (`p_roster_ids`) to the family switch-off, or that it falls back only on PGRST202; a regression would silently return to by-name | 2026-09-23 | Open |
+| TED-005 | 🟠 | 14 auto-scheduler tests fail (`auto_full_day.test.js`); still 14 at 4ce2489. Owner deferred. | 2026-09-23 | Open (deferred by owner) |
 
 ## Closed findings
 | ID | What it was | Closed | Proof |
 |----|-------------|--------|-------|
+| TED-048 | Verify script said "261 ok" on an earlier copy of 261 | 2026-09-23 | At 4ce2489, scratch DB: real 261 from d049454 and from b92dcdc → "run 261 again", then ok after re-running today's 261; today's 261 twice more → ok; pgtest 261 fails with d049454's verify script and with only the camp_people half removed. |
+| TED-049 | By-number family switch-off could cut off a family with an enrolled child (null sibling slot, stale page number, `[null]` list) | 2026-09-23 | At 4ce2489: pgtest 261 fails with each of the 3 fixes undone (no DB roster / no null-slot rule / item count), passes unchanged; my real-save scenario (`v16/real.sql`): removed + unenrolled children's families off, TED-047 case off, wrong page number (99 for #4) stays on. |
 | TED-047 | Family "still at camp" switch compared names, not numbers | 2026-09-23 | At d049454, scratch DB: my t047 scenario (departed Avi #1, new Avi Katz #3) → `revoked: 1`, Katz invite off (old 2-arg by name: 0); pgtest 261 fails with the number branch disabled, passes with it; page probe sends `p_roster_ids` and falls back only on PGRST202. |
 | TED-046 | Staff call naming a child by name only was sent before the erase check | 2026-09-23 | At 678e3a2: my unchanged real supabase-js probe (`v13/probe.e2e.js`) P5 → sent 0, reload (b6115a4: sent 1); `v13/probe_name.js` → 0 sent; `erase_guard.test.js` test 7 fails against b6115a4's `supabase_client.js`, passes at HEAD. |
 | TED-044 | Own erase in flight masked another computer's erase; a save slipped through | 2026-09-23 | At b6115a4, real supabase-js (`v13/probe.e2e.js`): P2 stale save sent 0 (70cd931: 1), reload after answer; P3 own erase alone: save waits, then sent, no reload. Mutations of `erase_guard.test.js`: old tab+own → tests 3,6 fail; no wait → 3; no recheck → 2,6; own before check → 5. |
@@ -65,7 +66,7 @@
 |------|-----------------|
 | Camper ID / camper number model (migrations 223-260, roster trigger, renumber, erase/merge, split repair, roster keys, invites, CSV import, Health entry) | 2026-09-23 (twelfth pass) |
 | Erase reload guard (`supabase_client.js` `_withEraseGuard`, fetch guard, camp_cache_epoch) | 2026-09-23 (fourteenth pass: guard below the ID layer; probes P1-P5 re-run; old-code run of erase_guard.test.js) |
-| Parent invitations (`link_parent_invites`, `upsert_parent_invite`, claim functions, stamp trigger, `restamp_parent_invite`, `revoke_orphaned_parent_invites`) | 2026-09-23 (numbers; who may write them; staff access to codes; leaving sweep by number re-checked at d049454 → TED-048, 049) |
+| Parent invitations (`link_parent_invites`, `upsert_parent_invite`, claim functions, stamp trigger, `restamp_parent_invite`, `revoke_orphaned_parent_invites`) | 2026-09-23 (numbers; who may write them; staff access to codes; leaving sweep by number + DB roster re-checked at 4ce2489, TED-048/049 closed) |
 | Me page cloud save (`integration_hooks.js` batch upsert) | 2026-09-23 (only against the renumber trigger) |
 | Auto Builder (solver, layers, grid) | never (only test results seen) |
 | Manual Builder | never |
@@ -73,7 +74,7 @@
 | Billing, payments, payroll | never (camper numbers and "#number" display only) |
 | Bank deposit matching | never |
 | Canteen / Snacks / Shop / POS | never (touched only through camper numbers) |
-| Parent portal (Link) | never in a browser (database-level invite ownership checked 2026-09-23) |
+| Parent portal (Link) | never in a browser (database-level invite ownership checked 2026-09-23; Parents-page refusal wording run in isolation 2026-09-23) |
 | Health, Go, Live, Lite | never (touched only through camper numbers) |
 | Access control / roles / sections | never |
 | Print center, calendar, analytics | never |
@@ -97,3 +98,4 @@
 | 2026-09-23 | Check my work: TED-044, 045 fixes | b6115a4 | unit 3276/14 · pg 50/0 · keys 42/0 · lite 12/0 · smoke 32/0 · scale 24/0 | 🟡 | [report](reports/2026-09-23-camper-id-thirteenth-recheck.md) |
 | 2026-09-23 | Check my work: TED-046 fix | 678e3a2 | unit 3277/14 · pg 50/0 · keys 42/0 · lite 12/0 · smoke 32/0 · scale 24/0 | 🟢 | [report](reports/2026-09-23-camper-id-fourteenth-recheck.md) |
 | 2026-09-23 | Check my work: TED-047 fix | d049454 | unit 3277/14 · pg 50/0 · keys 42/0 · lite 12/0 · smoke 32/0 · scale 24/0 | 🟡 | [report](reports/2026-09-23-camper-id-fifteenth-recheck.md) |
+| 2026-09-23 | Check my work: TED-048, 049 fixes + Parents page wording | 4ce2489 | unit 3280/14 · pg 50/0 · keys 42/0 · lite 12/0 · smoke 32/0 · scale 24/0 | 🟢 | [report](reports/2026-09-23-camper-id-sixteenth-recheck.md) |
