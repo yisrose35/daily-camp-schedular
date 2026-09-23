@@ -8,6 +8,17 @@
 - **Two builder modes:** Auto Builder (layer-based solver) and Manual Builder (drag-drop skeleton).
 - **The user has no Supabase CLI.** Never give `supabase` CLI commands (migrations, `functions deploy`, `secrets set`). Every deploy/config step must be a Supabase Dashboard walkthrough (Edge Functions → Deploy/Secrets UI, SQL Editor for migrations, etc.), and every migration is handed to the user as raw SQL to paste into the SQL Editor themselves.
 
+## Ted the Auditor
+The owner is not a programmer and relies on **Ted** (`.claude/agents/ted.md`,
+invoked with `/ted`) to independently check work. Ted's findings and memory live
+in `ted/LEDGER.md` and `ted/reports/`.
+- Before telling the owner something is done or fixed, run `npm test` and report
+  the exact pass/fail counts. Never describe a failing test as "known" or
+  "pre-existing" to justify leaving it red.
+- If your change fixes an open `TED-###` finding, say which one. Only Ted closes
+  findings.
+- Don't edit Ted's files (`.claude/agents/ted.md`, `ted/`) unless the owner asks.
+
 ## Active Mission
 
 **🟢 ACTIVE: 40-Day Deep Adversarial Audit (v2) — full plan + daily tasks in `AUDIT_PLAN_V2.md`.**
