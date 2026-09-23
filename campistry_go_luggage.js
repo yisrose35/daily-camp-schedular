@@ -147,7 +147,7 @@ function camperList() {
     return Object.keys(r).map(function (name) {
         var c = r[name] || {};
         return {
-            name: name, bunk: c.bunk || '', division: c.division || '',
+            name: name, camperId: c.camperId != null ? c.camperId : null, bunk: c.bunk || '', division: c.division || '',
             // Bags follow the family home in the off-season and the summer
             // address during it, so both are worth having to hand.
             street: c.street || '', city: c.city || '', state: c.state || '', zip: c.zip || ''
@@ -579,7 +579,7 @@ window.lugEditBooking = function (id) {
         '<div class="ops-row"><div class="ops-field"><label>Camper</label>' +
         '<select class="ops-select" id="bkCamper" onchange="lugCamperPicked()"><option value="">— Select —</option>' +
         campers.map(function (c) {
-            return '<option value="' + esc(c.name) + '"' + (b.camperName === c.name ? ' selected' : '') + '>' +
+            return '<option value="' + esc(c.name) + '"' + (((b.camperId != null && c.camperId != null) ? String(b.camperId) === String(c.camperId) : b.camperName === c.name) ? ' selected' : '') + '>' +
                 esc(_lbl(c.name)) + (c.bunk ? ' (' + esc(c.bunk) + ')' : '') + '</option>';
         }).join('') + '</select></div>' +
         '<div class="ops-field"><label>Bunk</label><input class="ops-input" id="bkBunk" value="' + esc(b.bunk || '') + '"></div>' +

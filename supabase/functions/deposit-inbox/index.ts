@@ -1248,11 +1248,15 @@ import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
         return camp + '-' + kid;
     };
 
+    // A camper's name as a parent reads it: never the roster's internal
+    // " #<number>". The reference number is what identifies the camper.
+    function displayName(s) { return String(s == null ? '' : s).replace(/\s#\d+(?:-\d+)?$/, ''); }
+
     M.referenceInstruction = function (campNumber, camperId, camperName) {
         var ref = M.reference(campNumber, camperId);
         if (!ref) return '';
         return 'Put ' + ref + ' in the Zelle or bank memo' +
-               (camperName ? ' for ' + camperName : '') + ' so the payment is credited automatically.';
+               (camperName ? ' for ' + displayName(camperName) : '') + ' so the payment is credited automatically.';
     };
 
     /**

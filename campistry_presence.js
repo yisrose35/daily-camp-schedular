@@ -94,8 +94,8 @@
                         (idx[name] || []).forEach(function (sp, i) {
                             var key = String(sp.s || ('span' + i));
                             ses[key] = { name: key, startDate: sp.f || '', endDate: sp.t || '' };
-                            out.enrollments['px_' + (++n)] =   // name-ok: the index is keyed by roster key, rebuilt from the full state on every write
-                                { camperName: name, session: key, status: 'enrolled' }; // name-ok: as above
+                            out.enrollments['px_' + (++n)] =
+                                { camperName: name, camperId: sp.i != null ? sp.i : null, session: key, status: 'enrolled' };
                         });
                     });
                     out.sessions = Object.keys(ses).map(function (k) { return ses[k]; });

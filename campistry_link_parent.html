@@ -7089,7 +7089,7 @@ function submitFillOnlinePdf(){
         var binary = '';
         for (var bi=0; bi<finalBytes.length; bi++) binary += String.fromCharCode(finalBytes[bi]);
         var pdfBase64 = btoa(binary);
-        var child = (typeof children !== 'undefined' && children.find) ? (children.find(function(c){ return c.name === st.camperName; }) || {}) : {};
+        var child = (typeof children !== 'undefined' && children.find) ? (children.find(function(c){ return _sameChild(c.camperId, c.name, st.camperId, st.camperName); }) || {}) : {};
         var s = _lkSupa(), db = window._parentDB;
         return db.auth.getSession().then(function(sessRes){
             var token = sessRes && sessRes.data && sessRes.data.session && sessRes.data.session.access_token;

@@ -671,7 +671,7 @@ window.shopEditOrder = function (id) {
         '<select class="ops-select" id="oCamper" onchange="shopCamperPicked()">' +
         '<option value="">— Select —</option>' +
         campers.map(function (c) {
-            return '<option value="' + esc(c.name) + '"' + (o.camperName === c.name ? ' selected' : '') + '>' +
+            return '<option value="' + esc(c.name) + '"' + (((o.camperId != null && c.camperId != null) ? String(o.camperId) === String(c.camperId) : o.camperName === c.name) ? ' selected' : '') + '>' +
                 esc(_lbl(c.name)) + (c.bunk ? ' (' + esc(c.bunk) + ')' : '') + '</option>';
         }).join('') + '</select></div>' +
         '<div class="ops-field"><label>Bunk</label><input class="ops-input" id="oBunk" value="' + esc(o.bunk || '') + '"></div></div>';

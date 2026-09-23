@@ -1181,7 +1181,7 @@ function _globalSearchIndex(query){
             var l=leads[id]||{};
             var nm=l.parentName||l.camperName||'';
             if(!nm||nm.toLowerCase().indexOf(q)<0) return;
-            pushIfRoom('lead',{type:'lead',label:nm,sublabel:l.camperName&&l.camperName!==nm?('Camper: '+l.camperName):'Lead',
+            pushIfRoom('lead',{type:'lead',label:nm,sublabel:l.camperName&&l.camperName!==nm?('Camper: '+l.camperName):'Lead', // name-ok: a lead, not a camper yet
                 open:function(){nav('leads');setTimeout(function(){viewLead(id)},50)}});
         });
     }catch(e){console.error('[Me] search: lead index failed',e)}

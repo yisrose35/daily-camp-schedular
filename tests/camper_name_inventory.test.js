@@ -1,10 +1,10 @@
 // =============================================================================
 // The camper-name inventory (Ted, TED-002).
 //
-// docs/CAMPER_NAME_INVENTORY.md lists every place the pages still identify a
-// camper by name. This keeps it honest: the document must match the code, and
-// no count may rise above the baseline below. When a step of the plan lands,
-// lower the baseline to the new count, so the ratchet only turns one way.
+// docs/CAMPER_NAME_INVENTORY.md lists every place a camper is identified by
+// anything but their number. This keeps it honest: the document must match the
+// code, part A (by a name) is zero, and no part-B count (by roster key) rises.
+// Lower a baseline when code moves to the number; never raise it.
 // =============================================================================
 const { test } = require('node:test');
 const assert = require('node:assert');
@@ -13,20 +13,26 @@ const path = require('node:path');
 const vm = require('node:vm');
 const inv = require('../scripts/camper_name_inventory.js');
 
-// Counts on 2026-09-23. Lower these as places move to numbers. Never raise them.
-// edge 130 → 1: the edge functions go by the camper number. The one line left
-// is in deposit-inbox, a GENERATED bundle: it is display text authored in
-// campistry_deposit_match.js (referenceInstruction), fixed at the source.
-const BASELINE = { records: 0, enrollments: 32, families: 71, bunks: 53, roster: 179, edge: 1, database: 4 };
+// Part A — a NAME decides who the camper is. Must be zero, always.
+const MUST_BE_ZERO = ['records', 'edge'];
+
+// Part B — the camper's ROSTER KEY decides, which since 259 the server binds to
+// one camper number for as long as anything about them exists. These cannot
+// reach the wrong child; they are held here so they do not grow (new code
+// should use the number where it has one). Counts on 2026-09-23.
+const BASELINE = { enrollments: 11, families: 71, bunks: 53, roster: 185, database: 4 };
 
 // `// name-ok: <reason>` marks a name that is not how a camper is identified
-// (a lead, a sample, the words of a message). Each needs a reason, and there
-// may not be more of them than this without someone deciding so here.
-// 13 → 17 (edge-function pass): three family-payment labels in
-// charge-due-installments (the familyKey on the same line identifies the
-// family; families carry no per-camper number to put there) and the Camper
-// line's type on the receipt in send-payment-receipt (display only).
-const NAME_OK_CEILING = 17;
+// (a lead, a sample, the words of a message or receipt). Each needs a reason,
+// and there may not be more of them than this without someone deciding so here.
+const NAME_OK_CEILING = 16;
+
+test('part A: nothing decides who a camper is by name', () => {
+    const c = inv.count();
+    const left = MUST_BE_ZERO.filter(k => c[k].total !== 0).map(k => k + ': ' + c[k].total + ' in ' + Object.keys(c[k].files).join(', '));
+    assert.deepStrictEqual(left, [], 'A camper is named without their number. Carry and use camperId:\n  ' + left.join('\n  '));
+    assert.ok(inv.KINDS.filter(k => k.part === 'name').every(k => MUST_BE_ZERO.includes(k.id)), 'a part-A kind is not held at zero');
+});
 
 test('the inventory document matches the code', () => {
     const want = inv.render(inv.count());
@@ -34,12 +40,12 @@ test('the inventory document matches the code', () => {
     assert.strictEqual(have, want, 'run: node scripts/camper_name_inventory.js');
 });
 
-test('no new place identifies a camper by name', () => {
+test('part B: no new place finds a camper by roster key where it could use the number', () => {
     const c = inv.count();
     const grew = Object.keys(BASELINE).filter(k => c[k].total > BASELINE[k])
         .map(k => k + ': ' + BASELINE[k] + ' → ' + c[k].total);
     assert.deepStrictEqual(grew, [],
-        'New name-keyed code. Use camperId (the camper number) instead:\n  ' + grew.join('\n  '));
+        'New key-based code. Use camperId (the camper number) where the record has one:\n  ' + grew.join('\n  '));
 });
 
 test('a name marked as not identifying a camper says why, and there are few', () => {
@@ -79,7 +85,8 @@ test('the inventory covers the edge functions and the database, not only the pag
     assert.strictEqual(c.database.total, inv.DB_NAME_KEYS.length, 'a database item disappeared from the migrations — update the list');
     const doc = fs.readFileSync(inv.OUT, 'utf8');
     assert.match(doc, /Edge functions: a camper named without their number/);
-    assert.match(doc, /Database: storage keyed by a camper's name/);
+    assert.match(doc, /Database storage keyed by roster key/);
+    assert.match(doc, /## A\. Decided by a name: 0 places/);
 });
 
 // ── the Snacks page finds an account by its camper's number ─────────────────

@@ -635,7 +635,8 @@
                         if (e.status !== 'enrolled' && e.status !== 'accepted') return;
                         const w = _win[e.session] || { f: '', t: '' };
                         if (!_idx[e.camperName]) _idx[e.camperName] = [];
-                        _idx[e.camperName].push({ s: e.session || '', f: w.f, t: w.t });
+                        _idx[e.camperName].push({ s: e.session || '', f: w.f, t: w.t,
+                                                  i: e.camperId != null ? e.camperId : null });   // the camper number
                     });
                     if (Object.keys(_idx).length) lite.campistryMe.presenceIndex = _idx;
                 } catch (e) {
