@@ -28,6 +28,7 @@ Its first run found five more, none of which any existing test could see:
 | The shop settled an order the server had not been told about yet | `campistry_snacks_shop.js` | `order_not_found` on the first save of every order — the charge never landed |
 | The canteen desk's deposit, cash-out and limit writers wrote a document branch that is stripped on the way out | migration 240 | the office took $40 in cash, the screen said so, and the next hydration put the camper back to zero |
 | A guard that compared the caller's camp with `<>` did nothing when the caller had no camp | migration 239 | a signed-in stranger could debit any camper's canteen balance at any camp |
+| The offline register was exported from the frozen document and imported back into it | migration 242, `campistry_snacks.js` | the register started from stale balances, and every sale it took was free at the next reload |
 
 The fourth was found by clicking "+ Add Deposit" and then looking in the
 database. The fifth was found while writing 240's own gate, by asking what the

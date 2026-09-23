@@ -23,6 +23,7 @@
 //   2. a camper is added on the Me page and saved      → camp_people gets an id
 //   3. the canteen desk takes a deposit                → the ledger gets a row
 //   4. the register charges a purchase                 → submit_canteen_purchase
+//  4b. the offline register exports, sells, imports    → canteen_office_import_offline
 //   5. a shop order is charged to the camp bill        → settle_shop_order
 //
 // and asserts each step in the DATABASE, not in the page's memory. Step 5 is
@@ -50,6 +51,7 @@
 
 const fs = require('node:fs');
 const path = require('node:path');
+const os = require('node:os');
 
 const PORT = 8141;
 const OWNER = '51000000-0000-0000-0000-000000000001';
@@ -374,6 +376,74 @@ function kvRead(db, key) {
         check('the balance is the deposit less the purchase',
             Number(after[0].balance) === DEPOSIT - PURCHASE,
             'balance=' + after[0].balance + ' expected=' + (DEPOSIT - PURCHASE));
+
+        // ── 4b. the offline register: export, sell, import ───────────────────
+        //
+        // THIS IS MIGRATION 242. The export read the document's accounts —
+        // frozen since 219 — and the import wrote the document, whose accounts
+        // and transactions are stripped on the way out. So the register started
+        // from stale balances and its sales never reached anyone.
+        step('4b', 'the offline register is loaded with the live balance, and its sale comes back');
+        await open('campistry_snacks.html', () => !!window.CampistrySnacks);
+        await page.waitForFunction(
+            (n) => (window.CampistrySnacks.getCamperList() || []).some(c => c.name === n),
+            CAMPER, { timeout: 30000 });
+
+        const [dl] = await Promise.all([
+            page.waitForEvent('download', { timeout: 20000 }),
+            page.evaluate(() => window.exportForOfflinePOS()),
+        ]);
+        const exported = JSON.parse(fs.readFileSync(await dl.path(), 'utf8'));
+        const exAcct = exported.accounts && exported.accounts[CAMPER];
+        check('the export carries the LIVE balance, read from the rows',
+            exAcct && Number(exAcct.balance) === DEPOSIT - PURCHASE,
+            exAcct ? 'balance=' + exAcct.balance : 'camper missing from export');
+        check('the export carries the camper id',
+            exAcct && String(exAcct.camperId) === String(personId),
+            exAcct ? 'camperId=' + exAcct.camperId : 'camper missing from export');
+
+        // What the register writes for one sale — see "Log transaction" in
+        // campistry_snacks_pos_offline.html.
+        const OFFLINE = 2.25;
+        const saleFile = path.join(os.tmpdir(), 'campistry-offline-sale-' + process.pid + '.json');
+        fs.writeFileSync(saleFile, JSON.stringify({ transactions: [{
+            id: 'offline-smoke-1', time: '1:05 PM', camper: CAMPER, camperId: exAcct && exAcct.camperId,
+            items: 'Popsicle', amount: OFFLINE, type: 'debit',
+            date: new Date().toISOString().slice(0, 10), timestamp: Date.now(), exported: false }] }));
+
+        async function importSaleFile() {
+            const before = bridge.calls.length;
+            const [chooser] = await Promise.all([
+                page.waitForEvent('filechooser', { timeout: 10000 }),
+                page.evaluate(() => window.importOfflinePOSTransactions()),
+            ]);
+            await chooser.setFiles(saleFile);
+            await waitFor('the offline import to reach the server', () =>
+                bridge.calls.slice(before).some(c => c.fn === 'canteen_office_import_offline'), 20000);
+            return bridge.calls.slice(before).filter(c => c.fn === 'canteen_office_import_offline')[0];
+        }
+
+        const imp1 = await importSaleFile();
+        check('canteen_office_import_offline took the sale',
+            imp1 && !imp1.error && imp1.value && imp1.value.imported === 1,
+            imp1 ? (imp1.error || JSON.stringify(imp1.value)) : 'never called');
+        const imp2 = await importSaleFile();
+        check('the same file again is recognised, not charged twice',
+            imp2 && !imp2.error && imp2.value && imp2.value.imported === 0 && imp2.value.duplicates === 1,
+            imp2 ? (imp2.error || JSON.stringify(imp2.value)) : 'never called');
+
+        const offRows = db.json(`SELECT amount, camper_id FROM canteen_transactions
+                                  WHERE camp_id = '${CAMP}' AND payload ->> 'kind' = 'offline_sale'`);
+        check('one offline sale in the ledger, on the same person',
+            offRows.length === 1 && Number(offRows[0].amount) === OFFLINE
+                && String(offRows[0].camper_id) === String(personId),
+            JSON.stringify(offRows));
+        const afterOff = db.json(`SELECT balance FROM camp_canteen_accounts
+                                   WHERE camp_id = '${CAMP}' AND account_key = ` + literal(CAMPER));
+        check('the balance is down by the offline sale, once',
+            Number(afterOff[0].balance) === DEPOSIT - PURCHASE - OFFLINE,
+            'balance=' + afterOff[0].balance);
+        try { fs.unlinkSync(saleFile); } catch (_) {}
 
         // ── 5. a shop order, charged to the camp bill ────────────────────────
         //

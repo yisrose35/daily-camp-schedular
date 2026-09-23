@@ -39,8 +39,9 @@ function code(src) {
 /** One `window.<name> = function() { … }` body, bounded by its own braces. */
 function writerBody(name) {
     const src = code(SNACKS);
-    const at = src.indexOf('window.' + name + ' = function');
-    if (at < 0) return null;
+    const m = new RegExp('window\\.' + name + ' = (async )?function').exec(src);
+    if (!m) return null;
+    const at = m.index;
     let i = src.indexOf('{', at);
     let depth = 0;
     for (let j = i; j < src.length; j++) {
@@ -128,22 +129,60 @@ test('every refusal the server can return has something to say to the office', (
         + 'them:\n  ' + unhandled.join('\n  '));
 });
 
-test('the offline-register import is named as the one that is still local', () => {
-    // It is NOT fixed the same way — those sales already happened on a register that
-    // was offline, so replaying them through submit_canteen_purchase would re-apply
-    // the daily caps and refuse the rows that need importing. Left in place, said
-    // out loud. An unmarked one is the thing this whole file is about.
-    // Anchored on the CODE, not on a comment. The first version of this test
-    // looked for the words 'Apply balance changes' — the comment the note replaced
-    // — so once the note was written the anchor was gone and the test passed
-    // whatever the file said. It survived a mutation that deleted the note.
-    const at = SNACKS.indexOf('snacks.accounts[t.camper].balance');
-    assert.ok(at >= 0,
-        'the offline-register import no longer moves a balance locally. If it now goes '
-        + 'through the server, delete this test and say so in migration 240’s header.');
-    assert.match(SNACKS.slice(Math.max(0, at - 1600), at), /KNOWN GAP/,
-        'the offline-register import writes accounts and transactions into the '
-        + 'document, where they are stripped, and no longer says so. Either route it '
-        + 'through a server importer or mark it — silence is how the deposit writer '
-        + 'stayed broken.');
+test('the offline-register import goes to the server, not the document', () => {
+    // It used to unshift each sale into snacks.transactions, subtract it from
+    // snacks.accounts[...].balance and call saveSnacksData — all stripped on the
+    // way out, so every offline sale was free. Migration 242 gave it a server
+    // importer; this keeps the page on it.
+    const src = code(SNACKS);
+    const at = src.indexOf('function _importOfflineSales');
+    assert.ok(at >= 0, 'campistry_snacks.js no longer defines _importOfflineSales');
+    let depth = 0, end = src.length;
+    for (let j = src.indexOf('{', at); j < src.length; j++) {
+        if (src[j] === '{') depth++;
+        else if (src[j] === '}') { depth--; if (depth === 0) { end = j + 1; break; } }
+    }
+    const body = src.slice(at, end);
+    assert.match(body, /rpc\(\s*'canteen_office_import_offline'/,
+        'the offline import no longer calls canteen_office_import_offline');
+    assert.doesNotMatch(body, /saveSnacksData\s*\(|snacks\.accounts\[|\.transactions\.unshift/,
+        'the offline import is writing the document again — accounts and '
+        + 'transactions are stripped from that write, so the sales reach nothing');
+    assert.doesNotMatch(writerBody('importOfflinePOSTransactions'),
+        /saveSnacksData\s*\(|snacks\.accounts\[/,
+        'importOfflinePOSTransactions writes the document itself');
+});
+
+test('the offline register is loaded with LIVE balances, and with camper ids', () => {
+    // Both exports read loadSnacksData() alone, whose accounts are the copy
+    // frozen at 219. A register loaded from it starts every camper on a stale
+    // balance. They now overlay the rows, and refuse when the rows cannot be read.
+    const src = code(SNACKS);
+    for (const name of ['downloadOfflinePOS', 'exportForOfflinePOS']) {
+        assert.match(writerBody(name), /_withLiveCanteenRows\s*\(/,
+            name + ' exports balances without reading the rows');
+    }
+    const live = src.slice(src.indexOf('function _withLiveCanteenRows'));
+    assert.match(live.slice(0, 400), /_overlayCanteenRows/,
+        '_withLiveCanteenRows no longer overlays the row-backed accounts');
+    assert.match(live.slice(0, 400), /ok \? data : null/,
+        '_withLiveCanteenRows falls back to the stale document when the rows fail');
+
+    // Every account the register receives carries its camper id, so every sale
+    // it takes can be posted to the person.
+    // Each builder has two branches — campers with an account and campers
+    // without one yet — and both must carry the id.
+    for (const [label, start] of [['buildOfflineExportData', 'function buildOfflineExportData'],
+                                  ['exportForOfflinePOS', 'window.exportForOfflinePOS']]) {
+        const at = src.indexOf(start);
+        const body = src.slice(at, src.indexOf('var exportData', at));
+        const n = (body.match(/camperId:\s*(a|c)\.camperId != null/g) || []).length;
+        assert.strictEqual(n, 2, label + ' carries camperId on ' + n + ' of its 2 account '
+            + 'branches — a sale on the other kind of account reaches the importer by name only');
+    }
+
+    const reg = fs.readFileSync(path.join(REPO, 'campistry_snacks_pos_offline.html'), 'utf8');
+    const tx = reg.slice(reg.indexOf('// Log transaction'));
+    assert.match(tx.slice(0, 700), /camperId:/,
+        'the offline register no longer stamps a camper id on each sale');
 });

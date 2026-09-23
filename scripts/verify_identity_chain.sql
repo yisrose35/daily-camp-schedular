@@ -1,5 +1,5 @@
 -- ============================================================================
--- Confirm migrations 222-241 are in and doing their job.
+-- Confirm migrations 222-242 are in and doing their job.
 --
 -- Paste the whole thing into the Supabase SQL Editor. It is READ ONLY — one
 -- SELECT, nothing is created, changed or deleted, and the two purge functions
@@ -259,7 +259,7 @@
 
 UNION ALL
 
-  -- ─── 1b. 239-241, read off the DEPLOYED function bodies ───────────────────
+  -- ─── 1b. 239-242, read off the DEPLOYED function bodies ───────────────────
   -- A separate block, and the bodies are computed in a subquery rather than
   -- through 239's _prosrc_code helper, for one reason that cost a rewrite:
   -- POSTGRES RESOLVES FUNCTION NAMES WHEN IT PLANS THE STATEMENT, not when it
@@ -284,7 +284,12 @@ UNION ALL
                     FROM pg_proc p JOIN pg_namespace n ON n.oid = p.pronamespace
                    WHERE n.nspname = 'public'
                      AND p.proname = 'use_family_card_for_canteen_auto_reload'
-                   LIMIT 1) AS card) b
+                   LIMIT 1) AS card,
+                 (SELECT regexp_replace(p.prosrc, '--[^' || chr(10) || ']*', '', 'g')
+                    FROM pg_proc p JOIN pg_namespace n ON n.oid = p.pronamespace
+                   WHERE n.nspname = 'public'
+                     AND p.proname = 'canteen_office_import_offline'
+                   LIMIT 1) AS offl) b
     CROSS JOIN LATERAL (VALUES
     -- ⚠ THE ONE TO READ FIRST. Until 239, a signed-in user who belongs to no camp
     -- could call settle_shop_order with ANY camp's id and debit a camper's canteen
@@ -319,7 +324,17 @@ UNION ALL
      CASE WHEN to_regprocedure('public.verify_family_card_autoreload(uuid)') IS NOT NULL
            AND b.card ~ 'byopCustomerRef'
            AND b.card ~ 'camp_family_key_for_person'
-          THEN 'ok' ELSE 'AN ATTACHED FAMILY CARD STILL NEVER RELOADS — apply 241' END)
+          THEN 'ok' ELSE 'AN ATTACHED FAMILY CARD STILL NEVER RELOADS — apply 241' END),
+
+    -- Sales rung up on the offline register. The import wrote a document branch
+    -- that is stripped on the way out, so every camper who bought something while
+    -- the register was offline got it free at the next reload.
+    ('242  offline-register sales reach the ledger',
+     CASE WHEN b.offl IS NOT NULL
+           AND b.offl ~ '''offline:'''
+           AND b.offl ~ 'sig\s*=\s*v_sig'
+           AND b.offl ~ 'camp_person_label'
+          THEN 'ok' ELSE 'OFFLINE SALES STILL GO NOWHERE — apply 242' END)
     ) AS x(item, result)
 
 UNION ALL

@@ -118,6 +118,7 @@ const MIGRATIONS = [
     '239_a_stranger_cannot_settle_another_camps_order',
     '240_the_canteen_desk_writes_to_the_cloud',
     '241_a_family_card_the_charger_can_find',
+    '242_offline_register_sales_reach_the_ledger',
 ];
 
 // The one thing the stubs deliberately get wrong for our purposes: they define

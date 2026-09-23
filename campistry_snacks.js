@@ -1138,8 +1138,27 @@ window.savePosPin = function() {
 // that were recorded offline back into the main ledger.
 // ==========================================================================
 
-function buildOfflineExportData() {
-    var data = loadSnacksData();
+/**
+ * The document plus the LIVE balances, or null when the rows cannot be read.
+ *
+ * Both exports used loadSnacksData() alone, and since 219 the document's
+ * `accounts` is a frozen copy from before the writers moved to rows (or absent,
+ * once a save has stripped it). An offline register loaded from it starts every
+ * camper on a stale balance — money deposited since then is missing, money spent
+ * since then is spendable again. There is no safe stale answer here, so the
+ * exports refuse rather than guess.
+ */
+function _withLiveCanteenRows() {
+    return new Promise(function (resolve) {
+        var data = Object.assign({}, loadSnacksData());
+        _overlayCanteenRows(data, function (ok) { resolve(ok ? data : null); });
+    });
+}
+
+var OFFLINE_EXPORT_NEEDS_ROWS = 'Could not read the current balances from the cloud — '
+    + 'not exporting stale ones. Check the connection and try again.';
+
+function buildOfflineExportData(data) {
     var roster = getRoster();
     var exportAccounts = {};
     Object.keys(data.accounts || {}).forEach(function(name) {
@@ -1153,7 +1172,11 @@ function buildOfflineExportData() {
             balanceFloor: a.balanceFloor || 0,
             creditLimit: a.creditLimit || 0,
             division: camper.division || '',
-            bunk: camper.bunk || ''
+            bunk: camper.bunk || '',
+            // The register stamps this on every sale, so the import can post it
+            // to the PERSON even if the camper is renamed meanwhile (242).
+            camperId: a.camperId != null ? a.camperId
+                    : (camper.camperId != null ? camper.camperId : null)
         };
     });
     Object.keys(roster).forEach(function(name) {
@@ -1166,7 +1189,8 @@ function buildOfflineExportData() {
             exportAccounts[name] = {
                 balance: 0, dailyLimit: 10, spentToday: 0, lastSpendDate: '',
                 balanceFloor: 0, creditLimit: 0,
-                division: c.division || '', bunk: c.bunk || ''
+                division: c.division || '', bunk: c.bunk || '',
+                camperId: c.camperId != null ? c.camperId : null
             };
         }
     });
@@ -1204,7 +1228,9 @@ window.downloadOfflinePOS = async function() {
         if (!resp.ok) throw new Error('Could not load offline POS template');
         var html = resp.text ? await resp.text() : '';
 
-        var exportData = buildOfflineExportData();
+        var live = await _withLiveCanteenRows();
+        if (!live) throw new Error(OFFLINE_EXPORT_NEEDS_ROWS);
+        var exportData = buildOfflineExportData(live);
         var preloadScript = '<script>window.__OFFLINE_POS_PRELOAD__ = ' +
             JSON.stringify(exportData) + ';<\/script>';
         html = html.replace('<!-- __PRELOAD_SLOT__ -->', preloadScript);
@@ -1229,8 +1255,9 @@ window.downloadOfflinePOS = async function() {
     }
 };
 
-window.exportForOfflinePOS = function() {
-    var data = loadSnacksData();
+window.exportForOfflinePOS = async function() {
+    var data = await _withLiveCanteenRows();
+    if (!data) { toast(OFFLINE_EXPORT_NEEDS_ROWS, 1); return; }
     var roster = getRoster();
     var exportAccounts = {};
     Object.keys(data.accounts || {}).forEach(function(name) {
@@ -1244,7 +1271,11 @@ window.exportForOfflinePOS = function() {
             balanceFloor: a.balanceFloor || 0,
             creditLimit: a.creditLimit || 0,
             division: camper.division || '',
-            bunk: camper.bunk || ''
+            bunk: camper.bunk || '',
+            // The register stamps this on every sale, so the import can post it
+            // to the PERSON even if the camper is renamed meanwhile (242).
+            camperId: a.camperId != null ? a.camperId
+                    : (camper.camperId != null ? camper.camperId : null)
         };
     });
     // Also include roster campers who don't have an account yet
@@ -1258,7 +1289,8 @@ window.exportForOfflinePOS = function() {
             exportAccounts[name] = {
                 balance: 0, dailyLimit: 10, spentToday: 0, lastSpendDate: '',
                 balanceFloor: 0, creditLimit: 0,
-                division: c.division || '', bunk: c.bunk || ''
+                division: c.division || '', bunk: c.bunk || '',
+                camperId: c.camperId != null ? c.camperId : null
             };
         }
     });
@@ -1297,62 +1329,109 @@ window.exportForOfflinePOS = function() {
 window.importOfflinePOSTransactions = function() {
     var inp = document.getElementById('offlineTxImportInput');
     if (!inp) return;
+    if (!_secEdit('accounts', 'Importing offline sales')) return;
     inp.value = '';
     inp.onclick = null;
     inp.onchange = function() {
         var file = inp.files && inp.files[0];
         if (!file) return;
         file.text().then(function(text) {
-            try {
-                var data = JSON.parse(text);
-                if (!data.transactions || !Array.isArray(data.transactions)) {
-                    toast('No transactions found in file', 1);
-                    return;
-                }
-                var txs = data.transactions;
-                var existing = snacks.transactions || [];
-                var existingSigs = {};
-                existing.forEach(function(t) {
-                    existingSigs[[t.date, t.time, t.camper, t.type, t.amount, t.items].join('|')] = 1;
-                });
-                var added = 0;
-                txs.forEach(function(t) {
-                    var sig = [t.date, t.time, t.camper, t.type, t.amount, t.items].join('|');
-                    if (existingSigs[sig]) return;
-                    existing.unshift(t);
-                    existingSigs[sig] = 1;
-                    added++;
-                    // ★ KNOWN GAP, stated rather than hidden: this import is still
-                    //   LOCAL ONLY. 219 made the rows the truth and
-                    //   _withoutRowBackedBranches strips accounts and transactions
-                    //   from every document write, so what this loop computes goes
-                    //   no further than this tab — the same defect migration 240
-                    //   fixed for the deposit, cash-out and limit writers.
-                    //
-                    //   It is not fixed the same way because these sales ALREADY
-                    //   HAPPENED on a register that was offline: replaying them
-                    //   through submit_canteen_purchase would re-apply the daily
-                    //   caps and refuse the very rows that need importing. It needs
-                    //   a batch importer that posts them as history, with the
-                    //   offline register's own signature for idempotency.
-                    if (t.camper && t.type === 'debit') {
-                        if (!snacks.accounts[t.camper]) snacks.accounts[t.camper] = { balance: 0, dailyLimit: 10, spentToday: 0 };
-                        snacks.accounts[t.camper].balance = Math.round((snacks.accounts[t.camper].balance - (parseFloat(t.amount) || 0)) * 100) / 100;
-                    }
-                });
-                snacks.transactions = existing;
-                saveSnacksData(snacks);
-                var el = document.getElementById('offlinePosStatus');
-                if (el) el.textContent = 'Imported ' + added + ' new transactions (' + (txs.length - added) + ' duplicates skipped)';
-                toast('Imported ' + added + ' offline transactions');
-                init();
-            } catch (e) {
-                toast('Import failed: ' + (e.message || 'Invalid file'), 1);
+            var data;
+            try { data = JSON.parse(text); }
+            catch (e) { toast('Import failed: ' + (e.message || 'Invalid file'), 1); return; }
+            if (!data || !Array.isArray(data.transactions)) {
+                toast('No transactions found in file', 1);
+                return;
             }
+            _importOfflineSales(data.transactions);
         });
     };
     inp.click();
 };
+
+/**
+ * Offline-register sales go to the SERVER, as history (migration 242).
+ *
+ * This used to unshift each sale into snacks.transactions, subtract it from
+ * snacks.accounts[name].balance and call saveSnacksData — a document write whose
+ * accounts and transactions _withoutRowBackedBranches deletes before it leaves the
+ * tab. "Imported 212 offline transactions" and none of them landed; the next
+ * hydration gave every camper who bought something offline their money back.
+ *
+ * Not replayed through submit_canteen_purchase: these sales already happened,
+ * and the live path would re-check caps against a balance the day has since
+ * moved and refuse the very rows that need recording. The server posts them,
+ * idempotent on the register's own sale id, so importing a file twice — or two
+ * people importing it at once — moves each balance exactly once.
+ */
+var OFFLINE_IMPORT_CHUNK = 500;
+var OFFLINE_IMPORT_ERRORS = {
+    missing_id:       'no sale id (file from a very old register)',
+    unsupported_type: 'not a sale',
+    invalid_amount:   'amount is not a valid sale',
+    invalid_date:     'no valid date',
+    unknown_camper:   'camper is no longer on the roster',
+    missing_camper:   'no camper on the sale',
+};
+
+function _importOfflineSales(rows) {
+    var el = document.getElementById('offlinePosStatus');
+    var ctx = _deskRpc();
+    if (!ctx) { toast('Not connected — offline sales can only be imported online.', 1); return; }
+    if (!rows.length) { toast('The file has no sales in it', 1); return; }
+
+    var chunks = [];
+    for (var i = 0; i < rows.length; i += OFFLINE_IMPORT_CHUNK) {
+        chunks.push(rows.slice(i, i + OFFLINE_IMPORT_CHUNK));
+    }
+    var total = { imported: 0, duplicates: 0, refused: [] };
+    if (el) el.textContent = 'Importing ' + rows.length + ' sales…';
+
+    function finish(stopMsg) {
+        var msg = 'Imported ' + total.imported + ' offline sales'
+            + (total.duplicates ? ' (' + total.duplicates + ' already imported)' : '');
+        if (total.refused.length) {
+            var why = {};
+            total.refused.forEach(function (r) {
+                var k = OFFLINE_IMPORT_ERRORS[r.error] || r.error;
+                why[k] = (why[k] || 0) + 1;
+            });
+            msg += '. Not imported: ' + Object.keys(why).map(function (k) {
+                return why[k] + ' — ' + k; }).join('; ');
+            console.warn('[Snacks] offline import refused rows:', total.refused);
+        }
+        if (stopMsg) msg = stopMsg + ' ' + msg + ' before it stopped.';
+        if (el) el.textContent = msg;
+        toast(msg, (stopMsg || total.refused.length) ? 1 : 0);
+        _deskRefresh();
+    }
+
+    (function next(k) {
+        if (k >= chunks.length) { finish(null); return; }
+        ctx.client.rpc('canteen_office_import_offline', { p_camp_id: ctx.campId, p_rows: chunks[k] })
+            .then(function (res) {
+                var d = res && res.data;
+                if (!d || d.success !== true) {
+                    var missing = res && res.error && /PGRST202|could not find|schema cache|does not exist/i
+                        .test(res.error.message || '');
+                    finish(missing ? 'Offline import is not set up yet on the server (migration 242).'
+                                   : _deskMessage(res, d, 'Import failed') + '.');
+                    return;
+                }
+                total.imported += d.imported || 0;
+                total.duplicates += d.duplicates || 0;
+                total.refused = total.refused.concat(d.refused || []);
+                if (el) el.textContent = 'Importing… ' + Math.min((k + 1) * OFFLINE_IMPORT_CHUNK, rows.length)
+                    + ' of ' + rows.length;
+                next(k + 1);
+            }, function (e) {
+                // Safe to retry: every sale carries its own id, so the chunks that
+                // did land are skipped as duplicates the second time.
+                finish('Import interrupted (' + ((e && e.message) || 'network error')
+                    + ') — run it again, nothing will be counted twice.');
+            });
+    })(0);
+}
 
 // ==========================================================================
 // MODALS & ACTIONS

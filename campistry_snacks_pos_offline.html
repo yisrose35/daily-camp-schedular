@@ -1704,6 +1704,10 @@ POS.charge = async function() {
         id: generateId(),
         time: new Date().toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' }),
         camper: sel,
+        // The PERSON, not just the spelling: the import posts this sale to the
+        // account of whoever carries this id, even if they are renamed before
+        // the file comes back (migration 242).
+        camperId: (a.camperId != null && a.camperId !== '') ? a.camperId : null,
         items: itemNames,
         amount: total,
         type: 'debit',
