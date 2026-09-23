@@ -1,5 +1,5 @@
 -- ============================================================================
--- Confirm migrations 222-246 are in and doing their job.
+-- Confirm migrations 222-247 are in and doing their job.
 --
 -- Paste the whole thing into the Supabase SQL Editor. It is READ ONLY — one
 -- SELECT, nothing is created, changed or deleted, and the two purge functions
@@ -259,7 +259,7 @@
 
 UNION ALL
 
-  -- ─── 1b. 239-246, read off the DEPLOYED function bodies ───────────────────
+  -- ─── 1b. 239-247, read off the DEPLOYED function bodies ───────────────────
   -- A separate block, and the bodies are computed in a subquery rather than
   -- through 239's _prosrc_code helper, for one reason that cost a rewrite:
   -- POSTGRES RESOLVES FUNCTION NAMES WHEN IT PLANS THE STATEMENT, not when it
@@ -371,7 +371,13 @@ UNION ALL
                  AND p.proname IN ('get_my_balance_derived', 'report_plan_undercollection')
                  AND regexp_replace(p.prosrc, '--[^' || chr(10) || ']*', '', 'g')
                      ~ '''finance''\s*->\s*''payments''')
-          THEN 'ok' ELSE 'A PARENT CAN BE SHOWN MONEY THEY ALREADY PAID — apply 246' END)
+          THEN 'ok' ELSE 'A PARENT CAN BE SHOWN MONEY THEY ALREADY PAID — apply 246' END),
+
+    -- The register: accepted staff only, and the camper by id.
+    ('247  the register charges a person, and only staff can',
+     CASE WHEN to_regprocedure('public.submit_canteen_purchase(uuid,text,numeric,text,date,bigint)') IS NOT NULL
+           AND to_regprocedure('public.submit_canteen_purchase(uuid,text,numeric,text,date)') IS NULL
+          THEN 'ok' ELSE 'AN UNACCEPTED INVITATION CAN CHARGE A CAMPER — apply 247' END)
     ) AS x(item, result)
 
 UNION ALL

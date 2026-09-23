@@ -355,6 +355,10 @@ function kvRead(db, key) {
         check('the register went through the server, not the offline fallback',
             charge.length === 1 && !charge[0].error,
             charge.length ? (charge[0].error || 'ok') : 'never called');
+        // Migration 247: the register names the PERSON, not only the spelling.
+        check('the register sends the camper id with the charge',
+            charge.length === 1 && (charge[0].args || []).includes('p_camper_id'),
+            charge.length ? 'args=' + (charge[0].args || []).join(',') : 'never called');
 
         await waitFor('the purchase to land in the ledger', () => {
             const d = db.json(`SELECT amount FROM canteen_transactions

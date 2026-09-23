@@ -742,7 +742,14 @@ window.charge = function() {
 
     if (client && campId && client.rpc) {
         const camperName = sel;
-        client.rpc('submit_canteen_purchase', { p_camp_id: campId, p_camper_name: camperName, p_amount: total, p_items: itemNames, p_date: todayStr() })
+        // The PERSON, when the roster has an id for them (migration 247): the
+        // server charges the account of whoever carries this id, not whoever
+        // the name resolves to — two campers can share a name.
+        const _c = (campers || []).find(c => c.name === camperName);
+        const _cid = _c && _c.camperId != null && _c.camperId !== '' ? Number(_c.camperId) : null;
+        const _args = { p_camp_id: campId, p_camper_name: camperName, p_amount: total, p_items: itemNames, p_date: todayStr() };
+        if (_cid != null && !isNaN(_cid)) _args.p_camper_id = _cid;
+        client.rpc('submit_canteen_purchase', _args)
             .then(res => {
                 const d = res && res.data;
                 const emsg = (res.error && res.error.message) || '';
