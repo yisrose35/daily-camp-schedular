@@ -527,6 +527,11 @@ SET LOCAL t260.uid = 'a6000000-0000-0000-0000-0000000000a6';
 DO $$
 DECLARE v jsonb;
 BEGIN
+    -- the owner's rule: an erase makes every page opened before it reload
+    IF public.get_camp_cache_epoch('a6000000-0000-0000-0000-000000000036') IS DISTINCT FROM 1 THEN
+        RAISE EXCEPTION 'the erase did not move the camp''s cache version on: %',
+            public.get_camp_cache_epoch('a6000000-0000-0000-0000-000000000036');
+    END IF;
     v := public.get_camper_numbers('a6000000-0000-0000-0000-000000000036');
     IF (v ->> 'next')::int <= 2 THEN
         RAISE EXCEPTION 'TED-021: the page would hand the erased #2 to the next new child: %', v;
@@ -562,6 +567,9 @@ BEGIN
     END IF;
     IF public._parent_owns_person(c, 2) THEN
         RAISE EXCEPTION 'TED-021: Sara''s mother owns #2';
+    END IF;
+    IF public.get_camp_cache_epoch(c) IS NOT NULL THEN
+        RAISE EXCEPTION 'a parent read the camp''s cache version';
     END IF;
     -- (TED-034) and a parent is not given the camp's list of children's numbers
     IF (public.get_camper_numbers(c) ->> 'success')::boolean IS NOT FALSE THEN
@@ -886,6 +894,28 @@ BEGIN
     IF NOT EXISTS (SELECT 1 FROM camp_people WHERE camp_id = 'a6000000-0000-0000-0000-000000000012'
                     AND person_id = 3 AND deleted_at IS NOT NULL) THEN
         RAISE EXCEPTION 'TED-033: a deliberate removal was undone';
+    END IF;
+END $$;
+ROLLBACK;
+
+-- ════════════════════════════════════════════════════════════════════════════
+-- 13. A merge takes a camper away for good too: the camp's cache version moves
+--     on, so every page opened before it reloads before its next save.
+-- ════════════════════════════════════════════════════════════════════════════
+BEGIN;
+INSERT INTO camps (id, name) VALUES ('a6000000-0000-0000-0000-000000000013', '260 camp thirteen');
+INSERT INTO camp_state_kv (camp_id, key, value) VALUES ('a6000000-0000-0000-0000-000000000013', 'app1',
+    '{"camperRoster":{"Eli":{"name":"Eli","camperId":30},"Eli S":{"name":"Eli S","camperId":31}}}');
+UPDATE camp_state_kv SET value = value #- '{camperRoster,Eli S}'
+ WHERE camp_id = 'a6000000-0000-0000-0000-000000000013' AND key = 'app1';
+DO $$
+DECLARE c uuid := 'a6000000-0000-0000-0000-000000000013'; v jsonb;
+BEGIN
+    v := public.merge_campers(c, 30, 31);
+    IF (v ->> 'success')::boolean IS NOT TRUE THEN RAISE EXCEPTION 'merge failed: %', v; END IF;
+    IF (v ->> 'cache_epoch')::int IS DISTINCT FROM 1
+       OR (SELECT epoch FROM camp_cache_epoch WHERE camp_id = c) IS DISTINCT FROM 1 THEN
+        RAISE EXCEPTION 'the merge did not move the camp''s cache version on: %', v;
     END IF;
 END $$;
 ROLLBACK;

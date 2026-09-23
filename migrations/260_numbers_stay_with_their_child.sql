@@ -798,12 +798,83 @@ BEGIN
            SET value = public._carry_moved_numbers(s.camp_id, s.key, s.value), updated_at = now()
          WHERE s.camp_id = p_camp_id
            AND s.value IS DISTINCT FROM public._carry_moved_numbers(s.camp_id, s.key, s.value);
+        -- …and every page opened before this reloads before it saves (2b).
+        v := v || jsonb_build_object('cache_epoch', public._bump_cache_epoch(p_camp_id));
     END IF;
     RETURN v;
 END;
 $$;
 REVOKE ALL ON FUNCTION public.erase_camper(uuid, bigint, boolean) FROM public, anon;
 GRANT EXECUTE ON FUNCTION public.erase_camper(uuid, bigint, boolean) TO authenticated, service_role;
+
+
+-- ─── 2b. after an erase or a merge, every open page reloads ────────────────
+-- A page that was open before a child was erased (or merged away) still
+-- holds that child in its memory and its local cache, and would write them
+-- back on its next save. So an erase or merge moves the camp's cache version
+-- on; every office page asks for it before it saves (and when it wakes up),
+-- and a page opened before the change clears its cache and reloads instead
+-- of saving (supabase_client.js). The owner's rule: "when a child is erased
+-- we force a reload that clears the cache."
+CREATE TABLE IF NOT EXISTS public.camp_cache_epoch (
+    camp_id    uuid PRIMARY KEY,
+    epoch      bigint NOT NULL DEFAULT 0,
+    changed_at timestamptz NOT NULL DEFAULT now()
+);
+ALTER TABLE public.camp_cache_epoch ENABLE ROW LEVEL SECURITY;
+REVOKE ALL ON public.camp_cache_epoch FROM anon, authenticated;
+
+CREATE OR REPLACE FUNCTION public._bump_cache_epoch(p_camp_id uuid)
+RETURNS bigint
+LANGUAGE sql
+SECURITY DEFINER
+SET search_path = public, pg_catalog
+AS $$
+    INSERT INTO camp_cache_epoch (camp_id, epoch, changed_at) VALUES (p_camp_id, 1, now())
+    ON CONFLICT (camp_id) DO UPDATE SET epoch = camp_cache_epoch.epoch + 1, changed_at = now()
+    RETURNING epoch
+$$;
+REVOKE ALL ON FUNCTION public._bump_cache_epoch(uuid) FROM public, anon, authenticated;
+
+-- The camp's cache version, for its staff's pages (NULL for anyone else).
+CREATE OR REPLACE FUNCTION public.get_camp_cache_epoch(p_camp_id uuid)
+RETURNS bigint
+LANGUAGE sql
+STABLE
+SECURITY DEFINER
+SET search_path = public, pg_catalog
+AS $$
+    SELECT CASE WHEN public.camp_staff_member(p_camp_id)
+                THEN COALESCE((SELECT epoch FROM camp_cache_epoch WHERE camp_id = p_camp_id), 0) END
+$$;
+REVOKE ALL ON FUNCTION public.get_camp_cache_epoch(uuid) FROM public, anon;
+GRANT EXECUTE ON FUNCTION public.get_camp_cache_epoch(uuid) TO authenticated, service_role;
+
+-- A merge takes a camper away for good too (254): the same reload.
+DO $$
+BEGIN
+    IF to_regprocedure('public._merge_campers_254(uuid,bigint,bigint)') IS NULL THEN
+        ALTER FUNCTION public.merge_campers(uuid, bigint, bigint) RENAME TO _merge_campers_254;
+    END IF;
+    REVOKE ALL ON FUNCTION public._merge_campers_254(uuid, bigint, bigint) FROM public, anon, authenticated;
+END $$;
+CREATE OR REPLACE FUNCTION public.merge_campers(p_camp_id uuid, p_keep bigint, p_gone bigint)
+RETURNS jsonb
+LANGUAGE plpgsql
+SECURITY DEFINER
+SET search_path = public, pg_catalog
+AS $$
+DECLARE v jsonb;
+BEGIN
+    v := public._merge_campers_254(p_camp_id, p_keep, p_gone);
+    IF (v ->> 'success')::boolean IS TRUE THEN
+        v := v || jsonb_build_object('cache_epoch', public._bump_cache_epoch(p_camp_id));
+    END IF;
+    RETURN v;
+END;
+$$;
+REVOKE ALL ON FUNCTION public.merge_campers(uuid, bigint, bigint) FROM public, anon;
+GRANT EXECUTE ON FUNCTION public.merge_campers(uuid, bigint, bigint) TO authenticated, service_role;
 
 
 -- ─── 3. invitations: each slot decided on every save ────────────────────────

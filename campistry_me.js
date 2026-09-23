@@ -447,6 +447,9 @@ function _runCamperErases(){
             : c.client.rpc('erase_camper',{p_camp_id:c.campId,p_person_id:x.id,p_confirm:true});
         return call.then(function(res){
             var d=res&&res.data, err=d&&d.error;
+            // This page is current after its own erase or merge; every other
+            // page opened before it reloads before its next save (260).
+            if(d&&d.cache_epoch!=null&&window.__campistryEraseGuardAdvance)window.__campistryEraseGuardAdvance(d.cache_epoch);
             if(d&&d.success===true){
                 if(x.kind!=='merge'&&d.files_queued>0)_eraseStoredFiles(c);
                 return;

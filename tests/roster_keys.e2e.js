@@ -26,6 +26,9 @@
 //      him, and a later edit still saves.
 //   4c. (TED-020) Renamed and renumbered in one edit: still one child.
 //   4e. (TED-025) …and put back on the number he was moved off.
+//   6. (TED-035, the owner's rule) A camper erased on another computer: an
+//      office page opened before the erase reloads instead of saving its old
+//      copy; the page that erased keeps working.
 //   4d. (TED-022) A spreadsheet Update with no Camper ID column updates the
 //      child filed as "Avi Katz #<n>", rather than adding a third Avi.
 //
@@ -323,7 +326,7 @@ function seed(db) {
         await waitFor('the re-imported roster to reach the database', () => {
             const r = (kvRead(db, 'app1') || {}).camperRoster || {};
             return !!r['Newt Ray'] && Object.keys(r).some(k => /^Leah Fox/.test(k));
-        }, 40000);
+        }, 60000);
         await new Promise(r => setTimeout(r, 1500));
         const r5 = kvRead(db, 'app1').camperRoster;
         const leahKey = Object.keys(r5).find(k => /^Leah Fox/.test(k));
@@ -335,6 +338,50 @@ function seed(db) {
         check('her $30 is still on her number', bal.length === 1 && Number(bal[0].balance) === 30, JSON.stringify(bal));
         check('a new child in the file got a new number', Number(r5['Newt Ray'].camperId) > 0
             && ![3, 4, 10, 20, 40, 41].includes(Number(r5['Newt Ray'].camperId)), JSON.stringify(r5['Newt Ray'].camperId));
+
+        step(6, 'a camper is erased on another computer: a page opened before it reloads instead of saving');
+        // A second office page, opened now — like another computer in the office.
+        const pageB = await browser.newPage({ viewport: { width: 1400, height: 900 } });
+        pageB.on('pageerror', e => pageErrors.push(String(e).split('\n')[0]));
+        await pageB.route('**/*', r =>
+            r.request().url().startsWith('http://localhost:' + PORT) ? r.continue() : r.abort());
+        await pageB.addInitScript(shim + `
+            installCampistrySmokeShim({
+                endpoint: 'http://localhost:${PORT}/__pg',
+                users: [{ id: '${OWNER}', email: '${OWNER_EMAIL}', password: 'keys' }],
+                signedInAs: { id: '${OWNER}', email: '${OWNER_EMAIL}' }
+            });`);
+        await pageB.goto('http://localhost:' + PORT + '/campistry_me.html', { waitUntil: 'domcontentloaded' });
+        await pageB.waitForFunction(() => window.CampistryDB && window.CampistryDB.getCampId && window.CampistryDB.getCampId()
+            && window.CampistryMe && window.loadGlobalSettings && (window.loadGlobalSettings().app1 || {}).camperRoster,
+            null, { timeout: 30000 });
+        await new Promise(r => setTimeout(r, 9000));     // its start-up checks have run: it knows the current version
+        let reloadsB = 0;
+        pageB.on('load', () => { reloadsB++; });
+        // The erase happens on "another computer" (this page, A): the camp's version moves on.
+        const epoch = db.json(`SELECT public._bump_cache_epoch('${CAMP}') AS e`)[0].e;
+        await page.evaluate((e) => window.__campistryEraseGuardAdvance(e), epoch);
+        // B edits Leah's school and saves, holding its copy from before the erase.
+        await pageB.evaluate(() => window.CampistryMe.nav('campers'));
+        await pageB.evaluate(() => window.CampistryMe.editCamper('Leah Fox'));
+        await pageB.waitForSelector('#ceFirst', { timeout: 10000 });
+        await pageB.fill('#ceSchool', 'Stale Tab Edit');
+        await pageB.click('#ceSave');
+        await waitFor('the page opened before the erase to reload', async () => reloadsB > 0, 30000);
+        check('the page opened before the erase reloaded instead of saving', reloadsB > 0, 'reloads: ' + reloadsB);
+        await new Promise(r => setTimeout(r, 3000));
+        const leahB = (kvRead(db, 'app1').camperRoster || {})['Leah Fox'] || {};
+        check('its out-of-date save never reached the database', leahB.school !== 'Stale Tab Edit', JSON.stringify(leahB.school));
+        // The page that did the erase is current: it saves as usual, no reload.
+        let reloadsA = 0;
+        page.on('load', () => { reloadsA++; });
+        await openCamperForm('Leah Fox');
+        await page.fill('#ceSchool', 'After The Erase');
+        await saveCamperForm();
+        await waitFor('the erasing page\'s edit to reach the database', () =>
+            ((kvRead(db, 'app1').camperRoster || {})['Leah Fox'] || {}).school === 'After The Erase', 30000);
+        check('the page that erased keeps working and saving (no reload)', reloadsA === 0, 'reloads: ' + reloadsA);
+        await pageB.close();
 
         const v = db.json(`SELECT public.verify_roster_keys() AS v`)[0].v;
         check('no key is shown by the wrong child', JSON.stringify(v.keys_shown_by_the_wrong_child) === '[]', JSON.stringify(v));

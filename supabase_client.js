@@ -54,6 +54,117 @@
             window.CampistryCamperIdRpc.wrap(client, _camperIdFromRoster);
             window.CampistryCamperIdRpc.wrapFetch(_camperIdFromRoster);
         }
+        return _withEraseGuard(client);
+    }
+
+    // ── After an erase or a merge, a page opened before it reloads ───────────
+    // The owner's rule: "when a child is erased we force a reload that clears
+    // the cache." A page opened before a camper was erased (or merged away)
+    // still holds them — in memory and in this browser's cache — and would
+    // write them back on its next save. The server moves the camp's cache
+    // version on with every erase and merge (migration 260). Before this page
+    // saves camp data, and whenever it wakes up or comes back into view, it
+    // asks for that version; if it has moved on since the page loaded, the
+    // page clears its local camp data and reloads instead of saving.
+    const _EG = { tab: null, checkedAt: 0, pending: null, reloading: false };
+    function _egStoreKey(camp) { return 'campistry_cache_epoch:' + camp; }
+    function _egReload(camp, server) {
+        if (_EG.reloading) return;
+        _EG.reloading = true;
+        try { localStorage.setItem(_egStoreKey(camp), String(server)); } catch (_) {}
+        try { console.warn('[SupabaseClient] a camper was erased or merged on another computer — clearing this page\'s copy and reloading'); } catch (_) {}
+        try {
+            const msg = 'A camper was erased on another computer. Reloading to get the latest…';
+            if (typeof window.showToast === 'function') window.showToast(msg, 'warning');
+            else if (typeof window.toast === 'function') window.toast(msg, 'warning');
+        } catch (_) {}
+        Promise.resolve()
+            .then(function () { try { purgeCampDataCaches(); } catch (_) {} })
+            .then(function () { return window.LocalCacheIDB && window.LocalCacheIDB.clear ? window.LocalCacheIDB.clear() : null; })
+            .catch(function () {})
+            .then(function () { setTimeout(function () { location.reload(); }, 600); });
+    }
+    // Resolves true when this page may go on (its copy is current), false when
+    // it is reloading. Asks the server at most every `maxAgeMs`.
+    function _eraseGuardCheck(rpc, client, maxAgeMs) {
+        if (_EG.reloading) return Promise.resolve(false);
+        const camp = getCampId();
+        if (!camp) return Promise.resolve(true);
+        if (_EG.tab !== null && Date.now() - _EG.checkedAt < maxAgeMs) return Promise.resolve(true);
+        if (_EG.pending) return _EG.pending;
+        _EG.pending = Promise.resolve(rpc.call(client, 'get_camp_cache_epoch', { p_camp_id: camp }))
+            .then(function (res) {
+                const server = res && !res.error && res.data != null ? Number(res.data) : null;
+                if (server === null || !isFinite(server)) return true;       // not staff, or not migrated: carry on
+                _EG.checkedAt = Date.now();
+                let stored = null;
+                try { const v = localStorage.getItem(_egStoreKey(camp)); stored = v == null ? null : Number(v); } catch (_) {}
+                // This page's own starting point: what its cache was current
+                // as of (first check), then what it has seen since.
+                if (_EG.tab === null) _EG.tab = (stored !== null && isFinite(stored)) ? stored : server;
+                if (server > _EG.tab) { _egReload(camp, server); return false; }
+                try { localStorage.setItem(_egStoreKey(camp), String(server)); } catch (_) {}
+                return true;
+            }, function () { return true; })
+            .then(function (ok) { _EG.pending = null; return ok; });
+        return _EG.pending;
+    }
+    // The erasing page itself is current: it moves its own starting point on.
+    function _eraseGuardAdvance(epoch) {
+        const camp = getCampId();
+        const n = Number(epoch);
+        if (!camp || !isFinite(n)) return;
+        _EG.tab = Math.max(_EG.tab || 0, n);
+        _EG.checkedAt = Date.now();
+        try { localStorage.setItem(_egStoreKey(camp), String(_EG.tab)); } catch (_) {}
+    }
+    window.__campistryEraseGuardAdvance = _eraseGuardAdvance;
+    function _withEraseGuard(client) {
+        if (!client || client.__eraseGuarded || typeof client.from !== 'function' || typeof client.rpc !== 'function') return client;
+        client.__eraseGuarded = true;
+        const rawRpc = client.rpc;
+        const blocked = { data: null, error: { message: 'A camper was erased on another computer — this page is reloading.' } };
+        // Hold a request until the check says this page's copy is current.
+        function guardThen(builder, maxAgeMs) {
+            if (!builder || typeof builder.then !== 'function') return builder;
+            const rawThen = builder.then.bind(builder);
+            builder.then = function (onOk, onErr) {
+                return _eraseGuardCheck(rawRpc, client, maxAgeMs).then(function (ok) {
+                    return ok ? rawThen(onOk, onErr) : Promise.resolve(blocked).then(onOk, onErr);
+                });
+            };
+            return builder;
+        }
+        const rawFrom = client.from.bind(client);
+        client.from = function (table) {
+            const qb = rawFrom(table);
+            // Camp documents: checked right before every write. Other tables: at most every 15 s.
+            const maxAge = table === 'camp_state_kv' ? 0 : 15000;
+            ['insert', 'upsert', 'update', 'delete'].forEach(function (m) {
+                const raw = qb && qb[m];
+                if (typeof raw !== 'function') return;
+                qb[m] = function () { return guardThen(raw.apply(qb, arguments), maxAge); };
+            });
+            return qb;
+        };
+        client.rpc = function (fn) {
+            const b = rawRpc.apply(client, arguments);
+            return fn === 'get_camp_cache_epoch' ? b : guardThen(b, 15000);
+        };
+        // A page that wakes (a laptop opened, a tab brought back) checks at once.
+        try {
+            const wake = function () {
+                if (document.visibilityState === 'visible') { _EG.checkedAt = 0; _eraseGuardCheck(rawRpc, client, 0); }
+            };
+            document.addEventListener('visibilitychange', wake);
+            window.addEventListener('focus', wake);
+            window.addEventListener('online', wake);
+            // …and a page just opened from this browser's cache, once the camp
+            // is known, without waiting for its first save.
+            [2500, 8000].forEach(function (ms) {
+                setTimeout(function () { _eraseGuardCheck(rawRpc, client, 0); }, ms);
+            });
+        } catch (_) {}
         return client;
     }
 
