@@ -145,7 +145,8 @@ SET search_path = public, pg_catalog
 AS $$
     SELECT jsonb_build_object(
         'autoreload_reader',  to_regprocedure('public.canteen_autoreload_accounts(uuid)') IS NOT NULL,
-        'camper_check',       to_regprocedure('public.canteen_camper_known(uuid,text)') IS NOT NULL,
+        -- By name: 248 adds p_camper_id to its signature.
+        'camper_check',       EXISTS (SELECT 1 FROM pg_proc WHERE proname = 'canteen_camper_known'),
         'accounts_with_autoreload_on', (SELECT count(*) FROM camp_canteen_accounts
             WHERE deleted_at IS NULL
               AND COALESCE((payload -> 'autoReload' ->> 'enabled')::boolean, false)),

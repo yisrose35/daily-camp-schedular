@@ -1,5 +1,5 @@
 -- ============================================================================
--- Confirm migrations 222-247 are in and doing their job.
+-- Confirm migrations 222-248 are in and doing their job.
 --
 -- Paste the whole thing into the Supabase SQL Editor. It is READ ONLY — one
 -- SELECT, nothing is created, changed or deleted, and the two purge functions
@@ -259,7 +259,7 @@
 
 UNION ALL
 
-  -- ─── 1b. 239-247, read off the DEPLOYED function bodies ───────────────────
+  -- ─── 1b. 239-248, read off the DEPLOYED function bodies ───────────────────
   -- A separate block, and the bodies are computed in a subquery rather than
   -- through 239's _prosrc_code helper, for one reason that cost a rewrite:
   -- POSTGRES RESOLVES FUNCTION NAMES WHEN IT PLANS THE STATEMENT, not when it
@@ -349,7 +349,7 @@ UNION ALL
     -- four edge functions it names must also be redeployed.
     ('243  the nightly reload reads the rows (and redeploy 4 edge functions)',
      CASE WHEN to_regprocedure('public.canteen_autoreload_accounts(uuid)') IS NOT NULL
-           AND to_regprocedure('public.canteen_camper_known(uuid,text)') IS NOT NULL
+           AND EXISTS (SELECT 1 FROM pg_proc WHERE proname = 'canteen_camper_known')
           THEN 'ok' ELSE 'AUTO-RELOAD STILL CHARGES NOBODY — apply 243' END),
 
     -- A renamed child's account is keyed by the old spelling; a new child with
@@ -377,7 +377,17 @@ UNION ALL
     ('247  the register charges a person, and only staff can',
      CASE WHEN to_regprocedure('public.submit_canteen_purchase(uuid,text,numeric,text,date,bigint)') IS NOT NULL
            AND to_regprocedure('public.submit_canteen_purchase(uuid,text,numeric,text,date)') IS NULL
-          THEN 'ok' ELSE 'AN UNACCEPTED INVITATION CAN CHARGE A CAMPER — apply 247' END)
+          THEN 'ok' ELSE 'AN UNACCEPTED INVITATION CAN CHARGE A CAMPER — apply 247' END),
+
+    -- Every function that names a camper also takes the camper's id.
+    ('248  every camper function takes an id',
+     CASE WHEN NOT EXISTS (
+              SELECT 1 FROM pg_proc p JOIN pg_namespace n ON n.oid = p.pronamespace
+               WHERE n.nspname = 'public'
+                 AND pg_get_function_identity_arguments(p.oid) ~ '\mp_camper(_name)?\M'
+                 AND pg_get_function_identity_arguments(p.oid) !~ '(p_camper_id|p_person_id)'
+                 AND p.proname !~ '__by_name$')
+          THEN 'ok' ELSE 'SOME FUNCTIONS STILL TAKE ONLY A NAME — apply 248' END)
     ) AS x(item, result)
 
 UNION ALL

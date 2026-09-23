@@ -261,25 +261,25 @@ test('the ledger has no stale entries — struck off as each is converted', () =
 const WHY_THE_NAME_IS_SAFE = {
     // The translation layer, on purpose. These four are the only entries here
     // that are not verified below.
-    _invite_covers_camper: 'wrapper',
-    _parent_owns_camper: 'wrapper',
-    _parent_invite_for: 'wrapper',
-    verify_my_camper: 'wrapper',
+    _invite_covers_camper: 'takes an id',
+    _parent_owns_camper: 'takes an id',
+    _parent_invite_for: 'takes an id',
+    verify_my_camper: 'takes an id',
 
     // Resolve the name themselves.
-    _camper_mail_record: 'resolves it',
-    _latest_pickup_alert: 'resolves it',
-    get_canteen_history: 'resolves it',
-    canteen_camper_known: 'resolves it',
+    _camper_mail_record: 'takes an id',
+    _latest_pickup_alert: 'takes an id',
+    get_canteen_history: 'takes an id',
+    canteen_camper_known: 'takes an id',
 
     // Reach the row through the canteen lock, which translates.
-    credit_canteen_balance_from_processor: 'lock translates',
-    credit_canteen_balance_from_stripe: 'lock translates',
-    merge_canteen_autoreload_card: 'lock translates',
-    refund_canteen_deposit_from_processor: 'lock translates',
-    refund_canteen_deposit_from_stripe: 'lock translates',
-    submit_canteen_purchase: 'lock translates',
-    update_canteen_autoreload_state: 'lock translates',
+    credit_canteen_balance_from_processor: 'takes an id',
+    credit_canteen_balance_from_stripe: 'takes an id',
+    merge_canteen_autoreload_card: 'takes an id',
+    refund_canteen_deposit_from_processor: 'takes an id',
+    refund_canteen_deposit_from_stripe: 'takes an id',
+    submit_canteen_purchase: 'takes an id',
+    update_canteen_autoreload_state: 'takes an id',
 
     // Accept an id alongside the name.
     add_pickup_alert_league_recipients: 'takes an id',
@@ -305,6 +305,21 @@ const WHY_THE_NAME_IS_SAFE = {
     submit_shop_order: 'takes an id',
     use_family_card_for_canteen_auto_reload: 'takes an id',
 };
+
+/**
+ * The functions migration 248 gave a p_camper_id by WRAPPING them — a
+ * dynamically created signature this file's text scan cannot see, so it is read
+ * from 248's own list of wrap calls.
+ */
+function wrappedWithAnId() {
+    const out = new Set();
+    for (const { sql } of migrationFiles()) {
+        const re = /wrap_with_camper_id\(\s*'(\w+)'/g;
+        let m;
+        while ((m = re.exec(sql)) !== null) out.add(m[1]);
+    }
+    return out;
+}
 
 /** The latest definition of each function: {name: {args, body}}. */
 function latestDefinitions() {
@@ -351,7 +366,7 @@ test('the classifications are true, not asserted', () => {
         if (!d) continue;                       // covered by the stale check above
         const code = d.body.replace(/--[^\n]*/g, '');
         if (why === 'takes an id') {
-            if (!/\bp_camper_id\b|\bp_person_id\b/.test(d.args)) {
+            if (!/\bp_camper_id\b|\bp_person_id\b/.test(d.args) && !wrappedWithAnId().has(fn)) {
                 wrong.push(`${fn}: classified 'takes an id' but its signature has none`);
             }
         } else if (why === 'resolves it') {
@@ -413,7 +428,7 @@ function alsoTakeAnId() {
     const out = [];
     for (const [fn, args] of latest) {
         if (!/\bp_camper(_name)?\b/.test(args)) continue;
-        if (/\bp_camper_id\b|\bp_person_id\b/.test(args)) out.push(fn);
+        if (/\bp_camper_id\b|\bp_person_id\b/.test(args) || wrappedWithAnId().has(fn)) out.push(fn);
     }
     return out.sort();
 }
@@ -432,4 +447,15 @@ test('progress is reported, so the direction is visible', () => {
     console.log(`    of those, ${unsafe.length} still lose data on a rename`
                 + (unsafe.length ? `: ${unsafe.join(', ')}` : ' — none'));
     assert.ok(t <= TABLES_ON_NAMES.length && f <= FUNCTIONS_ON_NAMES.length);
+});
+
+test('every function that names a camper also takes the camper\'s id', () => {
+    // The rule the whole ledger was working towards. A name is accepted only
+    // beside an id, so every caller that HAS the id can send it and have it
+    // decide — and a new function that takes only a name fails here the day it
+    // is written.
+    const onlyName = [...nameKeyedFunctions().keys()]
+        .filter(fn => WHY_THE_NAME_IS_SAFE[fn] !== 'takes an id').sort();
+    assert.deepStrictEqual(onlyName, [],
+        'These identify a camper by name and cannot be given an id:\n  ' + onlyName.join('\n  '));
 });

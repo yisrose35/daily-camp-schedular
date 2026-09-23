@@ -97,7 +97,19 @@ BEGIN
     END IF;
 END $$;
 
-\i migrations/225_parent_submissions_run_on_ids.sql
+-- Re-applying 225 proves it is idempotent. After 248, _invite_covers_camper has
+-- a p_camper_id wrapper, and 225's own later SQL functions cannot choose
+-- between that and the name-only signature 225 re-creates.
+-- So on a database with 248 this follows 248's own procedure for re-running an
+-- older file: unwrap, re-apply, re-run 248 — which also proves that procedure.
+SELECT to_regprocedure('public.unwrap_camper_id_functions()') IS NOT NULL AS has_248 \gset
+\if :has_248
+    SELECT public.unwrap_camper_id_functions();
+    \i migrations/225_parent_submissions_run_on_ids.sql
+    \i migrations/248_every_camper_function_takes_an_id.sql
+\else
+    \i migrations/225_parent_submissions_run_on_ids.sql
+\endif
 
 DO $$
 BEGIN

@@ -135,6 +135,7 @@ const MIGRATIONS = [
     '245_the_canteen_ledger_is_read_from_its_rows',
     '246_balances_read_payments_from_their_rows',
     '247_the_register_charges_a_person',
+    '248_every_camper_function_takes_an_id',
 ];
 
 // The one thing the stubs deliberately get wrong for our purposes: they define
