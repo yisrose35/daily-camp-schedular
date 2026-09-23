@@ -1,19 +1,21 @@
 # Ted's ledger
 
 ## Last commit checked
-`50f96f6` (2026-09-23)
+`70cd931` (2026-09-23)
 
 ## Open findings
 | ID | Severity | Description | Found | Status |
 |----|----------|-------------|-------|--------|
-| TED-040 | 🟡 | Erase guard: edge-function calls now checked afresh (verified with real supabase-js at 50f96f6); still open for other tables and RPCs (canteen sales, payments carry camperId), which check at most every 15 s | 2026-09-23 | Open (narrowed) |
-| TED-042 | 🟡 | Me page fires several erases/merges at once; if answers arrive out of order the erasing page reloads itself ("erased on another computer") and drops its last-moment edits | 2026-09-23 | Open (reload confirmed; frequency unmeasured) |
-| TED-043 | 🟡 | The new fetch guard lets a write through when the address is a URL object (`fetch(new URL(...), {method:'POST'})` → 200 while stale); no app code writes that way today | 2026-09-23 | Open |
-| TED-005 | 🟠 | 14 auto-scheduler tests fail (`auto_full_day.test.js`); still 14 at 50f96f6. Owner deferred. | 2026-09-23 | Open (deferred by owner) |
+| TED-044 | 🟡 | While this page's own erase awaits its answer, another computer's erase is masked (tab + own); a save in that moment reaches the server, then the page reloads | 2026-09-23 | Open |
+| TED-045 | 🟡 | No test guards "every ordinary-table write checks afresh": test:keys passes 41/41 with the 15 s rule put back for tables | 2026-09-23 | Open |
+| TED-005 | 🟠 | 14 auto-scheduler tests fail (`auto_full_day.test.js`); still 14 at 70cd931. Owner deferred. | 2026-09-23 | Open (deferred by owner) |
 
 ## Closed findings
 | ID | What it was | Closed | Proof |
 |----|-------------|--------|-------|
+| TED-040 | Other tables and camper-naming RPCs checked at most every 15 s | 2026-09-23 | At 70cd931, real supabase-js (`v12/probe.e2e.js`): canteen_transactions insert after erase elsewhere → 0 sent, reload; nested `camperId` RPC → not sent, reload; test:keys fails with RPC rule at 15 s. Calls with other argument names (e.g. `p_roster_names`) still 15 s. |
+| TED-042 | Several erases sent at once made the erasing page reload itself | 2026-09-23 | At 70cd931: test:keys fails with `Promise.all` back (reloads 1) and with the in-flight count removed (reloads 2); probe P3 own erase + save → no reload. Side effect filed as TED-044. |
+| TED-043 | URL-object write passed the fetch guard | 2026-09-23 | At 70cd931: probe P4 → 409, 0 requests; test:keys fails with the old line. |
 | TED-037 | A page forced to reload still sent its old copy on the way out (beforeunload keepalive) | 2026-09-23 | At 50f96f6: my unchanged `v10/leak2.e2e.js` (network-layer recorder, real erase) → 0 requests past the guard, database unchanged; leaving 0/100/300 ms after save (`v11/leak3.e2e.js`) → 0; test:keys fails with the fix removed (1 of 37). |
 | TED-038 | Lite never loaded the guarded supabase_client.js | 2026-09-23 | At 50f96f6: `campistry_lite.html:137` `LITE_ASSET_VERSION = '20260923-08'`; Lite's saveKV goes through `window.supabase`; test:lite 12/12. Native Capacitor build is an owner step. |
 | TED-039 | Verify script said 260 ok on an earlier copy of 260 | 2026-09-23 | At 50f96f6 (`v11/v39.js`): full → ok; 260 from 189d36b and from b92dcdc → "run 260 again"; no 260 → "apply 260". |
@@ -57,8 +59,8 @@
 ## Areas audited
 | Area | Last deep audit |
 |------|-----------------|
-| Camper ID / camper number model (migrations 223-260, roster trigger, renumber, erase/merge, split repair, roster keys, invites, CSV import, Health entry) | 2026-09-23 (eleventh pass) |
-| Erase reload guard (`supabase_client.js` `_withEraseGuard`, fetch guard, camp_cache_epoch) | 2026-09-23 (eleventh pass: Me page on scratch DB; guard with real supabase-js and fake server; Lite by code read; real edge functions never called) |
+| Camper ID / camper number model (migrations 223-260, roster trigger, renumber, erase/merge, split repair, roster keys, invites, CSV import, Health entry) | 2026-09-23 (twelfth pass) |
+| Erase reload guard (`supabase_client.js` `_withEraseGuard`, fetch guard, camp_cache_epoch) | 2026-09-23 (twelfth pass: real supabase-js + fake server probes P1-P4; mutation runs of test:keys; Lite by code read; real edge functions never called) |
 | Parent invitations (`link_parent_invites`, `upsert_parent_invite`, claim functions, stamp trigger, `restamp_parent_invite`) | 2026-09-23 (numbers; who may write them; staff access to codes via RPC and table policy, re-checked as `authenticated` at b92dcdc) |
 | Me page cloud save (`integration_hooks.js` batch upsert) | 2026-09-23 (only against the renumber trigger) |
 | Auto Builder (solver, layers, grid) | never (only test results seen) |
@@ -87,3 +89,4 @@
 | 2026-09-23 | Check my work: TED-021, 028, 031, 032 fixes | b92dcdc | unit 3270/14 · pg 50/0 · keys 31/0 · lite 12/0 · smoke 32/0 · scale 24/0 | 🟡 | [report](reports/2026-09-23-camper-id-ninth-recheck.md) |
 | 2026-09-23 | Check my work: TED-033..036 fixes + erase reload rule | 10f4461 | unit 3270/14 · pg 50/0 · keys 34/0 · lite 12/0 · smoke 32/0 · scale 24/0 | 🟡 | [report](reports/2026-09-23-camper-id-tenth-recheck.md) |
 | 2026-09-23 | Check my work: TED-037..041 fixes | 50f96f6 | unit 3270/14 · pg 50/0 · keys 37/0 · lite 12/0 · smoke 32/0 · scale 24/0 | 🟡 | [report](reports/2026-09-23-camper-id-eleventh-recheck.md) |
+| 2026-09-23 | Check my work: TED-040, 042, 043 fixes | 70cd931 | unit 3270/14 · pg 50/0 · keys 41/0 · lite 12/0 · smoke 32/0 · scale 24/0 | 🟡 | [report](reports/2026-09-23-camper-id-twelfth-recheck.md) |
