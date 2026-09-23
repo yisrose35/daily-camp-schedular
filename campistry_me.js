@@ -7076,29 +7076,35 @@ function _wireBunkChip(chip){
  * contenteditable/table quirks (cursor placement, column sizing) kept
  * surfacing bugs that a real spreadsheet app doesn't have. Instead: give
  * the camp a template CSV with the columns already labeled (Division,
- * Grade, Bunk, Days Available), let them fill it in Excel/Google Sheets/
- * Numbers — actual spreadsheet software, with actual fill handles, actual
- * copy/paste, actual undo — and upload the result back.
+ * Grade, Bunk, Days Available, School Grade, Bunk Size, Alternate Name),
+ * let them fill it in Excel/Google Sheets/Numbers — actual spreadsheet
+ * software, with actual fill handles, actual copy/paste, actual undo —
+ * and upload the result back. Only Division, Grade and Bunk are required.
  *
- * Days Available accepts any mix of day names/abbreviations ("M W F" /
- * "Mon Wed Fri" / "Monday Wednesday Friday", space or semicolon separated
- * so it can live inside one CSV cell without fighting the comma delimiter)
- * — left blank means every day, matching the app's existing "present all
- * days" default.
+ * Days Available and School Grade both accept any mix of values in one
+ * cell, space/semicolon separated so they can live inside a CSV cell
+ * without fighting the comma delimiter ("M W F" / "Mon Wed Fri" for days;
+ * a school grade cell can additionally use commas since it's the last
+ * column camps usually fill freely). Days left blank means every day,
+ * matching the app's existing "present all days" default. Bunk Size sets
+ * that bunk's capacity (same field as the manual per-bunk capacity input);
+ * Alternate Name sets that bunk's alias (same field as the manual bunk
+ * alias input) — both keyed by bunk name, same as the app's own storage.
  *
  * Merges into the EXISTING structure rather than replacing it: a division/
  * grade already present gets new bunks appended (skipping exact-name
- * duplicates); a new division/grade is created fresh. Nothing already in
- * the camp's structure is ever deleted by this tool.
+ * duplicates), and school grades union in; a new division/grade is created
+ * fresh. Nothing already in the camp's structure is ever deleted by this
+ * tool.
  */
-var QF_COLS=['Division','Grade','Bunk','Days Available'];
+var QF_COLS=['Division','Grade','Bunk','Days Available','School Grade','Bunk Size','Alternate Name'];
 var _qfPendingResult=null;
 
 function downloadQuickFillTemplate(){
     var rows=[
         QF_COLS,
-        ['Example: Seniors','Grade 8','Bunk 1','Mon Wed Fri'],
-        ['Example: Seniors','Grade 8','Bunk 2','']
+        ['Example: Seniors','Grade 8','Bunk 1','Mon Wed Fri','8th Grade','14','Eagles'],
+        ['Example: Seniors','Grade 8','Bunk 2','','8th Grade','12','']
     ];
     var csv=rows.map(function(r){return r.map(_qfCsvField).join(',')}).join('\r\n');
     var blob=new Blob([csv],{type:'text/csv;charset=utf-8;'});
@@ -7115,7 +7121,7 @@ function _qfCsvField(v){
 
 function openQuickFillUpload(){
     var body=
-        '<p style="font-size:.85rem;color:var(--s600);margin:0 0 14px;line-height:1.5">Download the template below, fill in one row per bunk in Excel/Google Sheets/Numbers, then upload it here. Divisions and grades that already exist just get new bunks added — nothing existing is overwritten or removed.</p>'
+        '<p style="font-size:.85rem;color:var(--s600);margin:0 0 14px;line-height:1.5">Download the template below, fill in one row per bunk in Excel/Google Sheets/Numbers, then upload it here. Division, Grade and Bunk are required; Days Available, School Grade, Bunk Size and Alternate Name are all optional. Divisions and grades that already exist just get new bunks added — nothing existing is overwritten or removed.</p>'
         +'<button type="button" class="me-btn me-btn--sec" onclick="CampistryMe.downloadQuickFillTemplate()" style="margin-bottom:16px">⬇ Download Template (CSV)</button>'
         +'<div class="fi-group"><label style="font-size:.8rem;font-weight:600;color:var(--s600);display:block;margin-bottom:6px">Upload filled-in CSV</label><input type="file" id="qfFileInput" accept=".csv,text/csv" class="fi" style="width:100%"></div>'
         +'<div id="qfUploadPreview" style="margin-top:14px;font-size:.82rem;line-height:1.5;display:none"></div>';
@@ -7151,7 +7157,10 @@ function _qfHandleFile(e){
         }
         _qfPendingResult=res;
         preview.style.color='var(--s600)';
-        preview.innerHTML='Will add: <strong>'+res.newDivs+'</strong> division'+(res.newDivs!==1?'s':'')+', <strong>'+res.newGrades+'</strong> grade'+(res.newGrades!==1?'s':'')+', <strong>'+res.newBunks+'</strong> bunk'+(res.newBunks!==1?'s':'')+'.';
+        var extras=[];
+        if(res.bunkSizeCount)extras.push(res.bunkSizeCount+' bunk size'+(res.bunkSizeCount!==1?'s':''));
+        if(res.altNameCount)extras.push(res.altNameCount+' alternate name'+(res.altNameCount!==1?'s':''));
+        preview.innerHTML='Will add: <strong>'+res.newDivs+'</strong> division'+(res.newDivs!==1?'s':'')+', <strong>'+res.newGrades+'</strong> grade'+(res.newGrades!==1?'s':'')+', <strong>'+res.newBunks+'</strong> bunk'+(res.newBunks!==1?'s':'')+(extras.length?' — plus '+extras.join(' and ')+'.':'.');
     };
     reader.readAsText(file);
 }
@@ -7191,6 +7200,22 @@ function _qfParseDays(cell){
     return out.length?out:null;
 }
 
+// Feeder school grade(s) a camp grade draws from -- free text against
+// SCHOOL_GRADE_CATALOG rather than a fixed set like days, so an exact
+// catalog match ("8th Grade") is normalized to it, but anything else typed
+// is kept as-is rather than silently dropped.
+function _qfParseSchoolGrades(cell){
+    if(!cell||!cell.trim())return null;
+    var tokens=cell.split(/[,;/]+/).map(function(t){return t.trim()}).filter(Boolean);
+    var out=[];
+    tokens.forEach(function(t){
+        var match=SCHOOL_GRADE_CATALOG.filter(function(sg){return sg.toLowerCase()===t.toLowerCase()})[0];
+        var val=match||t;
+        if(out.indexOf(val)<0)out.push(val);
+    });
+    return out.length?out:null;
+}
+
 // A small hand-rolled CSV parser -- handles quoted fields (so a value that
 // itself contains a comma or a newline survives round-tripping through
 // Excel/Sheets/Numbers, all of which quote such fields on export) without
@@ -7215,15 +7240,20 @@ function _qfParseCSVLines(text){
 }
 
 /** Pure parse -- reads the uploaded CSV's text, never touches `structure`.
- *  Columns are fixed (Division, Grade, Bunk, Days Available); a header row
- *  matching that is auto-detected and skipped, and the template's own
- *  "Example: ..." rows are ignored. Returns
- *  {rowCount, newDivs, newGrades, newBunks, byDivision, divOrder}. */
+ *  Columns are fixed (Division, Grade, Bunk, Days Available, School Grade,
+ *  Bunk Size, Alternate Name); a header row matching that is auto-detected
+ *  and skipped, and the template's own "Example: ..." rows are ignored.
+ *  Bunk Size and Alternate Name key off the bunk name into flat maps —
+ *  same shape as the app's own bunkCapacity/bunkAliases globals, which
+ *  aren't nested under structure either. Returns
+ *  {rowCount, newDivs, newGrades, newBunks, byDivision, divOrder,
+ *   bunkCapacity, bunkAliases, bunkSizeCount, altNameCount}. */
 function _qfParseCSV(text){
     var lines=_qfParseCSVLines(text||'').filter(function(r){return r.some(function(v){return (v||'').trim()!==''})});
-    var byDivision={}; // name -> {grades: {name: {bunks:[], days:[]|null}}, order:[]}
+    var byDivision={}; // name -> {grades: {name: {bunks:[], days:[]|null, schoolGrades:[]|null}}, order:[]}
     var divOrder=[],rowCount=0;
-    if(!lines.length)return {rowCount:0,byDivision:byDivision,divOrder:divOrder,newDivs:0,newGrades:0,newBunks:0};
+    var bunkCap={},bunkAlias={};
+    if(!lines.length)return {rowCount:0,byDivision:byDivision,divOrder:divOrder,newDivs:0,newGrades:0,newBunks:0,bunkCapacity:bunkCap,bunkAliases:bunkAlias,bunkSizeCount:0,altNameCount:0};
     var start=0;
     var first=(lines[0][0]||'').trim().toLowerCase();
     if(first==='division')start=1;
@@ -7235,11 +7265,24 @@ function _qfParseCSV(text){
         if(!gradeName)continue;
         var bunkName=(row[2]||'').trim();
         var days=_qfParseDays(row[3]||'');
+        var schoolGrades=_qfParseSchoolGrades(row[4]||'');
+        var sizeRaw=(row[5]||'').trim();
+        var size=sizeRaw?parseInt(sizeRaw,10):NaN;
+        var altName=(row[6]||'').trim();
         if(!byDivision[divName]){byDivision[divName]={grades:{},order:[]};divOrder.push(divName)}
         var dv=byDivision[divName];
-        if(!dv.grades[gradeName]){dv.grades[gradeName]={bunks:[],days:days};dv.order.push(gradeName)}
-        else if(days&&!dv.grades[gradeName].days)dv.grades[gradeName].days=days; // first non-blank Days cell for a grade wins
+        if(!dv.grades[gradeName]){dv.grades[gradeName]={bunks:[],days:days,schoolGrades:schoolGrades};dv.order.push(gradeName)}
+        else{
+            if(days&&!dv.grades[gradeName].days)dv.grades[gradeName].days=days; // first non-blank Days cell for a grade wins
+            if(schoolGrades){ // school grades UNION across every bunk row under this grade
+                var sg=dv.grades[gradeName].schoolGrades||[];
+                schoolGrades.forEach(function(v){if(sg.indexOf(v)<0)sg.push(v)});
+                dv.grades[gradeName].schoolGrades=sg;
+            }
+        }
         if(bunkName&&dv.grades[gradeName].bunks.indexOf(bunkName)<0)dv.grades[gradeName].bunks.push(bunkName);
+        if(bunkName&&!isNaN(size)&&size>0)bunkCap[bunkName]=size;
+        if(bunkName&&altName)bunkAlias[bunkName]=altName;
         rowCount++;
     }
     // New-vs-existing counts, computed against the CURRENT structure so the
@@ -7256,12 +7299,14 @@ function _qfParseCSV(text){
             newBunks+=g.bunks.filter(function(b){return existingBunks.indexOf(b)<0}).length;
         });
     });
-    return {rowCount:rowCount,byDivision:byDivision,divOrder:divOrder,newDivs:newDivs,newGrades:newGrades,newBunks:newBunks};
+    return {rowCount:rowCount,byDivision:byDivision,divOrder:divOrder,newDivs:newDivs,newGrades:newGrades,newBunks:newBunks,
+            bunkCapacity:bunkCap,bunkAliases:bunkAlias,bunkSizeCount:Object.keys(bunkCap).length,altNameCount:Object.keys(bunkAlias).length};
 }
 
-/** Writes the parsed result into `structure` and saves. Split from _qfParse
- *  so the live preview (fired on every keystroke) never touches real data --
- *  only the Create Structure button does. */
+/** Writes the parsed result into `structure` (plus the flat bunkCapacity/
+ *  bunkAliases maps) and saves. Split from _qfParseCSV so the live preview
+ *  (fired on every file pick) never touches real data -- only the Create
+ *  Structure button does. */
 function _qfCommit(res){
     res.divOrder.forEach(function(dn){
         if(!structure[dn])structure[dn]={color:COLORS[Object.keys(structure).length%COLORS.length],grades:{}};
@@ -7274,8 +7319,15 @@ function _qfCommit(res){
             if(!target.bunks)target.bunks=[];
             g.bunks.forEach(function(b){if(target.bunks.indexOf(b)<0)target.bunks.push(b)});
             if(g.days&&!target.daysPresent)target.daysPresent=g.days;
+            if(g.schoolGrades){
+                var sg=Array.isArray(target.schoolGrades)?target.schoolGrades:[];
+                g.schoolGrades.forEach(function(v){if(sg.indexOf(v)<0)sg.push(v)});
+                target.schoolGrades=sg;
+            }
         });
     });
+    Object.keys(res.bunkCapacity||{}).forEach(function(b){bunkCapacity[b]=res.bunkCapacity[b]});
+    Object.keys(res.bunkAliases||{}).forEach(function(b){bunkAliases[b]=res.bunkAliases[b]});
     save();
 }
 
