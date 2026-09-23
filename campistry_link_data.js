@@ -1567,7 +1567,7 @@
                 to: n.parentEmail,
                 subject: n.subject,
                 body: n.body,
-                camper: n.camperName
+                camper: n.camperName, camperId: n.camperId != null ? n.camperId : null
             };
         }).filter(function(n) { return n.to; });
     };

@@ -211,9 +211,10 @@
                 policy: pol
             });
             if (p.amount <= 0) return;
-            out.pots.push({ kind: 'canteen', name: str(c.name), plan: p });
+            var cid = (c.camperId != null && c.camperId !== '') ? c.camperId : null;
+            out.pots.push({ kind: 'canteen', name: str(c.name), camperId: cid, plan: p });
             out.steps = out.steps.concat(p.steps.map(function (s) {
-                return Object.assign({ kind: 'canteen', camper: str(c.name) }, s);
+                return Object.assign({ kind: 'canteen', camper: str(c.name), camperId: cid }, s);
             }));
             out.warnings = out.warnings.concat(p.warnings);
             out.total = money(out.total + p.amount);

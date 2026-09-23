@@ -1,5 +1,5 @@
 -- ============================================================================
--- Confirm migrations 222-259 are in and doing their job.
+-- Confirm migrations 222-260 are in and doing their job.
 --
 -- Paste the whole thing into the Supabase SQL Editor. It is READ ONLY — one
 -- SELECT, nothing is created, changed or deleted, and the two purge functions
@@ -479,6 +479,19 @@ UNION ALL
             THEN 'KEY ON THE WRONG CHILD: ' || (public.verify_roster_keys() ->> 'keys_shown_by_the_wrong_child')
           WHEN (public.verify_roster_keys() ->> 'unrecorded_keys')::int <> 0
             THEN (public.verify_roster_keys() ->> 'unrecorded_keys') || ' keys not recorded — re-apply 259'
+          ELSE 'ok' END),
+
+    -- Invitations' numbers on the right child; renumbers carry saved records;
+    -- children split by the 253 rename bug (read-only count + the repair line).
+    ('260  numbers stay with their child (invites, renumbers, split renames)',
+     CASE WHEN to_regprocedure('public.split_renames(boolean)') IS NULL THEN 'apply 260'
+          WHEN public.verify_invite_numbers() -> 'slots_on_the_wrong_child' <> '[]'::jsonb
+            THEN 'INVITE NUMBERS ON THE WRONG CHILD: ' || (public.verify_invite_numbers() ->> 'slots_on_the_wrong_child')
+          WHEN jsonb_array_length(public.split_renames() -> 'split_children') > 0
+            THEN jsonb_array_length(public.split_renames() -> 'split_children')
+                 || ' renamed children split by the old bug — read them with SELECT public.split_renames(); then repair with SELECT public.split_renames(true);'
+          WHEN pg_get_functiondef('public.number_camp_campers()'::regprocedure) !~ '_renumber_in_documents'
+            THEN 'renumbers do not carry saved records — re-apply 260'
           ELSE 'ok' END)
     ) AS x(item, result)
 

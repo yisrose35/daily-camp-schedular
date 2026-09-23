@@ -1458,11 +1458,11 @@ var CamperMail = (function(){
         var db=_db();
         if(!db){ if(cb)cb(); return; }
         db.client.from('link_camper_mail')
-            .select('id, camper_name, division, grade, bunk, parent_name, subject, body, status, created_at, source')
+            .select('id, camper_name, person_id, division, grade, bunk, parent_name, subject, body, status, created_at, source')
             .eq('camp_id',db.campId).order('created_at',{ascending:false}).limit(2000)
             .then(function(res){
                 if(res.error){ console.warn('[Live] link_camper_mail load:',res.error.message); }
-                else { _rows=(res.data||[]).map(function(r){ return { id:r.id, camper:r.camper_name, division:r.division||'', grade:r.grade||'', bunk:r.bunk||'', parentName:r.parent_name||'', subject:r.subject||'', body:r.body||'', status:r.status||'new', date:r.created_at, source:r.source||'link' }; }); }
+                else { _rows=(res.data||[]).map(function(r){ return { id:r.id, camper:r.camper_name, camperId:r.person_id!=null?r.person_id:null, division:r.division||'', grade:r.grade||'', bunk:r.bunk||'', parentName:r.parent_name||'', subject:r.subject||'', body:r.body||'', status:r.status||'new', date:r.created_at, source:r.source||'link' }; }); }
                 if(cb)cb();
             });
     }

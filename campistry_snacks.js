@@ -643,7 +643,7 @@ function cashOutLimit(name) {
     const cfg = getSettings();
     const lim = window.SnacksCash.limit({
         account: getAccount(name), transactions: snacks.transactions,
-        camper: name, date: todayStr(), settings: cfg
+        camper: name, camperId: _deskCamperId(name), date: todayStr(), settings: cfg
     });
     lim.cfg = cfg;
     return lim;
@@ -1755,7 +1755,7 @@ window.cashOut = function() {
     // lands from another device, so the number the office saw may be stale.
     const check = window.SnacksCash.validate({
         account: getAccount(name), transactions: snacks.transactions,
-        camper: name, date: todayStr(), settings: cfg,
+        camper: name, camperId: _deskCamperId(name), date: todayStr(), settings: cfg,
         amount: amt, note: note
     });
     // The client check above is UX: it disables the button and explains before a
@@ -1783,7 +1783,7 @@ window.cashOut = function() {
         }
         closeM('cash');
         _deskRefresh(null, name, d);
-        toast('Paid out $' + rounded.toFixed(2) + ' cash to ' + name);
+        toast('Paid out $' + rounded.toFixed(2) + ' cash to ' + _lbl(name));
         ['cashAmt', 'cashNote'].forEach(id => { const e = document.getElementById(id); if (e) e.value = ''; });
     }, function () {
         toast('Could not pay out the cash — connection error', 1);
@@ -1827,8 +1827,13 @@ async function _getSnacksProcessorKey() {
 // has neither, so it never appears here — there's nothing for either
 // gateway to refund.
 function _onlineDeposits(name, processorKey) {
+    const id = _deskCamperId(name);
     return (snacks.transactions || []).filter(t => {
-        if (!t || t.camper !== name || t.kind !== 'deposit' || t.method !== processorKey) return false;
+        if (!t || t.kind !== 'deposit' || t.method !== processorKey) return false;
+        // this camper's deposit: by number when both carry one, by name only
+        // for a deposit from before numbers
+        if (id != null && t.camperId != null && t.camperId !== '') { if (String(t.camperId) !== String(id)) return false; }
+        else if (t.camper !== name) return false;
         return processorKey === 'stripe' ? !!t.stripePaymentIntentId : !!t.byopTransactionId;
     });
 }

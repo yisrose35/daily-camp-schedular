@@ -17,6 +17,9 @@
 //      make a third camper.
 //   4. Dov Stern is renamed through the real form. He keeps his number, and
 //      nothing of his is left on a departed identity.
+//   5. The roster is re-imported with the spreadsheet's Replace option and no
+//      Camper ID column (Ted, TED-013): a returning child keeps her number,
+//      her key and her money; a new child gets a new number.
 //
 // It SKIPS with exit 0 when Playwright or Postgres is missing, like the other
 // browser tests.
@@ -84,7 +87,12 @@ function seed(db) {
     } });
     kvWrite(db, 'app1', { camperRoster: {
         'Dov Stern': { name: 'Dov Stern', camperId: 3, division: 'Boys', grade: 'Junior', bunk: 'J1' },
+        'Leah Fox': { name: 'Leah Fox', camperId: 20, division: 'Boys', grade: 'Junior', bunk: 'J1',
+                      dob: '2015-05-05', parent1Email: 'fox@keys.test' },
     } });
+    // Leah has money on her canteen account — it is on her number.
+    db.sql(`INSERT INTO camp_canteen_accounts (camp_id, account_key, person_id, camper_name, balance)
+            VALUES ('${CAMP}', 'Leah Fox', 20, 'Leah Fox', 30.00);`);
 }
 
 (async function main() {
@@ -201,6 +209,33 @@ function seed(db) {
             p3.length === 1 && p3[0].source_key === 'Dov Sterne' && !p3[0].gone, JSON.stringify(p3));
         check('no new number was issued for him', !people(db).some(p => p.source_key === 'Dov Sterne' && p.person_id !== 3),
             JSON.stringify(people(db)));
+
+        step(5, 'the office re-imports the roster with the spreadsheet\'s Replace option, with no Camper ID column');
+        const csv = '"First Name","Last Name","Date of Birth","Division","Grade","Bunk","Parent 1 Email"\n'
+                  + '"Leah","Fox","2015-05-05","Boys","Junior","J1","fox@keys.test"\n'
+                  + '"Newt","Ray","2016-01-01","Boys","Junior","J1","ray@keys.test"\n';
+        await page.evaluate(() => { window.CampistryMe.nav('campers'); window.CampistryMe.openCsv(); });
+        await page.setInputFiles('#csvFI', { name: 'roster.csv', mimeType: 'text/csv', buffer: Buffer.from(csv) });
+        await page.waitForSelector('#csvBtn:not([disabled])', { timeout: 10000 });
+        await page.click('#csvBtn');
+        await page.waitForSelector('#confirmDlgOk', { timeout: 10000 });
+        await page.fill('#csvArchiveLabel', '');        // no season archive for this test
+        await page.click('#confirmDlgOk');
+        await waitFor('the re-imported roster to reach the database', () => {
+            const r = (kvRead(db, 'app1') || {}).camperRoster || {};
+            return !!r['Newt Ray'] && Object.keys(r).some(k => /^Leah Fox/.test(k));
+        }, 40000);
+        await new Promise(r => setTimeout(r, 1500));
+        const r5 = kvRead(db, 'app1').camperRoster;
+        const leahKey = Object.keys(r5).find(k => /^Leah Fox/.test(k));
+        check('Leah kept her Camper ID and her key', leahKey === 'Leah Fox' && Number(r5[leahKey].camperId) === 20,
+            leahKey + ' #' + (r5[leahKey] && r5[leahKey].camperId));
+        const p20 = people(db).filter(p => p.person_id === 20);
+        check('her identity is live, not departed', p20.length === 1 && !p20[0].gone, JSON.stringify(p20));
+        const bal = db.json(`SELECT balance FROM camp_canteen_accounts WHERE camp_id = '${CAMP}' AND person_id = 20`);
+        check('her $30 is still on her number', bal.length === 1 && Number(bal[0].balance) === 30, JSON.stringify(bal));
+        check('a new child in the file got a new number', Number(r5['Newt Ray'].camperId) > 0
+            && ![3, 4, 10, 20].includes(Number(r5['Newt Ray'].camperId)), JSON.stringify(r5['Newt Ray'].camperId));
 
         const v = db.json(`SELECT public.verify_roster_keys() AS v`)[0].v;
         check('no key is shown by the wrong child', JSON.stringify(v.keys_shown_by_the_wrong_child) === '[]', JSON.stringify(v));

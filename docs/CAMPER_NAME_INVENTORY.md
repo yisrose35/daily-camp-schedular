@@ -15,7 +15,7 @@ A camper is identified by their **camper number**, issued by the server — or b
 
 ## A. Decided by a name: 0 places (must be 0)
 
-Not counted: 16 places where a name is not how a camper is identified (a lead who is not a camper yet, a sample, the words of a message or receipt). Each is marked `// name-ok:` in the code with its reason.
+Not counted: 15 places where a name is not how a camper is identified (a lead who is not a camper yet, a sample, the words of a message or receipt). Each is marked `// name-ok:` in the code with its reason.
 
 | Kind | Places |
 |---|---|
@@ -35,16 +35,16 @@ Lines in the server functions that carry a camper's name with no number beside t
 
 None.
 
-## B. Decided by a roster key: 320 places (one child per key since 259)
+## B. Decided by a roster key: 323 places (one child per key since 259)
 
 Code that finds a camper by their roster key. Since 259 a key is bound to one camper number, so these cannot reach the wrong child; they are counted so that new code uses the number where it has one.
 
 | Kind | Places | Files |
 |---|---|---|
 | Records compared with a camper by roster key | 11 | 5 |
-| Family membership listed by roster key | 71 | 5 |
+| Family membership listed by roster key | 73 | 5 |
 | Bunk lists of roster keys | 53 | 6 |
-| Roster looked up by roster key | 185 | 17 |
+| Roster looked up by roster key | 186 | 17 |
 | Database storage keyed by roster key | 4 | — |
 
 ### Records compared with a camper by roster key (11)
@@ -53,19 +53,19 @@ A saved record (an enrollment, a tag, a route stop…) compared with a camper by
 
 | File | Places |
 |---|---|
+| `campistry_me.js` | 4 |
 | `campistry_go_neighborhoods.js` | 3 |
-| `campistry_link_parent.html` | 3 |
-| `campistry_me.js` | 3 |
+| `campistry_link_parent.html` | 2 |
 | `campistry_go.js` | 1 |
 | `campistry_link_data.js` | 1 |
 
-### Family membership listed by roster key (71)
+### Family membership listed by roster key (73)
 
 A family lists its children in camperIds, which holds roster keys; the server stamps the numbers beside them (234).
 
 | File | Places |
 |---|---|
-| `campistry_me.js` | 65 |
+| `campistry_me.js` | 67 |
 | `campistry_deposits_ui.js` | 2 |
 | `campistry_link_data.js` | 2 |
 | `campistry_billing_core.js` | 1 |
@@ -84,14 +84,14 @@ Bunk Builder keeps each bunk as a list of roster keys.
 | `total_solver_engine.js` | 2 |
 | `integration_hooks.js` | 1 |
 
-### Roster looked up by roster key (185)
+### Roster looked up by roster key (186)
 
 The roster is keyed by roster key. A line that reads the camper NUMBER through the roster is the bridge from a key to the number and is not counted.
 
 | File | Places |
 |---|---|
 | `campistry_me.js` | 135 |
-| `campistry_health.js` | 12 |
+| `campistry_health.js` | 13 |
 | `campistry_go.js` | 7 |
 | `campistry_live.html` | 5 |
 | `campistry_link_photos.js` | 4 |

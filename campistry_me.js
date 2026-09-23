@@ -2241,7 +2241,7 @@ function _applyCloseout(famKey,plan){
         if(!f.charges)f.charges=[];
         f.charges.push({id:id,category:'Close-out',description:note,amount:amt,
                         date:today(),timestamp:stamp,closeout:{disposition:st.do,
-                        reason:reason,kind:st.kind||'family',camper:st.camper||''}});
+                        reason:reason,kind:st.kind||'family',camper:st.camper||'',camperId:st.camperId!=null?st.camperId:null}});
         f.balance=(f.balance||0)+amt;
         applied++;
     });
@@ -5735,6 +5735,11 @@ function saveCamper(){
         if(!_typedId){toast('Camper ID must be a number','error');return}
         var _holder=personIdHolder(_typedId,editingCamper||full);
         if(_holder){toast('ID '+_typedId+' already belongs to '+_holder,'error');return}
+        // A new number for this camper: every record this page holds for them
+        // moves with it (the server does the same for the tables and every
+        // saved document — 237/260), or the next save would put the old one back.
+        var _prevId=normalizePersonId(_oldRec.camperId);
+        if(_prevId&&String(_prevId)!==String(_typedId))_renumberLocal(_prevId,Number(_typedId));
         existingId=Number(_typedId);
         reservePersonId(existingId);
     }
@@ -5929,6 +5934,19 @@ function cascadeCamperRename(oldName,newName){
 // Is this enrollment the camper with this roster key? By camper number when
 // both carry one — so a rename, or a second child with the same name, cannot
 // mix them up — and by name only for an older enrollment without a number.
+// Every record this page holds under camper number `from` now says `to`.
+function _renumberLocal(from,to){
+    var F=String(from);
+    function walk(o,d){
+        if(!o||typeof o!=='object'||d>8)return;
+        if(Array.isArray(o)){o.forEach(function(x){walk(x,d+1)});return}
+        ['camperId','personId','person_id','camper_id'].forEach(function(k){
+            if(o[k]!=null&&String(o[k])===F)o[k]=(typeof o[k]==='string')?String(to):to;
+        });
+        Object.keys(o).forEach(function(k){if(o[k]&&typeof o[k]==='object')walk(o[k],d+1)});
+    }
+    [enrollments,families,payments,finPayments].forEach(function(x){walk(x,0)});
+}
 // The camper number for a roster key, or null.
 function _camperIdOf(key){var r=roster&&roster[key];return (r&&r.camperId!=null&&r.camperId!=='')?r.camperId:null}
 function _enrIsFor(e,key){
@@ -8790,7 +8808,7 @@ function _rebalanceCohort(bunks,bunkState,reqMap,targets,caps,cfg,locked){
                         if(heldByFriend(c,src))return;
                         if(bunkState[dest].occupants.length+1>caps[dest])return;
                         if(conflictsWith(c,bunkState[dest].occupants))return;
-                        pick={src:src,camper:c};
+                        pick={src:src,camper:c,camperId:(roster[c]||{}).camperId};
                     });
                 });
                 if(!pick)break;
@@ -8938,8 +8956,8 @@ function _bunkGenForGrade(poolNames,bunks,cfg,report){
         var res=resolveFor(n);
         reqMap[n]=res;
         report.requestsTotal+=res.friends.length+res.unmatched.length;
-        res.unmatched.forEach(function(f){report.unresolved.push({camper:n,requested:f,kind:'friend'});});
-        res.avoidUnmatched.forEach(function(f){report.unresolved.push({camper:n,requested:f,kind:'avoid'});});
+        res.unmatched.forEach(function(f){report.unresolved.push({camper:n,camperId:(roster[n]||{}).camperId,requested:f,kind:'friend'});});
+        res.avoidUnmatched.forEach(function(f){report.unresolved.push({camper:n,camperId:(roster[n]||{}).camperId,requested:f,kind:'avoid'});});
     });
     gradeCandidates.forEach(function(n){if(!reqMap[n])reqMap[n]=resolveFor(n);});
 
@@ -15111,7 +15129,7 @@ function renderFinance(){
         //   per camper. Family-level money is therefore attributed to the FIRST
         //   enrollment of that family only, and the per-family totals below are
         //   taken from the ledgers rather than re-summed from these rows.
-        var _efk=(e.familyKey&&families[e.familyKey])?e.familyKey:_payFamilyByName({family:e.camperName,camper:e.camperName});
+        var _efk=(e.familyKey&&families[e.familyKey])?e.familyKey:_payFamilyByName({family:e.camperName,camper:e.camperName,camperId:e.camperId});
         var _firstOfFamily=!_efk||!_finFamSeen[_efk];
         if(_efk)_finFamSeen[_efk]=1;
         var manualPay=finPayments.filter(function(p){
@@ -15902,6 +15920,12 @@ function _buildPayNameIndex(){
     return idx;
 }
 function _payFamilyByName(p){
+    // The camper's number first: the family that lists that child.
+    var _pid=normalizePersonId(p&&p.camperId);
+    if(_pid){
+        var _key=camperNameById(_pid);
+        if(_key){var _fk=Object.keys(families).find(function(k){return (families[k].camperIds||[]).indexOf(_key)>=0});if(_fk)return _fk}
+    }
     if(!_payNameIndex) _payNameIndex=_buildPayNameIndex();
     return _payNameIndex[_payNameKey(p.family)]||_payNameIndex[_payNameKey(p.camper)]||null;
 }
@@ -17895,7 +17919,11 @@ function addChargeForFamily(famKey){
 function _famRefundablePayments(f){
     return finPayments.filter(function(p){
         if((p.amount||0)<=0) return false;
-        if(!(f.name===p.family||f.name===p.camper||(f.camperIds||[]).indexOf(p.family)>=0||(f.camperIds||[]).indexOf(p.camper)>=0)) return false;
+        // A payment for one of this family's children: by the child's number
+        // when the payment carries one, by name only for one from before numbers.
+        var _pk=normalizePersonId(p.camperId)?camperNameById(normalizePersonId(p.camperId)):null;
+        if(_pk!=null){ if((f.camperIds||[]).indexOf(_pk)<0) return false; }
+        else if(!(f.name===p.family||f.name===p.camper||(f.camperIds||[]).indexOf(p.family)>=0||(f.camperIds||[]).indexOf(p.camper)>=0)) return false;
         var priorRefunded=finPayments.filter(function(x){return x.refundOf!=null&&String(x.refundOf)===String(p.id)}).reduce(function(s,x){return s+Math.abs(x.amount||0)},0);
         return Math.round((p.amount-priorRefunded)*100)/100>0;
     });
@@ -20221,13 +20249,16 @@ async function deleteForm(idx){
 }
 function viewFormResponses(idx){
     var f=campForms[idx];if(!f)return;
-    var completed=new Set((f.responses||[]).map(function(r){return r.camper}));
-    var missing=Object.keys(roster).filter(function(n){return!completed.has(n)}).sort();
+    // Who has answered: by camper number when the response carries one, by
+    // name only for a response from before numbers.
+    var doneIds=new Set(),doneNames=new Set();
+    (f.responses||[]).forEach(function(r){if(r.camperId!=null&&r.camperId!=='')doneIds.add(String(r.camperId));else doneNames.add(r.camper)});
+    var missing=Object.keys(roster).filter(function(n){var c=roster[n]||{};return!((c.camperId!=null&&doneIds.has(String(c.camperId)))||doneNames.has(n))}).sort();
     var h='<div style="margin-bottom:14px"><strong>'+esc(f.name)+'</strong> — '+(f.responses||[]).length+' responses</div>';
     if((f.responses||[]).length){
         h+='<div class="me-tw"><table class="me-t"><thead><tr><th>Camper</th><th>Submitted</th><th>Status</th></tr></thead><tbody>';
         f.responses.forEach(function(r){
-            h+='<tr><td class="bold">'+esc(r.camper)+'</td><td>'+(r.date?new Date(r.date).toLocaleDateString():'')+'</td><td>'+bdg('Completed','ok')+'</td></tr>';
+            h+='<tr><td class="bold">'+esc(_lbl(r.camper))+'</td><td>'+(r.date?new Date(r.date).toLocaleDateString():'')+'</td><td>'+bdg('Completed','ok')+'</td></tr>';
         });
         h+='</tbody></table></div>';
     }
@@ -21493,7 +21524,7 @@ async function sendFormReminders(){
     var campName='';try{var ss=JSON.parse(localStorage.getItem('campGlobalSettings_v1')||'{}');campName=ss.camp_name||ss.campName||'Camp'}catch(ex){}
     loadForms();
     var jobs=[];
-    campForms.filter(function(f){return f.required}).forEach(function(f){var completed=new Set((f.responses||[]).map(function(r){return r.camper}));Object.entries(roster).forEach(function([name,c]){if(completed.has(name))return;if(!c.parent1Email)return;jobs.push({email:c.parent1Email,name:c.parent1Name||'',data:{campName:campName,camperName:_lbl(name),parentName:c.parent1Name||'',formName:f.name}})})}); // name-ok: the words of an email
+    campForms.filter(function(f){return f.required}).forEach(function(f){var doneIds=new Set(),doneNames=new Set();(f.responses||[]).forEach(function(r){if(r.camperId!=null&&r.camperId!=='')doneIds.add(String(r.camperId));else doneNames.add(r.camper)});Object.entries(roster).forEach(function([name,c]){if((c.camperId!=null&&doneIds.has(String(c.camperId)))||doneNames.has(name))return;if(!c.parent1Email)return;jobs.push({email:c.parent1Email,name:c.parent1Name||'',data:{campName:campName,camperName:_lbl(name),parentName:c.parent1Name||'',formName:f.name}})})});
     if(!jobs.length){toast('No form reminders to send','error');return}
     var okFr=await confirmDialog({title:'Send Form Reminders?',message:'Send '+jobs.length+' form reminder email'+(jobs.length!==1?'s':'')+' to parents now? This emails them immediately.',confirmLabel:'Send',danger:false});
     if(!okFr)return;
@@ -21710,6 +21741,21 @@ function downloadTemplate(){
 // with different homes/parents, or simply no other info on file) is not a
 // duplicate; two siblings/re-entries in the SAME household with the same
 // name are.
+// The child in a previous roster that a file row is, or null. Same name
+// (by what the page shows), and the same child by what does not change with
+// a name — a date of birth, else a parent's email or home address. Exactly
+// one match, or none: an ambiguous row is a new camper, never a guess.
+function _returningCamper(prev,r,claimed){
+    var hits=Object.keys(prev||{}).filter(function(k){
+        var c=prev[k]; if(!c||claimed[k])return false;
+        var shown=(c.displayName||String(k).replace(/\s#\d+(?:-\d+)?$/,''));
+        if(shown!==r.name||normalizePersonId(c.camperId)==null)return false;
+        var dA=String(c.dob||'').trim(),dB=String(r.dob||'').trim();
+        if(dA&&dB)return dA===dB;
+        return _sameCamperSignal(c,r);
+    });
+    return hits.length===1?{key:hits[0],id:Number(normalizePersonId(prev[hits[0]].camperId))}:null;
+}
 function _sameCamperSignal(a,b){
     var emA=(a.parent1Email||'').trim().toLowerCase(),emB=(b.parent1Email||'').trim().toLowerCase();
     if(emA&&emA===emB)return true;
@@ -22073,6 +22119,10 @@ function importRows(rows,mode){
     var added=0,updated=0,newDivisions=0,newGrades=0,newBunks=0,newFamilies=0;
     var _preservedGradeTimes={};
 
+    // Who was on the roster before a Replace: a returning child in the file
+    // keeps their camper number and key — their money and history are on it —
+    // when the file shows it is the same child (not by name alone).
+    var _prevRoster=mode==='replace'?roster:null;
     if(mode==='replace'){
     // ═══ WIPE EXISTING DATA — CSV is the new source of truth ═══
     roster={};
@@ -22225,8 +22275,15 @@ function importRows(rows,mode){
             team:Object.values(r.teams)[0]||''
         };
     }
+    var _claimedPrev={},_importKept=0,_importNotMatched=[];
     rows.forEach(function(r){
         var targetName=r.name,camperId,oldBunk=null,isUpdate=false;
+        if(_prevRoster&&!r.camperId){
+            var _pv=_returningCamper(_prevRoster,r,_claimedPrev);
+            if(_pv){r.camperId=_pv.id;targetName=_pv.key;_claimedPrev[_pv.key]=1;_importKept++;}
+            else if(Object.keys(_prevRoster).some(function(k){return (_prevRoster[k]&&_prevRoster[k].displayName||String(k).replace(/\s#\d+(?:-\d+)?$/,''))===r.name}))
+                _importNotMatched.push(r.name);
+        }
         // An id the camp gave out is stronger identity than a name: it survives
         // a marriage, a nickname and a spelling fix, which is the whole reason
         // camps hand them out. So when a row carries one we already know, that
@@ -22415,6 +22472,13 @@ function importRows(rows,mode){
         summary+=' \u2014 '+_importRenamedById.length+' matched by Camper ID and renamed ('+_importRenamedById.join(', ')+')';
         console.log('[Me] CSV import: renamed by camper id \u2014',_importRenamedById);
     }
+    if(_importKept>0)summary+=' \u2014 '+_importKept+' returning camper'+(_importKept===1?'':'s')+' kept their Camper ID';
+    if(_importNotMatched.length>0){
+        summary+=' \u2014 \u26a0 '+_importNotMatched.length+' row'+(_importNotMatched.length===1?'':'s')+' named like a camper who was here could not be matched to them (no birthday or parent email to tell), so '
+                 +(_importNotMatched.length===1?'it is':'they are')+' a NEW camper with a new number ('+_importNotMatched.slice(0,5).map(_lbl).join(', ')
+                 +'). Add a Camper ID column to keep a returning child\'s number.';
+        console.warn('[Me] CSV import: rows not matched to a returning camper \u2014',_importNotMatched);
+    }
     if(_importIdClashes.length>0){
         summary+=' \u2014 \u26a0 '+_importIdClashes.length+' Camper ID'+(_importIdClashes.length>1?'s were':' was')+
                  ' already in use, so '+(_importIdClashes.length>1?'those campers':'that camper')+
@@ -22423,7 +22487,7 @@ function importRows(rows,mode){
     }
     if(_importDupeNames.length>0){
         var uniqDupes=Array.from(new Set(_importDupeNames));
-        summary+=' — ⚠ '+uniqDupes.length+' camper'+(uniqDupes.length>1?'s':'')+' shared a name with someone else in the roster but were from a different family, so '+(uniqDupes.length>1?'they were':'it was')+' kept separately and renamed with a "(2)" suffix to tell them apart ('+uniqDupes.join(', ')+')';
+        summary+=' — ⚠ '+uniqDupes.length+' camper'+(uniqDupes.length>1?'s':'')+' shared a name with someone else in the roster but were from a different family, so '+(uniqDupes.length>1?'they were':'it was')+' kept as separate campers, each with their own Camper ID ('+uniqDupes.join(', ')+')';
         console.warn('[Me] CSV import: same-name-different-family camper(s) disambiguated in roster —',uniqDupes);
     }
     toast(summary);

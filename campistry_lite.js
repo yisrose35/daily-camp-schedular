@@ -5001,7 +5001,7 @@
             // One message per parent; the form token carries that camper's name.
             for (const t of targets) {
                 let body = baseBody;
-                if (attach.form) body += `\n\n[[form:${attach.form.id}:${t.camperName || ''}]]`;
+                if (attach.form) body += `\n\n[[form:${attach.form.id}:${t.camperName || ''}:${t.camperId != null ? t.camperId : ''}]]`;
                 if (attach.list) body += `\n\n[[list:${attach.list.id}]]`;
                 await sendLinkMessage({ parentName: t.parentName, parentEmail: t.parentEmail, camperName: t.camperName, camperId: t.camperId, subject: subj, body });
             }

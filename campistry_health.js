@@ -468,10 +468,25 @@ function _lbl(key) { return String(key == null ? '' : key).replace(/\s#\d+$/, ''
         saveHealth(hd); toast(medName+' — Given to '+_lbl(camperName),'ok'); renderDashboard(); renderMedications();
     }
 
+    // Which camper a form's name box means: the one picked from the list (the
+    // box remembers the pick), or — if a name was typed — the ONE camper with
+    // that name. Two campers who share it, or none: null, and the form asks
+    // for a pick. A name never decides between two children.
+    function pickedCamper(inp) {
+        if (!inp) return null;
+        var roster = getRoster(), key = inp.dataset ? inp.dataset.camperKey : '';
+        if (key && roster[key] && _lbl(key) === inp.value.trim().replace(/\s+\(.*\)$/, '')) return key;
+        var typed = inp.value.trim().toLowerCase();
+        var hits = Object.keys(roster).filter(function (k) { return _lbl(k).toLowerCase() === typed; });
+        return hits.length === 1 ? hits[0] : null;
+    }
+
     function saveSickVisit() {
         var inp = document.getElementById('visitCamperInput');
         if (!inp||!inp.value.trim()) { toast('Enter camper name','err'); return; }
-        var name=inp.value.trim(), roster=getRoster(), c=roster[name]||{};
+        var name=pickedCamper(inp);
+        if (!name) { toast('Pick the camper from the list — more than one camper has that name, or none does','err'); return; }
+        var roster=getRoster(), c=roster[name]||{};
         var presets=[]; document.querySelectorAll('.complaint-preset.selected').forEach(function(b){presets.push(b.textContent.trim())});
         var custom = (document.getElementById('visitComplaint')||{}).value||'';
         var complaint = presets.concat(custom?[custom]:[]).join(', ');
@@ -479,10 +494,10 @@ function _lbl(key) { return String(key == null ? '' : key).replace(/\s#\d+$/, ''
         if (temp) complaint += ' ('+temp+'°F)';
         var hd = getHealth(); if (!hd.sickVisits) hd.sickVisits=[];
         hd.sickVisits.push({ camperName:name, camperId:camperIdOf(name), bunk:c.bunk||'', complaint:complaint, treatment:((document.getElementById('visitTreatment')||{}).value||'').trim(), disposition:(document.getElementById('visitDisposition')||{}).value||'', nurse:nurse(), date:todayISO(), time:nowTime(), timestamp:new Date().toISOString() });
-        saveHealth(hd); closeModal('visitModal'); toast('Visit logged for '+name,'ok');
+        saveHealth(hd); closeModal('visitModal'); toast('Visit logged for '+_lbl(name),'ok');
         renderDashboard(); renderSickVisits();
         // clear form
-        inp.value=''; if(document.getElementById('visitComplaint'))document.getElementById('visitComplaint').value='';
+        inp.value=''; if(inp.dataset)delete inp.dataset.camperKey; if(document.getElementById('visitComplaint'))document.getElementById('visitComplaint').value='';
         if(document.getElementById('visitTemp'))document.getElementById('visitTemp').value='';
         if(document.getElementById('visitTreatment'))document.getElementById('visitTreatment').value='';
         document.querySelectorAll('.complaint-preset.selected').forEach(function(b){b.classList.remove('selected')});
@@ -491,8 +506,10 @@ function _lbl(key) { return String(key == null ? '' : key).replace(/\s#\d+$/, ''
     function saveDispensing() {
         var inp=document.getElementById('medCamperInput');
         if (!inp||!inp.value.trim()) { toast('Enter camper name','err'); return; }
+        var who=pickedCamper(inp);
+        if (!who) { toast('Pick the camper from the list — more than one camper has that name, or none does','err'); return; }
         var hd=getHealth(); if(!hd.dispensingLog) hd.dispensingLog=[];
-        hd.dispensingLog.push({ camperName:inp.value.trim(), camperId:camperIdOf(inp.value.trim()), medication:(document.getElementById('medSelect')||{}).value||'', status:(document.getElementById('medStatus')||{}).value||'Given', nurse:nurse(), time:(document.getElementById('medTime')||{}).value||'', notes:((document.getElementById('medNotes')||{}).value||'').trim(), timestamp:new Date().toISOString(), date:todayISO() });
+        hd.dispensingLog.push({ camperName:who, camperId:camperIdOf(who), medication:(document.getElementById('medSelect')||{}).value||'', status:(document.getElementById('medStatus')||{}).value||'Given', nurse:nurse(), time:(document.getElementById('medTime')||{}).value||'', notes:((document.getElementById('medNotes')||{}).value||'').trim(), timestamp:new Date().toISOString(), date:todayISO() });
         saveHealth(hd); closeModal('medModal'); toast('Dispensing logged','ok'); renderDashboard(); renderMedications();
     }
 
@@ -629,7 +646,8 @@ function _lbl(key) { return String(key == null ? '' : key).replace(/\s#\d+$/, ''
     function setupSearch(inputId) {
         var input=document.getElementById(inputId); if(!input) return;
         input.addEventListener('input',function(){
-            var q=input.value.toLowerCase(), roster=getRoster(), names=Object.keys(roster).filter(function(n){return n.toLowerCase().includes(q)});
+            if (input.dataset) delete input.dataset.camperKey;       // typing undoes a pick
+            var q=input.value.toLowerCase(), roster=getRoster(), names=Object.keys(roster).filter(function(n){return _lbl(n).toLowerCase().includes(q)});
             var old=input.parentElement.querySelector('.camper-dd'); if(old) old.remove();
             if(!q||!names.length) return;
             var dd=document.createElement('div'); dd.className='camper-dd';
@@ -638,7 +656,8 @@ function _lbl(key) { return String(key == null ? '' : key).replace(/\s#\d+$/, ''
                 var c=roster[n], item=document.createElement('div');
                 item.style.cssText='padding:8px 12px;cursor:pointer;font-size:.82rem;display:flex;justify-content:space-between';
                 item.innerHTML='<span style="font-weight:600">'+esc(_lbl(n))+'</span><span style="color:var(--slate-400);font-size:.75rem">'+esc(c.bunk||'')+'</span>';
-                item.onclick=function(){ input.value=n; dd.remove(); populateMedDrop(n); };
+                // The box shows the name; it remembers WHICH camper was picked.
+                item.onclick=function(){ input.value=_lbl(n); if(input.dataset)input.dataset.camperKey=n; dd.remove(); populateMedDrop(n); };
                 item.onmouseenter=function(){item.style.background='var(--health-50)'}; item.onmouseleave=function(){item.style.background=''};
                 dd.appendChild(item);
             });

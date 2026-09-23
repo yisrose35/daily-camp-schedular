@@ -28,7 +28,7 @@ const OUT = path.join(REPO, 'docs', 'CAMPER_NAME_INVENTORY.md');
 const SKIP = /^(supabase-js@2\.js|jsqr@1\.4\.0\.js|.*\.min\.js|campistry_camper_id_rpc\.js)$/;
 
 // The camper number on the same line: `camperId` (not the family list camperIds).
-const NUMBER_TOO = /\bcamperId\b/;
+const NUMBER_TOO = /\bcamperId\b|\bperson_id\b|\bpersonId\b/;
 
 // Each kind of use. `part: 'name'` — a NAME decides who the camper is: must
 // be zero. `part: 'key'` — the camper's ROSTER KEY decides, which since 259 the
@@ -42,13 +42,16 @@ const KINDS = [
     { id: 'records', part: 'name', title: 'Records saved with a camper name and no number',
       why: 'A record (health log, message, order…) that carries only a name. Every record now carries camperId from the moment it is written.',
       // The number may sit on a neighbouring line of the same record.
-      test: (line, near) => /\bcamperName\s*:/.test(line) && !/camperId/.test(near || line) },
+      // camperName: or camper: holding a VALUE (not a string literal, a list,
+      // a function or an object — a label table or a config section).
+      test: (line, near) => /\b(?:camperName|camper)\s*:\s*(?!['"`\[{(]|function\b)[^\s,}]/.test(line) && !/camperId|person_id|personId/.test(near || line) },
     { id: 'enrollments', part: 'key', title: 'Records compared with a camper by roster key',
       why: 'A saved record (an enrollment, a tag, a route stop…) compared with a camper by key and not by number. Where the record carries a number the comparison goes by it (those lines are not counted); these are comparisons of roster keys only.',
       // A line that also carries the number (camperId) goes by the number and
       // falls back to the key only for a record written before numbers
       // (or checks it on a neighbouring line: the key is the fallback branch).
-      test: (line, near) => /\bcamperName\s*[!=]==|[!=]==\s*[\w.$\]\[]*\bcamperName\b/.test(line) && !NUMBER_TOO.test(near || line) },
+      // (a comparison with a string literal, like '(unassigned)', is not a camper)
+      test: (line, near) => /\b(?:camperName|camper_name)\s*[!=]==(?!\s*['"])|[!=]==\s*[\w.$\]\[]*\b(?:camperName|camper_name)\b|\.camper\s*[!=]==(?!\s*['"])|[!=]==\s*[\w.$\]\[]*\.camper\b/.test(line) && !NUMBER_TOO.test(near || line) },
     { id: 'families', part: 'key', title: 'Family membership listed by roster key',
       why: 'A family lists its children in camperIds, which holds roster keys; the server stamps the numbers beside them (234).',
       test: line => /\bcamperIds\b/.test(line) },

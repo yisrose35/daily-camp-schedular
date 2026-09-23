@@ -3015,7 +3015,7 @@ function handleFormReturn(rowId,camperName,formName,input,formId){
             formId: formId||rowId,
             formName: formName,
             docType: 'upload',
-            camper: camperName,
+            camper: camperName, camperId: child.camperId!=null?child.camperId:null,
             grade: child.grade||'', division: child.division||'', bunk: child.bunk||'',
             parentName: parent.name||'',
             date: now2.toLocaleDateString('en-US',{month:'short',day:'numeric',year:'numeric'}),
@@ -3190,7 +3190,7 @@ function _loadCamperFaceStatus(){
     var db=window._parentDB; if(!db||typeof parent==='undefined'||!parent||!parent.campId||typeof children==='undefined')return;
     _pRpcEachCamp('get_my_camper_face_status','campers').then(function(campers){
         (campers||[]).forEach(function(f){
-            var c=children.find(function(k){return k.name===f.camper_name;}); if(!c)return;
+            var c=children.find(function(k){return _sameChild(f.person_id,f.camper_name,k.camperId,k.name);}); if(!c)return;
             var slot=document.getElementById('refSlot_'+c.id),avatar=document.getElementById('refAvatar_'+c.id),status=document.getElementById('refStatus_'+c.id);
             // poses: [{pose, at}] since migration 030; plain strings before
             var rawPoses=Array.isArray(f.poses)?f.poses:(f.has_face?['front']:[]);
@@ -3338,7 +3338,7 @@ function _loadParentPhotos(){
         if(kidWrap){
             kidWrap.innerHTML='';
             purchasedKids.forEach(function(c){
-                var mine=myPhotos.filter(function(p){return p.camper===c.name;});
+                var mine=myPhotos.filter(function(p){return _sameChild(p.camper_id!=null?p.camper_id:p.camperId,p.camper,c.camperId,c.name);});
                 var card=document.createElement('div');
                 card.className='lk-card'; card.style.marginTop='16px';
                 var head=document.createElement('div'); head.className='lk-card-head';
@@ -3662,7 +3662,7 @@ function _msgFormActionHtml(m){
             var idx=-1;
             for(var i=0;i<forms.length;i++){ if(String(forms[i].id)===String(fr.id)){ idx=i; break; } }
             if(idx<0) return;
-            btns.push('<button class="btn btn-primary" style="margin:4px 8px 4px 0;" onclick="_openFormFromMsg('+idx+',\''+encodeURIComponent(fr.camper||'')+'\')">'+_FILE_SVG+'Open &amp; fill '+_foEsc(forms[idx].name||'form')+'</button>');
+            btns.push('<button class="btn btn-primary" style="margin:4px 8px 4px 0;" onclick="_openFormFromMsg('+idx+',\''+encodeURIComponent(fr.camper||'')+'\','+(fr.camperId!=null?fr.camperId:'null')+')">'+_FILE_SVG+'Open &amp; fill '+_foEsc(forms[idx].name||'form')+'</button>');
         });
         (refs.lists||[]).forEach(function(lr){
             var lists=window._campLists||[];
@@ -3691,10 +3691,11 @@ function _openListFromMsg(){
     closeMsgDetail();
     if(typeof nav==='function') nav('lists');
 }
-function _openFormFromMsg(idx, encCamper){
+function _openFormFromMsg(idx, encCamper, camperId){
     var camper=''; try{ camper=decodeURIComponent(encCamper||''); }catch(e){ camper=encCamper||''; }
     closeMsgDetail();
-    if(typeof openFillOnline==='function') openFillOnline(idx, camper, '');
+    var cid=_numOrNull(camperId); if(cid==null) cid=_childIdByName(camper);
+    if(typeof openFillOnline==='function') openFillOnline(idx, camper, cid!=null?cid:'');
 }
 function _afterMsgAction(){
     document.getElementById('msgListView').style.display='';
@@ -4221,7 +4222,7 @@ function _renderMyMail(){
     var seen={}; cloud.forEach(function(m){seen[m.id]=1;});
     var seenContent={}; cloud.forEach(function(m){seenContent[(m.camper_name||'')+'|'+(m.subject||'')+'|'+(m.body||'')]=1;});
     var all=cloud.map(function(m){
-        return {id:m.id,camper:m.camper_name,subject:m.subject,body:m.body,status:m.status,date:m.created_at};
+        return {id:m.id,camper:m.camper_name,camperId:m.person_id!=null?m.person_id:null,subject:m.subject,body:m.body,status:m.status,date:m.created_at};
     });
     _mailLocal().forEach(function(m){
         if(seen[m.id])return;
@@ -4261,7 +4262,7 @@ function sendCamperMail(){
     var now=new Date();
     var letter={
         id:'mail_'+now.getTime()+'_'+Math.random().toString(36).slice(2,5),
-        camper:child.name, division:child.division||'', grade:child.grade||'', bunk:child.bunk||'',
+        camper:child.name, camperId:child.camperId!=null?child.camperId:null, division:child.division||'', grade:child.grade||'', bunk:child.bunk||'',
         parentName:parent.name||'', subject:subject.trim(), body:body,
         status:'new', date:now.toISOString()
     };
@@ -4553,7 +4554,9 @@ function _parseMsgRefs(rawBody){
     var refs={forms:[],lists:[]};
     var clean=String(rawBody||'');
     clean=clean.replace(/\[\[form:([^:\]]+):([^\]]*)\]\]/g,function(_,fid,camper){
-        refs.forms.push({id:fid,camper:camper||''}); return '';
+        // "<key>:<number>" since numbers ride in the token; an older token has the key only.
+        var mm=String(camper||'').match(/^(.*):(\d*)$/);
+        refs.forms.push({id:fid,camper:mm?mm[1]:(camper||''),camperId:mm&&mm[2]?Number(mm[2]):null}); return '';
     });
     clean=clean.replace(/\[\[list:([^\]]+)\]\]/g,function(_,lid){
         refs.lists.push({id:lid}); return '';
@@ -4631,7 +4634,7 @@ function _loadSnacksData(childrenList){
         if(a.creditLimit !=null)c.creditLimit=a.creditLimit;
         if(a.balanceFloor!=null)c.balanceFloor=a.balanceFloor;
         c.autoReload=a.autoReload||null;
-        var childTx=txs.filter(function(t){return t.camper===c.name;});
+        var childTx=txs.filter(function(t){return _sameChild(t.camperId,t.camper,c.camperId,c.name);});
         canteenTxByChild[c.id]=childTx.map(_mapCanteenTx);
     });
 }
@@ -5426,7 +5429,7 @@ if (window.pdfjsLib) { window.pdfjsLib.GlobalWorkerOptions.workerSrc = 'pdfjs-di
                 // moment this sync ran on the next page load/reload, purely
                 // because this one field was never copied over.
                 c.autoReload = (a && a.autoReload) || null;
-                var childTx = txs.filter(function(t){ return t.camper === c.name; });
+                var childTx = txs.filter(function(t){ return _sameChild(t.camperId, t.camper, c.camperId, c.name); });
                 canteenTxByChild[c.id] = childTx.map(_mapCanteenTx);
             });
             // Refresh whatever's currently on screen with the live numbers.
@@ -7108,7 +7111,7 @@ function submitFillOnlinePdf(){
     }).then(function(){
         try {
             var subs = JSON.parse(localStorage.getItem(FORM_SUB_KEY_P)||'[]');
-            subs.push({ id:'sub_'+Date.now(), formId: st.formDef.id||'', camper: st.camperName, mode:'digital', submittedAt: new Date().toISOString() });
+            subs.push({ id:'sub_'+Date.now(), formId: st.formDef.id||'', camper: st.camperName, camperId: _numOrNull(st.camperId), mode:'digital', submittedAt: new Date().toISOString() });
             localStorage.setItem(FORM_SUB_KEY_P, JSON.stringify(subs));
         } catch(e){}
         closeFillOnline();
@@ -7698,7 +7701,7 @@ function confirmTip() {
             a.balance = Math.round(((a.balance || 0) - amt) * 100) / 100;
             s.transactions.unshift({
                 time: now.toLocaleTimeString([], {hour:'numeric', minute:'2-digit'}),
-                camper: child.name,
+                camper: child.name, camperId: child.camperId != null ? child.camperId : null,
                 items: 'Tip — ' + recipName + ' (' + recipRole + ')',
                 amount: amt,
                 type: 'tip',

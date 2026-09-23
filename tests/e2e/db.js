@@ -161,6 +161,7 @@ const MIGRATIONS = [
     '257_a_number_reaches_its_own_camper',
     '258_a_parent_sees_only_their_own_child',
     '259_a_roster_key_belongs_to_one_child',
+    '260_numbers_stay_with_their_child',
 ];
 
 // The one thing the stubs deliberately get wrong for our purposes: they define

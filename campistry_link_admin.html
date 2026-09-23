@@ -1150,7 +1150,7 @@
 <!-- Branding/watermark renderer — must load BEFORE link_data, which seeds and
      normalizes settings.branding through it on store load. -->
 <script src="campistry_link_branding.js?v=20260903-03"></script>
-<script src="campistry_link_data.js?v=20260923-20"></script>
+<script src="campistry_link_data.js?v=20260923-22"></script>
 <script src="face_match_core.js?v=20260923-20"></script>
 <script src="campistry_face_shared.js?v=20260903-03"></script>
 <script src="campistry_face_engine_v2.js?v=20260903-03"></script>
@@ -2892,7 +2892,9 @@ async function sendCompose() {
         // parses into "Open & fill" / "View list" buttons (get_my_messages
         // returns the body, so no schema change is needed).
         var refs = '';
-        if (attachFormId) refs += '\n\n[[form:' + attachFormId + ':' + (t.camperName || '') + ']]';
+        // [[form:<form>:<camper key>:<camper number>]] — the parent's portal
+        // fills the form for the child with that number.
+        if (attachFormId) refs += '\n\n[[form:' + attachFormId + ':' + (t.camperName || '') + ':' + (t.camperId != null ? t.camperId : '') + ']]';
         if (attachListId) refs += '\n\n[[list:' + attachListId + ']]';
         cl.msg.send({
             to: t.parentName, toType: 'individual',
@@ -4057,7 +4059,7 @@ function _loadCloudSubmissions(cb) {
     if (!db) { if (cb) cb(); return; }
     db.client
         .from('link_form_responses')
-        .select('id, form_id, form_name, mode, camper_name, camper_id, parent_name, parent_email, division, grade, bunk, answers, signature_data, file_name, filled_pdf_path, created_at')
+        .select('id, form_id, form_name, mode, camper_name, camper_id, person_id, parent_name, parent_email, division, grade, bunk, answers, signature_data, file_name, filled_pdf_path, created_at')
         .eq('camp_id', db.campId)
         .order('created_at', { ascending: false })
         .limit(2000)
@@ -4079,7 +4081,7 @@ function _loadFormSubmissions() {
         seen[(r.form_id || '') + '|' + (r.camper_name || '')] = 1;
         return {
             id: r.id, name: r.form_name, formId: r.form_id, docType: r.mode,
-            camper: r.camper_name, grade: r.grade || '', division: r.division || '', bunk: r.bunk || '',
+            camper: r.camper_name, camperId: r.person_id != null ? r.person_id : null, grade: r.grade || '', division: r.division || '', bunk: r.bunk || '',
             parentName: r.parent_name || '', parentEmail: r.parent_email || '',
             date: _fmtSubDate(r.created_at), submittedAt: r.created_at,
             filename: r.mode === 'digital' ? null : (r.file_name || 'upload'),
@@ -4093,7 +4095,7 @@ function _loadFormSubmissions() {
         if (seen[(s.formId || '') + '|' + (s.camper || '')]) return;
         docSubmissions.push({
             id: s.id, name: s.formName, formId: s.formId || '', docType: s.docType,
-            camper: s.camper, grade: s.grade, division: s.division, bunk: s.bunk,
+            camper: s.camper, camperId: s.camperId != null ? s.camperId : null, grade: s.grade, division: s.division, bunk: s.bunk,
             parentName: s.parentName || '', parentEmail: '',
             date: s.date, submittedAt: s.submittedAt,
             filename: s.mode === 'digital' ? null : (s.filename || 'upload'),

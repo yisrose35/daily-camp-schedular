@@ -183,6 +183,38 @@ function kvRead(db, key) {
             at >= 0 ? 'the screen shows: "' + healthText.slice(Math.max(0, at - 60), at + 20).replace(/\s+/g, ' ') + '"' : '');
         void hDose;
 
+        // The nurse's sick-visit form (Ted, TED-014): a typed name two campers
+        // share is refused; picking the second Rivka records HER number, and the
+        // box shows her plain name.
+        await page.evaluate(() => document.getElementById('visitModal').classList.add('open'));
+        await page.fill('#visitCamperInput', 'Rivka Stern');
+        await page.click('#visitModal .modal-footer .btn-primary');
+        await new Promise(r => setTimeout(r, 800));
+        const visitsAfterTyped = (kvRead(db, 'campistryHealth') || {}).sickVisits || [];
+        check('a name two campers share is not saved as a visit', visitsAfterTyped.length === 0, JSON.stringify(visitsAfterTyped));
+        await page.fill('#visitCamperInput', '');
+        await page.type('#visitCamperInput', 'Rivka');
+        await page.waitForSelector('.camper-dd div', { timeout: 5000 });
+        const items = await page.$$('.camper-dd > div');
+        let picked = false;
+        for (const it of items) {
+            const txt = await it.innerText();
+            if (/Rivka Stern/.test(txt) && !picked) {
+                // the dropdown order follows the roster keys: pick the one whose key is the second Rivka
+                const isSecond = await page.evaluate((el) => [...el.parentElement.children].indexOf(el), it) === 1;
+                if (isSecond) { await it.click(); picked = true; }
+            }
+        }
+        const shown = await page.inputValue('#visitCamperInput');
+        check('the box shows the plain name, not the internal key', shown === 'Rivka Stern', shown);
+        await page.click('#visitModal .modal-footer .btn-primary');
+        await waitFor('the visit to reach the database', () => {
+            const v = (kvRead(db, 'campistryHealth') || {}).sickVisits || [];
+            return v.length === 1;
+        }, 20000);
+        const visit = kvRead(db, 'campistryHealth').sickVisits[0];
+        check('the visit carries the picked camper\'s number (#702)', Number(visit.camperId) === 702, JSON.stringify(visit));
+
         // ── 5. the office's Billing screen ─────────────────────────────────────
         step(5, 'Me → Billing lists the family\'s children without the internal number');
         await page.goto('http://localhost:' + PORT + '/campistry_me.html', { waitUntil: 'domcontentloaded' });

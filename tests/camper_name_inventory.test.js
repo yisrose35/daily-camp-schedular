@@ -20,12 +20,16 @@ const MUST_BE_ZERO = ['records', 'edge'];
 // one camper number for as long as anything about them exists. These cannot
 // reach the wrong child; they are held here so they do not grow (new code
 // should use the number where it has one). Counts on 2026-09-23.
-const BASELINE = { enrollments: 11, families: 71, bunks: 53, roster: 185, database: 4 };
+// Raised once, 2026-09-23 (Ted TED-015): the counter now also counts
+// comparisons on the `camper` field (it missed them), and two new lines find a
+// FAMILY from a camper's NUMBER (_payFamilyByName, _famRefundablePayments) —
+// they read the family's key list, which the families count sees.
+const BASELINE = { enrollments: 11, families: 73, bunks: 53, roster: 186, database: 4 };
 
 // `// name-ok: <reason>` marks a name that is not how a camper is identified
 // (a lead, a sample, the words of a message or receipt). Each needs a reason,
 // and there may not be more of them than this without someone deciding so here.
-const NAME_OK_CEILING = 16;
+const NAME_OK_CEILING = 15;
 
 test('part A: nothing decides who a camper is by name', () => {
     const c = inv.count();
