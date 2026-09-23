@@ -25,8 +25,31 @@
 
     // ── Data Access (from Me) ─────────────────────────────────────────────
     function readGlobal() {
-        try { return JSON.parse(localStorage.getItem(STORAGE_KEY) || '{}'); }
-        catch(e) { return {}; }
+        var g = {};
+        try { g = JSON.parse(localStorage.getItem(STORAGE_KEY) || '{}') || {}; }
+        catch(e) { g = {}; }
+        return _withFullRoster(g);
+    }
+
+    // ★ The roster is NOT in localStorage — setLocalSettings strips
+    // app1.camperRoster from the lite snapshot to stay under the 5MB quota, and
+    // the full state lives in IndexedDB behind loadGlobalSettings(). Without this
+    // every list on this page is empty after the first cloud hydration: the
+    // medication sheet, the allergy sheet, the forms table. An empty medication
+    // sheet does not read as a bug to a nurse — it reads as "no medications".
+    // See campistry_snacks.js for the long version and
+    // tests/full_state_readers.test.js for the check.
+    function _withFullRoster(lite) {
+        try {
+            if ((lite.app1 && lite.app1.camperRoster) ||
+                typeof window.loadGlobalSettings !== 'function') return lite;
+            var full = window.loadGlobalSettings();
+            var r = full && full.app1 && full.app1.camperRoster;
+            if (!r || !Object.keys(r).length) return lite;
+            var out = Object.assign({}, lite);
+            out.app1 = Object.assign({}, lite.app1, { camperRoster: r });
+            return out;
+        } catch (e) { return lite; }
     }
     // Unenrolled campers (Me's "Unenroll" action — kept in the record for
     // billing/audit history but no longer active) are dropped here so a kid

@@ -84,10 +84,43 @@ function readGlobal() {
     // "campers not showing in Snacks" even after cloud hydration confirmed
     // finding real campers.
     const keys = [STORE_KEY, 'CAMPISTRY_LOCAL_CACHE', 'CAMPISTRY_UNIFIED_STATE'];
+    let g = {};
     for (const key of keys) {
-        try { const raw = localStorage.getItem(key); if (raw) return JSON.parse(raw) || {}; } catch (_) {}
+        try { const raw = localStorage.getItem(key); if (raw) { g = JSON.parse(raw) || {}; break; } } catch (_) {}
     }
-    return {};
+    return _withFullRoster(g);
+}
+
+// ★ THE ROSTER IS NOT IN localStorage, AND HAS NOT BEEN SINCE THE IDB MOVE.
+//
+// integration_hooks' setLocalSettings writes campGlobalSettings_v1 as a LITE
+// snapshot — it deliberately `delete`s app1.camperRoster (and the other keys that
+// grow without bound) so a large camp cannot blow localStorage's ~5MB ceiling.
+// The complete state lives in IndexedDB and is what window.loadGlobalSettings()
+// returns.
+//
+// So a page that reads the roster straight out of localStorage sees it exactly
+// once — in the window between campistry_cloud_bootstrap.js writing the raw cloud
+// keys and the first hydration replacing them with the lite snapshot — and
+// nothing after that. On this page the symptom is the whole canteen: no campers
+// to deposit for, no accounts, no cash out, no shop order, on every load. The
+// comment above blames CAMPISTRY_UNIFIED_STATE for "campers not showing in
+// Snacks", which was a real cause once; this is the other one.
+//
+// campistry_live.js and campistry_live_locator.js already prefer the full state.
+// Four more pages do now, and tests/full_state_readers.test.js is what keeps a
+// fifth from arriving without it.
+function _withFullRoster(lite) {
+    try {
+        if ((lite.app1 && lite.app1.camperRoster) ||
+            typeof window.loadGlobalSettings !== 'function') return lite;
+        const full = window.loadGlobalSettings();
+        const r = full && full.app1 && full.app1.camperRoster;
+        if (!r || !Object.keys(r).length) return lite;
+        const out = Object.assign({}, lite);
+        out.app1 = Object.assign({}, lite.app1, { camperRoster: r });
+        return out;
+    } catch (_) { return lite; }
 }
 
 function getRoster() {

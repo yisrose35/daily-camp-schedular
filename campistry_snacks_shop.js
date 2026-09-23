@@ -41,10 +41,31 @@ function readGlobal() {
     // Same key order as the other apps: the cloud bootstrap hydrates
     // campGlobalSettings_v1, and a stale demo blob must not shadow it.
     var keys = [STORE_KEY, 'CAMPISTRY_LOCAL_CACHE', 'CAMPISTRY_UNIFIED_STATE'];
+    var g = {};
     for (var i = 0; i < keys.length; i++) {
-        try { var raw = localStorage.getItem(keys[i]); if (raw) return JSON.parse(raw) || {}; } catch (e) {}
+        try { var raw = localStorage.getItem(keys[i]); if (raw) { g = JSON.parse(raw) || {}; break; } } catch (e) {}
     }
-    return {};
+    return _withFullRoster(g);
+}
+
+// ★ The roster is NOT in localStorage — setLocalSettings strips
+// app1.camperRoster from the lite snapshot to stay under the 5MB quota, and the
+// full state lives in IndexedDB behind loadGlobalSettings(). Without this the
+// order form's camper picker is empty, so no shop order can name a camper and
+// none can reach a canteen account or a camp bill.
+// See campistry_snacks.js for the long version and tests/full_state_readers.test.js
+// for the check that keeps every one of these readers honest.
+function _withFullRoster(lite) {
+    try {
+        if ((lite.app1 && lite.app1.camperRoster) ||
+            typeof window.loadGlobalSettings !== 'function') return lite;
+        var full = window.loadGlobalSettings();
+        var r = full && full.app1 && full.app1.camperRoster;
+        if (!r || !Object.keys(r).length) return lite;
+        var out = Object.assign({}, lite);
+        out.app1 = Object.assign({}, lite.app1, { camperRoster: r });
+        return out;
+    } catch (e) { return lite; }
 }
 function load() {
     var g = readGlobal();
@@ -60,6 +81,17 @@ function load() {
     shop.products.forEach(function (p) { if (p && +p.id > max) max = +p.id; });
     shop.products.forEach(function (p) { if (p && !p.id) p.id = ++max; });
 }
+// The most recent save's trip to the cloud. settleOrder waits on it — see the
+// star comment there for why that is not optional.
+var _lastSave = Promise.resolve();
+
+/**
+ * Save the shop. Returns a promise that resolves when the CLOUD has it, not
+ * merely when localStorage does.
+ *
+ * Existing callers use `save(); render();` and are unaffected; the promise is
+ * there for the one caller that genuinely needs the write to have landed.
+ */
 function save() {
     try {
         var g = JSON.parse(localStorage.getItem(STORE_KEY) || '{}');
@@ -68,19 +100,32 @@ function save() {
         localStorage.setItem(STORE_KEY, JSON.stringify(g));
         localStorage.setItem('CAMPISTRY_LOCAL_CACHE', JSON.stringify(g));
     } catch (e) { console.warn('[Shop] Local save failed:', e); }
+    _lastSave = _cloudSave();
+    return _lastSave;
+}
+
+function _cloudSave() {
     if (window.saveGlobalSettings && window.saveGlobalSettings._isAuthoritativeHandler) {
         window.saveGlobalSettings('campistryShop', shop);
-        return;
+        // saveGlobalSettings QUEUES; the upsert happens SYNC_DEBOUNCE_MS later.
+        // flushPendingSettingsSync exists for callers that cannot wait out the
+        // debounce, and this is one — see settleOrder.
+        try {
+            if (typeof window.flushPendingSettingsSync === 'function') {
+                return Promise.resolve(window.flushPendingSettingsSync());
+            }
+        } catch (e) { console.warn('[Shop] Flush failed:', e && e.message); }
+        return Promise.resolve();
     }
     try {
         var db = window.CampistryDB;
         var campId = db && db.getCampId && db.getCampId();
-        if (!db || !db.client || !campId) return;
-        db.client.from('camp_state_kv')
+        if (!db || !db.client || !campId) return Promise.resolve();
+        return db.client.from('camp_state_kv')
             .upsert({ camp_id: campId, key: 'campistryShop', value: shop, updated_at: new Date().toISOString() },
                     { onConflict: 'camp_id,key' })
             .then(function (r) { if (r.error) console.warn('[Shop] Cloud save failed:', r.error.message); });
-    } catch (e) { console.warn('[Shop] Cloud save error:', e); }
+    } catch (e) { console.warn('[Shop] Cloud save error:', e); return Promise.resolve(); }
 }
 
 function roster() { var g = readGlobal(); return (g.app1 && g.app1.camperRoster) || {}; }
@@ -831,6 +876,26 @@ window.shopSaveOrder = function () {
  * a silent difference.
  */
 function settleOrder(rec, cancelled, done) {
+    // ★ WAIT FOR THE ORDER TO BE IN THE CLOUD FIRST.
+    //
+    // settle_shop_order finds the order by id inside camp_state_kv's
+    // campistryShop row — the SERVER's copy. save() above writes localStorage
+    // immediately and then only QUEUES the cloud write behind a 500ms debounce,
+    // so calling this straight after a save raced that debounce and lost, every
+    // time: the RPC answered {success:false, error:'order_not_found'} and the
+    // office got "Saved, but the order was not found on the server to post
+    // payment against." on the first save of every order.
+    //
+    // The comment at the call site says the settlement happens after the local
+    // save "so the order row exists for the server to find". A local save is
+    // exactly what does NOT make it exist for the server. _lastSave resolves
+    // when the upsert has actually landed.
+    Promise.resolve(_lastSave).then(_go, _go);
+
+    function _go() { _settleNow(rec, cancelled, done); }
+}
+
+function _settleNow(rec, cancelled, done) {
     function finishUp(ok, msg) { if (typeof done === 'function') done(ok, msg); }
     try {
         var db = window.CampistryDB;
