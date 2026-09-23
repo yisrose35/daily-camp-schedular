@@ -66,15 +66,21 @@ const MIGRATIONS = [
     //   200  get_camp_applications      — campistry_me.js reads it on hydration
     // 020  link_messages — Lite and Link write parent messages there
     //      (tests/lite_health_numbers.e2e.js)
+    // 010/032/034/070/122: the functions that hand out and bind parent
+    // invitations — 261 lets only the camp office use them (TED-023/028).
+    '010_link_access_code',
     '020_link_messages',
     // 028-030: the photo matcher's face index, which 258 corrects.
     '028_facial_recognition',
     '029_face_recognition_v2',
     '030_face_freshness',
+    '032_bulk_parent_onboarding',
+    '034_invite_lifecycle',
     // 037  get_camp_health_documents — the Health page reads it on load
     '037_health_documents',
     '048_section_access',
     '063_camp_timezone',
+    '070_link_billing_access',
     // 080/081: what a parent's photo gallery shows, which 258 corrects.
     '080_photo_storage',
     '081_link_photo_purchases',

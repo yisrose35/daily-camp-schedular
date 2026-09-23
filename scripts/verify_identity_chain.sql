@@ -486,7 +486,11 @@ UNION ALL
     -- not inside it); children split by the 253 rename bug (read-only count
     -- + the repair line; uncertain ones are left for a person).
     ('260  numbers stay with their child (invites, renumbers, split renames)',
-     CASE WHEN to_regprocedure('public.split_renames(boolean)') IS NULL THEN 'apply 260'
+     -- The checks below call 260's functions, so they are run only once 260
+     -- is in (261 may be applied first): as text, through query_to_xml.
+     CASE WHEN to_regprocedure('public.split_renames(boolean)') IS NULL
+               OR to_regprocedure('public.verify_invite_numbers()') IS NULL THEN 'apply 260'
+          ELSE (xpath('/row/r/text()', query_to_xml($v260$SELECT CASE
           WHEN public.verify_invite_numbers() -> 'slots_on_the_wrong_child' <> '[]'::jsonb
             THEN 'INVITE NUMBERS ON THE WRONG CHILD: ' || (public.verify_invite_numbers() ->> 'slots_on_the_wrong_child')
           WHEN (public.verify_invite_numbers() ->> 'slots_on_a_moved_number')::int > 0
@@ -504,7 +508,7 @@ UNION ALL
           WHEN jsonb_array_length(public.split_renames() -> 'needs_a_person') > 0
             THEN jsonb_array_length(public.split_renames() -> 'needs_a_person')
                  || ' possibly split children need a person to decide — SELECT public.split_renames(); and read needs_a_person'
-          ELSE 'ok' END),
+          ELSE 'ok' END AS r$v260$, false, true, '')))[1]::text END),
     -- Only the camp's office can write a parent invitation (TED-023).
     ('261  only the camp office writes parent invitations',
      CASE WHEN to_regprocedure('public._is_camp_office(uuid,uuid)') IS NULL

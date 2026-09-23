@@ -15,6 +15,12 @@
 -- an invitation that names no children (which would cover the whole camp):
 -- a missing list is written as an empty one, which covers nobody.
 --
+-- THE SAME HOLE FROM INSIDE (TED-028). The office's list of invitations —
+-- with every family's access code — was open to ANY member of the camp, a
+-- counselor or a viewer too, who could then claim a family's code on their own
+-- login. That list, and every other function that binds or changes a family's
+-- invitation, is the office's too now.
+--
 -- Standalone. Does NOT need 260 — paste it into the Supabase SQL Editor and
 -- run it as soon as you can. Safe to run twice. NOT part of APPLY_BUNDLE.sql.
 -- Afterwards, run the read-only check at the bottom of this file.
@@ -119,6 +125,40 @@ END;
 $$;
 REVOKE ALL ON FUNCTION public.upsert_parent_invite(uuid, text, text, text, jsonb, jsonb, timestamptz) FROM public, anon;
 GRANT EXECUTE ON FUNCTION public.upsert_parent_invite(uuid, text, text, text, jsonb, jsonb, timestamptz) TO authenticated;
+
+-- ─── the office functions that let ANY camp member through (TED-028) ────────
+-- These let the camp owner or ANY member of the camp in — counselors and
+-- viewers included:
+--   get_camp_parent_invites      (032) lists every family's invitation WITH its
+--                                      access code — which anyone can then claim
+--                                      on their own login (claim_invite_by_code)
+--   resolve_join_request         (032) binds a login to a family
+--   set_parent_invite_email      (034) points a family's invitation at an email
+--   set_parent_billing_access    (070) opens a family's billing to its login
+--   revoke_orphaned_parent_invites (122) closes families' invitations
+-- Each is the office's act. Rewritten in place: the membership check becomes
+-- "the camp office" (owner, admin, manager); nothing else changes.
+DO $$
+DECLARE
+    f     text;
+    d     text;
+    n     text;
+    v_re  text := 'IF\s+NOT\s+EXISTS\s*\(\s*SELECT\s+1\s+FROM\s+camps\s+c\s+WHERE\s+c\.id\s*=\s*([a-z_.]+)\s+AND\s+c\.owner\s*=\s*caller\s*\)\s*AND\s+NOT\s+EXISTS\s*\(\s*SELECT\s+1\s+FROM\s+camp_users\s+u\s+WHERE\s+u\.camp_id\s*=\s*[a-z_.]+\s+AND\s+u\.user_id\s*=\s*caller\s*\)\s*THEN\s*RETURN\s+jsonb_build_object\(\s*''success'',\s*false,\s*''error'',\s*''not_a_member''\s*\)';
+BEGIN
+    FOREACH f IN ARRAY ARRAY['get_camp_parent_invites', 'resolve_join_request', 'set_parent_invite_email',
+                             'set_parent_billing_access', 'revoke_orphaned_parent_invites'] LOOP
+        FOR d IN SELECT pg_get_functiondef(p.oid) FROM pg_proc p JOIN pg_namespace ns ON ns.oid = p.pronamespace
+                  WHERE ns.nspname = 'public' AND p.proname = f LOOP
+            CONTINUE WHEN d ~ '_is_camp_office';                  -- already done
+            n := regexp_replace(d, v_re,
+                   'IF NOT public._is_camp_office(\1, caller) THEN RETURN jsonb_build_object(''success'', false, ''error'', ''not_camp_office'')');
+            IF n = d THEN
+                RAISE EXCEPTION '261: % does not look the way this file expects — send this message to the builder', f;
+            END IF;
+            EXECUTE n;
+        END LOOP;
+    END LOOP;
+END $$;
 
 -- ─── read-only check: was the hole used? ────────────────────────────────────
 -- Every claimed invitation that covers a whole camp (it names no children).

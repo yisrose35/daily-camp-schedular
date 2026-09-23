@@ -14440,6 +14440,9 @@ function _syncParentInviteSnapshot(enrollId,silent,opts){
             }
             var d=res.data;
             if(!d||!d.success){
+                // Only the camp office (owner, admin, manager) writes parent
+                // invitations (migration 261): say so, rather than "unknown".
+                if(d&&d.error==='not_camp_office')return {error:'office_only'};
                 console.error('[Me] upsert_parent_invite returned failure:',d);
                 return {error:'unknown'};
             }
@@ -14460,6 +14463,7 @@ function _syncParentInviteSnapshot(enrollId,silent,opts){
         }
         work.then(function(results){
             var primary=results[0],secondary=results[1];
+            if(primary&&primary.error==='office_only'){toast('Only the camp office (owner, admin or manager) can invite parents.','error');return;}
             if(!primary||primary.error){toast('Could not save invite'+(primary&&primary.error?': '+primary.error:'')+'. Run migration 011 in Supabase.');return;}
             if(secondary&&secondary.error){console.error('[Me] Second parent invite failed:',secondary.error);secondary=null;}
             _showInviteModal(enrollId,primary,secondary);

@@ -189,7 +189,10 @@ INSERT INTO camp_state_kv (camp_id, key, value) VALUES
     ('a6000000-0000-0000-0000-000000000004', 'campistryMe',
      '{"enrollments":{"e1":{"camperName":"Moshe Gold","camperId":1}}}'),
     ('a6000000-0000-0000-0000-000000000004', 'campistryHealth',
-     '{"dispensingLog":[{"camperName":"Moshe Gold","camperId":1,"medication":"Tylenol"}]}');
+     '{"dispensingLog":[{"camperName":"Moshe Gold","camperId":1,"medication":"Tylenol"}]}'),
+    -- Go keeps the number as _camperId on its route stops
+    ('a6000000-0000-0000-0000-000000000004', 'campistryGo',
+     '{"routes":[{"stops":[{"camper":"Moshe Gold","_camperId":1}]}]}');
 INSERT INTO auth.users (id, email) VALUES ('a6000000-0000-0000-0000-0000000000b4', 'gold4@260.test');
 INSERT INTO link_parent_invites (id, camp_id, user_id, parent_email, camper_names, camper_data, status)
 VALUES ('a6000000-aaaa-0000-0000-000000000004', 'a6000000-0000-0000-0000-000000000004',
@@ -232,6 +235,10 @@ BEGIN
                 WHERE camp_id = c AND key = 'campistryHealth' AND d ->> 'camperId' <> '7') THEN
         RAISE EXCEPTION 'TED-012: a health record is left on the old number: %',
             (SELECT value FROM camp_state_kv WHERE camp_id = c AND key = 'campistryHealth');
+    END IF;
+    IF (SELECT value #>> '{routes,0,stops,0,_camperId}' FROM camp_state_kv WHERE camp_id = c AND key = 'campistryGo') <> '7' THEN
+        RAISE EXCEPTION 'Go''s route stop is left on the old number: %',
+            (SELECT value FROM camp_state_kv WHERE camp_id = c AND key = 'campistryGo');
     END IF;
     IF EXISTS (SELECT 1 FROM camp_people WHERE camp_id = c AND person_id = 1) THEN
         RAISE EXCEPTION 'TED-017: the moved number 1 was given to another child';
@@ -430,6 +437,62 @@ BEGIN
     END IF;
     IF NOT EXISTS (SELECT 1 FROM jsonb_array_elements(me -> 'payments') p WHERE (p ->> 'camperId') = '1') THEN
         RAISE EXCEPTION 'Moshe''s payment was touched';
+    END IF;
+END $$;
+ROLLBACK;
+
+-- ════════════════════════════════════════════════════════════════════════════
+-- 6c. (TED-021) The other order: erase, Sara is given #2 FIRST, and only then
+--     the tab opened before the erase saves. Avi's copies lose the number;
+--     Sara's own records keep it.
+-- ════════════════════════════════════════════════════════════════════════════
+BEGIN;
+INSERT INTO camps (id, name) VALUES ('a6000000-0000-0000-0000-000000000026', '260 camp six-c');
+INSERT INTO camp_state_kv (camp_id, key, value) VALUES
+    ('a6000000-0000-0000-0000-000000000026', 'app1',
+     '{"camperRoster":{"Moshe Gold":{"name":"Moshe Gold","camperId":1},"Avi Gold":{"name":"Avi Gold","camperId":2}}}'),
+    ('a6000000-0000-0000-0000-000000000026', 'campistryMe',
+     '{"enrollments":{"e2":{"camperName":"Avi Gold","camperId":2,"status":"enrolled"}},
+       "payments":[{"camperName":"Avi Gold","camperId":2,"amount":900}]}'),
+    ('a6000000-0000-0000-0000-000000000026', 'campistryHealth',
+     '{"sickVisits":[{"camperName":"Avi Gold","camperId":2,"complaint":"cough"}]}');
+UPDATE camp_state_kv SET value = '{"camperRoster":{"Moshe Gold":{"name":"Moshe Gold","camperId":1}}}'
+ WHERE camp_id = 'a6000000-0000-0000-0000-000000000026' AND key = 'app1';
+CREATE TEMP TABLE t260_stale_c AS
+SELECT key, value FROM camp_state_kv WHERE camp_id = 'a6000000-0000-0000-0000-000000000026';
+SELECT public.erase_camper('a6000000-0000-0000-0000-000000000026', 2, true);
+-- Sara is given #2, and gets a sick visit of her own.
+UPDATE camp_state_kv SET value = jsonb_set(value, '{camperRoster,Sara Levi}', '{"name":"Sara Levi","camperId":2}')
+ WHERE camp_id = 'a6000000-0000-0000-0000-000000000026' AND key = 'app1';
+UPDATE camp_state_kv SET value = '{"sickVisits":[{"camperName":"Sara Levi","camperId":2,"complaint":"fever"}]}'
+ WHERE camp_id = 'a6000000-0000-0000-0000-000000000026' AND key = 'campistryHealth';
+-- NOW the stale tab saves its Me document (Avi's enrollment and $900), and a
+-- Health tab from before the erase saves Avi's visit alongside Sara's.
+INSERT INTO camp_state_kv (camp_id, key, value)
+SELECT 'a6000000-0000-0000-0000-000000000026'::uuid, 'campistryMe', value FROM t260_stale_c WHERE key = 'campistryMe'
+UNION ALL
+SELECT 'a6000000-0000-0000-0000-000000000026'::uuid, 'campistryHealth',
+       '{"sickVisits":[{"camperName":"Avi Gold","camperId":2,"complaint":"cough"},
+                       {"camperName":"Sara Levi","camperId":2,"complaint":"fever"}]}'::jsonb
+ON CONFLICT (camp_id, key) DO UPDATE SET value = EXCLUDED.value;
+DO $$
+DECLARE c uuid := 'a6000000-0000-0000-0000-000000000026'; me jsonb; h jsonb;
+BEGIN
+    SELECT value INTO me FROM camp_state_kv WHERE camp_id = c AND key = 'campistryMe';
+    SELECT value INTO h FROM camp_state_kv WHERE camp_id = c AND key = 'campistryHealth';
+    IF me::text ~ '"camperId": 2[,}]' THEN
+        RAISE EXCEPTION 'TED-021: Sara (#2) was given the erased child''s records: %', me;
+    END IF;
+    IF NOT EXISTS (SELECT 1 FROM jsonb_array_elements(me -> 'payments') p WHERE (p ->> 'amount')::int = 900) THEN
+        RAISE EXCEPTION 'the $900 left the books: %', me;
+    END IF;
+    IF EXISTS (SELECT 1 FROM jsonb_array_elements(h -> 'sickVisits') v
+                WHERE v ->> 'camperName' = 'Avi Gold' AND v ? 'camperId') THEN
+        RAISE EXCEPTION 'TED-021: Avi''s visit is filed on Sara''s number: %', h;
+    END IF;
+    IF NOT EXISTS (SELECT 1 FROM jsonb_array_elements(h -> 'sickVisits') v
+                    WHERE v ->> 'camperName' = 'Sara Levi' AND v ->> 'camperId' = '2') THEN
+        RAISE EXCEPTION 'Sara''s own visit lost her number: %', h;
     END IF;
 END $$;
 ROLLBACK;

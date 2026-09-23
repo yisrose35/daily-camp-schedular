@@ -118,7 +118,7 @@ BEGIN
                  CASE
                    WHEN jsonb_typeof(e.value) IN ('object', 'array')
                      THEN public._json_renumber_map(e.value, p_map)
-                   WHEN e.key IN ('camperId', 'personId', 'person_id', 'camper_id')
+                   WHEN e.key IN ('camperId', '_camperId', 'personId', 'person_id', 'camper_id')
                         AND jsonb_typeof(e.value) IN ('number', 'string')
                         AND p_map ? COALESCE(public._stated_person_id(e.value #>> '{}')::text, '')
                      THEN CASE WHEN jsonb_typeof(e.value) = 'string'
@@ -166,13 +166,56 @@ BEGIN
                  CASE WHEN jsonb_typeof(e.value) IN ('object', 'array')
                       THEN public._detach_person_json(e.value, p_id) ELSE e.value END), '{}'::jsonb)
           INTO v_out FROM jsonb_each(p_doc) e
-         WHERE NOT (e.key IN ('camperId', 'personId', 'person_id', 'camper_id')
+         WHERE NOT (e.key IN ('camperId', '_camperId', 'personId', 'person_id', 'camper_id')
                     AND jsonb_typeof(e.value) IN ('number', 'string')
                     AND public._stated_person_id(e.value #>> '{}') = p_id);
         RETURN v_out;
     ELSIF jsonb_typeof(p_doc) = 'array' THEN
         SELECT COALESCE(jsonb_agg(CASE WHEN jsonb_typeof(x.value) IN ('object', 'array')
                                        THEN public._detach_person_json(x.value, p_id) ELSE x.value END
+                                  ORDER BY x.ord), '[]'::jsonb)
+          INTO v_out FROM jsonb_array_elements(p_doc) WITH ORDINALITY x(value, ord);
+        RETURN v_out;
+    END IF;
+    RETURN p_doc;
+END;
+$$;
+
+-- The same, for a number that has since been given to a NEW child: only a
+-- record that carries the number AND names the erased child (camperName,
+-- camper, name) loses the number — that is a stale copy of the erased child
+-- (a tab opened before the erase), never the new child's own record (TED-021).
+CREATE OR REPLACE FUNCTION public._detach_named_json(p_doc jsonb, p_id bigint, p_name text)
+RETURNS jsonb
+LANGUAGE plpgsql
+IMMUTABLE
+SET search_path = public, pg_catalog
+AS $$
+DECLARE
+    v_out jsonb;
+    v_own boolean;
+BEGIN
+    IF jsonb_typeof(p_doc) = 'object' THEN
+        v_own := COALESCE(p_name, '') <> '' AND EXISTS (
+                   SELECT 1 FROM jsonb_each_text(p_doc) f
+                    WHERE f.key IN ('camperName', 'camper', 'name')
+                      AND regexp_replace(f.value, '\s#\d+(?:-\d+)?$', '') = p_name)
+                 AND EXISTS (
+                   SELECT 1 FROM jsonb_each(p_doc) f
+                    WHERE f.key IN ('camperId', '_camperId', 'personId', 'person_id', 'camper_id')
+                      AND jsonb_typeof(f.value) IN ('number', 'string')
+                      AND public._stated_person_id(f.value #>> '{}') = p_id);
+        SELECT COALESCE(jsonb_object_agg(e.key,
+                 CASE WHEN jsonb_typeof(e.value) IN ('object', 'array')
+                      THEN public._detach_named_json(e.value, p_id, p_name) ELSE e.value END), '{}'::jsonb)
+          INTO v_out FROM jsonb_each(p_doc) e
+         WHERE NOT (v_own AND e.key IN ('camperId', '_camperId', 'personId', 'person_id', 'camper_id')
+                    AND jsonb_typeof(e.value) IN ('number', 'string')
+                    AND public._stated_person_id(e.value #>> '{}') = p_id);
+        RETURN v_out;
+    ELSIF jsonb_typeof(p_doc) = 'array' THEN
+        SELECT COALESCE(jsonb_agg(CASE WHEN jsonb_typeof(x.value) IN ('object', 'array')
+                                       THEN public._detach_named_json(x.value, p_id, p_name) ELSE x.value END
                                   ORDER BY x.ord), '[]'::jsonb)
           INTO v_out FROM jsonb_array_elements(p_doc) WITH ORDINALITY x(value, ord);
         RETURN v_out;
@@ -202,6 +245,7 @@ DECLARE
     v_body jsonb;
     v_seen bigint[];
     g      bigint;
+    r      record;
 BEGIN
     IF p_doc IS NULL OR jsonb_typeof(p_doc) NOT IN ('object', 'array') THEN RETURN p_doc; END IF;
     IF NOT EXISTS (SELECT 1 FROM camp_person_renumbers WHERE camp_id = p_camp_id)
@@ -211,7 +255,7 @@ BEGIN
     v_body := CASE WHEN p_key = 'app1' AND jsonb_typeof(p_doc) = 'object' THEN p_doc - 'camperRoster' ELSE p_doc END;
     -- Every number the document's records carry, read once from its text.
     SELECT array_agg(DISTINCT public._stated_person_id(m[2])) INTO v_seen
-      FROM regexp_matches(v_body::text, '"(camperId|personId|person_id|camper_id)": "?(\d{1,15})"?[,}\]]', 'g') m;
+      FROM regexp_matches(v_body::text, '"(_?camperId|personId|person_id|camper_id)": "?(\d{1,15})"?[,}\]]', 'g') m;
     IF v_seen IS NULL THEN RETURN p_doc; END IF;
 
     SELECT jsonb_object_agg(from_id::text, to_id) INTO v_map
@@ -224,6 +268,17 @@ BEGIN
                 AND NOT EXISTS (SELECT 1 FROM camp_people p WHERE p.camp_id = e.camp_id AND p.person_id = e.person_id)
     LOOP
         v_body := public._detach_person_json(public._scrub_person_json(v_body, g, NULL), g);
+    END LOOP;
+    -- …and once a NEW child holds it: only the erased child's own records,
+    -- by number AND name, lose the number.
+    FOR r IN SELECT e.person_id, regexp_replace(COALESCE(e.key, ''), '\s#\d+(?:-\d+)?$', '') AS base
+               FROM camp_erased_people e
+              WHERE e.camp_id = p_camp_id AND e.person_id = ANY (v_seen) AND COALESCE(e.key, '') <> ''
+                AND EXISTS (SELECT 1 FROM camp_people p WHERE p.camp_id = e.camp_id AND p.person_id = e.person_id
+                                                          AND regexp_replace(p.source_key, '\s#\d+(?:-\d+)?$', '')
+                                                              <> regexp_replace(e.key, '\s#\d+(?:-\d+)?$', ''))
+    LOOP
+        v_body := public._detach_named_json(v_body, r.person_id, r.base);
     END LOOP;
 
     IF p_key = 'app1' AND jsonb_typeof(p_doc) = 'object' AND p_doc ? 'camperRoster' THEN

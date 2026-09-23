@@ -30,6 +30,10 @@ END $$;
 -- exist". Shaped the way the real thing is shaped, that fails here instead.
 CREATE SCHEMA IF NOT EXISTS extensions;
 CREATE EXTENSION IF NOT EXISTS pgcrypto SCHEMA extensions;
+-- On Supabase the extensions schema is on every role's search path, so older
+-- migrations (010) call gen_random_bytes() unqualified. Same name here.
+CREATE OR REPLACE FUNCTION public.gen_random_bytes(integer) RETURNS bytea
+    LANGUAGE sql VOLATILE AS $$ SELECT extensions.gen_random_bytes($1) $$;
 
 CREATE SCHEMA IF NOT EXISTS auth;
 CREATE TABLE IF NOT EXISTS auth.users (id uuid PRIMARY KEY, email text);

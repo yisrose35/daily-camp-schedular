@@ -72,6 +72,50 @@ BEGIN
     END IF;
 END $$;
 
+-- (TED-028) A counselor cannot read the families' access codes, re-point a
+-- family's invitation, open its billing, or bind a login to it — so cannot
+-- claim a family the way Ted did (read the code, then claim it).
+CREATE OR REPLACE FUNCTION auth.uid() RETURNS uuid LANGUAGE sql STABLE
+  AS 'SELECT ''a6100000-0000-0000-0000-0000000000d1''::uuid';
+DO $$
+DECLARE v jsonb; c uuid := 'a6100000-0000-0000-0000-000000000001';
+BEGIN
+    v := public.get_camp_parent_invites(c);
+    IF (v ->> 'success')::boolean IS NOT FALSE OR v::text ~ 'access_code' THEN
+        RAISE EXCEPTION 'TED-028: a counselor read the families'' access codes: %', v;
+    END IF;
+    v := public.set_parent_invite_email(c, 'gold@261.test', 'counselor@261.test');
+    IF (v ->> 'success')::boolean IS NOT FALSE THEN
+        RAISE EXCEPTION 'TED-028: a counselor re-pointed a family''s invitation: %', v;
+    END IF;
+    v := public.set_parent_billing_access(c, 'gold@261.test', true);
+    IF (v ->> 'success')::boolean IS NOT FALSE THEN
+        RAISE EXCEPTION 'TED-028: a counselor opened a family''s billing: %', v;
+    END IF;
+    INSERT INTO link_join_requests (id, camp_id, user_id, email, status)
+    VALUES ('a6100000-eeee-0000-0000-000000000001', c, 'a6100000-0000-0000-0000-0000000000d1', 'counselor@261.test', 'pending');
+    v := public.resolve_join_request('a6100000-eeee-0000-0000-000000000001', 'approve', 'gold@261.test');
+    IF (v ->> 'success')::boolean IS NOT FALSE THEN
+        RAISE EXCEPTION 'TED-028: a counselor bound themselves to a family: %', v;
+    END IF;
+    IF EXISTS (SELECT 1 FROM link_parent_invites WHERE camp_id = c AND user_id = auth.uid())
+       OR public._parent_owns_person(c, 5) THEN
+        RAISE EXCEPTION 'TED-028: the counselor owns Moshe';
+    END IF;
+END $$;
+
+-- The owner still reads the list (with the codes, to hand to families).
+CREATE OR REPLACE FUNCTION auth.uid() RETURNS uuid LANGUAGE sql STABLE
+  AS 'SELECT ''a6100000-0000-0000-0000-0000000000a1''::uuid';
+DO $$
+DECLARE v jsonb;
+BEGIN
+    v := public.get_camp_parent_invites('a6100000-0000-0000-0000-000000000001');
+    IF (v ->> 'success')::boolean IS NOT TRUE OR jsonb_array_length(v -> 'invites') < 1 THEN
+        RAISE EXCEPTION 'the owner cannot read the invitations: %', v;
+    END IF;
+END $$;
+
 -- The owner, with no list: an empty list, never a whole-camp invitation.
 CREATE OR REPLACE FUNCTION auth.uid() RETURNS uuid LANGUAGE sql STABLE
   AS 'SELECT ''a6100000-0000-0000-0000-0000000000a1''::uuid';
