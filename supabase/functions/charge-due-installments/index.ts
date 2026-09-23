@@ -454,7 +454,36 @@ serve(async (req) => {
 
   for (const row of (rows || [])) {
     const me = (row.value && typeof row.value === "object") ? row.value as Record<string, any> : null;
-    if (!me || !me.families) continue;
+    if (!me) continue;
+
+    // Families and payments come from their ROWS, never the document.
+    //
+    // Since 212/214 every server-side writer — record_autopay_installment below,
+    // a parent saving a card or choosing a plan, a webhook recording a payment —
+    // writes camp_families / camp_payments. The document's copies catch up only
+    // when somebody saves the Me page. Reading them here meant an installment this
+    // run marked PAID was still PENDING in the document tomorrow, so its card was
+    // charged again every night (and the write refused, so the second charge was
+    // not recorded either). And the payments were read from me.finance.payments,
+    // a branch that has not existed since migration 158 — so what a family had
+    // paid counted as nothing, and a family who paid in full early was charged
+    // their remaining installments anyway.
+    //
+    // A camp whose rows cannot be read is SKIPPED, never charged from the stale copy.
+    {
+      const famRes = await supabase.rpc("camp_families_object", { p_camp_id: row.camp_id });
+      const payRes = await supabase.rpc("camp_payments_array", { p_camp_id: row.camp_id });
+      if (famRes.error || payRes.error || !famRes.data || typeof famRes.data !== "object") {
+        console.error(`[autopay] camp ${row.camp_id}: could not read family/payment rows `
+          + `(${famRes.error?.message || payRes.error?.message || "no data"}) — skipping this camp tonight`);
+        details.push({ camp: row.camp_id, result: "skipped_rows_unreadable" });
+        continue;
+      }
+      me.families = famRes.data as Record<string, any>;
+      me.finance = { ...(me.finance && typeof me.finance === "object" ? me.finance : {}),
+                     payments: Array.isArray(payRes.data) ? payRes.data : [] };
+    }
+    if (!me.families || !Object.keys(me.families).length) continue;
 
     // Look AHEAD at the cards, before charging anything with them. A card
     // expires on a date known the day it was saved, so autopay starting to

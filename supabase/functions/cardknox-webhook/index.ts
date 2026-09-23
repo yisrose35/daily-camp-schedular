@@ -529,10 +529,12 @@ serve(async (req) => {
       // token or label the office saved deliberately). The writes are two
       // locked calls — see migration 168.
       let saved = false;
-      const cur = await service.from("camp_state_kv").select("value")
-        .eq("camp_id", campId).eq("key", "campistryMe").maybeSingle();
-      const meNow: Record<string, any> = (cur.data && cur.data.value && typeof cur.data.value === "object") ? cur.data.value : {};
-      const f = intent.familyKey ? ((meNow.families || {})[intent.familyKey] || null) : null;
+      // The family ROW: whether a card token is already vaulted is decided from
+      // what the writers wrote, not the document's lagging copy of it.
+      const famRes = intent.familyKey
+        ? await service.rpc("camp_family", { p_camp_id: campId, p_family_key: intent.familyKey })
+        : { data: null, error: null };
+      const f = (famRes.data && typeof famRes.data === "object") ? famRes.data as Record<string, any> : null;
       if (!f) {
         console.error(`[cardknox-webhook] Family ${intent.familyKey} gone for camp ${campId} — payment ${xRefNum} not recorded`);
       } else {

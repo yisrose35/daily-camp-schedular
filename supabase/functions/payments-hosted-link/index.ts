@@ -52,10 +52,9 @@ function bqAuth(c: Record<string, string>): string {
 }
 
 async function campOwnsFamily(service: ReturnType<typeof createClient>, campId: string, familyKey: string): Promise<boolean> {
-  const { data } = await service.from("camp_state_kv").select("value")
-    .eq("camp_id", campId).eq("key", "campistryMe").maybeSingle();
-  const families = data?.value && typeof data.value === "object" ? (data.value as Record<string, any>).families : null;
-  return !!(families && typeof families === "object" && Object.prototype.hasOwnProperty.call(families, familyKey));
+  // The family ROW (camp_family), not the campistryMe document's copy of it.
+  const { data, error } = await service.rpc("camp_family", { p_camp_id: campId, p_family_key: familyKey });
+  return !error && !!data && typeof data === "object";
 }
 
 async function campHasCamper(service: ReturnType<typeof createClient>, campId: string, camperName: string): Promise<boolean> {

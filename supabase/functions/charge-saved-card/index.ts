@@ -253,10 +253,19 @@ serve(async (req) => {
 
     // Re-read the family record directly (service role) for the actual
     // token/customer id — get_my_balance deliberately never returns these.
-    const { data: meRow } = await service.from("camp_state_kv").select("value")
-      .eq("camp_id", campId).eq("key", "campistryMe").maybeSingle();
-    const me: Record<string, any> = (meRow?.value && typeof meRow.value === "object") ? meRow.value : {};
-    const fam = me.families?.[familyKey];
+    // From the family ROW (camp_family), not the campistryMe document: a card a
+    // parent saved in the portal is written to the row, and the document's copy
+    // only catches up when somebody saves the Me page — so the office clicked
+    // "charge saved card" and was told there was none.
+    const { data: famRow, error: famErr } = await service.rpc("camp_family", {
+      p_camp_id: campId, p_family_key: familyKey,
+    });
+    if (famErr) {
+      const result = { success: false, error: "Could not read the family record — try again." };
+      await finishLock("failed", result);
+      return json(result, 500);
+    }
+    const fam = (famRow && typeof famRow === "object") ? famRow as Record<string, any> : null;
     if (!fam) {
       const result = { success: false, error: "Family record not found." };
       await finishLock("failed", result);

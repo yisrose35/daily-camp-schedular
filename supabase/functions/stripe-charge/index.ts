@@ -104,15 +104,13 @@ async function callerCampId(req: Request): Promise<string | null> {
 async function campOwnsCustomer(campId: string | undefined, customerId: string | undefined): Promise<boolean> {
   if (!campId || !customerId || !SUPABASE_URL || !SUPABASE_SERVICE_KEY) return false;
   const supabase = createClient(SUPABASE_URL, SUPABASE_SERVICE_KEY);
-  const { data } = await supabase
-    .from("camp_state_kv")
-    .select("value")
-    .eq("camp_id", campId)
-    .eq("key", "campistryMe")
-    .maybeSingle();
-  const families = data?.value && typeof data.value === "object" ? (data.value as Record<string, any>).families : null;
-  if (!families || typeof families !== "object") return false;
-  return Object.values(families).some((f: any) => f && f.stripeCustomerId === customerId);
+  // The family ROWS (camp_families_object): a Stripe customer saved by
+  // stripe-webhook is written to the row, and the campistryMe document's copy
+  // only catches up when somebody saves the Me page — so this refused to charge
+  // a card the camp had just saved.
+  const { data: families, error } = await supabase.rpc("camp_families_object", { p_camp_id: campId });
+  if (error || !families || typeof families !== "object") return false;
+  return Object.values(families as Record<string, any>).some((f: any) => f && f.stripeCustomerId === customerId);
 }
 
 // Returns the camp's connected account AND its name. The name is not a nicety:

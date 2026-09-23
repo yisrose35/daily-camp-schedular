@@ -2695,9 +2695,13 @@ async function fetchBody(emailId: string): Promise<{ text: string; html: string 
 // from the snapshot the browser publishes, because buildFamilyLedgers() cannot
 // run here. A missing snapshot just means the overpay guardrail sits out.
 async function loadContext(service: ReturnType<typeof createClient>, campId: string) {
-  const [kv, aliasRes, balRes] = await Promise.all([
+  const [kv, famRes, aliasRes, balRes] = await Promise.all([
     service.from("camp_state_kv").select("value")
       .eq("camp_id", campId).eq("key", "campistryMe").maybeSingle(),
+    // Families from their ROWS — the document's copy lags every server-side
+    // write, so a family added or edited since the office last saved the Me
+    // page could not be matched to the money they sent.
+    service.rpc("camp_families_object", { p_camp_id: campId }),
     service.from("payer_aliases")
       .select("family_key, normalized, handle, display_name, kind").eq("camp_id", campId),
     service.from("family_balance_snapshots")
@@ -2705,7 +2709,9 @@ async function loadContext(service: ReturnType<typeof createClient>, campId: str
   ]);
 
   const blob = (kv.data?.value as Record<string, unknown>) ?? {};
-  const families = blob.families ?? {};
+  const families = (!famRes.error && famRes.data && typeof famRes.data === "object")
+    ? famRes.data as Record<string, unknown>
+    : (blob.families ?? {});
   // The roster carries each camper's number; families carry camper NAMES.
   // Neither alone can answer "whose payment is 1234-5678", so both are loaded
   // and joined into an index once.

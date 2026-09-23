@@ -173,12 +173,11 @@ async function banquestChargeNonce(
 
 // ── Subject existence checks (campId is client-supplied) ────────────────────
 async function getFamily(service: ReturnType<typeof createClient>, campId: string, familyKey: string) {
-  const { data } = await service.from("camp_state_kv").select("value")
-    .eq("camp_id", campId).eq("key", "campistryMe").maybeSingle();
-  const me = (data?.value && typeof data.value === "object") ? data.value as Record<string, any> : null;
-  const fams = me?.families;
-  if (!fams || typeof fams !== "object" || !Object.prototype.hasOwnProperty.call(fams, familyKey)) return null;
-  return fams[familyKey];
+  // The family ROW (camp_family), not the campistryMe document's copy, which
+  // lags every server-side write until somebody saves the Me page.
+  const { data, error } = await service.rpc("camp_family", { p_camp_id: campId, p_family_key: familyKey });
+  if (error || !data || typeof data !== "object") return null;
+  return data as Record<string, any>;
 }
 async function campHasCamper(service: ReturnType<typeof createClient>, campId: string, camperName: string) {
   // The canteen accounts are ROWS since 219, and the page strips `accounts`
