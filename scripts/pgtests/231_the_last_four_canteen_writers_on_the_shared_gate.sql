@@ -85,14 +85,26 @@ VALUES
 
 -- Her family, with a vaulted card. camperIds holds her OLD key, as a real one
 -- would after a rename.
-INSERT INTO camp_families (camp_id, family_key, payload)
-VALUES ('f3100000-0000-0000-0000-000000000001', 'weiss', jsonb_build_object(
+--
+-- camper_ids IS SET AS WELL AS the payload, and that is not belt and braces. Every
+-- real writer keeps the two in step — camp_family_save sets both, and 211's
+-- projection sets both from the document — and since migration 234 the readers
+-- match on the COLUMN rather than on payload -> 'camperIds'. This fixture used to
+-- insert the payload alone, so the column defaulted to '[]' and every one of 234's
+-- three ways to recognise her found nothing. The test then reported
+-- family_not_found for a divergence no code path can produce, which reads as a
+-- regression in 234 and is not one.
+INSERT INTO camp_families (camp_id, family_key, camper_ids, payload)
+VALUES ('f3100000-0000-0000-0000-000000000001', 'weiss',
+        jsonb_build_array('Ayala Weiss'),
+        jsonb_build_object(
             'camperIds', jsonb_build_array('Ayala Weiss'),
             'byopCustomerRef', 'cus_231',
             'byopProcessor', 'cardknox',
             'paymentMethodType', 'card',
             'paymentMethodLabel', 'Visa 4242'))
-ON CONFLICT (camp_id, family_key) DO UPDATE SET payload = EXCLUDED.payload;
+ON CONFLICT (camp_id, family_key) DO UPDATE
+    SET camper_ids = EXCLUDED.camper_ids, payload = EXCLUDED.payload;
 
 -- She has a balance, and then the camp renames her.
 DO $$
@@ -265,13 +277,18 @@ BEGIN
         RAISE EXCEPTION 'attaching the card wiped the parent''s trigger config: %', ar;
     END IF;
     -- 6. a Stripe-only family clears the BYOP fields rather than keeping both
-    UPDATE camp_families SET payload = jsonb_build_object(
+    -- Through camp_family_save, not a raw UPDATE of `payload`. The column
+    -- camper_ids is what camp_family_key_for_person reads (migration 234), and
+    -- every real writer keeps it in step with the document because that function
+    -- sets both. Writing only the payload here left the column holding her OLD
+    -- name, so the lookup missed and this test reported family_not_found for a
+    -- divergence no code path can produce. The fixture was wrong, not 234.
+    PERFORM public.camp_family_save(camp, 'weiss', jsonb_build_object(
                'camperIds', jsonb_build_array('Ayala Weiss'),
                'stripeCustomerId', 'cus_stripe_231',
                'stripePaymentMethodId', 'pm_231',
                'cardOnFile', true,
-               'paymentMethodLabel', 'Mastercard 5555')
-     WHERE camp_id = camp AND family_key = 'weiss';
+               'paymentMethodLabel', 'Mastercard 5555'));
     r := public.use_family_card_for_canteen_auto_reload(camp, NULL, NULL, 880);
     IF (r ->> 'processorKey') <> 'stripe' THEN
         RAISE EXCEPTION 'switching to a Stripe family did not switch the processor: %', r;
@@ -280,6 +297,28 @@ BEGIN
      WHERE camp_id = camp AND account_key = 'Ayala Weiss';
     IF (ar ? 'byopCustomerRef') OR (ar ->> 'stripeCustomerId') IS DISTINCT FROM 'cus_stripe_231' THEN
         RAISE EXCEPTION 'a camper ended up with both a stale BYOP token and a new Stripe one: %', ar;
+    END IF;
+
+    -- 6b. AND BACK THE OTHER WAY. The check above only covered one direction, and a
+    -- mutation that stopped the cardknox branch clearing the Stripe fields survived
+    -- it — the camper would then hold a live BYOP token and a dead Stripe one, and
+    -- canteen-auto-reload tries byopCustomerRef FIRST, so nobody would notice until
+    -- the Stripe token was the one that mattered.
+    PERFORM public.camp_family_save(camp, 'weiss', jsonb_build_object(
+               'camperIds', jsonb_build_array('Ayala Weiss'),
+               'byopCustomerRef', 'cus_back_231',
+               'byopProcessor', 'cardknox',
+               'paymentMethodType', 'card',
+               'paymentMethodLabel', 'Visa 4242'));
+    r := public.use_family_card_for_canteen_auto_reload(camp, NULL, NULL, 880);
+    IF (r ->> 'processorKey') <> 'cardknox' THEN
+        RAISE EXCEPTION 'switching back to a BYOP family did not switch the processor: %', r;
+    END IF;
+    SELECT payload -> 'autoReload' INTO ar FROM camp_canteen_accounts
+     WHERE camp_id = camp AND account_key = 'Ayala Weiss';
+    IF (ar ? 'stripeCustomerId') OR (ar ? 'stripePaymentMethodId')
+       OR (ar ->> 'byopCustomerRef') IS DISTINCT FROM 'cus_back_231' THEN
+        RAISE EXCEPTION 'the stale Stripe token was kept beside the new BYOP one: %', ar;
     END IF;
     -- 4. another family's child
     IF (public.use_family_card_for_canteen_auto_reload(camp, NULL, NULL, 881) ->> 'error')

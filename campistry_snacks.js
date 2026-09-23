@@ -530,6 +530,22 @@ function ensureAccountsForRoster() {
 
 function getAccount(name) {
     const a = snacks.accounts[name] || { balance: 0, dailyLimit: getSettings().defaultDailyLimit, spentToday: 0 };
+    // ★ A ROW-BACKED ACCOUNT CAN BE MISSING FIELDS, and the default above only
+    //   applies when the whole account is missing.
+    //
+    //   218's _canteen_account_json omits dailyLimit, creditLimit and balanceFloor
+    //   when the column is NULL — deliberately, because NULL means "not set". And
+    //   the row writers create an account with payload '{}' and every numeric
+    //   column NULL: canteen_account_lock inserts it that way, so the first parent
+    //   deposit, POS sale or shop settlement for a camper produces exactly that
+    //   shape. rAccounts then reached a.dailyLimit.toFixed(2), threw, and the whole
+    //   Accounts table came out EMPTY — no error on screen, just no campers.
+    //
+    //   Filled here rather than at each of the dozen read sites, and with the same
+    //   defaults the missing-account branch uses so the two agree.
+    if (a.balance == null) a.balance = 0;
+    if (a.dailyLimit == null) a.dailyLimit = getSettings().defaultDailyLimit;
+    if (a.spentToday == null) a.spentToday = 0;
     // Daily spend resets at midnight
     const t = new Date();
     const today = t.getFullYear() + '-' + String(t.getMonth() + 1).padStart(2, '0') + '-' + String(t.getDate()).padStart(2, '0');
@@ -1306,7 +1322,19 @@ window.importOfflinePOSTransactions = function() {
                     existing.unshift(t);
                     existingSigs[sig] = 1;
                     added++;
-                    // Apply balance changes
+                    // ★ KNOWN GAP, stated rather than hidden: this import is still
+                    //   LOCAL ONLY. 219 made the rows the truth and
+                    //   _withoutRowBackedBranches strips accounts and transactions
+                    //   from every document write, so what this loop computes goes
+                    //   no further than this tab — the same defect migration 240
+                    //   fixed for the deposit, cash-out and limit writers.
+                    //
+                    //   It is not fixed the same way because these sales ALREADY
+                    //   HAPPENED on a register that was offline: replaying them
+                    //   through submit_canteen_purchase would re-apply the daily
+                    //   caps and refuse the very rows that need importing. It needs
+                    //   a batch importer that posts them as history, with the
+                    //   offline register's own signature for idempotency.
                     if (t.camper && t.type === 'debit') {
                         if (!snacks.accounts[t.camper]) snacks.accounts[t.camper] = { balance: 0, dailyLimit: 10, spentToday: 0 };
                         snacks.accounts[t.camper].balance = Math.round((snacks.accounts[t.camper].balance - (parseFloat(t.amount) || 0)) * 100) / 100;
@@ -1366,6 +1394,83 @@ function popSelects() {
     }
 }
 
+// ══════════════════════════════════════════════════════════════════════════
+// THE DESK'S THREE WRITERS — server-side since migration 240.
+//
+// They used to move a balance in `snacks` and push the document. 219 made the
+// ROWS the truth and _withoutRowBackedBranches (above) strips accounts and
+// transactions out of every document write, so all three wrote to a copy the
+// cloud throws away. The office took $40 in cash, the screen said "Added
+// $40.00", and the database never heard about it — and because _reconcileBalances
+// rebuilds every balance from the cloud ledger, the next hydration put that
+// camper back where they were. The money was gone and the camper was short.
+//
+// So each one is an RPC now, the balance shown afterwards is the SERVER's answer,
+// and a failure says so instead of pretending. There is deliberately no offline
+// fallback: a local-only deposit is the exact defect this replaces.
+// ══════════════════════════════════════════════════════════════════════════
+
+/** The RPC surface, or null when this tab has no connected camp. */
+function _deskRpc() {
+    const db = window.CampistryDB;
+    const client = db && (db.getClient ? db.getClient() : db.client);
+    const campId = db && db.getCampId && db.getCampId();
+    if (!client || typeof client.rpc !== 'function' || !campId) return null;
+    return { client: client, campId: campId };
+}
+
+/** The camper id on an account, so the write lands on a PERSON, not a spelling. */
+function _deskCamperId(name) {
+    const a = snacks.accounts && snacks.accounts[name];
+    return (a && a.camperId != null) ? a.camperId : null;
+}
+
+/**
+ * What to tell the office when a desk write is refused.
+ *
+ * Every code here is one the server can return; a code with no phrase would
+ * surface as "could not …" with no reason, which is how staff learn to click
+ * twice.
+ */
+const DESK_ERRORS = {
+    not_authorized:           'You do not have permission to change canteen accounts.',
+    missing_camper:           'Pick a camper first.',
+    unknown_camper:           'That camper is not on the roster any more.',
+    invalid_amount:           'Enter an amount greater than zero.',
+    invalid_limit:            'Enter a limit of zero or more (zero means no daily cap).',
+    reason_required:          'A reason is required for cash out.',
+    no_available_balance:     'No available balance to take out.',
+    daily_cash_limit_reached: 'The daily cash-out limit has already been reached.',
+    over_available:           'More than this camper has available to take out.',
+};
+
+function _deskMessage(res, d, fallback) {
+    if (res && res.error) {
+        // A missing function means 240 has not been pasted yet. Say that rather
+        // than letting the camp believe money moved.
+        return /PGRST202|could not find|schema cache|does not exist/i.test(res.error.message || '')
+            ? 'Canteen writes are not set up yet on the server (migration 240).'
+            : fallback + ': ' + res.error.message;
+    }
+    const code = d && d.error;
+    if (code && DESK_ERRORS[code]) {
+        let msg = DESK_ERRORS[code];
+        if (code === 'over_available' && d.max != null) {
+            msg = 'Only $' + Number(d.max).toFixed(2) + ' available to take out.';
+        }
+        return msg;
+    }
+    return fallback + (code ? ': ' + code : '');
+}
+
+/** Re-read the rows and repaint, so what is on screen is what the server has. */
+function _deskRefresh(done) {
+    _overlayCanteenRows(snacks, function () {
+        try { renderStats(); rAccounts(); rAnalytics(); rSettings(); } catch (_) {}
+        if (typeof done === 'function') done();
+    });
+}
+
 window.addDep = function() {
     if (!_secEdit('accounts', 'Adding funds')) return;
     const name = document.getElementById('depCamper').value;
@@ -1380,30 +1485,28 @@ window.addDep = function() {
     // method the camp doesn't accept — debit included.
     if (!cfg.payMethods.includes(method)) { toast('That payment method isn\'t accepted', 1); return; }
 
-    if (!snacks.accounts[name]) snacks.accounts[name] = { balance: 0, dailyLimit: cfg.defaultDailyLimit, spentToday: 0 };
+    const rpc = _deskRpc();
+    if (!rpc) { toast('Not connected — a deposit cannot be recorded offline', 1); return; }
     const rounded = Math.round(amt * 100) / 100;
-    snacks.accounts[name].balance = Math.round((snacks.accounts[name].balance + rounded) * 100) / 100;
-    // The ledger is the durable record — _reconcileBalances() rebuilds every
-    // balance from it, so a deposit that isn't written here gets erased by the
-    // next cloud merge.
-    if (!snacks.transactions) snacks.transactions = [];
-    snacks.transactions.unshift({
-        time: new Date().toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' }),
-        camper: name,
-        // Stamped so this money is joined to a person, not a name — see
-        // _reconcileBalances. Absent on anything written before that change,
-        // which is why the name remains the fallback there.
-        camperId: (snacks.accounts[name] && snacks.accounts[name].camperId) != null
-            ? snacks.accounts[name].camperId : undefined,
-        items: 'Deposit' + (note ? ' — ' + note : ''), amount: rounded,
-        type: 'credit', kind: 'deposit', method: method, note: note, date: todayStr()
+
+    rpc.client.rpc('canteen_office_credit', {
+        p_camp_id: rpc.campId, p_camper_name: name, p_amount: rounded,
+        p_method: method, p_note: note, p_date: todayStr(),
+        p_camper_id: _deskCamperId(name)
+    }).then(function (res) {
+        const d = res && res.data;
+        if ((res && res.error) || !d || !d.success) {
+            toast(_deskMessage(res, d, 'Could not add the funds'), 1);
+            return;
+        }
+        closeM('dep');
+        _deskRefresh();
+        toast('Added $' + rounded.toFixed(2) + ' to ' + name + ' (' + payMethodLabel(method) + ')');
+        document.getElementById('depAmt').value = '';
+        if (noteEl) noteEl.value = '';
+    }, function (e) {
+        toast('Could not add the funds — connection error', 1);
     });
-    saveSnacksData(snacks);
-    closeM('dep');
-    renderStats(); rAccounts(); rAnalytics(); rSettings();
-    toast('Added $' + rounded.toFixed(2) + ' to ' + name + ' (' + payMethodLabel(method) + ')');
-    document.getElementById('depAmt').value = '';
-    if (noteEl) noteEl.value = '';
 };
 
 // ==========================================================================
@@ -1474,23 +1577,36 @@ window.cashOut = function() {
         camper: name, date: todayStr(), settings: cfg,
         amount: amt, note: note
     });
+    // The client check above is UX: it disables the button and explains before a
+    // round trip. It is NOT the enforcement — canteen_office_cash_out applies the
+    // same rule (same floor, same cashDailyMax, same cashAllowNegative) under a
+    // row lock, which is the only place the balance can be held still.
     if (!check.ok) { toast(check.error, 1); cashPickCamper(); return; }
     const rounded = check.amount;
 
-    if (!snacks.accounts[name]) snacks.accounts[name] = { balance: 0, dailyLimit: cfg.defaultDailyLimit, spentToday: 0 };
-    snacks.accounts[name].balance = Math.round((snacks.accounts[name].balance - rounded) * 100) / 100;
-    if (!snacks.transactions) snacks.transactions = [];
-    // spentToday is deliberately untouched: dailyLimit caps canteen SPENDING,
-    // and cash out has its own cap (cashDailyMax).
-    snacks.transactions.unshift(window.SnacksCash.buildTransaction({
-        time: new Date().toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' }),
-        camper: name, amount: rounded, note: note, by: by, date: todayStr()
-    }));
-    saveSnacksData(snacks);
-    closeM('cash');
-    renderStats(); rAccounts(); rAnalytics(); rSettings();
-    toast('Paid out $' + rounded.toFixed(2) + ' cash to ' + name);
-    ['cashAmt', 'cashNote'].forEach(id => { const e = document.getElementById(id); if (e) e.value = ''; });
+    const rpc = _deskRpc();
+    if (!rpc) { toast('Not connected — cash out cannot be recorded offline', 1); return; }
+
+    rpc.client.rpc('canteen_office_cash_out', {
+        p_camp_id: rpc.campId, p_camper_name: name, p_amount: rounded,
+        p_note: note, p_by: by, p_date: todayStr(),
+        p_camper_id: _deskCamperId(name)
+    }).then(function (res) {
+        const d = res && res.data;
+        if ((res && res.error) || !d || !d.success) {
+            toast(_deskMessage(res, d, 'Could not pay out the cash'), 1);
+            // The refusal usually means the balance moved under us, so put the
+            // real numbers back on the modal rather than leaving a stale figure.
+            _deskRefresh(function () { try { cashPickCamper(); } catch (_) {} });
+            return;
+        }
+        closeM('cash');
+        _deskRefresh();
+        toast('Paid out $' + rounded.toFixed(2) + ' cash to ' + name);
+        ['cashAmt', 'cashNote'].forEach(id => { const e = document.getElementById(id); if (e) e.value = ''; });
+    }, function () {
+        toast('Could not pay out the cash — connection error', 1);
+    });
 };
 
 // ==========================================================================
@@ -2030,12 +2146,26 @@ window.setLimit = function() {
     // reject it as if it were blank/invalid, silently blocking the office
     // from ever setting "no limit" for a camper.
     if (!name || amt == null || isNaN(amt) || amt < 0) { toast('Enter valid info', 1); return; }
-    if (!snacks.accounts[name]) snacks.accounts[name] = { balance: 0, dailyLimit: getSettings().defaultDailyLimit, spentToday: 0 };
-    snacks.accounts[name].dailyLimit = amt;
-    saveSnacksData(snacks);
-    closeM('limit');
-    rAccounts();
-    toast(amt === 0 ? 'No daily limit set for ' + name : 'Limit set to $' + amt.toFixed(2) + ' for ' + name);
+
+    const rpc = _deskRpc();
+    if (!rpc) { toast('Not connected — a limit cannot be changed offline', 1); return; }
+
+    rpc.client.rpc('canteen_office_set_limit', {
+        p_camp_id: rpc.campId, p_camper_name: name, p_daily_limit: amt,
+        p_camper_id: _deskCamperId(name)
+    }).then(function (res) {
+        const d = res && res.data;
+        if ((res && res.error) || !d || !d.success) {
+            toast(_deskMessage(res, d, 'Could not change the limit'), 1);
+            return;
+        }
+        closeM('limit');
+        _deskRefresh();
+        toast(amt === 0 ? 'No daily limit set for ' + name
+                        : 'Limit set to $' + amt.toFixed(2) + ' for ' + name);
+    }, function () {
+        toast('Could not change the limit — connection error', 1);
+    });
 };
 
 // _editingItemId is null while the modal is in "Add Item" mode, or the id

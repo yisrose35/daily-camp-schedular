@@ -289,6 +289,14 @@ function getAccount(name) {
     if (!snacks.accounts) snacks.accounts = {};
     if (!snacks.accounts[name]) snacks.accounts[name] = { balance: 0, dailyLimit: 10, spentToday: 0 };
     const a = snacks.accounts[name];
+    // ★ Same reason as campistry_snacks.js's getAccount: 218 omits dailyLimit,
+    //   creditLimit and balanceFloor when the column is NULL, and the row writers
+    //   create accounts with every one of them NULL. renderCampers reads
+    //   a.balance.toFixed(2) and a.dailyLimit - a.spentToday, so a row-backed
+    //   account with no limit set would take the camper list down with it.
+    if (a.balance == null) a.balance = 0;
+    if (a.dailyLimit == null) a.dailyLimit = 10;
+    if (a.spentToday == null) a.spentToday = 0;
     // Daily spend resets at midnight
     if (a.lastSpendDate !== todayStr()) { a.spentToday = 0; a.lastSpendDate = todayStr(); }
     return a;

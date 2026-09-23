@@ -161,6 +161,14 @@ const FUNCTIONS_ON_NAMES = [
     '_parent_invite_for',
     '_parent_owns_camper',
     'add_pickup_alert_league_recipients',
+    // 240's three desk writers. They take p_camper_id FIRST and fall back to the
+    // name, the same shape as submit_canteen_deposit beside them — the office's own
+    // buttons pass whichever they have, and a camper added before 216 has only a
+    // name. They are on the list because they accept one, not because they lose
+    // anything by it.
+    'canteen_office_cash_out',
+    'canteen_office_credit',
+    'canteen_office_set_limit',
     'create_cardknox_checkout_intent',
     'credit_canteen_balance_from_processor',
     'credit_canteen_balance_from_stripe',
@@ -269,6 +277,9 @@ const WHY_THE_NAME_IS_SAFE = {
 
     // Accept an id alongside the name.
     add_pickup_alert_league_recipients: 'takes an id',
+    canteen_office_cash_out: 'takes an id',
+    canteen_office_credit: 'takes an id',
+    canteen_office_set_limit: 'takes an id',
     create_cardknox_checkout_intent: 'takes an id',
     mark_pickup_alert_league_checked: 'takes an id',
     promote_confirmed_face: 'takes an id',

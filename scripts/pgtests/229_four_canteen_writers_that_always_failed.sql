@@ -441,13 +441,19 @@ BEGIN
 
     -- the family card. 214's version reads families through
     -- camp_families_object, so the family goes into the 211 rows.
-    INSERT INTO camp_families (camp_id, family_key, payload)
-    VALUES (camp, 'fam1', jsonb_build_object(
+    -- camper_ids AS WELL AS the payload. Every real writer sets both — camp_family_save
+    -- does, and 211's projection does — and since migration 234 the family lookup
+    -- matches on the COLUMN. A payload-only insert leaves the column at its '[]'
+    -- default, which no code path can produce and which reads here as a lookup
+    -- regression rather than as a stale fixture.
+    INSERT INTO camp_families (camp_id, family_key, camper_ids, payload)
+    VALUES (camp, 'fam1', jsonb_build_array('Ayala Weiss'), jsonb_build_object(
                 'camperIds', jsonb_build_array('Ayala Weiss'),
                 'byopCustomerRef', 'cus_229',
                 'byopProcessor', 'cardknox',
                 'paymentMethodLabel', 'Visa 4242'))
-    ON CONFLICT (camp_id, family_key) DO UPDATE SET payload = EXCLUDED.payload;
+    ON CONFLICT (camp_id, family_key) DO UPDATE
+        SET camper_ids = EXCLUDED.camper_ids, payload = EXCLUDED.payload;
 
     r := public.use_family_card_for_canteen_auto_reload(camp, 'Ayala Weiss', NULL);
     IF (r ->> 'success') IS DISTINCT FROM 'true' THEN

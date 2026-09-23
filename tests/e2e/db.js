@@ -115,6 +115,9 @@ const MIGRATIONS = [
     '236_attributing_the_names_no_rule_can_resolve',
     '237_a_departed_campers_number_is_not_reused',
     '238_the_ledger_moves_with_the_person',
+    '239_a_stranger_cannot_settle_another_camps_order',
+    '240_the_canteen_desk_writes_to_the_cloud',
+    '241_a_family_card_the_charger_can_find',
 ];
 
 // The one thing the stubs deliberately get wrong for our purposes: they define
@@ -123,7 +126,11 @@ const MIGRATIONS = [
 // definition — it reads the claims the bridge sets per request.
 const REAL_AUTH_UID = `
 CREATE OR REPLACE FUNCTION auth.uid() RETURNS uuid LANGUAGE sql STABLE AS $fn$
-    SELECT NULLIF(current_setting('request.jwt.claims', true)::json ->> 'sub', '')::uuid
+    -- The inner NULLIF is not decoration. A RESET custom GUC reads back as the
+    -- EMPTY STRING, and ''::json raises "input string ended unexpectedly" — so an
+    -- unauthenticated caller would get an exception where every gate expects NULL.
+    -- Supabase's own definition wraps current_setting the same way.
+    SELECT NULLIF(NULLIF(current_setting('request.jwt.claims', true), '')::json ->> 'sub', '')::uuid
 $fn$;`;
 
 function findPgBin() {

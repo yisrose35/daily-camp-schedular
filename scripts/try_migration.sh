@@ -43,9 +43,21 @@ if [ -z "$PGBIN" ]; then
 fi
 
 KEEP=0
-if [ "${1:-}" = "--keep" ]; then KEEP=1; shift; fi
+RUN_TESTS=1
+while true; do
+    case "${1:-}" in
+        --keep)     KEEP=1; shift ;;
+        # Apply only, skip scripts/pgtests/. The pgtests from 200-231 COMMIT their
+        # fixtures and several share the 1111…/2222… style uuids, so running a long
+        # chain in one server fails on a duplicate key in a test that is correct on
+        # its own. Use this when the question is whether the chain APPLIES — which
+        # is what tests/e2e/db.js asks.
+        --no-tests) RUN_TESTS=0; shift ;;
+        *)          break ;;
+    esac
+done
 if [ "$#" -eq 0 ]; then
-    echo "usage: $0 [--keep] <migration.sql> [...]" >&2
+    echo "usage: $0 [--keep] [--no-tests] <migration.sql> [...]" >&2
     exit 2
 fi
 
@@ -124,7 +136,7 @@ for f in "$@"; do
     # migration that just applied. Applying is the low bar — this is where the
     # trigger, the backfill and the verifier are actually exercised with data.
     bt="scripts/pgtests/$(basename "$f")"
-    if [ -f "$bt" ]; then
+    if [ "$RUN_TESTS" = "1" ] && [ -f "$bt" ]; then
         bout="$($PGBIN/psql -h "$SOCK" -p "$PORT" -U postgres -v ON_ERROR_STOP=1 -f "$bt" 2>&1)"
         if [ $? -ne 0 ]; then
             echo "  BEHAVIOUR FAILED   $bt"
