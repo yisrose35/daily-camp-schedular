@@ -490,6 +490,17 @@ UNION ALL
      -- is in (261 may be applied first): as text, through query_to_xml.
      CASE WHEN to_regprocedure('public.split_renames(boolean)') IS NULL
                OR to_regprocedure('public.verify_invite_numbers()') IS NULL THEN 'apply 260'
+          -- The current 260, not an earlier copy of it (TED-039): the reload
+          -- after an erase, staff-only numbers, and "never remove a child a
+          -- page has not seen".
+          WHEN to_regprocedure('public.get_camp_cache_epoch(uuid)') IS NULL
+               OR to_regclass('public.camp_cache_epoch') IS NULL
+               OR to_regprocedure('public._merge_campers_254(uuid,bigint,bigint)') IS NULL
+               OR pg_get_functiondef('public.merge_campers(uuid,bigint,bigint)'::regprocedure) !~ '_bump_cache_epoch'
+               OR pg_get_functiondef('public.erase_camper(uuid,bigint,boolean)'::regprocedure) !~ '_bump_cache_epoch'
+               OR pg_get_functiondef('public.get_camper_numbers(uuid)'::regprocedure) !~ 'camp_staff_member'
+               OR pg_get_functiondef('public.number_camp_campers()'::regprocedure) !~ '_rosterSeen'
+            THEN 'run 260 again — this database has an earlier copy of 260'
           ELSE (xpath('/row/r/text()', query_to_xml($v260$SELECT CASE
           WHEN public.verify_invite_numbers() -> 'slots_on_the_wrong_child' <> '[]'::jsonb
             THEN 'INVITE NUMBERS ON THE WRONG CHILD: ' || (public.verify_invite_numbers() ->> 'slots_on_the_wrong_child')

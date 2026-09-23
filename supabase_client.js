@@ -71,6 +71,9 @@
     function _egReload(camp, server) {
         if (_EG.reloading) return;
         _EG.reloading = true;
+        // Everything this page still holds is from before the erase: nothing of
+        // it may be sent — not a queued save, not the save-on-leave (TED-037).
+        window.__campistryStalePage = true;
         try { localStorage.setItem(_egStoreKey(camp), String(server)); } catch (_) {}
         try { console.warn('[SupabaseClient] a camper was erased or merged on another computer — clearing this page\'s copy and reloading'); } catch (_) {}
         try {
@@ -114,11 +117,50 @@
         const camp = getCampId();
         const n = Number(epoch);
         if (!camp || !isFinite(n)) return;
-        _EG.tab = Math.max(_EG.tab || 0, n);
+        // Only this page's own erase moved the version on (exactly one step).
+        // If another computer erased or merged in between, this page is out of
+        // date like any other, and reloads (TED-041).
+        if (_EG.tab !== null && n !== _EG.tab + 1) { _egReload(camp, n); return; }
+        _EG.tab = n;
         _EG.checkedAt = Date.now();
         try { localStorage.setItem(_egStoreKey(camp), String(_EG.tab)); } catch (_) {}
     }
     window.__campistryEraseGuardAdvance = _eraseGuardAdvance;
+    // Below the client: every request this page sends to the camp's server.
+    // While the page is reloading after an erase, no write leaves it — this is
+    // what stops the save-on-leave (a plain keepalive fetch) and any other raw
+    // write (TED-037). And a call to the server's own functions (refunds,
+    // auto-reloads — they carry a camper's number) first checks the version
+    // afresh (TED-040).
+    function _installEraseGuardFetch(client, rawRpc) {
+        if (typeof window.fetch !== 'function' || window.fetch.__eraseGuardFetch) return;
+        const rawFetch = window.fetch.bind(window);
+        const base = String(CONFIG.SUPABASE_URL || '');
+        const wrapped = function (input, init) {
+            let url = '', method = 'GET';
+            try {
+                url = typeof input === 'string' ? input : (input && input.url) || '';
+                method = String((init && init.method) || (input && input.method) || 'GET').toUpperCase();
+            } catch (_) {}
+            const ours = base && url.indexOf(base) === 0;
+            const write = method !== 'GET' && method !== 'HEAD' && method !== 'OPTIONS';
+            const isRpcRead = /\/rest\/v1\/rpc\/get_camp_cache_epoch/.test(url);
+            if (ours && write && !isRpcRead && (_EG.reloading || window.__campistryStalePage)) {
+                return Promise.resolve(new Response(JSON.stringify({ message: 'This page is reloading: a camper was erased on another computer.' }),
+                    { status: 409, headers: { 'Content-Type': 'application/json' } }));
+            }
+            if (ours && write && /\/functions\/v1\//.test(url)) {
+                return _eraseGuardCheck(rawRpc, client, 0).then(function (ok) {
+                    return ok ? rawFetch(input, init)
+                              : new Response(JSON.stringify({ error: 'page_reloading' }), { status: 409, headers: { 'Content-Type': 'application/json' } });
+                });
+            }
+            return rawFetch(input, init);
+        };
+        wrapped.__eraseGuardFetch = true;
+        Object.keys(window.fetch).forEach(function (k) { try { wrapped[k] = window.fetch[k]; } catch (_) {} });
+        window.fetch = wrapped;
+    }
     function _withEraseGuard(client) {
         if (!client || client.__eraseGuarded || typeof client.from !== 'function' || typeof client.rpc !== 'function') return client;
         client.__eraseGuarded = true;
@@ -151,6 +193,36 @@
             const b = rawRpc.apply(client, arguments);
             return fn === 'get_camp_cache_epoch' ? b : guardThen(b, 15000);
         };
+        // The server's own functions (refunds, auto-reloads — they act on a
+        // camper by number): a fresh check first, every time (TED-040).
+        try {
+            const guardFns = function (fns) {
+                if (!fns || typeof fns.invoke !== 'function' || fns.__eraseGuarded) return fns;
+                const rawInvoke = fns.invoke.bind(fns);
+                fns.invoke = function () {
+                    const args = arguments;
+                    return _eraseGuardCheck(rawRpc, client, 0).then(function (ok) {
+                        return ok ? rawInvoke.apply(null, args)
+                                  : { data: null, error: { message: 'This page is reloading: a camper was erased on another computer.' } };
+                    });
+                };
+                fns.__eraseGuarded = true;
+                return fns;
+            };
+            // supabase-js builds a NEW functions client on every access (a
+            // getter), so the guard goes on the getter, not on one instance.
+            let proto = client, desc = null;
+            while (proto && !desc) { desc = Object.getOwnPropertyDescriptor(proto, 'functions'); proto = Object.getPrototypeOf(proto); }
+            if (desc && typeof desc.get === 'function') {
+                Object.defineProperty(client, 'functions', {
+                    configurable: true,
+                    get: function () { return guardFns(desc.get.call(client)); }
+                });
+            } else {
+                guardFns(client.functions);
+            }
+        } catch (_) {}
+        try { _installEraseGuardFetch(client, rawRpc); } catch (_) {}
         // A page that wakes (a laptop opened, a tab brought back) checks at once.
         try {
             const wake = function () {

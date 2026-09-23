@@ -345,6 +345,23 @@ function seed(db) {
         pageB.on('pageerror', e => pageErrors.push(String(e).split('\n')[0]));
         await pageB.route('**/*', r =>
             r.request().url().startsWith('http://localhost:' + PORT) ? r.continue() : r.abort());
+        // Every write that actually LEAVES page B, at the lowest layer (the
+        // guard wraps this, so only what gets past it is seen) — including the
+        // save-on-leave keepalive request (TED-037).
+        const leaked = [];
+        pageB.on('console', m => { const t = m.text(); if (t.indexOf('LEAKED-WRITE ') === 0) leaked.push(t); });
+        await pageB.addInitScript(() => {
+            const raw = window.fetch;
+            window.fetch = function (input, init) {
+                try {
+                    const url = typeof input === 'string' ? input : (input && input.url) || '';
+                    const method = String((init && init.method) || 'GET').toUpperCase();
+                    const body = init && typeof init.body === 'string' ? init.body : '';
+                    if (method !== 'GET' && /camp_state_kv|\/functions\/v1\//.test(url)) console.log('LEAKED-WRITE ' + method + ' ' + url + ' ' + body.slice(0, 20000));
+                } catch (_) {}
+                return raw.apply(this, arguments);
+            };
+        });
         await pageB.addInitScript(shim + `
             installCampistrySmokeShim({
                 endpoint: 'http://localhost:${PORT}/__pg',
@@ -372,6 +389,9 @@ function seed(db) {
         await new Promise(r => setTimeout(r, 3000));
         const leahB = (kvRead(db, 'app1').camperRoster || {})['Leah Fox'] || {};
         check('its out-of-date save never reached the database', leahB.school !== 'Stale Tab Edit', JSON.stringify(leahB.school));
+        const stale = leaked.filter(t => t.indexOf('Stale Tab Edit') >= 0);
+        check('nothing of its out-of-date copy left the page, not even the save-on-leave', stale.length === 0,
+            stale.map(t => t.slice(0, 160)).join(' | '));
         // The page that did the erase is current: it saves as usual, no reload.
         let reloadsA = 0;
         page.on('load', () => { reloadsA++; });
@@ -381,7 +401,34 @@ function seed(db) {
         await waitFor('the erasing page\'s edit to reach the database', () =>
             ((kvRead(db, 'app1').camperRoster || {})['Leah Fox'] || {}).school === 'After The Erase', 30000);
         check('the page that erased keeps working and saving (no reload)', reloadsA === 0, 'reloads: ' + reloadsA);
+
+        // (TED-040) A page opened before an erase asks a server function to act
+        // on a camper by number (a canteen auto-reload): it reloads, and the
+        // request never leaves it.
+        const leakedB2 = leaked.length;
+        await pageB.waitForFunction(() => window.CampistryDB && window.CampistryDB.getCampId && window.CampistryDB.getCampId()
+            && window.supabase && window.supabase.functions, null, { timeout: 30000 });
+        await new Promise(r => setTimeout(r, 9000));
+        const reloadsB2 = reloadsB;
+        db.json(`SELECT public._bump_cache_epoch('${CAMP}') AS e`);
+        await pageB.evaluate((camp) => { window.supabase.functions.invoke('canteen-auto-reload',
+            { body: { campId: camp, camperName: 'Leah Fox', camperId: 20 } }).catch(() => {}); }, CAMP);
+        await waitFor('the page to reload instead of calling the server function', async () => reloadsB > reloadsB2, 30000);
+        const fnLeak = leaked.slice(leakedB2).filter(t => /functions\/v1\/canteen-auto-reload/.test(t));
+        check('a server function call from an out-of-date page never leaves it (it reloads)', fnLeak.length === 0,
+            fnLeak.map(t => t.slice(0, 120)).join(' | '));
         await pageB.close();
+
+        // (TED-041) The erasing page's own erase comes back two steps on,
+        // because another computer erased in between: it reloads too.
+        const e2 = db.json(`SELECT public._bump_cache_epoch('${CAMP}') AS e`)[0].e;       // the other computer
+        const e3 = db.json(`SELECT public._bump_cache_epoch('${CAMP}') AS e`)[0].e;       // this page's own erase
+        const reloadsA2 = reloadsA;
+        await page.evaluate((e) => window.__campistryEraseGuardAdvance(e), e3);
+        await waitFor('the erasing page to reload', async () => reloadsA > reloadsA2, 30000);
+        check('an erasing page that missed another computer\'s erase reloads (#' + e2 + ' in between)', true);
+        await page.waitForFunction(() => window.CampistryDB && window.CampistryDB.getCampId && window.CampistryDB.getCampId()
+            && window.CampistryMe, null, { timeout: 30000 });
 
         const v = db.json(`SELECT public.verify_roster_keys() AS v`)[0].v;
         check('no key is shown by the wrong child', JSON.stringify(v.keys_shown_by_the_wrong_child) === '[]', JSON.stringify(v));
