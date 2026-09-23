@@ -59,10 +59,24 @@ CREATE TABLE IF NOT EXISTS public.camp_state_kv (
     camp_id uuid NOT NULL, key text NOT NULL, value jsonb,
     updated_at timestamptz NOT NULL DEFAULT now(),
     PRIMARY KEY (camp_id, key));
+-- 145's columns, so a chain that includes 145 (tests/e2e/db.js does) gets the
+-- table it expects: CREATE TABLE IF NOT EXISTS there skips over this one, and a
+-- stub missing `fingerprint` failed 145's unique index. Its constraints are left
+-- off and fingerprint defaults, so a test inserting a bare deposit still can.
 CREATE TABLE IF NOT EXISTS public.bank_deposits (
-    id uuid PRIMARY KEY DEFAULT gen_random_uuid(), camp_id uuid, family_key text,
-    amount_cents bigint, is_reversal boolean DEFAULT false, deposit_date date,
-    status text, kind text, payer_name text, memo_code text, trace_id text);
+    id uuid PRIMARY KEY DEFAULT gen_random_uuid(), camp_id uuid,
+    fingerprint text NOT NULL DEFAULT gen_random_uuid()::text,
+    amount_cents bigint, is_reversal boolean NOT NULL DEFAULT false, deposit_date date,
+    payer_name text NOT NULL DEFAULT '', payer_handle text NOT NULL DEFAULT '',
+    memo text NOT NULL DEFAULT '', memo_code text NOT NULL DEFAULT '',
+    kind text NOT NULL DEFAULT 'ach', trace_id text NOT NULL DEFAULT '',
+    bank text NOT NULL DEFAULT '', source text NOT NULL DEFAULT 'email',
+    raw_subject text NOT NULL DEFAULT '', status text NOT NULL DEFAULT 'unmatched',
+    family_key text, match_confidence integer NOT NULL DEFAULT 0,
+    match_reasons jsonb NOT NULL DEFAULT '[]'::jsonb, candidates jsonb NOT NULL DEFAULT '[]'::jsonb,
+    guardrail text NOT NULL DEFAULT '', matched_by text NOT NULL DEFAULT 'auto',
+    resolved_by uuid, resolved_at timestamptz,
+    created_at timestamptz NOT NULL DEFAULT now(), updated_at timestamptz NOT NULL DEFAULT now());
 CREATE TABLE IF NOT EXISTS public.notifications (
     id uuid PRIMARY KEY DEFAULT gen_random_uuid(), camp_id uuid, source text,
     source_id text, title text, body text, link_target text,

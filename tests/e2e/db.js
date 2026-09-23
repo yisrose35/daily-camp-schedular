@@ -70,6 +70,15 @@ const MIGRATIONS = [
     '101_pos_pin_manual_unlock',
     '104_pos_roster_read',
     '142_canteen_pos_inventory_only_save',
+    // The Me page's billing view reads the deposit inbox once families exist —
+    // found by tests/scale_600.e2e.js, whose camp has 300 of them (the smoke
+    // camp has one family and never opens that view).
+    '145_bank_deposits',
+    '145a_deposit_settings_random_fix',
+    '146_deposit_unparsed',
+    '147_bank_templates',
+    '148_template_self_learning',
+    '149_camp_number',
     '167_settle_shop_orders',
     // 171 before 178, and it is not optional: 178 puts record_chargeback on the
     // posted ledger, whose family_ledger_balance() 171 defines. 178 without 171

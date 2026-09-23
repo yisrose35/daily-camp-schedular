@@ -32,11 +32,14 @@
 -- shape the page already reads (the payload canteen_post stored) plus camperId —
 -- so the page joins sales to a PERSON.
 --
---   staff   the last 60 days, newest first, at most 20,000 rows. That is the
---           window the page's own compaction kept the document to (30 days by
---           default), with room; a 500-camper camp's summer is well over 50,000
---           sales, and shipping all of it on every page load is how a page gets
---           slow in week six. `ledgerWindow` says what was left out.
+--   staff   the last 7 days, newest first, at most 10,000 rows. The page
+--           uses today (the log, the day's numbers) and the last seven days
+--           (the weekly chart); anything older is one click away through
+--           get_canteen_history, which the page's "Show archived history"
+--           button already calls. Measured on a 600-camper camp with 36,000
+--           ledger rows (tests/scale_600.e2e.js): a 60-day window shipped
+--           3.4 MB and took 289 ms on every page load AND after every desk
+--           deposit. `ledgerWindow` says where the window starts.
 --   parent  every row for their own children, matched by ID, with the
 --           unattributed-by-name fallback the accounts use.
 --
@@ -104,8 +107,8 @@ DECLARE
     v_idtxt  text[];
     v_accts  jsonb := '{}'::jsonb;
     v_txs    jsonb;
-    v_from   text := ((now() AT TIME ZONE 'utc')::date - 60)::text;
-    v_cap    int  := 20000;
+    v_from   text := ((now() AT TIME ZONE 'utc')::date - 7)::text;
+    v_cap    int  := 10000;
     v_total  bigint;
 BEGIN
     -- Staff: the whole camp. Unchanged from 218 except where the ledger comes from.

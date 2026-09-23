@@ -90,9 +90,31 @@ test('the balance shown after a desk write is the server’s, re-read from the r
             name + ' does not re-read the rows after writing. Whatever it leaves on '
             + 'screen is this tab’s guess at a number three writers can change.');
     }
-    const refresh = code(SNACKS).slice(code(SNACKS).indexOf('function _deskRefresh'));
-    assert.match(refresh.slice(0, 500), /_overlayCanteenRows/,
+    const src = code(SNACKS);
+    const fnBody = (name) => {
+        const at = src.indexOf('function ' + name + '(');
+        if (at < 0) return '';
+        let depth = 0;
+        for (let j = src.indexOf('{', at); j < src.length; j++) {
+            if (src[j] === '{') depth++;
+            else if (src[j] === '}' && --depth === 0) return src.slice(at, j + 1);
+        }
+        return '';
+    };
+    // The whole camp, when nothing narrower is known (a refused cash-out, an
+    // offline import)…
+    assert.match(fnBody('_deskRefresh'), /_overlayCanteenRows/,
         '_deskRefresh no longer reads the row-backed accounts and ledger');
+    // …and one camper after a write that named one: the balance from the
+    // server's reply, the ledger rows from the server. Re-reading the whole camp
+    // after every deposit is 1.7 MB a click at 600 campers.
+    const one = fnBody('_deskRefreshOne');
+    assert.match(one, /result\.balance/, 'the per-camper refresh does not take the server\'s balance');
+    assert.match(one, /rpc\(\s*'get_canteen_history'/, 'the per-camper refresh does not re-read the camper\'s rows');
+    for (const name of Object.keys(DESK_WRITERS)) {
+        assert.match(writerBody(name), /_deskRefresh\(\s*null\s*,\s*name\s*,\s*d\s*\)/,
+            name + ' re-reads the whole camp after a successful write instead of just this camper');
+    }
 });
 
 test('there is no local fallback, because a local-only deposit is the defect', () => {

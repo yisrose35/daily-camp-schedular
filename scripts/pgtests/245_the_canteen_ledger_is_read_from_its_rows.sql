@@ -3,7 +3,7 @@
 --
 --   1. staff see today's sales (written by the real writers), not the frozen
 --      document's list — and old document rows do NOT come back
---   2. the staff window: 60 days, newest first, and it says when it truncated
+--   2. the staff window: 7 days, newest first, and it says when it truncated
 --   3. every account carries its camperId
 --   4. a parent sees their own child's rows, by ID — including after a rename,
 --      and NOT another child who has since taken the old name
@@ -74,13 +74,13 @@ END $$;
 -- ─── 2. the window ──────────────────────────────────────────────────────────
 INSERT INTO canteen_transactions (camp_id, sig, camper, camper_id, tx_type, amount, tx_date, payload)
 VALUES ('a4500000-0000-0000-0000-000000000001', 'old-1', 'Mine', '4501', 'debit', 1,
-        ((now() AT TIME ZONE 'utc')::date - 90)::text, '{}');
+        ((now() AT TIME ZONE 'utc')::date - 30)::text, '{}');
 DO $$
 DECLARE v jsonb; first_date text;
 BEGIN
     v := public.get_canteen_accounts('a4500000-0000-0000-0000-000000000001');
     IF EXISTS (SELECT 1 FROM jsonb_array_elements(v->'transactions') t WHERE t->>'sig' = 'old-1') THEN
-        RAISE EXCEPTION 'a 90-day-old row came back to the staff page';
+        RAISE EXCEPTION 'a 30-day-old row came back to the staff page';
     END IF;
     first_date := v->'transactions'->0->>'date';
     IF first_date IS DISTINCT FROM (now() AT TIME ZONE 'utc')::date::text THEN

@@ -352,7 +352,8 @@ function _loadCanteenRows(then) {
                 // every balance as zero is worse than showing none, because it
                 // looks like an answer.
                 if (!d || d.success !== true) { then(null); return; }
-                then({ accounts: d.accounts || {}, transactions: d.transactions || [] });
+                then({ accounts: d.accounts || {}, transactions: d.transactions || [],
+                       ledgerWindow: d.ledgerWindow || null });
             }, function () { then(null); });
     } catch (_) { then(null); }
 }
@@ -364,6 +365,13 @@ function _overlayCanteenRows(target, done) {
         if (rows && target && typeof target === 'object') {
             target.accounts = rows.accounts;
             target.transactions = rows.transactions;
+            // The server sends a recent WINDOW of the ledger (migration 245),
+            // not the season. Marking where it starts is what makes the
+            // history pane offer "Show archived history", which fetches the
+            // older rows for one camper through get_canteen_history.
+            if (rows.ledgerWindow && rows.ledgerWindow.from) {
+                target.ledgerCompactedThrough = _dateDaysBefore(rows.ledgerWindow.from, 1);
+            }
         }
         if (typeof done === 'function') done(!!rows);
     });
@@ -729,7 +737,13 @@ function _renderHistoryFilter() {
 function _renderHistoryBody() {
     const body = document.getElementById('histBody');
     if (!body) return;
-    let txs = (snacks.transactions || []).filter(t => t && t.camper === _histCamper);
+    // By the PERSON as well as the spelling: after a rename the older rows
+    // carry the old name, and a same-named child's rows carry the same one.
+    const _hAcct = snacks.accounts && snacks.accounts[_histCamper];
+    const _hId = _hAcct && _hAcct.camperId != null ? String(_hAcct.camperId) : null;
+    let txs = (snacks.transactions || []).filter(t => t && (_hId != null && t.camperId != null
+        ? String(t.camperId) === _hId
+        : t.camper === _histCamper));
     if (_histFilter === 'in') txs = txs.filter(t => t.type === 'credit');
     else if (_histFilter === 'out') txs = txs.filter(t => t.type !== 'credit');
     txs = txs.slice().sort((x, y) => _histSortKey(y) - _histSortKey(x)); // newest first
@@ -1550,11 +1564,50 @@ function _deskMessage(res, d, fallback) {
 }
 
 /** Re-read the rows and repaint, so what is on screen is what the server has. */
-function _deskRefresh(done) {
+function _deskRefresh(done, who, result) {
+    // ONE camper, when the write named one: their new numbers are in the
+    // server's own reply, and their ledger rows come from get_canteen_history.
+    // Re-reading the whole camp after every deposit was 1.7 MB a click on a
+    // 600-camper camp (tests/scale_600.e2e.js) — on opening day, when the desk
+    // takes hundreds of deposits in a row, that is the page grinding to a halt.
+    if (who) { _deskRefreshOne(who, result || {}, done); return; }
     _overlayCanteenRows(snacks, function () {
         try { renderStats(); rAccounts(); rAnalytics(); rSettings(); } catch (_) {}
         if (typeof done === 'function') done();
     });
+}
+
+function _deskRefreshOne(who, result, done) {
+    const rerender = function () {
+        try { renderStats(); rAccounts(); rAnalytics(); rSettings(); } catch (_) {}
+        if (typeof done === 'function') done();
+    };
+    if (!snacks.accounts) snacks.accounts = {};
+    const a = snacks.accounts[who] || (snacks.accounts[who] = { balance: 0, dailyLimit: 0, spentToday: 0 });
+    // What the server just said, not what this tab computed.
+    if (result.balance != null) a.balance = Number(result.balance);
+    if (result.dailyLimit != null) a.dailyLimit = Number(result.dailyLimit);
+    if (result.camperId != null && a.camperId == null) a.camperId = result.camperId;
+
+    const rpc = _deskRpc();
+    if (!rpc) { rerender(); return; }
+    rpc.client.rpc('get_canteen_history', { p_camp_id: rpc.campId, p_camper: who, p_before: null, p_limit: 200 })
+        .then(function (res) {
+            const d = res && res.data;
+            if (!d || d.success !== true) { _deskRefresh(done); return; }   // fall back to the full read
+            const from = snacks.ledgerCompactedThrough || '';
+            const id = a.camperId != null ? String(a.camperId) : null;
+            const mine = function (t) {
+                return t && (id != null && t.camperId != null ? String(t.camperId) === id : t.camper === who);
+            };
+            // These rows ARE this camper's (the server matched them by id), so
+            // they carry the id the page joins on.
+            const fresh = (d.transactions || [])
+                .filter(function (t) { return t && (!from || String(t.date || '') > from); })
+                .map(function (t) { return id != null ? Object.assign({}, t, { camperId: t.camperId != null ? t.camperId : id }) : t; });
+            snacks.transactions = fresh.concat((snacks.transactions || []).filter(function (t) { return !mine(t); }));
+            rerender();
+        }, function () { _deskRefresh(done); });
 }
 
 window.addDep = function() {
@@ -1586,7 +1639,7 @@ window.addDep = function() {
             return;
         }
         closeM('dep');
-        _deskRefresh();
+        _deskRefresh(null, name, d);
         toast('Added $' + rounded.toFixed(2) + ' to ' + name + ' (' + payMethodLabel(method) + ')');
         document.getElementById('depAmt').value = '';
         if (noteEl) noteEl.value = '';
@@ -1687,7 +1740,7 @@ window.cashOut = function() {
             return;
         }
         closeM('cash');
-        _deskRefresh();
+        _deskRefresh(null, name, d);
         toast('Paid out $' + rounded.toFixed(2) + ' cash to ' + name);
         ['cashAmt', 'cashNote'].forEach(id => { const e = document.getElementById(id); if (e) e.value = ''; });
     }, function () {
@@ -2246,7 +2299,7 @@ window.setLimit = function() {
             return;
         }
         closeM('limit');
-        _deskRefresh();
+        _deskRefresh(null, name, d);
         toast(amt === 0 ? 'No daily limit set for ' + name
                         : 'Limit set to $' + amt.toFixed(2) + ' for ' + name);
     }, function () {

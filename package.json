@@ -7,7 +7,8 @@
     "test": "node --test tests/*.test.js",
     "test:e2e": "node tests/bunk_builder_ui.e2e.js && node tests/setup_checklist_links.e2e.js",
     "test:smoke": "node tests/money_path.e2e.js",
-    "test:pg": "bash scripts/run_pgtests.sh"
+    "test:pg": "bash scripts/run_pgtests.sh",
+    "test:scale": "node tests/scale_600.e2e.js"
   },
   "devDependencies": {
     "playwright": "^1.63.0"
