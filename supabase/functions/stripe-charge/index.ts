@@ -30,7 +30,14 @@
 // A camp that hasn't connected (stripe_account_id IS NULL) is unaffected —
 // this stays the exact same platform-account charge as before.
 //
-// Request:  { customerId, paymentMethodId, amount, currency, description, metadata, campId? }
+// WHOSE CARD (TED-058). The customer must be one of the caller's own camp's
+// families, and a given payment method must be that customer's; otherwise the
+// charge is REFUSED. (It used to go ahead with no destination, charging a
+// stranger's card into the platform's account.) An idempotencyKey from the
+// click is sent to Stripe as its Idempotency-Key, so a retry cannot charge
+// twice.
+//
+// Request:  { customerId, paymentMethodId, amount, currency, description, metadata, idempotencyKey?, campId? }
 //           header: Authorization: Bearer <caller's Supabase access token>
 //           (campId in the body is kept for metadata/logging only — it is
 //           NEVER used to pick a Stripe Connect destination)
@@ -134,13 +141,15 @@ async function lookupCamp(campId: string | undefined, customerId: string | undef
   };
 }
 
-async function stripePost(endpoint: string, body: Record<string, string>) {
+async function stripePost(endpoint: string, body: Record<string, string>, idempotencyKey?: string) {
+  const headers: Record<string, string> = {
+    "Authorization": `Bearer ${STRIPE_SECRET}`,
+    "Content-Type": "application/x-www-form-urlencoded",
+  };
+  if (idempotencyKey) headers["Idempotency-Key"] = idempotencyKey;
   const resp = await fetch(`${STRIPE_API}${endpoint}`, {
     method: "POST",
-    headers: {
-      "Authorization": `Bearer ${STRIPE_SECRET}`,
-      "Content-Type": "application/x-www-form-urlencoded",
-    },
+    headers,
     body: new URLSearchParams(body).toString(),
   });
   return resp.json();
@@ -174,13 +183,32 @@ serve(async (req) => {
       });
     }
 
-    const { customerId, paymentMethodId, amount, currency, description, metadata } = await req.json();
+    const { customerId, paymentMethodId, amount, currency, description, metadata, idempotencyKey } = await req.json();
 
-    if (!customerId || !amount) {
-      return new Response(JSON.stringify({ error: "customerId and amount required" }), {
+    if (!customerId || !amount || !(Number(amount) > 0)) {
+      return new Response(JSON.stringify({ error: "customerId and a positive amount required" }), {
         status: 400,
         headers: { ...corsHeaders, "Content-Type": "application/json" },
       });
+    }
+
+    // Only a family of the caller's own camp.
+    if (!(await campOwnsCustomer(authedCampId, customerId))) {
+      return new Response(JSON.stringify({ error: "That card is not on file for a family at your camp." }), {
+        status: 403,
+        headers: { ...corsHeaders, "Content-Type": "application/json" },
+      });
+    }
+    // ...and a given payment method must be that family's own.
+    if (paymentMethodId) {
+      const pm = await stripeGet(`/payment_methods/${encodeURIComponent(String(paymentMethodId))}`);
+      const pmCustomer = typeof pm?.customer === "string" ? pm.customer : pm?.customer?.id;
+      if (!pm || pm.error || pmCustomer !== customerId) {
+        return new Response(JSON.stringify({ error: "That payment method does not belong to this family." }), {
+          status: 403,
+          headers: { ...corsHeaders, "Content-Type": "application/json" },
+        });
+      }
     }
 
     // If no paymentMethodId provided, get the customer's default payment method
@@ -216,6 +244,8 @@ serve(async (req) => {
         params[`metadata[${k}]`] = String(v);
       });
     }
+    // The camp is the server's, never the request's.
+    params["metadata[campId]"] = authedCampId;
 
     const camp = await lookupCamp(authedCampId, customerId);
     const destinationAccountId = camp.destination;
@@ -237,7 +267,9 @@ serve(async (req) => {
       params["on_behalf_of"] = destinationAccountId;
     }
 
-    const paymentIntent = await stripePost("/payment_intents", params);
+    const claimKey = typeof idempotencyKey === "string" && idempotencyKey.trim() ? idempotencyKey.trim() : "";
+    const paymentIntent = await stripePost("/payment_intents", params,
+      claimKey ? `charge:${authedCampId}:${claimKey}` : undefined);
 
     if (paymentIntent.error) {
       // If card requires authentication, return the client secret

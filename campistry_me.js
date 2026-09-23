@@ -18291,7 +18291,10 @@ function issueCreditForFamily(famKey){
                 try{
                     if(isStripe){
                         var stripeReason=(reasonSel==='requested_by_customer'||reasonSel==='duplicate'||reasonSel==='fraudulent')?reasonSel:'requested_by_customer';
-                        var res=await callEdgeFunction('stripe-refund',{paymentIntentId:p.stripePaymentIntentId,amount:chunk,reason:stripeReason,metadata:{campId:getCampId(),family:p.family||''}});
+                        // Signed in (owner/admin only, TED-052), with this click's key so a retry
+                        // replays instead of refunding twice.
+                        var res=await callEdgeFunctionAuthed('stripe-refund',{paymentIntentId:p.stripePaymentIntentId,amount:chunk,reason:stripeReason,metadata:{family:p.family||''},idempotencyKey:_refundKey+':'+ci});
+                        if(res&&res.replayed)console.log('[Me] refund chunk replayed:',ci);
                         refId=res.refundId;
                     } else {
                         var byopRes=await callEdgeFunctionAuthed('payments-refund',{externalTransactionId:p.byopTransactionId,amount:chunk,idempotencyKey:_refundKey+':'+ci});
@@ -18764,9 +18767,11 @@ async function requestCardSetup(famKey){
 }
 
 // Charge a family's stored card
-async function chargeStoredCard(famKey,amount,description){
+// Answers {ok:true} only when the money really moved, so batchCharge can count
+// real failures (TED-059). `quiet` leaves the per-family toasts to the batch.
+async function chargeStoredCard(famKey,amount,description,quiet){
     var f=families[famKey];
-    if(!f||(!f.stripeCustomerId&&!f.byopCustomerRef)){toast('No payment method on file yet','error');return}
+    if(!f||(!f.stripeCustomerId&&!f.byopCustomerRef)){if(!quiet)toast('No payment method on file yet','error');return {ok:false,error:'No payment method on file'}}
 
     if(!amount){
         // Ask for amount
@@ -18789,14 +18794,19 @@ async function chargeStoredCard(famKey,amount,description){
     }
 
     var isBYOP=!f.stripeCustomerId&&!!f.byopCustomerRef;
+    // One key per charge attempt: a network retry of this same request is
+    // answered by the processor's first result instead of charging twice.
+    var _chargeKey='chg_'+famKey+'_'+Date.now()+'_'+Math.random().toString(36).slice(2,8);
 
-    toast('Charging '+fm(amount)+' to '+f.name+'...');
+    if(!quiet)toast('Charging '+fm(amount)+' to '+f.name+'...');
     try{
         var result=isBYOP
             ? await callEdgeFunctionAuthed('payments-charge',{
                 customerRef:f.byopCustomerRef,
                 amount:amount,
-                description:description||'Campistry payment'
+                description:description||'Campistry payment',
+                familyKey:famKey,
+                idempotencyKey:_chargeKey
             })
             : await callEdgeFunctionAuthed('stripe-charge',{
                 customerId:f.stripeCustomerId,
@@ -18804,12 +18814,13 @@ async function chargeStoredCard(famKey,amount,description){
                 amount:amount,
                 currency:'usd',
                 description:description||'Campistry payment',
-                metadata:{campId:getCampId(),familyName:f.name,familyKey:famKey}
+                metadata:{familyName:f.name,familyKey:famKey},
+                idempotencyKey:_chargeKey
             });
 
         if(!isBYOP&&result.status==='requires_action'){
-            toast('Card requires authentication — parent must approve','error');
-            return;
+            if(!quiet)toast('Card requires authentication — parent must approve','error');
+            return {ok:false,error:'Card requires the parent to approve it'};
         }
 
         // payments-charge only ever resolves (without throwing) on a real
@@ -18842,13 +18853,16 @@ async function chargeStoredCard(famKey,amount,description){
             f.totalPaid=(f.totalPaid||0)+amount;
             f.balance=Math.max(0,(f.balance||0)-amount);
             save();if(curPage==='familydetail')renderFamilyDetailPage();else renderBilling();
-            toast('Charged '+fm(amount)+' to '+f.name+' — payment succeeded!');
+            if(!quiet)toast('Charged '+fm(amount)+' to '+f.name+' — payment succeeded!');
+            return {ok:true};
         }else{
-            toast('Payment status: '+result.status,'error');
+            if(!quiet)toast('Payment status: '+result.status,'error');
+            return {ok:false,error:'Payment status: '+result.status};
         }
     }catch(err){
         console.error('[Me] Charge error:',err);
-        toast('Charge failed: '+err.message,'error');
+        if(!quiet)toast('Charge failed: '+err.message,'error');
+        return {ok:false,error:err.message};
     }
 }
 
@@ -18874,19 +18888,21 @@ async function batchCharge(){
     showModal('Batch Charge — '+eligible.length+' Families',h,async function(){
         closeModal('dynModal');
         toast('Processing batch charges...');
-        var success=0,failed=0;
+        var success=0,failed=0,failedNames=[];
         for(var[fk,l]of eligible){
-            try{
-                await chargeStoredCard(fk,l.balance,'Batch payment — '+families[fk].name);
-                success++;
-            }catch(e){
-                console.error('[Me] Batch charge failed for',fk,e);
+            var r;
+            try{ r=await chargeStoredCard(fk,l.balance,'Batch payment — '+families[fk].name,true); }
+            catch(e){ r={ok:false,error:e&&e.message}; }
+            if(r&&r.ok) success++;
+            else{
                 failed++;
+                failedNames.push((families[fk]&&families[fk].name||fk)+(r&&r.error?' ('+r.error+')':''));
+                console.error('[Me] Batch charge failed for',fk,r&&r.error);
             }
             // Small delay between charges to avoid rate limits
             await new Promise(function(r){setTimeout(r,500)});
         }
-        toast('Batch complete: '+success+' charged, '+failed+' failed');
+        toast('Batch complete: '+success+' charged, '+failed+' failed'+(failedNames.length?' — '+failedNames.join('; '):''),failed?'error':undefined);
         renderBilling();
     });
 }
