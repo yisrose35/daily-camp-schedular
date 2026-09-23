@@ -1,5 +1,5 @@
 -- ============================================================================
--- Confirm migrations 222-236 are in and doing their job.
+-- Confirm migrations 222-237 are in and doing their job.
 --
 -- Paste the whole thing into the Supabase SQL Editor. It is READ ONLY — one
 -- SELECT, nothing is created, changed or deleted, and the two purge functions
@@ -225,7 +225,23 @@
            -- the transposition it exists for, asked of the function itself
            AND public._name_letters('Sara Schepansky') = public._name_letters('Sara Schepasnky')
            AND public._name_letters('Sara Rosenfeld') <> public._name_letters('Chana Rosenfeld')
-          THEN 'ok' ELSE 'MISSING — re-apply 236' END)
+          THEN 'ok' ELSE 'MISSING — re-apply 236' END),
+
+    ('237  a departed camper''s number is not reused',
+     CASE WHEN to_regprocedure('public._move_person_references(uuid,bigint,bigint)') IS NOT NULL
+           AND to_regprocedure('public.camper_returns_as(uuid,text,bigint,boolean)') IS NOT NULL
+           AND to_regprocedure('public.verify_person_references()') IS NOT NULL
+           -- The index must be PARTIAL, or a departed camper still blocks a new
+           -- arrival and the roster save aborts.
+           AND EXISTS (SELECT 1 FROM pg_index i JOIN pg_class c ON c.oid = i.indexrelid
+                        WHERE c.relname = 'uq_camp_people_source'
+                          AND pg_get_expr(i.indpred, i.indrelid) ~ 'deleted_at IS NULL')
+           -- and the lookup excludes the departed
+           AND EXISTS (SELECT 1 FROM pg_proc p JOIN pg_namespace n ON n.oid = p.pronamespace
+                        WHERE n.nspname = 'public' AND p.proname = '_project_people'
+                          AND p.prosrc ~ 'source_key = r\.k[^;]*deleted_at IS NULL'
+                          AND p.prosrc ~ '_move_person_references')
+          THEN 'ok' ELSE 'A REUSED NAME STILL STEALS AN IDENTITY — re-apply 237' END)
     ) AS t(item, result)
 
 UNION ALL
@@ -250,6 +266,9 @@ UNION ALL
     -- unresolved_accounts_with_a_plausible_match is the decision list; the rest
     -- of rows_the_roster_cannot_resolve is campers who left.
     ('camper attribution',  public.verify_camper_attribution()::text),
+    -- rows_pointing_at_nobody must be 0. spellings_reused_after_a_departure is
+    -- a fact about the camp, and before 237 each one was a single shared row.
+    ('person references',   public.verify_person_references()::text),
     -- Empty is the answer you want for both of these. Anything in the second is
     -- a function PostgREST cannot resolve, which fails every call from an edge
     -- function.
