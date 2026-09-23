@@ -14,7 +14,7 @@ const vm = require('node:vm');
 const inv = require('../scripts/camper_name_inventory.js');
 
 // Counts on 2026-09-23. Lower these as places move to numbers. Never raise them.
-const BASELINE = { records: 97, enrollments: 44, families: 73, bunks: 53, roster: 190, edge: 130, database: 4 };
+const BASELINE = { records: 79, enrollments: 33, families: 71, bunks: 53, roster: 189, edge: 130, database: 4 };
 
 test('the inventory document matches the code', () => {
     const want = inv.render(inv.count());

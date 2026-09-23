@@ -4880,7 +4880,7 @@
             const c = camp.roster[name]; if (!c) return;
             if (!(c.parent1Name || c.parent1Email)) return;
             seen.add(name);
-            out.push({ camperName: name, parentName: c.parent1Name || '', parentEmail: c.parent1Email || '' });
+            out.push({ camperName: name, camperId: c.camperId != null ? c.camperId : null, parentName: c.parent1Name || '', parentEmail: c.parent1Email || '' });
         }));
         return out;
     }

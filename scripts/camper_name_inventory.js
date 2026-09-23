@@ -23,14 +23,16 @@ const path = require('path');
 const REPO = path.join(__dirname, '..');
 const OUT = path.join(REPO, 'docs', 'CAMPER_NAME_INVENTORY.md');
 
-// Vendored libraries and generated bundles are not ours to move.
-const SKIP = /^(supabase-js@2\.js|jsqr@1\.4\.0\.js|.*\.min\.js)$/;
+// Vendored libraries and generated bundles are not ours to move; the module
+// that ADDS numbers to everything reads camperName by design.
+const SKIP = /^(supabase-js@2\.js|jsqr@1\.4\.0\.js|.*\.min\.js|campistry_camper_id_rpc\.js)$/;
 
 // Each kind of name-keyed use, in the order they should be moved.
 const KINDS = [
     { id: 'records', title: 'Records saved with a camper name and no number',
       why: 'A record (health log, message, order…) that carries only a name is matched to a camper later by that name. It should carry camperId from the moment it is written.',
-      test: line => /\bcamperName\s*:/.test(line) && !/camperId/.test(line) },
+      // The number may sit on a neighbouring line of the same record.
+      test: (line, near) => /\bcamperName\s*:/.test(line) && !/camperId/.test(near || line) },
     { id: 'enrollments', title: 'Enrollments tied to a camper by name',
       why: 'An enrollment finds its camper by comparing camperName. Billing and the family ledger hang off this.',
       test: line => /\bcamperName\s*[!=]==|[!=]==\s*[\w.$\]\[]*\bcamperName\b/.test(line) },
@@ -103,11 +105,12 @@ function count() {
     DB_NAME_KEYS.forEach(d => { if (d.present(allSql)) { byKind.database.total++; byKind.database.items.push(d); } });
     for (const f of clientFiles()) {
         const lines = fs.readFileSync(path.join(REPO, f), 'utf8').split('\n');
-        for (const raw of lines) {
-            const line = raw.replace(/\/\/.*$/, '');          // not comments
+        for (let i = 0; i < lines.length; i++) {
+            const line = lines[i].replace(/\/\/.*$/, '');      // not comments
             if (/^\s*\*/.test(line)) continue;                   // nor block-comment lines
+            const near = lines.slice(Math.max(0, i - 3), i + 4).join('\n');
             for (const k of KINDS) {
-                if (k.test(line)) {
+                if (k.test(line, near)) {
                     byKind[k.id].total++;
                     byKind[k.id].files[f] = (byKind[k.id].files[f] || 0) + 1;
                 }

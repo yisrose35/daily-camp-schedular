@@ -347,6 +347,11 @@ function _reconcileCamperNumbers(){
             if(!l||localCount[l]>1||_serverHeldNumbers[l]||(holderOf[l]&&holderOf[l]!==k)){
                 fixed.push(_lbl(k)+' → #'+s);
                 roster[k].camperId=Number(s);
+                // This camper's enrollments carry the number too: move them with it.
+                Object.keys(enrollments).forEach(function(eid){
+                    var e=enrollments[eid];
+                    if(e&&e.camperName===k&&(e.camperId==null||String(e.camperId)===l))e.camperId=Number(s);
+                });
             }
         });
         var next=Number(d.next)||0;
@@ -2914,7 +2919,7 @@ function runInstallments(){
           +'<span style="display:flex;gap:7px;align-items:center">'
           +'<input type="checkbox" class="riChk" value="'+esc(r.key)+'" checked '
           +'onchange="CampistryMe._riPreview()">'
-          +'<span><strong>'+esc(r.famName)+'</strong> \u00b7 '+esc(r.camperName)
+          +'<span><strong>'+esc(r.famName)+'</strong> \u00b7 '+esc(_lbl(r.camperName))
           +'<span style="color:var(--s500)"> \u2014 '+esc(nx.label)+'</span></span></span>'
           +'<span style="font-weight:700">'+fm(nx.amount)+'</span></label>';
     });
@@ -3206,7 +3211,7 @@ function applyCreditsToOwed(){
     plans.forEach(function(pl){
         h+='<div style="padding:7px 11px;border-bottom:1px solid var(--s100);font-size:.81rem">'
           +'<div style="display:flex;justify-content:space-between;gap:10px">'
-          +'<span><strong>'+esc(pl.row.famName)+'</strong> \u00b7 '+esc(pl.row.camperName)+'</span>'
+          +'<span><strong>'+esc(pl.row.famName)+'</strong> \u00b7 '+esc(_lbl(pl.row.camperName))+'</span>'
           +'<span style="font-weight:700">'+fm(Math.round(pl.total*100)/100)+'</span></div>'
           +'<div style="color:var(--s500)">'+pl.full.map(function(a){
               return esc(a.label)+' '+fm(a.amount)}).join(' \u00b7 ')+'</div>';
@@ -4007,7 +4012,7 @@ function mergeCampers(keyA,keyB){
     a.history=(Array.isArray(a.history)?a.history:[]).concat(Array.isArray(b.history)?b.history:[]);
     a.history.push({ts:new Date().toISOString(),type:'edit',changes:[{field:'Merged from',from:_lbl(keyB),to:_lbl(keyA)}]});
     // 3. Re-point enrollments (linked by camperName) from B → A.
-    try{Object.keys(enrollments).forEach(function(eid){if(enrollments[eid]&&enrollments[eid].camperName===keyB)enrollments[eid].camperName=keyA});}catch(_){}
+    try{var _aId=_camperIdOf(keyA);Object.keys(enrollments).forEach(function(eid){if(enrollments[eid]&&enrollments[eid].camperName===keyB){enrollments[eid].camperName=keyA;if(_aId!=null)enrollments[eid].camperId=_aId;}});}catch(_){}
     // 4. Re-point family membership, bunks, payments and Go addresses.
     cascadeCamperRename(keyB,keyA);
     // 5. Dedup arrays the rename may have doubled (A was already present).
@@ -4214,7 +4219,7 @@ function _famSuggestionsBannerHtml(){
     // Add-to-existing suggestions
     addToExisting.forEach(function(s){
         h+='<div style="display:flex;align-items:center;gap:12px;padding:10px 14px;background:#fff;border-radius:var(--r);margin-bottom:6px;border:1px solid var(--s200)">';
-        h+='<div style="flex:1"><div style="font-size:.8rem"><strong>'+esc(s.camperName)+'</strong> may belong to <strong>'+esc(s.familyName)+'</strong></div></div>';
+        h+='<div style="flex:1"><div style="font-size:.8rem"><strong>'+esc(_lbl(s.camperName))+'</strong> may belong to <strong>'+esc(s.familyName)+'</strong></div></div>';
         h+='<button class="me-btn me-btn--pri me-btn--sm" onclick="CampistryMe.acceptAddToFamily(\''+je(s.familyKey)+'\',\''+je(s.camperName)+'\')">Add</button>';
         h+='</div>';
     });
@@ -5833,12 +5838,12 @@ function saveCamper(){
     }
 }
 function _autoCreateAcceptedEnrollment(camperName){
-    if(Object.values(enrollments).some(function(e){return e.camperName===camperName}))return;
+    if(Object.values(enrollments).some(function(e){return _enrIsFor(e,camperName)}))return;
     var c=roster[camperName]||{};
     var last=camperName.split(' ').slice(1).join(' ');
     var id='enr_'+Date.now()+'_'+Math.random().toString(36).substr(2,4);
     enrollments[id]={
-        camperName:camperName,camperLast:last,
+        camperName:camperName,camperId:c.camperId!=null?c.camperId:null,camperLast:last,
         parentName:c.parent1Name||'',parentEmail:c.parent1Email||'',parentPhone:c.parent1Phone||'',
         dob:c.dob||'',gender:c.gender||'',
         school:c.school||'',schoolGrade:c.schoolGrade||'',
@@ -5878,6 +5883,17 @@ function cascadeCamperRename(oldName,newName){
 // " #<id>" appended to the plain name, so stripping it needs no lookup and cannot
 // disagree with displayName. IDENTITY keeps the KEY — checkbox values, data-
 // attributes, roster/family/ledger lookups; only visible text comes through here.
+// Is this enrollment the camper with this roster key? By camper number when
+// both carry one — so a rename, or a second child with the same name, cannot
+// mix them up — and by name only for an older enrollment without a number.
+// The camper number for a roster key, or null.
+function _camperIdOf(key){var r=roster&&roster[key];return (r&&r.camperId!=null&&r.camperId!=='')?r.camperId:null}
+function _enrIsFor(e,key){
+    if(!e)return false;
+    var id=_camperIdOf(key);
+    if(e.camperId!=null&&e.camperId!==''&&id!=null)return String(e.camperId)===String(id);
+    return e.camperName===key;
+}
 function _lbl(k){var r=roster&&roster[k];return (r&&r.displayName)||String(k==null?'':k).replace(/\s#\d+$/,'')}
 function _billingCore(){return (typeof window!=='undefined'&&window.BillingCore)||null}
 
@@ -5953,7 +5969,7 @@ function _resyncSiblingDiscounts(fk){
             reason:'sibling',
             note:SD.explain(c,fm),
             by:'system',
-            source:{enrollmentId:eid,camperName:c.camperName,
+            source:{enrollmentId:eid,camperName:c.camperName,camperId:_camperIdOf(c.camperName),
                     was:c.was,now:c.now,reason:c.reason}
         });
         // The enrollment carries what it is NOW priced at, so the next diff
@@ -5979,7 +5995,7 @@ function _withdrawalQuotes(f,name,onDate){
     if(!B||!f)return out;
     Object.keys(enrollments||{}).forEach(function(eid){
         var e=enrollments[eid];
-        if(!e||e.camperName!==name)return;
+        if(!e||!_enrIsFor(e,name))return;
         if(!B.tuitionEntryFor(f,eid))return;   // nothing posted for it
         var net=B.netTuitionFor(f,eid);
         var ses=(sessions||[]).find(function(x){return x&&x.name===e.session})||{};
@@ -6022,7 +6038,7 @@ function _creditWithdrawalsFor(f,name,reason,policy){
         if(pol==null)pol='none';
         var res=B.creditWithdrawal(f,{
             enrollmentId:q.enrollmentId,camperName:name,
-            camperId:(roster[name]&&roster[name].camperId)||null,
+            camperId:_camperIdOf(name),
             policy:pol,
             note:'Camper '+(reason||'removed')+' — '+name+
                  (q.quote&&q.quote.decided?' ('+q.quote.label+')':''),
@@ -6170,7 +6186,7 @@ function _postTuitionFor(f,eid){
         disc=(Number(e.discount.amt)||0)+Math.round(gross*(Number(e.discount.pct)||0)/100);
     }
     var res=B.postTuition(f,{
-        enrollmentId:eid,camperId:e.camperId!=null?e.camperId:((roster[e.camperName]&&roster[e.camperName].camperId)||null),
+        enrollmentId:eid,camperId:e.camperId!=null?e.camperId:_camperIdOf(e.camperName),
         camperName:e.camperName||'',session:e.session||'',
         tuition:gross,discount:disc,date:e.date||undefined
     });
@@ -6209,7 +6225,7 @@ function _postLedgerCredit(f,o){
         reason:(B.REASONS.indexOf(o.reason)>=0?o.reason:'goodwill'),
         date:o.date||undefined,note:o.note||'',
         by:'office',
-        source:{creditId:String(o.id||''),camperName:o.camperName||''}
+        source:{creditId:String(o.id||''),camperName:o.camperName||'',camperId:o.camperId!=null?o.camperId:_camperIdOf(o.camperName)}
     });
     return !!(res&&res.ok);
 }
@@ -6307,7 +6323,7 @@ function cascadeCamperDelete(name){
         // nothing is lost if the delete itself is undone.
         Object.keys(enrollments).forEach(function(eid){
             var e=enrollments[eid];
-            if(e&&e.camperName===name){
+            if(e&&_enrIsFor(e,name)){
                 delete enrollments[eid];
                 _tombstoneSubmission('enrollments',eid);
             }
@@ -6358,7 +6374,7 @@ async function deleteCamper(n){
     // restore its exact prior status/statusHistory, not just re-link roster/family.
     var capturedEnrollments={};
     Object.entries(enrollments).forEach(function(pair){
-        if(pair[1]&&pair[1].camperName===n){
+        if(pair[1]&&_enrIsFor(pair[1],n)){
             try{capturedEnrollments[pair[0]]=JSON.parse(JSON.stringify(pair[1]));}catch(_){}
         }
     });
@@ -6435,7 +6451,7 @@ function unenrollCamper(n){
     var flipped=[];
     Object.keys(enrollments).forEach(function(id){
         var e=enrollments[id];
-        if(!e||e.camperName!==n)return;
+        if(!e||!_enrIsFor(e,n))return;
         if(e.status!=='accepted'&&e.status!=='enrolled')return;
         var prev=e.status;
         e.status='unenrolled';
@@ -6496,7 +6512,7 @@ function _reopenWithdrawals(fk,name){
     var f=families[fk],n=0;
     Object.keys(enrollments||{}).forEach(function(eid){
         var e=enrollments[eid];
-        if(!e||e.camperName!==name)return;
+        if(!e||!_enrIsFor(e,name))return;
         var credit=B.withdrawalCreditFor(f,eid);
         if(!credit||B.isReversed(f,credit.id))return;
         var res=B.reverse(f,credit.id,{note:'Re-enrolled — '+name,by:'office'});
@@ -6518,7 +6534,7 @@ function reenrollCamper(n){
     }
     Object.keys(enrollments).forEach(function(id){
         var e=enrollments[id];
-        if(!e||e.camperName!==n||e.status!=='unenrolled')return;
+        if(!e||!_enrIsFor(e,n)||e.status!=='unenrolled')return;
         e.status='enrolled';
         e.statusHistory=e.statusHistory||[];
         e.statusHistory.push({from:'unenrolled',to:'enrolled',date:new Date().toISOString(),by:'office'});
@@ -13076,7 +13092,7 @@ function printApplication(id){
 
     var h='<html><head><title>'+esc('Application — '+e.camperName)+'</title><style>body{font-family:Arial,sans-serif;padding:30px;font-size:13px;color:#1E293B}h1{font-size:18px;margin:0 0 4px}h2{font-size:13px;color:#D97706;text-transform:uppercase;margin:16px 0 6px;border-bottom:1px solid #E2E8F0;padding-bottom:3px}table{width:100%;border-collapse:collapse}td{padding:3px 0;vertical-align:top}td:first-child{width:120px;color:#64748B;font-weight:600}.med{color:#EF4444;font-weight:600}.badge{display:inline-block;padding:2px 8px;border-radius:4px;font-size:11px;font-weight:700}img{max-width:250px;height:70px;object-fit:contain;border:1px solid #E2E8F0;border-radius:4px}@media print{body{padding:15px}}</style></head><body>';
     if(e.camperPhoto&&isSafeImageDataUrl(e.camperPhoto))h+='<img src="'+e.camperPhoto+'" style="float:right;width:90px;height:90px;object-fit:cover;max-width:90px">';
-    h+='<h1>'+esc(e.camperName)+'</h1>';
+    h+='<h1>'+esc(_lbl(e.camperName))+'</h1>';
     h+='<div style="color:#64748B;font-size:12px;margin-bottom:12px">Application ID: '+esc(id)+' · Status: '+esc(e.status)+' · Applied: '+esc(e.appliedDate)+'</div>';
 
     h+=sec('Camper');
@@ -14021,7 +14037,7 @@ async function _autoSendParentInvite(enrollId){
 function _enrollIdsForCamper(camperName){
     return Object.keys(enrollments).filter(function(id){
         var en=enrollments[id];
-        return en&&en.camperName===camperName&&(en.status==='accepted'||en.status==='enrolled');
+        return en&&_enrIsFor(en,camperName)&&(en.status==='accepted'||en.status==='enrolled');
     });
 }
 function _syncInvitesForCamper(camperName){
@@ -15633,7 +15649,7 @@ function finExportQB(){
         var tuition=e.sessionTuition||0;if(!tuition)return;
         var camperData=roster[e.camperName]||{};
         var camperId=camperData.camperId?String(camperData.camperId).padStart(4,'0'):'0000';
-        csv+='"'+esc(e.appliedDate||'')+'","Invoice","INV-'+camperId+'","'+esc(e.camperName)+'","Tuition Income","'+tuition+'","'+esc(e.session||'')+' tuition","'+esc(e.paymentStatus||'pending')+'"\n';
+        csv+='"'+esc(e.appliedDate||'')+'","Invoice","INV-'+camperId+'","'+esc(_lbl(e.camperName))+'","Tuition Income","'+tuition+'","'+esc(e.session||'')+' tuition","'+esc(e.paymentStatus||'pending')+'"\n';
     });
     // Manual payments
     finPayments.forEach(function(p){
@@ -15686,7 +15702,7 @@ function finExportXero(){
         var tuition=e.sessionTuition||0;if(!tuition)return;
         var camperData=roster[e.camperName]||{};
         var camperId=camperData.camperId?String(camperData.camperId).padStart(4,'0'):'0000';
-        csv+='"'+esc(e.parentName||e.camperName)+'","'+esc(e.parentEmail||'')+'","INV-'+camperId+'","'+esc(e.appliedDate||'')+'","'+esc(e.appliedDate||'')+'","'+tuition+'","'+esc(e.session||'')+' tuition — '+esc(e.camperName)+'","200"\n';
+        csv+='"'+esc(e.parentName||e.camperName)+'","'+esc(e.parentEmail||'')+'","INV-'+camperId+'","'+esc(e.appliedDate||'')+'","'+esc(e.appliedDate||'')+'","'+tuition+'","'+esc(e.session||'')+' tuition — '+esc(_lbl(e.camperName))+'","200"\n';
     });
     finPayments.forEach(function(p,i){
         csv+='"'+esc(p.family)+'","","PMT-'+String(i+1).padStart(4,'0')+'","'+p.date+'","'+p.date+'","'+p.amount+'","Payment received via '+esc(p.method)+'","200"\n';
@@ -15707,8 +15723,8 @@ function finExportJournal(){
         var tuition=e.sessionTuition||0;if(!tuition)return;
         var camperData=roster[e.camperName]||{};
         var camperId=camperData.camperId?String(camperData.camperId).padStart(4,'0'):'0000';
-        csv+='"'+esc(e.appliedDate||'')+'","INV-'+camperId+'","Accounts Receivable","'+tuition+'","","Tuition: '+esc(e.camperName)+'","'+esc(e.session||'')+'"\n';
-        csv+='"'+esc(e.appliedDate||'')+'","INV-'+camperId+'","Tuition Revenue","","'+tuition+'","Tuition: '+esc(e.camperName)+'",""\n';
+        csv+='"'+esc(e.appliedDate||'')+'","INV-'+camperId+'","Accounts Receivable","'+tuition+'","","Tuition: '+esc(_lbl(e.camperName))+'","'+esc(e.session||'')+'"\n';
+        csv+='"'+esc(e.appliedDate||'')+'","INV-'+camperId+'","Tuition Revenue","","'+tuition+'","Tuition: '+esc(_lbl(e.camperName))+'",""\n';
     });
     finPayments.forEach(function(p){
         csv+='"'+p.date+'","","Cash/Bank","'+p.amount+'","","Payment: '+esc(p.family)+'","'+esc(p.method)+'"\n';
@@ -15950,11 +15966,11 @@ function buildFamilyLedgers(){
         // went into totalCharges AND the discount went into totalCredits, so
         // balance = charges - payments - credits subtracted every discount
         // TWICE — understating what the family owed by the discount amount.
-        ledgers[fk].entries.push({type:'charge',category:'Tuition',desc:esc(e.camperName)+' — '+esc(e.session||''),amount:tuition,date:e.enrolledDate||e.appliedDate||'',ref:eid});
+        ledgers[fk].entries.push({type:'charge',category:'Tuition',desc:esc(_lbl(e.camperName))+' — '+esc(e.session||''),amount:tuition,date:e.enrolledDate||e.appliedDate||'',ref:eid});
         ledgers[fk]._seen['t:'+eid]=1;
         ledgers[fk].totalCharges+=tuition;
         if(discAmt>0){
-            ledgers[fk].entries.push({type:'credit',category:'Discount',desc:(e.discount.pct?e.discount.pct+'% ':'')+'discount for '+esc(e.camperName),amount:discAmt,date:e.enrolledDate||e.appliedDate||'',ref:eid+'_disc'});
+            ledgers[fk].entries.push({type:'credit',category:'Discount',desc:(e.discount.pct?e.discount.pct+'% ':'')+'discount for '+esc(_lbl(e.camperName)),amount:discAmt,date:e.enrolledDate||e.appliedDate||'',ref:eid+'_disc'});
             ledgers[fk].totalCredits+=discAmt;
             ledgers[fk]._seen['d:'+eid]=1;
         }
@@ -15978,7 +15994,7 @@ function buildFamilyLedgers(){
             schedule.forEach(function(inst,ii){
                 // invoicedAt/dueOn ride along so aging can be derived from the
                 // ledger instead of re-deciding which family owns this enrollment.
-                ledgers[fk].entries.push({type:'installment',category:inst.label,desc:esc(e.camperName)+' — '+esc(inst.label),amount:inst.amount,date:inst.dueDate||'',status:inst.status||'pending',ref:eid+'_inst'+ii,invoicedAt:inst.invoicedAt||'',dueOn:inst.invoiceDueDate||inst.dueDate||''});
+                ledgers[fk].entries.push({type:'installment',category:inst.label,desc:esc(_lbl(e.camperName))+' — '+esc(inst.label),amount:inst.amount,date:inst.dueDate||'',status:inst.status||'pending',ref:eid+'_inst'+ii,invoicedAt:inst.invoicedAt||'',dueOn:inst.invoiceDueDate||inst.dueDate||''});
             });
         }
     });
@@ -17418,7 +17434,7 @@ function renderBilling(){
             var statusCell=bdg(st[0],st[1])
                 +(l.pendingEnrollment?' '+bdg('Pending enrollment','warn'):'')
                 +_collectionWarning(l);
-            var camperNames=(l.family.camperIds||[]).concat((l.pendingCamperIds||[]).map(function(n){return n+' (pending)'})).join(', ');
+            var camperNames=(l.family.camperIds||[]).map(_lbl).concat((l.pendingCamperIds||[]).map(function(n){return _lbl(n)+' (pending)'})).join(', ');
 
             // Autopay — shown only when a plan is actively on autopay. Read
             // straight off the canonical family record (same shape the family
@@ -17461,7 +17477,7 @@ function renderFamilyDetailPage(){
         return;
     }
     var statusBadge=l.status==='unbilled'?_flatStatus('Not Billed'):l.status==='paid'?_flatStatus('Paid','ok'):l.status==='overdue'?_flatStatus('Overdue','err'):l.status==='partial'?_flatStatus('Partial','warn'):_flatStatus('Pending','warn');
-    var camperNames=(l.family.camperIds||[]).concat((l.pendingCamperIds||[]).map(function(n){return n+' (pending)'})).join(', ');
+    var camperNames=(l.family.camperIds||[]).map(_lbl).concat((l.pendingCamperIds||[]).map(function(n){return _lbl(n)+' (pending)'})).join(', ');
     var hasCard=_famChargeable(families[l.famKey]);
     var _fam=families[l.famKey];
     var moreId='famDetailMoreMenu';
@@ -18326,7 +18342,7 @@ async function printTaxStatement(famKey,year){
         h+='<tr><td colspan="4" class="muted">No payments were applied to charges in '+year+'.</td></tr>';
     }
     rep.byCamper.forEach(function(b){
-        h+='<tr><td>'+esc(b.camperName)+(b.notes.length?'<br><span class="muted">'+esc(b.notes.join(' · '))+'</span>':'')+
+        h+='<tr><td>'+esc(_lbl(b.camperName))+(b.notes.length?'<br><span class="muted">'+esc(b.notes.join(' · '))+'</span>':'')+
            '</td><td class="right bold">'+fm(b.qualifying)+'</td><td class="right">'+fm(b.notQualifying+b.needsReview)+
            '</td><td class="right">'+fm(b.total)+'</td></tr>';
     });
@@ -20556,7 +20572,7 @@ function _reportSources(){
                 return Object.keys(families).map(function(k){
                     var f=families[k]||{}; var hh=(f.households||[])[0]||{}; var pp=(hh.parents||[])[0]||{};
                     var l=ledgers[k]||{totalPayments:0,balance:0};
-                    return {name:f.name||'',campers:(f.camperIds||[]).join('; '),camperCount:(f.camperIds||[]).length,
+                    return {name:f.name||'',campers:(f.camperIds||[]).map(_lbl).join('; '),camperCount:(f.camperIds||[]).length,
                         parent:pp.name||'',phone:pp.phone||'',email:pp.email||'',address:hh.address||'',
                         totalPaid:l.totalPayments||0,balance:l.balance||0,status:l.balance>0?'Outstanding':l.totalPayments>0?'Paid':'Pending'};
                 });
@@ -21266,7 +21282,7 @@ function exportFamilyReport(){
         var addr=(f.households||[])[0]?.address||'';
         var l=ledgers[k]||{totalPayments:0,balance:0};
         var status=l.balance>0?'Outstanding':l.totalPayments>0?'Paid':'Pending';
-        csv+=[f.name||'',(f.camperIds||[]).join('; '),pp.name||'',pp.phone||'',pp.email||'',addr,l.totalPayments||0,l.balance||0,status].map(function(v){return'"'+String(v).replace(/"/g,'""')+'"'}).join(',')+'\n';
+        csv+=[f.name||'',(f.camperIds||[]).map(_lbl).join('; '),pp.name||'',pp.phone||'',pp.email||'',addr,l.totalPayments||0,l.balance||0,status].map(function(v){return'"'+String(v).replace(/"/g,'""')+'"'}).join(',')+'\n';
     });
     dlCsv('campistry_families_'+new Date().toISOString().split('T')[0]+'.csv',csv);
 }
@@ -21445,7 +21461,7 @@ function renderCamperHistory(camperName){
     // Fold in enrollment status changes so the profile shows the full story.
     var enrollEvents=[];
     Object.keys(enrollments).forEach(function(id){
-        var e=enrollments[id]; if(!e||e.camperName!==camperName)return;
+        var e=enrollments[id]; if(!e||!_enrIsFor(e,camperName))return;
         (e.statusHistory||[]).forEach(function(sh){
             enrollEvents.push({ts:sh.date,type:'status',label:(e.session?e.session+': ':'')+(sh.from?sh.from+' → ':'')+sh.to,by:sh.by});
         });
@@ -21482,7 +21498,7 @@ function reEnrollCamper(camperName){
     showModal('Re-Enroll Camper',h,function(){
         var session=document.getElementById('reSession').value;var sesObj=sessions.find(function(s){return s.name===session});
         var id='enr_'+Date.now()+'_'+Math.random().toString(36).substr(2,4);
-        enrollments[id]={camperName:camperName,camperLast:camperName.split(' ').pop(),parentName:d.parent1Name||'',parentEmail:d.parent1Email||'',parentPhone:d.parent1Phone||'',dob:d.dob||'',gender:d.gender||'',school:d.school||'',schoolGrade:d.schoolGrade||'',street:d.street||'',city:d.city||'',state:d.state||'',zip:d.zip||'',allergies:d.allergies||'',medications:d.medications||'',session:session,sessionTuition:sesObj?sesObj.tuition:0,status:'accepted',appliedDate:new Date().toISOString().split('T')[0],formsRequired:3,formsCompleted:0,paymentStatus:'pending',notes:'Re-enrollment — returning camper',isReturning:true};
+        enrollments[id]={camperName:camperName,camperId:d.camperId!=null?d.camperId:null,camperLast:camperName.split(' ').pop(),parentName:d.parent1Name||'',parentEmail:d.parent1Email||'',parentPhone:d.parent1Phone||'',dob:d.dob||'',gender:d.gender||'',school:d.school||'',schoolGrade:d.schoolGrade||'',street:d.street||'',city:d.city||'',state:d.state||'',zip:d.zip||'',allergies:d.allergies||'',medications:d.medications||'',session:session,sessionTuition:sesObj?sesObj.tuition:0,status:'accepted',appliedDate:new Date().toISOString().split('T')[0],formsRequired:3,formsCompleted:0,paymentStatus:'pending',notes:'Re-enrollment — returning camper',isReturning:true};
         save();closeModal('dynModal');_refreshPplIfActive();toast(camperName+' re-enrolled (auto-accepted)');
         if(d.parent1Email)sendAutoNotification('enrollment_confirmation',id);
     });
@@ -21568,7 +21584,7 @@ function addScholarship(camperName){
             // The award has to reach the LEDGER or it reduces nothing the
             // family is actually charged — see _postLedgerCredit. Without this
             // the aid was awarded, shown on screen, and billed for anyway.
-            _postLedgerCredit(_f,{id:_schId,amount:amt,reason:'scholarship',note:_schReason,date:aidDate,camperName:camperName});
+            _postLedgerCredit(_f,{id:_schId,amount:amt,reason:'scholarship',note:_schReason,date:aidDate,camperName:camperName,camperId:_camperIdOf(camperName)});
         }
         save();closeModal('dynModal');viewCamper(camperName);
         // Aid awarded to a camper who is in no household has no bill to reduce.

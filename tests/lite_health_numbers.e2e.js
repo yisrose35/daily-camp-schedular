@@ -16,7 +16,8 @@
 //      the row in link_messages carries person_id 702.
 //   4. The Health page logs a medication for the second Rivka: the record
 //      carries #702.
-//   5. Neither page shows the roster's internal "#702" as part of a name.
+//   5. No page — Lite, Health, or the office's Billing screen — shows the
+//      roster's internal "#702" as part of a name.
 //
 // It SKIPS with exit 0 when Playwright or Postgres is missing, like the other
 // browser tests.
@@ -76,6 +77,9 @@ function seed(db) {
                     medications: 'Tylenol', parent1Name: 'Parent Two', parent1Email: 'two@lite.test' },
     } });
     kv('campistryHealth', { dispensingLog: [], sickVisits: [], doctorVisits: [], bedwettingLog: [], medicalForms: {} });
+    // One family with both Rivkas, for the office's Billing screen (Ted, TED-009).
+    kv('campistryMe', { families: { fam_stern: { name: 'Stern', camperIds: [FIRST, SECOND],
+        households: [{ parents: [{ name: 'Parent One', email: 'one@lite.test' }] }] } } });
 }
 
 function kvRead(db, key) {
@@ -178,6 +182,19 @@ function kvRead(db, key) {
         check('Health shows the name without the internal number', at < 0,
             at >= 0 ? 'the screen shows: "' + healthText.slice(Math.max(0, at - 60), at + 20).replace(/\s+/g, ' ') + '"' : '');
         void hDose;
+
+        // ── 5. the office's Billing screen ─────────────────────────────────────
+        step(5, 'Me → Billing lists the family\'s children without the internal number');
+        await page.goto('http://localhost:' + PORT + '/campistry_me.html', { waitUntil: 'domcontentloaded' });
+        await waitFor('the Me page to load', () => page.evaluate(() => !!window.CampistryMe), 45000);
+        await waitFor('the family to reach the Me page', () => page.evaluate(() => {
+            window.CampistryMe.nav('billing');
+            return /Stern/.test(document.body.innerText);
+        }), 45000);
+        const billText = await page.evaluate(() => document.body.innerText);
+        const bAt = billText.search(/#702/);
+        check('Billing shows both children, and no internal number', /Rivka Stern/.test(billText) && bAt < 0,
+            bAt >= 0 ? 'the screen shows: "' + billText.slice(Math.max(0, bAt - 60), bAt + 20).replace(/\s+/g, ' ') + '"' : '');
 
         check('no uncaught page errors', pageErrors.length === 0, [...new Set(pageErrors)].slice(0, 5).join(' | '));
     } catch (e) {

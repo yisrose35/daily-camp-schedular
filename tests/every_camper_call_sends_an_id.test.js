@@ -384,3 +384,20 @@ test('the parent portal and Live show names through it, and never raw keys', () 
         assert.match(src, /function displayName\(/, f + ' writes a parent-facing name without stripping the internal number');
     }
 });
+
+test('a saved camp document: every record naming a camper gets their number', () => {
+    const M = load(), c = fakeTableClient();
+    M.wrap(c, (campId, name) => ({ 'Ayala Weiss': 880, 'Dov Lerner': 881 })[name] || null);
+    c.from('camp_state_kv').upsert([{ camp_id: 'c1', key: 'campistryHealth', value: {
+        dispensingLog: [{ camperName: 'Ayala Weiss', medication: 'x' }, { camperName: 'Dov Lerner', camperId: 5 }],
+        sickVisits: [{ camperName: 'A Lead', complaint: 'y' }],
+        nested: { deep: [{ orders: [{ camperName: 'Dov Lerner' }] }] },
+    } }], { onConflict: 'camp_id,key' });
+    const v = c.writes[0].values[0].value;
+    assert.strictEqual(v.dispensingLog[0].camperId, 880);
+    assert.strictEqual(v.dispensingLog[1].camperId, 5, 'a number already there is kept');
+    assert.ok(!('camperId' in v.sickVisits[0]), 'a name that is not a camper is left alone');
+    assert.strictEqual(v.nested.deep[0].orders[0].camperId, 881, 'records deep in the document too');
+    c.from('link_messages').insert({ value: { camperName: 'Ayala Weiss' } });
+    assert.ok(!('camperId' in c.writes[1].values.value), 'only camp documents are walked');
+});

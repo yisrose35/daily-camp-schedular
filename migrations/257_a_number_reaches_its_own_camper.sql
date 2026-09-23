@@ -166,7 +166,10 @@ AS $$
        AND p.proname NOT IN ('camp_person_label', 'camp_person_name_for',
                              'canteen_account_lock', 'canteen_account_save',
                              'canteen_autoreload_accounts', 'canteen_refund_view')
-       AND p.proname NOT LIKE 'verify\_%'
+       -- The database's self-checks (verify_*) only report. verify_my_camper
+       -- is not one of them: it answers a parent "is this my child?", and
+       -- must decide by the number like everything else (Ted, TED-008).
+       AND (p.proname NOT LIKE 'verify\_%' OR p.proname = 'verify_my_camper')
 $$;
 
 DO $$

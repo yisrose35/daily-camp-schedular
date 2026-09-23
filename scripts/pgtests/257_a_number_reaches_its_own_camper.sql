@@ -268,3 +268,40 @@ BEGIN
 END $$;
 RESET "request.jwt.claims";
 ROLLBACK;
+
+-- ════════════════════════════════════════════════════════════════════════════
+-- Ted's TED-008: "is this my child?" by number. Avi Katz #10 has left; the new
+-- Avi Katz #11 is this parent's child. Asked about #10, the answer is no.
+-- ════════════════════════════════════════════════════════════════════════════
+BEGIN;
+INSERT INTO auth.users (id, email) VALUES ('a5700000-0000-0000-0000-0000000000b5', 'parent5@257.test');
+INSERT INTO camps (id, name) VALUES ('a5700000-0000-0000-0000-000000000005', '257 camp five');
+INSERT INTO camp_state_kv (camp_id, key, value) VALUES ('a5700000-0000-0000-0000-000000000005', 'app1',
+    '{"camperRoster":{"Avi Katz":{"name":"Avi Katz","camperId":10}}}');
+UPDATE camp_state_kv SET value = '{"camperRoster":{}}' WHERE camp_id = 'a5700000-0000-0000-0000-000000000005' AND key = 'app1';
+UPDATE camp_state_kv SET value = '{"camperRoster":{"Avi Katz":{"name":"Avi Katz","camperId":11}}}'
+ WHERE camp_id = 'a5700000-0000-0000-0000-000000000005' AND key = 'app1';
+INSERT INTO link_parent_invites (camp_id, user_id, parent_email, camper_names, person_ids, status) VALUES
+    ('a5700000-0000-0000-0000-000000000005', 'a5700000-0000-0000-0000-0000000000b5', 'parent5@257.test', '["Avi Katz"]', '[11]', 'active');
+SET "request.jwt.claims" = '{"sub":"a5700000-0000-0000-0000-0000000000b5"}';
+DO $$
+DECLARE c text := 'a5700000-0000-0000-0000-000000000005';
+BEGIN
+    IF public.verify_my_camper(c, 'Avi Katz', 10) THEN
+        RAISE EXCEPTION 'the new Avi''s parent is told they own the departed Avi #10';
+    END IF;
+    IF NOT public.verify_my_camper(c, 'Avi Katz', 11) THEN
+        RAISE EXCEPTION 'the parent is not told they own their own child #11';
+    END IF;
+    IF NOT public.verify_my_camper(c, 'Avi Katz') THEN
+        RAISE EXCEPTION 'by name alone the enrolled child is the parent''s';
+    END IF;
+END $$;
+RESET "request.jwt.claims";
+DO $$
+BEGIN
+    IF public.verify_number_round_trip() -> 'functions_that_do_not_pin' <> '[]'::jsonb THEN
+        RAISE EXCEPTION 'unpinned: %', public.verify_number_round_trip() -> 'functions_that_do_not_pin';
+    END IF;
+END $$;
+ROLLBACK;

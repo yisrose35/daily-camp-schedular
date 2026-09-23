@@ -17,11 +17,11 @@ const end = SRC.indexOf('function _eraseStoredFiles');
 const BLOCK = SRC.slice(start, end);
 const NORMALIZE = SRC.slice(SRC.indexOf('function normalizePersonId'), SRC.indexOf('/** Roster key of the camper holding this id'));
 
-function load({ roster, next = 1, reply }) {
+function load({ roster, next = 1, reply, enrollments = {} }) {
     const store = {};
     const calls = [];
     const ctx = {
-        roster, nextPersonId: next, _saveLockUntil: 0, curPage: 'campers',
+        roster, enrollments, nextPersonId: next, _saveLockUntil: 0, curPage: 'campers',
         saved: 0, toasts: [],
         localStorage: { getItem: k => (k in store ? store[k] : null), setItem: (k, v) => { store[k] = String(v); } },
         setTimeout: () => 0, clearTimeout: () => {},
@@ -121,4 +121,29 @@ test('the Me page wires it: delete, Undo, rescind, merge, save and load', () => 
     assert.match(SRC, /_queueCamperErase\(_gone,_lbl\(keyB\),'merge',_keep\)/, 'merging does not move the duplicate\'s history');
     assert.match(SRC, /_scheduleNumberReconcile\(7000\)/, 'save does not pick up the server\'s numbers');
     assert.match(SRC, /_scheduleNumberReconcile\(3000\);\s*setTimeout\(_runCamperErases,5000\)/, 'load does not finish queued erases');
+});
+
+test('when the server corrects a camper\'s number, their enrollments move with it', async () => {
+    const roster = { Avi: { camperId: 10 }, Bina: { camperId: 10 } };
+    const enrollments = { e1: { camperName: 'Bina', camperId: 10 }, e2: { camperName: 'Avi', camperId: 10 }, e3: { camperName: 'Bina' } };
+    const { ctx } = load({ roster, enrollments, reply: () => ({ success: true, next: 20, campers: { Avi: 10, Bina: 12 }, departed: {} }) });
+    ctx._reconcileCamperNumbers();
+    await tick(); await tick();
+    assert.strictEqual(enrollments.e1.camperId, 12, 'Bina\'s enrollment kept her old number');
+    assert.strictEqual(enrollments.e3.camperId, 12, 'an enrollment with no number gets hers');
+    assert.strictEqual(enrollments.e2.camperId, 10, 'Avi\'s enrollment must not move');
+});
+
+test('an enrollment belongs to a camper by number; by name only when it has none', () => {
+    const start = SRC.indexOf('// The camper number for a roster key, or null.');
+    const end = SRC.indexOf('function _lbl(k)');
+    const ctx = { roster: { 'Rivka Stern': { camperId: 701 }, 'Rivka Stern #702': { camperId: 702 }, 'Old': {} }, String };
+    vm.runInNewContext(SRC.slice(start, end), ctx);
+    const is = ctx._enrIsFor;
+    assert.strictEqual(is({ camperName: 'Rivka Stern', camperId: 702 }, 'Rivka Stern'), false,
+        'an enrollment for #702 matched the other Rivka by name');
+    assert.strictEqual(is({ camperName: 'Rivka Stern', camperId: 702 }, 'Rivka Stern #702'), true, 'a renamed key still matches by number');
+    assert.strictEqual(is({ camperName: 'Rivka Stern' }, 'Rivka Stern'), true, 'an old enrollment with no number matches by name');
+    assert.strictEqual(is({ camperName: 'Old', camperId: 5 }, 'Old'), true, 'a camper with no number falls back to the name');
+    assert.strictEqual(is(null, 'x'), false);
 });
