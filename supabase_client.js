@@ -107,12 +107,34 @@
                 // This page's own starting point: what its cache was current
                 // as of (first check), then what it has seen since.
                 if (_EG.tab === null) _EG.tab = (stored !== null && isFinite(stored)) ? stored : server;
-                if (server > _EG.tab + _EG.own) { _egReload(camp, server); return false; }
+                if (server > _EG.tab) {
+                    // While this page's own erase or merge is still on its way,
+                    // the server has moved on for it — or for another computer
+                    // too. Nothing goes out until its answer is in; then decide
+                    // again (TED-044).
+                    if (_EG.own > 0) return _egWaitOwn().then(function () { return 'recheck'; });
+                    _egReload(camp, server); return false;
+                }
                 try { localStorage.setItem(_egStoreKey(camp), String(server)); } catch (_) {}
                 return true;
             }, function () { return true; })
-            .then(function (ok) { _EG.pending = null; return ok; });
+            .then(function (ok) {
+                _EG.pending = null;
+                return ok === 'recheck' ? _eraseGuardCheck(rpc, client, 0) : ok;
+            });
         return _EG.pending;
+    }
+    // Resolves when none of this page's erases or merges is waiting for its
+    // answer (or after 30 s, when the page reloads to be safe).
+    function _egWaitOwn() {
+        return new Promise(function (resolve) {
+            const until = Date.now() + 30000;
+            (function tick() {
+                if (_EG.own <= 0) return resolve();
+                if (Date.now() > until) { _EG.own = 0; _EG.tab = -1; return resolve(); }
+                setTimeout(tick, 50);
+            })();
+        });
     }
     // The erasing page itself is current: it moves its own starting point on.
     function _eraseGuardAdvance(epoch) {
@@ -203,20 +225,24 @@
         client.rpc = function (fn, args) {
             const b = rawRpc.apply(client, arguments);
             if (fn === 'get_camp_cache_epoch') return b;
-            const g = guardThen(b, namesCamper(args) ? 0 : 15000);
-            // This page's own erase or merge: counted while it is on its way, so
-            // a check in between does not take it for another computer's.
-            if ((fn === 'erase_camper' || fn === 'merge_campers') && g && typeof g.then === 'function') {
-                const guardedThen = g.then.bind(g);
-                g.then = function (onOk, onErr) {
-                    _EG.own++;
-                    let done = false;
-                    const fin = function () { if (!done) { done = true; _EG.own = Math.max(0, _EG.own - 1); } };
-                    return guardedThen(function (v) { try { return onOk ? onOk(v) : v; } finally { fin(); } },
+            // This page's own erase or merge: checked first like any write, then
+            // counted while it is on its way, so a check in between waits for its
+            // answer instead of taking it for another computer's (TED-042/044).
+            if ((fn === 'erase_camper' || fn === 'merge_campers') && b && typeof b.then === 'function') {
+                const rawThen = b.then.bind(b);
+                b.then = function (onOk, onErr) {
+                    return _eraseGuardCheck(rawRpc, client, 0).then(function (ok) {
+                        if (!ok) return Promise.resolve(blocked).then(onOk, onErr);
+                        _EG.own++;
+                        let done = false;
+                        const fin = function () { if (!done) { done = true; _EG.own = Math.max(0, _EG.own - 1); } };
+                        return rawThen(function (v) { try { return onOk ? onOk(v) : v; } finally { fin(); } },
                                        function (e) { fin(); if (onErr) return onErr(e); throw e; });
+                    });
                 };
+                return b;
             }
-            return g;
+            return guardThen(b, namesCamper(args) ? 0 : 15000);
         };
         // The server's own functions (refunds, auto-reloads — they act on a
         // camper by number): a fresh check first, every time (TED-040).

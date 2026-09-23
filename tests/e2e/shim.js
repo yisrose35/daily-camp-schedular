@@ -368,14 +368,29 @@ function installCampistrySmokeShim(cfg) {
     var client = {
         from: builder,
         schema: function () { return client; },
+        // Lazy, like supabase-js: nothing is sent until the result is asked
+        // for (then/catch/finally). Pages wrap the call before that moment —
+        // the erase guard checks the camp's version first — and an eager shim
+        // would send the call before any such check could run.
         rpc: function (fn, args) {
-            var res;
-            try {
-                res = send({ op: 'rpc', fn: fn, args: args || {} });
-            } catch (e) {
-                res = { data: null, error: { message: String(e.message || e) } };
+            var p = null;
+            function run() {
+                if (!p) {
+                    var res;
+                    try {
+                        res = send({ op: 'rpc', fn: fn, args: args || {} });
+                    } catch (e) {
+                        res = { data: null, error: { message: String(e.message || e) } };
+                    }
+                    p = Promise.resolve(res);
+                }
+                return p;
             }
-            return Promise.resolve(res);
+            return {
+                then: function (a, b) { return run().then(a, b); },
+                catch: function (b) { return run().catch(b); },
+                finally: function (f) { return run().finally(f); },
+            };
         },
         auth: auth,
         channel: channel,

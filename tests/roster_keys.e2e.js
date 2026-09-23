@@ -433,23 +433,39 @@ function seed(db) {
             && window.CampistryMe, null, { timeout: 30000 });
 
         step(7, 'the office erases two campers at once: its own page does not reload itself (TED-042)');
+        // The second office page shared this browser's storage, including its
+        // queue of pending erases, and ran leftovers from earlier steps — to
+        // this page, rightly, "another computer erasing". Start clean: no
+        // queued erases, and this page current with the camp.
+        await page.evaluate(() => localStorage.removeItem('campistry_camper_erase_queue'));
+        await new Promise(r => setTimeout(r, 3000));
+        await page.reload({ waitUntil: 'domcontentloaded' });
+        await page.waitForFunction(() => window.CampistryDB && window.CampistryDB.getCampId && window.CampistryDB.getCampId()
+            && window.CampistryMe, null, { timeout: 30000 });
         await new Promise(r => setTimeout(r, 9000));      // the reloaded page has checked in
         const erasable = people(db).filter(p => p.gone && (p.person_id === 10 || p.person_id === 21)).map(p => p.person_id);
         let reloadsA3 = 0;
         page.on('load', () => { reloadsA3++; });
         await page.evaluate((ids) => {
-            // The answer to the FIRST erase comes back late, so if the two were
-            // sent at once their answers would arrive out of order.
+            // Count how many erases this page has waiting for an answer at once:
+            // one after another means never more than one (TED-042). The exact
+            // timing of answers against the guard is covered by
+            // tests/erase_guard.test.js.
             const c = window.CampistryDB.getClient();
             const raw = c.rpc.bind(c);
-            let first = true;
+            window.__eraseInFlight = 0; window.__eraseMaxInFlight = 0;
             c.rpc = function (fn, args) {
                 const b = raw(fn, args);
-                if (fn === 'erase_camper' && first) {
-                    first = false;
-                    const sent = Promise.resolve().then(() => b);
-                    return { then: (ok, er) => sent.then(v => new Promise(r => setTimeout(() => r(v), 1500))).then(ok, er) };
-                }
+                if (fn !== 'erase_camper') return b;
+                // counted on the request itself: nothing is added between the
+                // answer and the page's own handling of it
+                const rawThen = b.then.bind(b);
+                b.then = function (ok, er) {
+                    window.__eraseInFlight++;
+                    window.__eraseMaxInFlight = Math.max(window.__eraseMaxInFlight, window.__eraseInFlight);
+                    return rawThen(v => { window.__eraseInFlight--; return ok ? ok(v) : v; },
+                                   e => { window.__eraseInFlight--; if (er) return er(e); throw e; });
+                };
                 return b;
             };
             localStorage.setItem('campistry_camper_erase_queue',
@@ -461,6 +477,8 @@ function seed(db) {
         await new Promise(r => setTimeout(r, 2000));
         check('both campers were erased (' + erasable.join(', ') + ')', erasable.length === 2, JSON.stringify(erasable));
         check('the page that erased them did not reload itself', reloadsA3 === 0, 'reloads: ' + reloadsA3);
+        const maxInFlight = await page.evaluate(() => window.__eraseMaxInFlight);
+        check('the erases were sent one after another, never two at once', maxInFlight === 1, 'at once: ' + maxInFlight);
 
         // (TED-043) A write whose address is a URL object is refused too while
         // a page is reloading.
