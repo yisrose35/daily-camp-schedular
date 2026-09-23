@@ -45,10 +45,30 @@ var tagFilter = 'all';       // which status the Tags tab prints
 // ── storage ─────────────────────────────────────────────────────────────────
 function readGlobal() {
     var keys = [STORE_KEY, 'CAMPISTRY_LOCAL_CACHE', 'CAMPISTRY_UNIFIED_STATE'];
+    var g = {};
     for (var i = 0; i < keys.length; i++) {
-        try { var raw = localStorage.getItem(keys[i]); if (raw) return JSON.parse(raw) || {}; } catch (e) {}
+        try { var raw = localStorage.getItem(keys[i]); if (raw) { g = JSON.parse(raw) || {}; break; } } catch (e) {}
     }
-    return {};
+    return _withFullRoster(g);
+}
+
+// ★ The roster is NOT in localStorage — setLocalSettings strips
+// app1.camperRoster from the lite snapshot to stay under the 5MB quota, and the
+// full state lives in IndexedDB behind loadGlobalSettings(). Without this the
+// luggage booking form has no camper to pick, on every load after the first
+// hydration. See campistry_snacks.js for the long version and
+// tests/full_state_readers.test.js for the check.
+function _withFullRoster(lite) {
+    try {
+        if ((lite.app1 && lite.app1.camperRoster) ||
+            typeof window.loadGlobalSettings !== 'function') return lite;
+        var full = window.loadGlobalSettings();
+        var r = full && full.app1 && full.app1.camperRoster;
+        if (!r || !Object.keys(r).length) return lite;
+        var out = Object.assign({}, lite);
+        out.app1 = Object.assign({}, lite.app1, { camperRoster: r });
+        return out;
+    } catch (e) { return lite; }
 }
 function load() {
     var g = readGlobal();

@@ -3,12 +3,18 @@
 -- so a clean run means every assertion held.
 \set ON_ERROR_STOP on
 
+-- uuids are prefixed 20800000-, like every pgtest from 211 onwards. They used to
+-- be 1111…/2222…, which 216's fixture also uses — and this file commits its
+-- fixture rather than rolling it back, so running the whole set against one
+-- server made 216 fail on a duplicate camps_pkey. A shared "canonical test camp"
+-- uuid is a test that only passes when it runs alone.
+--
 -- ── fixture: one camp, three payments, one of them a duplicate identity ────
 INSERT INTO public.camps (id, owner, name)
-VALUES ('11111111-1111-1111-1111-111111111111', NULL, 'Test Camp');
+VALUES ('20800000-0000-0000-0000-000000000001', NULL, 'Test Camp');
 
 INSERT INTO public.camp_state_kv (camp_id, key, value) VALUES
-('11111111-1111-1111-1111-111111111111', 'campistryMe', jsonb_build_object(
+('20800000-0000-0000-0000-000000000001', 'campistryMe', jsonb_build_object(
   'finance', jsonb_build_object('payments', jsonb_build_array(
      jsonb_build_object('id','p1','family','Cohen','familyKey','fk1','amount',100,'status','','date','2026-07-01','method','card'),
      jsonb_build_object('id','p2','family','Levy','familyKey','fk2','amount',250.50,'status','pending','date','2026-07-02','method','ach'),
@@ -23,15 +29,15 @@ DO $$
 DECLARE n integer; v numeric;
 BEGIN
     SELECT count(*) INTO n FROM camp_payments
-     WHERE camp_id = '11111111-1111-1111-1111-111111111111';
+     WHERE camp_id = '20800000-0000-0000-0000-000000000001';
     IF n <> 3 THEN RAISE EXCEPTION 'trigger on INSERT: expected 3 distinct identities, got %', n; END IF;
 
     SELECT amount INTO v FROM camp_payments
-     WHERE camp_id = '11111111-1111-1111-1111-111111111111' AND payment_id = 'p1';
+     WHERE camp_id = '20800000-0000-0000-0000-000000000001' AND payment_id = 'p1';
     IF v <> 120 THEN RAISE EXCEPTION 'duplicate identity: LAST must win, got amount %', v; END IF;
 
     IF NOT EXISTS (SELECT 1 FROM camp_payments
-                    WHERE camp_id = '11111111-1111-1111-1111-111111111111'
+                    WHERE camp_id = '20800000-0000-0000-0000-000000000001'
                       AND payment_id LIKE 'sig:%') THEN
         RAISE EXCEPTION 'an id-less payment did not get a signature identity';
     END IF;
@@ -42,7 +48,7 @@ END $$;
 DO $$
 DECLARE r jsonb;
 BEGIN
-    r := public.verify_camp_payments('11111111-1111-1111-1111-111111111111');
+    r := public.verify_camp_payments('20800000-0000-0000-0000-000000000001');
     IF (r ->> 'inSync') <> 'true' THEN RAISE EXCEPTION 'verify says out of sync: %', r; END IF;
     IF (r ->> 'missingFromRows') <> '0' THEN RAISE EXCEPTION 'missingFromRows: %', r; END IF;
     IF (r ->> 'staleRows') <> '0' THEN RAISE EXCEPTION 'staleRows: %', r; END IF;
@@ -61,21 +67,21 @@ DO $$
 DECLARE v_ord_before bigint; v_ord_after bigint; v_status text; n integer;
 BEGIN
     SELECT ordinal INTO v_ord_before FROM camp_payments
-     WHERE camp_id = '11111111-1111-1111-1111-111111111111' AND payment_id = 'p2';
+     WHERE camp_id = '20800000-0000-0000-0000-000000000001' AND payment_id = 'p2';
 
     UPDATE camp_state_kv
        SET value = jsonb_set(value, '{finance,payments,1,status}', '"succeeded"'::jsonb),
            updated_at = now()
-     WHERE camp_id = '11111111-1111-1111-1111-111111111111' AND key = 'campistryMe';
+     WHERE camp_id = '20800000-0000-0000-0000-000000000001' AND key = 'campistryMe';
 
     SELECT ordinal, status INTO v_ord_after, v_status FROM camp_payments
-     WHERE camp_id = '11111111-1111-1111-1111-111111111111' AND payment_id = 'p2';
+     WHERE camp_id = '20800000-0000-0000-0000-000000000001' AND payment_id = 'p2';
     IF v_status <> 'succeeded' THEN RAISE EXCEPTION 'patch not applied, status is %', v_status; END IF;
     IF v_ord_after <> v_ord_before THEN
         RAISE EXCEPTION 'ordinal moved on a status change: % -> %', v_ord_before, v_ord_after;
     END IF;
     SELECT count(*) INTO n FROM camp_payments
-     WHERE camp_id = '11111111-1111-1111-1111-111111111111';
+     WHERE camp_id = '20800000-0000-0000-0000-000000000001';
     IF n <> 3 THEN RAISE EXCEPTION 'a patch created a duplicate row: % rows', n; END IF;
     RAISE NOTICE 'ok  status transition patches in place, keeps its position, adds no row';
 END $$;
@@ -90,11 +96,11 @@ BEGIN
                    jsonb_build_object('id','p9','family','Adler','familyKey','fk9',
                                       'amount',40,'status','','date','2026-07-09','method','card'))),
            updated_at = now()
-     WHERE camp_id = '11111111-1111-1111-1111-111111111111' AND key = 'campistryMe';
+     WHERE camp_id = '20800000-0000-0000-0000-000000000001' AND key = 'campistryMe';
     SELECT count(*) INTO n FROM camp_payments
-     WHERE camp_id = '11111111-1111-1111-1111-111111111111';
+     WHERE camp_id = '20800000-0000-0000-0000-000000000001';
     IF n <> 4 THEN RAISE EXCEPTION 'appending one payment should give 4 rows, got %', n; END IF;
-    IF (public.verify_camp_payments('11111111-1111-1111-1111-111111111111') ->> 'inSync') <> 'true' THEN
+    IF (public.verify_camp_payments('20800000-0000-0000-0000-000000000001') ->> 'inSync') <> 'true' THEN
         RAISE EXCEPTION 'out of sync after an append';
     END IF;
     RAISE NOTICE 'ok  a new payment appends one row and stays in sync';
@@ -105,12 +111,12 @@ DO $$
 DECLARE before_ts timestamptz; after_ts timestamptz;
 BEGIN
     SELECT max(updated_at) INTO before_ts FROM camp_payments
-     WHERE camp_id = '11111111-1111-1111-1111-111111111111';
+     WHERE camp_id = '20800000-0000-0000-0000-000000000001';
     UPDATE camp_state_kv
        SET value = jsonb_set(value, '{campName}', '"Renamed"'::jsonb), updated_at = now()
-     WHERE camp_id = '11111111-1111-1111-1111-111111111111' AND key = 'campistryMe';
+     WHERE camp_id = '20800000-0000-0000-0000-000000000001' AND key = 'campistryMe';
     SELECT max(updated_at) INTO after_ts FROM camp_payments
-     WHERE camp_id = '11111111-1111-1111-1111-111111111111';
+     WHERE camp_id = '20800000-0000-0000-0000-000000000001';
     IF after_ts IS DISTINCT FROM before_ts THEN
         RAISE EXCEPTION 'an unrelated save touched payment rows (% -> %)', before_ts, after_ts;
     END IF;
@@ -125,11 +131,11 @@ DECLARE n integer; r jsonb;
 BEGIN
     UPDATE camp_state_kv
        SET value = jsonb_set(value, '{finance,payments}', '[]'::jsonb), updated_at = now()
-     WHERE camp_id = '11111111-1111-1111-1111-111111111111' AND key = 'campistryMe';
+     WHERE camp_id = '20800000-0000-0000-0000-000000000001' AND key = 'campistryMe';
     SELECT count(*) INTO n FROM camp_payments
-     WHERE camp_id = '11111111-1111-1111-1111-111111111111';
+     WHERE camp_id = '20800000-0000-0000-0000-000000000001';
     IF n <> 4 THEN RAISE EXCEPTION 'emptying the array deleted rows: % left of 4', n; END IF;
-    r := public.verify_camp_payments('11111111-1111-1111-1111-111111111111');
+    r := public.verify_camp_payments('20800000-0000-0000-0000-000000000001');
     -- rowPayments now EXCEEDS blobPayments. That is expected, documented, and
     -- must NOT be reported as a failure.
     IF (r ->> 'missingFromRows') <> '0' OR (r ->> 'staleRows') <> '0' THEN
@@ -179,10 +185,10 @@ DO $$
 DECLARE r jsonb;
 BEGIN
     INSERT INTO public.camps (id, owner, name)
-    VALUES ('22222222-2222-2222-2222-222222222222', NULL, 'Empty Camp');
+    VALUES ('20800000-0000-0000-0000-000000000002', NULL, 'Empty Camp');
     INSERT INTO public.camp_state_kv (camp_id, key, value)
-    VALUES ('22222222-2222-2222-2222-222222222222', 'campistryMe', '{}'::jsonb);
-    r := public.verify_camp_payments('22222222-2222-2222-2222-222222222222');
+    VALUES ('20800000-0000-0000-0000-000000000002', 'campistryMe', '{}'::jsonb);
+    r := public.verify_camp_payments('20800000-0000-0000-0000-000000000002');
     IF (r ->> 'inSync') <> 'true' THEN RAISE EXCEPTION 'an empty camp should be in sync: %', r; END IF;
     IF (r ->> 'collectedInBlob')::numeric <> 0 THEN RAISE EXCEPTION 'empty camp collected <> 0: %', r; END IF;
     RAISE NOTICE 'ok  a camp with no payments verifies clean';
@@ -202,7 +208,7 @@ BEGIN
                    '"a bare string, not an object"'::jsonb,
                    jsonb_build_object('id','good1','amount',10,'status','','family','Y')))),
            updated_at = now()
-     WHERE camp_id = '22222222-2222-2222-2222-222222222222' AND key = 'campistryMe';
+     WHERE camp_id = '20800000-0000-0000-0000-000000000002' AND key = 'campistryMe';
     IF NOT EXISTS (SELECT 1 FROM camp_payments WHERE payment_id = 'good1') THEN
         RAISE EXCEPTION 'a malformed sibling stopped a good payment being recorded';
     END IF;

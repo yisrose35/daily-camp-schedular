@@ -2406,7 +2406,22 @@ async function _loadPaymentsFromRows(){
         var d=res&&res.data;
         if(!d||d.success===false||!Array.isArray(d.payments))return;
         var before=JSON.stringify(finPayments||[]);
+        // ★ THE ROWS WE ALREADY HYDRATED WITH — and the guard that terminates
+        //   this. loadData() below calls this function again (it is one of the
+        //   loaders it fires), so re-hydrating on an ANSWER THAT DID NOT CHANGE
+        //   never stops: fetch → loadData → fetch → loadData, one RPC per hop,
+        //   for as long as the tab is open. The end-to-end harness measured ~350
+        //   get_camp_payments and ~350 get_camp_families in six seconds on an
+        //   empty camp, which is what that loop looks like when the round trip is
+        //   a local socket instead of the internet.
+        //
+        //   Comparing against finPayments (the `before` above) cannot serve: it
+        //   is what hydration PRODUCED, and hydration has not run yet. The
+        //   question that ends the loop is "did the server tell me something new",
+        //   and _paymentsFromRows is the only thing that records the last answer.
+        var rowsBefore=JSON.stringify(_paymentsFromRows);
         _paymentsFromRows=d.payments;
+        if(JSON.stringify(_paymentsFromRows)===rowsBefore)return;
         // Re-run the normal hydration so every consumer picks the rows up through
         // the one path, rather than this function reaching into each of them.
         if(typeof loadData==='function')loadData();
@@ -2455,7 +2470,12 @@ async function _loadFamiliesFromRows(){
         var d=res&&res.data;
         if(!d||d.success===false||!d.families||typeof d.families!=='object'||Array.isArray(d.families))return;
         var before=JSON.stringify(families||{});
+        // ★ Same guard, same reason as the payments loader above: loadData() fires
+        //   this function, so a re-hydrate on an unchanged answer is an unbounded
+        //   fetch loop. Compare the ANSWER, not what hydration made of it.
+        var rowsBefore=JSON.stringify(_familiesFromRows);
         _familiesFromRows=d.families;
+        if(JSON.stringify(_familiesFromRows)===rowsBefore)return;
         if(typeof loadData==='function')loadData();
         try{ _billSnapshot(); }catch(_){}
         // Before the writer phase the two homes agree, so this is normally a
