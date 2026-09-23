@@ -68,7 +68,15 @@ function files() {
 function code(sql) {
     const noComments = sql.replace(/--[^\n]*/g, m => ' '.repeat(m.length));
     // '' is an escaped quote inside a literal, so a run of them never opens one.
-    return noComments.replace(/'(?:''|[^'])*'/g, m => ' '.repeat(m.length));
+    //
+    // Replaced with a PLACEHOLDER, not with spaces. Blanking a literal to
+    // whitespace erases arguments: public._name_letters('Sara Schepansky')
+    // became public._name_letters(               ) and counted as ZERO
+    // arguments, so 236 was reported as calling a one-argument function with
+    // none. The placeholder keeps the same length — line numbers stay right —
+    // and contains no quote, comma or parenthesis, so it is exactly one
+    // argument and nothing else can be read out of it.
+    return noComments.replace(/'(?:''|[^'])*'/g, m => 'x'.repeat(m.length));
 }
 
 /**
@@ -199,10 +207,19 @@ function callSites() {
         const src = code(raw);
         // Where each function definition starts, so a call can be attributed to
         // the function that contains it.
+        //
+        // Each definition's END matters as much as its start. Without it a call
+        // in a trailing DO block is attributed to the last function defined
+        // above it, and the history rule then skips the call because THAT
+        // function is redefined later — so a real bad call in a DO block would
+        // be excused by an unrelated redefinition.
         const owners = [];
         const dre = /CREATE OR REPLACE FUNCTION\s+(?:public\.)?(\w+)\s*\(/g;
         let d;
-        while ((d = dre.exec(src)) !== null) owners.push({ name: d[1], at: d.index });
+        while ((d = dre.exec(src)) !== null) {
+            const end = src.indexOf('\n$$;', d.index);
+            owners.push({ name: d[1], at: d.index, end: end < 0 ? src.length : end + 4 });
+        }
 
         const re = /\bpublic\.(\w+)\s*\(/g;
         let m;
@@ -215,7 +232,10 @@ function callSites() {
             const args = balanced(src, m.index + m[0].length - 1);
             if (args === null) continue;
             let owner = null;
-            for (const o of owners) { if (o.at < m.index) owner = o; else break; }
+            for (const o of owners) {
+                if (o.at < m.index && m.index < o.end) owner = o;
+                else if (o.at > m.index) break;
+            }
             out.push({
                 file: f,
                 line: src.slice(0, m.index).split('\n').length,
