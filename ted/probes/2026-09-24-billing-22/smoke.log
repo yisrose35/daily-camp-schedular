@@ -1,0 +1,116 @@
+
+> daily-camp-schedular@0.0.0 test:smoke
+> node tests/money_path.e2e.js && node tests/snacks_refund_windows.e2e.js
+
+postgres up with 136 migrations applied
+
+1. the Me page resolves this camp and this role from the database
+  ok   the camp id comes back from the camps row   → 51000000-0000-0000-0000-0000000000c1
+  ok   the role is owner, verified against the DB rather than cached   → owner verified=true
+
+2. a camper is added on the Me page and saved
+  ok   the camper has a person row, with an id   → [{"person_id":1,"name":"Shaya Brickman","source_key":"Shaya Brickman","deleted_at":null}]
+  ok   the roster carries the same camper id the projection assigned   → roster=1 camp_people=1
+  ok   a family row exists for the new camper   → [{"family_key":"fam_brickman_1","name":"Brickman Family"}]
+
+3. the canteen desk takes a $40 deposit
+  ok   canteen_office_credit accepted the deposit   → {"amount":40,"camper":"Shaya Brickman","balance":40,"success":true,"camperId":1}
+  ok   the canteen account holds the deposit   → balance=40
+  ok   the canteen account is joined to the PERSON, not just the name   → account.person_id=1 camp_people=1
+  ok   the deposit is a row in the ledger, not only a balance   → [{"amount":40,"camper_id":"1","kind":"deposit","method":"cash"}]
+  ok   the ledger row carries the camper's person id   → camper_id=1
+  ok   the ledger row says how it was paid   → deposit/cash
+
+4. the register charges $2.5 through submit_canteen_purchase_once (a sale is charged once, 283)
+  ok   the register sends a key for the sale, so a repeat cannot charge twice   → args=p_sale_key,p_sold,p_camp_id,p_camper_name,p_amount,p_items,p_date,p_camper_id
+  ok   the register did not also charge the old way   → get_canteen_accounts,get_camp_cache_epoch,submit_canteen_purchase_once,record_canteen_sale_inventory
+  ok   the register went through the server, not the offline fallback   → ok
+  ok   the register sends the camper id with the charge   → args=p_sale_key,p_sold,p_camp_id,p_camper_name,p_amount,p_items,p_date,p_camper_id
+  ok   exactly one debit, for the price of the item   → [{"amount":2.5,"camper_id":"1","items":"Ices"}]
+  ok   the debit is on the same person as the deposit   → camper_id=1
+  ok   the balance is the deposit less the purchase   → balance=37.5 expected=37.5
+
+4b. the offline register is loaded with the live balance, and its sale comes back
+  ok   the export carries the LIVE balance, read from the rows   → balance=37.5
+  ok   the export carries the camper id   → camperId=1
+  ok   canteen_office_import_offline took the sale   → {"campers":{"Shaya Brickman":{"balance":35.25,"camperId":1}},"refused":[],"success":true,"imported":1,"duplicates":0}
+  ok   the same file again is recognised, not charged twice   → {"campers":{},"refused":[],"success":true,"imported":0,"duplicates":1}
+  ok   one offline sale in the ledger, on the same person   → [{"amount":2.25,"camper_id":"1"}]
+  ok   the balance is down by the offline sale, once   → balance=35.25
+
+5. a Camp Shop order is charged to the family’s camp bill
+  ok   settle_shop_order ran without a SQL error   → ok
+  ok   settle_shop_order reports success   → {"amount":18,"method":"bill","balance":null,"success":true,"camperId":1,"familyKey":"fam_brickman_1","previousAmount":0,"previousMethod":"none"}
+  ok   the family has exactly one charge   → [{"id":"shop_ord_1790266157181_2040","date":"2026-09-24","amount":18,"category":"Camp Shop","timestamp":1790266157204,"description":"Camp Shop order — Shaya Brickman","shopOrderId":"ord_1790266157181_2040"}]
+  ok   the charge is the price of the shirt   → 18
+  ok   the charge says what it was for   → {"id":"shop_ord_1790266157181_2040","date":"2026-09-24","amount":18,"category":"Camp Shop","timestamp":1790266157204,"de
+
+6. the harness answered everything the pages asked for
+  ok   no Supabase call fell through unimplemented
+  ok   no call came back with a database error
+  ok   every call that named a camper also sent the camper id   → 3 calls named a camper
+  ok   no uncaught page errors
+  ok   the Me page does not re-fetch the ledger without end   → get_camp_payments=4 get_camp_families=4
+
+114 Supabase calls went through the bridge
+
+All 34 assertions passed.
+postgres up with 136 migrations applied
+
+0. A camper with $40 in cash and $25 paid through Sola
+  ok   the Sola deposit was credited   → {"balance":65,"success":true,"rosterVerified":false}
+
+1. Snacks → Accounts → Refund All, on a Sola camp with one unanswered refund
+  ok   no page error from the click   → []
+  ok   the Refund All window opens
+  ok   it counts the Sola-paid money only: 1 camper, $25.00, through Sola   → "This will refund 1 camper, totaling approximately $25.00 through Sola — sent back to whatever each parent originally paid with.Only deposits paid through Sola are included. A balance that came from a "
+  ok   the button offers exactly that   → "Refund All ($25.00)"
+  ok   the unanswered refund is listed, by name without the number   → "A refund is waiting for an answer from the card companyIts money is held off the wallet until it is settled — it may already be with the parent.Avi Katz: $20.00, sent 10 min ago — check your processor"
+  ok   with both answers   → ["It went through","Nothing went through"]
+
+2. The Refund button on the child's row, with the same unanswered refund
+  ok   the row has a Refund button   → "openMFor('refund','refundCamper','Avi Katz')"
+  ok   no page error drawing the window   → []
+  ok   the Refund window is open
+  ok   "waiting for an answer" is shown for this child   → "A refund is waiting for an answer from the card companyIts money is held off the wallet until it is settled — it may already be with the parent.Avi Katz: $20.00, sent 10 min ago — check your processor"
+  ok   with "It went through" and "Nothing went through"   → ["It went through","Nothing went through"]
+  ok   the box offers the Sola-paid $25.00   → "Available to refund via Sola: $25.00$40.00 of this balance came from a cash/manual deposit (or a different processor) — refund that portion separately, it can't go through Sola."
+  ok   the answer goes to payments-canteen-refund for that hold   → [{"fn":"payments-canteen-refund","body":{"action":"resolveHold","holdKey":"canteen:cref_x:RN1","wentThrough":false}}]
+  ok   "It went through" sends the reference the office typed   → [{"fn":"payments-canteen-refund","body":{"action":"resolveHold","holdKey":"canteen:cref_x:RN1","wentThrough":true,"reference":"SOLA-REF-9"}}]
+  ok   no page error from either answer   → []
+
+3. Take Out Cash: $5 to the child
+  ok   one $5 cash-out row in the database   → [{"amount":5}]
+  ok   no page error from the payout   → []
+  ok   the office is told "Paid out $5.00 cash to Avi Katz"   → ["Paid out $5.00 cash to Avi Katz"]
+  ok   the amount box is cleared
+
+3b. A Sola top-up 30 days old, and a $20 refund of the new one still waiting
+  ok   the old Sola top-up was credited   → {"balance":90,"success":true,"rosterVerified":false}
+  ok   the waiting refund took its $20 off the wallet   → {"balance":70,"success":true}
+  ok   the page itself does not hold the 30-day-old top-up (the week it loads)
+  ok   no page error   → []
+  ok   TED-130: the Refund window counts the 30-day-old top-up and the wait — $35.00 to the card   → "Available to refund via Sola: $35.00$35.00 of this balance came from a cash/manual deposit (or a different processor) — refund that portion separately, it can't go through Sola."
+  ok   and the Refund button is on, for $35.00   → {"box":"Available to refund via Sola: $35.00$35.00 of this balance came from a cash/manual deposit (or a different processor) — refund that portion separately, it can't go through Sola.","disabled":false,"amt":"35.00","holds":"A refund is waiting for an answer from the card companyIts money is held off the wallet until it is settled — it may already be with the parent.Avi Katz: $20.00, sent just now — check your processor's dashboard:It went through Nothing went through"}
+  ok   the waiting $20 refund is listed   → "A refund is waiting for an answer from the card companyIts money is held off the wallet until it is settled — it may already be with the parent.Avi Katz: $20.00"
+  ok   TED-130/135: Refund All offers $35.00 — the old top-up counted, the waiting refund taken off   → {"body":"This will refund 1 camper, totaling approximately $35.00 through Sola — sent back to whatever each parent originally paid with.Only deposits paid through Sola are included. A balance that came from a cash/manual deposit (or a different processor) is skipped — refund that by hand.This cannot be undone.","btn":"Refund All ($35.00)"}
+
+4. Stripe camp, nobody with Stripe money left, one Stripe refund waiting
+  ok   no page error   → []
+  ok   it asks the Stripe function for the waiting refunds   → ["stripe-canteen-refund"]
+  ok   it says nobody has Stripe money to refund   → "No campers currently have a Stripe-paid balance to refund."
+  ok   the waiting Stripe refund is listed   → "A refund is waiting for an answer from the card companyIts money is held off the wallet until it is settled — it may already be with the parent.Avi Katz: $20.00, sent 15 min ago — looked up in Stripe "
+  ok   and there is still a button to look it up   → "Look up the waiting refunds in Stripe"
+  ok   pressing it runs Refund All, which looks the refund up in Stripe
+
+5. A $2 sale charged by mistake: Void it from the child's history (TED-175, TED-180)
+  ok   the sale went through   → {"camper":"Avi Katz","balance":68,"success":true,"spentToday":2,"needsReloadCheck":false}
+  ok   the sale in the history has a Void button
+  ok   TED-180: the Void window is the one you see (on top, the history closed)   → {"ok":true,"historyOpen":false,"text":"$2.00 · Ices · Avi Katz2026-09-24 · 04:09 PMThe $2.00 goes back on Avi Katz’s canteen balance as a void of this sale — not as a deposit, so no cash or card is recorded, and it no longer counts as a sale."}
+  ok   it says the money goes back, not as a deposit   → "$2.00 · Ices · Avi Katz2026-09-24 · 04:09 PMThe $2.00 goes back on Avi Katz’s canteen balance as a void of this sale — not as a deposit, so no cash or card is r"
+  ok   the $2 is back on the balance, once   → 68 -> 70
+  ok   the ices are back in stock (the register's own stock count is kept by record_canteen_sale_inventory, not called here)   → 11
+  ok   the history comes back with the sale marked Voided
+  ok   no page error   → []
+
+42/42 checks passed

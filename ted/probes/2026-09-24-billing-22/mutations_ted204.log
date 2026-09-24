@@ -1,0 +1,10 @@
+re-run of last pass's missed N7/N10/N13/N14 at 4889ba7
+MISSED  N7 TED-196 webhook: won/lost counted as taking again  (exit 0; node --test tests/tuition_dispute_inquiry.test.js tests/canteen_stripe_reversal.test.js tests/chargeback_and_blocks.test.js)
+SKIP  N10 TED-197 first pause does not keep the earlier mark: target found 0 times: "                     || CASE WHEN jsonb_typeof(b) = 'object' THEN json"
+CAUGHT  N13 TED-198 Cancel share window no longer says what was paid  (exit 1; node --test tests/payer_split_billed.test.js)
+      not ok 14 - TED-204 (N13): the Cancel-share window says what the fund already paid
+MISSED  N14 check script: earlier-288 row removed  (exit 0; bash scripts/run_pgtests.sh 288)
+CAUGHT  N7b same break, with the builder's new test file  (exit 1; node --test tests/dispute_pause_everywhere.test.js tests/tuition_dispute_inquiry.test.js)
+      not ok 2 - TED-204 (N7): a late "updated" or "funds_withdrawn" carrying won or lost takes nothing and pauses nothing
+CAUGHT  N10b first pause does not keep the earlier mark (today's text, in _mark_one_plan_for_dispute)  (exit 1; bash scripts/run_pgtests.sh 288)
+      FAIL   288_autopay_waits_while_a_payment_is_disputed

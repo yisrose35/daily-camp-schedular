@@ -1,0 +1,34 @@
+TAP version 13
+# office pay link (campistry_me.js:19019 body) => destination: acct_CAMP | metadata familyKey: "gold"
+# Subtest: parent portal Pay Now (campistry_link_parent.html:1723 body)
+not ok 1 - parent portal Pay Now (campistry_link_parent.html:1723 body)
+  ---
+  duration_ms: 164.77162
+  type: 'test'
+  location: '/home/user/daily-camp-schedular/ted/probes/2026-09-24-billing/paynow.test.js:12:3'
+  failureType: 'testCodeFailure'
+  error: "Cannot read properties of undefined (reading 'body')"
+  code: 'ERR_TEST_FAILURE'
+  name: 'TypeError'
+  stack: |-
+    TestContext.<anonymous> (/home/user/daily-camp-schedular/ted/probes/2026-09-24-billing/paynow.test.js:15:37)
+    Test.runInAsyncScope (node:async_hooks:214:14)
+    Test.run (node:internal/test_runner/test:1047:25)
+    Test.start (node:internal/test_runner/test:944:17)
+    startSubtestAfterBootstrap (node:internal/test_runner/harness:296:17)
+  ...
+# Subtest: office pay link (campistry_me.js:19019 body)
+ok 2 - office pay link (campistry_me.js:19019 body)
+  ---
+  duration_ms: 167.661594
+  type: 'test'
+  ...
+1..2
+# tests 2
+# suites 0
+# pass 1
+# fail 1
+# cancelled 0
+# skipped 0
+# todo 0
+# duration_ms 416.59747

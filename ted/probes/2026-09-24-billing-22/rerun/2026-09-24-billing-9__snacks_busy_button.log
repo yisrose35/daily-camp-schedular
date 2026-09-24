@@ -1,0 +1,12 @@
+after a double-click: requests sent = 1 | button disabled = true | label = Refunding…
+after retyping the amount mid-refund: button disabled = true
+a third press mid-refund: requests sent = 1
+after an error answer: button disabled = false | label = Refund | warning = "Failed to send a request to the Edge Function"
+<anonymous_script>:83
+            toast('Refunded $' + Number(data.totalRefunded).toFixed(2) + ' to ' + _lbl(name) +
+                                                                       ^
+
+ReferenceError: _lbl is not defined
+    at eval (eval at <anonymous> (/home/user/daily-camp-schedular/ted/probes/2026-09-24-billing-9/snacks_busy_button.js:42:13), <anonymous>:83:72)
+
+Node.js v22.22.2

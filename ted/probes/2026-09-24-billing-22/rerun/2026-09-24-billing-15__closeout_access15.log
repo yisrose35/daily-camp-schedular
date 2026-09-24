@@ -1,0 +1,15 @@
+Each person asks to close out Avi's $5 (default access rules, none customised):
+    owner      → took $5
+    admin      → took $5
+    manager    → took $5
+    scheduler  → took $5
+    counselor  → took $5
+    parent     → refused: not_authorized ("Only someone who can edit Billing can close out canteen money.")
+    stranger   → refused: not_authorized ("Only someone who can edit Billing can close out canteen money.")
+
+For comparison, the access resolver's level for Me → Billing: owner edit, admin edit, manager edit, scheduler edit, counselor edit
+
+A double press: the office presses Apply twice for the same $5
+    first: {"amount": 5.00, "camper": "Avi Katz", "balance": 0.00, "success": true}
+    second: {"error": "over_balance", "balance": 0.00, "message": "Only $0.00 is on the canteen account now — reopen the close-out to see the current figure.", "success": false}
+    wallet $0.00; close-out lines 6

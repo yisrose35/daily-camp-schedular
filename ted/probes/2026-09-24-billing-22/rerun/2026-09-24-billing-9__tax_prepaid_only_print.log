@@ -1,0 +1,14 @@
+
+== A. only a December deposit for next summer — 2025 statement
+   $500.00 paid in 2025 is for camp in 2026. Under IRS Publication 503 it is claimed on the 2026 return, and it is on the 2026 statement, so it is not included above.
+   Child Qualifying care paid Not qualifying Total paid
+   Nothing paid in 2025 was for camp given in 2025.
+   Total $0 $0 $0
+
+== B. this summer paid + a December deposit for next summer — 2025 statement
+   $500.00 paid in 2025 is for camp in 2026. Under IRS Publication 503 it is claimed on the 2026 return, and it is on the 2026 statement, so it is not included above.
+   Child Qualifying care paid Not qualifying Total paid
+   Avi $2,800 $0 $2,800
+   Total $2,800 $0 $2,800
+
+Expected: $0 claimable for A and $2,800 for B, the $500 described as paid toward care in 2026 (claim it on the 2026 return). Nothing should say the $500 "could not be matched" or must be "split by hand", nor that the camp "had not been billed yet" (it was billed 1 Oct 2025).

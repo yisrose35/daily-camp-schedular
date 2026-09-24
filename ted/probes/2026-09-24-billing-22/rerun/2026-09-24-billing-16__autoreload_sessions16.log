@@ -1,0 +1,49 @@
+SETUP (each case its own camp): Avi (#7) "below $5 → add $20", Bea (#8) weekly on today's weekday → add $25; both wallets $0, no Active dates; today 2026-09-24 (UTC)
+
+S1. Spring: last summer's AND next summer's sessions are listed (next starts 2026-12-23); campDates derived 2026-06-06 → 2027-02-21
+    run today (2026-09-24): camp 01 → skipped_not_in_session
+    run week 2 (2026-10-01): camp 01 → skipped_not_in_session
+    run week 3 (2026-10-08): camp 01 → skipped_not_in_session
+    run week 4 (2026-10-15): camp 01 → skipped_not_in_session
+  ok  S1 months before camp starts, nobody is charged (4 weekly runs)   → 0 charge(s): none
+
+S2. Between two sessions: 1st half ended 2026-09-22, 2nd half starts 2026-09-27
+    run: camp 02 → skipped_not_in_session
+  ok  S2 between sessions, nobody is charged   → none
+
+S3. First day of a session (camp 03: 2026-09-24 → 2026-10-04) / last day (camp 04: 2026-09-14 → 2026-09-24)
+    run first-day camp: Avi threshold $20 → charged; Bea schedule $25 → charged
+    run last-day camp: Avi threshold $20 → charged; Bea schedule $25 → charged
+  ok  S3 first and last day are camp days (Avi $20 + Bea $25 each)   → first: $20 from cus_avi, $25 from cus_bea; last: $20 from cus_avi, $25 from cus_bea
+
+S4. The day after the last session (ended 2026-09-23)
+    run: camp 05 → skipped_season_over
+  ok  S4 after the season, nobody is charged   → none
+
+S5. No sessions and no campDates at all
+    run: camp 06 → skipped_no_session_dates
+  ok  S5 a camp with no dates charges nobody   → none
+
+S6. Sessions without both dates; fallback to campDates (camp 07 in range, camp 08 in the future)
+    run in-range camp: Avi threshold $20 → charged; Bea schedule $25 → charged
+    run future camp: camp 08 → skipped_not_in_session
+  ok  S6 campDates fallback: in range charged, future not   → in range: $20 from cus_avi, $25 from cus_bea; future: none
+
+S7. In session, but the office switched Parents' auto-reload Off
+    run: camp 09 → skipped_switched_off_by_camp
+  ok  S7 the office's switch stops every charge   → none
+
+S8. ONE cron run over two camps: 10 in session, 11 starts in 60 days
+    run: Avi threshold $20 → charged; Bea schedule $25 → charged; camp 11 → skipped_not_in_session
+  ok  S8 only the in-session camp is charged   → in session: $20 from cus_avi, $25 from cus_bea; not yet: none
+
+S9. Sessions say next summer; an old campDates row still says 2026-08-25 → 2026-10-24
+    run: camp 12 → skipped_not_in_session
+  ok  S9 the sessions decide, not a stale campDates   → none
+
+S10. Time of day (UTC "today"): session 2027-07-01 → 2027-08-20, camp in New York
+    run at 21:00 New York the evening BEFORE camp (UTC 2027-07-01T01:00:00.000Z): Avi threshold $20 → charged
+    run at 21:00 New York on the LAST day of camp (UTC 2027-08-21T01:00:00.000Z): camp 13 → skipped_season_over
+  NOTE S10 evening before camp: 1 charge(s); last-day evening: 0 charge(s) — the job's "today" is the UTC date
+
+0 BAD

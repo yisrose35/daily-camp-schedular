@@ -1,0 +1,16 @@
+V0 ["283 : ok","284 : ok","285 : ok","286 : ok","287 : ok","288 : ok","289 : ok"]
+  ok  V0 rows 283-289 ok on today's chain   → 283 : ok | 284 : ok | 285 : ok | 286 : ok | 287 : ok | 288 : ok | 289 : ok
+V1 284 : apply 284 again — an earlier copy is in place: a void can put back in stock more than the sale had
+  ok  V1 last pass's 284 → apply 284 again   → 284 : apply 284 again — an earlier copy is in place: a void can put back in stock more than the sale had
+V2 288 : apply 288 BEFORE deploying stripe-webhook and charge-due-installments — autopay charges a family again for a payment their bank is disputing
+  ok  V2 288 missing → apply 288   → 288 : apply 288 BEFORE deploying stripe-webhook and charge-due-installments — autopay charges a family again for a payment their bank is disputing
+V3 288 : apply 288 again — a signed-in browser can pause or resume autopay
+  ok  V3 288 open to browsers → apply 288 again   → 288 : apply 288 again — a signed-in browser can pause or resume autopay
+  ok  V3b 288 pasted again → ok (grant taken back)   → 288 : ok
+V4 283 : ok | 289 : apply 289 again — two versions of the register's charge are in place and it cannot choose between them
+    a register that has not reloaded (no p_sold): ERROR ERROR:  function public.submit_canteen_purchase_once(p_camp_id => unknown, p_sale_key => unknown, p_camper_name => unknown, p_amount => integer, p_items => unknown, p_camper_id => integer) is not unique
+  ok  V4 an old 283 pasted after 289 → the 289 row says so   → 289 : apply 289 again — two versions of the register's charge are in place and it cannot choose between them
+V5 ["283 : ok","284 : ok","285 : ok","286 : ok","287 : ok","288 : ok","289 : ok"]
+  ok  V5 re-pasting 283/284/288/289 twice leaves everything ok   → 283 : ok | 284 : ok | 285 : ok | 286 : ok | 287 : ok | 288 : ok | 289 : ok
+
+0 BAD

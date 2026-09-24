@@ -1,0 +1,9 @@
+today's chain (new 281): ["281 : ok","282 : ok","283 : ok"]
+   failed refund re_9 → undo_card_fee_return: {"amount": 0, "undone": 1, "success": true, "discountBack": 30.00} | credits now: cdisc_pi_pi_hawk $30, cdback_undo_cdback_1 $30.00
+
+last pass's 281 pasted over it: ["281 : apply 281 again — an earlier copy is in place: when a refund fails, the discount for not paying by card that came off with it is not given back","282 : ok","283 : ok"]
+   failed refund re_9 → undo_card_fee_return: {"amount": 0, "undone": 0, "success": true} | credits now: cdisc_pi_pi_hawk $30
+  ok  the check script tells the owner to paste 281 again   → 281 : apply 281 again — an earlier copy is in place: when a refund fails, the discount for not paying by card that came off with it is not given back
+  BAD the discount comes back when the refund fails   → {"amount": 0, "undone": 0, "success": true} | credits now: cdisc_pi_pi_hawk $30
+
+1 BAD
