@@ -47,7 +47,7 @@
     <style>
         .lk-sync-badge { display:inline-flex; align-items:center; gap:5px; padding:4px 10px; border-radius:999px; font-size:.72rem; font-weight:600; color:var(--green-600); background:var(--green-50); }
         .lk-sync-badge::before { content:''; width:7px; height:7px; border-radius:50%; background:var(--green-500); flex-shrink:0; }
-        .lk-main { margin-left: 240px; padding: 24px 28px 80px; min-height: calc(100vh - 58px); }
+        .lk-main { margin-left: 0; padding: 24px 28px 80px; min-height: calc(100vh - 58px); }
 
         /* Compose modal — centered, responsive (scales with the screen) */
         .compose-backdrop { display:none; position:fixed; inset:0; background:rgba(15,23,42,.45); backdrop-filter:blur(3px); z-index:900; }
@@ -171,22 +171,37 @@
         .progress { width:100%; height:8px; background:var(--slate-100); border-radius:var(--radius-full); overflow:hidden; }
         .progress-fill { height:100%; background:var(--link-color); border-radius:var(--radius-full); transition:width .3s ease; }
 
-        /* Mobile */
-        @media(max-width:768px) {
-            /* campistry_link.css sets display:none on the sidebar for the parent
-               portal (which has no hamburger). Override it here for the admin page
-               so the slide-in animation works. */
-            .lk-sidebar { display:block; transform:translateX(-100%); transition:transform .25s ease; }
-            body.sidebar-open .lk-sidebar { transform:translateX(0); }
-            .lk-main { margin-left:0; padding:16px 16px 80px; }
-            .lk-sidebar-backdrop { display:none; position:fixed; inset:0; background:rgba(0,0,0,.3); z-index:49; }
-            body.sidebar-open .lk-sidebar-backdrop { display:block; }
-        }
+        /* Sidebar as an overlay at every width — hamburger-left / content-fills-
+           the-rest, matching the rest of Campistry (campistry_me.html's own
+           sidebar) instead of Link's old always-docked 240px rail plus a
+           separate always-visible camp-name/Live/avatar strip eating into the
+           header. campistry_link.css sets display:none on the sidebar for the
+           parent portal (which has no hamburger); this overrides that for the
+           admin page so the slide-in animation always works, not just <768px. */
+        .lk-sidebar { display:block; transform:translateX(-100%); transition:transform .25s ease; }
+        body.sidebar-open .lk-sidebar { transform:translateX(0); }
+        .lk-main { margin-left:0; padding:24px 28px 80px; }
+        .lk-sidebar-backdrop { display:none; position:fixed; inset:0; background:rgba(0,0,0,.3); z-index:49; }
+        body.sidebar-open .lk-sidebar-backdrop { display:block; }
+        @media(max-width:768px) { .lk-main { padding:16px 16px 80px; } }
 
-        /* Hamburger */
-        .lk-hamburger { display:none; width:36px; height:36px; border:1px solid var(--slate-200); border-radius:var(--radius-sm); background:#fff; cursor:pointer; flex-direction:column; align-items:center; justify-content:center; gap:4px; padding:0; }
+        /* Hamburger — always visible now, not just under 768px */
+        .lk-hamburger { display:flex; width:36px; height:36px; border:1px solid var(--slate-200); border-radius:var(--radius-sm); background:#fff; cursor:pointer; flex-direction:column; align-items:center; justify-content:center; gap:4px; padding:0; }
         .lk-hamburger span { display:block; width:16px; height:2px; background:var(--slate-600); border-radius:1px; }
-        @media(max-width:768px) { .lk-hamburger { display:flex; } }
+
+        /* Camp name / Live status / avatar move inside the sidebar (opened via
+           the hamburger) instead of permanently occupying the top bar. */
+        .lk-sidebar-identity { display:flex; align-items:center; gap:10px; padding:8px 10px 16px; margin-bottom:8px; border-bottom:1px solid rgba(15,23,42,.08); }
+        .lk-sidebar-identity .lk-camp-name { padding-left:0; border-left:none; font-size:.85rem; color:var(--slate-700); font-weight:600; flex:1; min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+
+        /* Top-bar search — proxies into whichever page's own search box is
+           active (Messages/Forms today), so the freed header space stays
+           functional rather than decorative. */
+        .lk-header-search { position:relative; display:flex; align-items:center; flex-shrink:0; }
+        .lk-header-search svg { position:absolute; left:10px; color:var(--slate-400); pointer-events:none; }
+        .lk-header-search input { width:200px; height:36px; padding:0 10px 0 32px; border:1px solid var(--slate-200); border-radius:var(--radius-full); font-size:.82rem; background:var(--slate-50); color:var(--slate-700); }
+        .lk-header-search input:focus { outline:none; border-color:var(--link-color); background:#fff; }
+        @media(max-width:640px) { .lk-header-search input { width:120px; } }
 
         @keyframes fadeUp { from { opacity:0; transform:translateY(8px); } to { opacity:1; transform:translateY(0); } }
         #toastBox { position:fixed; bottom:90px; left:50%; transform:translateX(-50%); z-index:999; display:flex; flex-direction:column; align-items:center; gap:8px; pointer-events:none; }
@@ -222,21 +237,29 @@
         <a href="dashboard.html" class="lk-logo">
             <img src="Link_clean.png" alt="Campistry Link" style="height:32px;width:auto;display:block;">
         </a>
-        <span class="lk-camp-name" id="campNameDisplay">Camp</span>
     </div>
     <div class="lk-header-right">
         <div data-quick-switch-mount="link"></div>
-        <span class="lk-sync-badge" id="syncBadge">Live</span>
-        <div class="lk-avatar" id="adminAvatar">CA</div>
+        <div class="lk-header-search">
+            <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg>
+            <input type="text" id="lkTopSearch" placeholder="Search…" oninput="_lkTopSearchProxy(this.value)">
+        </div>
     </div>
 </header>
 <script src="campistry_app_switcher.js?v=20260918-25"></script>
 
-<!-- SIDEBAR BACKDROP (mobile) -->
+<!-- SIDEBAR BACKDROP -->
 <div class="lk-sidebar-backdrop" id="sidebarBackdrop"></div>
 
-<!-- SIDEBAR -->
+<!-- SIDEBAR — camp name / Live status / avatar moved in here (behind the
+     hamburger) instead of permanently sitting in the top bar, freeing that
+     row for search and giving the page itself the full width. -->
 <nav class="lk-sidebar" id="sidebar">
+    <div class="lk-sidebar-identity">
+        <div class="lk-avatar" id="adminAvatar">CA</div>
+        <span class="lk-camp-name" id="campNameDisplay">Camp</span>
+        <span class="lk-sync-badge" id="syncBadge">Live</span>
+    </div>
     <div class="lk-sidebar-nav">
         <div class="lk-nav-label">Overview</div>
         <button class="lk-nav-item active" data-page="dashboard" onclick="nav('dashboard')">
@@ -1284,6 +1307,25 @@ function nav(p) {
     if (p === 'lists') renderAdminLists();
     if (p === 'tips') renderTipsAdmin();
     if (p === 'settings') { var _sdb = _dbc2(); if (_sdb) loadLinkProgramSettings(_sdb.campId); }
+    var topSearch = document.getElementById('lkTopSearch');
+    if (topSearch) { topSearch.value = ''; topSearch.placeholder = LK_SEARCH_PROXY[p] ? LK_SEARCH_PROXY[p].placeholder : 'Search…'; }
+}
+
+// Top-bar search has no list of its own — each page (Messages, Forms) already
+// has a working search input; this just forwards keystrokes into whichever
+// one belongs to the page currently on screen, so freeing the header of the
+// old camp-name/Live/avatar row didn't cost any functionality.
+var LK_SEARCH_PROXY = {
+    messages: { id: 'inboxSearch', placeholder: 'Search name, camper, subject…' },
+    forms: { id: 'recvSearch', placeholder: 'Search submissions…' }
+};
+function _lkTopSearchProxy(val) {
+    var active = document.querySelector('.lk-page.active');
+    var p = active && active.id ? active.id.replace('page-', '') : '';
+    var target = LK_SEARCH_PROXY[p];
+    if (!target) return;
+    var el = document.getElementById(target.id);
+    if (el && el.value !== val) { el.value = val; el.dispatchEvent(new Event('input')); }
 }
 
 function switchMsgTab(tab, btn) {
@@ -2108,7 +2150,24 @@ function loadTemplate(type) {
 }
 
 // ─── MESSAGE BRANDING (logo / color / footer) + SAVEABLE TEMPLATES ──────────
-function _linkStore() { var cl = CL(); return cl ? cl.getStore() : null; }
+// Link's own store (campistry_link_v1, via CampistryLink.getStore()) is a
+// same-browser cache that never re-reads camp_state_kv after its own initial
+// load. Dashboard > Profile's logo picker writes straight to camp_state_kv
+// (campGlobalSettings_v1.campistryLink.settings.branding.logo) instead, so a
+// logo set there never reached this store — Message Branding kept showing
+// "no logo" even after one was uploaded on Dashboard. Patch the cloud-synced
+// logo in here on every read so both pickers converge on one logo.
+function _linkStore() {
+    var cl = CL(); var st = cl ? cl.getStore() : null;
+    try {
+        var gs = (typeof window.loadGlobalSettings === 'function') ? window.loadGlobalSettings() : null;
+        var cloudLogo = gs && gs.campistryLink && gs.campistryLink.settings && gs.campistryLink.settings.branding && gs.campistryLink.settings.branding.logo;
+        if (st && st.settings && cloudLogo && _isSafeImg(cloudLogo) && (!st.settings.branding || st.settings.branding.logo !== cloudLogo)) {
+            st.settings.branding = Object.assign({}, st.settings.branding, { logo: cloudLogo });
+        }
+    } catch (e) { /* fall back to whatever the local store already has */ }
+    return st;
+}
 function _linkCampName() {
     try { var s = JSON.parse(localStorage.getItem('campGlobalSettings_v1') || '{}'); return s.camp_name || s.campName || 'Camp'; }
     catch (e) { return 'Camp'; }
