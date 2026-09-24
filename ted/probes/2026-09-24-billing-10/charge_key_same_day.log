@@ -1,0 +1,11 @@
+[Me] Charge error: Error: Stripe did not give a final answer (connection reset), so this charge may have gone through. Check the family's payments or the Stripe dashboard before charging again — pressing Charge Card again for the same amount is safe: Stripe answers with the first charge instead of making a second.
+  10:00 press → ok=false uncertain=true | toast: Stripe did not give a final answer (connection reset), so this charge may have gone throug
+  15:00 press (a NEW $500) → ok=true | toast: Charged $500 to Gold — payment succeeded!
+  Stripe charges actually made: ["pi_1 $500"] | payment rows the page added: ["pi_1 $500"]
+[Me] Charge error: Error: The card company did not answer (connection reset), so this charge may have gone through. Check the processor's dashboard before charging again.
+  10:00 press → ok=false uncertain=true | toast: The card company did not answer (connection reset), so this charge may have gone through. 
+[Me] Charge error: Error: An earlier try at this charge was never confirmed by the card company, so it may have gone through. Check the processor's dashboard: if it is not there, confirm and it will be charged.
+  15:00 press (a NEW $500) → ok=false | messages: ["CONFIRM? The card company did not answer (connection reset), so this charge may have gone through. Check the processor's dashboard before charging again.","The card company did not answer (connection reset), so this charge may have gone through. Check the processor's dashboard before charging again.","Charging $500 to Gold...","CONFIRM? An earlier try at this charge was never confirmed by the card company, so it may have gone through. Check the processor's dashboard: if it is not there, confirm and it will be charged.","An earlier try at this charge was never confirmed by the card company, so it may have gone through. Check the processor's dashboard: if it is not there, confirm and it will be charged."]
+  Sola sales actually made: ["R1 $500.00"] | payment rows the page added: []
+pass 2
+fail 0

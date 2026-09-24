@@ -1,0 +1,19 @@
+S1 Stripe: webhook books pi_S1, office answers "went through" with pi_S1
+  webhook → {"count": 1, "success": true, "updated": false, "ledgerPosted": true, "alreadyRecorded": false}
+  office → {"success": true, "recorded": true}
+  after: ledger payments 1 [le_pay_pi_S1 $500] | payment rows 1 | balance owed 500.00 | hold cleared | history ["0:500"] | next night due {"index": 1, "amount": 500.00, "dueDate": "2026-07-01", "remaining": 1}
+S2 Stripe: webhook books pi_S2, office pastes the charge id ch_S2 from the same Stripe page
+  office → {"success": true, "recorded": true}
+  after: ledger payments 2 [le_pay_pi_S2 $500, le_ap_plan_a_0 $500] | payment rows 2 | balance owed 0.00 | hold cleared | history ["0:500"] | next night due {"index": 1, "amount": 0, "reason": "nothing_owed", "dueDate": "2026-07-01", "remaining": 1}
+S3 Stripe: office answers with pi_S3 first, the webhook arrives after
+  office → {"success": true, "recorded": true}
+  webhook → {"count": 1, "success": true, "updated": true, "ledgerPosted": false, "alreadyRecorded": true}
+  after: ledger payments 1 [le_ap_plan_a_0 $500] | payment rows 1 | balance owed 500.00 | hold cleared | history ["0:500"] | next night due {"index": 1, "amount": 500.00, "dueDate": "2026-07-01", "remaining": 1}
+S4 Cardknox: no webhook booking; office answers with the Sola ref 12345
+  office → {"success": true, "recorded": true}
+  after: ledger payments 1 [le_ap_plan_a_0 $500] | payment rows 1 | balance owed 500.00 | hold cleared | history ["0:500"] | next night due {"index": 1, "amount": 500.00, "dueDate": "2026-07-01", "remaining": 1}
+  and answers again (a second tab / double click) → {"error": "nothing_to_answer", "success": false}
+S5 Cardknox: office answers "did not go through"
+  office → {"success": true, "recorded": false}
+  after: ledger payments 0 [] | payment rows 0 | balance owed 1000.00 | hold cleared | history [] | next night due {"index": 0, "amount": 500.00, "dueDate": "2026-06-01", "remaining": 2}
+S6 went through without a reference → {"error": "reference_required", "success": false}
