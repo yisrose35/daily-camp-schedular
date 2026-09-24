@@ -595,6 +595,8 @@ UNION ALL
     -- A card charge that was cut off can be tried again (TED-083/085/086).
     ('268  a cut-off charge can be tried again',
      CASE WHEN to_regprocedure('public.claim_charge_intent(uuid,text,numeric,text,boolean)') IS NULL
+               -- this round's copy: a stuck charge tells the office, and a takeover counts as asked now
+               OR pg_get_functiondef(to_regprocedure('public.claim_charge_intent(uuid,text,numeric,text,boolean)')) !~ 'charge_unconfirmed'
                OR EXISTS (SELECT 1 FROM pg_constraint WHERE conrelid = 'public.processor_transactions'::regclass
                            AND contype = 'c' AND pg_get_constraintdef(oid) ~ 'refund''')
           THEN 'apply 268 BEFORE redeploying registration-deposit-checkout — a deposit charge that is cut off tells the parent "already paid" for ever'
@@ -610,6 +612,8 @@ UNION ALL
     -- Money notices go only to people who can see Billing (TED-087).
     ('270  money notices for Billing only',
      CASE WHEN to_regprocedure('public.is_money_notice(text)') IS NULL
+               -- this round's copy (TED-104): the full list of money notices
+               OR NOT public.is_money_notice('autopay_setup') OR NOT public.is_money_notice('charge_unconfirmed')
                OR NOT EXISTS (SELECT 1 FROM pg_policies WHERE tablename = 'notifications' AND policyname = 'notifications_select'
                                AND qual ~ 'is_money_notice')
                OR (to_regclass('public.link_tip_cart_items') IS NOT NULL
@@ -621,6 +625,10 @@ UNION ALL
     -- a deposit can be paid straight after applying (TED-088/077/089).
     ('271  parents see what the server records',
      CASE WHEN pg_get_functiondef(to_regprocedure('public.projected_family_ledger(uuid,text)')) !~ 'camp_families'
+               -- this round's copy (TED-104): one family per catch-up, and a paid deposit cannot be unpaid by an old tab
+               OR to_regprocedure('public._catch_up_family_ledger(uuid,text)') IS NULL
+               OR pg_get_functiondef(to_regprocedure('public._ledger_started_catch_up()')) !~ '_catch_up_family_ledger'
+               OR to_regprocedure('public._deposit_charges_union(uuid,text)') IS NULL
                OR NOT EXISTS (SELECT 1 FROM pg_trigger WHERE tgname = 'trg_ledger_started_catch_up' AND NOT tgisinternal)
                OR pg_get_functiondef(to_regprocedure('public._registration_deposit_owed(uuid,text)')) !~ '_application_entry'
           THEN 'apply 271 BEFORE redeploying registration-deposit-checkout — parents see stale balances in Link and cannot pay a deposit right after applying'
@@ -628,6 +636,8 @@ UNION ALL
     -- A Billing tab left open keeps the shop's charges (TED-091).
     ('272  an old tab keeps the shop''s charges',
      CASE WHEN pg_get_functiondef(to_regprocedure('public._merge_family_from_page(jsonb,jsonb)')) !~ 'LIKE ''shop'
+               -- this round's copy: id-less plans matched by schedule, not position
+               OR pg_get_functiondef(to_regprocedure('public._merge_family_from_page(jsonb,jsonb)')) !~ '_plan_fingerprint'
           THEN 'apply 272 — an office tab left open cancels shop orders billed after it opened'
           ELSE 'ok' END),
     -- "Nothing went through" only releases a refund that has waited (TED-093).

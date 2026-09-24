@@ -626,6 +626,21 @@ serve(async (req) => {
       // never got saved), worth a log line instead of the two silent `continue`s
       // that used to sit above the plan check and made "my autopay didn't run"
       // impossible to diagnose from the logs.
+      // A card deposit Billing is still asking the office about (TED-103): it is
+      // not on the ledger yet, so the balance reads high by that deposit. Charge
+      // nothing for this family until the office answers — and tell them, on
+      // the plan (a Billing notice), which is what gets it answered.
+      if (Array.isArray(f.depositReview) && f.depositReview.length) {
+        const q = f.depositReview[0] || {};
+        for (const p of plans) {
+          if (p && p.autopay && !p.paused && (Array.isArray(p.dueDates) || Array.isArray(p.installments))) {
+            await flagPlan(String(row.camp_id), famKey, refOf(p), "deposit_review",
+              `a card deposit of $${Number(q.amount || 0).toFixed(2)} may already have been recorded by hand — answer the question on this family in Billing; autopay waits until then`);
+          }
+        }
+        details.push({ camp: row.camp_id, family: f.name, result: "waiting_for_deposit_review" });
+        continue;
+      }
       if (!f.cardOnFile || (processorKey ? !f.byopCustomerRef : !f.stripeCustomerId)) {
         const why = !f.cardOnFile ? "no card on file"
           : (processorKey ? "no vaulted card token (byopCustomerRef) — the card was never saved to the processor" : "no Stripe customer");

@@ -93,9 +93,10 @@ test('the claim key is DERIVED FROM THE REQUEST, not a constant', () => {
     // stays green on a version where claimKey is hardcoded null and the claim never
     // runs at all. Pin where the key comes from too.
     assert.match(REFUND, /const claimKey = typeof idempotencyKey === "string" && idempotencyKey\.trim\(\)/);
-    // The single canteen refund keys on the deposit and what is left on it, so
-    // it is claimed on every request — the Snacks page never sent a key (TED-093).
-    assert.match(CANTEEN, /const chunkKey = `canteen:\$\{dep\.externalTransactionId\}:\$\{Math\.round\(dep\.remaining \* 100\)\}:\$\{chunkCents\}`;/);
+    // The single canteen refund is claimed on every request: on the page's key
+    // for this refund when it sends one (TED-105), else on the deposit and what
+    // is left on it (TED-093).
+    assert.match(CANTEEN, /\? `canteen:\$\{reqKey\}:\$\{dep\.externalTransactionId\}:\$\{chunkCents\}`\s*: `canteen:\$\{dep\.externalTransactionId\}:\$\{Math\.round\(dep\.remaining \* 100\)\}:\$\{chunkCents\}`;/);
     assert.match(CANTEEN_ALL, /typeof body\.idempotencyKey === "string" && body\.idempotencyKey\.trim\(\)/);
     // And the claim is actually gated on having one, not skipped outright.
     assert.match(REFUND, /if \(claimKey\) \{[\s\S]{0,200}claim_refund_intent/);

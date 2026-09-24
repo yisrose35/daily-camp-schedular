@@ -108,8 +108,14 @@ async function campOwnsPayment(campId: string, pi: any): Promise<boolean> {
   // first: a registration deposit is made on the FORM's customer, which is
   // often not the family's card on file (a returning family, a sibling, a
   // hosted checkout's fresh customer) — and it is still this camp's (TED-096).
-  if (String(pi?.metadata?.campId || "") === campId) return true;
-  if (pi?.metadata?.campId) return false;              // another camp's, by its own stamp
+  //
+  // But only for a family's money (TED-100): Campistry's own charges TO the camp
+  // — the SMS number and monthly SMS fees — carry the same camp stamp, and a
+  // camp must never be able to refund those to itself.
+  const meta = pi?.metadata || {};
+  if (/telnyx/i.test(String(meta.purpose || "")) || /telnyx/i.test(String(meta.source || ""))) return false;
+  if (meta.campId && String(meta.campId) !== campId) return false;   // another camp's, by its own stamp
+  if (String(meta.campId || "") === campId && String(meta.source || "") === "registration_deposit") return true;
   const customer = typeof pi?.customer === "string" ? pi.customer : pi?.customer?.id;
   if (customer) {
     const service = createClient(SUPABASE_URL, SUPABASE_SERVICE_KEY);

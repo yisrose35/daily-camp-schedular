@@ -30,7 +30,7 @@ function cut(name) {
 function load() {
     const ctx = { _billingCore: () => B, finPayments: [], roster: {}, today: () => '2026-07-01' };
     vm.createContext(ctx);
-    vm.runInContext(['_camperIdOf', '_paymentRefOf', '_paymentRefsOf', '_postPaymentEntry', '_postCardDepositsFor'].map(cut).join('\n')
+    vm.runInContext(['_camperIdOf', '_paymentRefOf', '_paymentRefsOf', '_postPaymentEntry', '_markCardPayment', '_postCardDepositsFor'].map(cut).join('\n')
         + '\nthis.post=_postCardDepositsFor;', ctx);
     return ctx;
 }
@@ -130,4 +130,50 @@ test('TED-095: Billing shows the question, and the answer is wired', () => {
     const ME2 = require('node:fs').readFileSync(require('node:path').join(__dirname, '..', 'campistry_me.js'), 'utf8');
     assert.match(ME2, /CampistryMe\.resolveDepositReview\(/);
     assert.match(ME2, /resolveDepositReview:resolveDepositReview,/);
+});
+
+// ── TED-102 ────────────────────────────────────────────────────────────────
+function loadWithReview(answers) {
+    const ctx = { _billingCore: () => B, finPayments: [], roster: {}, today: () => '2026-07-01', families: {}, curPage: 'billing',
+        save() {}, renderBilling() {}, renderFamilyDetailPage() {}, toast() {}, esc: (x) => String(x), fm: (n) => '$' + n,
+        confirmDialog: async () => answers.shift() };
+    vm.createContext(ctx);
+    vm.runInContext(['_camperIdOf', '_paymentRefOf', '_paymentRefsOf', '_postPaymentEntry', '_markCardPayment', '_postCardDepositsFor'].map(cut).join('\n')
+        + '\nasync ' + cut('resolveDepositReview')
+        + '\nthis.post=_postCardDepositsFor;this.resolve=resolveDepositReview;', ctx);
+    return ctx;
+}
+
+test('TED-102: a typed payment linked by its reference becomes refundable to the card', () => {
+    const ctx = load(), f = family();
+    ctx.finPayments.push({ id: 'pay_hand', familyKey: 'gold', amount: 250, method: 'Card', reference: '9001', date: '2026-05-01' });
+    ctx.post(f, 'gold', { depositCharges: [{ ref: '9001', amount: 250, processor: 'cardknox' }] }, 'e1');
+    assert.strictEqual(ctx.finPayments[0].byopTransactionId, '9001');
+    assert.strictEqual(ctx.finPayments[0].byopProcessor, 'cardknox');
+});
+
+test('TED-102: two siblings\' deposits, two typed payments — each question points at its own', async () => {
+    const ctx = loadWithReview([true, true]), f = family();
+    ctx.families.gold = f;
+    ctx.finPayments.push({ id: 'h1', familyKey: 'gold', amount: 250, date: '2026-05-01' },
+                         { id: 'h2', familyKey: 'gold', amount: 250, date: '2026-05-02' });
+    ctx.post(f, 'gold', { camperName: 'A', depositCharges: [{ ref: 'pi_a', amount: 250, date: '2026-05-01', processor: 'stripe' }] }, 'e1');
+    ctx.post(f, 'gold', { camperName: 'B', depositCharges: [{ ref: 'pi_b', amount: 250, date: '2026-05-01', processor: 'stripe' }] }, 'e2');
+    assert.deepStrictEqual(Array.from(f.depositReview, r => r.paymentId).sort(), ['h1', 'h2']);
+    await ctx.resolve('gold', 'pi_a');
+    await ctx.resolve('gold', 'pi_b');
+    const byId = Object.fromEntries(ctx.finPayments.map(p => [p.id, p]));
+    assert.strictEqual(byId.h1.stripePaymentIntentId, 'pi_a');
+    assert.strictEqual(byId.h2.stripePaymentIntentId, 'pi_b', 'the second child\'s deposit is not refundable to its card');
+    assert.strictEqual(f.depositReview.length, 0);
+});
+
+test('TED-102: a question left over after its payment was linked elsewhere is dropped, not re-linked', async () => {
+    const ctx = loadWithReview([true]), f = family();
+    ctx.families.gold = f;
+    ctx.finPayments.push({ id: 'h1', familyKey: 'gold', amount: 250, depositReference: 'pi_a', stripePaymentIntentId: 'pi_a' });
+    f.depositReview = [{ ref: 'pi_b', amount: 250, paymentId: 'h1' }];
+    await ctx.resolve('gold', 'pi_b');
+    assert.strictEqual(ctx.finPayments[0].depositReference, 'pi_a', 'the link moved to another child\'s charge');
+    assert.strictEqual(f.depositReview.length, 0);
 });

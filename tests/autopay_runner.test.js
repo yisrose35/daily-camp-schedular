@@ -301,3 +301,11 @@ test('TED-084: a debit still clearing after ten days is put in front of the offi
     assert.strictEqual(newCharges(r).length, 0);
     assert.ok(r.rpcs.some(x => x.name === 'flag_plan_collection' && x.args.p_reason === 'bank_debit_stuck'));
 });
+
+test('TED-103: autopay waits while Billing is asking about a card deposit, and the office is told', () => {
+    const r = runEdge('charge-due-installments', shapeNight({ plans: [LEDGER_PLAN],
+        depositReview: [{ ref: 'pi_dep', amount: 250, paymentId: 'pay_hand' }] }, { id: 'pi_x', status: 'succeeded' }));
+    assert.strictEqual(newCharges(r).length, 0, 'autopay charged against a balance that is $250 too high');
+    assert.deepStrictEqual(results(r), ['waiting_for_deposit_review']);
+    assert.ok(r.rpcs.some(x => x.name === 'flag_plan_collection' && x.args.p_reason === 'deposit_review'));
+});

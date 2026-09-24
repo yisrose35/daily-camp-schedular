@@ -6343,6 +6343,15 @@ function _planSchedule(plan,balance){
  * The office's "Mark deposit received" sets no reference and is untouched:
  * that money is recorded in Billing by hand, as the button says.
  */
+/** A typed payment found to BE a card charge becomes refundable to that card (TED-102). */
+function _markCardPayment(row,ref,proc,isStripe){
+    if(!row||!ref)return;
+    if(isStripe||/^pi_/.test(ref)){if(!row.stripePaymentIntentId)row.stripePaymentIntentId=ref;}
+    else{
+        if(!row.byopTransactionId)row.byopTransactionId=ref;
+        if(!row.byopProcessor&&proc)row.byopProcessor=proc;
+    }
+}
 function _postCardDepositsFor(f,fk,e,eid){
     if(!f||!e)return 0;
     var list=Array.isArray(e.depositCharges)?e.depositCharges.slice():[];
@@ -6363,7 +6372,7 @@ function _postCardDepositsFor(f,fk,e,eid){
             row=(finPayments||[]).filter(function(p){
                 return p&&p.familyKey===fk&&(Number(p.amount)||0)>0&&String(p.reference||'').trim()===ref;
             })[0];
-            if(row){row.depositReference=ref;n++;}
+            if(row){row.depositReference=ref;_markCardPayment(row,ref,proc,isStripe);n++;}
         }
         // Typed in by hand WITHOUT a reference, for the same amount around the
         // same time: probably the same money — the office was told to record
@@ -6372,8 +6381,14 @@ function _postCardDepositsFor(f,fk,e,eid){
         var decided=(f.depositReviewed&&f.depositReviewed[ref])||'';
         if(!row&&decided!=='separate'){
             var dAt=Date.parse(c.date||e.depositPaidDate||'')||0;
+            // A typed payment another open question already points at is not a
+            // candidate for this one too — two siblings' deposits must not both
+            // ask about the same typed payment (TED-102).
+            var asked={};
+            (Array.isArray(f.depositReview)?f.depositReview:[]).forEach(function(r){if(r&&r.ref!==ref&&r.paymentId!=null)asked[String(r.paymentId)]=1;});
             var twin=(finPayments||[]).filter(function(p){
                 if(!p||p.familyKey!==fk||p.depositReference||p.stripePaymentIntentId||p.byopTransactionId)return false;
+                if(asked[String(p.id)])return false;
                 if(Math.abs((Number(p.amount)||0)-amt)>0.005)return false;
                 var pAt=Date.parse(p.date||'')||0;
                 return !dAt||!pAt||Math.abs(pAt-dAt)<=45*86400000;
@@ -6381,7 +6396,7 @@ function _postCardDepositsFor(f,fk,e,eid){
             if(twin){
                 if(!Array.isArray(f.depositReview))f.depositReview=[];
                 if(!f.depositReview.some(function(r){return r&&r.ref===ref})){
-                    f.depositReview.push({ref:ref,amount:amt,paymentId:twin.id,date:c.date||e.depositPaidDate||'',camperName:e.camperName||'',camperId:e.camperId!=null?e.camperId:_camperIdOf(e.camperName)});
+                    f.depositReview.push({ref:ref,amount:amt,paymentId:twin.id,processor:proc,date:c.date||e.depositPaidDate||'',camperName:e.camperName||'',camperId:e.camperId!=null?e.camperId:_camperIdOf(e.camperName)});
                     n++;
                 }
                 return;
@@ -6409,6 +6424,14 @@ async function resolveDepositReview(fk,ref){
     var f=families[fk]; if(!f||!Array.isArray(f.depositReview))return;
     var r=f.depositReview.filter(function(x){return x&&x.ref===ref})[0]; if(!r)return;
     var twin=(finPayments||[]).filter(function(p){return p&&String(p.id)===String(r.paymentId)})[0];
+    // Settled meanwhile (the deposit was posted, or that typed payment was linked
+    // to another card charge): the question is out of date — drop it (TED-102).
+    var posted=(finPayments||[]).some(function(p){return p&&p!==twin&&p.depositReference===ref;});
+    if(posted||!twin||(twin.depositReference&&twin.depositReference!==ref)){
+        f.depositReview=f.depositReview.filter(function(x){return x&&x.ref!==ref});
+        save();try{if(curPage==='familydetail')renderFamilyDetailPage();else renderBilling()}catch(_){}
+        return toast('That question was already settled');
+    }
     var same=await confirmDialog({title:'Is this the same money?',
         message:(r.camperName?esc(r.camperName)+'\u2019s ':'')+'registration deposit of '+fm(r.amount)+' was paid by card'
                +(r.date?' on '+esc(r.date):'')+'. '+(twin?'A payment of '+fm(twin.amount)+(twin.date?' on '+esc(twin.date):'')
@@ -6416,9 +6439,7 @@ async function resolveDepositReview(fk,ref){
                +'<br><br>If they are the same money, it is linked to the card charge (so it can be refunded to the card) and counted once.',
         confirmLabel:'Same money \u2014 link them'});
     if(same){
-        if(twin){twin.depositReference=ref;
-            if(/^pi_/.test(ref)){if(!twin.stripePaymentIntentId)twin.stripePaymentIntentId=ref;}
-            else if(!twin.byopTransactionId){twin.byopTransactionId=ref;}}
+        if(twin){twin.depositReference=ref;_markCardPayment(twin,ref,r.processor||'',/^pi_/.test(ref));}
     }else{
         var sep=await confirmDialog({title:'Count the card deposit as well?',
             message:'Only if the hand-recorded '+fm(r.amount)+' was a DIFFERENT payment. The card deposit is then added to the family as its own payment.',
@@ -17681,6 +17702,7 @@ function _collectionWarning(l){
                  :b.reason==='bank_debit_unheld'?'Bank debit not recorded — may be debited again'
                  :b.reason==='bank_debit_stuck'?'Bank debit not cleared after 10 days'
                  :b.reason==='bank_debit_unverified'?'Bank debit cannot be checked'
+                 :b.reason==='deposit_review'?'Autopay waiting — answer the card deposit question'
                  :String(b.reason||'Cannot collect');
         if(n>1)label+=' ×'+n;
         if(b.escalated)label='Not collecting — '+label;
@@ -18797,7 +18819,10 @@ async function printTaxStatement(famKey,year){
         var e=(enrollments||{})[eid];
         if(!e)return{};
         var ses=(sessions||[]).find(function(x){return x.name===e.session});
-        return{camperName:e.camperName||'',camperId:e.camperId!=null?e.camperId:_camperIdOf(e.camperName),session:e.session||'',overnight:!!(ses&&ses.overnight)};
+        // The year the care is given — the session's start (TED-101) — not the
+        // date the tuition was charged, which is the enrolment date.
+        var careYear=String((ses&&(ses.startDate||ses.start))||e.sessionStart||'').slice(0,4);
+        return{camperName:e.camperName||'',camperId:e.camperId!=null?e.camperId:_camperIdOf(e.camperName),session:e.session||'',overnight:!!(ses&&ses.overnight),careYear:careYear};
     }
     var camperDobs={};
     ((l.family.camperIds)||[]).concat(l.pendingCamperIds||[]).forEach(function(n){

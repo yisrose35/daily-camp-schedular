@@ -130,7 +130,8 @@ DECLARE
     n3 text := $n$                       WHEN 'no_processor' THEN 'the camp''s payment processor is not connected'
                        WHEN 'bank_debit_unheld' THEN 'a bank debit is clearing but could not be recorded on their plan, so it may be debited again'
                        WHEN 'bank_debit_stuck' THEN 'a bank debit has not cleared for over ten days'
-                       WHEN 'bank_debit_unverified' THEN 'a bank debit from an earlier night cannot be checked with Stripe'$n$;
+                       WHEN 'bank_debit_unverified' THEN 'a bank debit from an earlier night cannot be checked with Stripe'
+                       WHEN 'deposit_review' THEN 'autopay is waiting for you to answer a question about their card deposit'$n$;
 BEGIN
     IF position('_plan_path' IN d) > 0 THEN
         RAISE NOTICE '269: flag_plan_collection already finds every plan';

@@ -265,8 +265,14 @@ serve(async (req) => {
         // a second click after an answer was lost must meet the same claim, not
         // start a second refund. A refund that was recorded changes what is left,
         // so a deliberate later refund gets a new key.
-        const chunkKey = `canteen:${dep.externalTransactionId}:${Math.round(dep.remaining * 100)}:${chunkCents}`;
-        void idempotencyKey;
+        // With the page's key for this refund (TED-105), the retry of a refund
+        // whose answer was lost meets its first attempt, while a deliberate
+        // second refund (a new key) is its own. Without one, the deposit and
+        // what is left on it.
+        const reqKey = (typeof idempotencyKey === "string" && idempotencyKey.trim()) ? idempotencyKey.trim() : "";
+        const chunkKey = reqKey
+          ? `canteen:${reqKey}:${dep.externalTransactionId}:${chunkCents}`
+          : `canteen:${dep.externalTransactionId}:${Math.round(dep.remaining * 100)}:${chunkCents}`;
         if (chunkKey) {
           const { data: claim } = await service.rpc("claim_refund_intent", {
             p_camp_id: authedCampId, p_key: chunkKey, p_amount: chunk,

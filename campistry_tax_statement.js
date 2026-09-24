@@ -126,8 +126,14 @@
             if (amt <= 0) return;
             var who = resolve(e) || {};
             var cls = T.classifyCharge(e, { overnight: who.overnight, rules: rules });
+            // The year the care is GIVEN (Pub 503): the session's own start when
+            // the caller knows it, else the charge's date. A tuition charge is
+            // dated at enrolment — October for next July — so its date alone
+            // would put next summer's care in this year (TED-101).
+            var careYear = String(who.careYear || '').slice(0, 4);
+            if (!/^\d{4}$/.test(careYear)) careYear = ymd(e.date).slice(0, 4);
             lots.push({
-                date: ymd(e.date), seq: idx, open: amt, amount: amt,
+                date: ymd(e.date), seq: idx, open: amt, amount: amt, careYear: careYear,
                 camperName: who.camperName || '', camperId: who.camperId != null ? who.camperId : null, session: who.session || '',
                 qualifies: cls.verdict, why: cls.reason,
                 label: e.desc || e.category || 'Charge', ref: e.ref || ''
@@ -228,6 +234,7 @@
         }
 
         var inYearRefunds = 0;
+        var carried = [];
         reducers.forEach(function (r) {
             var e = r.e, amt = num(e.amount);
             var isPayment = e.type === 'payment';
@@ -251,10 +258,30 @@
             }
 
             var res = apply(lots, amt);
-            if (!isPayment || !inYear) return;    // credits, and other years' payments, only move the lots
+            if (!isPayment) return;               // credits only move the lots
+            var payYear = ymd(e.date).slice(0, 4);
+
+            // The year each part counts in (TED-101): the year the care is given
+            // when it was paid AHEAD of it, else the year it was paid (arrears
+            // paid in March for last summer count in March's year).
+            var counts = [], ahead = 0;
+            res.hits.forEach(function (h) {
+                var cy = h.lot.careYear || payYear;
+                var countYear = cy > payYear ? cy : payYear;
+                if (countYear === year) counts.push(h);
+                else if (inYear && cy > year) ahead = round2(ahead + h.amount);
+            });
+            if (!inYear) {
+                // Paid in an earlier year for care given in this one: claimable
+                // NOW. Kept aside from this year's own payments so this year's
+                // refunds are not prorated against it.
+                counts.forEach(function (h) { carried.push(h); });
+                return;
+            }
 
             report.paid.gross = round2(report.paid.gross + amt);
-            res.hits.forEach(function (h) {
+            report.prepaid = round2(report.prepaid + ahead);
+            counts.forEach(function (h) {
                 var b = bucket(h.lot.camperName, h.lot.camperId);
                 b.total = round2(b.total + h.amount);
                 if (h.lot.qualifies === 'yes') {
@@ -300,6 +327,31 @@
             report.warnings.push('Refunds in ' + year + ' exceed payments in ' + year + ' — the family was ' +
                 'refunded money they paid in an earlier year. Nothing is claimable for ' + year + ', and the ' +
                 'earlier year’s return may need amending.');
+        }
+
+        // Money paid in an earlier year for care given in this one (TED-101).
+        var carriedTotal = 0;
+        carried.forEach(function (h) {
+            var b = bucket(h.lot.camperName, h.lot.camperId);
+            b.total = round2(b.total + h.amount);
+            carriedTotal = round2(carriedTotal + h.amount);
+            if (h.lot.qualifies === 'yes') {
+                b.qualifying = round2(b.qualifying + h.amount);
+                report.qualifying = round2(report.qualifying + h.amount);
+            } else if (h.lot.qualifies === 'no') {
+                b.notQualifying = round2(b.notQualifying + h.amount);
+                report.notQualifying = round2(report.notQualifying + h.amount);
+                note(excludedLines, h.lot.why === 'overnight' ? 'Overnight camp — never claimable' : h.lot.label, h.amount);
+            } else {
+                b.needsReview = round2(b.needsReview + h.amount);
+                report.needsReview = round2(report.needsReview + h.amount);
+                note(reviewLines, h.lot.label, h.amount);
+            }
+        });
+        report.paidEarlier = carriedTotal;
+        if (carriedTotal > 0.004) {
+            report.warnings.push('Includes ' + carriedTotal.toFixed(2) + ' paid before ' + year + ' for care given in ' + year +
+                ' — under Publication 503 it is claimed for the year the care is given, not the year it was paid.');
         }
 
         // A child's age is the parent's business, not the camp's — but a child

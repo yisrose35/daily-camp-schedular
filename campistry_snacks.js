@@ -1938,7 +1938,16 @@ window.refundCanteenDeposit = async function() {
     if (btn) { btn.disabled = true; btn.textContent = 'Refunding…'; }
     const _rc = getRoster()[name];
     const _rcid = _rc && /^\d+$/.test(String(_rc.camperId == null ? '' : _rc.camperId)) ? Number(_rc.camperId) : undefined;
-    var _body = { camperName: name, camperId: _rcid, amount: amount };
+    // One key per refund the office means to make (TED-105): made the first
+    // time this refund is sent and kept while the same camper and amount are
+    // retried — so pressing Refund again after an answer was lost meets the
+    // first attempt instead of refunding twice. A different camper or amount,
+    // or a refund that went through, starts a new one.
+    var _sig = String(_rcid != null ? _rcid : name) + ':' + Math.round(amount * 100);
+    if (!window._canteenRefundKey || window._canteenRefundKey.sig !== _sig) {
+        window._canteenRefundKey = { sig: _sig, key: 'cref_' + Date.now().toString(36) + Math.random().toString(36).slice(2, 8) };
+    }
+    var _body = { camperName: name, camperId: _rcid, amount: amount, idempotencyKey: window._canteenRefundKey.key };
     var _send = function() { return client.functions.invoke(fnName, { body: _body }); };
     _send()
         .then(async function(res) {
@@ -1961,6 +1970,7 @@ window.refundCanteenDeposit = async function() {
                 else toast(err, 1);
                 return;
             }
+            window._canteenRefundKey = null;                  // done: the next refund is a new one
             closeM('refund');
             var acrossN = (data.refunds || []).length;
             toast('Refunded $' + Number(data.totalRefunded).toFixed(2) + ' to ' + name +
