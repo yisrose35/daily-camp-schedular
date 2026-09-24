@@ -147,6 +147,125 @@ function _wsK(key) {
     }
 
     // =========================================================================
+    // "FOR WHO?" DATA SCOPE PICKER — Divisions / Grades / Bunks, inline
+    // =========================================================================
+    // Replaces the old named "division group" (subdivisions table) with a
+    // direct pick, per person, of exactly which divisions/grades/bunks their
+    // access applies to — for ANY role, not just schedulers. A named group
+    // was a real answer when the only consumer was scheduler generation
+    // scope and several schedulers shared the same list; it's an unnecessary
+    // extra step now that this applies broadly and each person's scope is
+    // usually its own thing anyway. Existing subdivision_ids assignments
+    // (getUserAssignedDivisions()'s fallback chain, permissions_guard.js)
+    // keep working untouched — this only changes how NEW scope is set.
+    //
+    // Shape written to camp_users.data_scope (see migration 265):
+    //   {type:'all'} | {type:'divisions', divisions:[name,...]} |
+    //   {type:'grades', grades:[{division,grade},...]} |
+    //   {type:'bunks',  bunks:[{division,grade,bunk},...]}
+    // 'all' means unrestricted — the default, matching how an unconfigured
+    // member works everywhere else in the access system.
+    function _scopeTabs() {
+        return [
+            { key: 'all', label: 'Everyone' },
+            { key: 'divisions', label: 'Entire division(s)' },
+            { key: 'grades', label: 'Entire grade(s)' },
+            { key: 'bunks', label: 'Specific bunk(s)' }
+        ];
+    }
+    function _renderScopePicker(ns, scope, meDivisions) {
+        scope = scope && scope.type ? scope : { type: 'all' };
+        const divNames = Object.keys(meDivisions || {});
+        const scopedDivSet = new Set(scope.type === 'divisions' ? (scope.divisions || []) : []);
+        const scopedGradeSet = new Set(scope.type === 'grades' ? (scope.grades || []).map(g => g.division + '␟' + g.grade) : []);
+        const scopedBunkSet = new Set(scope.type === 'bunks' ? (scope.bunks || []).map(b => b.division + '␟' + b.grade + '␟' + b.bunk) : []);
+
+        const divisionsHtml = !divNames.length
+            ? `<p style="color:var(--slate-500);font-style:italic;">No divisions yet. <a href="campistry_me.html" style="color:var(--camp-green,#147D91);font-weight:600;">Create divisions in Campistry Me</a> first.</p>`
+            : `<div class="division-checkboxes">${divNames.map(div => {
+                  const color = (meDivisions[div] && meDivisions[div].color) || '#6B7280';
+                  return `<label class="checkbox-item" style="border-left:3px solid ${color};padding-left:10px;"><input type="checkbox" data-scope-div="${_tsuEsc(div)}" ${scopedDivSet.has(div) ? 'checked' : ''}> <span>${_tsuEsc(div)}</span></label>`;
+              }).join('')}</div>`;
+
+        const gradesHtml = !divNames.length ? divisionsHtml : divNames.map(div => {
+            const grades = Object.keys((meDivisions[div] && meDivisions[div].grades) || {});
+            if (!grades.length) return '';
+            return `<div style="margin-bottom:10px;"><div style="font-size:.78rem;font-weight:700;color:var(--slate-500);margin-bottom:4px;">${_tsuEsc(div)}</div>`
+                + `<div class="division-checkboxes">${grades.map(g => {
+                      const key = div + '␟' + g;
+                      return `<label class="checkbox-item"><input type="checkbox" data-scope-grade-div="${_tsuEsc(div)}" data-scope-grade="${_tsuEsc(g)}" ${scopedGradeSet.has(key) ? 'checked' : ''}> <span>${_tsuEsc(g)}</span></label>`;
+                  }).join('')}</div></div>`;
+        }).join('') || '<p style="color:var(--slate-500);font-style:italic;">No grades yet.</p>';
+
+        const bunksHtml = !divNames.length ? divisionsHtml : divNames.map(div => {
+            const gradesObj = (meDivisions[div] && meDivisions[div].grades) || {};
+            const rows = Object.keys(gradesObj).map(g => {
+                const bunks = (gradesObj[g] && gradesObj[g].bunks) || [];
+                if (!bunks.length) return '';
+                return `<div style="margin-bottom:6px;"><div style="font-size:.74rem;color:var(--slate-400);margin-bottom:3px;">${_tsuEsc(div)} → ${_tsuEsc(g)}</div>`
+                    + `<div class="division-checkboxes">${bunks.map(b => {
+                          const key = div + '␟' + g + '␟' + b;
+                          return `<label class="checkbox-item"><input type="checkbox" data-scope-bunk-div="${_tsuEsc(div)}" data-scope-bunk-grade="${_tsuEsc(g)}" data-scope-bunk="${_tsuEsc(b)}" ${scopedBunkSet.has(key) ? 'checked' : ''}> <span>${_tsuEsc(b)}</span></label>`;
+                      }).join('')}</div></div>`;
+            }).join('');
+            return rows ? `<div style="margin-bottom:10px;">${rows}</div>` : '';
+        }).join('') || '<p style="color:var(--slate-500);font-style:italic;">No bunks yet.</p>';
+
+        return `
+            <div class="form-group scope-picker" data-scope-ns="${ns}">
+                <label>For who? <span style="font-weight:400;color:var(--slate-400);">— which part of the camp this applies to</span></label>
+                <div class="tabs" style="margin-bottom:10px;">
+                    ${_scopeTabs().map(t => `<button type="button" class="tab${scope.type === t.key ? ' on' : ''}" data-scopetab="${t.key}">${t.label}</button>`).join('')}
+                </div>
+                <div data-scopepane="all" style="display:${scope.type === 'all' ? 'block' : 'none'};">
+                    <p style="color:var(--slate-500);font-size:.85rem;margin:0;">No limit — applies camp-wide, everything their Role/Account type otherwise allows.</p>
+                </div>
+                <div data-scopepane="divisions" style="display:${scope.type === 'divisions' ? 'block' : 'none'};">${divisionsHtml}</div>
+                <div data-scopepane="grades" style="display:${scope.type === 'grades' ? 'block' : 'none'};">${gradesHtml}</div>
+                <div data-scopepane="bunks" style="display:${scope.type === 'bunks' ? 'block' : 'none'};">${bunksHtml}</div>
+            </div>`;
+    }
+    function _wireScopePicker(root) {
+        const picker = root.querySelector('.scope-picker');
+        if (!picker) return;
+        picker.querySelectorAll('[data-scopetab]').forEach(btn => {
+            btn.addEventListener('click', () => {
+                const key = btn.getAttribute('data-scopetab');
+                picker.querySelectorAll('[data-scopetab]').forEach(b => b.classList.toggle('on', b === btn));
+                picker.querySelectorAll('[data-scopepane]').forEach(p => { p.style.display = (p.getAttribute('data-scopepane') === key) ? 'block' : 'none'; });
+            });
+        });
+    }
+    function _readScopePicker(root) {
+        const picker = root.querySelector('.scope-picker');
+        if (!picker) return { type: 'all' };
+        const activeBtn = picker.querySelector('[data-scopetab].on');
+        const type = activeBtn ? activeBtn.getAttribute('data-scopetab') : 'all';
+        if (type === 'divisions') {
+            return { type, divisions: [...picker.querySelectorAll('[data-scope-div]:checked')].map(cb => cb.getAttribute('data-scope-div')) };
+        }
+        if (type === 'grades') {
+            return { type, grades: [...picker.querySelectorAll('[data-scope-grade]:checked')].map(cb => ({ division: cb.getAttribute('data-scope-grade-div'), grade: cb.getAttribute('data-scope-grade') })) };
+        }
+        if (type === 'bunks') {
+            return { type, bunks: [...picker.querySelectorAll('[data-scope-bunk]:checked')].map(cb => ({ division: cb.getAttribute('data-scope-bunk-div'), grade: cb.getAttribute('data-scope-bunk-grade'), bunk: cb.getAttribute('data-scope-bunk') })) };
+        }
+        return { type: 'all' };
+    }
+    // The one place a data_scope value turns into the FLAT division-name list
+    // every existing consumer (getUserAssignedDivisions() and everything
+    // downstream of it) already knows how to read — so a grade/bunk scope
+    // still gets AT LEAST its parent division(s) right for any consumer that
+    // hasn't been taught about the finer grain.
+    function _scopeToAssignedDivisions(scope) {
+        if (!scope || scope.type === 'all') return [];
+        if (scope.type === 'divisions') return (scope.divisions || []).slice();
+        if (scope.type === 'grades') return [...new Set((scope.grades || []).map(g => g.division))];
+        if (scope.type === 'bunks') return [...new Set((scope.bunks || []).map(b => b.division))];
+        return [];
+    }
+
+    // =========================================================================
     // DIVISIONS CARD (read-only display from campStructure)
     // =========================================================================
 
@@ -445,11 +564,13 @@ function _wsK(key) {
     // =========================================================================
 
     async function showInviteModal() {
-        const subdivisions = window.AccessControl?.getSubdivisions() || [];
         const meDivisions = await getMeDivisions(false);
-        // Custom Access Groups (migration 097) are reusable roles too — an
-        // owner who built one expects it to show up right here, not only
-        // reachable later through Edit on an already-invited member.
+        // Custom Roles (camp_access_groups, migration 097) show up in the SAME
+        // dropdown as the base account types now — an owner who built one
+        // expects to just pick it, not juggle two separate "role" selectors.
+        // Picking one sets role='manager' underneath (the tier migration 097
+        // added specifically to host a group's own permission set) plus the
+        // group assignment; picking a base account type clears any group.
         const accessGroups = await fetchAccessGroups();
 
         const modal = document.createElement('div');
@@ -471,43 +592,17 @@ function _wsK(key) {
                          instead, not here, so this list never mixes Lite accounts in with
                          people who actually log into the Campistry website. -->
                     <div class="form-group">
-                        <label for="invite-role">Account type *</label>
+                        <label for="invite-role">Role *</label>
                         <select id="invite-role" required>
-                            <option value="">Select an account type...</option>
+                            <option value="">Select a role...</option>
                             <option value="admin">Admin - Full access to everything</option>
                             <option value="manager">Manager - Configurable access to specific apps and sections</option>
                             <option value="scheduler">Scheduler - Access to assigned divisions</option>
                             <option value="viewer">Viewer - View only, no editing</option>
+                            ${accessGroups.length ? `<optgroup label="Custom roles">${accessGroups.map(g => `<option value="group:${g.id}">${_tsuEsc(g.name)}</option>`).join('')}</optgroup>` : ''}
                         </select>
                     </div>
-                    <div class="form-group" id="invite-access-group-field">
-                        <label for="invite-access-group">Role <span style="font-weight:400;color:var(--slate-400);">— a named, reusable permission set (optional)</span></label>
-                        <select id="invite-access-group">
-                            <option value="">No role — configure apps and sections after they're invited</option>
-                            ${accessGroups.map(g => `<option value="${g.id}">${_tsuEsc(g.name)}</option>`).join('')}
-                        </select>
-                    </div>
-                    <div class="form-group" id="subdivisions-group" style="display: none;">
-                        <label>Assign to Division Groups</label>
-                        <p style="font-size: 0.85rem; color: var(--slate-500); margin-bottom: 8px;">Select which division groups this scheduler can manage</p>
-                        ${subdivisions.length > 0 ? `
-                            <div class="subdivision-checkboxes">
-                                ${subdivisions.map(sub => {
-                                    const divPills = sub.divisions?.length > 0
-                                        ? renderDivisionPills(sub.divisions, meDivisions)
-                                        : '<span style="color:var(--slate-400);font-size:0.8rem;">No divisions</span>';
-                                    return `
-                                    <label class="checkbox-item" style="border-left: 3px solid ${sub.color}; padding-left: 10px;">
-                                        <input type="checkbox" name="subdivision" value="${sub.id}">
-                                        <div style="display:flex;flex-direction:column;gap:2px;">
-                                            <span>${_tsuEsc(sub.name)}</span>
-                                            <div style="margin-top:2px;">${divPills}</div>
-                                        </div>
-                                    </label>`;
-                                }).join('')}
-                            </div>
-                        ` : `<p style="color: var(--slate-500); font-style: italic;">No division groups created yet. Use the "Add" button in the Divisions card first.</p>`}
-                    </div>
+                    ${_renderScopePicker('invite', { type: 'all' }, meDivisions)}
                     <div id="invite-error" class="form-error"></div>
                     <div id="invite-success" class="form-success"></div>
                     <div class="form-actions">
@@ -518,9 +613,7 @@ function _wsK(key) {
             </div>`;
 
         document.body.appendChild(modal);
-        const roleSelect = document.getElementById('invite-role');
-        document.getElementById('subdivisions-group').style.display = 'none';
-        roleSelect.addEventListener('change', () => { document.getElementById('subdivisions-group').style.display = roleSelect.value === 'scheduler' ? 'block' : 'none'; });
+        _wireScopePicker(modal);
 
         const closeModal = () => modal.remove();
         document.getElementById('modal-close').addEventListener('click', closeModal);
@@ -532,24 +625,26 @@ function _wsK(key) {
         document.getElementById('invite-form').addEventListener('submit', async (e) => {
             e.preventDefault();
             const email = document.getElementById('invite-email').value.trim();
-            const role = document.getElementById('invite-role').value;
+            const roleVal = document.getElementById('invite-role').value;
             const errorEl = document.getElementById('invite-error');
             const successEl = document.getElementById('invite-success');
             errorEl.textContent = ''; successEl.textContent = '';
-            if (!email || !role) { errorEl.textContent = 'Please fill in all required fields'; return; }
+            if (!email || !roleVal) { errorEl.textContent = 'Please fill in all required fields'; return; }
 
-            const subdivisionIds = [...modal.querySelectorAll('input[name="subdivision"]:checked')].map(cb => cb.value);
-            const accessGroupId = document.getElementById('invite-access-group')?.value || null;
+            const isGroup = roleVal.indexOf('group:') === 0;
+            const role = isGroup ? 'manager' : roleVal;
+            const accessGroupId = isGroup ? roleVal.slice(6) : null;
+            const dataScope = _readScopePicker(modal);
 
             try {
-                const result = await window.AccessControl.inviteTeamMember(email, role, subdivisionIds);
+                const result = await window.AccessControl.inviteTeamMember(email, role, [], '', dataScope);
                 if (result.error) { errorEl.textContent = result.error; return; }
                 if (accessGroupId && result.data && result.data.id && window.supabase) {
                     const { data: agRes, error: agErr } = await window.supabase.rpc('assign_member_access_group', {
                         p_member_id: result.data.id, p_group_id: accessGroupId
                     });
                     if (agErr || !agRes || !agRes.success) {
-                        errorEl.textContent = 'Invite sent, but the access group could not be assigned — set it from Edit instead.';
+                        errorEl.textContent = 'Invite sent, but the role could not be assigned — set it from Edit instead.';
                     }
                 }
                 successEl.innerHTML = `
@@ -560,7 +655,8 @@ function _wsK(key) {
                     </div>
                     <div style="margin-top:10px;font-size:0.8rem;color:var(--slate-500);">Or share: <input type="text" value="${result.inviteUrl}" readonly style="width:100%;margin-top:4px;padding:6px 8px;font-size:0.8rem;border:1px solid var(--slate-200);border-radius:4px;" onclick="this.select()"></div>`;
                 document.getElementById('copy-invite-link')?.addEventListener('click', async () => { await copyToClipboard(result.inviteUrl); showToast('Invite link copied!'); });
-                document.getElementById('send-invite-email')?.addEventListener('click', async () => { await sendInviteEmail(email, result.inviteUrl, window.AccessControl?.getRoleDisplayName(role) || role); });
+                const roleLabel = isGroup ? (accessGroups.find(g => g.id === accessGroupId) || {}).name : (window.AccessControl?.getRoleDisplayName(role) || role);
+                document.getElementById('send-invite-email')?.addEventListener('click', async () => { await sendInviteEmail(email, result.inviteUrl, roleLabel || role); });
                 await refreshData();
                 const fa = modal.querySelector('.form-actions');
                 if (fa) { fa.innerHTML = `<button type="button" class="btn-primary" id="done-invite" style="width:100%;">Done</button>`; document.getElementById('done-invite')?.addEventListener('click', () => { closeModal(); const c = document.getElementById('team-card'); if (c) renderTeamCard(c); }); }
@@ -573,10 +669,20 @@ function _wsK(key) {
     // =========================================================================
 
     async function showEditMemberModal(member) {
-        const subdivisions = window.AccessControl?.getSubdivisions() || [];
         const meDivisions = await getMeDivisions(false);
         const accessGroups = await fetchAccessGroups();
         const hasGroup = !!member.access_group_id;
+        // A member who predates this picker has no data_scope of their own yet,
+        // but may already be restricted the OLD way (assigned_divisions, set
+        // from a now-legacy named subdivision group). Seed from that rather
+        // than defaulting to "Everyone" — saving this form always re-derives
+        // their scope from whatever the picker shows, so seeding wrong would
+        // silently lift an existing restriction the moment anyone hit Save.
+        const initialScope = member.data_scope || (
+            (member.assigned_divisions && member.assigned_divisions.length)
+                ? { type: 'divisions', divisions: member.assigned_divisions.slice() }
+                : { type: 'all' }
+        );
 
         const modal = document.createElement('div');
         modal.className = 'modal-overlay';
@@ -587,30 +693,16 @@ function _wsK(key) {
                 <p style="color: var(--slate-600); margin-bottom: 16px;">${member.email}</p>
                 <form id="edit-member-form">
                     <div class="form-group">
-                        <label for="edit-role">Account type</label>
+                        <label for="edit-role">Role</label>
                         <select id="edit-role">
-                            <option value="admin" ${member.role === 'admin' ? 'selected' : ''}>Admin</option>
-                            <option value="manager" ${member.role === 'manager' ? 'selected' : ''}>Manager</option>
-                            <option value="scheduler" ${member.role === 'scheduler' ? 'selected' : ''}>Scheduler</option>
-                            <option value="viewer" ${member.role === 'viewer' ? 'selected' : ''}>Viewer</option>
+                            <option value="admin" ${member.role === 'admin' && !hasGroup ? 'selected' : ''}>Admin</option>
+                            <option value="manager" ${member.role === 'manager' && !hasGroup ? 'selected' : ''}>Manager</option>
+                            <option value="scheduler" ${member.role === 'scheduler' && !hasGroup ? 'selected' : ''}>Scheduler</option>
+                            <option value="viewer" ${member.role === 'viewer' && !hasGroup ? 'selected' : ''}>Viewer</option>
+                            ${accessGroups.length ? `<optgroup label="Custom roles">${accessGroups.map(g => `<option value="group:${g.id}" ${member.access_group_id === g.id ? 'selected' : ''}>${_tsuEsc(g.name)}</option>`).join('')}</optgroup>` : ''}
                         </select>
                     </div>
-                    <div class="form-group" id="edit-subdivisions-group" style="display: ${member.role === 'scheduler' ? 'block' : 'none'};">
-                        <label>Division Groups</label>
-                        ${subdivisions.length > 0 ? `<div class="subdivision-checkboxes">${subdivisions.map(sub => {
-                            const divPills = sub.divisions?.length > 0
-                                ? renderDivisionPills(sub.divisions, meDivisions)
-                                : '<span style="color:var(--slate-400);font-size:0.8rem;">No divisions</span>';
-                            return `
-                            <label class="checkbox-item" style="border-left: 3px solid ${sub.color}; padding-left: 10px;">
-                                <input type="checkbox" name="subdivision" value="${sub.id}" ${member.subdivision_ids?.includes(sub.id) ? 'checked' : ''}>
-                                <div style="display:flex;flex-direction:column;gap:2px;">
-                                    <span>${_tsuEsc(sub.name)}</span>
-                                    <div style="margin-top:2px;">${divPills}</div>
-                                </div>
-                            </label>`;
-                        }).join('')}</div>` : '<p style="color: var(--slate-500);">No division groups available</p>'}
-                    </div>
+                    ${_renderScopePicker('edit', initialScope, meDivisions)}
                     <div class="form-group">
                         <label for="edit-display-name">Display name <span style="font-weight:400;color:var(--slate-400);">— shown to parents</span></label>
                         <input type="text" id="edit-display-name" value="${_tsuEsc(member.display_name || member.name || '')}" placeholder="e.g. Rabbi A">
@@ -621,13 +713,6 @@ function _wsK(key) {
                     </div>
                     <div class="form-group">
                         <label class="checkbox-item" style="cursor:pointer;"><input type="checkbox" id="edit-contactable" ${member.parent_contactable ? 'checked' : ''}> <span>Parents can message this person</span></label>
-                    </div>
-                    <div class="form-group">
-                        <label for="edit-access-group">Role <span style="font-weight:400;color:var(--slate-400);">— a named, reusable permission set (optional)</span></label>
-                        <select id="edit-access-group">
-                            <option value="">No role — configure apps and sections individually below</option>
-                            ${accessGroups.map(g => `<option value="${g.id}" ${member.access_group_id === g.id ? 'selected' : ''}>${_tsuEsc(g.name)}</option>`).join('')}
-                        </select>
                     </div>
                     <div id="edit-individual-access-products" style="display:${hasGroup ? 'none' : 'block'};">
                         <div class="form-group">
@@ -670,12 +755,15 @@ function _wsK(key) {
             </div>`;
 
         document.body.appendChild(modal);
+        _wireScopePicker(modal);
+        const roleSel = document.getElementById('edit-role');
+        const isGroupVal = (v) => v.indexOf('group:') === 0;
         const _accessBtn = document.getElementById('edit-open-access');
         if (_accessBtn) _accessBtn.addEventListener('click', () => {
             if (!window.CampistryAccessSettings) { alert('Access settings not loaded'); return; }
-            const groupSel = document.getElementById('edit-access-group');
-            const currentGroupId = groupSel ? (groupSel.value || null) : null;
-            const currentGroup = currentGroupId ? _accessGroups.find(g => g.id === currentGroupId) : null;
+            const roleVal = roleSel.value;
+            const currentGroupId = isGroupVal(roleVal) ? roleVal.slice(6) : null;
+            const currentGroup = currentGroupId ? accessGroups.find(g => g.id === currentGroupId) : null;
             // Seed the fine-tune matrix from the ASSIGNED ROLE's own grants when
             // this person has no bespoke overrides of their own yet — otherwise
             // "Configure" on a grouped person would open to a blank slate instead
@@ -697,7 +785,7 @@ function _wsK(key) {
                     });
                     if (!error && data && data.success) {
                         member.access_group_id = null;
-                        if (groupSel) groupSel.value = '';
+                        roleSel.value = 'manager';
                         const prodBlock = document.getElementById('edit-individual-access-products');
                         if (prodBlock) prodBlock.style.display = 'block';
                         const hint = document.getElementById('edit-access-hint');
@@ -709,11 +797,11 @@ function _wsK(key) {
                 if (sum) sum.textContent = _accessSummary(member);
             });
         });
-        document.getElementById('edit-role').addEventListener('change', () => { document.getElementById('edit-subdivisions-group').style.display = document.getElementById('edit-role').value === 'scheduler' ? 'block' : 'none'; });
-        document.getElementById('edit-access-group').addEventListener('change', (e) => {
-            document.getElementById('edit-individual-access-products').style.display = e.target.value ? 'none' : 'block';
+        roleSel.addEventListener('change', () => {
+            const grouped = isGroupVal(roleSel.value);
+            document.getElementById('edit-individual-access-products').style.display = grouped ? 'none' : 'block';
             const hint = document.getElementById('edit-access-hint');
-            if (hint) hint.textContent = e.target.value
+            if (hint) hint.textContent = grouped
                 ? 'Customizing will detach this person from their Role — future changes to the Role won\'t apply to them anymore.'
                 : 'Limit them to parts of an app — e.g. the roster but not billing.';
         });
@@ -726,20 +814,27 @@ function _wsK(key) {
 
         document.getElementById('edit-member-form').addEventListener('submit', async (e) => {
             e.preventDefault();
-            const role = document.getElementById('edit-role').value;
+            const roleVal = roleSel.value;
+            const isGroup = isGroupVal(roleVal);
+            const role = isGroup ? 'manager' : roleVal;
+            const groupId = isGroup ? roleVal.slice(6) : null;
             const errorEl = document.getElementById('edit-member-error');
-            const subdivisionIds = [...modal.querySelectorAll('input[name="subdivision"]:checked')].map(cb => cb.value);
             const display_name = document.getElementById('edit-display-name').value.trim() || null;
             const department = document.getElementById('edit-department').value.trim() || null;
             const parent_contactable = document.getElementById('edit-contactable').checked;
-            const groupId = document.getElementById('edit-access-group').value || null;
-            const updates = { role, subdivision_ids: subdivisionIds, display_name, department, parent_contactable };
+            const dataScope = _readScopePicker(modal);
+            const updates = {
+                role, display_name, department, parent_contactable,
+                subdivision_ids: [], // fully superseded by data_scope below, going forward
+                data_scope: dataScope,
+                assigned_divisions: _scopeToAssignedDivisions(dataScope)
+            };
             // Only touch product_access here when NOT assigned to a group — a
             // grouped member's app/section access resolves from the group
             // (get_my_access, migration 097), so their own product_access column
             // is left untouched rather than overwritten with an empty selection
             // the "individual access" block never rendered for them.
-            if (!groupId) {
+            if (!isGroup) {
                 updates.product_access = [...modal.querySelectorAll('input[name="product"]:checked')].map(cb => cb.value);
             }
             try {
@@ -752,7 +847,7 @@ function _wsK(key) {
                     if (agErr || !agRes || !agRes.success) {
                         errorEl.textContent = (agRes && agRes.error === 'cannot_restrict_admin')
                             ? 'Owners and admins always have full access — change their role first.'
-                            : 'Saved role and details, but could not set the access group.';
+                            : 'Saved role and details, but could not set the role.';
                         return;
                     }
                 }
