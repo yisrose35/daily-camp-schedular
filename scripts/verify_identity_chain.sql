@@ -1,5 +1,5 @@
 -- ============================================================================
--- Confirm migrations 222-264 are in and doing their job.
+-- Confirm migrations 222-265 are in and doing their job.
 --
 -- Paste the whole thing into the Supabase SQL Editor. It is READ ONLY — one
 -- SELECT, nothing is created, changed or deleted, and the two purge functions
@@ -572,6 +572,11 @@ UNION ALL
     ('264  a plan charges the amounts the office set',
      CASE WHEN pg_get_functiondef(to_regprocedure('public.plan_due(jsonb,jsonb,text)')) !~ 'amounts'
           THEN 'apply 264 — autopay ignores the amounts typed into a payment plan and splits the whole balance evenly'
+          ELSE 'ok' END),
+    -- A Zelle / bank-transfer payment reaches the family's ledger (TED-077).
+    ('265  a bank deposit reaches the ledger',
+     CASE WHEN NOT EXISTS (SELECT 1 FROM pg_trigger WHERE tgname = 'trg_bank_deposit_to_ledger' AND NOT tgisinternal)
+          THEN 'apply 265 — a Zelle or bank-transfer payment never lowers a family''s balance, and autopay collects it again'
           ELSE 'ok' END)
     ) AS x(item, result)
 

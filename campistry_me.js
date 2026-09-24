@@ -16430,6 +16430,10 @@ function buildFamilyLedgers(){
                 if(e.kind==='charge'&&e.reason==='tuition'&&src.enrollmentId)key='t:'+src.enrollmentId;
                 else if(e.kind==='credit'&&(e.reason==='discount'||e.reason==='sibling')&&src.enrollmentId)key='d:'+src.enrollmentId;
                 else if((e.kind==='payment'||e.kind==='refund')&&src.paymentId)key='p:'+src.paymentId;
+                // A bank deposit posted to the ledger (migration 265) is the row
+                // 3b already shows for it — but only THAT row: a deposit moved to
+                // another family leaves a payment and its reversal here, both shown.
+                else if((e.kind==='payment'||e.kind==='refund')&&src.depositId)key='p:'+src.depositId;
                 else if(e.kind==='credit'&&src.creditId)key='x:'+src.creditId;
                 else if(e.kind==='charge'&&src.chargeId)key='c:'+src.chargeId;
                 if(key&&l._seen[key])return;
@@ -16451,7 +16455,7 @@ function buildFamilyLedgers(){
                     l.entries.push({type:'payment',category:label||'Payment',desc:e.note||'Payment received',amount:amt,date:e.date||'',ref:e.id,status:''});
                     l.totalPayments+=amt;l.totalGrossPayments+=amt;
                 }
-                if(key)l._seen[key]=1;
+                if(key&&!src.depositId)l._seen[key]=1;
             });
         });
     }
