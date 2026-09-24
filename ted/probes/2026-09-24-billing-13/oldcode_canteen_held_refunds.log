@@ -1,0 +1,88 @@
+TAP version 13
+# Subtest: TED-116: the office lists the held refunds
+ok 1 - TED-116: the office lists the held refunds
+  ---
+  duration_ms: 174.931764
+  type: 'test'
+  ...
+# Subtest: TED-116: "it went through" puts it on the child's history, and the wallet stays where it is
+ok 2 - TED-116: "it went through" puts it on the child's history, and the wallet stays where it is
+  ---
+  duration_ms: 159.139395
+  type: 'test'
+  ...
+# Subtest: TED-116: a reference already used for another refund is refused, not taken
+ok 3 - TED-116: a reference already used for another refund is refused, not taken
+  ---
+  duration_ms: 167.71817
+  type: 'test'
+  ...
+# Subtest: TED-116: "nothing went through" puts the $20 back — but never for a refund still on its way
+ok 4 - TED-116: "nothing went through" puts the $20 back — but never for a refund still on its way
+  ---
+  duration_ms: 325.081166
+  type: 'test'
+  ...
+# Subtest: TED-116: a new refund for that child waits for the earlier one; "not there" gives it back and sends the new one once
+ok 5 - TED-116: a new refund for that child waits for the earlier one; "not there" gives it back and sends the new one once
+  ---
+  duration_ms: 169.836316
+  type: 'test'
+  ...
+# Subtest: TED-116: a Stripe refund is not settled by hand
+ok 6 - TED-116: a Stripe refund is not settled by hand
+  ---
+  duration_ms: 172.944175
+  type: 'test'
+  ...
+# Subtest: TED-116: Refund All names the child whose earlier refund is unanswered
+ok 7 - TED-116: Refund All names the child whose earlier refund is unanswered
+  ---
+  duration_ms: 160.640749
+  type: 'test'
+  ...
+# Subtest: TED-116/124: the helpers the refund windows call are reachable from the page
+ok 8 - TED-116/124: the helpers the refund windows call are reachable from the page
+  ---
+  duration_ms: 0.97717
+  type: 'test'
+  ...
+# Subtest: TED-116: Snacks shows the held refund with both answers, and sends the office's answer
+ok 9 - TED-116: Snacks shows the held refund with both answers, and sends the office's answer
+  ---
+  duration_ms: 3.008031
+  type: 'test'
+  ...
+# Subtest: TED-134: a staff member who is not the owner/admin is told so — not "no card processor connected"
+not ok 10 - TED-134: a staff member who is not the owner/admin is told so — not "no card processor connected"
+  ---
+  duration_ms: 3.011567
+  type: 'test'
+  location: '/tmp/claude-0/-home-user-daily-camp-schedular/39278441-0cf3-5f6a-bf8e-a51bef67e95d/scratchpad/wt_old/tests/canteen_held_refunds.test.js:158:1'
+  failureType: 'testCodeFailure'
+  error: |-
+    Expected values to be strictly equal:
+    + actual - expected
+    
+    + 'none'
+    - 'forbidden'
+    
+  code: 'ERR_ASSERTION'
+  name: 'AssertionError'
+  expected: 'forbidden'
+  actual: 'none'
+  operator: 'strictEqual'
+  stack: |-
+    TestContext.<anonymous> (/tmp/claude-0/-home-user-daily-camp-schedular/39278441-0cf3-5f6a-bf8e-a51bef67e95d/scratchpad/wt_old/tests/canteen_held_refunds.test.js:170:12)
+    async Test.run (node:internal/test_runner/test:1054:7)
+    async Test.processPendingSubtests (node:internal/test_runner/test:744:7)
+  ...
+1..10
+# tests 10
+# suites 0
+# pass 9
+# fail 1
+# cancelled 0
+# skipped 0
+# todo 0
+# duration_ms 1422.770815

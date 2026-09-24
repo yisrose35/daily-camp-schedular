@@ -1,0 +1,18 @@
+== new pgtest 278, OLD migration 278 (f3ee2ed)
+  FAIL   278_a_refund_that_fails_later_puts_the_money_back
+           psql:scripts/pgtests/278_a_refund_that_fails_later_puts_the_money_back.sql:116: ERROR:  no Billing notice for the failed canteen refund: {"amount": 20.00, "account": "Avi", "balance": 20.00, "canteen": true, "success": true}
+           CONTEXT:  PL/pgSQL function inline_code_block line 26 at RAISE
+
+0 passed, 1 failed — against 126 migrations, one database copy per test
+failed: 278_a_refund_that_fails_later_puts_the_money_back
+== new pgtest 278, TODAY's 278 with the TED-129 UPDATE removed
+  FAIL   278_a_refund_that_fails_later_puts_the_money_back
+           psql:scripts/pgtests/278_a_refund_that_fails_later_puts_the_money_back.sql:116: ERROR:  TED-129: the put-back refund's reservation still says it was sent
+           CONTEXT:  PL/pgSQL function inline_code_block line 29 at RAISE
+
+0 passed, 1 failed — against 126 migrations, one database copy per test
+failed: 278_a_refund_that_fails_later_puts_the_money_back
+== new pgtest 278, TODAY's 278 unchanged (control)
+  ok     278_a_refund_that_fails_later_puts_the_money_back
+
+1 passed, 0 failed — against 126 migrations, one database copy per test

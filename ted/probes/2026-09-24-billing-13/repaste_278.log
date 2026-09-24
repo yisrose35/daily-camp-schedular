@@ -1,0 +1,6 @@
+only the EARLIER 278: reverse_failed_stripe_refund(uuid,text,text)
+    check script: 1 is it there|278 a refund that fails later puts the money back|apply 278 BEFORE redeploying stripe-webhook — a refund Stripe fails later still shows as refunded
+today's 278 pasted (1): reverse_failed_stripe_refund(uuid,text,text,numeric,text)
+    check script: 1 is it there|278 a refund that fails later puts the money back|ok
+today's 278 pasted (2): reverse_failed_stripe_refund(uuid,text,text,numeric,text)
+    check script: 1 is it there|278 a refund that fails later puts the money back|ok
