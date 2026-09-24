@@ -199,6 +199,7 @@ const MIGRATIONS = [
     '263_a_cancelled_charge_leaves_the_ledger',
     '264_a_plan_charges_the_amounts_the_office_set',
     '265_a_bank_deposit_reaches_the_ledger',
+    '266_an_old_tab_cannot_undo_the_server',
 ];
 
 // The one thing the stubs deliberately get wrong for our purposes: they define

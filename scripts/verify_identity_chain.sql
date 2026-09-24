@@ -1,5 +1,5 @@
 -- ============================================================================
--- Confirm migrations 222-265 are in and doing their job.
+-- Confirm migrations 222-266 are in and doing their job.
 --
 -- Paste the whole thing into the Supabase SQL Editor. It is READ ONLY — one
 -- SELECT, nothing is created, changed or deleted, and the two purge functions
@@ -577,6 +577,13 @@ UNION ALL
     ('265  a bank deposit reaches the ledger',
      CASE WHEN NOT EXISTS (SELECT 1 FROM pg_trigger WHERE tgname = 'trg_bank_deposit_to_ledger' AND NOT tgisinternal)
           THEN 'apply 265 — a Zelle or bank-transfer payment never lowers a family''s balance, and autopay collects it again'
+          ELSE 'ok' END),
+    -- An office tab left open cannot undo what the server wrote (TED-078).
+    ('266  an old tab cannot undo the server',
+     CASE WHEN to_regprocedure('public._merge_family_from_page(jsonb,jsonb)') IS NULL
+               OR pg_get_functiondef(to_regprocedure('public.sync_camp_billing(uuid,jsonb,jsonb,jsonb,jsonb)')) !~ '_merge_family_from_page'
+               OR pg_get_functiondef(to_regprocedure('public.project_camp_families()')) !~ '_merge_family_from_page'
+          THEN 'apply 266 — a Billing tab left open can undo autopay''s work and the family is debited again'
           ELSE 'ok' END)
     ) AS x(item, result)
 
