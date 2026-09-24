@@ -1,0 +1,141 @@
+TAP version 13
+# Subtest: TED-113: cardknox — Gold's answer is lost: held for the office, never declined; Silver is still charged tonight
+ok 1 - TED-113: cardknox — Gold's answer is lost: held for the office, never declined; Silver is still charged tonight
+  ---
+  duration_ms: 209.407262
+  type: 'test'
+  ...
+# Subtest: TED-113: banquest — Gold's answer is lost: held for the office, never declined; Silver is still charged tonight
+ok 2 - TED-113: banquest — Gold's answer is lost: held for the office, never declined; Silver is still charged tonight
+  ---
+  duration_ms: 179.330513
+  type: 'test'
+  ...
+# Subtest: TED-113: the next night, a held charge is not charged again
+ok 3 - TED-113: the next night, a held charge is not charged again
+  ---
+  duration_ms: 182.22925
+  type: 'test'
+  ...
+# Subtest: TED-113: Stripe — the answer is lost, the runner asks again with the same key: charged once, recorded
+ok 4 - TED-113: Stripe — the answer is lost, the runner asks again with the same key: charged once, recorded
+  ---
+  duration_ms: 1680.952892
+  type: 'test'
+  ...
+# Subtest: TED-113: Stripe never gives a final answer: held for the office, not declined
+ok 5 - TED-113: Stripe never gives a final answer: held for the office, not declined
+  ---
+  duration_ms: 4687.177342
+  type: 'test'
+  ...
+# Subtest: TED-113: an error nobody foresaw in one family stops only that family
+ok 6 - TED-113: an error nobody foresaw in one family stops only that family
+  ---
+  duration_ms: 181.080764
+  type: 'test'
+  ...
+# Subtest: TED-113: Billing shows a held autopay charge, and the office records it with its reference
+ok 7 - TED-113: Billing shows a held autopay charge, and the office records it with its reference
+  ---
+  duration_ms: 1.313625
+  type: 'test'
+  ...
+# Subtest: TED-113: "nothing went through" needs a second, deliberate yes; cancelling changes nothing
+ok 8 - TED-113: "nothing went through" needs a second, deliberate yes; cancelling changes nothing
+  ---
+  duration_ms: 0.784247
+  type: 'test'
+  ...
+# Subtest: TED-120: on Stripe the office's answer must be the payment's id (pi_), never a charge id
+not ok 9 - TED-120: on Stripe the office's answer must be the payment's id (pi_), never a charge id
+  ---
+  duration_ms: 2.93674
+  type: 'test'
+  location: '/tmp/claude-0/-home-user-daily-camp-schedular/39278441-0cf3-5f6a-bf8e-a51bef67e95d/scratchpad/old92/tests/autopay_lost_answer.test.js:184:1'
+  failureType: 'testCodeFailure'
+  error: |-
+    Expected values to be strictly deep-equal:
+    + actual - expected
+    
+      [
+        [
+    +     'resolve_unconfirmed_autopay',
+    -     'stripe-charge',
+          {
+    +       p_camp_id: 'camp1',
+    +       p_family_key: 'gold',
+    +       p_plan_ref: 'plan_g',
+    +       p_reference: 'pi_3Nx',
+    +       p_went_through: true
+    -       action: 'confirmAutopay',
+    -       familyKey: 'gold',
+    -       paymentIntentId: 'pi_3Nx',
+    -       planRef: 'plan_g'
+          }
+        ]
+      ]
+    
+  code: 'ERR_ASSERTION'
+  name: 'AssertionError'
+  expected:
+    0:
+      0: 'stripe-charge'
+      1:
+        action: 'confirmAutopay'
+        familyKey: 'gold'
+        planRef: 'plan_g'
+        paymentIntentId: 'pi_3Nx'
+  actual:
+    0:
+      0: 'resolve_unconfirmed_autopay'
+      1:
+        p_camp_id: 'camp1'
+        p_family_key: 'gold'
+        p_plan_ref: 'plan_g'
+        p_went_through: true
+        p_reference: 'pi_3Nx'
+  operator: 'deepStrictEqual'
+  stack: |-
+    TestContext.<anonymous> (/tmp/claude-0/-home-user-daily-camp-schedular/39278441-0cf3-5f6a-bf8e-a51bef67e95d/scratchpad/old92/tests/autopay_lost_answer.test.js:192:12)
+    async Test.run (node:internal/test_runner/test:1054:7)
+    async Test.processPendingSubtests (node:internal/test_runner/test:744:7)
+  ...
+# Subtest: TED-120: a Stripe payment Stripe says is not this family's is not recorded, and the office is told why
+not ok 10 - TED-120: a Stripe payment Stripe says is not this family's is not recorded, and the office is told why
+  ---
+  duration_ms: 1.016326
+  type: 'test'
+  location: '/tmp/claude-0/-home-user-daily-camp-schedular/39278441-0cf3-5f6a-bf8e-a51bef67e95d/scratchpad/old92/tests/autopay_lost_answer.test.js:196:1'
+  failureType: 'testCodeFailure'
+  error: 'the hold was cleared for a refused payment'
+  code: 'ERR_ASSERTION'
+  name: 'AssertionError'
+  expected: true
+  operator: '=='
+  stack: |-
+    TestContext.<anonymous> (/tmp/claude-0/-home-user-daily-camp-schedular/39278441-0cf3-5f6a-bf8e-a51bef67e95d/scratchpad/old92/tests/autopay_lost_answer.test.js:200:12)
+    async Test.run (node:internal/test_runner/test:1054:7)
+    async Test.processPendingSubtests (node:internal/test_runner/test:744:7)
+  ...
+# Subtest: TED-123: out of time, the run stops between families and starts a new run after its bookmark
+ok 11 - TED-123: out of time, the run stops between families and starts a new run after its bookmark
+  ---
+  duration_ms: 3188.352512
+  type: 'test'
+  ...
+# Subtest: TED-123: the continuing run starts after the bookmark — nobody charged or checked twice
+ok 12 - TED-123: the continuing run starts after the bookmark — nobody charged or checked twice
+  ---
+  duration_ms: 176.997166
+  type: 'test'
+  ...
+1..12
+# tests 12
+# suites 0
+# pass 10
+# fail 2
+# cancelled 0
+# skipped 0
+# todo 0
+# duration_ms 10602.710484

@@ -1,0 +1,18 @@
+TAP version 13
+# \# control, no flag on the plan: charges sent 1 | results ["charged"]
+# \# question answered, deposit_review flag left from last night (retry 2026-09-27): charges sent 1 | results [{"result":"charged"}]
+# Subtest: probe
+ok 1 - probe
+  ---
+  duration_ms: 356.947307
+  type: 'test'
+  ...
+1..1
+# tests 1
+# suites 0
+# pass 1
+# fail 0
+# cancelled 0
+# skipped 0
+# todo 0
+# duration_ms 443.190087

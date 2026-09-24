@@ -1,0 +1,30 @@
+=== m278a (pgtest 278)
+  FAIL   278_a_refund_that_fails_later_puts_the_money_back
+           psql:scripts/pgtests/278_a_refund_that_fails_later_puts_the_money_back.sql:96: ERROR:  a re-sent failure put the money back twice: {"amount": 20.00, "account": "Avi", "balance": 40.00, "canteen": true, "success": true} balance 40.00
+           CONTEXT:  PL/pgSQL function inline_code_block line 36 at RAISE
+
+0 passed, 1 failed — against 126 migrations, one database copy per test
+failed: 278_a_refund_that_fails_later_puts_the_money_back
+exit 1
+=== m278b (pgtest 278)
+  FAIL   278_a_refund_that_fails_later_puts_the_money_back
+           psql:scripts/pgtests/278_a_refund_that_fails_later_puts_the_money_back.sql:96: ERROR:  a re-sent family failure: {"amount": 200.00, "family": true, "balance": -200.00, "success": true, "familyKey": "gold"} owes -200.00
+           CONTEXT:  PL/pgSQL function inline_code_block line 56 at RAISE
+
+0 passed, 1 failed — against 126 migrations, one database copy per test
+failed: 278_a_refund_that_fails_later_puts_the_money_back
+exit 1
+=== m279 another-family rule removed (pgtest 279)
+  FAIL   279_a_stripe_autopay_answer_is_checked_with_stripe
+           psql:scripts/pgtests/279_a_stripe_autopay_answer_is_checked_with_stripe.sql:94: ERROR:  TED-120: another family's same-amount payment was taken for Gold: {"error": "stripe_check_needed", "success": false}
+           CONTEXT:  PL/pgSQL function inline_code_block line 7 at RAISE
+
+0 passed, 1 failed — against 126 migrations, one database copy per test
+failed: 279_a_stripe_autopay_answer_is_checked_with_stripe
+exit 1
+=== unchanged 278 279
+  ok     278_a_refund_that_fails_later_puts_the_money_back
+  ok     279_a_stripe_autopay_answer_is_checked_with_stripe
+
+2 passed, 0 failed — against 126 migrations, one database copy per test
+exit 0

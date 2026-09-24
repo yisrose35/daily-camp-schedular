@@ -1,0 +1,106 @@
+TAP version 13
+# Subtest: the catalogue was actually read
+ok 1 - the catalogue was actually read
+  ---
+  duration_ms: 1.140931
+  type: 'test'
+  ...
+# Subtest: none of the leaking readers is reachable by anon any more
+ok 2 - none of the leaking readers is reachable by anon any more
+  ---
+  duration_ms: 0.268179
+  type: 'test'
+  ...
+# Subtest: each one asks who is calling, not just what camp
+ok 3 - each one asks who is calling, not just what camp
+  ---
+  duration_ms: 0.267499
+  type: 'test'
+  ...
+# Subtest: a stranger gets nothing from the canteen
+ok 4 - a stranger gets nothing from the canteen
+  ---
+  duration_ms: 0.207606
+  type: 'test'
+  ...
+# Subtest: a parent gets their own children, not the camp
+ok 5 - a parent gets their own children, not the camp
+  ---
+  duration_ms: 0.168085
+  type: 'test'
+  ...
+# Subtest: staff still get the whole camp, and are checked first
+ok 6 - staff still get the whole camp, and are checked first
+  ---
+  duration_ms: 0.148778
+  type: 'test'
+  ...
+# Subtest: the POS still qualifies as staff
+ok 7 - the POS still qualifies as staff
+  ---
+  duration_ms: 0.29415
+  type: 'test'
+  ...
+# Subtest: the helpers are camp-SCOPED, unlike get_user_role
+ok 8 - the helpers are camp-SCOPED, unlike get_user_role
+  ---
+  duration_ms: 0.148851
+  type: 'test'
+  ...
+# Subtest: the helpers are not themselves callable by anon
+ok 9 - the helpers are not themselves callable by anon
+  ---
+  duration_ms: 0.372761
+  type: 'test'
+  ...
+# Subtest: my two writers are service_role only
+ok 10 - my two writers are service_role only
+  ---
+  duration_ms: 0.398501
+  type: 'test'
+  ...
+# Subtest: no camp-scoped SECURITY DEFINER function is open to anon without a gate
+ok 11 - no camp-scoped SECURITY DEFINER function is open to anon without a gate
+  ---
+  duration_ms: 1.952327
+  type: 'test'
+  ...
+# Subtest: nothing that WRITES is reachable by anon at all
+ok 12 - nothing that WRITES is reachable by anon at all
+  ---
+  duration_ms: 0.758495
+  type: 'test'
+  ...
+# Subtest: no NEW migration reuses a number
+ok 13 - no NEW migration reuses a number
+  ---
+  duration_ms: 1.110036
+  type: 'test'
+  ...
+# Subtest: no migration looks for a CHECK by the word IN
+ok 14 - no migration looks for a CHECK by the word IN
+  ---
+  duration_ms: 20.993203
+  type: 'test'
+  ...
+# Subtest: every migration that widens a CHECK drops it by name first
+ok 15 - every migration that widens a CHECK drops it by name first
+  ---
+  duration_ms: 20.293726
+  type: 'test'
+  ...
+# Subtest: no RPC is left with an overload PostgREST cannot choose between
+ok 16 - no RPC is left with an overload PostgREST cannot choose between
+  ---
+  duration_ms: 20.084485
+  type: 'test'
+  ...
+1..16
+# tests 16
+# suites 0
+# pass 16
+# fail 0
+# cancelled 0
+# skipped 0
+# todo 0
+# duration_ms 218.880249

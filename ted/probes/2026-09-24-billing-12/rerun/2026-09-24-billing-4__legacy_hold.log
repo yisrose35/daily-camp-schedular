@@ -1,0 +1,6 @@
+hold on old single plan #0: {"success": true}
+flag old single plan #0   : true
+after stale save: plan.pendingCharge = {"since":"2026-06-01","amount":500,"dueDate":"2026-06-01","paymentIntentId":"pi_ach_1"} | collectionBlocked.reason = declined
+
+hold on plans[0] (#0, the $300 plan): {"success": true}
+after the office removed the $300 plan: plans = [{"total":200,"pendingCharge":null}]
