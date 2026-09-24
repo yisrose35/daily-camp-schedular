@@ -216,7 +216,7 @@ for (const type of ['refund.failed', 'refund.updated', 'charge.refund.updated'])
         assert.strictEqual(r.status, 200);
         assert.strictEqual(calls.length, 1, JSON.stringify(r.logs));
         assert.deepStrictEqual(calls[0].args, { p_camp_id: 'camp1', p_refund_id: 're_16', p_reason: 'expired or canceled card',
-            p_amount: 20, p_payment_ref: 'pi_1' });
+            p_amount: 20, p_payment_ref: 'pi_1', p_hold_key: 'scanteen:pi_1:2000:2000' });
     });
 }
 
@@ -282,10 +282,15 @@ test('TED-131: a booked failure alerts once; a repeat does not', () => {
     assert.strictEqual(alerted(again), 0);
 });
 
-test('TED-131: a failed refund with no camp anywhere still alerts the platform', () => {
-    const r = hook(refundEvent('refund.failed', 'failed'), `T.fetch = () => ({ id: 'x', metadata: {} });`);
+test('TED-131/137: a failed refund with no camp anywhere alerts the platform — once, however often Stripe sends it', () => {
+    const r = hook(refundEvent('refund.failed', 'failed'), `T.fetch = () => ({ id: 'x', metadata: {} });
+const alertsClaimed = new Set<string>();
+T.rpc.claim_refund_failure_alert = (a: any) => { const first = !alertsClaimed.has(a.p_refund_id); alertsClaimed.add(a.p_refund_id); return first; };
+// the same failure delivered four times (read once T.request is set)
+Object.defineProperty(T, 'requests', { get: () => [T.request, T.request, T.request, T.request] });`);
     assert.strictEqual(r.rpcs.filter(c => c.name === 'reverse_failed_stripe_refund').length, 0);
-    assert.strictEqual(alerted(r), 1, JSON.stringify(r.logs));
+    assert.deepStrictEqual(r.responses.map(x => x.status), [200, 200, 200, 200]);
+    assert.strictEqual(alerted(r), 1, 'alerts for one failure: ' + alerted(r));
 });
 
 // ── TED-133: charge.refunded asks Stripe how each refund stands NOW ────────
@@ -336,8 +341,8 @@ T.rpc.canteen_refund_view = () => (${JSON.stringify(holdsView('stripe', 'stripeP
 T.request = { headers: { Authorization: 'Bearer owner' }, body: { action: 'holds' } };`);
     // Avi: OLD 30 − 10 refunded + 10 failed back = 30; NEW 25 − 20 on its way = 5 → 35; wallet 70 → 35 now
     assert.deepStrictEqual(r.body.refundable.Avi, { camperId: 7, wallet: 70, card: 35, now: 35 });
-    // Bea: $50 top-up, wallet 12 less a $2 floor → 10
-    assert.deepStrictEqual(r.body.refundable.Bea, { camperId: 8, wallet: 10, card: 50, now: 10 });
+    // Bea: $50 top-up, wallet $12 — her $2 floor limits spending, not a refund (TED-142)
+    assert.deepStrictEqual(r.body.refundable.Bea, { camperId: 8, wallet: 12, card: 50, now: 12 });
     assert.strictEqual(r.body.holds.length, 1);
 });
 
@@ -388,4 +393,99 @@ test('TED-132: a tuition refund that failed and was put back can be refunded to 
     };
     assert.deepStrictEqual(run([pay, refund]), [], 'a refunded payment still offered');
     assert.deepStrictEqual(run([pay, refund, putBack]), [['pay_1', 500]]);
+});
+
+// ── TED-136: "refund it again from Billing" after a refund failed ──────────
+// Billing sends the SAME key for the same payment, amount and remainder. The
+// claim table kept the first, failed refund's answer under it forever, so the
+// second press replayed it: "Refunded $500", nothing sent.
+
+test('TED-136: pressing Refund again after the first refund failed makes a real second refund — once', () => {
+    const r = runEdge('stripe-refund', `
+T.env = { STRIPE_SECRET_KEY: 'sk_test', SUPABASE_URL: 'http://db', SUPABASE_ANON_KEY: 'anon', SUPABASE_SERVICE_ROLE_KEY: 'svc' };
+T.users = { owner: 'u-owner' };
+T.tables.camps = [{ id: 'camp1', owner: 'u-owner' }];
+T.rpc.camp_families_object = () => ({ gold: { stripeCustomerId: 'cus_gold' } });
+// refund_intents, as migration 198 keeps them: a settled claim answers with its result forever
+const claims: any = {};
+T.rpc.claim_refund_intent = (a: any) => { const c = claims[a.p_key]; if (c) return { claimed: false, previous: c.result || {} };
+  claims[a.p_key] = { result: null }; return { claimed: true }; };
+T.rpc.settle_refund_intent = (a: any) => { claims[a.p_key].result = a.p_result; return true; };
+T.rpc.release_refund_intent = (a: any) => { delete claims[a.p_key]; return true; };
+// Stripe: each key's first answer kept. re_1 is made by the first press and has
+// FAILED by the time anyone asks about it again (the card account was closed).
+const refunds: any = {}; const memory: any = {}; let n = 0; T.tables.__sent = [];
+T.fetch = (url: string, init: any) => {
+  if (url.includes('/payment_intents/pi_g')) return { id: 'pi_g', customer: 'cus_gold', amount: 50000 };
+  if (url.includes('/refunds/re_')) {
+    const id = url.split('/refunds/')[1]; const r = refunds[id];
+    if (!r) return { __status: 404, error: { type: 'invalid_request_error' } };
+    return Object.assign({}, r, id === 're_1' ? { status: 'failed', failure_reason: 'expired_or_canceled_card' } : {});
+  }
+  if (init.method === 'POST' && url.endsWith('/refunds')) {
+    const key = init.headers['Idempotency-Key'];
+    if (memory[key]) return Object.assign({}, memory[key], { __headers: { 'Idempotent-Replayed': 'true' } });
+    const r = { id: 're_' + (++n), status: 'succeeded', amount: 50000, created: Math.floor(Date.now() / 1000) };
+    refunds[r.id] = r; memory[key] = Object.assign({}, r); T.tables.__sent.push({ id: r.id, key });
+    return r;
+  }
+  return {};
+};
+const press = { headers: { Authorization: 'Bearer owner' }, body: { paymentIntentId: 'pi_g', amount: 500, idempotencyKey: 'rfnd_gold:pay_1:500:500' } };
+T.requests = [press, press, press];`);
+    const [first, again, third] = r.responses.map(x => x.body);
+    assert.strictEqual(first.refundId, 're_1');
+    // the office presses Refund again (Billing sends the same key): a NEW refund
+    assert.strictEqual(again.refundId, 're_2', 'the failed refund was replayed as if it had gone through: ' + JSON.stringify(again));
+    assert.ok(!again.replayed);
+    assert.deepStrictEqual(r.tables.__sent.map(x => x.key),
+        ['refund:camp1:rfnd_gold:pay_1:500:500', 'refund:camp1:rfnd_gold:pay_1:500:500:after:re_1']);
+    // pressed a third time (say its answer was lost): the second refund, replayed — nothing new sent
+    assert.strictEqual(third.refundId, 're_2');
+    assert.strictEqual(third.replayed, true);
+    assert.strictEqual(r.tables.__sent.length, 2, 'a third refund was sent');
+});
+
+test('TED-136: Stripe cannot be asked about the earlier refund — nothing is sent, and it is not booked', () => {
+    const r = runEdge('stripe-refund', `
+T.env = { STRIPE_SECRET_KEY: 'sk_test', SUPABASE_URL: 'http://db', SUPABASE_ANON_KEY: 'anon', SUPABASE_SERVICE_ROLE_KEY: 'svc' };
+T.users = { owner: 'u-owner' };
+T.tables.camps = [{ id: 'camp1', owner: 'u-owner' }];
+T.rpc.camp_families_object = () => ({ gold: { stripeCustomerId: 'cus_gold' } });
+T.rpc.claim_refund_intent = () => ({ claimed: false, previous: { refundId: 're_1', amount: 500 } });
+T.fetch = (url: string, init: any) => url.includes('/payment_intents/pi_g') ? { id: 'pi_g', customer: 'cus_gold', amount: 50000 }
+  : url.includes('/refunds/re_1') ? { __status: 503, error: { type: 'api_error' } } : {};
+T.request = { headers: { Authorization: 'Bearer owner' }, body: { paymentIntentId: 'pi_g', amount: 500, idempotencyKey: 'k1' } };`);
+    assert.strictEqual(r.body.uncertain, true, JSON.stringify(r.body));
+    assert.ok(!r.body.refundId, 'an answer the page would book as a refund');
+    assert.strictEqual(r.fetches.filter(f => f.method === 'POST').length, 0);
+});
+
+// ── TED-142: a balance floor is not held back from a refund ────────────────
+
+test('TED-142: Refund All returns the whole balance, floor and all', () => {
+    const src = canteen({ deposits: [{ pi: 'pi_top1', amount: 50, ts: 1 }], bal: 50, refunds: [] })
+      .replace("T.rpc.canteen_refund_view = () => ({ success: true, accounts: { Avi: { camperId: 7, balance: bal, balanceFloor: 0 } }",
+               "T.rpc.canteen_refund_view = () => ({ success: true, accounts: { Avi: { camperId: 7, balance: bal, balanceFloor: 10 } }");
+    assert.ok(/balanceFloor: 10/.test(src));
+    const r = runEdge('stripe-canteen-refund-all', src);
+    assert.strictEqual(r.body.totalRefunded, 50, JSON.stringify(r.body));
+    assert.strictEqual(r.tables.__bal, 0);
+    const one = runEdge('stripe-canteen-refund', src.replace(/T\.request = [^\n]*$/,
+        `T.request = { headers: { Authorization: 'Bearer owner' }, body: { camperId: 7, camperName: 'Avi', idempotencyKey: 'cref_f' } };`));
+    assert.strictEqual(one.body.totalRefunded, 50, JSON.stringify(one.body));
+});
+
+test('TED-142: Take Out Cash still keeps the floor, and says so — and where the rest can go', () => {
+    const C = require('../campistry_snacks_cash.js');
+    const S = { cashDailyMax: 0, cashReasonRequired: false };
+    const v = C.validate({ account: { balance: 50, balanceFloor: 10 }, transactions: [], camper: 'Avi', date: '2026-08-20', settings: S, amount: 50 });
+    assert.strictEqual(v.ok, false);
+    assert.match(v.error, /Only \$40\.00 available to take out — the other \$10\.00 is under the balance floor; refund it to the card \(Refund\) instead/);
+    const w = C.validate({ account: { balance: 10, balanceFloor: 10 }, transactions: [], camper: 'Avi', date: '2026-08-20', settings: S, amount: 5 });
+    assert.match(w.error, /under the balance floor — it cannot be taken out as cash; refund it to the card/);
+    // when the DAILY limit is what stops it, the floor is not blamed
+    const d = C.validate({ account: { balance: 50, balanceFloor: 10 }, transactions: [], camper: 'Avi', date: '2026-08-20',
+        settings: { cashDailyMax: 20, cashReasonRequired: false }, amount: 30 });
+    assert.strictEqual(d.error, 'Only $20.00 available to take out');
 });

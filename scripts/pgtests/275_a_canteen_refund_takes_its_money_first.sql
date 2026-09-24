@@ -78,10 +78,14 @@ BEGIN
     SELECT count(*) INTO n FROM canteen_transactions WHERE camp_id = c AND payload->>'stripeRefundId' = 're_late';
     IF bal <> 20 OR n <> 1 THEN RAISE EXCEPTION 'a refund confirmed after it was given back: balance % (want 20), lines %', bal, n; END IF;
 
-    -- the floor is respected
+    -- a balance floor limits a child's spending, not a refund to the parent
+    -- (TED-142): the whole balance can go back — and never more than it
     PERFORM public.canteen_account_save(c, 'Avi', jsonb_build_object('balance', 20.00, 'balanceFloor', 5));
+    r := public.reserve_canteen_refund(c, 'Avi', 'k3a', 25, 'cardknox', 'X1');
+    IF r->>'error' <> 'insufficient' OR (r->>'available')::numeric <> 20 THEN RAISE EXCEPTION 'more than the balance: %', r; END IF;
     r := public.reserve_canteen_refund(c, 'Avi', 'k3', 20, 'cardknox', 'X1');
-    IF r->>'error' <> 'insufficient' OR (r->>'available')::numeric <> 15 THEN RAISE EXCEPTION 'the floor: %', r; END IF;
+    IF (r->>'success')::boolean IS NOT TRUE THEN RAISE EXCEPTION 'TED-142: the floor was held back from a refund: %', r; END IF;
+    PERFORM public.release_canteen_refund_hold(c, 'k3');
 
     -- 5. the refund screens see what is on its way
     PERFORM public.reserve_canteen_refund(c, 'Avi', 'k4', 15, 'cardknox', 'X9');

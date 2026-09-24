@@ -134,8 +134,10 @@ BEGIN
                                   'balance', COALESCE((v_acct ->> 'balance')::numeric, 0));
     END IF;
 
-    v_avail := round(COALESCE(NULLIF(v_acct ->> 'balance', '')::numeric, 0)
-                   - COALESCE(NULLIF(v_acct ->> 'balanceFloor', '')::numeric, 0), 2);
+    -- The whole balance, never more: a balance floor keeps a child from
+    -- SPENDING below it, but a refund goes to the parent, floor and all
+    -- (TED-142) — up to $20 a child was otherwise never returnable.
+    v_avail := round(COALESCE(NULLIF(v_acct ->> 'balance', '')::numeric, 0), 2);
     IF v_amt > v_avail THEN
         RETURN jsonb_build_object('success', false, 'error', 'insufficient',
                                   'available', GREATEST(v_avail, 0));

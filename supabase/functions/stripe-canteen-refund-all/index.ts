@@ -56,6 +56,52 @@ function round2(n: number): number {
   return Math.round(n * 100) / 100;
 }
 
+// The ledger, indexed ONCE per run (TED-139): each top-up used to re-scan the
+// whole ledger for its refunds, and the holds for what is on its way — at 1,000
+// children × 15 top-ups that was ~3 s of CPU, over Supabase's limit for a
+// function, and the Snacks page then fell back to its week-only figure. The
+// same rules as before, by camper number (a row with no number: by name).
+type LedgerIndex = {
+  byId: Map<string, Record<string, any>[]>;
+  byName: Map<string, Record<string, any>[]>;
+  byNameNoId: Map<string, Record<string, any>[]>;
+  refunded: Map<string, number>;   // refunds from each payment, less ones failed and put back (278)
+  held: Map<string, number>;       // refunds of each payment on their way (275)
+};
+const __ledgerIndexes = new WeakMap<object, WeakMap<object, Map<string, LedgerIndex>>>();
+function ledgerIndex(transactions: Record<string, any>[], holds: Record<string, any>[], method: string, idField: string): LedgerIndex {
+  let byHolds = __ledgerIndexes.get(transactions);
+  if (!byHolds) { byHolds = new WeakMap(); __ledgerIndexes.set(transactions, byHolds); }
+  let cached = byHolds.get(holds);
+  if (!cached) { cached = new Map(); byHolds.set(holds, cached); }
+  const hit = cached.get(method + "|" + idField);
+  if (hit) return hit;
+  const idx: LedgerIndex = { byId: new Map(), byName: new Map(), byNameNoId: new Map(), refunded: new Map(), held: new Map() };
+  const add = (m: Map<string, Record<string, any>[]>, k: string, v: Record<string, any>) => { const a = m.get(k); if (a) a.push(v); else m.set(k, [v]); };
+  const bump = (m: Map<string, number>, k: string, n: number) => m.set(k, (m.get(k) || 0) + n);
+  for (const t of transactions) {
+    if (!t) continue;
+    if (t.kind === "deposit" && t.method === method && t[idField]) {
+      if (t.camperId != null) add(idx.byId, String(t.camperId), t); else add(idx.byNameNoId, String(t.camper), t);
+      add(idx.byName, String(t.camper), t);
+    } else if (t.kind === "refund" && t[idField]) {
+      bump(idx.refunded, String(t[idField]), Number(t.amount) || 0);
+    } else if (t.kind === "refund_failed" && t[idField]) {
+      bump(idx.refunded, String(t[idField]), -(Number(t.amount) || 0));
+    }
+  }
+  for (const h of holds) {
+    if (h && h.method === method && h.paymentRef) bump(idx.held, String(h.paymentRef), Number(h.amount) || 0);
+  }
+  cached.set(method + "|" + idField, idx);
+  return idx;
+}
+// A child's top-ups: by number when both carry one, by name when either has none.
+function depositsOf(idx: LedgerIndex, camperId: number | null, name: string): Record<string, any>[] {
+  if (camperId != null) return (idx.byId.get(String(camperId)) || []).concat(idx.byNameNoId.get(String(name)) || []);
+  return idx.byName.get(String(name)) || [];
+}
+
 async function stripePost(endpoint: string, body: Record<string, string>, idempotencyKey?: string) {
   const headers: Record<string, string> = {
     Authorization: `Bearer ${STRIPE_SECRET}`,
@@ -171,21 +217,14 @@ function depositsFor(who: { camperId: number | null; camperName: string }, trans
   // By camper ID when the account has one (250): the account's key is the
   // spelling at the time, and a renamed or same-named child shares spellings.
   // The name is compared only when the account or the ledger row has no number.
-  const mine = (t: Record<string, any>) => (who.camperId != null && t.camperId != null) ? String(t.camperId) === String(who.camperId) : t.camper === who.camperName;
-  return transactions
-    .filter((t) => t && mine(t) && t.kind === "deposit" && t.method === "stripe" && t.stripePaymentIntentId)
+  // What is already refunded from each (less a refund that failed later and was
+  // put back, TED-126), and what another refund has on its way from it (275) —
+  // from one index of the ledger per run (TED-139).
+  const idx = ledgerIndex(transactions, holds, "stripe", "stripePaymentIntentId");
+  return depositsOf(idx, who.camperId, who.camperName)
     .map((dep) => {
-      // what is already refunded from it (less any refund that failed later and
-      // was put back, TED-126), and what another refund has on its way from it (275)
-      const refundedSoFar = transactions
-        .filter((t) => t && t.kind === "refund" && t.stripePaymentIntentId === dep.stripePaymentIntentId)
-        .reduce((sum, t) => sum + (Number(t.amount) || 0), 0)
-        - transactions
-        .filter((t) => t && t.kind === "refund_failed" && t.stripePaymentIntentId === dep.stripePaymentIntentId)
-        .reduce((sum, t) => sum + (Number(t.amount) || 0), 0)
-        + holds.filter((h) => h.method === "stripe" && h.paymentRef === dep.stripePaymentIntentId)
-            .reduce((sum, h) => sum + (Number(h.amount) || 0), 0);
-      return { paymentIntentId: dep.stripePaymentIntentId as string, remaining: round2((Number(dep.amount) || 0) - refundedSoFar), timestamp: Number(dep.timestamp) || 0 };
+      const ref = String(dep.stripePaymentIntentId);
+      return { paymentIntentId: ref, remaining: round2((Number(dep.amount) || 0) - (idx.refunded.get(ref) || 0) - (idx.held.get(ref) || 0)), timestamp: Number(dep.timestamp) || 0 };
     })
     .filter((d) => d.remaining > 0)
     .sort((a, b) => a.timestamp - b.timestamp);
@@ -397,7 +436,9 @@ serve(async (req) => {
     const candidates = Object.entries(accounts)
       .map(([accountKey, acct]) => {
         const a = acct || {};
-        const walletAvailable = Math.max(0, round2((Number(a.balance) || 0) - (Number(a.balanceFloor) || 0)));
+        // All of it: a balance floor keeps a child from SPENDING below it; a
+        // refund goes to the parent, so the floor is not held back (TED-142).
+        const walletAvailable = Math.max(0, round2(Number(a.balance) || 0));
         const who = { camperId: a.camperId != null ? Number(a.camperId) : null, camperName: accountKey };
         const staleHold = holds.some((h) => Number(h.ageSeconds) >= 180 &&
           ((who.camperId != null && h.camperId != null) ? String(h.camperId) === String(who.camperId) : h.accountKey === accountKey));

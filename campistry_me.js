@@ -2059,9 +2059,9 @@ function _closeoutAPI(){return (typeof window!=='undefined'&&window.CampistryClo
  *
  * Canteen balances live under `campistrySnacks`, which this page does not own and
  * may not have hydrated at all — so this reads defensively and answers 0 rather
- * than guessing. `balanceFloor` is subtracted for the same reason
- * payments-canteen-refund-all subtracts it: money below the floor is not the
- * family's to take back.
+ * than guessing. The whole balance: a balance floor keeps a child from SPENDING
+ * below it, and at close-out the money goes back to the family, floor and all
+ * (TED-142) — the refund functions no longer hold it back either.
  */
 /**
  * A camper's name as a human reads it. Roster keys are unique but are not always
@@ -2106,8 +2106,7 @@ function _canteenAvailableFor(camperName){
         // An account with no id at all (never attributed) — by name, and only then.
         if(!acc&&accts[camperName]&&accts[camperName].camperId==null)acc=accts[camperName];
         if(!acc)return 0;
-        var avail=(Number(acc.balance)||0)-(Number(acc.balanceFloor)||0);
-        return Math.max(0,Math.round(avail*100)/100);
+        return Math.max(0,Math.round((Number(acc.balance)||0)*100)/100);
     }catch(e){return 0}
 }
 
@@ -2402,7 +2401,9 @@ function addCardSurcharge(famKey){
       +'<input type="number" id="csBase" class="me-input" step="0.01" min="0" value="'
       +(owed>0?owed.toFixed(2):'')+'" placeholder="0.00" '
       +'oninput="CampistryMe._surchargePreview()"></div>';
-    h+='<div id="csPreview" style="margin-top:4px"></div>';
+    h+='<div id="csPreview" data-family="'+esc(String(famKey))+'" style="margin-top:4px"></div>';
+    h+='<p style="font-size:.78rem;color:var(--s500);margin:10px 0 0;line-height:1.6">Card on file: '
+      +esc(_familyCardLabel(f))+'. If the family ends up paying another way, remove this fee from their bill.</p>';
     h+='<p style="font-size:.78rem;color:var(--s400);margin:12px 0 0;line-height:1.6">'
       +esc(F.disclosure(pol,{fmt:fm}))+'</p>';
     h+='</div>';
@@ -2410,7 +2411,10 @@ function addCardSurcharge(famKey){
     showModal('Add card surcharge',h,function(){
         var base=parseFloat((document.getElementById('csBase')||{}).value)||0;
         if(!(base>0)){toast('Enter the amount being paid by card','error');return}
-        var q=F.quote(pol,{amount:base,method:'card',funding:'credit',channel:'online'});
+        // The family's OWN card decides it (TED-140): a surcharge on a debit or
+        // prepaid card is what the brands forbid, and a card whose type is not
+        // on file is treated the same — never assumed to be credit.
+        var q=F.quote(pol,{amount:base,method:'card',funding:_familyCardFunding(f),channel:'online'});
         if(!q||!q.permitted){
             toast((q&&q.label)||'That fee is not permitted \u2014 see Card Fees','error');return;
         }
@@ -2421,7 +2425,7 @@ function addCardSurcharge(famKey){
             // the version that gets a camp in trouble with the brands.
             description:F.disclosure(pol,{fmt:fm})||'Card fee',
             amount:Math.round(q.fee*100)/100,date:today(),timestamp:Date.now(),
-            cardFee:{mode:q.mode,base:Math.round(base*100)/100,reason:q.reason}});
+            cardFee:{mode:q.mode,base:Math.round(base*100)/100,reason:q.reason,funding:_familyCardFunding(f)}});
         _postLedgerCharge(f,f.charges[f.charges.length-1]);
         f.balance=(f.balance||0)+Math.round(q.fee*100)/100;
         save();closeModal('dynModal');
@@ -2429,6 +2433,29 @@ function addCardSurcharge(famKey){
         toast('Card fee of '+fm(q.fee)+' added to '+(f.name||'the account'));
     },'Add fee');
     _surchargePreview();
+}
+
+/**
+ * What kind of card the family pays with — 'credit', 'debit', 'prepaid', or
+ * 'unknown' — from the card Stripe classified when it was saved (stripe-webhook
+ * stores `funding` on savedPaymentMethods). The default card first; otherwise
+ * the only card on file; otherwise unknown, which is never surcharged (TED-140).
+ */
+function _familyCardOnFile(f){
+    var pms=(f&&Array.isArray(f.savedPaymentMethods))?f.savedPaymentMethods.filter(function(m){return m&&m.type!=='us_bank_account'}):[];
+    var def=f&&f.stripePaymentMethodId;
+    return (def&&pms.find(function(m){return m.token===def}))||(pms.length===1?pms[0]:null);
+}
+function _familyCardFunding(f){
+    var m=_familyCardOnFile(f);
+    var fu=m&&String(m.funding||'').toLowerCase();
+    return fu||'unknown';
+}
+function _familyCardLabel(f){
+    var m=_familyCardOnFile(f);
+    if(!m)return 'none on file whose type we know';
+    var fu=_familyCardFunding(f);
+    return (m.label||'card')+' ('+(fu==='unknown'?'type not known':fu)+')';
 }
 
 /** Live figure under the amount, so the office sees the fee before agreeing. */
@@ -2439,7 +2466,8 @@ function _surchargePreview(){
     var base=parseFloat((document.getElementById('csBase')||{}).value)||0;
     if(!(base>0)){box.innerHTML='';return}
     var pol=F.normalize(enrollSettings.cardFeePolicy);
-    var q=F.quote(pol,{amount:base,method:'card',funding:'credit',channel:'online'});
+    var _pf=families[box.getAttribute('data-family')||''];
+    var q=F.quote(pol,{amount:base,method:'card',funding:_familyCardFunding(_pf),channel:'online'});
     if(!q||!q.permitted||!(q.fee>0)){
         box.innerHTML='<div style="background:#FEF2F2;border:1px solid #FECACA;color:#991B1B;'
           +'border-radius:8px;padding:7px 10px;font-size:.78rem">'
@@ -18440,6 +18468,25 @@ function _famRefundExpired(f){
     });
 }
 function _crFamChanged(){ _crUpdateRefundSummary(); }
+// The card surcharge a family paid and still keeps: surcharge charges, less
+// what has gone back with refunds (TED-141).
+function _surchargeKept(f){
+    if(!f)return 0;
+    var fees=(f.charges||[]).filter(function(c){return c&&c.cardFee&&c.cardFee.mode==='surcharge'&&!c.voided;})
+        .reduce(function(t,c){return t+(Number(c.amount)||0)},0);
+    var back=(f.credits||[]).filter(function(c){return c&&c.cardFeeReturn;})
+        .reduce(function(t,c){return t+(Number(c.amount)||0)},0);
+    return Math.max(0,Math.round((fees-back)*100)/100);
+}
+// Its share of a refund, by the card-fee rules' own refundShare: in proportion
+// to the refund against what is still on the card (the whole of it when the
+// whole is refunded).
+function _surchargeShare(feeKept,paidOnCard,refunded){
+    var F=_cfAPI();
+    if(!F||!(feeKept>0)||!(paidOnCard>0)||!(refunded>0))return 0;
+    var r=F.refundShare({mode:'surcharge'},{feeCharged:feeKept,paymentAmount:paidOnCard,refundAmount:refunded});
+    return Math.max(0,Math.round((Number(r&&r.fee)||0)*100)/100);
+}
 // Three named refund/credit types (mirrors the standard camp-billing
 // vocabulary: gateway refund / ledger credit / offline refund). "Partial or
 // fee-adjusted" isn't a fourth type of its own — it's just entering a smaller
@@ -18495,7 +18542,11 @@ function _crUpdateRefundSummary(){
         ? '<div style="margin-top:6px;font-size:.72rem;color:#92400E">'+soon.length+' of these payment'+(soon.length!==1?'s are':' is')
           +' within days of the '+REFUND_WINDOW_DAYS+'-day refund window closing.</div>'
         : '';
-        if(sumEl) sumEl.innerHTML='<strong>'+fm(onlineTotal)+'</strong> refundable to card/bank across '+online.length+' online payment'+(online.length!==1?'s':'')+'. Enter any amount up to that — it draws from the most recent charges first, so the refund stays inside the window the card networks allow.'+soonNote+expiredNote;
+        var _kept=_surchargeKept(f);
+        var feeNote=_kept>0
+            ? '<div style="margin-top:6px;font-size:.74rem;color:var(--s600)">This family paid a card surcharge ('+fm(_kept)+' still kept). The card brands require its share to go back with any refund: refunding everything returns all of it, and the fee on their bill comes down by the same share.</div>'
+            : '';
+        if(sumEl) sumEl.innerHTML='<strong>'+fm(onlineTotal)+'</strong> refundable to card/bank across '+online.length+' online payment'+(online.length!==1?'s':'')+'. Enter any amount up to that — it draws from the most recent charges first, so the refund stays inside the window the card networks allow.'+feeNote+soonNote+expiredNote;
         if(amtEl){amtEl.setAttribute('max',onlineTotal); if(!amtEl.value) amtEl.value=onlineTotal.toFixed(2);}
         if(noteEl) noteEl.innerHTML='<div style="font-size:.72rem;color:var(--s400);margin-top:4px">Sends money back to the original card/bank through '+esc(Object.keys(procs).join(' & '))+' — you don\'t pick a charge, Campistry applies it newest-first. For anything beyond '+fm(onlineTotal)+', use Offline Refund.</div>';
     } else {
@@ -18679,6 +18730,9 @@ function issueCreditForFamily(famKey){
                     +':'+Math.round((Number(left)||0)*100)+':'+Math.round((Number(amt)||0)*100);
             };
             var remaining=refundAmt, done=0, failMsg=null;
+            // The card surcharge this family paid, and what of it is still kept,
+            // before any of this refund is booked (TED-141).
+            var _feeBefore=_surchargeKept(f), _paidBefore=onlineTotal;
             toast('Processing refund…');
             for(var ci=0; ci<chunks.length && remaining>0.001; ci++){
                 var p=chunks[ci].p;
@@ -18741,6 +18795,20 @@ function issueCreditForFamily(famKey){
                 remaining=Math.round((remaining-chunk)*100)/100;
             }
             if(done<=0){toast('Refund failed'+(failMsg?': '+failMsg:''),'error');return}
+            // A card surcharge goes back in proportion to what is refunded — a
+            // card-brand rule, not the camp's choice (TED-141). The refund to the
+            // card already carries it (the fee was part of the payment); this is
+            // the fee on the bill coming down by the same share, so the family
+            // keeps only the fee on what they kept.
+            var _feeBack=_surchargeShare(_feeBefore,_paidBefore,done);
+            if(_feeBack>0){
+                if(!Array.isArray(f.credits))f.credits=[];
+                var _fc={id:'cfr_'+Date.now(),amount:_feeBack,date:today(),reason:'correction',cardFeeReturn:true,
+                    note:'Card surcharge returned in proportion to the '+fm(done)+' refund',timestamp:Date.now()};
+                f.credits.push(_fc);
+                _postLedgerCredit(f,_fc);
+                f.balance=Math.round(((f.balance||0)-_feeBack)*100)/100;
+            }
             save();closeModal('dynModal');
             // The refunds (finPayments pushes + save) are already done here — a
             // rendering failure below must never look like the refund vanished.
@@ -18751,7 +18819,7 @@ function issueCreditForFamily(famKey){
                 toast('Refund recorded, but the page failed to refresh (see console) — reload to see it.','error');
             }
             if(failMsg){ toast('Refunded '+fm(done)+' before an error stopped the rest: '+failMsg,'error'); }
-            else { toast('Refunded '+fm(done)+' to card/bank for '+(f.name||'family')); }
+            else { toast('Refunded '+fm(done)+' to card/bank for '+(f.name||'family')+(_feeBack>0?' \u2014 '+fm(_feeBack)+' of it was the card surcharge, taken off their bill':'')); }
             return;
         }
         if(type==='refund_offline'){
@@ -19036,12 +19104,26 @@ async function callEdgeFunctionAuthed(fnName,body){
     if(!client) throw new Error('Not signed in');
     var res=await client.functions.invoke(fnName,{body:body});
     if(res.error){
+        // supabase-js reports every non-2xx as "Edge Function returned a non-2xx
+        // status code"; the function's own { error } is on the response it
+        // carries (TED-134) — "Only the camp owner or an admin…", Stripe's
+        // reason for refusing a refund, "No payment method on file". Read it, so
+        // the office sees why.
+        var _ctx=res.error.context;
+        var _msg=res.error.message||'Edge function error', _body=null;
+        try{
+            if(_ctx&&typeof _ctx.json==='function'){
+                _body=await (typeof _ctx.clone==='function'?_ctx.clone():_ctx).json();
+                if(_body&&typeof _body.error==='string'&&_body.error)_msg=_body.error;
+            }
+        }catch(_){ /* not JSON: keep the generic message */ }
+        var _he=new Error(_msg);
         // Whether the request got an answer at all (TED-111): a network failure
         // or a 5xx from the platform says nothing about what the function did.
-        var _he=new Error(res.error.message||'Edge function error');
-        var _ctx=res.error.context;
         _he.status=_ctx&&typeof _ctx.status==='number'?_ctx.status:null;
         _he.noAnswer=_he.status==null||_he.status>=500;
+        // Only the words change: _he.data stays unset, so "did it go through?"
+        // is still decided by status alone (TED-111).
         throw _he;
     }
     var data=res.data;

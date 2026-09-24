@@ -1899,7 +1899,8 @@ window.refundPickCamper = async function() {
     // this page holds only a week of it, so a July top-up read as $0.00 here.
     // Worked out locally only when the server could not be asked.
     const srv = _refundableFor(got.refundable, name);
-    const walletAvailable = srv ? srv.wallet : Math.max(0, Math.round((a.balance - (a.balanceFloor || 0)) * 100) / 100);
+    // the whole balance — a floor limits spending, not a refund to the parent (TED-142)
+    const walletAvailable = srv ? srv.wallet : Math.max(0, Math.round((Number(a.balance) || 0) * 100) / 100);
     const capacity = srv ? srv.card : _onlineRefundCapacity(name, processorKey);
     const max = Math.round(Math.min(walletAvailable, capacity) * 100) / 100;
 
@@ -2134,7 +2135,7 @@ function _refundAllPreview(processorKey) {
     var total = 0, count = 0;
     (camperList || []).forEach(function(c) {
         var a = getAccount(c.name);
-        var walletAvailable = Math.max(0, Math.round((a.balance - (a.balanceFloor || 0)) * 100) / 100);
+        var walletAvailable = Math.max(0, Math.round((Number(a.balance) || 0) * 100) / 100);   // TED-142: the floor is not held back from a refund
         var capacity = _onlineRefundCapacity(c.name, processorKey);
         var amt = Math.round(Math.min(walletAvailable, capacity) * 100) / 100;
         if (amt > 0) { total = Math.round((total + amt) * 100) / 100; count++; }

@@ -149,9 +149,12 @@ test('a camper is capped by BOTH their wallet and what their deposits can give b
     assert.match(byop, /Math\.min\(walletAvailable, processorCapacity\)/);
     // Deposits from a processor the camp has SINCE LEFT must not be drawn on:
     // that transaction id means nothing to the gateway being called.
-    assert.match(byop, /t\.method === processorKey && t\.byopTransactionId/);
+    // (The ledger is indexed once per run for the camp's processor — TED-139.)
+    assert.match(byop, /ledgerIndex\(transactions, holds, processorKey, "byopTransactionId"\)/);
+    assert.match(byop, /t\.kind === "deposit" && t\.method === method && t\[idField\]/);
     // Already-refunded amounts come off each deposit's remaining capacity.
-    assert.match(byop, /kind === "refund" && t\.byopTransactionId === dep\.byopTransactionId/);
+    assert.match(byop, /t\.kind === "refund" && t\[idField\]/);
+    assert.match(byop, /- \(idx\.refunded\.get\(ref\) \|\| 0\)/);
 });
 
 test('a chunk that fails keeps the chunks that already moved money', () => {

@@ -293,7 +293,7 @@ function meBody(name) {
     return ME.slice(at);
 }
 
-test('canteen money comes from the rows, below the floor excluded, never guessed', () => {
+test('canteen money comes from the rows, the whole balance, never guessed', () => {
     // This test used to REQUIRE the read from campistrySnacks — the document
     // whose accounts the Snacks page strips on every save since 219. So it
     // passed while every family's close-out said there was no canteen money.
@@ -304,7 +304,9 @@ test('canteen money comes from the rows, below the floor excluded, never guessed
     assert.doesNotMatch(body.replace(/\/\/[^\n]*/g, ''), /campistrySnacks/,
         'the close-out reads canteen money from the stripped document again');
     assert.match(body, /_closeoutCanteen/, 'it reads the rows the close-out loaded');
-    assert.match(body, /balanceFloor/, 'money below the floor is not the family\'s to take');
+    // The whole balance (TED-142): a balance floor stops a child SPENDING below
+    // it; at close-out the money goes back to the family, floor and all.
+    assert.doesNotMatch(body.replace(/\/\/[^\n]*/g, ''), /balanceFloor/, 'the floor is held back from the family again');
     assert.match(body, /catch\(e\)\{return 0\}/, 'and a failure answers 0, not a guess');
 });
 

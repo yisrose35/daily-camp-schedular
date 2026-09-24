@@ -107,8 +107,25 @@ BEGIN
     IF n <> 1 THEN RAISE EXCEPTION 'TED-131: no notice for a failed refund that was not on the books'; END IF;
     r := public.reverse_failed_stripe_refund(c, 're_never', 'account closed', 75, 'pi_dash');
     IF (r->>'firstNotice')::boolean IS NOT FALSE THEN RAISE EXCEPTION 'the same unknown failure noticed twice: %', r; END IF;
-    IF has_function_privilege('authenticated', 'public.reverse_failed_stripe_refund(uuid,text,text,numeric,text)', 'EXECUTE')
-       OR has_function_privilege('anon', 'public.reverse_failed_stripe_refund(uuid,text,text,numeric,text)', 'EXECUTE') THEN
+    -- TED-138: Campistry's own canteen refund still waiting for its answer —
+    -- the notice says Campistry will put it back and send it again, and warns
+    -- against refunding it by hand
+    PERFORM public.canteen_account_save(c, 'Bea', jsonb_build_object('balance', 30.00, 'balanceFloor', 0));
+    PERFORM public.reserve_canteen_refund(c, 'Bea', 'scanteen:pi_b:3000:3000', 30, 'stripe', 'pi_b', 'k_b');
+    r := public.reverse_failed_stripe_refund(c, 're_lost', 'account closed', 30, 'pi_b', 'scanteen:pi_b:3000:3000');
+    SELECT count(*) INTO n FROM notifications WHERE camp_id = c AND source = 'refund_failed' AND source_id = 're_lost'
+       AND title = 'A canteen refund failed' AND body LIKE '%Bea''s money%' AND body LIKE '%Do NOT refund it by hand%'
+       AND link_target = 'campistry_snacks.html';
+    IF n <> 1 THEN RAISE EXCEPTION 'TED-138: the waiting canteen refund''s notice: %', (SELECT body FROM notifications WHERE source_id = 're_lost'); END IF;
+    -- TED-137: a failure with no camp is alerted once
+    IF public.claim_refund_failure_alert('re_nocamp') IS NOT TRUE OR public.claim_refund_failure_alert('re_nocamp') IS NOT FALSE THEN
+        RAISE EXCEPTION 'TED-137: the no-camp alert is not once-only';
+    END IF;
+    IF has_function_privilege('authenticated', 'public.claim_refund_failure_alert(text)', 'EXECUTE') THEN
+        RAISE EXCEPTION 'a browser can claim refund alerts';
+    END IF;
+    IF has_function_privilege('authenticated', 'public.reverse_failed_stripe_refund(uuid,text,text,numeric,text,text)', 'EXECUTE')
+       OR has_function_privilege('anon', 'public.reverse_failed_stripe_refund(uuid,text,text,numeric,text,text)', 'EXECUTE') THEN
         RAISE EXCEPTION 'a browser can put refunds back';
     END IF;
     IF NOT public.is_money_notice('refund_failed') THEN RAISE EXCEPTION 'the notice is shown to people without Billing'; END IF;

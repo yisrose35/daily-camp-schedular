@@ -95,3 +95,30 @@ test('TED-120: someone who is not the camp\'s owner or an admin is refused befor
     assert.strictEqual(r.body.error, 'Only the camp owner or an admin can confirm a Stripe autopay payment.');
     assert.strictEqual(recorded(r).length, 0);
 });
+
+test('TED-134: Billing shows the function\'s own reason, not "Edge Function returned a non-2xx status code"', async () => {
+    const fs = require('node:fs'), path = require('node:path');
+    const ME = fs.readFileSync(path.join(__dirname, '..', 'campistry_me.js'), 'utf8');
+    const at = ME.indexOf('async function callEdgeFunctionAuthed(');
+    let i = ME.indexOf('{', at), d = 0;
+    for (; i < ME.length; i++) { if (ME[i] === '{') d++; else if (ME[i] === '}' && --d === 0) break; }
+    const src = ME.slice(at, i + 1);
+    const make = (status, body) => {
+        const window = { CampistryDB: { getClient: () => ({ functions: { invoke: async () => ({ data: null,
+            error: { message: 'Edge Function returned a non-2xx status code',
+                     context: new Response(typeof body === 'string' ? body : JSON.stringify(body), { status }) } }) } }) } };
+        return new Function('window', src + '; return callEdgeFunctionAuthed;')(window);
+    };
+    const err = async (fn) => { try { await fn('stripe-charge', {}); } catch (e) { return e; } return null; };
+    const e1 = await err(make(403, { error: 'Only the camp owner or an admin can confirm a Stripe autopay payment.' }));
+    assert.strictEqual(e1.message, 'Only the camp owner or an admin can confirm a Stripe autopay payment.');
+    assert.strictEqual(e1.noAnswer, false);
+    // a 5xx still counts as "no answer", whatever it says (TED-111)
+    const e2 = await err(make(500, { error: 'Stripe did not answer' }));
+    assert.strictEqual(e2.message, 'Stripe did not answer');
+    assert.strictEqual(e2.noAnswer, true);
+    assert.strictEqual(e2.data, undefined);
+    // not JSON: the generic words, rather than nothing
+    const e3 = await err(make(502, '<html>Bad gateway</html>'));
+    assert.strictEqual(e3.message, 'Edge Function returned a non-2xx status code');
+});

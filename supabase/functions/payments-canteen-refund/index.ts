@@ -14,7 +14,8 @@
 // A refund is capped at THE LOWEST of three ceilings, same as
 // stripe-canteen-refund:
 //   1. whatever's still unspent in the camper's canteen wallet
-//      (balance - balanceFloor)
+//      (the whole balance — a balanceFloor limits spending, not a refund
+//      to the parent, TED-142)
 //   2. the total still refundable across the camper's BYOP deposits FOR
 //      THE CAMP'S CURRENT PROCESSOR (each deposit's original amount minus
 //      whatever's already been refunded from it)
@@ -134,6 +135,52 @@ function round2(n: number): number {
   return Math.round(n * 100) / 100;
 }
 
+// The ledger, indexed ONCE per run (TED-139): each top-up used to re-scan the
+// whole ledger for its refunds, and the holds for what is on its way — at 1,000
+// children × 15 top-ups that was ~3 s of CPU, over Supabase's limit for a
+// function, and the Snacks page then fell back to its week-only figure. The
+// same rules as before, by camper number (a row with no number: by name).
+type LedgerIndex = {
+  byId: Map<string, Record<string, any>[]>;
+  byName: Map<string, Record<string, any>[]>;
+  byNameNoId: Map<string, Record<string, any>[]>;
+  refunded: Map<string, number>;   // refunds from each payment, less ones failed and put back (278)
+  held: Map<string, number>;       // refunds of each payment on their way (275)
+};
+const __ledgerIndexes = new WeakMap<object, WeakMap<object, Map<string, LedgerIndex>>>();
+function ledgerIndex(transactions: Record<string, any>[], holds: Record<string, any>[], method: string, idField: string): LedgerIndex {
+  let byHolds = __ledgerIndexes.get(transactions);
+  if (!byHolds) { byHolds = new WeakMap(); __ledgerIndexes.set(transactions, byHolds); }
+  let cached = byHolds.get(holds);
+  if (!cached) { cached = new Map(); byHolds.set(holds, cached); }
+  const hit = cached.get(method + "|" + idField);
+  if (hit) return hit;
+  const idx: LedgerIndex = { byId: new Map(), byName: new Map(), byNameNoId: new Map(), refunded: new Map(), held: new Map() };
+  const add = (m: Map<string, Record<string, any>[]>, k: string, v: Record<string, any>) => { const a = m.get(k); if (a) a.push(v); else m.set(k, [v]); };
+  const bump = (m: Map<string, number>, k: string, n: number) => m.set(k, (m.get(k) || 0) + n);
+  for (const t of transactions) {
+    if (!t) continue;
+    if (t.kind === "deposit" && t.method === method && t[idField]) {
+      if (t.camperId != null) add(idx.byId, String(t.camperId), t); else add(idx.byNameNoId, String(t.camper), t);
+      add(idx.byName, String(t.camper), t);
+    } else if (t.kind === "refund" && t[idField]) {
+      bump(idx.refunded, String(t[idField]), Number(t.amount) || 0);
+    } else if (t.kind === "refund_failed" && t[idField]) {
+      bump(idx.refunded, String(t[idField]), -(Number(t.amount) || 0));
+    }
+  }
+  for (const h of holds) {
+    if (h && h.method === method && h.paymentRef) bump(idx.held, String(h.paymentRef), Number(h.amount) || 0);
+  }
+  cached.set(method + "|" + idField, idx);
+  return idx;
+}
+// A child's top-ups: by number when both carry one, by name when either has none.
+function depositsOf(idx: LedgerIndex, camperId: number | null, name: string): Record<string, any>[] {
+  if (camperId != null) return (idx.byId.get(String(camperId)) || []).concat(idx.byNameNoId.get(String(name)) || []);
+  return idx.byName.get(String(name)) || [];
+}
+
 // What each child can be refunded to a card right now, worked out from the
 // FULL ledger (TED-130): the Snacks page loads only a week of history (245), so
 // it cannot work this out itself — a top-up from July read as "$0.00
@@ -144,21 +191,18 @@ function round2(n: number): number {
 function refundableByAccount(view: Record<string, any>, method: string, idField: string): Record<string, unknown> {
   const txs: Record<string, any>[] = Array.isArray(view.transactions) ? view.transactions : [];
   const holds: Record<string, any>[] = Array.isArray(view.holds) ? view.holds : [];
+  const idx = ledgerIndex(txs, holds, method, idField);
   const out: Record<string, unknown> = {};
   for (const [key, a] of Object.entries((view.accounts || {}) as Record<string, any>)) {
     const acct = a || {};
     const cid = acct.camperId != null ? Number(acct.camperId) : null;
-    const mine = (t: Record<string, any>) => (cid != null && t.camperId != null) ? String(t.camperId) === String(cid) : t.camper === key;
     let card = 0;
-    for (const dep of txs.filter((t) => t && mine(t) && t.kind === "deposit" && t.method === method && t[idField])) {
-      const ref = dep[idField];
-      const sum = (kind: string) => txs.filter((t) => t && t.kind === kind && t[idField] === ref)
-        .reduce((s, t) => s + (Number(t.amount) || 0), 0);
-      const held = holds.filter((h) => h.method === method && h.paymentRef === ref)
-        .reduce((s, h) => s + (Number(h.amount) || 0), 0);
-      card += Math.max(0, round2((Number(dep.amount) || 0) - sum("refund") + sum("refund_failed") - held));
+    for (const dep of depositsOf(idx, cid, key)) {
+      const ref = String(dep[idField]);
+      card += Math.max(0, round2((Number(dep.amount) || 0) - (idx.refunded.get(ref) || 0) - (idx.held.get(ref) || 0)));
     }
-    const wallet = Math.max(0, round2((Number(acct.balance) || 0) - (Number(acct.balanceFloor) || 0)));
+    // the whole balance: the floor limits spending, not a refund to the parent (TED-142)
+    const wallet = Math.max(0, round2(Number(acct.balance) || 0));
     out[key] = { camperId: cid, wallet, card: round2(card), now: round2(Math.min(wallet, card)) };
   }
   return out;
@@ -289,7 +333,6 @@ serve(async (req) => {
     // A ledger row with a number matches by its number; by name only when either side has none.
     const mine = (t: Record<string, any>) => (camperId != null && t.camperId != null) ? String(t.camperId) === String(camperId) : t.camper === camperName;
     const balance = Number(account.balance) || 0;
-    const balanceFloor = Number(account.balanceFloor) || 0;
     const reqKey = (typeof idempotencyKey === "string" && idempotencyKey.trim()) ? idempotencyKey.trim() : "";
     // the account found above (by number when one was sent), to match a hold with no number
     const acctKey = Object.keys(accountsAll).find((k) => accountsAll[k] === account) ?? "";
@@ -321,7 +364,8 @@ serve(async (req) => {
         }
       }
     }
-    const walletAvailable = Math.max(0, round2(balance - balanceFloor
+    // the whole balance: a floor limits SPENDING, not a refund to the parent (TED-142)
+    const walletAvailable = Math.max(0, round2(balance
       + ownHolds.reduce((t, h) => t + (Number(h.amount) || 0), 0) + releasedBack));
 
     // What this refund (the page's key) already did, on an earlier try whose

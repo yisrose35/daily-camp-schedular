@@ -40,6 +40,8 @@ T.fetch = (url: string, init: any) => {
   if (url.includes('/payment_intents/pi_guest')) return { id: 'pi_guest', customer: null, metadata: { campId: 'camp2' } };
   if (url.includes('/payment_methods/pm_camp1')) return { id: 'pm_camp1', customer: 'cus_camp1' };
   if (url.includes('/payment_methods/pm_camp2')) return { id: 'pm_camp2', customer: 'cus_camp2' };
+  // a refund as it stands now — asked before a settled one is replayed (TED-136)
+  if (url.includes('/refunds/re_')) return { id: url.split('/refunds/')[1], status: 'succeeded', amount: 10000 };
   if (url.endsWith('/refunds')) return { id: 're_' + T.fetches.length, status: 'succeeded', amount: 10000 };
   if (url.endsWith('/payment_intents')) return { id: 'pi_new', status: 'succeeded' };
   return {};

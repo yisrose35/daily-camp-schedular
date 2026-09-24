@@ -106,7 +106,7 @@ test('TED-053/076: Charge several accounts posts each charge to the ledger', () 
 });
 
 test('TED-053/076: a card surcharge reaches the ledger', () => {
-    const f = runCallback("showModal('Add card surcharge'", (fam) => ({ f: fam, pol: {},
+    const f = runCallback("showModal('Add card surcharge'", (fam) => ({ f: fam, pol: {}, _familyCardFunding: () => 'credit',
         document: { getElementById: () => ({ value: '100' }) },
         F: { quote: () => ({ permitted: true, fee: 3, mode: 'surcharge', reason: '' }), disclosure: () => '3% card fee' } }));
     assert.strictEqual(B.balance(f), 603);

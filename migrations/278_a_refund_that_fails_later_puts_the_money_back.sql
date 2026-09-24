@@ -69,12 +69,64 @@ GRANT EXECUTE ON FUNCTION public.is_money_notice(text) TO authenticated, service
 
 -- A failed refund that is not on these books: the office is told, once.
 -- Returns whether this was the first time (so the platform is alerted once).
+DROP FUNCTION IF EXISTS public._notice_unbooked_refund_failure(uuid, text, text, numeric, text);
 CREATE OR REPLACE FUNCTION public._notice_unbooked_refund_failure(
     p_camp_id     uuid,
     p_refund_id   text,
     p_reason      text,
     p_amount      numeric,
-    p_payment_ref text)
+    p_payment_ref text,
+    p_hold_key    text)
+RETURNS boolean
+LANGUAGE plpgsql
+SECURITY DEFINER
+SET search_path = public, pg_catalog
+AS $$
+DECLARE
+    v_n       integer := 0;
+    v_waiting canteen_refund_holds;
+    v_what    text := 'Stripe could not send a ' || COALESCE('$' || to_char(round(p_amount, 2), 'FM999999990.00') || ' ', '')
+                      || 'refund (' || p_refund_id || COALESCE(', on payment ' || NULLIF(p_payment_ref, ''), '') || ')'
+                      || COALESCE(' — ' || NULLIF(p_reason, ''), '') || '. The parent did not get it. ';
+BEGIN
+    IF to_regclass('public.notifications') IS NULL THEN RETURN true; END IF;
+    -- Campistry's own canteen refund whose answer was lost (TED-138): its money
+    -- is still held off the child's wallet, and the next look-up (Refund All,
+    -- or that child's Refund) puts it back and sends it again. Refunding it by
+    -- hand as well would pay the parent twice.
+    IF NULLIF(p_hold_key, '') IS NOT NULL THEN
+        SELECT * INTO v_waiting FROM canteen_refund_holds
+         WHERE camp_id = p_camp_id AND hold_key = p_hold_key AND state = 'open';
+    END IF;
+    INSERT INTO notifications (camp_id, source, source_id, title, body, link_target)
+    VALUES (p_camp_id, 'refund_failed', p_refund_id,
+            CASE WHEN v_waiting.hold_key IS NOT NULL THEN 'A canteen refund failed' ELSE 'A refund failed' END,
+            v_what
+              || CASE WHEN v_waiting.hold_key IS NOT NULL
+                      THEN 'It was a canteen refund of ' || regexp_replace(v_waiting.account_key, '\s#\d+$', '')
+                           || '''s money that Campistry was still waiting to hear about. Its money is held off the wallet: '
+                           || 'the next Refund All in Snacks (or that child''s Refund) looks it up, puts it back on the wallet and sends it again. '
+                           || 'Do NOT refund it by hand as well — the parent would be paid twice. '
+                      ELSE 'It is not on Campistry''s books (it may have been made in the Stripe dashboard), so nothing was changed here: '
+                           || 'find the payment in Stripe, then refund it again or record it by hand. ' END
+              || 'Stripe returned the money to Campistry''s platform account; Campistry has been alerted to pass it back to yours.',
+            CASE WHEN v_waiting.hold_key IS NOT NULL THEN 'campistry_snacks.html' ELSE 'campistry_me.html' END)
+    ON CONFLICT (camp_id, source, source_id) DO NOTHING;
+    GET DIAGNOSTICS v_n = ROW_COUNT;
+    RETURN v_n > 0;
+END $$;
+REVOKE ALL ON FUNCTION public._notice_unbooked_refund_failure(uuid, text, text, numeric, text, text) FROM public, anon, authenticated;
+
+-- A failed refund no camp could be found for: the platform is alerted once
+-- (TED-137) — Stripe sends the failure several times (refund.failed,
+-- refund.updated, charge.refund.updated, and retries).
+CREATE TABLE IF NOT EXISTS public.refund_failure_alerts (
+    refund_id  text        PRIMARY KEY,
+    first_seen timestamptz NOT NULL DEFAULT now()
+);
+ALTER TABLE public.refund_failure_alerts ENABLE ROW LEVEL SECURITY;
+REVOKE ALL ON public.refund_failure_alerts FROM public, anon, authenticated;
+CREATE OR REPLACE FUNCTION public.claim_refund_failure_alert(p_refund_id text)
 RETURNS boolean
 LANGUAGE plpgsql
 SECURITY DEFINER
@@ -82,30 +134,23 @@ SET search_path = public, pg_catalog
 AS $$
 DECLARE v_n integer := 0;
 BEGIN
-    IF to_regclass('public.notifications') IS NULL THEN RETURN true; END IF;
-    INSERT INTO notifications (camp_id, source, source_id, title, body, link_target)
-    VALUES (p_camp_id, 'refund_failed', p_refund_id,
-            'A refund failed',
-            'Stripe could not send a ' || COALESCE('$' || to_char(round(p_amount, 2), 'FM999999990.00') || ' ', '')
-              || 'refund (' || p_refund_id || COALESCE(', on payment ' || NULLIF(p_payment_ref, ''), '') || ')'
-              || COALESCE(' — ' || NULLIF(p_reason, ''), '') || '. The parent did not get it. '
-              || 'It is not on Campistry''s books (it may have been made in the Stripe dashboard), so nothing was changed here: '
-              || 'find the payment in Stripe, then refund it again or record it by hand. '
-              || 'Stripe returned the money to Campistry''s platform account; Campistry has been alerted to pass it back to yours.',
-            'campistry_me.html')
-    ON CONFLICT (camp_id, source, source_id) DO NOTHING;
+    IF NULLIF(btrim(COALESCE(p_refund_id, '')), '') IS NULL THEN RETURN true; END IF;
+    INSERT INTO refund_failure_alerts (refund_id) VALUES (p_refund_id) ON CONFLICT (refund_id) DO NOTHING;
     GET DIAGNOSTICS v_n = ROW_COUNT;
     RETURN v_n > 0;
 END $$;
-REVOKE ALL ON FUNCTION public._notice_unbooked_refund_failure(uuid, text, text, numeric, text) FROM public, anon, authenticated;
+REVOKE ALL ON FUNCTION public.claim_refund_failure_alert(text) FROM public, anon, authenticated;
+GRANT EXECUTE ON FUNCTION public.claim_refund_failure_alert(text) TO service_role;
 
 DROP FUNCTION IF EXISTS public.reverse_failed_stripe_refund(uuid, text, text);
+DROP FUNCTION IF EXISTS public.reverse_failed_stripe_refund(uuid, text, text, numeric, text);
 CREATE OR REPLACE FUNCTION public.reverse_failed_stripe_refund(
     p_camp_id     uuid,
     p_refund_id   text,
     p_reason      text    DEFAULT NULL,
     p_amount      numeric DEFAULT NULL,    -- Stripe's, for a refund not on these books
-    p_payment_ref text    DEFAULT NULL)    -- the payment it was refunding, likewise
+    p_payment_ref text    DEFAULT NULL,    -- the payment it was refunding, likewise
+    p_hold_key    text    DEFAULT NULL)    -- its metadata.campistryHold, when Campistry sent it
 RETURNS jsonb
 LANGUAGE plpgsql
 SECURITY DEFINER
@@ -144,7 +189,7 @@ BEGIN
         v_key  := public.canteen_account_key_for(p_camp_id, v_tx.camper);
         v_acct := public.canteen_account_lock(p_camp_id, v_key);
         IF v_acct IS NULL THEN
-            v_first := public._notice_unbooked_refund_failure(p_camp_id, v_ref, v_why, COALESCE(p_amount, v_tx.amount), p_payment_ref);
+            v_first := public._notice_unbooked_refund_failure(p_camp_id, v_ref, v_why, COALESCE(p_amount, v_tx.amount), p_payment_ref, p_hold_key);
             RETURN jsonb_build_object('success', false, 'error', 'account_not_found', 'firstNotice', v_first);
         END IF;
         -- once, under the wallet's lock
@@ -215,7 +260,7 @@ BEGIN
         -- Nothing to put back here — but the parent did not get it and the
         -- money is in Campistry's Stripe balance, so the office is told
         -- (TED-131), once.
-        v_first := public._notice_unbooked_refund_failure(p_camp_id, v_ref, v_why, p_amount, p_payment_ref);
+        v_first := public._notice_unbooked_refund_failure(p_camp_id, v_ref, v_why, p_amount, p_payment_ref, p_hold_key);
         RETURN jsonb_build_object('success', false, 'error', 'refund_not_found', 'firstNotice', v_first);
     END IF;
 
@@ -270,5 +315,5 @@ BEGIN
     RETURN jsonb_build_object('success', true, 'family', true, 'familyKey', v_famKey, 'amount', v_amt,
                               'balance', public.family_ledger_balance(v_fam), 'firstNotice', v_first);
 END $$;
-REVOKE ALL ON FUNCTION public.reverse_failed_stripe_refund(uuid, text, text, numeric, text) FROM public, anon, authenticated;
-GRANT EXECUTE ON FUNCTION public.reverse_failed_stripe_refund(uuid, text, text, numeric, text) TO service_role;
+REVOKE ALL ON FUNCTION public.reverse_failed_stripe_refund(uuid, text, text, numeric, text, text) FROM public, anon, authenticated;
+GRANT EXECUTE ON FUNCTION public.reverse_failed_stripe_refund(uuid, text, text, numeric, text, text) TO service_role;

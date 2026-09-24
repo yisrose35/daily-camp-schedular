@@ -421,7 +421,9 @@ test('the fee is computed by the RULE, never recalculated at the call site', () 
     // second place for the 3% ceiling to be got wrong.
     const fn = ME_SUR.slice(ME_SUR.indexOf('function addCardSurcharge(famKey)'));
     const body = fn.slice(0, 4200);
-    assert.match(body, /F\.quote\(pol,\{amount:base,method:'card',funding:'credit'/);
+    // with the family's OWN card type — never assumed credit (TED-140)
+    assert.match(body, /F\.quote\(pol,\{amount:base,method:'card',funding:_familyCardFunding\(f\)/);
+    assert.doesNotMatch(body, /funding:'credit'/);
     assert.ok(!/\*\s*0?\.?03|\/\s*100\s*\*\s*base|base\s*\*\s*pct/.test(body),
         'no percentage arithmetic may happen here');
 });
@@ -455,7 +457,7 @@ test('the charge records what it was a fee ON, and increases the balance', () =>
     // sign: a fee the family owes must raise the balance, not lower it.
     const fn = ME_SUR.slice(ME_SUR.indexOf('function addCardSurcharge(famKey)'));
     const body = fn.slice(0, 4200);
-    assert.match(body, /cardFee:\{mode:q\.mode,base:Math\.round\(base\*100\)\/100,reason:q\.reason\}/);
+    assert.match(body, /cardFee:\{mode:q\.mode,base:Math\.round\(base\*100\)\/100,reason:q\.reason,funding:_familyCardFunding\(f\)\}/);
     assert.match(body, /f\.balance=\(f\.balance\|\|0\)\+Math\.round\(q\.fee\*100\)\/100;/);
     assert.ok(!/f\.balance=\(f\.balance\|\|0\)-Math\.round\(q\.fee/.test(body),
         'a fee the family owes must not reduce what they owe');

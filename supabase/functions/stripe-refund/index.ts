@@ -214,21 +214,43 @@ serve(async (req) => {
     // CLAIM BEFORE STRIPE (migration 198), exactly as payments-refund does: a
     // retry of the same click replays the first answer instead of refunding
     // again. The same key also goes to Stripe as its Idempotency-Key.
-    const claimKey = typeof idempotencyKey === "string" && idempotencyKey.trim() ? idempotencyKey.trim() : null;
+    const pageKey = typeof idempotencyKey === "string" && idempotencyKey.trim() ? idempotencyKey.trim() : null;
+    let claimKey = pageKey;
     const service = createClient(SUPABASE_URL, SUPABASE_SERVICE_KEY);
-    if (claimKey) {
+    // A refund made under this key and settled may since have FAILED at Stripe
+    // and been put back on the family's account (278). The office is then told
+    // to refund it again, and Billing sends the same key (the same payment,
+    // amount and what is left of it) — which replayed the old, failed refund:
+    // "Refunded $500" with nothing sent, a new refund line per press (TED-136).
+    // So a replay is checked against the refund as it is NOW; a failed or
+    // canceled one moves the key on, to one made from its id — the same new
+    // key again if this refund is itself cut off and retried.
+    let hop = 0;
+    for (; claimKey && hop < 5; hop++) {
       const { data: claim } = await service.rpc("claim_refund_intent", {
         p_camp_id: campId, p_key: claimKey,
         p_amount: params.amount ? Number(params.amount) / 100 : null,
         p_payment_ref: String(paymentIntentId),
       });
-      if (claim && claim.claimed === false && claim.previous && claim.previous.refundId) {
-        console.log(`[stripe-refund] replaying settled refund for key ${claimKey}`);
-        return json(Object.assign({ replayed: true }, claim.previous), 200);
+      if (!(claim && claim.claimed === false && claim.previous && claim.previous.refundId)) break;
+      // Held but never confirmed falls through too: an earlier try was cut off
+      // after Stripe was asked (TED-093), and asking again with the SAME Stripe
+      // key is safe — Stripe answers with the refund it made, or makes it now.
+      const prevId = String(claim.previous.refundId);
+      let now: any = null;
+      try { now = await stripeGet(`/refunds/${encodeURIComponent(prevId)}`); } catch (_) { now = null; }
+      if (!now || now.error || !now.id) {
+        return json({ uncertain: true, error: "Stripe could not be asked what became of the earlier refund with these details — try again in a minute." }, 200);
       }
-      // Held but never confirmed: an earlier try was cut off after Stripe was
-      // asked (TED-093). Asking again with the SAME Stripe key is safe — Stripe
-      // answers with the refund it made, or makes it now — so fall through.
+      if (now.status !== "failed" && now.status !== "canceled") {
+        console.log(`[stripe-refund] replaying settled refund for key ${claimKey}`);
+        return json(Object.assign({ replayed: true }, claim.previous, { status: now.status }), 200);
+      }
+      console.log(`[stripe-refund] the refund under key ${claimKey} (${prevId}) ${now.status} — sending a new one`);
+      claimKey = `${pageKey}:after:${prevId}`;
+    }
+    if (hop >= 5) {
+      return json({ error: "This refund has failed at Stripe five times — refund it by hand (Offline Refund)." }, 409);
     }
 
     const refund = await sendRefund(params, claimKey ? `refund:${campId}:${claimKey}` : undefined);

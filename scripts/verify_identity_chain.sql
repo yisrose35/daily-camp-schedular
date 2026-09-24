@@ -670,9 +670,9 @@ UNION ALL
           ELSE 'ok' END),
     -- A refund Stripe fails after accepting it puts the money back (TED-126).
     ('278  a refund that fails later puts the money back',
-     CASE WHEN to_regprocedure('public.reverse_failed_stripe_refund(uuid,text,text,numeric,text)') IS NULL
+     CASE WHEN to_regprocedure('public.reverse_failed_stripe_refund(uuid,text,text,numeric,text,text)') IS NULL
                OR NOT public.is_money_notice('refund_failed')
-               OR has_function_privilege('authenticated', 'public.reverse_failed_stripe_refund(uuid,text,text,numeric,text)', 'EXECUTE')
+               OR has_function_privilege('authenticated', 'public.reverse_failed_stripe_refund(uuid,text,text,numeric,text,text)', 'EXECUTE')
           THEN 'apply 278 BEFORE redeploying stripe-webhook — a refund Stripe fails later still shows as refunded'
           ELSE 'ok' END),
     -- "The autopay charge went through" is checked before it is recorded (TED-120).

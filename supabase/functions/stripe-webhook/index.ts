@@ -828,11 +828,16 @@ async function handleRefundFailed(
     </div>`);
   if (!campId) {
     console.error(`[stripe-webhook] refund ${refundId} ${status} but has no camp — nothing put back; reconcile by hand`);
-    await alert("No camp could be found for it, so nothing was changed in Campistry.");
+    // Once per refund (TED-137): Stripe sends the same failure several times.
+    const { data: first, error: claimErr } = await supabase.rpc("claim_refund_failure_alert", { p_refund_id: refundId });
+    if (claimErr) throw new Error(`refund ${refundId} failed with no camp and the alert could not be claimed: ${claimErr.message}`);
+    if (first !== false) await alert("No camp could be found for it, so nothing was changed in Campistry.");
     return;
   }
   const { data, error } = await supabase.rpc("reverse_failed_stripe_refund", {
-    p_camp_id: campId, p_refund_id: refundId, p_reason: why, p_amount: amount || null, p_payment_ref: payment || null });
+    p_camp_id: campId, p_refund_id: refundId, p_reason: why, p_amount: amount || null, p_payment_ref: payment || null,
+    // Campistry's own canteen refund carries its reservation's key (TED-138)
+    p_hold_key: (r.metadata && r.metadata.campistryHold) ? String(r.metadata.campistryHold) : null });
   // The database not answering is not an answer: 500, so Stripe sends it again.
   if (error) throw new Error(`refund ${refundId} failed at Stripe and could not be put back yet: ${error.message}`);
   if (!data?.success) {
