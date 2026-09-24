@@ -506,7 +506,11 @@
                      reason: 'nothing_owed' };
         }
         var remaining = dates.length - i;
-        var amount = (remaining <= 1) ? outstanding : money(outstanding / remaining);
+        // The amount the office set for this instalment, when it set one
+        // (TED-068, migration 264's plan_due) — never more than is owed.
+        var fixed = Array.isArray(plan.amounts) && typeof plan.amounts[i] === 'number' ? plan.amounts[i] : null;
+        var amount = (fixed != null && fixed > 0) ? Math.min(money(fixed), outstanding)
+                   : (remaining <= 1) ? outstanding : money(outstanding / remaining);
         if (amount > outstanding) amount = outstanding;
         return { index: i, dueDate: due, amount: amount, remaining: remaining };
     };

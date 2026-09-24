@@ -95,3 +95,113 @@ test('TED-055: before the retry date, a flagged office plan is left alone (no ch
     `);
     assert.deepStrictEqual(charges(r), [], 'a flagged plan was charged before its retry date');
 });
+
+// ── TED-064: a bank debit that is still clearing ─────────────────────────────
+function achNight(plan, piAnswer, heldStatus) {
+    return BASE + `
+      const plan: any = ${JSON.stringify(plan)};
+      T.rpc.camp_families_object = () => ({
+        famA: { name: 'Bank family', camperIds: ['C'], cardOnFile: true, stripeCustomerId: 'cus_A', charges: [{ amount: 1000 }], plans: [plan] },
+      });
+      T.rpc.plan_due_for = () => ({ index: 0, dueDate: TODAY, amount: 500 });
+      T.rpc.hold_autopay_charge = () => ({ success: true });
+      T.fetch = (url: string, init: any) => {
+        if (init.method === 'POST' && url.endsWith('/payment_intents')) return ${JSON.stringify(piAnswer)};
+        if (url.includes('/payment_intents/pi_ach')) return { id: 'pi_ach', status: '${heldStatus || 'processing'}', last_payment_error: { message: 'Insufficient funds' } };
+        return {};
+      };`;
+}
+const newCharges = r => r.fetches.filter(f => f.method === 'POST' && f.url.endsWith('/payment_intents'));
+const LEDGER_PLAN = { id: 'plan_a', dueDates: [TODAY, '2099-01-01'], count: 2, nextIndex: 0, history: [], autopay: true, paused: false };
+
+test('TED-064: night 1 — a debit that comes back "processing" is held on the plan, not recorded as paid', () => {
+    const r = runEdge('charge-due-installments', achNight(LEDGER_PLAN, { id: 'pi_ach', status: 'processing' }));
+    assert.strictEqual(newCharges(r).length, 1);
+    assert.ok(newCharges(r)[0].headers['Idempotency-Key'], 'no Idempotency-Key on the autopay charge');
+    const hold = r.rpcs.find(x => x.name === 'hold_autopay_charge');
+    assert.ok(hold, 'the debit in flight was not held');
+    assert.strictEqual(hold.args.p_hold.paymentIntentId, 'pi_ach');
+    assert.strictEqual(hold.args.p_hold.index, 0);
+    assert.ok(!r.rpcs.some(x => x.name === 'record_autopay_charge'), 'a debit that has not landed was recorded');
+});
+
+test('TED-064: night 2 — while the debit is still clearing, nothing new is charged', () => {
+    const held = Object.assign({}, LEDGER_PLAN, { pendingCharge: { paymentIntentId: 'pi_ach', index: 0, dueDate: TODAY, amount: 500, since: TODAY } });
+    const r = runEdge('charge-due-installments', achNight(held, { id: 'pi_NEW', status: 'processing' }, 'processing'));
+    assert.strictEqual(newCharges(r).length, 0, 'the family was debited again while the first debit was clearing');
+    assert.ok(r.rpcs.every(x => x.name !== 'record_autopay_charge'));
+});
+
+test('TED-064: night 3 — the debit cleared: it is recorded as that instalment, the hold released, nothing new charged', () => {
+    const held = Object.assign({}, LEDGER_PLAN, { pendingCharge: { paymentIntentId: 'pi_ach', index: 0, dueDate: TODAY, amount: 500, since: TODAY } });
+    const r = runEdge('charge-due-installments', achNight(held, { id: 'pi_NEW', status: 'succeeded' }, 'succeeded'));
+    assert.strictEqual(newCharges(r).length, 0);
+    const rec = r.rpcs.find(x => x.name === 'record_autopay_charge');
+    assert.ok(rec, 'the cleared debit was not recorded');
+    assert.strictEqual(rec.args.p_amount, 500);
+    assert.strictEqual(rec.args.p_index, 0);
+    assert.strictEqual(rec.args.p_dedupe_key, 'pi_ach');
+    assert.ok(r.rpcs.some(x => x.name === 'hold_autopay_charge' && x.args.p_hold == null), 'the hold was not released');
+});
+
+test('TED-064: a debit that failed while clearing goes down the decline path (office told), hold released', () => {
+    const held = Object.assign({}, LEDGER_PLAN, { pendingCharge: { paymentIntentId: 'pi_ach', index: 0, dueDate: TODAY, amount: 500, since: TODAY } });
+    const r = runEdge('charge-due-installments', achNight(held, { id: 'pi_NEW', status: 'succeeded' }, 'requires_payment_method'));
+    assert.strictEqual(newCharges(r).length, 0);
+    const rec = r.rpcs.find(x => x.name === 'record_autopay_charge');
+    assert.strictEqual(rec.args.p_amount, 0);
+    assert.match(rec.args.p_reason, /declined/);
+    assert.ok(r.rpcs.some(x => x.name === 'flag_plan_collection' && x.args.p_reason === 'declined'));
+    assert.ok(r.rpcs.some(x => x.name === 'hold_autopay_charge' && x.args.p_hold == null));
+});
+
+test('TED-064: an office-built installments[] plan holds a clearing debit too', () => {
+    const plan = { id: 'plan_o2', autopay: true, installments: [{ n: 1, amount: 500, dueDate: TODAY, status: 'pending' }] };
+    const n1 = runEdge('charge-due-installments', achNight(plan, { id: 'pi_ach', status: 'processing' }));
+    assert.strictEqual(newCharges(n1).length, 1);
+    assert.ok(n1.rpcs.some(x => x.name === 'hold_autopay_charge' && x.args.p_hold && x.args.p_hold.paymentIntentId === 'pi_ach'));
+    const held = Object.assign({}, plan, { pendingCharge: { paymentIntentId: 'pi_ach', dueDate: TODAY, amount: 500, since: TODAY } });
+    const n2 = runEdge('charge-due-installments', achNight(held, { id: 'pi_NEW', status: 'processing' }, 'processing'));
+    assert.strictEqual(newCharges(n2).length, 0, 'debited again');
+    const n3 = runEdge('charge-due-installments', achNight(held, { id: 'pi_NEW', status: 'processing' }, 'succeeded'));
+    assert.strictEqual(newCharges(n3).length, 0);
+    const paid = n3.rpcs.find(x => x.name === 'record_autopay_installment');
+    assert.strictEqual(paid.args.p_patch.status, 'paid');
+    assert.strictEqual(paid.args.p_dedupe_key, 'pi_ach');
+});
+
+// ── TED-073: the nightly retry for a counselor's tip that failed ─────────────
+function tipNight(existingTransfer) {
+    return BASE + `
+      T.rpc.camp_families_object = () => ({});
+      T.rpc.retry_failed_tip_transfers = () => [{ id: 'item1', cartId: 'cart1', staffName: 'Counselor Dina', staffAccountId: 'lsa-internal-uuid', tipCents: 2000, feeCents: 40 }];
+      T.tables.link_tip_cart_items = [{ id: 'item1', cart_id: 'cart1', camp_id: 'camp1', staff_account_id: 'lsa-internal-uuid', staff_name: 'Counselor Dina',
+          staff_role: 'counselor', stripe_account_id: 'acct_DINA', tip_cents: 2000, fee_cents: 40, processed_at: null, transfer_error: 'boom',
+          parent_user_id: 'u-p', camper_name: 'Avi', person_id: 4 }];
+      T.tables.link_tips = [];
+      T.fetch = (url: string, init: any) => {
+        if (init.method === 'GET' && url.includes('/transfers?')) return { data: ${existingTransfer ? `[{ id: 'tr_first', metadata: { cartItemId: 'item1' } }]` : '[]'} };
+        if (init.method === 'POST' && url.endsWith('/transfers')) return { id: 'tr_retry' };
+        return {};
+      };`;
+}
+const transfersMade = r => r.fetches.filter(f => f.method === 'POST' && f.url.endsWith('/transfers'));
+
+test('TED-073: the tip retry pays the whole tip to the counselor\'s Stripe account, and records it', () => {
+    const r = runEdge('charge-due-installments', tipNight(false));
+    const t = transfersMade(r);
+    assert.strictEqual(t.length, 1);
+    const p = new URLSearchParams(t[0].body);
+    assert.strictEqual(p.get('destination'), 'acct_DINA', 'sent to the internal record id, not the counselor\'s Stripe account');
+    assert.strictEqual(p.get('amount'), '2000', 'the tip was cut by the fee a second time');
+    assert.ok(t[0].headers['Idempotency-Key']);
+    assert.ok(r.writes.some(w => w.table === 'link_tips' && w.op === 'insert'), 'the tip was not recorded for the counselor');
+    assert.ok(r.rpcs.some(x => x.name === 'increment_staff_total_earned'));
+    assert.ok(r.writes.some(w => w.table === 'link_tip_cart_items' && w.op === 'update' && w.payload.stripe_transfer_id === 'tr_retry'));
+});
+
+test('TED-073: if the first transfer actually went through, the retry pays nothing and only catches up', () => {
+    const r = runEdge('charge-due-installments', tipNight(true));
+    assert.strictEqual(transfersMade(r).length, 0, 'the counselor was paid twice');
+    assert.ok(r.writes.some(w => w.table === 'link_tip_cart_items' && w.op === 'update' && w.payload.stripe_transfer_id === 'tr_first'));
+});

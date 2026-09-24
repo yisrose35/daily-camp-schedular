@@ -1985,6 +1985,11 @@ function managePaymentMethods(){
  * (set_my_payment_plan RPC, migration 115) instead of the office building one
  * manually via Billing -> Monthly Plan.
  */
+// TED-074: what this switch actually does is offer "Payment Plan" as a choice
+// on the registration form (campistry_register.html). It used to be described
+// as parents building their own plan in Link — a builder Link no longer has —
+// and it hid the office's own Set Up Payment Plan button, so nobody set the
+// plan up. The office always sets it up now; the words say so.
 function manageParentPaymentPlanSetting(){
     if(!_secEdit('billing','Changing payment plan settings'))return;
     var on=!!enrollSettings.allowParentPaymentPlans;
@@ -1992,16 +1997,16 @@ function manageParentPaymentPlanSetting(){
     h+='<label class="ops-check" style="display:flex;align-items:flex-start;gap:9px;font-size:.85rem;'
       +'font-weight:500;color:var(--s700);cursor:pointer">'
       +'<input type="checkbox" id="ppAllowChk" style="margin-top:2px"'+(on?' checked':'')+'> '
-      +'<span>Let parents set up their own payment plan in Link'
+      +'<span>Let parents ask for a payment plan on the registration form'
       +'<span style="display:block;font-weight:400;margin-top:3px;font-size:.78rem;color:var(--s500)">'
-      +'Once accepted. When off, an application asking for a payment plan flags the office to '
-      +'set one up instead.</span></span></label>';
+      +'When a family picks it, their application shows a Set Up Payment Plan button, and '
+      +'the office sets the plan up from Billing. When off, the option is not offered.</span></span></label>';
     h+='</div>';
     showModal('Parent payment plans',h,function(){
         var checked=!!(document.getElementById('ppAllowChk')||{}).checked;
         enrollSettings.allowParentPaymentPlans=checked;
         save();closeModal('dynModal');
-        toast('Parent payment plans '+(checked?'enabled':'disabled'));
+        toast('Payment plan '+(checked?'offered':'no longer offered')+' on the registration form');
     },'Save');
 }
 
@@ -2243,7 +2248,7 @@ function _applyCloseout(famKey,plan){
     var f=families[famKey];
     var C=_closeoutAPI();
     if(!f||!C||!plan)return;
-    var stamp=Date.now(), applied=0, deferred=[];
+    var stamp=Date.now(), applied=0, deferred=[], canteenJobs=[];
 
     plan.steps.forEach(function(st,i){
         var amt=Math.round((Number(st.amount)||0)*100)/100;
@@ -2252,9 +2257,11 @@ function _applyCloseout(famKey,plan){
                                      :'Account credit';
         var id='co_'+stamp+'_'+i;
 
-        if(st.do==='bill'||st.do==='hold'){
-            // Nothing to do, and that IS the disposition: the credit stays where it
-            // already is. Writing an entry here would move money for no reason.
+        // bill / hold / roll_forward LEAVE THE MONEY WHERE IT IS (TED-067). A
+        // family's account and a child's canteen account both carry into next
+        // season, so "roll into next season" is exactly "keep it". It used to
+        // post a charge that consumed the credit — the opposite of rolling it on.
+        if(st.do==='bill'||st.do==='hold'||st.do==='roll_forward'){
             applied++;
             return;
         }
@@ -2262,17 +2269,25 @@ function _applyCloseout(famKey,plan){
             deferred.push(amt);
             return;
         }
-        // donate / cash / check / roll_forward all CONSUME the credit, so each is a
-        // charge against the account with the reason attached. Crediting would double
-        // the family's credit; editing the balance would bypass the ledger entirely.
-        var reason=(st.do==='donate')?'donation'
-                  :(st.do==='roll_forward')?'carried_forward':'disbursement';
-        var note=C.labelFor(st.do)+' \u2014 '+who
-                +(st.do==='roll_forward'?' (opening credit next season)':'');
+        var note=C.labelFor(st.do)+' \u2014 '+who;
+        // A CHILD'S CANTEEN MONEY comes off the child's canteen account (TED-067),
+        // through the same call the Canteen page's cash-out uses. It used to be
+        // charged to the family's tuition account, leaving the canteen untouched
+        // — a paid-in-full family suddenly owed their child's snack money.
+        if(st.kind==='canteen'){
+            canteenJobs.push({camper:st.camper||'',camperId:(st.camperId!=null?st.camperId:(typeof _camperIdOf==='function'?_camperIdOf(st.camper):null)),
+                              amount:amt,note:note});
+            return;
+        }
+        // Account credit that is donated / paid out in cash or by check is
+        // CONSUMED, so it is a charge against the account with the reason
+        // attached. Crediting would double it; editing the balance would bypass
+        // the ledger entirely.
+        var reason=(st.do==='donate')?'donation':'disbursement';
         if(!f.charges)f.charges=[];
         f.charges.push({id:id,category:'Close-out',description:note,amount:amt,
                         date:today(),timestamp:stamp,closeout:{disposition:st.do,
-                        reason:reason,kind:st.kind||'family',camper:st.camper||'',camperId:st.camperId!=null?st.camperId:null}});
+                        reason:reason,kind:'family'}});
         _postLedgerCharge(f,f.charges[f.charges.length-1]);
         f.balance=(f.balance||0)+amt;
         applied++;
@@ -2281,13 +2296,35 @@ function _applyCloseout(famKey,plan){
     save();closeModal('dynModal');
     if(curPage==='familydetail')renderFamilyDetailPage();else renderBilling();
 
-    var msg=applied?(applied+' close-out step'+(applied===1?'':'s')+' applied'):'';
-    if(deferred.length){
-        var total=deferred.reduce(function(n,x){return n+x},0);
-        msg+=(msg?'. ':'')+fm(Math.round(total*100)/100)+' is set to go back to a card '
-            +'\u2014 use Issue Credit/Refund so it goes through the refund checks';
+    function finish(canteenDone,canteenFailed){
+        var n=applied+canteenDone;
+        var msg=n?(n+' close-out step'+(n===1?'':'s')+' applied'):'';
+        if(canteenFailed.length){
+            msg+=(msg?'. ':'')+'Could not take canteen money off: '+canteenFailed.join('; ')
+                +' \u2014 do it from the Canteen page';
+        }
+        if(deferred.length){
+            var total=deferred.reduce(function(n,x){return n+x},0);
+            msg+=(msg?'. ':'')+fm(Math.round(total*100)/100)+' is set to go back to a card '
+                +'\u2014 use Issue Credit/Refund so it goes through the refund checks';
+        }
+        toast(msg||'Nothing to apply',canteenFailed.length?'error':undefined);
     }
-    toast(msg||'Nothing to apply');
+    if(!canteenJobs.length){finish(0,[]);return}
+    var client=window.CampistryDB&&window.CampistryDB.getClient?window.CampistryDB.getClient():null;
+    var campId=window.CampistryDB&&window.CampistryDB.getCampId?window.CampistryDB.getCampId():null;
+    if(!client||!campId){finish(0,canteenJobs.map(function(j){return _camperLabel(j.camper)+' (not connected)'}));return}
+    var done=0,failed=[];
+    Promise.all(canteenJobs.map(function(j){
+        return client.rpc('canteen_office_cash_out',{
+            p_camp_id:campId,p_camper_name:j.camper,p_camper_id:j.camperId,p_amount:j.amount,
+            p_note:'Season close-out: '+j.note,p_by:'office (close-out)',p_date:today()
+        }).then(function(res){
+            var d=res&&res.data;
+            if(res&&res.error||!d||!d.success)failed.push(_camperLabel(j.camper)+' ('+((d&&d.error)||(res&&res.error&&res.error.message)||'refused')+')');
+            else done++;
+        },function(e){failed.push(_camperLabel(j.camper)+' ('+((e&&e.message)||'error')+')')});
+    })).then(function(){finish(done,failed)});
 }
 
 /** Live arithmetic under the form, so a partial card refund is visible first. */
@@ -6271,11 +6308,14 @@ function _planSchedule(plan,balance){
     if(!dates.length)return [];
     var next=Number(plan.nextIndex)||0;
     var owed=Math.max(0,Number(balance)||0);
+    var fixed=Array.isArray(plan.amounts)?plan.amounts:[];
     var out=[];
     for(var i=0;i<dates.length;i++){
         if(i<next){out.push({dueDate:dates[i],amount:null,status:'paid',derived:true});continue}
         var left=dates.length-i;
-        var amt=left<=1?owed:Math.round((owed/left)*100)/100;
+        // The office's own amount when it set one (TED-068) — as autopay charges it.
+        var amt=(typeof fixed[i]==='number'&&fixed[i]>0)?Math.min(Math.round(fixed[i]*100)/100,owed)
+               :(left<=1?owed:Math.round((owed/left)*100)/100);
         out.push({dueDate:dates[i],amount:amt,status:'pending',derived:true});
         owed=Math.round((owed-amt)*100)/100;
     }
@@ -6370,6 +6410,64 @@ function _postLedgerCharge(f,c){
         source:{chargeId:String(c.id),category:c.category||''}
     });
     return !!(res&&res.ok);
+}
+
+/**
+ * Post the family's EXISTING charges to its ledger — the catch-up Billing runs
+ * on load (TED-053) — without posting any charge twice (TED-065).
+ *
+ * A camp that ran convert_family_ledgers (171/215) already has every charge
+ * that existed then on the ledger, as `le_conv_<family>_<n>` entries with
+ * reason 'fee' and nothing linking them to the charge's id. So each such
+ * converted charge "covers" one charge of the same amount (and date, when the
+ * conversion kept it), matched one to one; only a charge nothing covers is
+ * posted. A charge already on the ledger is kept EQUAL to charges[] (TED-066):
+ * re-priced, the difference is posted; gone (a cancelled Camp Shop order), it
+ * is taken back — the same entries migration 263's _sync_charge_to_ledger
+ * writes, so the two never double up. Returns how many entries were posted.
+ */
+function _postExistingCharges(f){
+    if(!f||!Array.isArray(f.entries)||!f.entries.length)return 0;
+    var B=_billingCore(); if(!B)return 0;
+    var charges=Array.isArray(f.charges)?f.charges:[];
+    var cents=function(v){return Math.round((Number(v)||0)*100)};
+    var pool=f.entries.filter(function(e){
+        return e&&e.kind==='charge'&&e.reason==='fee'&&/^le_conv_/.test(String(e.id||''));
+    }).map(function(e){return {cents:cents(e.amount),date:String(e.date||''),used:false}});
+    // What the ledger already holds for each charge id (TED-066): charges
+    // posted, less anything taken back.
+    var net={},count={};
+    f.entries.forEach(function(e){
+        var cid=e&&e.source&&e.source.chargeId; if(cid==null||cid==='')return;
+        cid=String(cid);
+        net[cid]=(net[cid]||0)+(e.kind==='charge'?cents(e.amount):(e.kind==='credit'?-cents(e.amount):0));
+        count[cid]=(count[cid]||0)+1;
+    });
+    var n=0, adjust=function(cid,diffC,desc){
+        if(!diffC)return;
+        var r=B.post(f,{id:'le_chgadj_'+cid+'_'+(count[cid]||0),kind:diffC>0?'charge':'credit',
+            amount:Math.abs(diffC)/100,reason:diffC>0?'other':'reversal',
+            note:(diffC<0&&!charges.some(function(c){return c&&String(c.id)===cid})?'Cancelled — ':'Changed — ')+(desc||'charge'),
+            by:'system',source:{chargeId:cid}});
+        if(r&&r.ok){n++;count[cid]=(count[cid]||0)+1;net[cid]=(net[cid]||0)+diffC;}
+    };
+    var seen={};
+    charges.forEach(function(c){
+        if(!c||c.id==null)return;
+        var cid=String(c.id); seen[cid]=1;
+        if(count[cid]){                                                          // posted before: keep it equal
+            adjust(cid,Math.max(0,cents(c.amount))-(net[cid]||0),c.description||c.category);
+            return;
+        }
+        var cc=cents(c.amount), cd=String(c.date||'');
+        var hit=pool.filter(function(p){return !p.used&&p.cents===cc&&p.date===cd})[0]
+              ||pool.filter(function(p){return !p.used&&p.cents===cc})[0];
+        if(hit){hit.used=true;return}                                           // the conversion posted it
+        if(_postLedgerCharge(f,c))n++;
+    });
+    // A charge that is gone from charges[] (a cancelled shop order) comes off.
+    Object.keys(net).forEach(function(cid){ if(!seen[cid]&&net[cid])adjust(cid,-net[cid],'charge'); });
+    return n;
 }
 
 /** Money helpers for the removal warnings. Read-only. */
@@ -13075,9 +13173,10 @@ function viewApplication(id){
             // remember what to do about it.
             var famKeyForApp=_resolveFamilyKey(e.camperName,_famItemRaw(e.camperName,e.street,e.city,e.state,e.zip,e.parentName,e.parentEmail));
             if(e.paymentMethod==='payment_plan'){
-                if(enrollSettings.allowParentPaymentPlans){
-                    b+='<div style="font-size:.8rem;color:var(--s500);margin-top:6px;">Self-serve payment plans are on — once accepted, this family can build their own plan from their Link portal.</div>';
-                }else if(famKeyForApp){
+                // The office sets the plan up (TED-074). A "parents build their
+                // own plan in Link" setting used to hide this button and promise
+                // a builder that Link no longer has, so nobody set the plan up.
+                if(famKeyForApp){
                     b+='<button class="me-btn me-btn--sec me-btn--sm" style="margin-top:6px;" onclick="CampistryMe.monthlyPlan(\''+je(famKeyForApp)+'\')">Set Up Payment Plan</button>';
                 }else{
                     b+='<div style="font-size:.8rem;color:var(--s500);margin-top:6px;">Accept &amp; enroll this application, then set up a payment plan from Billing.</div>';
@@ -16085,7 +16184,7 @@ function buildFamilyLedgers(){
         // Keyed on the charge's id, so this posts each one once, ever.
         Object.keys(families||{}).forEach(function(fk){
             var f=families[fk];
-            (f&&Array.isArray(f.charges)?f.charges:[]).forEach(function(c){ if(_postLedgerCharge(f,c))_posted++; });
+            _posted+=_postExistingCharges(f);
         });
         if(_posted){try{setTimeout(function(){try{save()}catch(_){}} ,0)}catch(_){}}
     }
@@ -19296,7 +19395,7 @@ function monthlyPlan(famKey,planId){
     h+='<div style="font-size:.7rem;font-weight:700;color:var(--s500);text-transform:uppercase;letter-spacing:.05em;margin-bottom:6px">Payments — edit any date or amount, add or remove rows freely</div>';
     h+='<div id="mpRowsBody" style="margin-bottom:8px">'+_mpRowsHtml(startRows)+'</div>';
     h+='<button type="button" class="me-btn me-btn--ghost me-btn--sm" onclick="CampistryMe._mpAddRow()">+ Add payment</button>';
-    h+='<div style="font-size:.75rem;color:var(--s500);margin:6px 0 0">The dates are kept exactly. Each payment\'s amount is worked out on its due date from what the family still owes then, split evenly over the payments left — so a payment made in between, or a new charge, is taken into account automatically.</div>';
+    h+='<div style="font-size:.75rem;color:var(--s500);margin:6px 0 0">Each payment is charged exactly as entered here, on its date — never more than the family still owes by then.</div>';
     h+='<div style="text-align:right;font-size:.8rem;color:var(--s500);margin:8px 0 14px">Total scheduled: <strong id="mpRunningTotal" style="color:var(--s800)">'+fm(startRows.reduce(function(s,r){return s+(Number(r.amount)||0)},0))+'</strong></div>';
     h+='</div>';
 
@@ -19352,12 +19451,24 @@ function _mpBuildLedgerPlan(existingPlan,insts,auto,total){
             });
         nextIdx=done.length;
     }
-    var future=insts.map(function(i){return i.dueDate}).sort();
-    return {id:existingPlan&&existingPlan.id?existingPlan.id:('plan_'+Date.now().toString(36)+Math.random().toString(36).slice(2,6)),
-        enrollmentIds:null,dueDates:done.concat(future),
+    var sorted=insts.slice().sort(function(a,b){return String(a.dueDate).localeCompare(String(b.dueDate))});
+    var future=sorted.map(function(i){return i.dueDate});
+    // The amounts the office typed, one per date (TED-068): autopay charges
+    // exactly these, never more than is owed. Past dates keep what they had.
+    var pastAmounts=(existingPlan&&Array.isArray(existingPlan.amounts))?existingPlan.amounts.slice(0,done.length):[];
+    while(pastAmounts.length<done.length)pastAmounts.push(null);
+    var amounts=pastAmounts.concat(sorted.map(function(i){return Math.round((Number(i.amount)||0)*100)/100}));
+    var plan={id:existingPlan&&existingPlan.id?existingPlan.id:('plan_'+Date.now().toString(36)+Math.random().toString(36).slice(2,6)),
+        enrollmentIds:null,dueDates:done.concat(future),amounts:amounts,
         count:done.length+future.length,nextIndex:nextIdx,history:hist,
-        autopay:!!auto,paused:false,total:Math.round(total*100)/100,
+        autopay:!!auto,paused:!!(existingPlan&&existingPlan.paused),total:Math.round(total*100)/100,
         createdAt:existingPlan&&existingPlan.createdAt||new Date().toISOString(),source:existingPlan&&existingPlan.source||'office'};
+    // Editing the schedule changes neither whether the plan is paused nor what
+    // is stopping collection (TED-076): a card that was declined is still the
+    // same card, and a bank debit still clearing is still in flight.
+    if(existingPlan&&existingPlan.collectionBlocked)plan.collectionBlocked=existingPlan.collectionBlocked;
+    if(existingPlan&&existingPlan.pendingCharge)plan.pendingCharge=existingPlan.pendingCharge;
+    return plan;
 }
 function _mpSwitchTab(tab){
     var gen=document.getElementById('mpTabGenerate'), edit=document.getElementById('mpTabEdit');

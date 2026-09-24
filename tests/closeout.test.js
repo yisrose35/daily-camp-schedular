@@ -246,7 +246,9 @@ test('bill and hold write NOTHING, because that is the disposition', () => {
     // The credit is already on the account. An entry here would move money for no
     // reason and leave the family's balance wrong.
     const fn = ME.slice(ME.indexOf('function _applyCloseout(famKey,plan)'));
-    assert.match(fn.slice(0, 2600), /if\(st\.do==='bill'\|\|st\.do==='hold'\)\{[\s\S]{0,320}return;/);
+    // TED-067: roll_forward is the same "leave it where it is" — a family's
+    // account and a canteen account both carry into next season.
+    assert.match(fn.slice(0, 2600), /if\(st\.do==='bill'\|\|st\.do==='hold'\|\|st\.do==='roll_forward'\)\{[\s\S]{0,420}return;/);
 });
 
 test('every other disposition CONSUMES the credit, as a charge with a reason', () => {

@@ -1,5 +1,5 @@
 -- ============================================================================
--- Confirm migrations 222-261 are in and doing their job.
+-- Confirm migrations 222-264 are in and doing their job.
 --
 -- Paste the whole thing into the Supabase SQL Editor. It is READ ONLY — one
 -- SELECT, nothing is created, changed or deleted, and the two purge functions
@@ -555,6 +555,23 @@ UNION ALL
           WHEN EXISTS (SELECT 1 FROM link_parent_invites WHERE user_id IS NOT NULL AND camper_names IS NULL)
             THEN (SELECT count(*) FROM link_parent_invites WHERE user_id IS NOT NULL AND camper_names IS NULL)
                  || ' claimed invitation(s) cover a WHOLE camp — look at them: SELECT camp_id, parent_email, created_at FROM link_parent_invites WHERE user_id IS NOT NULL AND camper_names IS NULL;'
+          ELSE 'ok' END),
+    -- Autopay waits for a bank debit to clear instead of debiting again (TED-064).
+    ('262  autopay waits for a bank debit',
+     CASE WHEN to_regprocedure('public.hold_autopay_charge(uuid,text,text,jsonb)') IS NULL
+          THEN 'apply 262 — a family paying by bank account on autopay can be debited again every night until the first debit clears'
+          ELSE 'ok' END),
+    -- A cancelled or re-priced shop order leaves the ledger too (TED-066).
+    ('263  a cancelled charge leaves the ledger',
+     CASE WHEN to_regprocedure('public._sync_charge_to_ledger(jsonb,text)') IS NULL
+               OR to_regprocedure('public.settle_shop_order(uuid,text,text,numeric,boolean)') IS NULL
+               OR pg_get_functiondef(to_regprocedure('public.settle_shop_order(uuid,text,text,numeric,boolean)')) !~ '_sync_charge_to_ledger'
+          THEN 'apply 263 — a Camp Shop order billed to a family and then cancelled keeps billing them'
+          ELSE 'ok' END),
+    -- A payment plan charges the amounts the office set (TED-068).
+    ('264  a plan charges the amounts the office set',
+     CASE WHEN pg_get_functiondef(to_regprocedure('public.plan_due(jsonb,jsonb,text)')) !~ 'amounts'
+          THEN 'apply 264 — autopay ignores the amounts typed into a payment plan and splits the whole balance evenly'
           ELSE 'ok' END)
     ) AS x(item, result)
 

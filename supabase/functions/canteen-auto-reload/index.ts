@@ -100,7 +100,7 @@ const corsHeaders = {
   "Access-Control-Allow-Headers": "authorization, x-client-info, apikey, content-type, x-cron-secret",
 };
 
-async function stripeCharge(customerId: string, pmId: string | null, amount: number, description: string, metadata: Record<string, string>, destinationAccountId?: string | null) {
+async function stripeCharge(customerId: string, pmId: string | null, amount: number, description: string, metadata: Record<string, string>, destinationAccountId?: string | null, idempotencyKey?: string) {
   const params: Record<string, string> = {
     amount: String(Math.round(amount * 100)),
     currency: "usd",
@@ -126,9 +126,11 @@ async function stripeCharge(customerId: string, pmId: string | null, amount: num
     params["transfer_data[destination]"] = destinationAccountId;
     params["on_behalf_of"] = destinationAccountId;
   }
+  const headers: Record<string, string> = { "Authorization": `Bearer ${STRIPE_SECRET}`, "Content-Type": "application/x-www-form-urlencoded" };
+  if (idempotencyKey) headers["Idempotency-Key"] = idempotencyKey;
   const resp = await fetch(`${STRIPE_API}/payment_intents`, {
     method: "POST",
-    headers: { "Authorization": `Bearer ${STRIPE_SECRET}`, "Content-Type": "application/x-www-form-urlencoded" },
+    headers,
     body: new URLSearchParams(params).toString(),
   });
   return resp.json();
@@ -445,6 +447,21 @@ serve(async (req) => {
       const due = dueAmount(ar, Number(acct.balance) || 0, today);
       if (!due || due.amount <= 0) continue;
 
+      // ONE reload per camper per slot (TED-075). Two runs at once — the
+      // 30-minute cron and a parent's purchase triggering it, say — both read
+      // the same balance and both charged. The claim is taken before the card
+      // is charged: the loser skips; a decline gives it back.
+      const reloadsToday = (Array.isArray(ar.reloadHistory) ? ar.reloadHistory : []).filter((d: string) => d === today).length;
+      const reloadKey = `reload:${camperId != null ? camperId : camperName}:${today}:${reloadsToday}`;
+      const { data: rclaim } = await supabase.rpc("claim_refund_intent", {
+        p_camp_id: row.camp_id, p_key: reloadKey, p_amount: due.amount, p_payment_ref: String(camperId ?? camperName),
+      });
+      if (rclaim && rclaim.claimed === false) {
+        details.push({ camp: row.camp_id, camper: camperName, camperId, amount: due.amount, kind: due.kind, result: "already_reloaded" });
+        continue;
+      }
+      const releaseReload = () => supabase.rpc("release_refund_intent", { p_camp_id: row.camp_id, p_key: reloadKey });
+
       if (ar.byopCustomerRef) {
         // Cardknox/Sola path — a direct gateway charge, synchronous, so
         // this function credits the balance itself instead of waiting on a
@@ -456,18 +473,21 @@ serve(async (req) => {
           // leave enabled, don't burn a failure on the family for something
           // that isn't their fault. Flagged, not silently dropped.
           details.push({ camp: row.camp_id, camper: camperName, camperId, amount: due.amount, kind: due.kind, result: "skipped_no_processor", processor: processorKey || "unknown" });
+          await releaseReload();
           continue;
         }
         const creds = await byopCredentials(String(row.camp_id));
         const hasCred = processorKey === "cardknox" ? !!creds?.apiKey : (!!creds?.sourceKey && !!creds?.pin);
         if (!creds || !hasCred) {
           details.push({ camp: row.camp_id, camper: camperName, camperId, amount: due.amount, kind: due.kind, result: "skipped_no_processor", processor: processorKey });
+          await releaseReload();
           continue;
         }
         const res = processorKey === "cardknox"
           ? await cardknoxCharge(String(creds.apiKey), Math.round(due.amount * 100), String(ar.byopCustomerRef))
           : await banquestCharge(creds, Math.round(due.amount * 100), String(ar.byopCustomerRef));
         if (!res.success || !res.externalTransactionId) {
+          await releaseReload();
           markFailure(ar, today, res.error || "Declined");
           failed++;
           details.push({ camp: row.camp_id, camper: camperName, camperId, amount: due.amount, kind: due.kind, result: "failed", reason: res.error || "Declined" });
@@ -505,6 +525,7 @@ serve(async (req) => {
       // Stripe path (unchanged from before BYOP support was added).
       if (!STRIPE_SECRET) {
         details.push({ camp: row.camp_id, camper: camperName, camperId, amount: due.amount, kind: due.kind, result: "skipped_no_processor", processor: "stripe" });
+        await releaseReload();
         continue;
       }
       const pi = await stripeCharge(
@@ -512,9 +533,11 @@ serve(async (req) => {
         `${campNames.get(String(row.camp_id)) || "Camp"} — canteen auto-reload (${due.kind}), ${displayName(camperName)}`,
         { campId: String(row.camp_id), camperName, camperId: camperId != null ? String(camperId) : "", source: "campistry-canteen-deposit", auto: "true" },
         campDestinations.get(String(row.camp_id)) || null,
+        `${row.camp_id}:${reloadKey}`,
       );
 
       if (pi.error || pi.status === "requires_action") {
+        await releaseReload();
         const reason = pi.error?.message || "requires_authentication";
         markFailure(ar, today, reason);
         failed++;

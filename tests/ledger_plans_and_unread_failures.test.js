@@ -156,7 +156,8 @@ test('the retry the old comment promised now actually exists', () => {
     assert.match(RUNNER, /retry_failed_tip_transfers/,
         'nothing ever drains the queue of unpaid tips');
     // Paying a tip twice is worse than paying it late.
-    assert.match(RUNNER, /"Idempotency-Key": `tip_retry_\$\{t\.id\}`/,
+    // (TED-073 re-reads the row, so the key is on the item's own id.)
+    assert.match(RUNNER, /"Idempotency-Key": `tip_retry_\$\{item\.id\}`/,
         'a retry has no idempotency key, so a transfer that actually succeeded ' +
         'on an earlier run could pay the staff member twice');
     // Only ever items whose money was taken and not handed on.
@@ -169,7 +170,9 @@ test('the retry the old comment promised now actually exists', () => {
 
 test('a tip retry cannot fail the tuition run', () => {
     const at = RUNNER.indexOf('retry_failed_tip_transfers');
-    const block = RUNNER.slice(at - 900, at + 2200);
+    // From the sweep's own try to its catch, however long the retry grows
+    // (TED-073 made it longer; tests/autopay_runner.test.js runs it).
+    const block = RUNNER.slice(at - 900, RUNNER.indexOf('tip retry sweep failed', at) + 40);
     assert.match(block, /try \{/);
     assert.match(block, /tip retry sweep failed/,
         'an error in the tip sweep is not contained');

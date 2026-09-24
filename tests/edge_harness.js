@@ -6,7 +6,7 @@
 // The function's own file is used as-is. Only its three outside imports are
 // swapped: Deno's `serve` (so the test can call the handler directly),
 // supabase-js's `createClient` (a small in-memory database the scenario fills
-// in), and `npm:resend` (email). Everything else — the checks, the maths, the
+// in), `npm:resend` (email) and js-md5 (Node's own md5). Everything else — the checks, the maths, the
 // calls it makes — is the function's own code, run with Node's TypeScript type
 // stripping.
 //
@@ -121,7 +121,9 @@ function runEdge(name, scenario, opts) {
     let fn = src
         .replace(/from\s+["']https:\/\/deno\.land\/std@[^"']+\/http\/server\.ts["']/g, 'from "./fake_serve.mts"')
         .replace(/from\s+["']https:\/\/esm\.sh\/@supabase\/supabase-js@[^"']+["']/g, 'from "./fake_db.mts"')
-        .replace(/from\s+["']npm:resend@[^"']+["']/g, 'from "./fake_resend.mts"');
+        .replace(/from\s+["']npm:resend@[^"']+["']/g, 'from "./fake_resend.mts"')
+        // md5 from esm.sh (the Sola signature) -> Node's own, same answers.
+        .replace(/import md5 from ["']https:\/\/esm\.sh\/js-md5@[^"']+["'];/, 'import { createHash as __ch } from "node:crypto"; const md5 = (x: string) => __ch("md5").update(x).digest("hex");');
     if (typeof opts.transform === 'function') fn = opts.transform(fn);
     fs.writeFileSync(path.join(dir, 'fn.mts'), fn);
     fs.writeFileSync(path.join(dir, 'fake_serve.mts'), FAKE_SERVE);

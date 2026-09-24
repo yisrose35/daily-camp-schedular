@@ -195,6 +195,9 @@ const MIGRATIONS = [
     '259_a_roster_key_belongs_to_one_child',
     '260_numbers_stay_with_their_child',
     '261_only_the_camp_office_writes_parent_invites',
+    '262_autopay_waits_for_a_bank_debit',
+    '263_a_cancelled_charge_leaves_the_ledger',
+    '264_a_plan_charges_the_amounts_the_office_set',
 ];
 
 // The one thing the stubs deliberately get wrong for our purposes: they define

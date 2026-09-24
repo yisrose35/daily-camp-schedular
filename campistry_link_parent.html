@@ -1129,7 +1129,17 @@ function _lkSupa(){ return window.__CAMPISTRY_SUPABASE__||{}; }
 function _lkMoney(n){ n=Number(n)||0; var neg=n<0; n=Math.abs(n); return (neg?'-$':'$')+n.toLocaleString(undefined,{minimumFractionDigits:2,maximumFractionDigits:2}); }
 async function _lkCheckout(body){
     var s=_lkSupa(); if(!s.url) throw new Error('Payments are not set up for this camp yet.');
-    var resp=await fetch(s.url+'/functions/v1/stripe-checkout',{method:'POST',headers:{'Content-Type':'application/json','Authorization':'Bearer '+(s.anonKey||''),'apikey':s.anonKey||''},body:JSON.stringify(body)});
+    // The parent's own login, when there is one: stripe-checkout works out the
+    // family from it (TED-063), so the payment is credited to the right family
+    // and settles in the camp's account.
+    var token=s.anonKey||'';
+    try{
+        var db=window._parentDB;
+        var sessRes=db&&db.auth?await db.auth.getSession():null;
+        var t=sessRes&&sessRes.data&&sessRes.data.session&&sessRes.data.session.access_token;
+        if(t)token=t;
+    }catch(_){}
+    var resp=await fetch(s.url+'/functions/v1/stripe-checkout',{method:'POST',headers:{'Content-Type':'application/json','Authorization':'Bearer '+token,'apikey':s.anonKey||''},body:JSON.stringify(body)});
     var data=await resp.json(); if(!resp.ok||data.error) throw new Error(data.error||'Could not start checkout'); return data;
 }
 // Generic anon-key edge function caller — same shape as _lkCheckout above,
@@ -1720,7 +1730,7 @@ async function _lkPayConfirm(){
             return;
         }
         toast('Opening secure checkout…');
-        var res=await _lkCheckout({campId:cid,familyName:d.familyName||'',email:email,amount:amt,description:'Camp payment'+(d.familyName?' — '+d.familyName:''),successUrl:_lkReturnUrl('success','pay'),cancelUrl:_lkReturnUrl('cancelled','pay')});
+        var res=await _lkCheckout({campId:cid,familyKey:d.familyKey||'',familyName:d.familyName||'',email:email,amount:amt,description:'Camp payment'+(d.familyName?' — '+d.familyName:''),successUrl:_lkReturnUrl('success','pay'),cancelUrl:_lkReturnUrl('cancelled','pay')});
         if(res&&res.url){ _lkGoToCheckout(res.url); } else { throw new Error('No checkout link'); }
     }catch(err){ console.error('[Parent] checkout error:',err); toast('Could not start payment: '+(err&&err.message||'error')); }
 }

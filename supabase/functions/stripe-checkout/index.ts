@@ -58,6 +58,30 @@ const STRIPE_SECRET = Deno.env.get("STRIPE_SECRET_KEY");
 const STRIPE_API = "https://api.stripe.com/v1";
 const SUPABASE_URL = Deno.env.get("SUPABASE_URL") || "";
 const SUPABASE_SERVICE_KEY = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY") || "";
+const SUPABASE_ANON_KEY = Deno.env.get("SUPABASE_ANON_KEY") || "";
+
+// WHOSE PAYMENT (TED-063). A parent paying from Link is signed in, so their
+// family is worked out HERE from their own login (get_my_balance, run as
+// them) — never taken from the request. Link used to send no family at all,
+// so the payment was credited to nobody (the parent still saw the full
+// balance) and, with no family to check, settled in the platform's account
+// instead of the camp's. The office's emailed pay link has no parent login
+// and carries the family key the office chose, checked against the camp.
+async function callerFamilyKey(req: Request, campId: string | undefined): Promise<string | null> {
+  const jwt = (req.headers.get("Authorization") || "").replace(/^Bearer\s+/i, "");
+  if (!jwt || !campId || jwt === SUPABASE_ANON_KEY || !SUPABASE_URL || !SUPABASE_ANON_KEY) return null;
+  try {
+    const asUser = createClient(SUPABASE_URL, SUPABASE_ANON_KEY, {
+      global: { headers: { Authorization: `Bearer ${jwt}` } },
+      auth: { persistSession: false, autoRefreshToken: false },
+    });
+    const { data: u } = await asUser.auth.getUser();
+    if (!u?.user?.id) return null;
+    const { data } = await asUser.rpc("get_my_balance", { p_camp_id: campId });
+    const fk = data && typeof data === "object" ? String((data as any).familyKey || "") : "";
+    return fk || null;
+  } catch (_) { return null; }
+}
 
 const VALID_SOURCES = new Set(["campistry-checkout", "campistry-canteen-deposit"]);
 
@@ -228,6 +252,22 @@ serve(async (req) => {
       }
     }
 
+    // A tuition payment must land on a family's ledger. The signed-in parent's
+    // own family wins; otherwise the key sent must be one of this camp's
+    // families. Neither: refuse, rather than take money nobody is credited with.
+    let famKey: string = "";
+    if (!isCanteenDeposit) {
+      const mine = await callerFamilyKey(req, campId);
+      if (mine) famKey = mine;
+      else if (familyKey && await campOwnsFamily(campId, String(familyKey))) famKey = String(familyKey);
+      if (!famKey) {
+        return new Response(JSON.stringify({ error: "We couldn't find your family's account at this camp — please contact the camp office." }), {
+          status: 400,
+          headers: { ...corsHeaders, "Content-Type": "application/json" },
+        });
+      }
+    }
+
     const cents = String(Math.round(Number(amount) * 100));
     // The camp's own name leads the label, because this string is what the
     // parent sees on the Checkout page, in Stripe's receipt and on their card
@@ -253,7 +293,7 @@ serve(async (req) => {
     // webhook has it regardless of which event we key off.
     const meta: Record<string, string> = {
       campId: String(campId || ""),
-      familyKey: String(familyKey || ""),
+      familyKey: famKey,
       familyName: String(familyName || ""),
       enrollmentId: String(enrollmentId || ""),
       source: checkoutSource,
@@ -282,7 +322,7 @@ serve(async (req) => {
 
     const destinationAccountId = isCanteenDeposit
       ? await lookupCampDestinationForCanteen(campId)
-      : await lookupCampDestination(campId, familyKey);
+      : await lookupCampDestination(campId, famKey);
 
     // Tuition's Pay Link works fine with no destination (money still lands
     // somewhere real — the platform account). Canteen is different: the

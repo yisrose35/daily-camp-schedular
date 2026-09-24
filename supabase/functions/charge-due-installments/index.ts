@@ -94,7 +94,7 @@ const corsHeaders = {
   "Access-Control-Allow-Headers": "authorization, x-client-info, apikey, content-type, x-cron-secret",
 };
 
-async function stripeCharge(customerId: string, pmId: string | null, amount: number, description: string, metadata: Record<string, string>, destinationAccountId?: string | null) {
+async function stripeCharge(customerId: string, pmId: string | null, amount: number, description: string, metadata: Record<string, string>, destinationAccountId?: string | null, idempotencyKey?: string) {
   const params: Record<string, string> = {
     amount: String(Math.round(amount * 100)),
     currency: "usd",
@@ -122,12 +122,31 @@ async function stripeCharge(customerId: string, pmId: string | null, amount: num
     params["transfer_data[destination]"] = destinationAccountId;
     params["on_behalf_of"] = destinationAccountId;
   }
+  // One key per plan, instalment and night (TED-064): a second run on the same
+  // night — a retried cron, two schedules — is answered with the first charge
+  // instead of making another.
+  const headers: Record<string, string> = { "Authorization": `Bearer ${STRIPE_SECRET}`, "Content-Type": "application/x-www-form-urlencoded" };
+  if (idempotencyKey) headers["Idempotency-Key"] = idempotencyKey;
   const resp = await fetch(`${STRIPE_API}/payment_intents`, {
     method: "POST",
-    headers: { "Authorization": `Bearer ${STRIPE_SECRET}`, "Content-Type": "application/x-www-form-urlencoded" },
+    headers,
     body: new URLSearchParams(params).toString(),
   });
   return resp.json();
+}
+
+// How is a debit we already started doing? (TED-064)
+async function stripePaymentIntent(id: string) {
+  try {
+    const resp = await fetch(`${STRIPE_API}/payment_intents/${encodeURIComponent(id)}`, {
+      headers: { "Authorization": `Bearer ${STRIPE_SECRET}` },
+    });
+    return await resp.json();
+  } catch (_) { return null; }
+}
+// Stripe's words for "this one is not going to be paid".
+function piFailed(pi: any): boolean {
+  return !!pi && !pi.error && (pi.status === "canceled" || pi.status === "requires_payment_method");
 }
 
 // Cardknox/Sola charge against a vaulted card token, inlined rather than
@@ -407,6 +426,16 @@ serve(async (req) => {
     }
   }
 
+  // A bank debit still clearing is held ON THE PLAN (migration 262, TED-064),
+  // so the next night asks Stripe about that debit instead of starting another.
+  async function holdCharge(campId: string, famKey: string, planId: string, hold: Record<string, unknown> | null) {
+    if (!planId) return;
+    const { error } = await supabase.rpc("hold_autopay_charge", {
+      p_camp_id: campId, p_family_key: famKey, p_plan_id: planId, p_hold: hold,
+    });
+    if (error) console.error(`[autopay] camp ${campId} family ${famKey}: could not hold the debit on plan ${planId} (${error.message}) — it may be charged again`);
+  }
+
   // A declined LEGACY instalment (TED-055). It used to be written
   // status:'failed', and the loop only charges 'pending' — so one decline lost
   // that month for good, with no alert. Now it stays 'pending' with the reason
@@ -598,6 +627,48 @@ serve(async (req) => {
           continue;
         }
 
+        // A bank debit from an earlier night still clearing (TED-064): ask
+        // Stripe about THAT debit; never start another for the plan meanwhile.
+        const heldP = plan.pendingCharge;
+        if (heldP && heldP.paymentIntentId) {
+          const hpi = processorKey ? null : await stripePaymentIntent(String(heldP.paymentIntentId));
+          if (hpi && !hpi.error && hpi.status === "succeeded") {
+            const recH = await supabase.rpc("record_autopay_charge", {
+              p_camp_id: row.camp_id, p_family_key: famKey,
+              p_plan_id: String(plan.id || ""), p_index: heldP.index,
+              p_due_date: heldP.dueDate, p_amount: Number(heldP.amount),
+              p_payment: {
+                id: "auto_" + hpi.id, familyKey: famKey,
+                amount: Number(heldP.amount), date: today, method: "Autopay (bank)",
+                reference: hpi.id, stripePaymentIntentId: hpi.id,
+                notes: "Autopay instalment " + (Number(heldP.index) + 1) + " of " + plan.dueDates.length,
+                status: "succeeded", timestamp: Date.now(),
+              },
+              p_dedupe_key: String(hpi.id),
+              p_entry_note: "Autopay instalment " + (Number(heldP.index) + 1) + " of " + plan.dueDates.length,
+            });
+            await holdCharge(String(row.camp_id), famKey, String(plan.id || ""), null);
+            await flagPlan(String(row.camp_id), famKey, String(plan.id || ""), null);
+            charged++;
+            details.push({ camp: row.camp_id, family: f.name, amount: Number(heldP.amount),
+                           result: (recH.error || !recH.data?.success) ? "charged_not_recorded" : "cleared" });
+          } else if (piFailed(hpi)) {
+            const why = hpi.last_payment_error?.message || "bank debit failed";
+            await supabase.rpc("record_autopay_charge", {
+              p_camp_id: row.camp_id, p_family_key: famKey,
+              p_plan_id: String(plan.id || ""), p_index: heldP.index,
+              p_due_date: heldP.dueDate, p_amount: 0, p_reason: "declined: " + why,
+            });
+            await holdCharge(String(row.camp_id), famKey, String(plan.id || ""), null);
+            await flagPlan(String(row.camp_id), famKey, String(plan.id || ""), "declined", why);
+            failed++;
+            details.push({ camp: row.camp_id, family: f.name, amount: Number(heldP.amount), result: "failed", reason: why });
+          } else {
+            details.push({ camp: row.camp_id, family: f.name, amount: Number(heldP.amount), result: "waiting_for_bank_debit" });
+          }
+          continue;
+        }
+
         const { data: due, error: dueErr } = await supabase.rpc("plan_due_for", {
           p_camp_id: row.camp_id, p_family_key: famKey,
           p_plan_id: String(plan.id || ""), p_as_of: today,
@@ -669,15 +740,21 @@ serve(async (req) => {
             { campId: String(row.camp_id), familyKey: famKey, familyName: camperName2,
               planId: String(plan.id || ""), source: "autopay" },
             campDestinations.get(String(row.camp_id)) || null,
+            `autopay:${row.camp_id}:${famKey}:${plan.id || ""}:${due.index}:${today}`,
           );
           if (pi.error || pi.status === "requires_action") {
             failWhy = pi.error?.message || "requires_authentication";
           } else if (pi.status === "succeeded") {
             ok = true; txnId = String(pi.id);
           } else {
-            // Still processing. Record nothing: the counter must not advance on
-            // a charge that has not landed.
-            details.push({ camp: row.camp_id, family: f.name, amount, result: pi.status });
+            // Still processing (a bank debit). The counter must not advance on a
+            // charge that has not landed — but the debit IS in flight, so it is
+            // held on the plan and not started again tomorrow (TED-064).
+            await holdCharge(String(row.camp_id), famKey, String(plan.id || ""), {
+              paymentIntentId: String(pi.id), index: due.index, dueDate: due.dueDate,
+              amount, since: today,
+            });
+            details.push({ camp: row.camp_id, family: f.name, amount, result: "processing_held" });
             continue;
           }
         }
@@ -772,6 +849,38 @@ serve(async (req) => {
           details.push({ camp: row.camp_id, family: f.name, result: "waiting_to_retry",
                          reason: blockedL.reason, attempts: blockedL.attempts,
                          nextRetryAt: blockedL.nextRetryAt });
+          continue;
+        }
+
+        // The same for an installments[] plan: a debit still clearing is asked
+        // about, never started again (TED-064).
+        const heldL = plan.pendingCharge;
+        if (heldL && heldL.paymentIntentId) {
+          const hpi = processorKey ? null : await stripePaymentIntent(String(heldL.paymentIntentId));
+          const hinst = plan.installments.find((x: any) => x && x.dueDate === heldL.dueDate && x.status === "pending");
+          if (hpi && !hpi.error && hpi.status === "succeeded") {
+            if (hinst) {
+              await recordInstallment(String(row.camp_id), famKey, plan, planIndex, hinst,
+                { status: "paid", paidDate: today, stripePaymentIntentId: hpi.id },
+                { id: "auto_" + hpi.id, familyKey: famKey, amount: Number(heldL.amount), date: today,
+                  method: "Autopay (bank)", reference: hpi.id, notes: "Monthly autopay installment",
+                  stripePaymentIntentId: hpi.id, status: "succeeded", timestamp: Date.now() },
+                String(hpi.id));
+              remainingBalance -= Number(heldL.amount) || 0;
+            }
+            await holdCharge(String(row.camp_id), famKey, String(plan.id || ""), null);
+            await flagPlan(String(row.camp_id), famKey, String(plan.id || ""), null);
+            charged++;
+            details.push({ camp: row.camp_id, family: f.name, amount: Number(heldL.amount), result: "cleared" });
+          } else if (piFailed(hpi)) {
+            const why = hpi.last_payment_error?.message || "bank debit failed";
+            if (hinst) await legacyDeclined(String(row.camp_id), famKey, plan, planIndex, hinst, why);
+            await holdCharge(String(row.camp_id), famKey, String(plan.id || ""), null);
+            failed++;
+            details.push({ camp: row.camp_id, family: f.name, amount: Number(heldL.amount), result: "failed", reason: why });
+          } else {
+            details.push({ camp: row.camp_id, family: f.name, amount: Number(heldL.amount), result: "waiting_for_bank_debit" });
+          }
           continue;
         }
 
@@ -896,6 +1005,7 @@ serve(async (req) => {
             `Autopay installment — ${f.name || famKey}`,
             { campId: String(row.camp_id), familyKey: famKey, familyName: camperName, planId: plan.id || "", source: "autopay" },   // name-ok: label in metadata; familyKey identifies the family
             campDestinations.get(String(row.camp_id)) || null,
+            `autopay:${row.camp_id}:${famKey}:${plan.id || planIndex}:${inst.dueDate}:${today}`,
           );
 
           if (pi.error || pi.status === "requires_action") {
@@ -925,10 +1035,14 @@ serve(async (req) => {
             details.push({ camp: row.camp_id, family: f.name, amount,
               result: recorded ? "charged" : "charged_not_recorded" });
           } else {
-            // Processing (e.g. a slower method). Nothing to persist: the
-            // installment stays 'pending' on purpose, so the next run picks it
-            // up if the intent never lands.
-            details.push({ camp: row.camp_id, family: f.name, amount, result: pi.status });
+            // Processing (a bank debit). The instalment stays 'pending' — it has
+            // not landed — but the debit is held on the plan so the next run asks
+            // Stripe about it instead of debiting again (TED-064).
+            await holdCharge(String(row.camp_id), famKey, String(plan.id || ""), {
+              paymentIntentId: String(pi.id), dueDate: inst.dueDate, amount, since: today,
+            });
+            details.push({ camp: row.camp_id, family: f.name, amount, result: "processing_held" });
+            break;   // the rest of this plan waits for it
           }
         }
       }
@@ -952,31 +1066,73 @@ serve(async (req) => {
     for (const t of (pending || [])) {
       if (!STRIPE_SECRET) break;
       try {
-        const amountCents = Math.max(0, Number(t.tipCents) - Number(t.feeCents || 0));
-        if (!(amountCents > 0)) continue;
-        const resp = await fetch(`${STRIPE_API}/transfers`, {
-          method: "POST",
-          headers: {
-            Authorization: `Bearer ${STRIPE_SECRET}`,
-            "Content-Type": "application/x-www-form-urlencoded",
-            // Same key every night for the same item, so a retry that actually
-            // went through on a previous run cannot pay the tip twice.
-            "Idempotency-Key": `tip_retry_${t.id}`,
-          },
-          body: new URLSearchParams({
-            amount: String(amountCents),
-            currency: "usd",
-            destination: String(t.staffAccountId),
-            description: `Campistry tip — ${t.staffName || ""} (retry)`,
-          }).toString(),
-        });
-        const tr = await resp.json();
-        if (tr.error) throw new Error(tr.error.message);
+        // The row itself: the retry must do exactly what the first attempt did
+        // (TED-073). It used to send Campistry's internal staff record id as
+        // the Stripe destination ("No such destination", every night) and the
+        // tip minus the 2% fee, which was already taken on the whole cart.
+        const { data: item } = await supabase.from("link_tip_cart_items")
+          .select("*").eq("id", t.id).maybeSingle();
+        if (!item || item.processed_at || !item.stripe_account_id || !(Number(item.tip_cents) > 0)) continue;
+        const auth = { Authorization: `Bearer ${STRIPE_SECRET}` };
+
+        // Did the first attempt actually go through? A transfer carries its
+        // cart item id; if one exists, only the bookkeeping is caught up — a
+        // second transfer would pay the counselor twice.
+        let transfer: any = null;
+        try {
+          const lr = await fetch(`${STRIPE_API}/transfers?limit=100&transfer_group=${encodeURIComponent("cart_" + item.cart_id)}`, { headers: auth });
+          const list = await lr.json();
+          transfer = (Array.isArray(list?.data) ? list.data : []).find((x: any) => x?.metadata?.cartItemId === String(item.id)) || null;
+        } catch (_) { /* could not look: fall through to the keyed create */ }
+
+        if (!transfer) {
+          const resp = await fetch(`${STRIPE_API}/transfers`, {
+            method: "POST",
+            headers: {
+              ...auth,
+              "Content-Type": "application/x-www-form-urlencoded",
+              // Same key every night for the same item, so a retry that went
+              // through on a previous run cannot pay the tip twice.
+              "Idempotency-Key": `tip_retry_${item.id}`,
+            },
+            body: new URLSearchParams({
+              amount: String(item.tip_cents),                 // the whole tip, as the first attempt sends
+              currency: "usd",
+              destination: String(item.stripe_account_id),    // the counselor's Stripe account
+              transfer_group: "cart_" + item.cart_id,
+              "metadata[cartId]": String(item.cart_id),
+              "metadata[cartItemId]": String(item.id),
+              description: `Campistry tip — ${item.staff_name || ""} (retry)`,
+            }).toString(),
+          });
+          transfer = await resp.json();
+          if (transfer.error) throw new Error(transfer.error.message);
+        }
+
+        // The same bookkeeping the webhook does on a first-time success, once.
+        const { data: known } = await supabase.from("link_tips").select("id")
+          .eq("stripe_transfer_id", transfer.id).maybeSingle();
+        if (!known) {
+          await supabase.from("link_tips").insert({
+            camp_id: item.camp_id, user_id: item.parent_user_id,
+            person_id: item.person_id ?? null, camper_name: item.camper_name,
+            parent_name: item.parent_name, parent_email: item.parent_email,
+            recipient_name: item.staff_name, recipient_role: item.staff_role,
+            staff_account_id: item.staff_account_id,
+            amount: Number(item.tip_cents) / 100,
+            payment_method: "stripe_connect",
+            stripe_transfer_id: transfer.id,
+            fee_amount: Number(item.fee_cents || 0) / 100,
+          });
+          await supabase.rpc("increment_staff_total_earned", {
+            p_account_id: item.staff_account_id, p_amount: Number(item.tip_cents) / 100,
+          });
+        }
         await supabase.from("link_tip_cart_items")
-          .update({ processed_at: new Date().toISOString(), stripe_transfer_id: tr.id, transfer_error: null })
-          .eq("id", t.id);
+          .update({ processed_at: new Date().toISOString(), stripe_transfer_id: transfer.id, transfer_error: null })
+          .eq("id", item.id);
         tipsRetried++;
-        console.log(`[autopay] retried tip ${t.id} -> ${t.staffName}: $${amountCents / 100} (${tr.id})`);
+        console.log(`[autopay] retried tip ${item.id} -> ${item.staff_name}: $${Number(item.tip_cents) / 100} (${transfer.id})`);
       } catch (e) {
         tipsStillFailing++;
         console.warn(`[autopay] tip ${t.id} for ${t.staffName} still failing: ${(e as Error).message}`);
