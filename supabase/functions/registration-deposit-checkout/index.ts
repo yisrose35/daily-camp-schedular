@@ -40,6 +40,33 @@ import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
 const SUPABASE_URL = Deno.env.get("SUPABASE_URL") || "";
 const SUPABASE_SERVICE_KEY = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY") || "";
 const STRIPE_SECRET_KEY = Deno.env.get("STRIPE_SECRET_KEY") || "";
+const SUPABASE_ANON_KEY = Deno.env.get("SUPABASE_ANON_KEY") || "";
+
+// The camp the AUTHENTICATED caller is owner/admin of — the same rule the
+// office's other charge functions use. The office's "charge deposit now"
+// needs it (TED-069): it used to charge a parent's saved card for anyone who
+// knew a camp id and an application id.
+async function callerCampId(req: Request): Promise<string | null> {
+  const jwt = (req.headers.get("Authorization") || "").replace(/^Bearer\s+/i, "");
+  if (!jwt || jwt === SUPABASE_ANON_KEY || !SUPABASE_URL || !SUPABASE_ANON_KEY) return null;
+  const asUser = createClient(SUPABASE_URL, SUPABASE_ANON_KEY, {
+    global: { headers: { Authorization: `Bearer ${jwt}` } },
+    auth: { persistSession: false, autoRefreshToken: false },
+  });
+  const { data: userData } = await asUser.auth.getUser();
+  const uid = userData?.user?.id;
+  if (!uid) return null;
+  const { data: ownedCamps } = await asUser.from("camps").select("id").eq("owner", uid);
+  const owned = Array.isArray(ownedCamps) && ownedCamps.length
+    ? (ownedCamps.find((c: { id: string }) => c.id === uid) || ownedCamps[0]) : null;
+  if (owned?.id) return owned.id;
+  const { data: memberships } = await asUser.from("camp_users").select("camp_id, role")
+    .eq("user_id", uid).not("accepted_at", "is", null)
+    .order("accepted_at", { ascending: false }).limit(1);
+  const m = Array.isArray(memberships) && memberships.length ? memberships[0] : null;
+  if (m?.camp_id && (m.role === "owner" || m.role === "admin")) return m.camp_id;
+  return null;
+}
 
 const corsHeaders = {
   "Access-Control-Allow-Origin": "*",
@@ -53,10 +80,13 @@ function json(body: unknown, status = 200) {
 }
 
 const BANQUEST_DEFAULT_BASE = "https://api.banquestgateway.com/api/v2";
+// The camp's gateway address is stored as gatewayUrl, as every other Banquest
+// call reads it (TED-070: this read apiHost, a field nothing stores, so a camp
+// on any gateway but the default was charged at the wrong address).
 function bqBase(c: Record<string, string>): string {
-  const host = (c.apiHost || "").trim();
-  if (!host) return BANQUEST_DEFAULT_BASE;
-  return /\/api\/v\d/.test(host) ? host.replace(/\/+$/, "") : host.replace(/\/+$/, "") + "/api/v2";
+  let b = (c.gatewayUrl || c.apiHost || BANQUEST_DEFAULT_BASE).trim().replace(/\/+$/, "");
+  if (!/\/(api\/)?v\d+$/i.test(b)) b += "/api/v2";
+  return b;
 }
 function bqAuth(c: Record<string, string>): string {
   return "Basic " + btoa(`${c.sourceKey}:${c.pin}`);
@@ -178,6 +208,10 @@ serve(async (req) => {
     // never from the request. An office page cannot name someone else's card
     // any more than a parent's browser can name its own price.
     if (officeCharge && !captureReference) {
+      const office = await callerCampId(req);
+      if (!office || office !== String(campId)) {
+        return json({ success: false, error: "Only the camp's owner or an admin can charge a deposit." }, 403);
+      }
       const { data: kv } = await service.from("camp_state_kv").select("value")
         .eq("camp_id", campId).eq("key", "campistryMe").maybeSingle();
       const enr = (kv?.value as Record<string, any> | null)?.enrollments?.[String(enrollmentId)];
@@ -229,13 +263,27 @@ serve(async (req) => {
 
       const amountCents = Math.round(owed * 100);
       let txnId = "", chargedCents = amountCents, declineMsg = "";
+
+      // ONE charge per application at a time (TED-069): an office click and a
+      // parent's retry arriving together could both pass the "owed" check above
+      // and both charge. The claim is taken before the processor is called,
+      // released if it declines, and kept once it succeeds.
+      // Keyed on the amount too: a settled claim is kept, and a later, different
+      // deposit on the same application must still be chargeable.
+      const depositKey = "deposit:" + String(enrollmentId) + ":" + amountCents;
+      const { data: dclaim } = await service.rpc("claim_refund_intent", {
+        p_camp_id: campId, p_key: depositKey, p_amount: owed, p_payment_ref: String(enrollmentId),
+      });
+      if (dclaim && dclaim.claimed === false) {
+        return json({ success: true, alreadyPaid: true, replayed: true });
+      }
       const last4 = claim.last4 || null, brand = claim.brand || null;
 
       if (claim.processor === "banquest") {
         const { data: credRes } = await service.rpc("_admin_get_processor_credential", { p_camp_id: campId });
         const creds = (credRes?.credentials || credRes?.credential || credRes) as Record<string, string> | null;
         if (!creds?.sourceKey || !creds?.pin) {
-          return json({ success: false, error: "This camp has not finished setting up online payments." }, 200);
+          { await service.rpc("release_refund_intent", { p_camp_id: campId, p_key: depositKey }); return json({ success: false, error: "This camp has not finished setting up online payments." }, 200); }
         }
         // A saved card is charged as source "tkn-<card_ref>" -- the same shape
         // charge-due-installments already uses for autopay.
@@ -265,7 +313,7 @@ serve(async (req) => {
       } else if (claim.processor === "cardknox") {
         const { data: credResult } = await service.rpc("_admin_get_processor_credential", { p_camp_id: campId });
         const apiKey = credResult?.success ? credResult.credentials?.apiKey : null;
-        if (!apiKey) return json({ success: false, error: "This camp has not finished setting up online payments." }, 200);
+        if (!apiKey) { await service.rpc("release_refund_intent", { p_camp_id: campId, p_key: depositKey }); return json({ success: false, error: "This camp has not finished setting up online payments." }, 200); }
         // The unique xInvoice is load-bearing: Sola blocks a transaction whose
         // Key+Card+Amount+Invoice match another within 10 minutes.
         const resp = await fetch("https://x1.cardknox.com/gateway", {
@@ -284,7 +332,7 @@ serve(async (req) => {
         if (parsed.xResult !== "A") declineMsg = parsed.xError || "Declined";
         else txnId = parsed.xRefNum || "";
       } else if (claim.processor === "stripe") {
-        if (!STRIPE_SECRET_KEY) return json({ success: false, error: "Online payment is not configured." }, 200);
+        if (!STRIPE_SECRET_KEY) { await service.rpc("release_refund_intent", { p_camp_id: campId, p_key: depositKey }); return json({ success: false, error: "Online payment is not configured." }, 200); }
         const params: Record<string, string> = {
           amount: String(amountCents), currency: "usd",
           customer: String(claim.customer || ""),
@@ -298,10 +346,14 @@ serve(async (req) => {
         // Money lands in the camp's own account when they are connected.
         if (camp?.stripe_charges_enabled && camp?.stripe_account_id) {
           params["transfer_data[destination]"] = String(camp.stripe_account_id);
+          // The camp's name on the parent's statement, not the platform's
+          // (TED-076) — the same pairing stripe-charge uses.
+          params["on_behalf_of"] = String(camp.stripe_account_id);
         }
         const resp = await fetch("https://api.stripe.com/v1/payment_intents", {
           method: "POST",
-          headers: { "Authorization": `Bearer ${STRIPE_SECRET_KEY}`, "Content-Type": "application/x-www-form-urlencoded" },
+          headers: { "Authorization": `Bearer ${STRIPE_SECRET_KEY}`, "Content-Type": "application/x-www-form-urlencoded",
+                     "Idempotency-Key": `deposit:${campId}:${enrollmentId}:${amountCents}` },
           body: new URLSearchParams(params).toString(),
         });
         const pi = await resp.json();
@@ -316,8 +368,13 @@ serve(async (req) => {
       }
 
       if (declineMsg || !txnId) {
+        await service.rpc("release_refund_intent", { p_camp_id: campId, p_key: depositKey });
         return json({ success: false, error: declineMsg || "The card was declined." }, 200);
       }
+      await service.rpc("settle_refund_intent", {
+        p_camp_id: campId, p_key: depositKey,
+        p_result: { txnId, amount: chargedCents / 100, processor: String(claim.processor) },
+      });
 
       const charged = chargedCents / 100;
 
@@ -388,7 +445,10 @@ serve(async (req) => {
     // ── Banquest: a hosted pay page ─────────────────────────────────────────
     if (processorKey === "banquest") {
       const { data: credRes } = await service.rpc("_admin_get_processor_credential", { p_camp_id: campId });
-      const creds = (credRes?.credential || credRes) as Record<string, string> | null;
+      // `.credentials`, as _admin_get_processor_credential answers (TED-070:
+      // this read `.credential`, found nothing, and told every parent the camp
+      // had not finished setting up online payments).
+      const creds = (credRes?.credentials || credRes?.credential || credRes) as Record<string, string> | null;
       if (!creds?.sourceKey || !creds?.pin || !creds?.paymentPageSlug) {
         return json({
           success: false,
