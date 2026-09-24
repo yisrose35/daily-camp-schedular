@@ -159,7 +159,7 @@ function _wsK(key) {
     // (getUserAssignedDivisions()'s fallback chain, permissions_guard.js)
     // keep working untouched — this only changes how NEW scope is set.
     //
-    // Shape written to camp_users.data_scope (see migration 265):
+    // Shape written to camp_users.data_scope (see migration 274):
     //   {type:'all'} | {type:'divisions', divisions:[name,...]} |
     //   {type:'grades', grades:[{division,grade},...]} |
     //   {type:'bunks',  bunks:[{division,grade,bunk},...]}

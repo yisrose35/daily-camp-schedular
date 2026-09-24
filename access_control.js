@@ -2107,7 +2107,7 @@
                 invite_token: inviteToken
             };
             let { data, error } = await window.supabase.from('camp_users').insert([insertRow]).select().single();
-            // migration 265 (camp_users.data_scope) not applied to this camp's
+            // migration 274 (camp_users.data_scope) not applied to this camp's
             // database yet — degrade instead of failing the whole invite: drop
             // the one column Postgres doesn't recognize and retry once. Scope
             // just won't be saved until the migration runs; everything else
@@ -2161,7 +2161,7 @@
             }
 
             let { data, error } = await window.supabase.from('camp_users').update(updates).eq('id', id).select().single();
-            // migration 265 (camp_users.data_scope) not applied yet — same
+            // migration 274 (camp_users.data_scope) not applied yet — same
             // degrade-and-retry as inviteTeamMember above, so an edit to
             // role/name/department/etc. isn't blocked by a column this
             // camp's database doesn't have yet.
