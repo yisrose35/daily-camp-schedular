@@ -31,6 +31,9 @@ function _wsK(key) {
             .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
             .replace(/"/g, '&quot;').replace(/'/g, '&#39;');
 
+    const _ROLE_TYPE_LABELS = { admin: 'Admin', manager: 'Manager', scheduler: 'Scheduler', viewer: 'Viewer' };
+    const _roleTypeLabel = (r) => _ROLE_TYPE_LABELS[r] || r || 'Manager';
+
     /**
      * One line describing a member's section access, for the staff list and the
      * edit modal. Delegates to the capability registry so the wording stays in
@@ -565,13 +568,12 @@ function _wsK(key) {
 
     async function showInviteModal() {
         const meDivisions = await getMeDivisions(false);
-        // Custom Roles (camp_access_groups, migration 097) show up in the SAME
-        // dropdown as the base account types now — an owner who built one
-        // expects to just pick it, not juggle two separate "role" selectors.
-        // Picking one sets role='manager' underneath (the tier migration 097
-        // added specifically to host a group's own permission set) plus the
-        // group assignment; picking a base account type clears any group.
+        // No more raw account-type options (Admin/Manager/Scheduler/Viewer)
+        // here at all (migration 275) — every invite picks a Role, and the
+        // Role itself carries its account type. One decision, not two, and
+        // the two can never disagree because there's only one to make.
         const accessGroups = await fetchAccessGroups();
+        const roleTypeLabel = _ROLE_TYPE_LABELS;
 
         const modal = document.createElement('div');
         modal.className = 'modal-overlay';
@@ -591,23 +593,23 @@ function _wsK(key) {
                          access) is invited from campistry_me.js's "Invite to Lite" actions
                          instead, not here, so this list never mixes Lite accounts in with
                          people who actually log into the Campistry website. -->
+                    ${accessGroups.length ? `
                     <div class="form-group">
                         <label for="invite-role">Role *</label>
                         <select id="invite-role" required>
-                            <option value="">Select a role...</option>
-                            <option value="admin">Admin - Full access to everything</option>
-                            <option value="manager">Manager - Configurable access to specific apps and sections</option>
-                            <option value="scheduler">Scheduler - Access to assigned divisions</option>
-                            <option value="viewer">Viewer - View only, no editing</option>
-                            ${accessGroups.length ? `<optgroup label="Custom roles">${accessGroups.map(g => `<option value="group:${g.id}">${_tsuEsc(g.name)}</option>`).join('')}</optgroup>` : ''}
+                            <option value="">Select a Role...</option>
+                            ${accessGroups.map(g => `<option value="${g.id}">${_tsuEsc(g.name)} (${roleTypeLabel[g.base_role] || g.base_role})</option>`).join('')}
                         </select>
                     </div>
                     ${_renderScopePicker('invite', { type: 'all' }, meDivisions)}
+                    ` : `
+                    <div class="form-error" style="display:block;">No Roles yet — <a href="#" id="invite-go-make-role">create one</a> first, then come back to invite.</div>
+                    `}
                     <div id="invite-error" class="form-error"></div>
                     <div id="invite-success" class="form-success"></div>
                     <div class="form-actions">
                         <button type="button" class="btn-secondary" id="cancel-invite">Cancel</button>
-                        <button type="submit" class="btn-primary">Send Invite</button>
+                        <button type="submit" class="btn-primary" ${accessGroups.length ? '' : 'disabled'}>Send Invite</button>
                     </div>
                 </form>
             </div>`;
@@ -618,6 +620,10 @@ function _wsK(key) {
         const closeModal = () => modal.remove();
         document.getElementById('modal-close').addEventListener('click', closeModal);
         document.getElementById('cancel-invite').addEventListener('click', closeModal);
+        document.getElementById('invite-go-make-role')?.addEventListener('click', (e) => {
+            e.preventDefault(); closeModal();
+            document.getElementById('add-access-group-btn')?.click();
+        });
         let _mdModalB = false;
         modal.addEventListener('mousedown', e => { _mdModalB = (e.target === modal); });
         modal.addEventListener('click', e => { if (e.target === modal && _mdModalB) closeModal(); });
@@ -625,26 +631,26 @@ function _wsK(key) {
         document.getElementById('invite-form').addEventListener('submit', async (e) => {
             e.preventDefault();
             const email = document.getElementById('invite-email').value.trim();
-            const roleVal = document.getElementById('invite-role').value;
+            const groupId = document.getElementById('invite-role')?.value;
             const errorEl = document.getElementById('invite-error');
             const successEl = document.getElementById('invite-success');
             errorEl.textContent = ''; successEl.textContent = '';
-            if (!email || !roleVal) { errorEl.textContent = 'Please fill in all required fields'; return; }
+            if (!email || !groupId) { errorEl.textContent = 'Please fill in all required fields'; return; }
 
-            const isGroup = roleVal.indexOf('group:') === 0;
-            const role = isGroup ? 'manager' : roleVal;
-            const accessGroupId = isGroup ? roleVal.slice(6) : null;
+            const group = accessGroups.find(g => g.id === groupId);
+            if (!group) { errorEl.textContent = 'That Role could not be found — pick another.'; return; }
+            const role = group.base_role;
             const dataScope = _readScopePicker(modal);
 
             try {
                 const result = await window.AccessControl.inviteTeamMember(email, role, [], '', dataScope);
                 if (result.error) { errorEl.textContent = result.error; return; }
-                if (accessGroupId && result.data && result.data.id && window.supabase) {
+                if (result.data && result.data.id && window.supabase) {
                     const { data: agRes, error: agErr } = await window.supabase.rpc('assign_member_access_group', {
-                        p_member_id: result.data.id, p_group_id: accessGroupId
+                        p_member_id: result.data.id, p_group_id: groupId
                     });
                     if (agErr || !agRes || !agRes.success) {
-                        errorEl.textContent = 'Invite sent, but the role could not be assigned — set it from Edit instead.';
+                        errorEl.textContent = 'Invite sent, but the Role could not be assigned — set it from Edit instead.';
                     }
                 }
                 successEl.innerHTML = `
@@ -655,8 +661,7 @@ function _wsK(key) {
                     </div>
                     <div style="margin-top:10px;font-size:0.8rem;color:var(--slate-500);">Or share: <input type="text" value="${result.inviteUrl}" readonly style="width:100%;margin-top:4px;padding:6px 8px;font-size:0.8rem;border:1px solid var(--slate-200);border-radius:4px;" onclick="this.select()"></div>`;
                 document.getElementById('copy-invite-link')?.addEventListener('click', async () => { await copyToClipboard(result.inviteUrl); showToast('Invite link copied!'); });
-                const roleLabel = isGroup ? (accessGroups.find(g => g.id === accessGroupId) || {}).name : (window.AccessControl?.getRoleDisplayName(role) || role);
-                document.getElementById('send-invite-email')?.addEventListener('click', async () => { await sendInviteEmail(email, result.inviteUrl, roleLabel || role); });
+                document.getElementById('send-invite-email')?.addEventListener('click', async () => { await sendInviteEmail(email, result.inviteUrl, group.name); });
                 await refreshData();
                 const fa = modal.querySelector('.form-actions');
                 if (fa) { fa.innerHTML = `<button type="button" class="btn-primary" id="done-invite" style="width:100%;">Done</button>`; document.getElementById('done-invite')?.addEventListener('click', () => { closeModal(); const c = document.getElementById('team-card'); if (c) renderTeamCard(c); }); }
@@ -695,11 +700,8 @@ function _wsK(key) {
                     <div class="form-group">
                         <label for="edit-role">Role</label>
                         <select id="edit-role">
-                            <option value="admin" ${member.role === 'admin' && !hasGroup ? 'selected' : ''}>Admin</option>
-                            <option value="manager" ${member.role === 'manager' && !hasGroup ? 'selected' : ''}>Manager</option>
-                            <option value="scheduler" ${member.role === 'scheduler' && !hasGroup ? 'selected' : ''}>Scheduler</option>
-                            <option value="viewer" ${member.role === 'viewer' && !hasGroup ? 'selected' : ''}>Viewer</option>
-                            ${accessGroups.length ? `<optgroup label="Custom roles">${accessGroups.map(g => `<option value="group:${g.id}" ${member.access_group_id === g.id ? 'selected' : ''}>${_tsuEsc(g.name)}</option>`).join('')}</optgroup>` : ''}
+                            ${!hasGroup ? `<option value="" selected>Custom — no Role (${_tsuEsc(_roleTypeLabel(member.role))}, this person's own settings)</option>` : ''}
+                            ${accessGroups.map(g => `<option value="${g.id}" ${member.access_group_id === g.id ? 'selected' : ''}>${_tsuEsc(g.name)} (${_tsuEsc(_roleTypeLabel(g.base_role))})</option>`).join('')}
                         </select>
                     </div>
                     ${_renderScopePicker('edit', initialScope, meDivisions)}
@@ -757,12 +759,12 @@ function _wsK(key) {
         document.body.appendChild(modal);
         _wireScopePicker(modal);
         const roleSel = document.getElementById('edit-role');
-        const isGroupVal = (v) => v.indexOf('group:') === 0;
+        const isGroupVal = (v) => !!v;
         const _accessBtn = document.getElementById('edit-open-access');
         if (_accessBtn) _accessBtn.addEventListener('click', () => {
             if (!window.CampistryAccessSettings) { alert('Access settings not loaded'); return; }
             const roleVal = roleSel.value;
-            const currentGroupId = isGroupVal(roleVal) ? roleVal.slice(6) : null;
+            const currentGroupId = isGroupVal(roleVal) ? roleVal : null;
             const currentGroup = currentGroupId ? accessGroups.find(g => g.id === currentGroupId) : null;
             // Seed the fine-tune matrix from the ASSIGNED ROLE's own grants when
             // this person has no bespoke overrides of their own yet — otherwise
@@ -785,7 +787,12 @@ function _wsK(key) {
                     });
                     if (!error && data && data.success) {
                         member.access_group_id = null;
-                        roleSel.value = 'manager';
+                        const customOpt = document.createElement('option');
+                        customOpt.value = '';
+                        customOpt.selected = true;
+                        customOpt.textContent = `Custom — no Role (${_roleTypeLabel(member.role)}, this person's own settings)`;
+                        roleSel.insertBefore(customOpt, roleSel.firstChild);
+                        roleSel.value = '';
                         const prodBlock = document.getElementById('edit-individual-access-products');
                         if (prodBlock) prodBlock.style.display = 'block';
                         const hint = document.getElementById('edit-access-hint');
@@ -816,15 +823,22 @@ function _wsK(key) {
             e.preventDefault();
             const roleVal = roleSel.value;
             const isGroup = isGroupVal(roleVal);
-            const role = isGroup ? 'manager' : roleVal;
-            const groupId = isGroup ? roleVal.slice(6) : null;
+            const groupId = isGroup ? roleVal : null;
             const errorEl = document.getElementById('edit-member-error');
+            if (isGroup && !accessGroups.find(g => g.id === groupId)) {
+                errorEl.textContent = 'That Role could not be found — pick another.';
+                return;
+            }
             const display_name = document.getElementById('edit-display-name').value.trim() || null;
             const department = document.getElementById('edit-department').value.trim() || null;
             const parent_contactable = document.getElementById('edit-contactable').checked;
             const dataScope = _readScopePicker(modal);
+            // role itself is never set from here — assign_member_access_group
+            // (migration 275) sets camp_users.role from the Role's base_role
+            // whenever a Role is assigned; for a Custom/no-Role member it's
+            // left exactly as it already is.
             const updates = {
-                role, display_name, department, parent_contactable,
+                display_name, department, parent_contactable,
                 subdivision_ids: [], // fully superseded by data_scope below, going forward
                 data_scope: dataScope,
                 assigned_divisions: _scopeToAssignedDivisions(dataScope)
