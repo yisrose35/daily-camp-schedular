@@ -150,9 +150,12 @@ DECLARE
     n     text;
     v_re  text := 'IF\s+NOT\s+EXISTS\s*\(\s*SELECT\s+1\s+FROM\s+camps\s+c\s+WHERE\s+c\.id\s*=\s*([a-z_.]+)\s+AND\s+c\.owner\s*=\s*caller\s*\)\s*AND\s+NOT\s+EXISTS\s*\(\s*SELECT\s+1\s+FROM\s+camp_users\s+u\s+WHERE\s+u\.camp_id\s*=\s*[a-z_.]+\s+AND\s+u\.user_id\s*=\s*caller\s*\)\s*THEN\s*RETURN\s+jsonb_build_object\(\s*''success'',\s*false,\s*''error'',\s*''not_a_member''\s*\)';
 BEGIN
+    -- Pasted from Windows the patterns carry CR LF; the function text has none.
+    f := replace(f, chr(13), '');
+    v_re := replace(v_re, chr(13), '');
     FOREACH f IN ARRAY ARRAY['get_camp_parent_invites', 'resolve_join_request', 'set_parent_invite_email',
                              'set_parent_billing_access', 'revoke_orphaned_parent_invites'] LOOP
-        FOR d IN SELECT pg_get_functiondef(p.oid) FROM pg_proc p JOIN pg_namespace ns ON ns.oid = p.pronamespace
+        FOR d IN SELECT replace(pg_get_functiondef(p.oid), chr(13), '') FROM pg_proc p JOIN pg_namespace ns ON ns.oid = p.pronamespace
                   WHERE ns.nspname = 'public' AND p.proname = f LOOP
             CONTINUE WHEN d ~ '_is_camp_office';                  -- already done
             n := regexp_replace(d, v_re,

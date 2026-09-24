@@ -229,7 +229,12 @@ DECLARE
     a2  text := 'SELECT ct.payload, ct.tx_date, ct.first_seen';
     b2  text := 'SELECT ct.payload, ct.sig, ct.tx_date, ct.first_seen';
 BEGIN
-    d := pg_get_functiondef(f);
+    -- Pasted from Windows the patterns carry CR LF; the function text has none.
+    a1 := replace(a1, chr(13), '');
+    b1 := replace(b1, chr(13), '');
+    a2 := replace(a2, chr(13), '');
+    b2 := replace(b2, chr(13), '');
+    d := replace(pg_get_functiondef(f), chr(13), '');
     IF position('''sig'', x.sig' IN d) > 0 THEN
         RAISE NOTICE '284: get_canteen_history already carries sig';
         RETURN;

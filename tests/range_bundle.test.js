@@ -15,3 +15,20 @@ test('APPLY_255_290.sql matches the migrations it carries', (t) => {
     if (r.error && r.error.code === 'ENOENT') return t.skip('python3 is not installed');
     assert.strictEqual(r.status, 0, (r.stderr || '') + (r.stdout || ''));
 });
+
+// Pasted from Windows, the SQL Editor sends CR LF line endings: a migration that
+// patched a function by matching its text with a plain line break found
+// nothing ("267: _merge_family_from_page does not look the way this file
+// expects"). Every function text read in 255-290 is taken without CRs.
+test('every migration in 255-290 reads a function\'s text without Windows line endings', () => {
+    const fs = require('node:fs');
+    const dir = path.join(__dirname, '..', 'migrations');
+    const bad = [];
+    for (const f of fs.readdirSync(dir).filter(n => /^(25[5-9]|2[6-8]\d|290)_.*\.sql$/.test(n))) {
+        const s = fs.readFileSync(path.join(dir, f), 'utf8');
+        const all = (s.match(/(?<![\w.])pg_get_functiondef\(/g) || []).length;
+        const wrapped = (s.match(/replace\(pg_get_functiondef\(/g) || []).length;
+        if (all !== wrapped) bad.push(`${f}: ${all - wrapped} of ${all}`);
+    }
+    assert.deepStrictEqual(bad, [], 'pg_get_functiondef not wrapped in replace(…, chr(13), \'\')');
+});

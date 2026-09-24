@@ -179,7 +179,7 @@ DECLARE
     v_n    int := 0;
 BEGIN
     FOR f IN SELECT * FROM public._functions_that_must_pin() LOOP
-        v_def := pg_get_functiondef(f);
+        v_def := replace(pg_get_functiondef(f), chr(13), '');
         v_def := regexp_replace(v_def, '(public\.)?camp_person_label\(', 'public.camp_person_name_for(', 'g');
         EXECUTE v_def;
         v_n := v_n + 1;
@@ -195,7 +195,7 @@ DECLARE
 BEGIN
     FOR f IN SELECT p.oid FROM pg_proc p JOIN pg_namespace n ON n.oid = p.pronamespace
               WHERE n.nspname = 'public' AND p.proname = 'canteen_office_import_offline' LOOP
-        v_def := pg_get_functiondef(f);
+        v_def := replace(pg_get_functiondef(f), chr(13), '');
         IF position('clear_person_pins()' IN v_def) = 0 THEN
             v_def := regexp_replace(v_def,
                 '(FOR r IN SELECT value FROM jsonb_array_elements\(p_rows\) LOOP)',
@@ -215,7 +215,7 @@ DO $$
 DECLARE v_def text;
 BEGIN
     IF to_regprocedure('public.verify_offline_import()') IS NOT NULL THEN
-        v_def := pg_get_functiondef('public.verify_offline_import()'::regprocedure);
+        v_def := replace(pg_get_functiondef('public.verify_offline_import()'::regprocedure), chr(13), '');
         IF position('camp_person_(label|name_for)' IN v_def) = 0 THEN
             EXECUTE replace(v_def, $q$~ 'camp_person_label'$q$, $q$~ 'camp_person_(label|name_for)'$q$);
         END IF;

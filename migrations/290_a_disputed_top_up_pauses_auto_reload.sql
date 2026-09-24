@@ -143,12 +143,15 @@ GRANT EXECUTE ON FUNCTION public.pause_canteen_autoreload_for_dispute(uuid, text
 -- same way as a Stripe one (TED-211): 287 finds the top-up by either id.
 DO $$
 DECLARE
-    d   text := pg_get_functiondef('public.record_canteen_stripe_reversal(uuid,text,text,numeric,text,text)'::regprocedure);
+    d   text := replace(pg_get_functiondef('public.record_canteen_stripe_reversal(uuid,text,text,numeric,text,text)'::regprocedure), chr(13), '');
     old text := $o$payload ->> 'stripePaymentIntentId' = v_pi
        AND tx_type = 'credit'$o$;
     new text := $n$(payload ->> 'stripePaymentIntentId' = v_pi OR payload ->> 'byopTransactionId' = v_pi)
        AND tx_type = 'credit'$n$;
 BEGIN
+    -- Pasted from Windows the patterns carry CR LF; the function text has none.
+    old := replace(old, chr(13), '');
+    new := replace(new, chr(13), '');
     IF position('byopTransactionId' IN d) > 0 THEN
         RAISE NOTICE '290: record_canteen_stripe_reversal already finds a Cardknox/Banquest top-up';
         RETURN;
@@ -165,7 +168,7 @@ DO $$
 DECLARE
     p   regprocedure := COALESCE(to_regprocedure('public._update_canteen_autoreload_state__by_name(uuid,text,jsonb)'),
                                  to_regprocedure('public.update_canteen_autoreload_state(uuid,text,jsonb)'));
-    d   text := pg_get_functiondef(p);
+    d   text := replace(pg_get_functiondef(p), chr(13), '');
     old text := $o$    v_acct := jsonb_set(v_acct, '{autoReload}', p_autoreload, true);$o$;
     new text := $n$    -- 290 (TED-205): a dispute pause stays off until the parent's own save.
     IF jsonb_typeof(v_prev) = 'object' AND v_prev ? 'disputePausedAt' AND NOT p_autoreload ? 'disputePausedAt' THEN
@@ -175,6 +178,9 @@ DECLARE
     END IF;
     v_acct := jsonb_set(v_acct, '{autoReload}', p_autoreload, true);$n$;
 BEGIN
+    -- Pasted from Windows the patterns carry CR LF; the function text has none.
+    old := replace(old, chr(13), '');
+    new := replace(new, chr(13), '');
     IF position('disputePausedAt' IN d) > 0 THEN
         RAISE NOTICE '290: the nightly run''s write already keeps a dispute pause';
         RETURN;
@@ -189,10 +195,13 @@ END $$;
 -- 282 does for the camp's other notes).
 DO $$
 DECLARE
-    d   text := pg_get_functiondef('public.set_canteen_auto_reload(uuid,text,jsonb,bigint)'::regprocedure);
+    d   text := replace(pg_get_functiondef('public.set_canteen_auto_reload(uuid,text,jsonb,bigint)'::regprocedure), chr(13), '');
     old text := $o$    v_ar := (v_ar - 'disabledReason') - 'disabledAt';$o$;
     new text := $n$    v_ar := (((v_ar - 'disabledReason') - 'disabledAt') - 'disputePausedAt') - 'disputeId';$n$;
 BEGIN
+    -- Pasted from Windows the patterns carry CR LF; the function text has none.
+    old := replace(old, chr(13), '');
+    new := replace(new, chr(13), '');
     IF position('disputePausedAt' IN d) > 0 THEN
         RAISE NOTICE '290: a parent''s save already clears the dispute pause';
         RETURN;

@@ -109,7 +109,7 @@ GRANT EXECUTE ON FUNCTION public.verify_parent_reads_by_number() TO authenticate
 DO $$
 DECLARE d text; n text;
 BEGIN
-    SELECT pg_get_functiondef(p.oid) INTO d
+    SELECT replace(pg_get_functiondef(p.oid), chr(13), '') INTO d
       FROM pg_proc p JOIN pg_namespace ns ON ns.oid = p.pronamespace
      WHERE ns.nspname = 'public' AND p.proname = 'get_postaccept_bootstrap';
     IF d IS NULL THEN
@@ -265,7 +265,7 @@ BEGIN
                 AND p.proname IN ('set_camper_face_consent', 'submit_camper_headshot')
                 AND p.prosrc ~ 'INSERT INTO link_camper_faces'
     LOOP
-        d := pg_get_functiondef(r.oid);
+        d := replace(pg_get_functiondef(r.oid), chr(13), '');
         n := regexp_replace(d,
             '(INSERT INTO link_camper_faces[^;]*?)ON CONFLICT \(camp_id, camper_name\) DO UPDATE\s+SET ',
             '\1ON CONFLICT (camp_id, person_id) WHERE person_id IS NOT NULL DO UPDATE
@@ -326,7 +326,7 @@ BEGIN
                                   'get_viewable_original_photo_ids', 'get_my_camper_face_status')
                 AND p.prosrc !~ '_parent_owns_person\s*\('
     LOOP
-        d := pg_get_functiondef(r.oid);
+        d := replace(pg_get_functiondef(r.oid), chr(13), '');
         n := regexp_replace(d,
             '(public\.)?_parent_owns_camper\(\s*([a-z_.]+)\s*,\s*([a-z_]+)\.camper_name\s*\)',
             '(CASE WHEN \3.person_id IS NOT NULL THEN public._parent_owns_person(\2, \3.person_id) ELSE public._parent_owns_camper(\2, \3.camper_name) END)',

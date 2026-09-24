@@ -26,10 +26,13 @@ DECLARE
     v_ar := (v_ar - 'disabledReason') - 'disabledAt';
     v_acct  := jsonb_set(v_acct, '{autoReload}', v_ar, true);$n$;
 BEGIN
+    -- Pasted from Windows the patterns carry CR LF; the function text has none.
+    old := replace(old, chr(13), '');
+    new := replace(new, chr(13), '');
     IF to_regprocedure('public.set_canteen_auto_reload(uuid,text,jsonb,bigint)') IS NULL THEN
         RAISE EXCEPTION '282 needs migration 231 — apply it first';
     END IF;
-    d := pg_get_functiondef('public.set_canteen_auto_reload(uuid,text,jsonb,bigint)'::regprocedure);
+    d := replace(pg_get_functiondef('public.set_canteen_auto_reload(uuid,text,jsonb,bigint)'::regprocedure), chr(13), '');
     IF position('disabledReason' IN d) > 0 THEN
         RAISE NOTICE '282: set_canteen_auto_reload already clears the note';
         RETURN;

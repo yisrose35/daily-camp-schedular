@@ -84,10 +84,13 @@ REVOKE ALL ON FUNCTION public._sync_charge_to_ledger(jsonb, text) FROM public, a
 -- settle_shop_order: sync the order's charge onto the ledger in the same save.
 DO $$
 DECLARE
-    d   text := pg_get_functiondef('public.settle_shop_order(uuid,text,text,numeric,boolean)'::regprocedure);
+    d   text := replace(pg_get_functiondef('public.settle_shop_order(uuid,text,text,numeric,boolean)'::regprocedure), chr(13), '');
     old text := $o$v_fam || jsonb_build_object('charges', v_kept));$o$;
     new text := $n$public._sync_charge_to_ledger(v_fam || jsonb_build_object('charges', v_kept), v_chargeId));$n$;
 BEGIN
+    -- Pasted from Windows the patterns carry CR LF; the function text has none.
+    old := replace(old, chr(13), '');
+    new := replace(new, chr(13), '');
     IF position('_sync_charge_to_ledger' IN d) > 0 THEN
         RAISE NOTICE '263: settle_shop_order already syncs the ledger';
         RETURN;

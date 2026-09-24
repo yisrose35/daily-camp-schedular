@@ -340,9 +340,11 @@ REVOKE ALL ON FUNCTION public._keep_dispute_hold(jsonb, jsonb) FROM public, anon
 
 DO $$
 DECLARE
-    d   text := pg_get_functiondef('public._merge_family_from_page(jsonb,jsonb)'::regprocedure);
+    d   text := replace(pg_get_functiondef('public._merge_family_from_page(jsonb,jsonb)'::regprocedure), chr(13), '');
     old text := 'public._keep_payer_ledger(p_server, v_out)';
 BEGIN
+    -- Pasted from Windows the patterns carry CR LF; the function text has none.
+    old := replace(old, chr(13), '');
     IF position('_keep_dispute_hold' IN d) > 0 THEN
         RAISE NOTICE '288: _merge_family_from_page already keeps the dispute pause';
         RETURN;
@@ -358,7 +360,7 @@ END $$;
 -- pause and records its mark under it, to come back when the pause lifts.
 DO $$
 DECLARE
-    d  text := pg_get_functiondef('public.flag_plan_collection(uuid,text,text,text,text)'::regprocedure);
+    d  text := replace(pg_get_functiondef('public.flag_plan_collection(uuid,text,text,text,text)'::regprocedure), chr(13), '');
     a1 text := '    v_next   date;';
     b1 text := '    v_next   date;' || chr(10) || '    v_cb     jsonb;';
     a2 text := '    v_prev := v_plan->''collectionBlocked'';';
@@ -378,6 +380,13 @@ DECLARE
             || '    END IF;' || chr(10)
             || '    v_fam := jsonb_set(v_fam, public._plan_path(v_fam, p_plan_id), v_plan, true);';
 BEGIN
+    -- Pasted from Windows the patterns carry CR LF; the function text has none.
+    a1 := replace(a1, chr(13), '');
+    b1 := replace(b1, chr(13), '');
+    a2 := replace(a2, chr(13), '');
+    b2 := replace(b2, chr(13), '');
+    a3 := replace(a3, chr(13), '');
+    b3 := replace(b3, chr(13), '');
     IF position('v_cb' IN d) > 0 THEN
         RAISE NOTICE '288: flag_plan_collection already keeps a dispute pause';
         RETURN;

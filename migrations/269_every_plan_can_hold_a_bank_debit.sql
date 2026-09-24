@@ -109,7 +109,7 @@ GRANT EXECUTE ON FUNCTION public.hold_autopay_charge(uuid, text, text, jsonb) TO
 -- flag_plan_collection (214), on any plan: the lookup and the write-back.
 DO $$
 DECLARE
-    d  text := pg_get_functiondef('public.flag_plan_collection(uuid,text,text,text,text)'::regprocedure);
+    d  text := replace(pg_get_functiondef('public.flag_plan_collection(uuid,text,text,text,text)'::regprocedure), chr(13), '');
     o1 text := $o$    v_plans := CASE WHEN jsonb_typeof(v_fam->'plans') = 'array'
                     THEN v_fam->'plans' ELSE '[]'::jsonb END;
     FOR i IN 0 .. GREATEST(jsonb_array_length(v_plans) - 1, -1) LOOP
@@ -133,6 +133,13 @@ DECLARE
                        WHEN 'bank_debit_unverified' THEN 'a bank debit from an earlier night cannot be checked with Stripe'
                        WHEN 'deposit_review' THEN 'autopay is waiting for you to answer a question about their card deposit'$n$;
 BEGIN
+    -- Pasted from Windows the patterns carry CR LF; the function text has none.
+    o1 := replace(o1, chr(13), '');
+    n1 := replace(n1, chr(13), '');
+    o2 := replace(o2, chr(13), '');
+    n2 := replace(n2, chr(13), '');
+    o3 := replace(o3, chr(13), '');
+    n3 := replace(n3, chr(13), '');
     IF position('_plan_path' IN d) > 0 THEN
         RAISE NOTICE '269: flag_plan_collection already finds every plan';
         RETURN;
@@ -200,7 +207,7 @@ REVOKE ALL ON FUNCTION public._merge_plan_state(jsonb, jsonb) FROM public, anon,
 DO $guard$
 BEGIN
     IF to_regprocedure('public._merge_family_from_page(jsonb,jsonb)') IS NULL
-       OR pg_get_functiondef(to_regprocedure('public._merge_family_from_page(jsonb,jsonb)')) !~ 'LIKE ''shop' THEN
+       OR replace(pg_get_functiondef(to_regprocedure('public._merge_family_from_page(jsonb,jsonb)')), chr(13), '') !~ 'LIKE ''shop' THEN
         EXECUTE $fn$
 CREATE OR REPLACE FUNCTION public._merge_family_from_page(p_server jsonb, p_page jsonb)
 RETURNS jsonb

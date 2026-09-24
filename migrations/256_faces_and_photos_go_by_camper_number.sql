@@ -51,7 +51,7 @@ DECLARE
 BEGIN
     FOR f IN SELECT p.oid FROM pg_proc p JOIN pg_namespace n ON n.oid = p.pronamespace
               WHERE n.nspname = 'public' AND p.proname = p_name LOOP
-        v_def := pg_get_functiondef(f);
+        v_def := replace(pg_get_functiondef(f), chr(13), '');
         v_new := v_def;
         v_seen := false;
         FOR i IN 1 .. array_length(p_pairs, 1) LOOP

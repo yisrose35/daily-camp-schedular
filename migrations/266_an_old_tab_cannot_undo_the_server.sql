@@ -33,7 +33,7 @@
 DO $guard$
 BEGIN
     IF to_regprocedure('public._merge_family_from_page(jsonb,jsonb)') IS NULL
-       OR pg_get_functiondef(to_regprocedure('public._merge_family_from_page(jsonb,jsonb)')) !~ '_keep_charge_links|_merge_plan_state' THEN
+       OR replace(pg_get_functiondef(to_regprocedure('public._merge_family_from_page(jsonb,jsonb)')), chr(13), '') !~ '_keep_charge_links|_merge_plan_state' THEN
         EXECUTE $fn$
 CREATE OR REPLACE FUNCTION public._merge_family_from_page(p_server jsonb, p_page jsonb)
 RETURNS jsonb
@@ -132,7 +132,7 @@ DECLARE
     d text;
 BEGIN
     -- 1. sync_camp_billing (213)
-    d := pg_get_functiondef('public.sync_camp_billing(uuid,jsonb,jsonb,jsonb,jsonb)'::regprocedure);
+    d := replace(pg_get_functiondef('public.sync_camp_billing(uuid,jsonb,jsonb,jsonb,jsonb)'::regprocedure), chr(13), '');
     IF position('_merge_family_from_page' IN d) = 0 THEN
         IF position('PERFORM public.camp_family_save(p_camp_id, r.key, r.value);' IN d) = 0 THEN
             RAISE EXCEPTION '266: sync_camp_billing does not look the way this file expects — send this message to the builder';
@@ -142,7 +142,7 @@ BEGIN
     END IF;
 
     -- 2. the settings-document projection (234)
-    d := pg_get_functiondef('public.project_camp_families()'::regprocedure);
+    d := replace(pg_get_functiondef('public.project_camp_families()'::regprocedure), chr(13), '');
     IF position('_merge_family_from_page' IN d) = 0 THEN
         IF position('payload    = EXCLUDED.payload,' IN d) = 0 THEN
             RAISE EXCEPTION '266: project_camp_families does not look the way this file expects — send this message to the builder';

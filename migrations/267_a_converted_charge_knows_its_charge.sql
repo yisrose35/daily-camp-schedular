@@ -91,11 +91,13 @@ ALTER FUNCTION public._sync_charge_to_ledger(jsonb, text) STABLE;
 -- The conversion writes the link itself from now on.
 DO $$
 DECLARE
-    d     text := pg_get_functiondef('public.convert_family_ledgers(uuid,boolean)'::regprocedure);
+    d     text := replace(pg_get_functiondef('public.convert_family_ledgers(uuid,boolean)'::regprocedure), chr(13), '');
     empty text := '''source'', ''{}''::jsonb';
     at    integer;
     rel   integer;
 BEGIN
+    -- Pasted from Windows the patterns carry CR LF; the function text has none.
+    empty := replace(empty, chr(13), '');
     IF position('chargeId'', e->>''id''' IN d) > 0 THEN
         RAISE NOTICE '267: convert_family_ledgers already links its charges';
         RETURN;
@@ -158,9 +160,11 @@ REVOKE ALL ON FUNCTION public._keep_charge_links(jsonb, jsonb) FROM public, anon
 
 DO $$
 DECLARE
-    d   text := pg_get_functiondef('public._merge_family_from_page(jsonb,jsonb)'::regprocedure);
+    d   text := replace(pg_get_functiondef('public._merge_family_from_page(jsonb,jsonb)'::regprocedure), chr(13), '');
     old text := '    RETURN v_out;' || chr(10) || 'END;';
 BEGIN
+    -- Pasted from Windows the patterns carry CR LF; the function text has none.
+    old := replace(old, chr(13), '');
     IF position('_keep_charge_links' IN d) > 0 THEN
         RAISE NOTICE '267: _merge_family_from_page already keeps charge links';
         RETURN;

@@ -251,7 +251,7 @@ BEGIN
     FOR f IN SELECT p.oid FROM pg_proc p JOIN pg_namespace n ON n.oid = p.pronamespace
               WHERE n.nspname = 'public' AND p.proname = p_name LOOP
         v_any := true;
-        v_def := pg_get_functiondef(f);
+        v_def := replace(pg_get_functiondef(f), chr(13), '');
         v_new := v_def;
         FOR i IN 1 .. array_length(p_pairs, 1) LOOP
             IF v_new ~ p_pairs[i][1] THEN
@@ -369,7 +369,7 @@ DECLARE
 BEGIN
     FOR f IN SELECT p.oid FROM pg_proc p JOIN pg_namespace n ON n.oid = p.pronamespace
               WHERE n.nspname = 'public' AND p.proname = p_name LOOP
-        v_def := pg_get_functiondef(f);
+        v_def := replace(pg_get_functiondef(f), chr(13), '');
         v_new := v_def;
         v_seen := false;
         FOR i IN 1 .. array_length(p_pairs, 1) LOOP
@@ -623,7 +623,7 @@ DECLARE
     v_n    int := 0;
 BEGIN
     FOR f IN SELECT * FROM public._functions_that_must_pin() LOOP
-        v_def := pg_get_functiondef(f);
+        v_def := replace(pg_get_functiondef(f), chr(13), '');
         v_def := regexp_replace(v_def, '(public\.)?camp_person_label\(', 'public.camp_person_name_for(', 'g');
         EXECUTE v_def;
         v_n := v_n + 1;
@@ -639,7 +639,7 @@ DECLARE
 BEGIN
     FOR f IN SELECT p.oid FROM pg_proc p JOIN pg_namespace n ON n.oid = p.pronamespace
               WHERE n.nspname = 'public' AND p.proname = 'canteen_office_import_offline' LOOP
-        v_def := pg_get_functiondef(f);
+        v_def := replace(pg_get_functiondef(f), chr(13), '');
         IF position('clear_person_pins()' IN v_def) = 0 THEN
             v_def := regexp_replace(v_def,
                 '(FOR r IN SELECT value FROM jsonb_array_elements\(p_rows\) LOOP)',
@@ -659,7 +659,7 @@ DO $$
 DECLARE v_def text;
 BEGIN
     IF to_regprocedure('public.verify_offline_import()') IS NOT NULL THEN
-        v_def := pg_get_functiondef('public.verify_offline_import()'::regprocedure);
+        v_def := replace(pg_get_functiondef('public.verify_offline_import()'::regprocedure), chr(13), '');
         IF position('camp_person_(label|name_for)' IN v_def) = 0 THEN
             EXECUTE replace(v_def, $q$~ 'camp_person_label'$q$, $q$~ 'camp_person_(label|name_for)'$q$);
         END IF;
@@ -832,7 +832,7 @@ GRANT EXECUTE ON FUNCTION public.verify_parent_reads_by_number() TO authenticate
 DO $$
 DECLARE d text; n text;
 BEGIN
-    SELECT pg_get_functiondef(p.oid) INTO d
+    SELECT replace(pg_get_functiondef(p.oid), chr(13), '') INTO d
       FROM pg_proc p JOIN pg_namespace ns ON ns.oid = p.pronamespace
      WHERE ns.nspname = 'public' AND p.proname = 'get_postaccept_bootstrap';
     IF d IS NULL THEN
@@ -988,7 +988,7 @@ BEGIN
                 AND p.proname IN ('set_camper_face_consent', 'submit_camper_headshot')
                 AND p.prosrc ~ 'INSERT INTO link_camper_faces'
     LOOP
-        d := pg_get_functiondef(r.oid);
+        d := replace(pg_get_functiondef(r.oid), chr(13), '');
         n := regexp_replace(d,
             '(INSERT INTO link_camper_faces[^;]*?)ON CONFLICT \(camp_id, camper_name\) DO UPDATE\s+SET ',
             '\1ON CONFLICT (camp_id, person_id) WHERE person_id IS NOT NULL DO UPDATE
@@ -1049,7 +1049,7 @@ BEGIN
                                   'get_viewable_original_photo_ids', 'get_my_camper_face_status')
                 AND p.prosrc !~ '_parent_owns_person\s*\('
     LOOP
-        d := pg_get_functiondef(r.oid);
+        d := replace(pg_get_functiondef(r.oid), chr(13), '');
         n := regexp_replace(d,
             '(public\.)?_parent_owns_camper\(\s*([a-z_.]+)\s*,\s*([a-z_]+)\.camper_name\s*\)',
             '(CASE WHEN \3.person_id IS NOT NULL THEN public._parent_owns_person(\2, \3.person_id) ELSE public._parent_owns_camper(\2, \3.camper_name) END)',
@@ -2817,7 +2817,7 @@ GRANT EXECUTE ON FUNCTION public.split_renames(boolean) TO service_role;
 DO $$
 DECLARE d text; n text;
 BEGIN
-    SELECT pg_get_functiondef(p.oid) INTO d FROM pg_proc p JOIN pg_namespace ns ON ns.oid = p.pronamespace
+    SELECT replace(pg_get_functiondef(p.oid), chr(13), '') INTO d FROM pg_proc p JOIN pg_namespace ns ON ns.oid = p.pronamespace
      WHERE ns.nspname = 'public' AND p.proname = 'get_my_camper_photos';
     IF d IS NULL OR d ~ '''camper_id'',\s*t\.person_id' THEN RETURN; END IF;
     n := regexp_replace(d, '''camper'',\s*t\.camper_name', '''camper'',     t.camper_name,
@@ -2983,9 +2983,12 @@ DECLARE
     n     text;
     v_re  text := 'IF\s+NOT\s+EXISTS\s*\(\s*SELECT\s+1\s+FROM\s+camps\s+c\s+WHERE\s+c\.id\s*=\s*([a-z_.]+)\s+AND\s+c\.owner\s*=\s*caller\s*\)\s*AND\s+NOT\s+EXISTS\s*\(\s*SELECT\s+1\s+FROM\s+camp_users\s+u\s+WHERE\s+u\.camp_id\s*=\s*[a-z_.]+\s+AND\s+u\.user_id\s*=\s*caller\s*\)\s*THEN\s*RETURN\s+jsonb_build_object\(\s*''success'',\s*false,\s*''error'',\s*''not_a_member''\s*\)';
 BEGIN
+    -- Pasted from Windows the patterns carry CR LF; the function text has none.
+    f := replace(f, chr(13), '');
+    v_re := replace(v_re, chr(13), '');
     FOREACH f IN ARRAY ARRAY['get_camp_parent_invites', 'resolve_join_request', 'set_parent_invite_email',
                              'set_parent_billing_access', 'revoke_orphaned_parent_invites'] LOOP
-        FOR d IN SELECT pg_get_functiondef(p.oid) FROM pg_proc p JOIN pg_namespace ns ON ns.oid = p.pronamespace
+        FOR d IN SELECT replace(pg_get_functiondef(p.oid), chr(13), '') FROM pg_proc p JOIN pg_namespace ns ON ns.oid = p.pronamespace
                   WHERE ns.nspname = 'public' AND p.proname = f LOOP
             CONTINUE WHEN d ~ '_is_camp_office';                  -- already done
             n := regexp_replace(d, v_re,
@@ -3263,10 +3266,13 @@ REVOKE ALL ON FUNCTION public._sync_charge_to_ledger(jsonb, text) FROM public, a
 -- settle_shop_order: sync the order's charge onto the ledger in the same save.
 DO $$
 DECLARE
-    d   text := pg_get_functiondef('public.settle_shop_order(uuid,text,text,numeric,boolean)'::regprocedure);
+    d   text := replace(pg_get_functiondef('public.settle_shop_order(uuid,text,text,numeric,boolean)'::regprocedure), chr(13), '');
     old text := $o$v_fam || jsonb_build_object('charges', v_kept));$o$;
     new text := $n$public._sync_charge_to_ledger(v_fam || jsonb_build_object('charges', v_kept), v_chargeId));$n$;
 BEGIN
+    -- Pasted from Windows the patterns carry CR LF; the function text has none.
+    old := replace(old, chr(13), '');
+    new := replace(new, chr(13), '');
     IF position('_sync_charge_to_ledger' IN d) > 0 THEN
         RAISE NOTICE '263: settle_shop_order already syncs the ledger';
         RETURN;
@@ -3548,7 +3554,7 @@ END $$;
 DO $guard$
 BEGIN
     IF to_regprocedure('public._merge_family_from_page(jsonb,jsonb)') IS NULL
-       OR pg_get_functiondef(to_regprocedure('public._merge_family_from_page(jsonb,jsonb)')) !~ '_keep_charge_links|_merge_plan_state' THEN
+       OR replace(pg_get_functiondef(to_regprocedure('public._merge_family_from_page(jsonb,jsonb)')), chr(13), '') !~ '_keep_charge_links|_merge_plan_state' THEN
         EXECUTE $fn$
 CREATE OR REPLACE FUNCTION public._merge_family_from_page(p_server jsonb, p_page jsonb)
 RETURNS jsonb
@@ -3647,7 +3653,7 @@ DECLARE
     d text;
 BEGIN
     -- 1. sync_camp_billing (213)
-    d := pg_get_functiondef('public.sync_camp_billing(uuid,jsonb,jsonb,jsonb,jsonb)'::regprocedure);
+    d := replace(pg_get_functiondef('public.sync_camp_billing(uuid,jsonb,jsonb,jsonb,jsonb)'::regprocedure), chr(13), '');
     IF position('_merge_family_from_page' IN d) = 0 THEN
         IF position('PERFORM public.camp_family_save(p_camp_id, r.key, r.value);' IN d) = 0 THEN
             RAISE EXCEPTION '266: sync_camp_billing does not look the way this file expects — send this message to the builder';
@@ -3657,7 +3663,7 @@ BEGIN
     END IF;
 
     -- 2. the settings-document projection (234)
-    d := pg_get_functiondef('public.project_camp_families()'::regprocedure);
+    d := replace(pg_get_functiondef('public.project_camp_families()'::regprocedure), chr(13), '');
     IF position('_merge_family_from_page' IN d) = 0 THEN
         IF position('payload    = EXCLUDED.payload,' IN d) = 0 THEN
             RAISE EXCEPTION '266: project_camp_families does not look the way this file expects — send this message to the builder';
@@ -3765,11 +3771,13 @@ ALTER FUNCTION public._sync_charge_to_ledger(jsonb, text) STABLE;
 -- The conversion writes the link itself from now on.
 DO $$
 DECLARE
-    d     text := pg_get_functiondef('public.convert_family_ledgers(uuid,boolean)'::regprocedure);
+    d     text := replace(pg_get_functiondef('public.convert_family_ledgers(uuid,boolean)'::regprocedure), chr(13), '');
     empty text := '''source'', ''{}''::jsonb';
     at    integer;
     rel   integer;
 BEGIN
+    -- Pasted from Windows the patterns carry CR LF; the function text has none.
+    empty := replace(empty, chr(13), '');
     IF position('chargeId'', e->>''id''' IN d) > 0 THEN
         RAISE NOTICE '267: convert_family_ledgers already links its charges';
         RETURN;
@@ -3832,9 +3840,11 @@ REVOKE ALL ON FUNCTION public._keep_charge_links(jsonb, jsonb) FROM public, anon
 
 DO $$
 DECLARE
-    d   text := pg_get_functiondef('public._merge_family_from_page(jsonb,jsonb)'::regprocedure);
+    d   text := replace(pg_get_functiondef('public._merge_family_from_page(jsonb,jsonb)'::regprocedure), chr(13), '');
     old text := '    RETURN v_out;' || chr(10) || 'END;';
 BEGIN
+    -- Pasted from Windows the patterns carry CR LF; the function text has none.
+    old := replace(old, chr(13), '');
     IF position('_keep_charge_links' IN d) > 0 THEN
         RAISE NOTICE '267: _merge_family_from_page already keeps charge links';
         RETURN;
@@ -4149,7 +4159,7 @@ GRANT EXECUTE ON FUNCTION public.hold_autopay_charge(uuid, text, text, jsonb) TO
 -- flag_plan_collection (214), on any plan: the lookup and the write-back.
 DO $$
 DECLARE
-    d  text := pg_get_functiondef('public.flag_plan_collection(uuid,text,text,text,text)'::regprocedure);
+    d  text := replace(pg_get_functiondef('public.flag_plan_collection(uuid,text,text,text,text)'::regprocedure), chr(13), '');
     o1 text := $o$    v_plans := CASE WHEN jsonb_typeof(v_fam->'plans') = 'array'
                     THEN v_fam->'plans' ELSE '[]'::jsonb END;
     FOR i IN 0 .. GREATEST(jsonb_array_length(v_plans) - 1, -1) LOOP
@@ -4173,6 +4183,13 @@ DECLARE
                        WHEN 'bank_debit_unverified' THEN 'a bank debit from an earlier night cannot be checked with Stripe'
                        WHEN 'deposit_review' THEN 'autopay is waiting for you to answer a question about their card deposit'$n$;
 BEGIN
+    -- Pasted from Windows the patterns carry CR LF; the function text has none.
+    o1 := replace(o1, chr(13), '');
+    n1 := replace(n1, chr(13), '');
+    o2 := replace(o2, chr(13), '');
+    n2 := replace(n2, chr(13), '');
+    o3 := replace(o3, chr(13), '');
+    n3 := replace(n3, chr(13), '');
     IF position('_plan_path' IN d) > 0 THEN
         RAISE NOTICE '269: flag_plan_collection already finds every plan';
         RETURN;
@@ -4240,7 +4257,7 @@ REVOKE ALL ON FUNCTION public._merge_plan_state(jsonb, jsonb) FROM public, anon,
 DO $guard$
 BEGIN
     IF to_regprocedure('public._merge_family_from_page(jsonb,jsonb)') IS NULL
-       OR pg_get_functiondef(to_regprocedure('public._merge_family_from_page(jsonb,jsonb)')) !~ 'LIKE ''shop' THEN
+       OR replace(pg_get_functiondef(to_regprocedure('public._merge_family_from_page(jsonb,jsonb)')), chr(13), '') !~ 'LIKE ''shop' THEN
         EXECUTE $fn$
 CREATE OR REPLACE FUNCTION public._merge_family_from_page(p_server jsonb, p_page jsonb)
 RETURNS jsonb
@@ -5561,13 +5578,16 @@ DECLARE
        OR COALESCE(public.user_section_level(p_camp_id, 'me.billing'), 'none') = 'none' THEN$n$]];
     i int;
 BEGIN
+    -- Pasted from Windows the patterns carry CR LF; the function text has none.
+    f := replace(f, chr(13), '');
+    o := replace(o, chr(13), '');
     FOR i IN 1 .. array_length(fixes, 1) LOOP
         f := fixes[i][1]; o := fixes[i][2]; n := fixes[i][3];
         IF to_regprocedure(f) IS NULL THEN
             RAISE NOTICE '277: % is not on this database — skipped', f;
             CONTINUE;
         END IF;
-        d := pg_get_functiondef(to_regprocedure(f));
+        d := replace(pg_get_functiondef(to_regprocedure(f)), chr(13), '');
         IF position('camp_staff_member(p_camp_id)' IN d) > 0 THEN
             RAISE NOTICE '277: % already checks the camp', f;
             CONTINUE;
@@ -6463,10 +6483,13 @@ DECLARE
     v_ar := (v_ar - 'disabledReason') - 'disabledAt';
     v_acct  := jsonb_set(v_acct, '{autoReload}', v_ar, true);$n$;
 BEGIN
+    -- Pasted from Windows the patterns carry CR LF; the function text has none.
+    old := replace(old, chr(13), '');
+    new := replace(new, chr(13), '');
     IF to_regprocedure('public.set_canteen_auto_reload(uuid,text,jsonb,bigint)') IS NULL THEN
         RAISE EXCEPTION '282 needs migration 231 — apply it first';
     END IF;
-    d := pg_get_functiondef('public.set_canteen_auto_reload(uuid,text,jsonb,bigint)'::regprocedure);
+    d := replace(pg_get_functiondef('public.set_canteen_auto_reload(uuid,text,jsonb,bigint)'::regprocedure), chr(13), '');
     IF position('disabledReason' IN d) > 0 THEN
         RAISE NOTICE '282: set_canteen_auto_reload already clears the note';
         RETURN;
@@ -6834,7 +6857,12 @@ DECLARE
     a2  text := 'SELECT ct.payload, ct.tx_date, ct.first_seen';
     b2  text := 'SELECT ct.payload, ct.sig, ct.tx_date, ct.first_seen';
 BEGIN
-    d := pg_get_functiondef(f);
+    -- Pasted from Windows the patterns carry CR LF; the function text has none.
+    a1 := replace(a1, chr(13), '');
+    b1 := replace(b1, chr(13), '');
+    a2 := replace(a2, chr(13), '');
+    b2 := replace(b2, chr(13), '');
+    d := replace(pg_get_functiondef(f), chr(13), '');
     IF position('''sig'', x.sig' IN d) > 0 THEN
         RAISE NOTICE '284: get_canteen_history already carries sig';
         RETURN;
@@ -7045,9 +7073,11 @@ REVOKE ALL ON FUNCTION public._keep_payer_ledger(jsonb, jsonb) FROM public, anon
 
 DO $$
 DECLARE
-    d   text := pg_get_functiondef('public._merge_family_from_page(jsonb,jsonb)'::regprocedure);
+    d   text := replace(pg_get_functiondef('public._merge_family_from_page(jsonb,jsonb)'::regprocedure), chr(13), '');
     old text := 'RETURN public._keep_charge_links(p_server, v_out);';
 BEGIN
+    -- Pasted from Windows the patterns carry CR LF; the function text has none.
+    old := replace(old, chr(13), '');
     IF position('_keep_payer_ledger' IN d) > 0 THEN
         RAISE NOTICE '286: _merge_family_from_page already keeps the payers'' entries';
         RETURN;
@@ -7603,9 +7633,11 @@ REVOKE ALL ON FUNCTION public._keep_dispute_hold(jsonb, jsonb) FROM public, anon
 
 DO $$
 DECLARE
-    d   text := pg_get_functiondef('public._merge_family_from_page(jsonb,jsonb)'::regprocedure);
+    d   text := replace(pg_get_functiondef('public._merge_family_from_page(jsonb,jsonb)'::regprocedure), chr(13), '');
     old text := 'public._keep_payer_ledger(p_server, v_out)';
 BEGIN
+    -- Pasted from Windows the patterns carry CR LF; the function text has none.
+    old := replace(old, chr(13), '');
     IF position('_keep_dispute_hold' IN d) > 0 THEN
         RAISE NOTICE '288: _merge_family_from_page already keeps the dispute pause';
         RETURN;
@@ -7621,7 +7653,7 @@ END $$;
 -- pause and records its mark under it, to come back when the pause lifts.
 DO $$
 DECLARE
-    d  text := pg_get_functiondef('public.flag_plan_collection(uuid,text,text,text,text)'::regprocedure);
+    d  text := replace(pg_get_functiondef('public.flag_plan_collection(uuid,text,text,text,text)'::regprocedure), chr(13), '');
     a1 text := '    v_next   date;';
     b1 text := '    v_next   date;' || chr(10) || '    v_cb     jsonb;';
     a2 text := '    v_prev := v_plan->''collectionBlocked'';';
@@ -7641,6 +7673,13 @@ DECLARE
             || '    END IF;' || chr(10)
             || '    v_fam := jsonb_set(v_fam, public._plan_path(v_fam, p_plan_id), v_plan, true);';
 BEGIN
+    -- Pasted from Windows the patterns carry CR LF; the function text has none.
+    a1 := replace(a1, chr(13), '');
+    b1 := replace(b1, chr(13), '');
+    a2 := replace(a2, chr(13), '');
+    b2 := replace(b2, chr(13), '');
+    a3 := replace(a3, chr(13), '');
+    b3 := replace(b3, chr(13), '');
     IF position('v_cb' IN d) > 0 THEN
         RAISE NOTICE '288: flag_plan_collection already keeps a dispute pause';
         RETURN;
@@ -7922,12 +7961,15 @@ GRANT EXECUTE ON FUNCTION public.pause_canteen_autoreload_for_dispute(uuid, text
 -- same way as a Stripe one (TED-211): 287 finds the top-up by either id.
 DO $$
 DECLARE
-    d   text := pg_get_functiondef('public.record_canteen_stripe_reversal(uuid,text,text,numeric,text,text)'::regprocedure);
+    d   text := replace(pg_get_functiondef('public.record_canteen_stripe_reversal(uuid,text,text,numeric,text,text)'::regprocedure), chr(13), '');
     old text := $o$payload ->> 'stripePaymentIntentId' = v_pi
        AND tx_type = 'credit'$o$;
     new text := $n$(payload ->> 'stripePaymentIntentId' = v_pi OR payload ->> 'byopTransactionId' = v_pi)
        AND tx_type = 'credit'$n$;
 BEGIN
+    -- Pasted from Windows the patterns carry CR LF; the function text has none.
+    old := replace(old, chr(13), '');
+    new := replace(new, chr(13), '');
     IF position('byopTransactionId' IN d) > 0 THEN
         RAISE NOTICE '290: record_canteen_stripe_reversal already finds a Cardknox/Banquest top-up';
         RETURN;
@@ -7944,7 +7986,7 @@ DO $$
 DECLARE
     p   regprocedure := COALESCE(to_regprocedure('public._update_canteen_autoreload_state__by_name(uuid,text,jsonb)'),
                                  to_regprocedure('public.update_canteen_autoreload_state(uuid,text,jsonb)'));
-    d   text := pg_get_functiondef(p);
+    d   text := replace(pg_get_functiondef(p), chr(13), '');
     old text := $o$    v_acct := jsonb_set(v_acct, '{autoReload}', p_autoreload, true);$o$;
     new text := $n$    -- 290 (TED-205): a dispute pause stays off until the parent's own save.
     IF jsonb_typeof(v_prev) = 'object' AND v_prev ? 'disputePausedAt' AND NOT p_autoreload ? 'disputePausedAt' THEN
@@ -7954,6 +7996,9 @@ DECLARE
     END IF;
     v_acct := jsonb_set(v_acct, '{autoReload}', p_autoreload, true);$n$;
 BEGIN
+    -- Pasted from Windows the patterns carry CR LF; the function text has none.
+    old := replace(old, chr(13), '');
+    new := replace(new, chr(13), '');
     IF position('disputePausedAt' IN d) > 0 THEN
         RAISE NOTICE '290: the nightly run''s write already keeps a dispute pause';
         RETURN;
@@ -7968,10 +8013,13 @@ END $$;
 -- 282 does for the camp's other notes).
 DO $$
 DECLARE
-    d   text := pg_get_functiondef('public.set_canteen_auto_reload(uuid,text,jsonb,bigint)'::regprocedure);
+    d   text := replace(pg_get_functiondef('public.set_canteen_auto_reload(uuid,text,jsonb,bigint)'::regprocedure), chr(13), '');
     old text := $o$    v_ar := (v_ar - 'disabledReason') - 'disabledAt';$o$;
     new text := $n$    v_ar := (((v_ar - 'disabledReason') - 'disabledAt') - 'disputePausedAt') - 'disputeId';$n$;
 BEGIN
+    -- Pasted from Windows the patterns carry CR LF; the function text has none.
+    old := replace(old, chr(13), '');
+    new := replace(new, chr(13), '');
     IF position('disputePausedAt' IN d) > 0 THEN
         RAISE NOTICE '290: a parent''s save already clears the dispute pause';
         RETURN;

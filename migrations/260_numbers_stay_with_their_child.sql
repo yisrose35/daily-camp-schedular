@@ -1245,7 +1245,7 @@ GRANT EXECUTE ON FUNCTION public.split_renames(boolean) TO service_role;
 DO $$
 DECLARE d text; n text;
 BEGIN
-    SELECT pg_get_functiondef(p.oid) INTO d FROM pg_proc p JOIN pg_namespace ns ON ns.oid = p.pronamespace
+    SELECT replace(pg_get_functiondef(p.oid), chr(13), '') INTO d FROM pg_proc p JOIN pg_namespace ns ON ns.oid = p.pronamespace
      WHERE ns.nspname = 'public' AND p.proname = 'get_my_camper_photos';
     IF d IS NULL OR d ~ '''camper_id'',\s*t\.person_id' THEN RETURN; END IF;
     n := regexp_replace(d, '''camper'',\s*t\.camper_name', '''camper'',     t.camper_name,

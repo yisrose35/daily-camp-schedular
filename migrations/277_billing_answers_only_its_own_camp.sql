@@ -63,13 +63,16 @@ DECLARE
        OR COALESCE(public.user_section_level(p_camp_id, 'me.billing'), 'none') = 'none' THEN$n$]];
     i int;
 BEGIN
+    -- Pasted from Windows the patterns carry CR LF; the function text has none.
+    f := replace(f, chr(13), '');
+    o := replace(o, chr(13), '');
     FOR i IN 1 .. array_length(fixes, 1) LOOP
         f := fixes[i][1]; o := fixes[i][2]; n := fixes[i][3];
         IF to_regprocedure(f) IS NULL THEN
             RAISE NOTICE '277: % is not on this database — skipped', f;
             CONTINUE;
         END IF;
-        d := pg_get_functiondef(to_regprocedure(f));
+        d := replace(pg_get_functiondef(to_regprocedure(f)), chr(13), '');
         IF position('camp_staff_member(p_camp_id)' IN d) > 0 THEN
             RAISE NOTICE '277: % already checks the camp', f;
             CONTINUE;
