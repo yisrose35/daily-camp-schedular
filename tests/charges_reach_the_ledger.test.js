@@ -262,3 +262,28 @@ test('TED-081: merging two families keeps every charge the second one was billed
     assert.deepStrictEqual(Array.from(m.charges, c => c.id), ['lf_b']);
     assert.deepStrictEqual(Array.from(m.credits, c => c.id), ['cr_b']);
 });
+
+test('TED-082: a charge the conversion posted is linked, so re-pricing and cancelling it follow', () => {
+    const f = { name: 'Conv', entries: [
+        { id: 'le_conv_g_1', kind: 'charge', amount: 1000, reason: 'tuition', source: { enrollmentId: 'e1' } },
+        { id: 'le_conv_g_2', kind: 'charge', amount: 40, reason: 'fee', date: '2026-07-01', source: {} },
+        { id: 'le_conv_g_3', kind: 'payment', amount: 1000, reason: 'card' }],
+      charges: [{ id: 'shop_o1', category: 'Camp Shop', amount: 40, date: '2026-07-01' }] };
+    assert.strictEqual(ctx.catchUp(f), 0);
+    assert.strictEqual(f.entries[1].source.chargeId, 'shop_o1', 'the converted entry was not linked');
+    assert.strictEqual(B.balance(f), 40);
+    f.charges[0].amount = 55;                             // re-priced
+    ctx.catchUp(f); ctx.catchUp(f);
+    assert.strictEqual(B.balance(f), 55, 'a re-priced converted charge was counted twice');
+    f.charges = [];                                       // cancelled
+    ctx.catchUp(f); ctx.catchUp(f);
+    assert.strictEqual(B.balance(f), 0, 'a cancelled converted charge is still billed');
+});
+
+test('TED-082: a converted fee migration 267 already linked is not handed to another charge', () => {
+    const f = { name: 'Linked', entries: [
+        { id: 'le_conv_l_1', kind: 'charge', amount: 25, reason: 'fee', date: '2026-07-01', source: { chargeId: 'lf_a' } }],
+      charges: [{ id: 'lf_a', amount: 25, date: '2026-07-01' }, { id: 'lf_b', amount: 25, date: '2026-07-01' }] };
+    assert.strictEqual(ctx.catchUp(f), 1, 'the second $25 fee must be posted — the converted one is lf_a\'s');
+    assert.strictEqual(B.balance(f), 50);
+});

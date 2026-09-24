@@ -1,5 +1,5 @@
 -- ============================================================================
--- Confirm migrations 222-266 are in and doing their job.
+-- Confirm migrations 222-267 are in and doing their job.
 --
 -- Paste the whole thing into the Supabase SQL Editor. It is READ ONLY — one
 -- SELECT, nothing is created, changed or deleted, and the two purge functions
@@ -584,6 +584,13 @@ UNION ALL
                OR pg_get_functiondef(to_regprocedure('public.sync_camp_billing(uuid,jsonb,jsonb,jsonb,jsonb)')) !~ '_merge_family_from_page'
                OR pg_get_functiondef(to_regprocedure('public.project_camp_families()')) !~ '_merge_family_from_page'
           THEN 'apply 266 — a Billing tab left open can undo autopay''s work and the family is debited again'
+          ELSE 'ok' END),
+    -- A charge the ledger conversion posted knows which charge it is (TED-082).
+    ('267  a converted charge knows its charge',
+     CASE WHEN to_regprocedure('public._link_converted_charges(jsonb)') IS NULL
+               OR pg_get_functiondef(to_regprocedure('public.convert_family_ledgers(uuid,boolean)')) !~ 'chargeId'
+               OR pg_get_functiondef(to_regprocedure('public._merge_family_from_page(jsonb,jsonb)')) !~ '_keep_charge_links'
+          THEN 'apply 267 — on a converted camp, re-pricing a shop order bills it twice and cancelling it takes nothing off'
           ELSE 'ok' END)
     ) AS x(item, result)
 

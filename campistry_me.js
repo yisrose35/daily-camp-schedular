@@ -6440,9 +6440,12 @@ function _postExistingCharges(f){
     var B=_billingCore(); if(!B)return 0;
     var charges=Array.isArray(f.charges)?f.charges:[];
     var cents=function(v){return Math.round((Number(v)||0)*100)};
+    // A converted fee already linked to its charge (migration 267, or an
+    // earlier pass here) is counted under that charge below, never pooled.
     var pool=f.entries.filter(function(e){
-        return e&&e.kind==='charge'&&e.reason==='fee'&&/^le_conv_/.test(String(e.id||''));
-    }).map(function(e){return {cents:cents(e.amount),date:String(e.date||''),used:false}});
+        return e&&e.kind==='charge'&&e.reason==='fee'&&/^le_conv_/.test(String(e.id||''))
+            &&!(e.source&&e.source.chargeId!=null&&e.source.chargeId!=='');
+    }).map(function(e){return {e:e,cents:cents(e.amount),date:String(e.date||''),used:false}});
     // What the ledger already holds for each charge id (TED-066): charges
     // posted, less anything taken back.
     var net={},count={};
@@ -6471,7 +6474,12 @@ function _postExistingCharges(f){
         var cc=cents(c.amount), cd=String(c.date||'');
         var hit=pool.filter(function(p){return !p.used&&p.cents===cc&&p.date===cd})[0]
               ||pool.filter(function(p){return !p.used&&p.cents===cc})[0];
-        if(hit){hit.used=true;return}                                           // the conversion posted it
+        if(hit){                                                                // the conversion posted it:
+            hit.used=true;                                                      // link it, so a later re-price
+            hit.e.source=Object.assign({},hit.e.source||{},{chargeId:cid});     // or cancel is seen (TED-082)
+            count[cid]=1; net[cid]=hit.cents;
+            return;
+        }
         if(_postLedgerCharge(f,c))n++;
     });
     // A charge that is gone from charges[] (a cancelled shop order) comes off.
