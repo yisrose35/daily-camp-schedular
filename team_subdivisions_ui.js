@@ -478,9 +478,9 @@ function _wsK(key) {
                         </select>
                     </div>
                     <div class="form-group" id="invite-access-group-field">
-                        <label for="invite-access-group">Access Group <span style="font-weight:400;color:var(--slate-400);">— a named, reusable permission set (optional)</span></label>
+                        <label for="invite-access-group">Role <span style="font-weight:400;color:var(--slate-400);">— a named, reusable permission set (optional)</span></label>
                         <select id="invite-access-group">
-                            <option value="">No group — configure apps and sections after they're invited</option>
+                            <option value="">No role — configure apps and sections after they're invited</option>
                             ${accessGroups.map(g => `<option value="${g.id}">${_tsuEsc(g.name)}</option>`).join('')}
                         </select>
                     </div>
@@ -621,9 +621,9 @@ function _wsK(key) {
                         <label class="checkbox-item" style="cursor:pointer;"><input type="checkbox" id="edit-contactable" ${member.parent_contactable ? 'checked' : ''}> <span>Parents can message this person</span></label>
                     </div>
                     <div class="form-group">
-                        <label for="edit-access-group">Access Group <span style="font-weight:400;color:var(--slate-400);">— a named, reusable permission set (optional)</span></label>
+                        <label for="edit-access-group">Role <span style="font-weight:400;color:var(--slate-400);">— a named, reusable permission set (optional)</span></label>
                         <select id="edit-access-group">
-                            <option value="">No group — configure apps and sections individually below</option>
+                            <option value="">No role — configure apps and sections individually below</option>
                             ${accessGroups.map(g => `<option value="${g.id}" ${member.access_group_id === g.id ? 'selected' : ''}>${_tsuEsc(g.name)}</option>`).join('')}
                         </select>
                     </div>
@@ -833,7 +833,7 @@ function _wsK(key) {
         if (!window.CampistryAccessSettings) { showToast('Access editor not loaded', 'error'); return; }
         const campId = window.AccessControl?.getCampId?.();
         window.CampistryAccessSettings.openForGroup(group ? Object.assign({}, group) : {}, campId, function () {
-            showToast(group && group.id ? 'Group updated' : 'Group created');
+            showToast(group && group.id ? 'Role updated' : 'Role created');
             if (onDone) onDone();
         });
     }
@@ -844,21 +844,21 @@ function _wsK(key) {
 
         container.innerHTML = `
             <div class="card-header">
-                <h2>Access Groups</h2>
+                <h2>Roles</h2>
                 <button class="btn-edit" id="add-access-group-btn">
                     <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
                         <line x1="12" y1="5" x2="12" y2="19"></line><line x1="5" y1="12" x2="19" y2="12"></line>
                     </svg>
-                    New Group
+                    New Role
                 </button>
             </div>
             <p style="color: var(--slate-500); font-size: 0.9rem; margin-bottom: 1rem;">
-                Named, reusable permission sets — assign one to any Manager, Scheduler, Viewer, or Counselor. Editing a group updates everyone assigned to it.
+                Named, reusable permission sets — assign one to any Manager, Scheduler, Viewer, or Counselor. Editing a role updates everyone assigned to it.
             </p>
             <div id="access-groups-list">
                 ${_accessGroups.length === 0 ? `
                     <div class="empty-state">
-                        <p style="color: var(--slate-600); margin: 0; font-weight: 500;">No access groups yet</p>
+                        <p style="color: var(--slate-600); margin: 0; font-weight: 500;">No roles yet</p>
                         <p style="color: var(--slate-400); font-size: 0.85rem; margin-top: 6px;">Create one to reuse the same app/section permissions across multiple staff, instead of configuring each person one at a time.</p>
                     </div>
                 ` : _accessGroups.map(renderAccessGroupItem).join('')}
@@ -879,12 +879,12 @@ function _wsK(key) {
                 const g = _accessGroups.find(x => x.id === btn.dataset.id);
                 if (!g) return;
                 const warn = g.member_count > 0
-                    ? ` ${g.member_count} member${g.member_count === 1 ? '' : 's'} using it will keep exactly the access they have right now (frozen onto their own account) and stop being linked to this group.`
+                    ? ` ${g.member_count} member${g.member_count === 1 ? '' : 's'} using it will keep exactly the access they have right now (frozen onto their own account) and stop being linked to this role.`
                     : '';
                 if (!confirm(`Delete "${g.name}"?${warn}`)) return;
                 const { data, error } = await window.supabase.rpc('delete_access_group', { p_group_id: g.id });
-                if (error || !data || !data.success) { showToast('Could not delete group', 'error'); return; }
-                showToast('Group deleted');
+                if (error || !data || !data.success) { showToast('Could not delete role', 'error'); return; }
+                showToast('Role deleted');
                 renderAccessGroupsCard(container);
             });
         });
@@ -915,7 +915,7 @@ function _wsK(key) {
                 </div>`).join('');
 
         const groupRows = _accessGroups.length === 0
-            ? `<p style="color:var(--slate-400,#94A3B8);font-size:0.85rem;padding:8px 0;">No access groups yet.</p>`
+            ? `<p style="color:var(--slate-400,#94A3B8);font-size:0.85rem;padding:8px 0;">No roles yet.</p>`
             : _accessGroups.map(g => `
                 <div style="display:flex;align-items:center;gap:10px;padding:9px 0;border-bottom:1px solid var(--slate-100,#F1F5F9);">
                     <div style="flex:1;min-width:0;">
@@ -928,15 +928,12 @@ function _wsK(key) {
         container.innerHTML = `
             <div class="card-header">
                 <h2>Team & Access</h2>
-                <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;">
-                    <a href="team_access_setup.html" class="btn-edit" style="text-decoration:none;">Manage &rarr;</a>
-                    <a href="campistry_team_access.html" class="btn-edit" style="text-decoration:none;">What each job can open &rarr;</a>
-                </div>
+                <a href="team_access_setup.html" class="btn-edit" style="text-decoration:none;">Manage &rarr;</a>
             </div>
-            <p class="card-desc">Who's on your team, their role, and what they can access. Invite people and build Access Groups on the setup page &mdash; or set what a whole job can open, and make exceptions for individuals, on the access page.</p>
+            <p class="card-desc">Who's on your team, their role, and what they can access. Invite people, create Roles, and set what a whole job or one person can open — all on the setup page.</p>
             <div style="font-size:0.7rem;font-weight:700;color:var(--slate-400,#94A3B8);text-transform:uppercase;letter-spacing:0.05em;margin:14px 0 4px;">Team Members</div>
             ${memberRows}
-            <div style="font-size:0.7rem;font-weight:700;color:var(--slate-400,#94A3B8);text-transform:uppercase;letter-spacing:0.05em;margin:18px 0 4px;">Access Groups</div>
+            <div style="font-size:0.7rem;font-weight:700;color:var(--slate-400,#94A3B8);text-transform:uppercase;letter-spacing:0.05em;margin:18px 0 4px;">Roles</div>
             ${groupRows}
         `;
     }

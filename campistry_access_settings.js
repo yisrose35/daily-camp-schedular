@@ -27,16 +27,37 @@
     var _advanced = false;
     var _onSaved = null;
 
-    // ── group mode ──────────────────────────────────────────────────────────
+    // ── group ("Role") mode ──────────────────────────────────────────────────
     // Same preset-picker + fine-tune-matrix UI, retargeted to edit a
     // camp_access_groups row (migration 097) instead of one member's own
     // access_preset/section_access columns — a named, reusable permission
     // template instead of a one-shot per-person combination. _mode picks
     // which save path doSave() takes; everything else below (levelOf,
-    // bodyHtml, wire) is shared between the two modes.
+    // bodyHtml, wire) is shared between the two modes. User-facing text calls
+    // this a "Role"; the underlying table/RPCs (camp_access_groups,
+    // *_access_group) keep their original names.
     var _mode = 'member';       // 'member' | 'group'
     var _group = null;          // the camp_access_groups row being edited (group mode)
-    var _groupProducts = [];    // group mode's own product_access, edited live in this modal
+
+    // product_access used to be a THIRD, separately-edited checkbox list here
+    // ("apps this group can open"), independent of the preset/fine-tune
+    // matrix below it. That was the bug: an owner could grant a section (say
+    // Billing) in the matrix while the Billing app checkbox stayed unchecked,
+    // and resolve() checks products BEFORE sections, so the grant silently
+    // did nothing. Switching presets made it worse — the checkbox list only
+    // ever grew, never shrank, so an old preset's apps stayed checked after
+    // switching to a new one. Fixed by removing the manual list entirely:
+    // which apps a role opens is now ALWAYS computed from whatever the
+    // preset + fine-tune matrix actually grant, so the two can never
+    // disagree, and there is nothing to go stale on a preset switch.
+    function computeProducts() {
+        var out = [];
+        C().APPS.forEach(function (app) {
+            var grantsSomething = C().forApp(app.key).some(function (c) { return levelOf(c.key) !== 'none'; });
+            if (grantsSomething) out.push(app.key);
+        });
+        return out;
+    }
 
     function C() { return window.CampistryCapabilities; }
     function esc(s) {
@@ -127,9 +148,19 @@
         return capEntitled(key) ? levelOf(key) : 'none';
     }
 
-    /** Apps this member/group can open at all — no point showing sections of the rest. */
+    /**
+     * Apps whose sections show in the fine-tune matrix. Member mode still
+     * filters to the apps that member's own product_access already allows
+     * (set elsewhere, e.g. at invite) — no point showing controls for an app
+     * they can't open at all. Role (group) mode shows every app, unfiltered:
+     * which apps a role opens is now DERIVED from the matrix (computeProducts),
+     * so filtering the matrix by that same derived value would make an app
+     * disappear the moment nothing in it was on yet — there'd be no way to
+     * grant its first section.
+     */
     function visibleApps() {
-        var products = _mode === 'group' ? _groupProducts : ((_member && _member.product_access) || []);
+        if (_mode === 'group') return C().APPS;
+        var products = (_member && _member.product_access) || [];
         return C().APPS.filter(function (app) {
             return !products.length || products.indexOf(app.key) >= 0;
         });
@@ -168,7 +199,6 @@
         _member = { campId: campId };  // carried through to doSave's RPC call
         _preset = _group.access_preset || null;
         _overrides = Object.assign({}, _group.section_access || {});
-        _groupProducts = (_group.product_access || []).slice();
         _advanced = false;
         _onSaved = onSaved || null;
         drawWhenEntitlementsKnown();
@@ -206,7 +236,7 @@
                 'padding:16px 22px;border-bottom:1px solid #E2E8F0;">' +
                     (_mode === 'group'
                         ? '<div><h2 style="margin:0;font-size:1.05rem;font-weight:700;color:#0F172A;">' +
-                          esc(_group.id ? 'Edit access group' : 'New access group') + '</h2>' +
+                          esc(_group.id ? 'Edit role' : 'New role') + '</h2>' +
                           '<p style="margin:2px 0 0;font-size:.78rem;color:#64748B;">A named, reusable permission set — assign it to any number of staff.</p></div>'
                         : '<div><h2 style="margin:0;font-size:1.05rem;font-weight:700;color:#0F172A;">What ' +
                           esc(_member.display_name || _member.name || 'this person') + ' can open</h2>' +
@@ -261,21 +291,26 @@
 
         if (_mode === 'group') {
             h += '<div style="margin-bottom:16px;"><label style="display:block;font-size:.68rem;font-weight:700;' +
-                 'color:#94A3B8;text-transform:uppercase;letter-spacing:.05em;margin-bottom:6px;">Group name</label>' +
+                 'color:#94A3B8;text-transform:uppercase;letter-spacing:.05em;margin-bottom:6px;">Role name</label>' +
                  '<input id="agName" type="text" value="' + esc(_group.name || '') + '" placeholder="e.g. Office Admin" ' +
                  'style="width:100%;padding:9px 12px;border-radius:9px;border:1.5px solid #E2E8F0;font:inherit;font-size:.88rem;box-sizing:border-box;"></div>';
 
+            // Which apps this role opens is no longer a separate choice — it's
+            // whatever the preset/fine-tune matrix below actually grants
+            // something in, shown here read-only so it's still visible at a
+            // glance without being a second, independently-editable field
+            // that could disagree with the matrix.
+            var liveProducts = computeProducts();
             h += '<div style="margin-bottom:16px;"><div style="font-size:.68rem;font-weight:700;color:#94A3B8;' +
-                 'text-transform:uppercase;letter-spacing:.05em;margin-bottom:8px;">Apps this group can open</div>';
-            h += '<div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(150px,1fr));gap:7px;">';
-            Cc.APPS.forEach(function (app) {
-                var on = _groupProducts.indexOf(app.key) >= 0;
-                h += '<label style="display:flex;align-items:center;gap:7px;font-size:.82rem;color:#334155;' +
-                     'padding:7px 10px;border-radius:9px;border:1.5px solid ' + (on ? '#4F46E5' : '#E2E8F0') +
-                     ';background:' + (on ? '#EEF2FF' : '#fff') + ';cursor:pointer;">' +
-                     '<input type="checkbox" data-agproduct="' + esc(app.key) + '"' + (on ? ' checked' : '') + '> ' + esc(app.label) + '</label>';
-            });
-            h += '</div></div>';
+                 'text-transform:uppercase;letter-spacing:.05em;margin-bottom:6px;">Apps this role opens</div>';
+            h += '<div style="font-size:.82rem;color:#334155;">' +
+                 (liveProducts.length
+                     ? liveProducts.map(function (k) {
+                           var app = Cc.APPS.filter(function (a) { return a.key === k; })[0];
+                           return esc(app ? app.label : k);
+                       }).join(', ')
+                     : '<span style="color:#94A3B8;">Nothing yet — pick a role below or turn on a section.</span>') +
+                 '</div></div>';
         }
 
         // ── simple: the preset picker ──
@@ -440,16 +475,6 @@
         var adv = document.getElementById('asToggleAdv');
         if (adv) adv.onclick = function () { _advanced = !_advanced; redraw(); };
 
-        m.querySelectorAll('[data-agproduct]').forEach(function (cb) {
-            cb.onchange = function () {
-                var key = cb.getAttribute('data-agproduct');
-                var i = _groupProducts.indexOf(key);
-                if (cb.checked && i < 0) _groupProducts.push(key);
-                else if (!cb.checked && i >= 0) _groupProducts.splice(i, 1);
-                redraw();
-            };
-        });
-
         m.querySelectorAll('[data-preset]').forEach(function (b) {
             b.onclick = function () {
                 var k = b.getAttribute('data-preset');
@@ -459,22 +484,12 @@
                     // Picking a preset clears overrides: it's a fresh starting
                     // point, and silently keeping stale overrides on top is how
                     // someone ends up with access they didn't intend to grant.
+                    // Which apps this opens is computed fresh from the new
+                    // preset on the next render (computeProducts) — nothing to
+                    // separately update here, and nothing left over from
+                    // whatever the previous preset was.
                     _preset = k;
                     _overrides = {};
-                    // Group mode's fine-tune matrix only shows apps in
-                    // _groupProducts (visibleApps()) — without this, picking
-                    // a preset that grants e.g. Billing does nothing visible
-                    // if Billing's app checkbox isn't already on, so the
-                    // fine-tune toggles look out of sync with the role just
-                    // picked. Bring every app the preset actually grants
-                    // something in into the group's app list.
-                    if (_mode === 'group') {
-                        var exp = C().expandPreset(k);
-                        C().APPS.forEach(function (app) {
-                            var grantsSomething = C().forApp(app.key).some(function (c) { return (exp[c.key] || 'none') !== 'none'; });
-                            if (grantsSomething && _groupProducts.indexOf(app.key) < 0) _groupProducts.push(app.key);
-                        });
-                    }
                 }
                 redraw();
             };
@@ -608,10 +623,11 @@
             btn.textContent = 'Save access';
             return;
         }
+        var products = computeProducts();
         var rpc = _group.id ? 'update_access_group' : 'create_access_group';
         var args = _group.id
-            ? { p_group_id: _group.id, p_name: name, p_product_access: _groupProducts, p_preset: _preset, p_section_access: payload }
-            : { p_camp_id: _member.campId, p_name: name, p_product_access: _groupProducts, p_preset: _preset, p_section_access: payload };
+            ? { p_group_id: _group.id, p_name: name, p_product_access: products, p_preset: _preset, p_section_access: payload }
+            : { p_camp_id: _member.campId, p_name: name, p_product_access: products, p_preset: _preset, p_section_access: payload };
 
         client.rpc(rpc, args).then(function (res) {
             btn.disabled = false;
@@ -620,7 +636,7 @@
             var r = res.data;
             if (!r || !r.success) {
                 var e = r && r.error;
-                alert(e === 'not_authorized' ? 'Only the camp owner or an admin can manage access groups.'
+                alert(e === 'not_authorized' ? 'Only the camp owner or an admin can manage roles.'
                     : e === 'name_required' ? 'Give this group a name.'
                     : e === 'invalid_level' ? 'Something went wrong with one of the toggles. Please try again.'
                     : 'Could not save this group.');
@@ -628,7 +644,7 @@
             }
             _group.id = _group.id || r.id;
             _group.name = name;
-            _group.product_access = _groupProducts.slice();
+            _group.product_access = products;
             _group.access_preset = _preset;
             _group.section_access = payload;
             m.remove();

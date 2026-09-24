@@ -36,6 +36,23 @@
     --acc-edit:     #059669;
 }
 
+/* ── shared shell pieces ────────────────────────────────────────────────── */
+/* Used by both the standalone page (campistry_team_access.html) and the
+   embedded card (team_access_setup.html's "By Job / By Person" card) — kept
+   here instead of duplicated inline in each host so the two never drift. */
+.lede { color: var(--acc-muted); font-size: .88rem; line-height: 1.6; margin-bottom: 22px; max-width: 66ch; }
+.card {
+    background: #fff; border: 1px solid var(--acc-line); border-radius: 16px;
+    padding: 22px; margin-bottom: 16px; box-shadow: 0 1px 3px rgba(15,23,42,.04);
+}
+.tabs { display: flex; gap: 8px; flex-wrap: wrap; }
+.tab {
+    font: inherit; font-weight: 600; font-size: .88rem; padding: 9px 18px;
+    border-radius: 999px; cursor: pointer; border: 1px solid #CBD5E1;
+    background: #fff; color: var(--acc-ink-soft);
+}
+.tab.on { background: var(--acc-brand); border-color: var(--acc-brand); color: #fff; }
+
 /* ── steps ──────────────────────────────────────────────────────────────── */
 /* Numbered, so it is obvious there is an order and that step 3 is optional. */
 .acc-step { margin-bottom: 22px; }
