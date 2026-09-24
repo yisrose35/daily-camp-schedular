@@ -38,6 +38,7 @@
     // *_access_group) keep their original names.
     var _mode = 'member';       // 'member' | 'group'
     var _group = null;          // the camp_access_groups row being edited (group mode)
+    var _baseRole = 'manager';  // this Role's account type (migration 291) — admin/manager/scheduler/viewer
 
     // product_access used to be a THIRD, separately-edited checkbox list here
     // ("apps this group can open"), independent of the preset/fine-tune
@@ -201,6 +202,11 @@
         _overrides = Object.assign({}, _group.section_access || {});
         _advanced = false;
         _onSaved = onSaved || null;
+        // Every invite now picks a Role instead of a raw account type
+        // (migration 291) — the account type lives HERE, on the Role itself.
+        // 'manager' default matches migration 097's own reasoning for that
+        // tier: hosting a group's own permission set is exactly what it's for.
+        _baseRole = _group.base_role || 'manager';
         drawWhenEntitlementsKnown();
     };
 
@@ -294,6 +300,35 @@
                  'color:#94A3B8;text-transform:uppercase;letter-spacing:.05em;margin-bottom:6px;">Role name</label>' +
                  '<input id="agName" type="text" value="' + esc(_group.name || '') + '" placeholder="e.g. Office Admin" ' +
                  'style="width:100%;padding:9px 12px;border-radius:9px;border:1.5px solid #E2E8F0;font:inherit;font-size:.88rem;box-sizing:border-box;"></div>';
+
+            // The account type now lives ON the Role (migration 291) — an
+            // invite is just "pick a Role" from here on, one decision
+            // instead of two. Admin has nothing below to configure (full
+            // access is structural — get_my_access()'s unrestricted check
+            // runs before any preset/section resolution ever would), so
+            // picking it collapses the rest of this form to a short notice.
+            h += '<div style="margin-bottom:16px;"><label style="display:block;font-size:.68rem;font-weight:700;' +
+                 'color:#94A3B8;text-transform:uppercase;letter-spacing:.05em;margin-bottom:6px;">Account type</label>';
+            h += '<div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(110px,1fr));gap:7px;">';
+            [
+                { key: 'admin', label: 'Admin' }, { key: 'manager', label: 'Manager' },
+                { key: 'scheduler', label: 'Scheduler' }, { key: 'viewer', label: 'Viewer' }
+            ].forEach(function (t) {
+                var on = _baseRole === t.key;
+                h += '<button type="button" data-baserole="' + t.key + '" style="text-align:center;cursor:pointer;font:inherit;' +
+                     'padding:9px 10px;border-radius:9px;font-size:.82rem;font-weight:600;' +
+                     'background:' + (on ? '#EEF2FF' : '#fff') + ';color:' + (on ? '#4F46E5' : '#334155') + ';' +
+                     'border:1.5px solid ' + (on ? '#4F46E5' : '#E2E8F0') + ';">' + esc(t.label) + '</button>';
+            });
+            h += '</div></div>';
+
+            if (_baseRole === 'admin') {
+                h += '<p style="font-size:.82rem;color:#334155;background:#F8FAFC;border:1px solid #E2E8F0;' +
+                     'border-radius:9px;padding:11px 13px;margin:0 0 4px;line-height:1.55;">' +
+                     '<strong>Admins have full access to everything.</strong> Nothing below applies to them — ' +
+                     'sections and scope are for Manager, Scheduler, and Viewer Roles.</p>';
+                return h;
+            }
 
             // Which apps this role opens is no longer a separately-EDITED
             // choice — that was the bug (see the comment on computeProducts
@@ -485,6 +520,10 @@
         var agName = document.getElementById('agName');
         if (agName) agName.oninput = function () { _group.name = agName.value; };
 
+        m.querySelectorAll('[data-baserole]').forEach(function (b) {
+            b.onclick = function () { _baseRole = b.getAttribute('data-baserole'); redraw(); };
+        });
+
         var adv = document.getElementById('asToggleAdv');
         if (adv) adv.onclick = function () { _advanced = !_advanced; redraw(); };
 
@@ -647,11 +686,18 @@
             btn.textContent = 'Save access';
             return;
         }
-        var products = computeProducts();
+        // Admin has no sections/apps to speak of — get_my_access()'s
+        // unrestricted check never looks at these columns for it, so persist
+        // them clean rather than whatever stale preset/overrides happened to
+        // be sitting in memory (e.g. from switching an existing Role TO admin).
+        var isAdmin = _baseRole === 'admin';
+        var products = isAdmin ? [] : computeProducts();
+        var presetToSave = isAdmin ? null : _preset;
+        var payloadToSave = isAdmin ? {} : payload;
         var rpc = _group.id ? 'update_access_group' : 'create_access_group';
         var args = _group.id
-            ? { p_group_id: _group.id, p_name: name, p_product_access: products, p_preset: _preset, p_section_access: payload }
-            : { p_camp_id: _member.campId, p_name: name, p_product_access: products, p_preset: _preset, p_section_access: payload };
+            ? { p_group_id: _group.id, p_name: name, p_product_access: products, p_preset: presetToSave, p_section_access: payloadToSave, p_base_role: _baseRole }
+            : { p_camp_id: _member.campId, p_name: name, p_product_access: products, p_preset: presetToSave, p_section_access: payloadToSave, p_base_role: _baseRole };
 
         client.rpc(rpc, args).then(function (res) {
             btn.disabled = false;
@@ -669,8 +715,9 @@
             _group.id = _group.id || r.id;
             _group.name = name;
             _group.product_access = products;
-            _group.access_preset = _preset;
-            _group.section_access = payload;
+            _group.access_preset = presetToSave;
+            _group.section_access = payloadToSave;
+            _group.base_role = _baseRole;
             m.remove();
             if (_onSaved) { try { _onSaved(_group); } catch (e) {} }
         }, function () {
