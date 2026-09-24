@@ -119,6 +119,10 @@ function methodLabel(type: string): string {
   }
 }
 
+// A signature older than this is refused, so a captured message cannot be
+// replayed later (TED-057). Stripe's own libraries use the same 5 minutes.
+const WEBHOOK_TOLERANCE_SECONDS = 300;
+
 async function verifySignature(payload: string, signature: string, secret: string): Promise<boolean> {
   if (!secret || !signature) return false;
   try {
@@ -130,6 +134,10 @@ async function verifySignature(payload: string, signature: string, secret: strin
     const timestamp = parts["t"];
     const sig = parts["v1"];
     if (!timestamp || !sig) return false;
+    const tsSeconds = Number(timestamp);
+    if (!Number.isFinite(tsSeconds) || Math.abs(Date.now() / 1000 - tsSeconds) > WEBHOOK_TOLERANCE_SECONDS) {
+      return false;
+    }
     const signedPayload = `${timestamp}.${payload}`;
     const key = await crypto.subtle.importKey(
       "raw", new TextEncoder().encode(secret),
@@ -849,14 +857,22 @@ serve(async (req) => {
   try {
     const body = await req.text();
     const signature = req.headers.get("stripe-signature") || "";
-    if (STRIPE_WEBHOOK_SECRET) {
-      const valid = await verifySignature(body, signature, STRIPE_WEBHOOK_SECRET);
-      if (!valid) {
-        console.error("[stripe-webhook] Invalid signature");
-        return new Response(JSON.stringify({ error: "Invalid signature" }), {
-          status: 400, headers: { ...corsHeaders, "Content-Type": "application/json" },
-        });
-      }
+    // FAIL CLOSED (TED-057). With no secret this used to skip the check, so
+    // anyone could post a fake "payment succeeded" and mark a family paid.
+    // Refusing with a 500 makes Stripe retry (for up to three days), so no real
+    // event is lost while the secret is being set.
+    if (!STRIPE_WEBHOOK_SECRET) {
+      console.error("[stripe-webhook] STRIPE_WEBHOOK_SECRET is not set — refusing every event until it is");
+      return new Response(JSON.stringify({ error: "Webhook not configured" }), {
+        status: 500, headers: { ...corsHeaders, "Content-Type": "application/json" },
+      });
+    }
+    const valid = await verifySignature(body, signature, STRIPE_WEBHOOK_SECRET);
+    if (!valid) {
+      console.error("[stripe-webhook] Invalid or expired signature");
+      return new Response(JSON.stringify({ error: "Invalid signature" }), {
+        status: 400, headers: { ...corsHeaders, "Content-Type": "application/json" },
+      });
     }
 
     const event = JSON.parse(body);

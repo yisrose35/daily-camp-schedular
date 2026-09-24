@@ -409,21 +409,25 @@ serve(async (req) => {
     const body = await req.text();
     const signature = req.headers.get("stripe-signature") || "";
     // Two endpoints (see header note) can deliver here, each signed with its
-    // own secret — accept either. If neither secret is configured at all,
-    // skip verification (matches this function's original permissive
-    // behavior rather than hard-failing on an incomplete deploy).
+    // own secret — accept either. With NEITHER set this used to skip the check
+    // and accept anything; it now refuses (TED-057's twin). A 500 makes Stripe
+    // retry, so nothing is lost while the secret is being set.
     const secrets = [STRIPE_CONNECT_WEBHOOK_SECRET, STRIPE_CONNECT_ACCOUNT_WEBHOOK_SECRET].filter(Boolean) as string[];
-    if (secrets.length > 0) {
-      let valid = false;
-      for (const secret of secrets) {
-        if (await verifySignature(body, signature, secret)) { valid = true; break; }
-      }
-      if (!valid) {
-        console.error("[stripe-connect-webhook] Invalid signature");
-        return new Response(JSON.stringify({ error: "Invalid signature" }), {
-          status: 400, headers: { ...corsHeaders, "Content-Type": "application/json" },
-        });
-      }
+    if (!secrets.length) {
+      console.error("[stripe-connect-webhook] no webhook secret is set — refusing every event until one is");
+      return new Response(JSON.stringify({ error: "Webhook not configured" }), {
+        status: 500, headers: { ...corsHeaders, "Content-Type": "application/json" },
+      });
+    }
+    let valid = false;
+    for (const secret of secrets) {
+      if (await verifySignature(body, signature, secret)) { valid = true; break; }
+    }
+    if (!valid) {
+      console.error("[stripe-connect-webhook] Invalid signature");
+      return new Response(JSON.stringify({ error: "Invalid signature" }), {
+        status: 400, headers: { ...corsHeaders, "Content-Type": "application/json" },
+      });
     }
 
     const event = JSON.parse(body);
