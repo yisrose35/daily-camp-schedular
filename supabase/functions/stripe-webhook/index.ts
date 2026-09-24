@@ -761,8 +761,13 @@ async function handleChargeRefunded(
     if (!refundId || !(amount > 0)) continue;
     // A refund that failed (or was canceled) sent nothing back (TED-126): it is
     // not booked here, and one booked before it failed is put back by
-    // handleRefundFailed.
-    if (r.status === "failed" || r.status === "canceled") continue;
+    // handleRefundFailed. The list in the event is how the refund stood when
+    // the event was MADE — on an older API version this event can arrive after
+    // the refund failed and still say "succeeded" (TED-133) — so its status is
+    // asked of Stripe now. Stripe not answering throws: the event is sent again.
+    const now = await stripeGetJson(`/refunds/${encodeURIComponent(refundId)}`);
+    const status = String((now && now.status) || r.status || "");
+    if (status === "failed" || status === "canceled") continue;
     try {
       const { data, error } = await supabase.rpc("record_external_refund", {
         p_camp_id: campId, p_refund_id: refundId, p_refs: refs,
@@ -805,33 +810,42 @@ async function handleRefundFailed(
   const campId = await campIdFor({ metadata: r.metadata, payment_intent: r.payment_intent, charge: r.charge });
   const amount = Number(((Number(r.amount) || 0) / 100).toFixed(2));
   const why = r.failure_reason ? String(r.failure_reason).replace(/_/g, " ") : (status === "canceled" ? "canceled" : null);
+  const payment = typeof r.payment_intent === "string" ? r.payment_intent : (r.payment_intent?.id || (typeof r.charge === "string" ? r.charge : r.charge?.id) || "");
+  // The platform is alerted for EVERY failed refund (TED-131) — the money is
+  // back in the platform's balance whether or not Campistry had booked the
+  // refund — once per refund where the camp is known (the database's notice
+  // is the once-only claim).
+  const alert = (what: string) => sendRiskAlertEmail(`Stripe alert: a $${amount.toFixed(2)} refund failed — pass it back to the camp`, `
+    <div style="font-family:sans-serif;max-width:600px;">
+      <h2 style="color:#B91C1C;">A refund failed after Stripe accepted it</h2>
+      <p><strong>Refund:</strong> ${refundId} (${status}${why ? ", " + why : ""})</p>
+      <p><strong>Amount:</strong> $${amount.toFixed(2)}</p>
+      <p><strong>Payment:</strong> ${payment || "—"}</p>
+      <p><strong>Camp:</strong> ${campId || "not found — look the payment up in Stripe"}</p>
+      <p>The money is back in the PLATFORM's Stripe balance; the camp's own account was debited when
+      the refund was made. ${what} Transfer $${amount.toFixed(2)} back to the camp's connected account.</p>
+      <p style="margin-top:20px;color:#64748B;font-size:13px;">Event: ${event.type} (${event.id})</p>
+    </div>`);
   if (!campId) {
     console.error(`[stripe-webhook] refund ${refundId} ${status} but has no camp — nothing put back; reconcile by hand`);
+    await alert("No camp could be found for it, so nothing was changed in Campistry.");
     return;
   }
   const { data, error } = await supabase.rpc("reverse_failed_stripe_refund", {
-    p_camp_id: campId, p_refund_id: refundId, p_reason: why });
+    p_camp_id: campId, p_refund_id: refundId, p_reason: why, p_amount: amount || null, p_payment_ref: payment || null });
   // The database not answering is not an answer: 500, so Stripe sends it again.
   if (error) throw new Error(`refund ${refundId} failed at Stripe and could not be put back yet: ${error.message}`);
   if (!data?.success) {
     console.error(`[stripe-webhook] refund ${refundId} ${status} (camp ${campId}) — not on Campistry's books ` +
       `(${data?.error || "unknown"}); nothing put back`);
+    if (data?.firstNotice !== false) {
+      await alert("It was not on Campistry's books (made in the Stripe dashboard, or its answer was lost), so nothing was changed there; the camp has been told.");
+    }
     return;
   }
-  if (data.alreadyRecorded) return;
+  if (data.alreadyRecorded || data.firstNotice === false) return;
   console.warn(`[stripe-webhook] refund ${refundId} ${status}: $${amount} put back for camp ${campId}`);
-  await sendRiskAlertEmail(`Stripe alert: a $${amount.toFixed(2)} refund failed — pass it back to the camp`, `
-    <div style="font-family:sans-serif;max-width:600px;">
-      <h2 style="color:#B91C1C;">A refund failed after Stripe accepted it</h2>
-      <p><strong>Refund:</strong> ${refundId} (${status}${why ? ", " + why : ""})</p>
-      <p><strong>Amount:</strong> $${amount.toFixed(2)}</p>
-      <p><strong>Payment:</strong> ${r.payment_intent || r.charge || "—"}</p>
-      <p><strong>Camp:</strong> ${campId}</p>
-      <p>The money is back in the PLATFORM's Stripe balance; the camp's own account was debited when
-      the refund was made. Campistry has put it back on the family's account (or the child's canteen
-      wallet) and told the camp. Transfer $${amount.toFixed(2)} back to the camp's connected account.</p>
-      <p style="margin-top:20px;color:#64748B;font-size:13px;">Event: ${event.type} (${event.id})</p>
-    </div>`);
+  await alert("Campistry has put it back on the family's account (or the child's canteen wallet) and told the camp.");
 }
 
 async function handleDisputeLedger(

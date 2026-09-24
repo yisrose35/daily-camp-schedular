@@ -317,8 +317,10 @@ async function refundOneCamper(
 // refused, which is not a "no". Made: on the ledger. Never made: the money
 // goes back on the wallet. Stripe cannot say: still waiting. One not yet a
 // couple of minutes old may still be running, and is left alone.
+type LookedUp = { made: number; madeAmount: number; notMade: number; notMadeAmount: number };
 async function settleWaitingRefunds(supabase: ReturnType<typeof createClient>, campId: string,
-                                    holds: Record<string, any>[], transactions: Record<string, any>[]): Promise<boolean> {
+                                    holds: Record<string, any>[], transactions: Record<string, any>[],
+                                    found: LookedUp): Promise<boolean> {
   let changed = false;
   const booked = new Set<string>(transactions.filter((t) => t && t.stripeRefundId).map((t) => String(t.stripeRefundId)));
   for (const h of holds.filter((x) => x.method === "stripe" && Number(x.ageSeconds) >= 120)) {
@@ -334,10 +336,12 @@ async function settleWaitingRefunds(supabase: ReturnType<typeof createClient>, c
       await supabase.rpc("settle_refund_intent", { p_camp_id: campId, p_key: h.key, p_result: { refundId: hit.id, amount: Number(h.amount) } });
       await supabase.rpc("settle_canteen_refund_hold", { p_camp_id: campId, p_hold_key: h.key, p_refund_id: String(hit.id) });
       booked.add(String(hit.id));
+      found.made++; found.madeAmount = round2(found.madeAmount + (Number(h.amount) || 0));
       changed = true;
     } else if (hit || !list.has_more) {
       await supabase.rpc("release_refund_intent", { p_camp_id: campId, p_key: h.key });
-      await supabase.rpc("release_canteen_refund_hold", { p_camp_id: campId, p_hold_key: h.key });
+      const { data: rel } = await supabase.rpc("release_canteen_refund_hold", { p_camp_id: campId, p_hold_key: h.key });
+      if (rel && rel.released) { found.notMade++; found.notMadeAmount = round2(found.notMadeAmount + (Number(h.amount) || 0)); }
       changed = true;
     }
   }
@@ -373,8 +377,11 @@ serve(async (req) => {
     // ledger is a 7-day window. This has every deposit, and each account's id.
     let { data: accountsData, error: acctErr } = await supabase.rpc("canteen_refund_view", { p_camp_id: authedCampId });
     if (acctErr || !accountsData?.success) return json({ error: "Could not read canteen balances." }, 500);
+    // What the look-up of refunds still waiting for Stripe found, for the
+    // office (TED-135): a run that refunds nobody new still says what it did.
+    const lookedUp: LookedUp = { made: 0, madeAmount: 0, notMade: 0, notMadeAmount: 0 };
     if (await settleWaitingRefunds(supabase, authedCampId, Array.isArray(accountsData.holds) ? accountsData.holds : [],
-                                   Array.isArray(accountsData.transactions) ? accountsData.transactions : [])) {
+                                   Array.isArray(accountsData.transactions) ? accountsData.transactions : [], lookedUp)) {
       ({ data: accountsData, error: acctErr } = await supabase.rpc("canteen_refund_view", { p_camp_id: authedCampId }));
       if (acctErr || !accountsData?.success) return json({ error: "Could not read canteen balances." }, 500);
     }
@@ -399,7 +406,7 @@ serve(async (req) => {
       .filter((c) => c.walletAvailable > 0 || c.staleHold);
 
     if (!candidates.length) {
-      return json({ totalRefunded: 0, refundedCount: 0, skippedCount: 0, failedCount: 0, details: [] });
+      return json({ totalRefunded: 0, refundedCount: 0, skippedCount: 0, failedCount: 0, details: [], lookedUp });
     }
 
     const results = await mapWithConcurrency(candidates, CONCURRENCY, (c) =>
@@ -415,7 +422,7 @@ serve(async (req) => {
 
     console.log(`[stripe-canteen-refund-all] camp ${authedCampId}: refunded $${totalRefunded} across ${refundedCount} camper(s), ${skippedCount} skipped, ${failedCount} failed`);
 
-    return json({ totalRefunded, refundedCount, skippedCount, failedCount, details: results });
+    return json({ totalRefunded, refundedCount, skippedCount, failedCount, details: results, lookedUp });
   } catch (err) {
     console.error("[stripe-canteen-refund-all] Error:", (err as Error).message);
     return json({ error: (err as Error).message }, 500);

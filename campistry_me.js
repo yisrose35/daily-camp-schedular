@@ -18365,9 +18365,19 @@ function _famRefundablePayments(f){
         var _pk=normalizePersonId(p.camperId)?camperNameById(normalizePersonId(p.camperId)):null;
         if(_pk!=null){ if((f.camperIds||[]).indexOf(_pk)<0) return false; }
         else if(!(f.name===p.family||f.name===p.camper||(f.camperIds||[]).indexOf(p.family)>=0||(f.camperIds||[]).indexOf(p.camper)>=0)) return false;
-        var priorRefunded=finPayments.filter(function(x){return x.refundOf!=null&&String(x.refundOf)===String(p.id)}).reduce(function(s,x){return s+Math.abs(x.amount||0)},0);
-        return Math.round((p.amount-priorRefunded)*100)/100>0;
+        return Math.round((p.amount-_refundedFrom(p))*100)/100>0;
     });
+}
+// What has been refunded from a payment — less a refund the processor failed
+// after accepting it, which Campistry put back (278 writes a row carrying
+// failedRefundId): that money was never refunded, so the payment can be
+// refunded again (TED-132).
+function _refundedFrom(p){
+    var putBack={};
+    finPayments.forEach(function(x){ if(x&&x.failedRefundId)putBack[String(x.failedRefundId)]=1; });
+    return finPayments.filter(function(x){return x&&x.refundOf!=null&&String(x.refundOf)===String(p.id)
+            &&!((x.stripeRefundId&&putBack[String(x.stripeRefundId)])||(x.byopRefundId&&putBack[String(x.byopRefundId)]));})
+        .reduce(function(s,x){return s+Math.abs(x.amount||0)},0);
 }
 // How old a card payment can be and still be refundable through the gateway.
 //
@@ -18413,7 +18423,7 @@ function _famRefundableOnlineAll(f){
     return _famRefundablePayments(f)
         .filter(function(p){return !!p.stripePaymentIntentId || !!p.byopTransactionId})
         .map(function(p){
-            var priorRefunded=finPayments.filter(function(x){return x.refundOf!=null&&String(x.refundOf)===String(p.id)}).reduce(function(s,x){return s+Math.abs(x.amount||0)},0);
+            var priorRefunded=_refundedFrom(p);
             return {p:p,remaining:Math.round((p.amount-priorRefunded)*100)/100};
         })
         .filter(function(d){return d.remaining>0})

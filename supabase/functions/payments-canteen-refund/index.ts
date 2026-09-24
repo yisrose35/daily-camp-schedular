@@ -134,6 +134,36 @@ function round2(n: number): number {
   return Math.round(n * 100) / 100;
 }
 
+// What each child can be refunded to a card right now, worked out from the
+// FULL ledger (TED-130): the Snacks page loads only a week of history (245), so
+// it cannot work this out itself — a top-up from July read as "$0.00
+// refundable" in August. The same maths as a refund of that child: the wallet
+// (less its floor) against what the child's top-ups on this processor still
+// have — less what is already refunded from them (a refund that failed and was
+// put back, 278, counts as not refunded) and what another refund has on its way.
+function refundableByAccount(view: Record<string, any>, method: string, idField: string): Record<string, unknown> {
+  const txs: Record<string, any>[] = Array.isArray(view.transactions) ? view.transactions : [];
+  const holds: Record<string, any>[] = Array.isArray(view.holds) ? view.holds : [];
+  const out: Record<string, unknown> = {};
+  for (const [key, a] of Object.entries((view.accounts || {}) as Record<string, any>)) {
+    const acct = a || {};
+    const cid = acct.camperId != null ? Number(acct.camperId) : null;
+    const mine = (t: Record<string, any>) => (cid != null && t.camperId != null) ? String(t.camperId) === String(cid) : t.camper === key;
+    let card = 0;
+    for (const dep of txs.filter((t) => t && mine(t) && t.kind === "deposit" && t.method === method && t[idField])) {
+      const ref = dep[idField];
+      const sum = (kind: string) => txs.filter((t) => t && t.kind === kind && t[idField] === ref)
+        .reduce((s, t) => s + (Number(t.amount) || 0), 0);
+      const held = holds.filter((h) => h.method === method && h.paymentRef === ref)
+        .reduce((s, h) => s + (Number(h.amount) || 0), 0);
+      card += Math.max(0, round2((Number(dep.amount) || 0) - sum("refund") + sum("refund_failed") - held));
+    }
+    const wallet = Math.max(0, round2((Number(acct.balance) || 0) - (Number(acct.balanceFloor) || 0)));
+    out[key] = { camperId: cid, wallet, card: round2(card), now: round2(Math.min(wallet, card)) };
+  }
+  return out;
+}
+
 // Copied verbatim from payments-refund/index.ts.
 async function callerCampId(req: Request): Promise<string | null> {
   const jwt = (req.headers.get("Authorization") || "").replace(/^Bearer\s+/i, "");
@@ -188,8 +218,12 @@ serve(async (req) => {
       if (vErr || !view?.success) return json({ error: "Could not read canteen refunds." }, 500);
       const open: Record<string, any>[] = Array.isArray(view.holds) ? view.holds : [];
       if (action === "holds") {
+        const { data: campRow } = await service.from("camps").select("payment_processor_key").eq("id", authedCampId).maybeSingle();
+        const proc = String(campRow?.payment_processor_key || "");
         return json({ holds: open.map((h) => ({ key: h.key, camperId: h.camperId ?? null, account: h.accountKey,
-          amount: Number(h.amount), method: h.method, ageSeconds: Number(h.ageSeconds) || 0, createdAt: h.createdAt })) });
+          amount: Number(h.amount), method: h.method, ageSeconds: Number(h.ageSeconds) || 0, createdAt: h.createdAt })),
+          processor: proc,
+          refundable: (proc === "cardknox" || proc === "banquest") ? refundableByAccount(view, proc, "byopTransactionId") : {} });
       }
       const h = open.find((x) => String(x.key) === String(holdKey || ""));
       if (!h) return json({ error: "That refund was already settled." }, 409);

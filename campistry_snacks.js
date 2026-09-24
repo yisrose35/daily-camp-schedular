@@ -1820,7 +1820,10 @@ async function _getSnacksProcessorKey() {
         const client = db && db.client;
         if (!campId || !client) return 'stripe';
         const res = await client.rpc('get_camp_payment_processor_status', { p_camp_id: campId });
-        _snacksProcessorKey = (res.data && res.data.success && res.data.processorKey) || 'none';
+        // Only the owner or an admin may see the processor — and refund to a
+        // card (TED-134). Anyone else was told "no card processor connected".
+        _snacksProcessorKey = (res.data && res.data.error === 'not_authorized') ? 'forbidden'
+            : (res.data && res.data.success && res.data.processorKey) || 'none';
     } catch (e) {
         console.warn('[Snacks] Could not resolve payment processor, defaulting to stripe:', e);
         _snacksProcessorKey = 'stripe';
@@ -1876,12 +1879,29 @@ window.refundPickCamper = async function() {
         return;
     }
     const processorKey = await _getSnacksProcessorKey();
+    if (processorKey === 'forbidden') {
+        box.style.display = '';
+        box.textContent = 'Only the camp owner or an admin can refund canteen money to a card.';
+        amtInput.value = ''; amtInput.max = '';
+        if (btn) btn.disabled = true;
+        return;
+    }
     const gatewayLabel = _processorLabel(processorKey);
-    _showCanteenHolds(document.getElementById('refundHolds'), name);      // TED-116
+    box.style.display = '';
+    box.textContent = 'Working out what can be refunded…';
+    amtInput.value = ''; amtInput.max = '';
+    if (btn) btn.disabled = true;
+    const got = await _loadCanteenHolds();
+    if ((document.getElementById('refundCamper') || {}).value !== name) return;   // another child was picked meanwhile
+    _showCanteenHolds(document.getElementById('refundHolds'), name, got);      // TED-116
     const a = getAccount(name);
-    const walletAvailable = Math.max(0, Math.round((a.balance - (a.balanceFloor || 0)) * 100) / 100);
-    const capacity = _onlineRefundCapacity(name, processorKey);
-    const max = Math.min(walletAvailable, capacity);
+    // What can go back to the card, from the server's FULL history (TED-130):
+    // this page holds only a week of it, so a July top-up read as $0.00 here.
+    // Worked out locally only when the server could not be asked.
+    const srv = _refundableFor(got.refundable, name);
+    const walletAvailable = srv ? srv.wallet : Math.max(0, Math.round((a.balance - (a.balanceFloor || 0)) * 100) / 100);
+    const capacity = srv ? srv.card : _onlineRefundCapacity(name, processorKey);
+    const max = Math.round(Math.min(walletAvailable, capacity) * 100) / 100;
 
     box.style.display = '';
     box.innerHTML =
@@ -2015,14 +2035,28 @@ window.refundCanteenDeposit = async function() {
 async function _loadCanteenHolds() {
     const db = window.CampistryDB;
     const client = db && db.client;
-    if (!client) return { holds: [], processorKey: null };
+    if (!client) return { holds: [], processorKey: null, refundable: null };
     const processorKey = await _getSnacksProcessorKey();
+    if (processorKey === 'forbidden') return { holds: [], processorKey, refundable: null };
     const fnName = processorKey === 'stripe' ? 'stripe-canteen-refund' : 'payments-canteen-refund';
     try {
         const res = await client.functions.invoke(fnName, { body: { action: 'holds' } });
         const d = res && res.data;
-        return { holds: (d && Array.isArray(d.holds)) ? d.holds : [], processorKey };
-    } catch (_) { return { holds: [], processorKey }; }
+        return { holds: (d && Array.isArray(d.holds)) ? d.holds : [], processorKey,
+                 refundable: (d && d.refundable && typeof d.refundable === 'object') ? d.refundable : null };
+    } catch (_) { return { holds: [], processorKey, refundable: null }; }
+}
+// This child's line of the server's refundable-to-card answer (TED-130): by
+// camper number, else by the account's key.
+function _refundableFor(map, rosterKey) {
+    if (!map) return null;
+    const r = getRoster()[rosterKey];
+    const id = r && r.camperId != null ? String(r.camperId) : null;
+    if (id != null) {
+        const k = Object.keys(map).find(function(x) { return map[x] && map[x].camperId != null && String(map[x].camperId) === id; });
+        if (k) return map[k];
+    }
+    return map[rosterKey] || null;
 }
 function _holdCamperKey(h) {
     const roster = getRoster();
@@ -2040,9 +2074,9 @@ function _holdAge(sec) {
     return Math.round(sec / 86400) + ' days ago';
 }
 // `onlyKey` (a roster key) limits it to one child — the refund window.
-async function _showCanteenHolds(el, onlyKey) {
-    if (!el) return;
-    const got = await _loadCanteenHolds();
+async function _showCanteenHolds(el, onlyKey, preloaded) {
+    if (!el) return [];
+    const got = preloaded || await _loadCanteenHolds();
     const roster = getRoster();
     const onlyId = (onlyKey && roster[onlyKey] && roster[onlyKey].camperId != null) ? roster[onlyKey].camperId : null;   // by the camper's number
     const holds = got.holds.filter(function(h) {
@@ -2108,6 +2142,15 @@ function _refundAllPreview(processorKey) {
     return { total: total, count: count };
 }
 
+function _refundAllPreviewFrom(map) {
+    var total = 0, count = 0;
+    Object.keys(map || {}).forEach(function(k) {
+        var amt = Math.round((Number(map[k] && map[k].now) || 0) * 100) / 100;
+        if (amt > 0) { total = Math.round((total + amt) * 100) / 100; count++; }
+    });
+    return { total: total, count: count };
+}
+
 function _processorLabel(processorKey) {
     return processorKey === 'stripe' ? 'Stripe' : processorKey === 'cardknox' ? 'Sola'
          : processorKey === 'banquest' ? 'Banquest' : String(processorKey || '');
@@ -2126,14 +2169,21 @@ window.openRefundAllModal = async function() {
     // the refund itself goes through — before it counts anything.
     openM('refundall');
     var processorKey = await _getSnacksProcessorKey();
-    var holdsShown = _showCanteenHolds(document.getElementById('refundAllHolds'));      // TED-116
+    if (processorKey === 'forbidden') {
+        if (body) body.innerHTML = '<p>Only the camp owner or an admin can refund canteen money to a card.</p>';
+        return;
+    }
+    var got = await _loadCanteenHolds();
+    var holdsShown = _showCanteenHolds(document.getElementById('refundAllHolds'), null, got);      // TED-116
     if (!body) return;
     if (processorKey !== 'stripe' && processorKey !== 'cardknox' && processorKey !== 'banquest') {
         body.innerHTML = '<p>This camp has no card processor connected, so there is nothing to refund to a card. Refund balances by hand (Take Out Cash).</p>';
         return;
     }
     var gw = _processorLabel(processorKey);
-    var preview = _refundAllPreview(processorKey);
+    // From the server's full history, less any refund still on its way (TED-130,
+    // TED-135); worked out locally only when the server could not be asked.
+    var preview = got.refundable ? _refundAllPreviewFrom(got.refundable) : _refundAllPreview(processorKey);
     if (!preview.count) {
         body.innerHTML = '<p>No campers currently have a ' + esc(gw) + '-paid balance to refund.</p>';
         // A Stripe refund still waiting for its answer is looked up when Refund
@@ -2185,6 +2235,10 @@ window.refundAllCanteenDeposits = function() {
             if (btn) btn.style.display = 'none';
             var msg = 'Refunded $' + Number(data.totalRefunded).toFixed(2) + ' across ' + data.refundedCount + ' camper' + (data.refundedCount === 1 ? '' : 's') + '.';
             if (data.skippedCount) msg += ' ' + data.skippedCount + ' skipped (no online balance to refund).';
+            // What the look-up of refunds waiting for Stripe found (TED-135).
+            var lk = data.lookedUp || {};
+            if (lk.made) msg += ' ' + lk.made + ' waiting refund' + (lk.made === 1 ? '' : 's') + ' ($' + Number(lk.madeAmount || 0).toFixed(2) + ') had gone through and ' + (lk.made === 1 ? 'is' : 'are') + ' now recorded.';
+            if (lk.notMade) msg += ' ' + lk.notMade + ' waiting refund' + (lk.notMade === 1 ? '' : 's') + ' ($' + Number(lk.notMadeAmount || 0).toFixed(2) + ') had not gone through — the money is back on the wallet' + (lk.notMade === 1 ? '' : 's') + (data.refundedCount ? ' and was refunded again above.' : '.');
             if (data.failedCount) msg += ' ' + data.failedCount + ' hit an error:';
             // Each child that hit an error, by name, with why (TED-116).
             var failedLines = (Array.isArray(data.details) ? data.details : []).filter(function(d) { return d && d.error; })

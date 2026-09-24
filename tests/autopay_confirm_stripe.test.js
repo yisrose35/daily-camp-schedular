@@ -91,5 +91,7 @@ test('TED-120: a charge already answered is not answered again', () => {
 test('TED-120: someone who is not the camp\'s owner or an admin is refused before Stripe is asked', () => {
     const r = confirm('pi_GOLD', { who: 'stranger' });
     assert.strictEqual(r.status, 403);
+    // said for what was asked — nothing is being charged (TED-134)
+    assert.strictEqual(r.body.error, 'Only the camp owner or an admin can confirm a Stripe autopay payment.');
     assert.strictEqual(recorded(r).length, 0);
 });

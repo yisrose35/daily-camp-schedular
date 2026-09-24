@@ -154,3 +154,21 @@ test('TED-116: Snacks shows the held refund with both answers, and sends the off
     assert.strictEqual(JSON.stringify(sent.find(s => s[1].action === 'resolveHold')),
         JSON.stringify(['payments-canteen-refund', { action: 'resolveHold', holdKey: 'canteen:cref_old:X1', wentThrough: true, reference: 'RX_77' }]));
 });
+
+test('TED-134: a staff member who is not the owner/admin is told so — not "no card processor connected"', async () => {
+    const vmod = require('node:vm');
+    const els = {};
+    const el = (id) => els[id] || (els[id] = { id, style: {}, innerHTML: '', textContent: '', disabled: false });
+    const ctx = {
+        window: { CampistryDB: { getCampId: () => 'camp1', client: { rpc: async () => ({ data: { success: false, error: 'not_authorized' } }) } } },
+        console, document: { getElementById: el }, _secEdit: () => true, openM() {}, esc: (s) => String(s),
+    };
+    vmod.createContext(ctx);
+    vmod.runInContext('var _snacksProcessorKey = null;\n' + cut('_getSnacksProcessorKey')
+        + '\n' + SN.match(/window\.openRefundAllModal = async function[\s\S]*?\n\};\n/)[0]
+        + '\nthis.key = _getSnacksProcessorKey;', ctx);
+    assert.strictEqual(await ctx.key(), 'forbidden');
+    await ctx.window.openRefundAllModal();
+    assert.match(els.refundAllBody.innerHTML, /Only the camp owner or an admin can refund canteen money to a card/);
+    assert.doesNotMatch(els.refundAllBody.innerHTML, /no card processor/);
+});

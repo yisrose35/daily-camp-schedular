@@ -215,7 +215,8 @@ for (const type of ['refund.failed', 'refund.updated', 'charge.refund.updated'])
         const calls = r.rpcs.filter(c => c.name === 'reverse_failed_stripe_refund');
         assert.strictEqual(r.status, 200);
         assert.strictEqual(calls.length, 1, JSON.stringify(r.logs));
-        assert.deepStrictEqual(calls[0].args, { p_camp_id: 'camp1', p_refund_id: 're_16', p_reason: 'expired or canceled card' });
+        assert.deepStrictEqual(calls[0].args, { p_camp_id: 'camp1', p_refund_id: 're_16', p_reason: 'expired or canceled card',
+            p_amount: 20, p_payment_ref: 'pi_1' });
     });
 }
 
@@ -253,4 +254,138 @@ test('TED-126: Snacks counts a failed-and-put-back refund as refundable again', 
     vm.createContext(ctx);
     vm.runInContext(cut('_onlineDeposits') + '\n' + cut('_onlineRefundCapacity') + '\nthis.cap = _onlineRefundCapacity;', ctx);
     assert.strictEqual(ctx.cap('Avi', 'stripe'), 20);
+});
+
+// ── TED-131: the platform hears about EVERY failed refund, once ─────────────
+
+const alerted = (r) => r.logs.filter(l => /cannot send risk alert: Stripe alert: a \$20\.00 refund failed/.test(l)).length;
+
+test('TED-131: a failed refund not on Campistry\'s books still alerts the platform (and the office is told)', () => {
+    const r = hook(refundEvent('refund.failed', 'failed'),
+        `T.rpc.reverse_failed_stripe_refund = () => ({ success: false, error: 'refund_not_found', firstNotice: true });`);
+    assert.strictEqual(r.status, 200);
+    assert.strictEqual(alerted(r), 1, JSON.stringify(r.logs));
+});
+
+test('TED-131: the same unbooked failure again (refund.updated after refund.failed) does not alert twice', () => {
+    const r = hook(refundEvent('refund.updated', 'failed'),
+        `T.rpc.reverse_failed_stripe_refund = () => ({ success: false, error: 'refund_not_found', firstNotice: false });`);
+    assert.strictEqual(alerted(r), 0, JSON.stringify(r.logs));
+});
+
+test('TED-131: a booked failure alerts once; a repeat does not', () => {
+    const first = hook(refundEvent('refund.failed', 'failed'),
+        `T.rpc.reverse_failed_stripe_refund = () => ({ success: true, canteen: true, amount: 20, firstNotice: true });`);
+    assert.strictEqual(alerted(first), 1);
+    const again = hook(refundEvent('charge.refund.updated', 'failed'),
+        `T.rpc.reverse_failed_stripe_refund = () => ({ success: true, alreadyRecorded: true, canteen: true });`);
+    assert.strictEqual(alerted(again), 0);
+});
+
+test('TED-131: a failed refund with no camp anywhere still alerts the platform', () => {
+    const r = hook(refundEvent('refund.failed', 'failed'), `T.fetch = () => ({ id: 'x', metadata: {} });`);
+    assert.strictEqual(r.rpcs.filter(c => c.name === 'reverse_failed_stripe_refund').length, 0);
+    assert.strictEqual(alerted(r), 1, JSON.stringify(r.logs));
+});
+
+// ── TED-133: charge.refunded asks Stripe how each refund stands NOW ────────
+
+test('TED-133: a refund the event still calls succeeded, but Stripe now says failed, is not booked', () => {
+    const event = { id: 'evt_4', type: 'charge.refunded', data: { object: { id: 'ch_1', object: 'charge', payment_intent: 'pi_1',
+        metadata: { campId: 'camp1' }, refunds: { data: [
+            { id: 're_ok', amount: 1000, status: 'succeeded' },
+            { id: 're_late', amount: 20000, status: 'succeeded' }] } } } };
+    const r = hook(event, `T.fetch = (url: string) => url.endsWith('/refunds/re_late') ? { id: 're_late', status: 'failed' }
+      : url.endsWith('/refunds/re_ok') ? { id: 're_ok', status: 'succeeded' } : {};`);
+    assert.deepStrictEqual(r.rpcs.filter(c => c.name === 'record_external_refund').map(c => c.args.p_refund_id), ['re_ok']);
+});
+
+test('TED-133: Stripe not answering about a refund — 500, so the event comes again', () => {
+    const event = { id: 'evt_5', type: 'charge.refunded', data: { object: { id: 'ch_1', object: 'charge', payment_intent: 'pi_1',
+        metadata: { campId: 'camp1' }, refunds: { data: [{ id: 're_ok', amount: 1000, status: 'succeeded' }] } } } };
+    const r = hook(event, `T.fetch = (url: string) => url.includes('/refunds/') ? { __status: 503, error: { type: 'api_error' } } : {};`);
+    assert.strictEqual(r.status, 500);
+    assert.strictEqual(r.rpcs.filter(c => c.name === 'record_external_refund').length, 0);
+});
+
+// ── TED-130/135: the page is told what can go back to a card, from the FULL ledger
+
+const monthAgo = 1;   // a timestamp far in the past: the functions must not care how old a top-up is
+function holdsView(method, idField) {
+    const dep = (ref, amount, ts) => ({ kind: 'deposit', method, [idField]: ref, amount, camper: 'Avi', camperId: 7, timestamp: ts });
+    return {
+        success: true,
+        accounts: { Avi: { camperId: 7, balance: 70, balanceFloor: 0 }, Bea: { camperId: 8, balance: 12, balanceFloor: 2 } },
+        transactions: [
+            dep('OLD', 30, monthAgo), dep('NEW', 25, 2),
+            { kind: 'deposit', method: 'cash', amount: 40, camper: 'Avi', camperId: 7 },
+            { kind: 'refund', method, [idField]: 'OLD', amount: 10, camperId: 7 },
+            { kind: 'refund_failed', type: 'credit', method, stripePaymentIntentId: 'OLD', amount: 10, camperId: 7 },
+            { kind: 'deposit', method, [idField]: 'B1', amount: 50, camper: 'Bea', camperId: 8, timestamp: 3 },
+        ],
+        holds: [{ key: 'h1', accountKey: 'Avi', camperId: 7, amount: 20, method, paymentRef: 'NEW', ageSeconds: 30 }],
+    };
+}
+
+test('TED-130: stripe-canteen-refund tells the page what each child can get back to the card, from the full ledger', () => {
+    const r = runEdge('stripe-canteen-refund', `
+T.env = { STRIPE_SECRET_KEY: 'sk_test', SUPABASE_URL: 'http://db', SUPABASE_ANON_KEY: 'anon', SUPABASE_SERVICE_ROLE_KEY: 'svc' };
+T.users = { owner: 'u-owner' };
+T.tables.camps = [{ id: 'camp1', owner: 'u-owner' }];
+T.rpc.canteen_refund_view = () => (${JSON.stringify(holdsView('stripe', 'stripePaymentIntentId'))});
+T.request = { headers: { Authorization: 'Bearer owner' }, body: { action: 'holds' } };`);
+    // Avi: OLD 30 − 10 refunded + 10 failed back = 30; NEW 25 − 20 on its way = 5 → 35; wallet 70 → 35 now
+    assert.deepStrictEqual(r.body.refundable.Avi, { camperId: 7, wallet: 70, card: 35, now: 35 });
+    // Bea: $50 top-up, wallet 12 less a $2 floor → 10
+    assert.deepStrictEqual(r.body.refundable.Bea, { camperId: 8, wallet: 10, card: 50, now: 10 });
+    assert.strictEqual(r.body.holds.length, 1);
+});
+
+test('TED-130: payments-canteen-refund does the same on a Sola camp', () => {
+    const r = runEdge('payments-canteen-refund', `
+T.env = { SUPABASE_URL: 'http://db', SUPABASE_ANON_KEY: 'anon', SUPABASE_SERVICE_ROLE_KEY: 'svc' };
+T.users = { owner: 'u-owner' };
+T.tables.camps = [{ id: 'camp1', owner: 'u-owner', payment_processor_key: 'cardknox' }];
+T.rpc.canteen_refund_view = () => (${JSON.stringify(holdsView('cardknox', 'byopTransactionId'))});
+T.request = { headers: { Authorization: 'Bearer owner' }, body: { action: 'holds' } };`);
+    // on Sola a refund_failed line (Stripe-only) does not apply: OLD 30 − 10 = 20; NEW 5 → 25
+    assert.deepStrictEqual(r.body.refundable.Avi, { camperId: 7, wallet: 70, card: 25, now: 25 });
+    assert.strictEqual(r.body.processor, 'cardknox');
+});
+
+test('TED-135: Refund All says what the look-up of waiting refunds found', () => {
+    const H = 'scanteen:pi_top1:2000:2000';
+    const r = runEdge('stripe-canteen-refund-all', canteen({
+        deposits: [{ pi: 'pi_top1', amount: 20, ts: 1 }], bal: 0, holdAge: 900,
+        holds: [{ key: H, amount: 20, method: 'stripe', paymentRef: 'pi_top1', stripeKey: 'k', state: 'open', refundId: null, camperId: 7, accountKey: 'Avi' }],
+        refunds: [snapshot('re_9', 2000, 'pi_top1', H)] }));
+    assert.deepStrictEqual(r.body.lookedUp, { made: 1, madeAmount: 20, notMade: 0, notMadeAmount: 0 });
+    assert.strictEqual(r.body.refundedCount, 0);
+    const n = runEdge('stripe-canteen-refund-all', canteen({
+        deposits: [{ pi: 'pi_top1', amount: 20, ts: 1 }], bal: 0, holdAge: 900,
+        holds: [{ key: H, amount: 20, method: 'stripe', paymentRef: 'pi_top1', stripeKey: 'k', state: 'open', refundId: null, camperId: 7, accountKey: 'Avi' }],
+        refunds: [] }));
+    assert.deepStrictEqual(n.body.lookedUp, { made: 0, madeAmount: 0, notMade: 1, notMadeAmount: 20 });
+    assert.strictEqual(n.body.totalRefunded, 20, 'the put-back money was refunded again in the same run');
+});
+
+// ── TED-132: Billing can refund a put-back refund to the card again ────────
+
+test('TED-132: a tuition refund that failed and was put back can be refunded to the card again', () => {
+    const fs = require('node:fs'), path = require('node:path'), vm = require('node:vm');
+    const ME = fs.readFileSync(path.join(__dirname, '..', 'campistry_me.js'), 'utf8');
+    const cut = (name) => { const at = ME.indexOf('function ' + name + '('); let i = ME.indexOf('{', at), d = 0;
+        for (; i < ME.length; i++) { if (ME[i] === '{') d++; else if (ME[i] === '}' && --d === 0) break; } return ME.slice(at, i + 1); };
+    const pay = { id: 'pay_1', family: 'Gold', amount: 500, stripePaymentIntentId: 'pi_g', timestamp: Date.now() };
+    const refund = { id: 'ref_1', family: 'Gold', amount: -500, refundOf: 'pay_1', stripeRefundId: 're_f1' };
+    const putBack = { id: 'refail_re_f1', family: 'Gold', familyKey: 'gold', amount: 500, method: 'Refund failed', failedRefundId: 're_f1' };
+    const run = (rows) => {
+        const ctx = { finPayments: rows, normalizePersonId: () => null, camperNameById: () => null };
+        vm.createContext(ctx);
+        vm.runInContext(['_famRefundablePayments', '_refundedFrom', '_famRefundableOnlineAll'].map(cut).join('\n')
+            + '\nthis.f = _famRefundableOnlineAll;', ctx);
+        return JSON.parse(JSON.stringify(ctx.f({ name: 'Gold', camperIds: [] }).map(d => [d.p.id, d.remaining])));
+    };
+    assert.deepStrictEqual(run([pay, refund]), [], 'a refunded payment still offered');
+    assert.deepStrictEqual(run([pay, refund, putBack]), [['pay_1', 500]]);
 });

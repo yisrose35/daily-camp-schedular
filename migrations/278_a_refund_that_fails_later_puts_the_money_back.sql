@@ -25,8 +25,16 @@
 --                      entry (the way a won chargeback is posted, 175), and
 --                      the payments list gets the matching row;
 --   either             a Billing notice (only people who can see Billing).
+--   neither            (not on these books — made in the Stripe dashboard, or
+--                      its answer was lost) still a Billing notice, and the
+--                      webhook still alerts the platform (TED-131): the money
+--                      is back in Campistry's Stripe balance either way.
 --
--- The same failure again (Stripe re-sends events) changes nothing.
+-- A canteen refund put back reopens its reservation (TED-129), so the next
+-- Refund All refunds that money again rather than finding it "already done".
+--
+-- The same failure again (Stripe re-sends events) changes nothing, and says
+-- so (firstNotice false), so the platform is alerted once.
 -- ============================================================================
 
 DO $$
@@ -59,10 +67,45 @@ $$;
 GRANT EXECUTE ON FUNCTION public.is_money_notice(text) TO authenticated, service_role;
 
 
+-- A failed refund that is not on these books: the office is told, once.
+-- Returns whether this was the first time (so the platform is alerted once).
+CREATE OR REPLACE FUNCTION public._notice_unbooked_refund_failure(
+    p_camp_id     uuid,
+    p_refund_id   text,
+    p_reason      text,
+    p_amount      numeric,
+    p_payment_ref text)
+RETURNS boolean
+LANGUAGE plpgsql
+SECURITY DEFINER
+SET search_path = public, pg_catalog
+AS $$
+DECLARE v_n integer := 0;
+BEGIN
+    IF to_regclass('public.notifications') IS NULL THEN RETURN true; END IF;
+    INSERT INTO notifications (camp_id, source, source_id, title, body, link_target)
+    VALUES (p_camp_id, 'refund_failed', p_refund_id,
+            'A refund failed',
+            'Stripe could not send a ' || COALESCE('$' || to_char(round(p_amount, 2), 'FM999999990.00') || ' ', '')
+              || 'refund (' || p_refund_id || COALESCE(', on payment ' || NULLIF(p_payment_ref, ''), '') || ')'
+              || COALESCE(' — ' || NULLIF(p_reason, ''), '') || '. The parent did not get it. '
+              || 'It is not on Campistry''s books (it may have been made in the Stripe dashboard), so nothing was changed here: '
+              || 'find the payment in Stripe, then refund it again or record it by hand. '
+              || 'Stripe returned the money to Campistry''s platform account; Campistry has been alerted to pass it back to yours.',
+            'campistry_me.html')
+    ON CONFLICT (camp_id, source, source_id) DO NOTHING;
+    GET DIAGNOSTICS v_n = ROW_COUNT;
+    RETURN v_n > 0;
+END $$;
+REVOKE ALL ON FUNCTION public._notice_unbooked_refund_failure(uuid, text, text, numeric, text) FROM public, anon, authenticated;
+
+DROP FUNCTION IF EXISTS public.reverse_failed_stripe_refund(uuid, text, text);
 CREATE OR REPLACE FUNCTION public.reverse_failed_stripe_refund(
-    p_camp_id   uuid,
-    p_refund_id text,
-    p_reason    text DEFAULT NULL)
+    p_camp_id     uuid,
+    p_refund_id   text,
+    p_reason      text    DEFAULT NULL,
+    p_amount      numeric DEFAULT NULL,    -- Stripe's, for a refund not on these books
+    p_payment_ref text    DEFAULT NULL)    -- the payment it was refunding, likewise
 RETURNS jsonb
 LANGUAGE plpgsql
 SECURITY DEFINER
@@ -84,7 +127,8 @@ DECLARE
     v_row    jsonb;
     v_rev    jsonb;
     v_who    text;
-    v_out    jsonb := '{}'::jsonb;
+    v_first  boolean := false;
+    v_n      integer;
 BEGIN
     IF p_camp_id IS NULL OR v_ref IS NULL THEN
         RETURN jsonb_build_object('success', false, 'error', 'bad_arguments');
@@ -100,7 +144,8 @@ BEGIN
         v_key  := public.canteen_account_key_for(p_camp_id, v_tx.camper);
         v_acct := public.canteen_account_lock(p_camp_id, v_key);
         IF v_acct IS NULL THEN
-            RETURN jsonb_build_object('success', false, 'error', 'account_not_found');
+            v_first := public._notice_unbooked_refund_failure(p_camp_id, v_ref, v_why, COALESCE(p_amount, v_tx.amount), p_payment_ref);
+            RETURN jsonb_build_object('success', false, 'error', 'account_not_found', 'firstNotice', v_first);
         END IF;
         -- once, under the wallet's lock
         IF EXISTS (SELECT 1 FROM canteen_transactions
@@ -129,6 +174,12 @@ BEGIN
             || CASE WHEN v_tx.payload ? 'camperId'
                     THEN jsonb_build_object('camperId', v_tx.payload -> 'camperId') ELSE '{}'::jsonb END,
             'refail:' || v_ref);
+        -- The reservation this refund settled is open for a new refund again
+        -- (TED-129): "posted" told the next Refund All the money was already
+        -- sent, and it skipped the child. Released is the truth — the money is
+        -- back on the wallet — and a reserve under the same key takes it afresh.
+        UPDATE canteen_refund_holds SET state = 'released', settled_at = now_ts
+         WHERE camp_id = p_camp_id AND refund_id = v_ref AND state = 'posted';
         v_who := COALESCE(NULLIF(v_acct ->> 'camperName', ''), regexp_replace(v_key, '\s#\d+$', ''));
         IF to_regclass('public.notifications') IS NOT NULL THEN
             INSERT INTO notifications (camp_id, source, source_id, title, body, link_target)
@@ -140,9 +191,11 @@ BEGIN
                       || 'Stripe returned it to Campistry''s platform account; Campistry has been alerted to pass it back to yours.',
                     'campistry_snacks.html')
             ON CONFLICT (camp_id, source, source_id) DO NOTHING;
+            GET DIAGNOSTICS v_n = ROW_COUNT;
+            v_first := v_n > 0;
         END IF;
         RETURN jsonb_build_object('success', true, 'canteen', true, 'account', v_key,
-                                  'amount', v_amt, 'balance', v_bal);
+                                  'amount', v_amt, 'balance', v_bal, 'firstNotice', v_first);
     END IF;
 
     -- ── a family refund: the ledger gets the money back ─────────────────────
@@ -157,9 +210,13 @@ BEGIN
     END LOOP;
 
     IF v_famKey IS NULL THEN
-        -- Not Campistry's refund (made in the Stripe dashboard for money that
-        -- was never on these books), or not booked yet: nothing to put back.
-        RETURN jsonb_build_object('success', false, 'error', 'refund_not_found');
+        -- Not on these books: made in the Stripe dashboard, or its answer was
+        -- lost (a canteen refund still waiting is settled by its look-up).
+        -- Nothing to put back here — but the parent did not get it and the
+        -- money is in Campistry's Stripe balance, so the office is told
+        -- (TED-131), once.
+        v_first := public._notice_unbooked_refund_failure(p_camp_id, v_ref, v_why, p_amount, p_payment_ref);
+        RETURN jsonb_build_object('success', false, 'error', 'refund_not_found', 'firstNotice', v_first);
     END IF;
 
     v_fam := public.camp_family_for_update(p_camp_id, v_famKey);
@@ -207,9 +264,11 @@ BEGIN
                   || 'Campistry has been alerted to pass it back to yours.',
                 'campistry_me.html')
         ON CONFLICT (camp_id, source, source_id) DO NOTHING;
+        GET DIAGNOSTICS v_n = ROW_COUNT;
+        v_first := v_n > 0;
     END IF;
     RETURN jsonb_build_object('success', true, 'family', true, 'familyKey', v_famKey, 'amount', v_amt,
-                              'balance', public.family_ledger_balance(v_fam));
+                              'balance', public.family_ledger_balance(v_fam), 'firstNotice', v_first);
 END $$;
-REVOKE ALL ON FUNCTION public.reverse_failed_stripe_refund(uuid, text, text) FROM public, anon, authenticated;
-GRANT EXECUTE ON FUNCTION public.reverse_failed_stripe_refund(uuid, text, text) TO service_role;
+REVOKE ALL ON FUNCTION public.reverse_failed_stripe_refund(uuid, text, text, numeric, text) FROM public, anon, authenticated;
+GRANT EXECUTE ON FUNCTION public.reverse_failed_stripe_refund(uuid, text, text, numeric, text) TO service_role;

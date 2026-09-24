@@ -14,6 +14,11 @@
 //            settle a stuck Sola/Banquest refund.
 //   TED-125  Take Out Cash hit the same _lbl after the payout: no confirmation,
 //            and the amount left in the box.
+//   TED-130  "How much can go back to the card" was worked out from the week of
+//            history the page loads, so a top-up older than 7 days read $0.00.
+//            Step 3b answers the page's question with the REAL refund function's
+//            code (run in Node by tests/edge_harness.js) over the REAL database's
+//            full history — no stand-in numbers — with a top-up 30 days old.
 //
 // Here nothing is extracted: the page loads as the office loads it, and the
 // test presses the buttons. Edge functions are not reachable in the harness, so
@@ -44,6 +49,7 @@ try {
 }
 const { boot } = require('./e2e/db');
 const { start } = require('./e2e/bridge');
+const { runEdge } = require('./edge_harness');
 
 const checks = [];
 function check(label, ok, detail) {
@@ -247,6 +253,68 @@ async function waitFor(what, fn, ms) {
         check('the amount box is cleared', (await page.evaluate(() => document.getElementById('cashAmt').value)) === '');
 
         // ── 4. a Stripe camp: a waiting refund for a child with $0 to refund ─
+        // ── 3b. a top-up 30 days old, and a refund still waiting (TED-130/135)
+        step('3b', 'A Sola top-up 30 days old, and a $20 refund of the new one still waiting');
+        const credit2 = db.json(`SELECT public.credit_canteen_balance_from_processor(
+                p_camp_id => '${CAMP}', p_camper_name => ${lit(CAMPER)}, p_amount => 30,
+                p_processor_key => 'cardknox', p_external_transaction_id => 'XREF-OLD') AS r`);
+        check('the old Sola top-up was credited', credit2[0] && credit2[0].r && credit2[0].r.success, JSON.stringify(credit2[0] && credit2[0].r));
+        const old = new Date(Date.now() - 30 * 86400000).toISOString().slice(0, 10);
+        db.sql(`UPDATE canteen_transactions SET tx_date = '${old}', payload = payload || jsonb_build_object('date', '${old}')
+                 WHERE camp_id = '${CAMP}' AND payload->>'byopTransactionId' = 'XREF-OLD';`);
+        // a refund of $20 from the $25 top-up, sent and never answered
+        const held = db.json(`SELECT public.reserve_canteen_refund('${CAMP}', ${lit(CAMPER)}, 'canteen:cref_w:XREF-25', 20, 'cardknox', 'XREF-25') AS r`);
+        check('the waiting refund took its $20 off the wallet', held[0] && held[0].r && held[0].r.success, JSON.stringify(held[0] && held[0].r));
+        // wallet: $60 after the cash-out, + $30 old top-up, − $20 waiting = $70.
+        // To a card: $25 − $20 waiting = $5, + the old $30 = $35. (The page alone
+        // would say $25: the new top-up, blind to both the old one and the wait.)
+        // The edge function's `holds` answer, from the real code over the real rows.
+        await page.exposeFunction('__realHolds', (fn) => {
+            const view = db.json(`SELECT public.canteen_refund_view('${CAMP}') AS v`)[0].v;
+            const r = runEdge(fn, `
+T.env = { STRIPE_SECRET_KEY: 'sk_test', SUPABASE_URL: 'http://db', SUPABASE_ANON_KEY: 'anon', SUPABASE_SERVICE_ROLE_KEY: 'svc' };
+T.users = { owner: 'u-owner' };
+T.tables.camps = [{ id: '${CAMP}', owner: 'u-owner', payment_processor_key: 'cardknox' }];
+T.rpc.canteen_refund_view = () => (${JSON.stringify(view)});
+T.request = { headers: { Authorization: 'Bearer owner' }, body: { action: 'holds' } };`);
+            return r.body;
+        });
+        await open('campistry_snacks.html', () => !!window.CampistrySnacks);
+        await page.waitForFunction((n) => (window.CampistrySnacks.getCamperList() || []).some(c => c.name === n), CAMPER, { timeout: 30000 });
+        await snacksNav('accounts');
+        const pageSees = await page.evaluate(() => (window.CampistrySnacks.getSnacksData().transactions || []).some(t => t && t.byopTransactionId === 'XREF-OLD'));
+        check('the page itself does not hold the 30-day-old top-up (the week it loads)', !pageSees);
+        await page.evaluate(() => {
+            window.__fnCalls = [];
+            window.CampistryDB.client.functions.invoke = async (fn, o) => {
+                window.__fnCalls.push({ fn, body: o && o.body });
+                if (o && o.body && o.body.action === 'holds') return { data: await window.__realHolds(fn), error: null };
+                return { data: null, error: { message: 'not in this step' } };
+            };
+        });
+        errs = pageErrors.length;
+        await page.evaluate(() => {
+            const b = [...document.querySelectorAll('button')].find(x => /^openMFor\('refund'/.test(x.getAttribute('onclick') || ''));
+            if (b) b.click();
+        });
+        await waitFor('the refund box', () => page.evaluate(() => /Available to refund/.test((document.getElementById('refundBox') || {}).textContent || '')), 20000).catch(() => {});
+        const box3 = await page.evaluate(() => ({ box: (document.getElementById('refundBox') || {}).textContent || '',
+            disabled: document.getElementById('refundBtn').disabled, amt: document.getElementById('refundAmt').value,
+            holds: (document.getElementById('refundHolds') || {}).textContent || '' }));
+        check('no page error', pageErrors.length === errs, JSON.stringify(pageErrors.slice(errs)));
+        check('TED-130: the Refund window counts the 30-day-old top-up and the wait — $35.00 to the card',
+              /via Sola: \$35\.00/.test(box3.box), JSON.stringify(box3.box));
+        check('and the Refund button is on, for $35.00', !box3.disabled && box3.amt === '35.00', JSON.stringify(box3));
+        check('the waiting $20 refund is listed', /\$20\.00/.test(box3.holds), JSON.stringify(box3.holds.slice(0, 160)));
+        await page.evaluate(() => closeM('refund'));
+        await page.click('button[onclick="openRefundAllModal()"]');
+        await waitFor('the Refund All preview', () => page.evaluate(() => /through Sola|No campers/.test((document.getElementById('refundAllBody') || {}).textContent || '')), 20000).catch(() => {});
+        const ra3 = await page.evaluate(() => { const b = document.getElementById('refundAllBtn');
+            return { body: (document.getElementById('refundAllBody') || {}).textContent || '', btn: b && getComputedStyle(b).display !== 'none' ? b.textContent : null }; });
+        check('TED-130/135: Refund All offers $35.00 — the old top-up counted, the waiting refund taken off',
+              ra3.btn === 'Refund All ($35.00)' && /\$35\.00/.test(ra3.body), JSON.stringify(ra3));
+        await page.evaluate(() => closeM('refundall'));
+
         step(4, 'Stripe camp, nobody with Stripe money left, one Stripe refund waiting');
         db.sql(`UPDATE camps SET payment_processor_key = 'stripe' WHERE id = '${CAMP}';`);
         await open('campistry_snacks.html', () => !!window.CampistrySnacks);

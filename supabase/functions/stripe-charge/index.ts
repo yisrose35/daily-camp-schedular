@@ -247,15 +247,20 @@ serve(async (req) => {
       });
     }
 
+    let reqBody: Record<string, any> = {};
+    try { reqBody = await req.json(); } catch (_) { reqBody = {}; }
     const authedCampId = await callerCampId(req);
     if (!authedCampId) {
-      return new Response(JSON.stringify({ error: "Only camp owners/admins can charge a stored card." }), {
+      // Said for what was asked (TED-134): confirming an autopay payment charges nothing.
+      const why = reqBody && reqBody.action === "confirmAutopay"
+        ? "Only the camp owner or an admin can confirm a Stripe autopay payment."
+        : "Only the camp owner or an admin can charge a stored card.";
+      return new Response(JSON.stringify({ error: why }), {
         status: 403,
         headers: { ...corsHeaders, "Content-Type": "application/json" },
       });
     }
 
-    const reqBody = await req.json();
     // "The autopay charge went through" on Stripe (279, TED-120): checked with
     // Stripe here, never taken from the browser.
     if (reqBody && reqBody.action === "confirmAutopay") {
