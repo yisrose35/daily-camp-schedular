@@ -50,10 +50,14 @@ window.TeamRoleDefaults = (function () {
     // Jobs that can carry a default. Owners and admins are ungated by design,
     // so a default for them would be a setting that silently does nothing —
     // migration 165's CHECK constraint refuses them for the same reason.
+    // Website team members only — 'counselor' is exclusively the role
+    // Campistry Lite's own "Invite to Lite" actions hard-code (see
+    // access_control.js's getTeamMembers(), which excludes it for the same
+    // reason), never a real website login, so it has no place in a page
+    // about what a whole job or one person can open ON THE WEBSITE.
     var JOBS = [
         { key: 'manager',   label: 'Manager',   desc: 'Runs part of the camp day to day.' },
         { key: 'scheduler', label: 'Scheduler', desc: 'Builds and adjusts the schedule.' },
-        { key: 'counselor', label: 'Counselor', desc: 'Bunk staff. Never more than view.' },
         { key: 'viewer',    label: 'Viewer',    desc: 'Can look, never change.' }
     ];
 
@@ -626,7 +630,10 @@ window.TeamRoleDefaults = (function () {
             ? window.AccessControl.getTeamMembers().then(function (r) {
                   if (Array.isArray(r && r.data)) _members = sortMembers(r.data);
               }, function () {})
-            : cl.from('camp_users').select('*').eq('camp_id', cid).then(function (r) {
+            // 'counselor' excluded here too, same reason as
+            // AccessControl.getTeamMembers() (access_control.js) — this page
+            // doesn't load that file, so its own filter doesn't reach here.
+            : cl.from('camp_users').select('*').eq('camp_id', cid).neq('role', 'counselor').then(function (r) {
                   if (!r.error && Array.isArray(r.data)) _members = sortMembers(r.data);
               }, function () {});
 

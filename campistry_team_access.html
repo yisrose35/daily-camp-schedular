@@ -33,13 +33,12 @@
 <script src="supabase_client.js?v=20260923-08"></script>
 <script src="campistry_capabilities.js"></script>
 
-<script src="team_role_defaults_ui.js?v=20260924-01"></script>
+<script src="team_role_defaults_ui.js?v=20260924-02"></script>
 <script>
 (function () {
     'use strict';
-    // The by-job/by-person editor itself lives in team_role_defaults_ui.js
-    // now, shared with team_access_setup.html's "Roles" card — this page
-    // just mounts it standalone into #root so a direct link here still works.
+    // The by-job/by-person editor itself lives in team_role_defaults_ui.js —
+    // this page just mounts it standalone into #root.
     function boot() { window.TeamRoleDefaults.mount('root'); }
     if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', boot);
     else boot();
