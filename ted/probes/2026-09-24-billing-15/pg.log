@@ -1,0 +1,10 @@
+
+> daily-camp-schedular@0.0.0 test:pg
+> bash scripts/run_pgtests.sh
+
+  ok     200_applications_out_of_the_blob
+  ok     208_payments_into_rows
+  ok     210_payments_read_from_rows
+  ok     211_families_into_rows
+  ok     212_families_read_from_rows
+  ok     213_payments_row_truth
