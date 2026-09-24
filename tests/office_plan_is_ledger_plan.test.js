@@ -64,13 +64,33 @@ test('editing an old installments[] plan turns it into a ledger plan, paid ones 
     assert.strictEqual(p.history[0].paymentId, 'pay_1');
 });
 
-test('the office sees the edited plan with the amounts still owed, split evenly', () => {
-    const p = ctx.build({ id: 'x', dueDates: ['2026-06-01', '2026-07-01'], nextIndex: 1, history: [] }, rows(['2026-08-01', '2026-09-01']), false, 0);
-    const s = ctx.sched(p, 600);
-    assert.strictEqual(s.length, 3);
-    assert.strictEqual(s[0].status, 'paid');
-    assert.strictEqual(s[1].amount, 300);
-    assert.strictEqual(s[2].amount, 300);
+test('TED-068: the office\'s typed amounts are what the schedule shows and autopay charges', () => {
+    const plan = ctx.build(null, [
+        { n: 1, amount: 1000, dueDate: '2026-06-01' }, { n: 2, amount: 200, dueDate: '2026-07-01' },
+        { n: 3, amount: 200, dueDate: '2026-08-01' }], true, 1400);
+    assert.deepStrictEqual(Array.from(plan.amounts), [1000, 200, 200]);
+    const s = ctx.sched(plan, 1400);
+    assert.deepStrictEqual(Array.from(s, x => x.amount), [1000, 200, 200], 'the typed amounts were not kept');
+});
+
+test('TED-068: a plan for $600 of a $1,400 balance charges $300 + $300, not $700 + $700', () => {
+    const plan = ctx.build(null, [{ n: 1, amount: 300, dueDate: '2026-06-01' }, { n: 2, amount: 300, dueDate: '2026-07-01' }], true, 600);
+    const s = ctx.sched(plan, 1400);
+    assert.deepStrictEqual(Array.from(s, x => x.amount), [300, 300]);
+});
+
+test('TED-068: never more than is owed, and a plan without amounts still splits evenly', () => {
+    const plan = ctx.build(null, [{ n: 1, amount: 500, dueDate: '2026-06-01' }], true, 500);
+    assert.strictEqual(ctx.sched(plan, 120)[0].amount, 120);
+    const even = { id: 'p', dueDates: ['2026-06-01', '2026-07-01', '2026-08-01'], nextIndex: 1, history: [] };
+    assert.deepStrictEqual(Array.from(ctx.sched(even, 600), x => x.amount), [null, 300, 300]);
+});
+
+test('editing keeps the amounts already charged for past dates', () => {
+    const p = ctx.build({ id: 'x', dueDates: ['2026-06-01', '2026-07-01'], amounts: [700, 700], nextIndex: 1, history: [] },
+                       [{ n: 1, amount: 350, dueDate: '2026-08-01' }, { n: 2, amount: 350, dueDate: '2026-09-01' }], true, 700);
+    assert.deepStrictEqual(Array.from(p.amounts), [700, 350, 350]);
+    assert.deepStrictEqual(Array.from(p.dueDates), ['2026-06-01', '2026-08-01', '2026-09-01']);
 });
 
 test('the editor reopens a plan from its schedule, not from installments[] (a parent-built plan used to crash it)', () => {

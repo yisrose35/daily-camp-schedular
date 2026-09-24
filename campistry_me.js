@@ -6303,11 +6303,14 @@ function _planSchedule(plan,balance){
     if(!dates.length)return [];
     var next=Number(plan.nextIndex)||0;
     var owed=Math.max(0,Number(balance)||0);
+    var fixed=Array.isArray(plan.amounts)?plan.amounts:[];
     var out=[];
     for(var i=0;i<dates.length;i++){
         if(i<next){out.push({dueDate:dates[i],amount:null,status:'paid',derived:true});continue}
         var left=dates.length-i;
-        var amt=left<=1?owed:Math.round((owed/left)*100)/100;
+        // The office's own amount when it set one (TED-068) — as autopay charges it.
+        var amt=(typeof fixed[i]==='number'&&fixed[i]>0)?Math.min(Math.round(fixed[i]*100)/100,owed)
+               :(left<=1?owed:Math.round((owed/left)*100)/100);
         out.push({dueDate:dates[i],amount:amt,status:'pending',derived:true});
         owed=Math.round((owed-amt)*100)/100;
     }
@@ -19386,7 +19389,7 @@ function monthlyPlan(famKey,planId){
     h+='<div style="font-size:.7rem;font-weight:700;color:var(--s500);text-transform:uppercase;letter-spacing:.05em;margin-bottom:6px">Payments — edit any date or amount, add or remove rows freely</div>';
     h+='<div id="mpRowsBody" style="margin-bottom:8px">'+_mpRowsHtml(startRows)+'</div>';
     h+='<button type="button" class="me-btn me-btn--ghost me-btn--sm" onclick="CampistryMe._mpAddRow()">+ Add payment</button>';
-    h+='<div style="font-size:.75rem;color:var(--s500);margin:6px 0 0">The dates are kept exactly. Each payment\'s amount is worked out on its due date from what the family still owes then, split evenly over the payments left — so a payment made in between, or a new charge, is taken into account automatically.</div>';
+    h+='<div style="font-size:.75rem;color:var(--s500);margin:6px 0 0">Each payment is charged exactly as entered here, on its date — never more than the family still owes by then.</div>';
     h+='<div style="text-align:right;font-size:.8rem;color:var(--s500);margin:8px 0 14px">Total scheduled: <strong id="mpRunningTotal" style="color:var(--s800)">'+fm(startRows.reduce(function(s,r){return s+(Number(r.amount)||0)},0))+'</strong></div>';
     h+='</div>';
 
@@ -19442,9 +19445,15 @@ function _mpBuildLedgerPlan(existingPlan,insts,auto,total){
             });
         nextIdx=done.length;
     }
-    var future=insts.map(function(i){return i.dueDate}).sort();
+    var sorted=insts.slice().sort(function(a,b){return String(a.dueDate).localeCompare(String(b.dueDate))});
+    var future=sorted.map(function(i){return i.dueDate});
+    // The amounts the office typed, one per date (TED-068): autopay charges
+    // exactly these, never more than is owed. Past dates keep what they had.
+    var pastAmounts=(existingPlan&&Array.isArray(existingPlan.amounts))?existingPlan.amounts.slice(0,done.length):[];
+    while(pastAmounts.length<done.length)pastAmounts.push(null);
+    var amounts=pastAmounts.concat(sorted.map(function(i){return Math.round((Number(i.amount)||0)*100)/100}));
     var plan={id:existingPlan&&existingPlan.id?existingPlan.id:('plan_'+Date.now().toString(36)+Math.random().toString(36).slice(2,6)),
-        enrollmentIds:null,dueDates:done.concat(future),
+        enrollmentIds:null,dueDates:done.concat(future),amounts:amounts,
         count:done.length+future.length,nextIndex:nextIdx,history:hist,
         autopay:!!auto,paused:!!(existingPlan&&existingPlan.paused),total:Math.round(total*100)/100,
         createdAt:existingPlan&&existingPlan.createdAt||new Date().toISOString(),source:existingPlan&&existingPlan.source||'office'};

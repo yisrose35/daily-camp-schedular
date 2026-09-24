@@ -1,5 +1,5 @@
 -- ============================================================================
--- Confirm migrations 222-263 are in and doing their job.
+-- Confirm migrations 222-264 are in and doing their job.
 --
 -- Paste the whole thing into the Supabase SQL Editor. It is READ ONLY — one
 -- SELECT, nothing is created, changed or deleted, and the two purge functions
@@ -567,6 +567,11 @@ UNION ALL
                OR to_regprocedure('public.settle_shop_order(uuid,text,text,numeric,boolean)') IS NULL
                OR pg_get_functiondef(to_regprocedure('public.settle_shop_order(uuid,text,text,numeric,boolean)')) !~ '_sync_charge_to_ledger'
           THEN 'apply 263 — a Camp Shop order billed to a family and then cancelled keeps billing them'
+          ELSE 'ok' END),
+    -- A payment plan charges the amounts the office set (TED-068).
+    ('264  a plan charges the amounts the office set',
+     CASE WHEN pg_get_functiondef(to_regprocedure('public.plan_due(jsonb,jsonb,text)')) !~ 'amounts'
+          THEN 'apply 264 — autopay ignores the amounts typed into a payment plan and splits the whole balance evenly'
           ELSE 'ok' END)
     ) AS x(item, result)
 
