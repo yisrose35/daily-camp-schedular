@@ -20,6 +20,23 @@
 -- part, no longer takes a shop charge off the ledger itself.)
 -- ============================================================================
 
+-- What an id-less plan is: when it was made and its schedule.
+CREATE OR REPLACE FUNCTION public._plan_fingerprint(p jsonb)
+RETURNS text
+LANGUAGE sql
+IMMUTABLE
+SET search_path = public, pg_catalog
+AS $$
+    SELECT COALESCE(p->>'createdAt', '') || '|' ||
+           COALESCE(CASE WHEN jsonb_typeof(p->'dueDates') = 'array' THEN (p->'dueDates')::text END, '') || '|' ||
+           COALESCE((SELECT string_agg(COALESCE(i->>'dueDate', '') || ':' || COALESCE(i->>'amount', ''), ',' ORDER BY o)
+                       FROM jsonb_array_elements(CASE WHEN jsonb_typeof(p->'installments') = 'array'
+                                                      THEN p->'installments' ELSE '[]'::jsonb END)
+                            WITH ORDINALITY AS t(i, o)), '');
+$$;
+REVOKE ALL ON FUNCTION public._plan_fingerprint(jsonb) FROM public, anon, authenticated;
+
+
 CREATE OR REPLACE FUNCTION public._merge_family_from_page(p_server jsonb, p_page jsonb)
 RETURNS jsonb
 LANGUAGE plpgsql
@@ -63,9 +80,16 @@ BEGIN
             v_sp := NULL;
             IF COALESCE(p->>'id', '') <> '' THEN
                 SELECT x INTO v_sp FROM jsonb_array_elements(p_server->'plans') x WHERE x->>'id' = p->>'id' LIMIT 1;
+            ELSIF public._plan_fingerprint(p) <> '||' THEN
+                -- No id on either: the same schedule, not the same position — a
+                -- plan the office deleted must not hand its bank-debit hold to
+                -- the plan that moved up into its place (TED-094).
+                SELECT x INTO v_sp FROM jsonb_array_elements(p_server->'plans') x
+                 WHERE COALESCE(x->>'id', '') = '' AND public._plan_fingerprint(x) = public._plan_fingerprint(p)
+                 LIMIT 1;
             ELSIF jsonb_typeof(p_server->'plans'->n) = 'object'
                   AND COALESCE(p_server->'plans'->n->>'id', '') = '' THEN
-                v_sp := p_server->'plans'->n;                     -- no id on either: same position
+                v_sp := p_server->'plans'->n;                     -- nothing else to go on: same position
             END IF;
             v_plans := v_plans || jsonb_build_array(public._merge_plan_state(v_sp, p));
             n := n + 1;

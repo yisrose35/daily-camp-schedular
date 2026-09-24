@@ -314,6 +314,19 @@ serve(async (req) => {
       let called = false;
       const release = (declined: boolean) =>
         service.rpc("release_charge_intent", { p_camp_id: campId, p_key: depositKey, p_declined: declined });
+      // The parent is told the office will confirm a charge the card company
+      // never answered — so the office must actually hear about it (TED-092).
+      const notifyUnconfirmed = async (why: string) => {
+        try {
+          await service.from("notifications").insert({
+            camp_id: campId, source: "charge_unconfirmed", source_id: depositKey + ":" + Date.now(),
+            title: "A deposit charge needs checking",
+            body: `${label}: $${owed.toFixed(2)} was sent to ${String(claim.processor)} and it never answered (${why}). `
+                + `Check the processor's dashboard, then use "Charge deposit now" in Me → Registration to confirm.`,
+            link_target: "campistry_me.html",
+          });
+        } catch (_) { /* best-effort: the claim still stops a second charge */ }
+      };
       const markCalled = async () => {
         await service.rpc("mark_charge_intent_called", { p_camp_id: campId, p_key: depositKey });
         called = true;
@@ -350,6 +363,7 @@ serve(async (req) => {
           // The gateway failed without saying whether it charged: not a
           // decline. The claim stays, and goes to the office after 10 minutes.
           console.error(`[registration-deposit] banquest ${resp.status} with no answer, camp ${campId} enroll ${enrollmentId}`);
+          await notifyUnconfirmed(`HTTP ${resp.status}`);
           return json({ success: false, error: "The card company did not answer. Please don't pay again — the camp office will confirm whether this went through." }, 200);
         }
         if (resp.status < 200 || resp.status >= 300 || !approved || !txnId) {
@@ -382,6 +396,7 @@ serve(async (req) => {
         new URLSearchParams(await resp.text()).forEach((v, k) => { parsed[k] = v; });
         if (!parsed.xResult) {
           console.error(`[registration-deposit] cardknox HTTP ${resp.status} with no result, camp ${campId} enroll ${enrollmentId}`);
+          await notifyUnconfirmed(`HTTP ${resp.status}`);
           return json({ success: false, error: "The card company did not answer. Please don't pay again — the camp office will confirm whether this went through." }, 200);
         }
         if (parsed.xResult !== "A") declineMsg = parsed.xError || "Declined";
@@ -439,6 +454,7 @@ serve(async (req) => {
         // asking again safe), the claim goes back. Otherwise whether money moved
         // is unknown: the claim stays, and after 10 minutes the office is asked.
         if (!called || claim.processor === "stripe") await release(false);
+        else await notifyUnconfirmed((e as Error).message);
         console.error(`[registration-deposit] charge cut off (processor ${called ? "was" : "was not"} asked):`, (e as Error).message);
         return json({ success: false, error: called && claim.processor !== "stripe"
           ? "The connection to the card company dropped. Please don't pay again — the camp office will confirm whether this went through."

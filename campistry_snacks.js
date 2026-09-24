@@ -1938,10 +1938,22 @@ window.refundCanteenDeposit = async function() {
     if (btn) { btn.disabled = true; btn.textContent = 'Refunding…'; }
     const _rc = getRoster()[name];
     const _rcid = _rc && /^\d+$/.test(String(_rc.camperId == null ? '' : _rc.camperId)) ? Number(_rc.camperId) : undefined;
-    client.functions.invoke(fnName, { body: { camperName: name, camperId: _rcid, amount: amount } })
+    var _body = { camperName: name, camperId: _rcid, amount: amount };
+    var _send = function() { return client.functions.invoke(fnName, { body: _body }); };
+    _send()
         .then(async function(res) {
-            if (btn) { btn.disabled = false; btn.textContent = 'Refund'; }
             var data = res && res.data;
+            // An earlier refund of this money was sent and the card company never
+            // answered (TED-093). Only its dashboard can say whether it went
+            // through; send it again only when the office says it did not.
+            if (data && data.uncertain && !_body.confirmNotRefunded && !data.totalRefunded &&
+                window.confirm((data.error || 'An earlier refund was never confirmed.') +
+                    '\n\nOnly press OK if the processor\'s dashboard shows NO such refund.')) {
+                _body.confirmNotRefunded = true;
+                res = await _send();
+                data = res && res.data;
+            }
+            if (btn) { btn.disabled = false; btn.textContent = 'Refund'; }
             var hasError = !!(res && res.error) || !!(data && data.error);
             var err = hasError ? await _edgeFnErrorMessage(res) : null;
             if (err) {

@@ -27,9 +27,17 @@ BEGIN
     EXECUTE format(age, 'created_at', 'deposit:e1:25000');
     r := public.claim_charge_intent(c, 'deposit:e1:25000', 250, 'e1');
     IF r->>'state' <> 'stale' THEN RAISE EXCEPTION 'TED-083: a cut-off charge whose outcome is unknown was not flagged: %', r; END IF;
+    IF NOT EXISTS (SELECT 1 FROM notifications WHERE camp_id = c AND source = 'charge_unconfirmed') THEN
+        RAISE EXCEPTION 'TED-092: the office was not told about a stuck charge';
+    END IF;
     r := public.claim_charge_intent(c, 'deposit:e1:25000', 250, 'e1', true);
     IF r->>'state' <> 'retaken' OR (r->>'attempt')::int <> 0 THEN
         RAISE EXCEPTION 'TED-083: a caller that re-asks (same key) could not take the stale claim: %', r;
+    END IF;
+    -- a second confirmation right behind it (two tabs, a double click) charges nothing
+    r := public.claim_charge_intent(c, 'deposit:e1:25000', 250, 'e1', true);
+    IF r->>'state' <> 'in_progress' THEN
+        RAISE EXCEPTION 'TED-092: a second "nothing went through" was also allowed to charge: %', r;
     END IF;
 
     -- declined: released with a new attempt number (a new Idempotency-Key)

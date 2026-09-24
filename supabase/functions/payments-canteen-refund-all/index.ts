@@ -66,7 +66,7 @@ async function cardknoxRefund(
   credentials: Record<string, string>,
   externalTransactionId: string,
   amountCents: number,
-): Promise<{ success: boolean; externalTransactionId?: string; status?: string; error?: string; raw?: unknown }> {
+): Promise<{ success: boolean; uncertain?: boolean; externalTransactionId?: string; status?: string; error?: string; raw?: unknown }> {
   const apiKey = credentials.apiKey;
   if (!apiKey) return { success: false, error: "Missing apiKey" };
   try {
@@ -81,10 +81,12 @@ async function cardknoxRefund(
     const text = await resp.text();
     const r: Record<string, string> = {};
     new URLSearchParams(text).forEach((v, k) => { r[k] = v; });
+    // No result at all is not a "no" (TED-093): the gateway may have refunded.
+    if (!r.xResult) return { success: false, uncertain: true, error: "No answer from the card company (HTTP " + resp.status + ")", raw: r };
     if (r.xResult !== "A") return { success: false, status: r.xStatus, error: r.xError || "Refund failed", raw: r };
     return { success: true, externalTransactionId: r.xRefNum, status: r.xStatus, raw: r };
   } catch (err) {
-    return { success: false, error: (err as Error).message };
+    return { success: false, uncertain: true, error: (err as Error).message };   // cut off: may have moved money (TED-093)
   }
 }
 
@@ -98,7 +100,7 @@ async function banquestRefund(
   credentials: Record<string, string>,
   externalTransactionId: string,
   amountCents: number,
-): Promise<{ success: boolean; externalTransactionId?: string; status?: string; error?: string; raw?: unknown }> {
+): Promise<{ success: boolean; uncertain?: boolean; externalTransactionId?: string; status?: string; error?: string; raw?: unknown }> {
   if (!credentials.sourceKey || !credentials.pin) return { success: false, error: "Missing sourceKey/pin" };
   const refNum = Number(externalTransactionId);
   if (!Number.isFinite(refNum)) return { success: false, error: "Original transaction reference is not a valid Banquest reference_number." };
@@ -114,13 +116,16 @@ async function banquestRefund(
     const st = String(data?.status || "").toLowerCase();
     const ok = code === "A" || /approv|void|refund/.test(st);
     const newRef = data?.reference_number != null ? String(data.reference_number) : (data?.transaction?.id ? String(data.transaction.id) : "");
+    if (resp.status >= 500 && !newRef) {
+      return { success: false, uncertain: true, error: `No answer from the card company (HTTP ${resp.status})`, raw: data };
+    }
     if (resp.status < 200 || resp.status >= 300 || !ok || !newRef) {
       const errMsg = data?.error_message || (Array.isArray(data?.error_messages) && data.error_messages[0]) || data?.error_details || data?.error || data?.message || data?.status || `Refund failed (HTTP ${resp.status})`;
       return { success: false, status: data?.status, error: errMsg, raw: data };
     }
     return { success: true, externalTransactionId: newRef, status: data?.status, raw: data };
   } catch (err) {
-    return { success: false, error: (err as Error).message };
+    return { success: false, uncertain: true, error: (err as Error).message };   // cut off: may have moved money (TED-093)
   }
 }
 
@@ -237,6 +242,11 @@ async function refundOneCamper(
           p_payment_ref: String(dep.externalTransactionId),
         });
         if (claim && claim.claimed === false) {
+          if (!(claim.previous && claim.previous.externalTransactionId)) {
+            // Asked on an earlier run and never confirmed (TED-093): leave this
+            // camper for the office to check, never refund them twice.
+            return { camperId, camperName, refunded, error: "An earlier refund for this camper was never confirmed by the card company — check the processor's dashboard." };
+          }
           console.log(`[canteen-refund-all] already settled, skipping: ${chunkKey}`);
           continue;
         }
@@ -244,6 +254,11 @@ async function refundOneCamper(
       const refundResult = processorKey === "cardknox"
         ? await cardknoxRefund(credentials, dep.externalTransactionId, chunkCents)
         : await banquestRefund(credentials, dep.externalTransactionId, chunkCents);
+      if (!refundResult.success && refundResult.uncertain) {
+        // Maybe it moved money: keep the claim, so a re-run leaves this camper
+        // for the office to check instead of refunding them again (TED-093).
+        throw new Error("The card company did not answer, so this camper's refund may or may not have gone through — check the processor's dashboard.");
+      }
       if (!refundResult.success) {
         if (chunkKey) {
           await service.rpc("release_refund_intent", { p_camp_id: campId, p_key: chunkKey });

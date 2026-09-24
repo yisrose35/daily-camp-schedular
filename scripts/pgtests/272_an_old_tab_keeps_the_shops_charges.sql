@@ -55,6 +55,25 @@ BEGIN
     RAISE NOTICE 'ok  272: the shop order survives an old tab (1050), a cancel still counts (1010)';
 END $$;
 
+-- TED-094: deleting one id-less plan does not move its bank-debit hold onto the next
+DO $$
+DECLARE m jsonb;
+    a jsonb := '{"autopay":true,"installments":[{"dueDate":"2026-06-01","amount":500}]}';
+    b jsonb := '{"autopay":true,"installments":[{"dueDate":"2026-08-01","amount":300}]}';
+BEGIN
+    m := public._merge_family_from_page(
+        jsonb_build_object('plans', jsonb_build_array(a || '{"pendingCharge":{"paymentIntentId":"pi_a"}}'::jsonb, b)),
+        jsonb_build_object('plans', jsonb_build_array(b)));          -- the office deleted plan a
+    IF m->'plans'->0 ? 'pendingCharge' THEN
+        RAISE EXCEPTION 'TED-094: the deleted plan''s hold moved onto the next plan: %', m;
+    END IF;
+    m := public._merge_family_from_page(
+        jsonb_build_object('plans', jsonb_build_array(a || '{"pendingCharge":{"paymentIntentId":"pi_a"}}'::jsonb, b)),
+        jsonb_build_object('plans', jsonb_build_array(a, b)));
+    IF NOT (m->'plans'->0 ? 'pendingCharge') THEN RAISE EXCEPTION 'the hold on an unchanged id-less plan was lost: %', m; END IF;
+    RAISE NOTICE 'ok  272: id-less plans are matched by schedule, not position';
+END $$;
+
 \set verify_q `cat scripts/verify_identity_chain.sql`
 BEGIN;
 CREATE TEMP TABLE v272 AS :verify_q

@@ -122,6 +122,8 @@ test('TED-083: a Cardknox charge cut off mid-way is never reported as paid, and 
     assert.strictEqual(b[2].reason, 'needs_check', 'after 10 minutes the office is asked to check: ' + JSON.stringify(b[2]));
     assert.strictEqual(b[3].paid, true, 'the office confirmed nothing went through, and it was not charged: ' + JSON.stringify(b[3]));
     assert.strictEqual(r.fetches.filter(f => f.url.includes('cardknox')).length, 2, 'the card company was asked more than twice');
+    assert.ok(r.writes.some(w => w.table === 'notifications' && w.op === 'insert' && w.payload.source === 'charge_unconfirmed'),
+        'TED-092: the office was never told the charge needs checking');
 });
 
 test('TED-083: a Stripe charge cut off mid-way is re-asked with the SAME key (Stripe says what happened)', () => {

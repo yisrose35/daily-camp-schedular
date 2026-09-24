@@ -181,15 +181,22 @@ serve(async (req) => {
         p_amount: params.amount ? Number(params.amount) / 100 : null,
         p_payment_ref: String(paymentIntentId),
       });
-      if (claim && claim.claimed === false) {
+      if (claim && claim.claimed === false && claim.previous && claim.previous.refundId) {
         console.log(`[stripe-refund] replaying settled refund for key ${claimKey}`);
-        return json(Object.assign({ replayed: true }, claim.previous || {}), 200);
+        return json(Object.assign({ replayed: true }, claim.previous), 200);
       }
+      // Held but never confirmed: an earlier try was cut off after Stripe was
+      // asked (TED-093). Asking again with the SAME Stripe key is safe — Stripe
+      // answers with the refund it made, or makes it now — so fall through.
     }
 
     const refund = await stripePost("/refunds", params, claimKey ? `refund:${campId}:${claimKey}` : undefined);
 
     if (refund.error) {
+      // Still running at Stripe (a concurrent try with this key): not a "no".
+      if (refund.error.type === "idempotency_error" || refund.error.type === "api_error") {
+        return json({ uncertain: true, error: "Stripe is still working on this refund — wait a minute and check before trying again." }, 200);
+      }
       if (claimKey) await service.rpc("release_refund_intent", { p_camp_id: campId, p_key: claimKey });
       throw new Error(refund.error.message);
     }

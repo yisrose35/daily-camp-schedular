@@ -18494,8 +18494,16 @@ function issueCreditForFamily(famKey){
             // (migration 198), so a retry of this same action resumes instead of
             // refunding twice. A second, deliberate refund is a second click and
             // gets its own key, which is the distinction only the client can make.
-            var _refundKey='rfnd_'+fk+'_'+Date.now()+'_'
-                          +Math.random().toString(36).slice(2,8);
+            // ...and the SAME key for the same refund on a later click (TED-093):
+            // keyed on the payment, what is still refundable on it and the
+            // amount, so a retry after a lost answer meets its first attempt
+            // instead of refunding twice, while a refund that was recorded changes
+            // what is left and so gives a deliberate second refund its own key.
+            var _refundKey='rfnd_'+fk;
+            var _chunkKey=function(p,left,amt){
+                return _refundKey+':'+String(p.id||p.stripePaymentIntentId||p.byopTransactionId)
+                    +':'+Math.round((Number(left)||0)*100)+':'+Math.round((Number(amt)||0)*100);
+            };
             var remaining=refundAmt, done=0, failMsg=null;
             toast('Processing refund…');
             for(var ci=0; ci<chunks.length && remaining>0.001; ci++){
@@ -18509,11 +18517,26 @@ function issueCreditForFamily(famKey){
                         var stripeReason=(reasonSel==='requested_by_customer'||reasonSel==='duplicate'||reasonSel==='fraudulent')?reasonSel:'requested_by_customer';
                         // Signed in (owner/admin only, TED-052), with this click's key so a retry
                         // replays instead of refunding twice.
-                        var res=await callEdgeFunctionAuthed('stripe-refund',{paymentIntentId:p.stripePaymentIntentId,amount:chunk,reason:stripeReason,metadata:{family:p.family||''},idempotencyKey:_refundKey+':'+ci});
+                        var res=await callEdgeFunctionAuthed('stripe-refund',{paymentIntentId:p.stripePaymentIntentId,amount:chunk,reason:stripeReason,metadata:{family:p.family||''},idempotencyKey:_chunkKey(p,chunks[ci].remaining,chunk)});
                         if(res&&res.replayed)console.log('[Me] refund chunk replayed:',ci);
                         refId=res.refundId;
                     } else {
-                        var byopRes=await callEdgeFunctionAuthed('payments-refund',{externalTransactionId:p.byopTransactionId,amount:chunk,idempotencyKey:_refundKey+':'+ci});
+                        var _bBody={externalTransactionId:p.byopTransactionId,amount:chunk,idempotencyKey:_chunkKey(p,chunks[ci].remaining,chunk)};
+                        var byopRes;
+                        try{ byopRes=await callEdgeFunctionAuthed('payments-refund',_bBody); }
+                        catch(uErr){
+                            // An earlier try was cut off after the card company was
+                            // asked (TED-093). Only the processor's dashboard can say
+                            // whether it went through; never send it again on a guess.
+                            if(!(uErr&&uErr.data&&uErr.data.uncertain))throw uErr;
+                            var _sure=await confirmDialog({title:'Did the earlier refund go through?',
+                                message:esc(uErr.message)+'<br><br>Only continue if the processor\u2019s dashboard shows NO refund of '
+                                       +fm(chunk)+' on this payment.',
+                                confirmLabel:'Nothing went through \u2014 refund '+fm(chunk)});
+                            if(!_sure)throw uErr;
+                            _bBody.confirmNotRefunded=true;
+                            byopRes=await callEdgeFunctionAuthed('payments-refund',_bBody);
+                        }
                         // A replayed claim means this chunk already moved money on
                         // an earlier attempt. Treat it as the success it repeats.
                         if(byopRes&&byopRes.replayed)console.log('[Me] refund chunk replayed:',ci);
@@ -18837,7 +18860,7 @@ async function callEdgeFunctionAuthed(fnName,body){
     var res=await client.functions.invoke(fnName,{body:body});
     if(res.error) throw new Error(res.error.message||'Edge function error');
     var data=res.data;
-    if(data&&data.error) throw new Error(data.error);
+    if(data&&data.error){var _e=new Error(data.error);_e.data=data;throw _e;}
     return data;
 }
 

@@ -32,7 +32,8 @@ SET search_path = public, pg_catalog
 AS $$
     SELECT COALESCE(p_source, '') IN (
         'payment_unmatched', 'autopay_blocked', 'chargeback', 'card_expiry',
-        'parent_payment_plan_created', 'payout_failed');
+        'parent_payment_plan_created', 'payout_failed', 'charge_unconfirmed',
+        'canteen_autoreload_off', 'tip_transfer_failed', 'telnyx_fee_failed');
 $$;
 GRANT EXECUTE ON FUNCTION public.is_money_notice(text) TO authenticated, service_role;
 

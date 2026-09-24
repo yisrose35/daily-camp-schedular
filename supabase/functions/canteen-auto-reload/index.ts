@@ -128,12 +128,27 @@ async function stripeCharge(customerId: string, pmId: string | null, amount: num
   }
   const headers: Record<string, string> = { "Authorization": `Bearer ${STRIPE_SECRET}`, "Content-Type": "application/x-www-form-urlencoded" };
   if (idempotencyKey) headers["Idempotency-Key"] = idempotencyKey;
-  const resp = await fetch(`${STRIPE_API}/payment_intents`, {
-    method: "POST",
-    headers,
-    body: new URLSearchParams(params).toString(),
-  });
-  return resp.json();
+  let resp: Response;
+  try {
+    resp = await fetch(`${STRIPE_API}/payment_intents`, {
+      method: "POST",
+      headers,
+      body: new URLSearchParams(params).toString(),
+    });
+  } catch (e) {
+    // Cut off: whether Stripe charged is unknown — NOT a decline (TED-094).
+    return { error: { message: (e as Error).message }, unknownOutcome: true };
+  }
+  let body: any = {};
+  try { body = await resp.json(); } catch { /* not JSON */ }
+  // A Stripe server error (or a concurrent try with the same key) is not a
+  // decline either: the retry must repeat THIS key so Stripe answers with what
+  // it did, instead of starting a second charge under a new one.
+  if (resp.status >= 500 || resp.status === 409 || body?.error?.type === "api_error"
+      || body?.error?.type === "idempotency_error") {
+    return Object.assign({ error: { message: `Stripe ${resp.status}` } }, body, { unknownOutcome: true });
+  }
+  return body;
 }
 
 // Inlined rather than imported — same "no shared module between Edge
@@ -540,6 +555,13 @@ serve(async (req) => {
         `${row.camp_id}:${reloadKey}:f${Number(ar.consecutiveFailures) || 0}`,
       );
 
+      if (pi.unknownOutcome) {
+        // Neither a charge nor a decline: give the slot back WITHOUT counting a
+        // failure, so the next check repeats this same Stripe key (TED-094).
+        await releaseReload();
+        details.push({ camp: row.camp_id, camper: camperName, camperId, amount: due.amount, kind: due.kind, result: "retry_same_key", reason: pi.error?.message });
+        continue;
+      }
       if (pi.error || pi.status === "requires_action") {
         await releaseReload();
         const reason = pi.error?.message || "requires_authentication";

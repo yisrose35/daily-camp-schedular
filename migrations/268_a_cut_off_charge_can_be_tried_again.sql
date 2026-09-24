@@ -77,9 +77,12 @@ BEGIN
        OR (r.called_at IS NULL AND r.created_at < now() - interval '10 minutes')  -- died before asking
        OR (p_take_stale AND r.called_at IS NOT NULL
            AND r.called_at < now() - interval '10 minutes') THEN               -- caller will re-ask
+        -- A stale claim that is taken over counts as asked NOW (TED-092): a
+        -- second caller in the next 10 minutes sees "in progress" and charges
+        -- nothing, instead of taking it over as well.
         UPDATE refund_intents
            SET released_at = NULL, created_at = now(),
-               called_at = CASE WHEN r.released_at IS NULL AND r.called_at IS NOT NULL THEN r.called_at END,
+               called_at = CASE WHEN r.released_at IS NULL AND r.called_at IS NOT NULL THEN now() END,
                amount = COALESCE(p_amount, amount)
          WHERE camp_id = p_camp_id AND key = v_key;
         RETURN jsonb_build_object('claimed', true, 'state', 'retaken', 'attempt', r.attempt,
@@ -87,6 +90,17 @@ BEGIN
     END IF;
 
     IF r.called_at IS NOT NULL AND r.called_at < now() - interval '10 minutes' THEN
+        -- Tell the office, once per stuck charge (TED-092): the parent has been
+        -- told the office will confirm it, so the office has to know.
+        IF to_regclass('public.notifications') IS NOT NULL THEN
+            INSERT INTO notifications (camp_id, source, source_id, title, body, link_target)
+            VALUES (p_camp_id, 'charge_unconfirmed', v_key || ':' || to_char(r.called_at, 'YYYYMMDDHH24MISS'),
+                    'A card charge needs checking',
+                    'A charge (' || COALESCE(r.payment_ref, v_key) || ', $' || COALESCE(r.amount::text, '?')
+                      || ') was sent to the card company and never answered. Check the processor''s dashboard, then use "Charge deposit now" in Me → Registration to confirm.',
+                    'campistry_me.html')
+            ON CONFLICT (camp_id, source, source_id) DO NOTHING;
+        END IF;
         RETURN jsonb_build_object('claimed', false, 'state', 'stale', 'attempt', r.attempt,
                                   'since', r.called_at);
     END IF;
