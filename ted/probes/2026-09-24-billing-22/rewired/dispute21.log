@@ -1,0 +1,18 @@
+H1/H2/H3/K1. each paid $1,000 by card; each payment disputed (needs_response)
+    hazel: owes $2000.00, pause {"reason":"chargeback","disputeIds":["dp_hazel"]}, chargeback notices 1
+    fern: owes $2000.00, pause none, chargeback notices 1
+    ash: owes $2000.00, pause {"reason":"chargeback","disputeIds":["dp_ash"]}, chargeback notices 1
+    kiwi: owes $2000.00, pause {"reason":"chargeback","disputeIds":["dp_kiwi"]}, chargeback notices 1
+  ok  K1 control: an autopay family is paused   → {"reason":"chargeback","disputeIds":["dp_kiwi"]}
+  ok  H3 the older single-plan family is paused too   → {"reason":"chargeback","disputeIds":["dp_ash"]}
+    night: ["Ash:held_for_dispute","Fern:held_for_dispute","Hazel:held_for_dispute","Kiwi:held_for_dispute","Rose2:charged"]; charges: cus_rose2 $500.00
+  ok  H1 autopay switched on mid-dispute does not charge the disputed card   → cus_rose2 $500.00
+  ok  H2 a new autopay plan mid-dispute does not charge the disputed card   → cus_rose2 $500.00
+  ok  H3 the older single-plan family is not charged mid-dispute   → cus_rose2 $500.00
+  ok  K1 control not charged   → cus_rose2 $500.00
+
+H4. Rose2: two disputes (A on pi_rose2, B on a second $500); A lost; owner resumes
+    after A lost: {"reason":"chargeback","disputeIds":["dp_r2A","dp_r2B"]}; resume → {"open": 1, "error": "dispute_open", "message": "A dispute is still open with the bank.", "success": false}; pause now {"reason":"chargeback","disputeIds":["dp_r2A","dp_r2B"]} (dispute B still open)
+  ok  H4 (recorded; the owner resumed by hand)   → {"reason":"chargeback","disputeIds":["dp_r2A","dp_r2B"]}
+
+0 BAD

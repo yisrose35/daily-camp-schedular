@@ -1,0 +1,7 @@
+family just enrolled, no ledger entries yet: null
+Zelle $400 auto-matched: posted
+  entries after the deposit: null
+after first Billing render: entries le_t1 charge 1000, le_dep_d733218f-9c60-462f-9ec7-5be3de4c1785 payment 400
+  ledger balance 600.00 (paid 400 by Zelle, so should be 600)
+  autopay due 1 Jun: {"index": 0, "amount": 300.00, "dueDate": "2026-06-01", "remaining": 2}
+  covered by family_covers_deposit? t

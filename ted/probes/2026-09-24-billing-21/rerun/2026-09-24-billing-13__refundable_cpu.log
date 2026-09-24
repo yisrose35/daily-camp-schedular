@@ -1,0 +1,10 @@
+machine: Intel(R) Xeon(R) Processor @ 2.10GHz, node v22.22.2
+file:///tmp/rba-RiIGzZ/fn.ts:7
+  const idx = ledgerIndex(txs, holds, method, idField);
+              ^
+
+ReferenceError: ledgerIndex is not defined
+    at refundableByAccount (file:///tmp/rba-RiIGzZ/fn.ts:7:15)
+    at file:///home/user/daily-camp-schedular/ted/probes/2026-09-24-billing-13/refundable_cpu.mts:31:15
+
+Node.js v22.22.2

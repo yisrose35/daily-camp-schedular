@@ -1,0 +1,24 @@
+H1 Refund All, Sola made it, answer lost; the office answers "it went through"
+  Refund All → 200 {"totalRefunded":0,"refundedCount":0,"skippedCount":0,"failedCount":1,"details":[{"camperId":7,"camperName":"Avi","refunded":0,"error":"The card company did not answer, s
+  holds → 200 {"holds":[{"key":"canteen:X1top:5000:2000","camperId":7,"account":"Avi","amount":20,"method":"cardknox","ageSeconds":600,"createdAt":"2026-09-24T11:39:23.616499+00:00"}],
+  it went through, ref RN1 → 200 {"settled":true,"balance":0}
+  the same answer again (2nd tab) → 409 {"error":"That refund was already settled."}
+  Refund All again → 200 {"totalRefunded":0,"refundedCount":0,"skippedCount":0,"failedCount":0,"details":[]}
+  money back $20.0000000000000000 [RN1], wallet $0.00, holds [posted $20.00], history [RN1 $20.00]   (want money $20 once, wallet $0, RN on the history, hold posted)
+H2 single $20 of $50 never reached Sola; reload; $20 again; server asks; office confirms "not there"
+  press 1 → 200 {"uncertain":true,"error":"The card company did not answer, so a canteen refund may or may not have gone through. Check the processor's dashboard before trying again."}
+  after reload → 200 {"uncertain":true,"error":"An earlier refund of $20.00 of this child's money was never confirmed by the card company, so it is held off the wallet. Check the processor's 
+  confirmed → 200 {"totalRefunded":20,"requested":20,"capped":false,"cappedReason":null,"refunds":[{"refundId":"RN2","externalTransactionId":"X2top","amount":20}]}
+  money back $20.0000000000000000 [RN2], wallet $30.00, holds [released $20.00, posted $20.00], history [RN2 $20.00]   (want money $20 once, wallet $30)
+H3 "nothing went through" 1 minute after sending, then after 5 minutes
+  at 1 min → 409 {"error":"This refund was sent a moment ago and may still be going through. Wait a few minutes, check the processor's dashboard, then answer."}
+  at 5 min → 200 {"released":true,"balance":50}
+  the office then refunds $20 again (same page key) → 200 {"totalRefunded":20,"requested":20,"capped":false,"cappedReason":null,"refunds":[{"refundId":"RN3","externalTransactionId":"X3top","amount":20}]}
+  money back $20.0000000000000000 [RN3], wallet $30.00, holds [posted $20.00], history [RN3 $20.00]   (want money $20 once, wallet $30)
+H4 "it went through" with a reference already on another refund
+  reference RN4 (already used) → 409 {"error":"That reference is already recorded for another refund. Check it in the processor's dashboard."}
+  money back $10.0000000000000000 [RN4], wallet $20.00, holds [posted $10.00, open $20.00], history [RN4 $10.00]
+H5 who may use the new actions
+  sched: holds → 403 {"error":"Only camp owners/admins can refund a canteen deposit."} | resolveHold → 403 {"error":"Only camp owners/admins can refund a canteen deposit."}
+  stranger: holds → 403 {"error":"Only camp owners/admins can refund a canteen deposit."} | resolveHold → 403 {"error":"Only camp owners/admins can refund a canteen deposit."}
+  money back $0.00000000000000000000 [], wallet $30.00, holds [open $20.00], history [none]   (want hold still open, wallet $30)

@@ -1,0 +1,54 @@
+D1. Hazel (hand-paying), Fern (no plan), Ash (older single plan), Kiwi (autopay) each paid $1,000 by card; each disputed
+    hazel: HTTP 200; family pause {"disputeIds":["dp_hazel"],"lostIds":[]}; notices 1
+    fern: HTTP 200; family pause {"disputeIds":["dp_fern"],"lostIds":[]}; notices 1
+    ash: HTTP 200; family pause {"disputeIds":["dp_ash"],"lostIds":[]}; notices 1
+    kiwi: HTTP 200; family pause {"disputeIds":["dp_kiwi"],"lostIds":[]}; notices 1
+  ok  D1 hazel: the family is paused, one notice   → {"disputeIds":["dp_hazel"],"lostIds":[]}, 1
+  ok  D1 fern: the family is paused, one notice   → {"disputeIds":["dp_fern"],"lostIds":[]}, 1
+  ok  D1 ash: the family is paused, one notice   → {"disputeIds":["dp_ash"],"lostIds":[]}, 1
+  ok  D1 kiwi: the family is paused, one notice   → {"disputeIds":["dp_kiwi"],"lostIds":[]}, 1
+  ok  D1 Ash's older single plan carries the pause too   → {"since":"2026-09-24T17:02:14Z","detail":"fraudulent","reason":"chargeback","disputeId":"dp_ash","disputeIds":["dp_ash"]}
+  ok  D1 Hazel's autopay-off plan carries the pause too   → {"since":"2026-09-24T17:02:13Z","detail":"fraudulent","reason":"chargeback","disputeId":"dp_hazel","disputeIds":["dp_hazel"]}
+
+D2. the office switches Hazel to autopay and gives Fern an autopay plan (page saves); the night: ["Ash:held_for_dispute","Fern:held_for_dispute","Hazel:held_for_dispute","Kiwi:held_for_dispute","Olive:charged"]; charged: cus_olive $500.00
+  ok  D2 no disputed family charged by the night   → cus_olive $500.00
+  ok  D2 control Olive charged by the night (her $500 instalment)   → cus_olive $500.00
+
+D3. Charge Card on the server (real stripe-charge), each family
+    hazel: HTTP 409 (disputed) Hazel disputed a payment with their bank, so their card is not charged again until the dispute is over (or someone who c
+    fern: HTTP 409 (disputed) Fern disputed a payment with their bank, so their card is not charged again until the dispute is over (or someone who ca
+    ash: HTTP 409 (disputed) Ash disputed a payment with their bank, so their card is not charged again until the dispute is over (or someone who can
+    kiwi: HTTP 409 (disputed) Kiwi disputed a payment with their bank, so their card is not charged again until the dispute is over (or someone who ca
+    olive: HTTP 200 
+  ok  D3 no disputed family's card sent to Stripe   → cus_olive $1000.00
+  ok  D3 control Olive charged   → cus_olive $1000.00
+
+D4. an old computer saves Hazel (copy from before the dispute) and sends a made-up pause for Olive → Hazel {"disputeIds":["dp_hazel"],"lostIds":[]} (notes: edited on an old computer); Olive none
+  ok  D4 the old computer's edit is kept, the pause is kept   → {"disputeIds":["dp_hazel"],"lostIds":[]}
+  ok  D4 a page cannot invent a pause   → none
+
+D5. Rose: two disputes (A $1,000, B $500); A lost; then B won
+    A lost (HTTP 200): pause {"disputeIds":["dp_rA","dp_rB"],"lostIds":["dp_rA"]}; Resume → {"open": 1, "error": "dispute_open", "message": "A dispute is still open with the bank.", "success": false}
+  ok  D5 Resume refused while B is open, says 1 open   → {"open": 1, "error": "dispute_open", "message": "A dispute is still open with the bank.", "success": false}
+    B won (HTTP 200): pause {"disputeIds":["dp_rA"],"lostIds":["dp_rA"]}
+  ok  D5 after B won, only lost A keeps the pause (the office decides)   → {"disputeIds":["dp_rA"],"lostIds":["dp_rA"]}
+    Resume → {"changed": true, "success": true}; pause none
+  ok  D5 Resume (no "anyway") allowed once nothing is open   → {"changed": true, "success": true} / none
+
+D6. Wren: disputed → lost → the office resumes → a late funds_withdrawn for the same dispute arrives
+    resume → {"changed": true, "success": true}; pause after resume: none
+    late funds_withdrawn HTTP 200; pause now none; notices 1; Resume again → {"changed": false, "success": true}
+    owes $2000.00 (paid 1,000 of 2,000; chargeback 1,000 → 2,000)
+  ok  D6 a late message for a dispute already lost and resumed does not pause the family again   → none
+  ok  D6 Resume does not call a lost dispute "still open"   → {"changed": false, "success": true}
+
+D7. Lark: "closed: lost" is delivered before "created" (created re-sent later by Stripe)
+    closed(lost) first: HTTP 200 [stripe-webhook] Event: charge.dispute.closed (evt_d21) | [stripe-webhook] RISK EVENT: charge.dispute.closed (evt_d21) | [stripe-webhook] risk alert email sent:
+    created later: HTTP 200; pause {"disputeIds":["dp_l"],"lostIds":[]}; Resume → {"open": 1, "error": "dispute_open", "message": "A dispute is still open with the bank.", "success": false}
+  NOTE D7 order-dependent: Resume after a lost dispute whose "lost" came first   → {"open": 1, "error": "dispute_open", "message": "A dispute is still open with the bank.", "success": false}
+
+D8. Moss: disputed; the office agrees with the family and presses "Resume anyway"; the camp then submits evidence (Stripe: charge.dispute.updated, under_review)
+    resume anyway → {"changed": true, "success": true}; pause none; evidence submitted → HTTP 200; pause now none; notices 1
+  ok  D8 the office's "Resume anyway" is not undone by the next routine Stripe update   → none
+
+0 BAD

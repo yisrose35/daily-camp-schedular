@@ -104,10 +104,41 @@ function _txSig(t) { return [t.date, t.time, t.camper, t.type, t.amount, t.items
 // rules. Two copies exist because the POS register loads without the manager, and
 // they decide what every canteen balance is, so tests/canteen_identity.test.js
 // asserts they are character-identical once comments are stripped.
-function _reconcileBalances(data) {
-    if (!data || !data.accounts) return data;
-    var byId = {}, byNameNoId = {}, byName = {};
-    (data.transactions || []).forEach(function(t) {
+// ── Ledger compaction ───────────────────────────────────────────────────────
+// The transactions array is prepend-only and, until this, unbounded: every
+// register sale, office save and parent deposit rewrote the whole season, and
+// every reader, sync and realtime event paid for it. It could not simply be
+// trimmed, because balances are Σ of that very array — trim it and the next
+// save rewrites every balance in the camp. So compaction FOLDS instead: rows
+// older than a watermark are summed into `ledgerCarry` (the exact three
+// buckets _reconcileBalances attributes by, so a recreated account finds its
+// history by the same rules as before) and removed, and `ledgerCompactedThrough`
+// records the watermark. Balance = carry + Σ(live rows) — identical by
+// construction, and compactSnacksLedger refuses to save if it is not.
+//
+// Nothing is folded that is not already archived: migration 203's trigger
+// copies every transaction the cloud ever sees into canteen_transactions, and
+// compaction verifies that before dropping a row. The archive is the floor.
+//
+// The merge has to know about the watermark, or a stale tab whose local copy
+// still holds folded rows would union them straight back in — and, keeping the
+// cloud's carry as well, count them twice. _mergeCompaction keeps the carry
+// that belongs to the higher watermark and drops anything at or below it.
+// This block is IDENTICAL in campistry_snacks_pos.js, and a test holds the two
+// copies together the way one already holds the two _reconcileBalances.
+function _txFolded(t, w) {
+    if (!w || !t) return false;
+    var d = t.date;
+    // Only a well-formed date can be compared; a legacy row with none is never
+    // folded and never dropped, so it can never be lost by either.
+    return typeof d === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(d) && d <= w;
+}
+function _ledgerBuckets(transactions, carry) {
+    var c = carry || {};
+    var byId = Object.assign({}, c.byId || {});
+    var byNameNoId = Object.assign({}, c.byNameNoId || {});
+    var byName = Object.assign({}, c.byName || {});
+    (transactions || []).forEach(function(t) {
         if (!t) return;
         var amt = parseFloat(t.amount) || 0;
         var signed = (t.type === 'credit' ? amt : -amt);
@@ -118,6 +149,23 @@ function _reconcileBalances(data) {
             if (!hasId) byNameNoId[t.camper] = (byNameNoId[t.camper] || 0) + signed;
         }
     });
+    return { byId: byId, byNameNoId: byNameNoId, byName: byName };
+}
+function _mergeCompaction(merged, tx, cloud, local) {
+    var cw = (cloud && cloud.ledgerCompactedThrough) || '';
+    var lw = (local && local.ledgerCompactedThrough) || '';
+    var w = cw >= lw ? cw : lw;
+    if (!w) return tx;
+    merged.ledgerCompactedThrough = w;
+    merged.ledgerCarry = ((cw >= lw ? cloud : local).ledgerCarry) || {};
+    return tx.filter(function(t) { return !_txFolded(t, w); });
+}
+
+function _reconcileBalances(data) {
+    if (!data || !data.accounts) return data;
+    // Seeded from the compaction carry, so a folded row still counts.
+    var b = _ledgerBuckets(data.transactions, data.ledgerCarry);
+    var byId = b.byId, byNameNoId = b.byNameNoId, byName = b.byName;
     Object.keys(data.accounts).forEach(function(name) {
         var a = data.accounts[name];
         if (!a) return;
@@ -176,7 +224,7 @@ function cloudSaveSnacks(data) {
                         var cloudAr = cloud.accounts && cloud.accounts[name] && cloud.accounts[name].autoReload;
                         if (cloudAr !== undefined) merged.accounts[name].autoReload = cloudAr;
                     });
-                    merged.transactions = tx;
+                    merged.transactions = _mergeCompaction(merged, tx, cloud, data);
                     _reconcileBalances(merged);
                 }
                 _dbg('about to upsert merged inventory deltas:', _invSummary(merged));
@@ -241,6 +289,14 @@ function getAccount(name) {
     if (!snacks.accounts) snacks.accounts = {};
     if (!snacks.accounts[name]) snacks.accounts[name] = { balance: 0, dailyLimit: 10, spentToday: 0 };
     const a = snacks.accounts[name];
+    // ★ Same reason as campistry_snacks.js's getAccount: 218 omits dailyLimit,
+    //   creditLimit and balanceFloor when the column is NULL, and the row writers
+    //   create accounts with every one of them NULL. renderCampers reads
+    //   a.balance.toFixed(2) and a.dailyLimit - a.spentToday, so a row-backed
+    //   account with no limit set would take the camper list down with it.
+    if (a.balance == null) a.balance = 0;
+    if (a.dailyLimit == null) a.dailyLimit = 10;
+    if (a.spentToday == null) a.spentToday = 0;
     // Daily spend resets at midnight
     if (a.lastSpendDate !== todayStr()) { a.spentToday = 0; a.lastSpendDate = todayStr(); }
     return a;
@@ -320,6 +376,7 @@ window.renderCampers = function() {
 };
 
 window.pickCamper = function(name) {
+    if (sel !== name) _pendingSale = null;   // another child: a new sale (TED-168)
     sel = name;
     // Pull this camper's current limit/balance from the cloud so a limit the
     // parent just raised (or a fresh deposit) is reflected immediately — fixes
@@ -537,7 +594,10 @@ window.addItem = function(id) {
 // CART
 // ==========================================================================
 
-window.clearCart = function() { cart = []; renderCart(); };
+// Clearing the cart ends that sale: a later sale of the same items to the same
+// child is a new sale with a new key (TED-168) — kept, it would replay the first
+// sale's answer and charge nothing.
+window.clearCart = function() { cart = []; _pendingSale = null; renderCart(); };
 window.changeQty = function(id, d) {
     const ci = cart.find(c => c.id === id);
     if (!ci) return;
@@ -579,6 +639,7 @@ function renderCart() {
 
 function updateChargeBtn() {
     const btn = document.getElementById('chargeBtn');
+    if (_chargeInFlight) { btn.disabled = true; btn.textContent = 'Charging…'; return; }
     const total = cart.reduce((s, ci) => {
         const item = snacks.inventory.find(i => i.id === ci.id);
         return s + (item ? item.price * ci.qty : 0);
@@ -596,8 +657,27 @@ function updateChargeBtn() {
 // CHARGE — deducts balance, decrements stock, logs transaction
 // ==========================================================================
 
+// One sale at a time, and one key per sale (TED-159). Tapping Charge again
+// while a charge is on its way does nothing; a retry of the SAME sale (same
+// child, same items) after an answer never came sends the same key, which the
+// server (migration 283) answers with the first result instead of charging the
+// child again. A different sale gets a new key.
+var _chargeInFlight = false;
+var _pendingSale = null;          // { key, fp } — a sale with no answer yet
+function _saleKeyFor(fp) {
+    if (_pendingSale && _pendingSale.fp === fp) return _pendingSale.key;
+    _pendingSale = { fp: fp, key: 'sale_' + Date.now().toString(36) + '_' + Math.random().toString(36).slice(2, 10) };
+    return _pendingSale.key;
+}
+
 window.charge = function() {
     if (!sel || !cart.length) return;
+    if (_chargeInFlight) return;
+    const camperName = sel;           // the toast must not read `sel` after it is cleared
+    // THIS sale's items, as they are now (TED-169): the answer may come back
+    // after the counselor has started the next child's sale, and that cart is
+    // not what was sold.
+    const saleCart = cart.map(ci => ({ id: ci.id, qty: ci.qty }));
     const a = getAccount(sel);
     const total = Math.round(cart.reduce((s, ci) => {
         const item = snacks.inventory.find(i => i.id === ci.id);
@@ -621,10 +701,10 @@ window.charge = function() {
     const _cdb = window.CampistryDB;
     const client = _cdb && _cdb.getClient && _cdb.getClient();
     const campId = _cdb && _cdb.getCampId && _cdb.getCampId();
-    const finish = (viaRpc) => {
+    const finish = (viaRpc, replayed) => {
         const hr = new Date().getHours();
-        const itemDeltas = cart.map(ci => ({ id: ci.id, qty: ci.qty }));
-        cart.forEach(ci => { const item = snacks.inventory.find(i => i.id === ci.id); if (item) { if (item.stock != null) item.stock -= ci.qty; item.soldToday = (item.soldToday || 0) + ci.qty; item.totalSold = (item.totalSold || 0) + ci.qty; } });
+        const itemDeltas = saleCart.map(ci => ({ id: ci.id, qty: ci.qty }));
+        saleCart.forEach(ci => { const item = snacks.inventory.find(i => i.id === ci.id); if (item) { if (item.stock != null) item.stock -= ci.qty; item.soldToday = (item.soldToday || 0) + ci.qty; item.totalSold = (item.totalSold || 0) + ci.qty; } });
         if (!snacks.hourlyActivity) snacks.hourlyActivity = {};
         snacks.hourlyActivity[hr] = (snacks.hourlyActivity[hr] || 0) + 1;
         if (viaRpc && client && campId && client.rpc) {
@@ -654,10 +734,20 @@ window.charge = function() {
             saveSnacksData(snacks);
         }
         const cp = document.querySelector('.cart-panel'); if (cp) { cp.classList.add('flash'); setTimeout(() => cp.classList.remove('flash'), 600); }
-        toast('✓ $' + total.toFixed(2) + ' charged to ' + sel);
-        cart = []; sel = null;
+        // A repeat of a sale that had already gone through (the answer was lost
+        // the first time) says so, rather than "✓ charged" for a charge not made.
+        toast(replayed ? 'Already charged — the earlier $' + total.toFixed(2) + ' charge to ' + camperName + ' went through; not charged again'
+                       : '✓ $' + total.toFixed(2) + ' charged to ' + camperName);
+        // Clear the screen only if it still shows THIS sale (TED-169).
+        // The same child by number where the account has one (a key otherwise).
+        const saleCamperId = a && a.camperId != null ? String(a.camperId) : null;
+        const selCamperId = sel != null && getAccount(sel) && getAccount(sel).camperId != null ? String(getAccount(sel).camperId) : null;
+        const sameChild = sel != null && (saleCamperId != null && selCamperId != null ? selCamperId === saleCamperId : sel === camperName);
+        const stillThisSale = sameChild && cart.length === saleCart.length
+            && cart.every((ci, i) => ci.id === saleCart[i].id && ci.qty === saleCart[i].qty);
+        if (stillThisSale) { cart = []; sel = null; }
         renderCampers(); renderItems(); renderCart(); updateCamperBar();
-        var cs = document.getElementById('camperSearch'); if (cs) { cs.value = ''; cs.focus(); }
+        if (stillThisSale) { var cs = document.getElementById('camperSearch'); if (cs) { cs.value = ''; cs.focus(); } }
     };
 
     // Best-effort local charge (offline, or before the purchase RPC exists).
@@ -675,25 +765,60 @@ window.charge = function() {
         a.spentToday = Math.round((a.spentToday + total) * 100) / 100;
         a.lastSpendDate = todayStr();
         if (!snacks.transactions) snacks.transactions = [];
-        snacks.transactions.unshift({ time: new Date().toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' }), camper: sel,
+        // THIS sale's child (camperName), not whoever is selected now (TED-169).
+        snacks.transactions.unshift({ time: new Date().toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' }), camper: camperName,
             // See _reconcileBalances: the ledger joins on camperId when it has
             // one, so a reused name cannot inherit another camper's balance.
-            camperId: (snacks.accounts && snacks.accounts[sel] && snacks.accounts[sel].camperId) != null
-                ? snacks.accounts[sel].camperId : undefined,
+            camperId: (snacks.accounts && snacks.accounts[camperName] && snacks.accounts[camperName].camperId) != null
+                ? snacks.accounts[camperName].camperId : undefined,
             items: itemNames, amount: total, type: 'debit', date: todayStr() });
         finish(false);
     };
 
     if (client && campId && client.rpc) {
-        const camperName = sel;
-        client.rpc('submit_canteen_purchase', { p_camp_id: campId, p_camper_name: camperName, p_amount: total, p_items: itemNames, p_date: todayStr() })
+        // The PERSON, when the roster has an id for them (migration 247): the
+        // server charges the account of whoever carries this id, not whoever
+        // the name resolves to — two campers can share a name.
+        const _c = (campers || []).find(c => c.name === camperName);
+        const _cid = _c && _c.camperId != null && _c.camperId !== '' ? Number(_c.camperId) : null;
+        const _args = { p_camp_id: campId, p_camper_name: camperName, p_amount: total, p_items: itemNames, p_date: todayStr() };
+        if (_cid != null && !isNaN(_cid)) _args.p_camper_id = _cid;
+        const _fp = (_cid != null && !isNaN(_cid) ? _cid : 'n:' + camperName) + '|' + total.toFixed(2) + '|' + itemNames;
+        const _saleKey = _saleKeyFor(_fp);
+        const _btn = document.getElementById('chargeBtn');
+        _chargeInFlight = true;
+        if (_btn) { _btn.disabled = true; _btn.textContent = 'Charging…'; }
+        const _done = () => { _chargeInFlight = false; updateChargeBtn(); };
+        const _noAnswer = () => {
+            // Nothing definite came back: it may have gone through. The key is
+            // kept, so pressing Charge again for this sale cannot charge twice.
+            toast('Could not confirm the charge to ' + camperName + ' — it may have gone through. Check their transactions; pressing Charge again for the same items will not charge twice.', true);
+        };
+        const _send = (fn, args) => client.rpc(fn, args);
+        const _missing = (res) => !!(res && res.error && /PGRST202|could not find|schema cache|does not exist|no function/i.test(res.error.message || ''));
+        // What this sale sold, by item id (TED-192, migration 289), kept with
+        // the sale so a void can put exactly those items back in stock.
+        const _sold = saleCart.map(ci => ({ id: ci.id, qty: ci.qty }));
+        _send('submit_canteen_purchase_once', Object.assign({ p_sale_key: _saleKey, p_sold: _sold }, _args))
+            // 289 not applied yet: the same keyed sale without the item list
+            .then(res => _missing(res) ? _send('submit_canteen_purchase_once', Object.assign({ p_sale_key: _saleKey }, _args)) : res)
             .then(res => {
+                // 283 not applied yet: the charge as it was, one request.
+                if (_missing(res)) return _send('submit_canteen_purchase', _args);
+                return res;
+            })
+            .then(res => {
+                _done();
                 const d = res && res.data;
-                const emsg = (res.error && res.error.message) || '';
+                const emsg = (res && res.error && res.error.message) || '';
                 // Migration 026 not applied yet → RPC doesn't exist → don't break
                 // the register; fall back to the local path.
-                if (res.error && /PGRST202|could not find|schema cache|does not exist|no function/i.test(emsg)) { localCharge('⚠ Spending limits not synced yet — charge not verified against caps'); return; }
+                if (res && res.error && /PGRST202|could not find|schema cache|does not exist|no function/i.test(emsg)) { _pendingSale = null; localCharge('⚠ Spending limits not synced yet — charge not verified against caps'); return; }
+                // No answer from the server (a dropped connection comes back as an
+                // error with no database code): never "Charge failed".
+                if (!res || (res.error && !res.error.code && !d)) { _noAnswer(); return; }
                 if (res.error || !d || !d.success) {
+                    _pendingSale = null;             // refused: nothing was charged
                     const err = (d && d.error) || emsg || 'charge_failed';
                     const msg = err === 'daily_limit_exceeded' ? 'Blocked — over daily limit ($' + (Number((d && d.remaining) || 0)).toFixed(2) + ' left today)'
                               : err === 'insufficient_balance' ? 'Blocked — insufficient balance ($' + (Number((d && d.spendable) || 0)).toFixed(2) + ' spendable)'
@@ -702,8 +827,9 @@ window.charge = function() {
                     toast(msg, true);
                     return;
                 }
+                _pendingSale = null;                 // answered: the next sale is a new one
                 a.balance = Number(d.balance); a.spentToday = Number(d.spentToday); a.lastSpendDate = todayStr();
-                finish(true);
+                finish(true, !!d.replayed);
                 // Instant auto-reload check — fire-and-forget, never blocks the
                 // register. submit_canteen_purchase (migration 140) only sets
                 // needsReloadCheck when this sale just pushed the camper under
@@ -713,9 +839,9 @@ window.charge = function() {
                 // would otherwise sit unresolved until the next 30-min cron
                 // tick (CANTEEN_AUTORELOAD_SETUP.md).
                 if (d.needsReloadCheck && client.functions && client.functions.invoke) {
-                    client.functions.invoke('canteen-auto-reload', { body: { campId: campId, camperName: camperName } }).catch(() => {});
+                    client.functions.invoke('canteen-auto-reload', { body: { campId: campId, camperName: camperName, camperId: _cid != null && !isNaN(_cid) ? _cid : undefined } }).catch(() => {});
                 }
-            }, e => { toast('Charge failed — connection error', true); });
+            }, e => { _done(); _noAnswer(); });
         return;
     }
 

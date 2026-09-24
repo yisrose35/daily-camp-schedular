@@ -285,3 +285,103 @@ test('the tax statement prints the EIN whatever the on-statements toggle says', 
     assert.ok(!/showCampTaxId\s*&&\s*campTaxId/.test(body),
         'the tax statement must not hide the EIN behind show_tax_id_on_statements');
 });
+
+// ── TED-101: the year the care is given, not the year the charge was dated ──
+const withCareYear = (e) => { const w = resolveCharge(e); return Object.assign({}, w, { careYear: '2026' }); };
+const entries101 = () => [
+    charge('2025-10-01', 3000, 'e1'),     // enrolled in October for summer 2026 — dated at enrolment
+    pay('2025-12-15', 500),               // the December deposit
+    pay('2026-04-01', 2500)
+];
+
+test('TED-101: a December deposit for next summer is prepaid in its own year, not claimable', () => {
+    const r = T.build({ year: 2025, entries: entries101(), resolveCharge: withCareYear });
+    assert.strictEqual(r.qualifying, 0, 'next summer\'s deposit was put on this year\'s return');
+    assert.strictEqual(r.prepaid, 500);
+});
+
+test('TED-101: ...and all of it is claimable in the year the care is given', () => {
+    const r = T.build({ year: 2026, entries: entries101(), resolveCharge: withCareYear });
+    assert.strictEqual(r.qualifying, 3000, 'the December deposit never reached a statement');
+    assert.strictEqual(r.paidEarlier, 500);
+    assert.match(r.warnings.join(' '), /paid before 2026 for care given in 2026/);
+});
+
+test('TED-101: arrears still count in the year they are paid', () => {
+    const late = (e) => Object.assign({}, resolveCharge(e), { careYear: '2025' });
+    const r = T.build({ year: 2026, entries: [charge('2025-04-01', 2000, 'e1'), pay('2026-03-01', 2000)], resolveCharge: late });
+    assert.strictEqual(r.qualifying, 2000);
+    assert.strictEqual(T.build({ year: 2025, entries: [charge('2025-04-01', 2000, 'e1'), pay('2026-03-01', 2000)], resolveCharge: late }).qualifying, 0);
+});
+
+test('TED-101: Me tells the statement each charge\'s care year from the session start', () => {
+    const ME = require('node:fs').readFileSync(require('node:path').join(__dirname, '..', 'campistry_me.js'), 'utf8');
+    assert.match(ME, /var careYear=String\(\(ses&&\(ses\.startDate\|\|ses\.start\)\)\|\|e\.sessionStart\|\|''\)\.slice\(0,4\);/);
+});
+
+// ── TED-107: a December deposit refunded in March (camp cancelled) ─────────
+test('TED-107: a deposit paid last year and refunded this year is not claimable this year', () => {
+    const r = T.build({ year: 2026, entries: [charge('2025-10-01', 3000, 'e1'), pay('2025-12-15', 500), pay('2026-03-01', -500)], resolveCharge: withCareYear });
+    assert.strictEqual(r.qualifying, 0, 'a refunded deposit was reported as claimable');
+    assert.ok(!/exceed payments/.test(r.warnings.join(' ')), 'told the family an earlier return may need amending for money never claimed');
+});
+
+// ── TED-101 residue: sessions without dates, and the Total row ─────────────
+test('TED-101: an undated session charged in the autumn is taken as next summer, and says so', () => {
+    const r25 = build(2025, [charge('2025-10-01', 3000, 'e1'), pay('2025-12-15', 500)]);
+    assert.strictEqual(r25.qualifying, 0);
+    assert.strictEqual(r25.prepaid, 500);
+    assert.match(r25.warnings.join(' '), /no start date/);
+    const r26 = build(2026, [charge('2025-10-01', 3000, 'e1'), pay('2025-12-15', 500), pay('2026-04-01', 2500)]);
+    assert.strictEqual(r26.qualifying, 3000);
+});
+
+test('TED-101: the printed Total equals the sum of the child rows', () => {
+    const r = T.build({ year: 2026, entries: entries101(), resolveCharge: withCareYear });
+    assert.strictEqual(r.claimedTotal, r.byCamper.reduce((t, b) => t + b.total, 0));
+    const ME = require('node:fs').readFileSync(require('node:path').join(__dirname, '..', 'campistry_me.js'), 'utf8');
+    assert.match(ME, /fm\(rep\.claimedTotal!=null\?rep\.claimedTotal:rep\.paid\.net\)/);
+});
+
+// ── TED-101 (8th pass): undated sessions charged in the summer ─────────────
+test('TED-101: an undated "Summer 2027" re-enrolment paid in August 2026 belongs to 2027', () => {
+    const named = (e) => Object.assign({}, resolveCharge(e), { session: 'Summer 2027' });
+    const entries = [charge('2026-08-01', 3000, 'e1'), pay('2026-08-01', 500)];
+    const r26 = T.build({ year: 2026, entries, resolveCharge: named });
+    assert.strictEqual(r26.qualifying, 0, 'next summer\'s deposit is on this year\'s statement');
+    assert.strictEqual(r26.prepaid, 500);
+    assert.strictEqual(T.build({ year: 2027, entries, resolveCharge: named }).qualifying, 500);
+});
+
+test('TED-101: every undated session is named on the statement, whatever month it was charged', () => {
+    const r = build(2026, [charge('2026-08-01', 3000, 'e1'), pay('2026-08-01', 500)]);
+    assert.match(r.warnings.join(' '), /no start date/, 'an August charge on an undated session was assumed silently');
+});
+
+// ── TED-112: a year whose only payment was a deposit for next summer ───────
+test('TED-112: a December deposit for next summer is described as next year\'s, and the statement is ready', () => {
+    const dated = (e) => Object.assign({}, resolveCharge(e), { careYear: '2026' });   // Summer 2026, dated
+    const entries = [charge('2025-10-01', 3000, 'e1'), pay('2025-12-10', 500)];
+    const r = T.build({ year: 2025, entries, resolveCharge: dated });
+    assert.strictEqual(r.qualifying, 0);
+    const w = r.warnings.join(' | ');
+    assert.match(w, /\$500\.00 paid in 2025 is for camp in 2026/, w);
+    assert.doesNotMatch(w, /could not be matched|split by hand/, 'a deposit for next summer was called unmatched: ' + w);
+    assert.doesNotMatch(w, /had not been billed yet/, 'it was billed in October: ' + w);
+    assert.strictEqual(r.allocated, true);
+    const ready = T.readiness(r, { name: 'Camp', address: '1 Lake Rd', taxId: '12-3456789' });
+    assert.deepStrictEqual(ready, { ready: true, missing: [] });
+    // and it is on the 2026 statement
+    assert.strictEqual(T.build({ year: 2026, entries, resolveCharge: dated }).qualifying, 500);
+});
+
+test('TED-112: money paid with nothing billed is still said as not billed yet', () => {
+    const r = build(2025, [pay('2025-12-10', 500)]);
+    assert.match(r.warnings.join(' '), /toward camp that had not been billed yet/);
+});
+
+test('TED-112: "not ready" always says what is missing', () => {
+    const ready = T.readiness({ allocated: false, byCamper: [] }, { name: 'Camp', address: 'a', taxId: 't' });
+    assert.strictEqual(ready.ready, false);
+    assert.ok(ready.missing.length > 0, 'not ready, with nothing listed');
+});

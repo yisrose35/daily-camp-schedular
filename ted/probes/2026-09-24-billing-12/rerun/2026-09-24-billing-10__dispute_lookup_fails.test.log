@@ -1,0 +1,66 @@
+TAP version 13
+#   dispute | Stripe answers 500               → webhook answers HTTP 500 (Stripe re-sends only on non-2xx) | chargebacks posted: 0 | log: [stripe-webhook] Event: charge.dispute.created (evt_1)
+#   refund  | Stripe answers 500               → webhook answers HTTP 500 | refunds posted: 0 | logs: ["[stripe-webhook] Error: Stripe answered 500 for /refunds?charge=ch_1&limit=100 — asking Stripe to send this event again"]
+#   dispute | Stripe answers 429 (rate limit)  → webhook answers HTTP 500 (Stripe re-sends only on non-2xx) | chargebacks posted: 0 | log: [stripe-webhook] Event: charge.dispute.created (evt_1)
+#   refund  | Stripe answers 429 (rate limit)  → webhook answers HTTP 500 | refunds posted: 0 | logs: ["[stripe-webhook] Error: Stripe answered 429 for /refunds?charge=ch_1&limit=100 — asking Stripe to send this event again"]
+#   dispute | the connection drops             → webhook answers HTTP 500 (Stripe re-sends only on non-2xx) | chargebacks posted: 0 | log: [stripe-webhook] Event: charge.dispute.created (evt_1)
+#   refund  | the connection drops             → webhook answers HTTP 500 | refunds posted: 0 | logs: ["[stripe-webhook] Error: Stripe did not answer /refunds?charge=ch_1&limit=100 (connection reset) — asking Stripe to send this event again"]
+#   dispute | (control) Stripe answers         → webhook answers HTTP 200 (Stripe re-sends only on non-2xx) | chargebacks posted: 1 | log: [stripe-webhook] Event: charge.dispute.created (evt_1)
+#   refund  | (control) Stripe answers         → webhook answers HTTP 200 | refunds posted: 1 | logs: []
+# Subtest: dispute, lookup: Stripe answers 500
+ok 1 - dispute, lookup: Stripe answers 500
+  ---
+  duration_ms: 185.689621
+  type: 'test'
+  ...
+# Subtest: charge.refunded (no list), lookup: Stripe answers 500
+ok 2 - charge.refunded (no list), lookup: Stripe answers 500
+  ---
+  duration_ms: 180.425653
+  type: 'test'
+  ...
+# Subtest: dispute, lookup: Stripe answers 429 (rate limit)
+ok 3 - dispute, lookup: Stripe answers 429 (rate limit)
+  ---
+  duration_ms: 178.548025
+  type: 'test'
+  ...
+# Subtest: charge.refunded (no list), lookup: Stripe answers 429 (rate limit)
+ok 4 - charge.refunded (no list), lookup: Stripe answers 429 (rate limit)
+  ---
+  duration_ms: 169.629061
+  type: 'test'
+  ...
+# Subtest: dispute, lookup: the connection drops
+ok 5 - dispute, lookup: the connection drops
+  ---
+  duration_ms: 188.794934
+  type: 'test'
+  ...
+# Subtest: charge.refunded (no list), lookup: the connection drops
+ok 6 - charge.refunded (no list), lookup: the connection drops
+  ---
+  duration_ms: 175.237812
+  type: 'test'
+  ...
+# Subtest: dispute, lookup: (control) Stripe answers
+ok 7 - dispute, lookup: (control) Stripe answers
+  ---
+  duration_ms: 188.73152
+  type: 'test'
+  ...
+# Subtest: charge.refunded (no list), lookup: (control) Stripe answers
+ok 8 - charge.refunded (no list), lookup: (control) Stripe answers
+  ---
+  duration_ms: 181.598846
+  type: 'test'
+  ...
+1..8
+# tests 8
+# suites 0
+# pass 8
+# fail 0
+# cancelled 0
+# skipped 0
+# todo 0
+# duration_ms 1543.894192

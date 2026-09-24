@@ -1,0 +1,6 @@
+L1. Avi is on (card on file). The parent presses "Turn off"
+    stored enabled true; Link "✓ Auto-reload is on · charging Visa ···· 4242"; buttons ["Update card","Turn off"]; box ticked true; toasts []; calls []
+  BAD L1 in the plain Off state there is a way back on   → ["Update card","Turn off"]
+  BAD the run finished   → page.click: Timeout 30000ms exceeded. | Call log: | [2m  - waiting for locator('#arOnBtn')[22m
+
+2 BAD

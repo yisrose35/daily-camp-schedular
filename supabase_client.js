@@ -29,6 +29,274 @@
 (function() {
     'use strict';
 
+    // ── Every call that names a camper carries their ID ─────────────────────
+    // campistry_camper_id_rpc.js (loaded before this file) wraps the client's
+    // rpc(); the id comes from the roster, which is keyed by exactly the names
+    // the staff pages send. See that file for what it will and will not do.
+    function _camperIdFromRoster(campId, name) {
+        try {
+            var g = (typeof window.loadGlobalSettings === 'function') ? window.loadGlobalSettings() : null;
+            var r = g && g.app1 && g.app1.camperRoster;
+            var c = r && r[name];
+            // A page that keeps its own copy of the roster (Campistry Lite reads
+            // app1 straight from the cloud) registers it here.
+            if (!c && window.__camperIdRoster && typeof window.__camperIdRoster === 'object') {
+                c = window.__camperIdRoster[name];
+            }
+            return (c && c.camperId != null && /^\d+$/.test(String(c.camperId))) ? c.camperId : null;
+        } catch (_) { return null; }
+    }
+    // Registered globally as well, so the module can wrap a client that was
+    // created before it loaded (pages that load this file dynamically).
+    window.__camperIdResolve = _camperIdFromRoster;
+    function _withCamperIds(client) {
+        // The erase guard goes on FIRST, so it sits closest to the network:
+        // the camper-number layer below adds a child's number to a call that
+        // names them and sends it at once — with the guard outside it, the
+        // call was already gone before the guard could check (TED-046).
+        client = _withEraseGuard(client);
+        if (client && window.CampistryCamperIdRpc) {
+            window.CampistryCamperIdRpc.wrap(client, _camperIdFromRoster);
+            window.CampistryCamperIdRpc.wrapFetch(_camperIdFromRoster);
+        }
+        return client;
+    }
+
+    // ── After an erase or a merge, a page opened before it reloads ───────────
+    // The owner's rule: "when a child is erased we force a reload that clears
+    // the cache." A page opened before a camper was erased (or merged away)
+    // still holds them — in memory and in this browser's cache — and would
+    // write them back on its next save. The server moves the camp's cache
+    // version on with every erase and merge (migration 260). Before this page
+    // saves camp data, and whenever it wakes up or comes back into view, it
+    // asks for that version; if it has moved on since the page loaded, the
+    // page clears its local camp data and reloads instead of saving.
+    // own: this page's erases/merges still waiting for their answer — the
+    // server's version has already moved on for them (TED-042).
+    const _EG = { tab: null, checkedAt: 0, pending: null, reloading: false, own: 0 };
+    function _egStoreKey(camp) { return 'campistry_cache_epoch:' + camp; }
+    function _egReload(camp, server) {
+        if (_EG.reloading) return;
+        _EG.reloading = true;
+        // Everything this page still holds is from before the erase: nothing of
+        // it may be sent — not a queued save, not the save-on-leave (TED-037).
+        window.__campistryStalePage = true;
+        try { localStorage.setItem(_egStoreKey(camp), String(server)); } catch (_) {}
+        try { console.warn('[SupabaseClient] a camper was erased or merged in another tab or on another computer — clearing this page\'s copy and reloading'); } catch (_) {}
+        try {
+            const msg = 'A camper was erased or merged in another tab or on another computer. Reloading to get the latest…';
+            if (typeof window.showToast === 'function') window.showToast(msg, 'warning');
+            else if (typeof window.toast === 'function') window.toast(msg, 'warning');
+        } catch (_) {}
+        Promise.resolve()
+            .then(function () { try { purgeCampDataCaches(); } catch (_) {} })
+            .then(function () { return window.LocalCacheIDB && window.LocalCacheIDB.clear ? window.LocalCacheIDB.clear() : null; })
+            .catch(function () {})
+            .then(function () { setTimeout(function () { location.reload(); }, 600); });
+    }
+    // Resolves true when this page may go on (its copy is current), false when
+    // it is reloading. Asks the server at most every `maxAgeMs`.
+    function _eraseGuardCheck(rpc, client, maxAgeMs) {
+        if (_EG.reloading) return Promise.resolve(false);
+        const camp = getCampId();
+        if (!camp) return Promise.resolve(true);
+        if (_EG.tab !== null && Date.now() - _EG.checkedAt < maxAgeMs) return Promise.resolve(true);
+        if (_EG.pending) return _EG.pending;
+        _EG.pending = Promise.resolve(rpc.call(client, 'get_camp_cache_epoch', { p_camp_id: camp }))
+            .then(function (res) {
+                const server = res && !res.error && res.data != null ? Number(res.data) : null;
+                if (server === null || !isFinite(server)) return true;       // not staff, or not migrated: carry on
+                _EG.checkedAt = Date.now();
+                let stored = null;
+                try { const v = localStorage.getItem(_egStoreKey(camp)); stored = v == null ? null : Number(v); } catch (_) {}
+                // This page's own starting point: what its cache was current
+                // as of (first check), then what it has seen since.
+                if (_EG.tab === null) _EG.tab = (stored !== null && isFinite(stored)) ? stored : server;
+                if (server > _EG.tab) {
+                    // While this page's own erase or merge is still on its way,
+                    // the server has moved on for it — or for another computer
+                    // too. Nothing goes out until its answer is in; then decide
+                    // again (TED-044).
+                    if (_EG.own > 0) return _egWaitOwn().then(function () { return 'recheck'; });
+                    _egReload(camp, server); return false;
+                }
+                try { localStorage.setItem(_egStoreKey(camp), String(server)); } catch (_) {}
+                return true;
+            }, function () { return true; })
+            .then(function (ok) {
+                _EG.pending = null;
+                return ok === 'recheck' ? _eraseGuardCheck(rpc, client, 0) : ok;
+            });
+        return _EG.pending;
+    }
+    // Resolves when none of this page's erases or merges is waiting for its
+    // answer (or after 30 s, when the page reloads to be safe).
+    function _egWaitOwn() {
+        return new Promise(function (resolve) {
+            const until = Date.now() + 30000;
+            (function tick() {
+                if (_EG.own <= 0) return resolve();
+                if (Date.now() > until) { _EG.own = 0; _EG.tab = -1; return resolve(); }
+                setTimeout(tick, 50);
+            })();
+        });
+    }
+    // The erasing page itself is current: it moves its own starting point on.
+    function _eraseGuardAdvance(epoch) {
+        const camp = getCampId();
+        const n = Number(epoch);
+        if (!camp || !isFinite(n)) return;
+        // Only this page's own erase moved the version on (exactly one step).
+        // If another computer erased or merged in between, this page is out of
+        // date like any other, and reloads (TED-041).
+        if (_EG.tab !== null && n !== _EG.tab + 1) { _egReload(camp, n); return; }
+        _EG.tab = n;
+        _EG.checkedAt = Date.now();
+        try { localStorage.setItem(_egStoreKey(camp), String(_EG.tab)); } catch (_) {}
+    }
+    window.__campistryEraseGuardAdvance = _eraseGuardAdvance;
+    // Below the client: every request this page sends to the camp's server.
+    // While the page is reloading after an erase, no write leaves it — this is
+    // what stops the save-on-leave (a plain keepalive fetch) and any other raw
+    // write (TED-037). And a call to the server's own functions (refunds,
+    // auto-reloads — they carry a camper's number) first checks the version
+    // afresh (TED-040).
+    function _installEraseGuardFetch(client, rawRpc) {
+        if (typeof window.fetch !== 'function' || window.fetch.__eraseGuardFetch) return;
+        const rawFetch = window.fetch.bind(window);
+        const base = String(CONFIG.SUPABASE_URL || '');
+        const wrapped = function (input, init) {
+            let url = '', method = 'GET';
+            try {
+                // a string, a Request (.url) or a URL object (its string form) — TED-043
+                url = String((input && typeof input === 'object' && input.url) || input || '');
+                method = String((init && init.method) || (input && input.method) || 'GET').toUpperCase();
+            } catch (_) {}
+            const ours = base && url.indexOf(base) === 0;
+            const write = method !== 'GET' && method !== 'HEAD' && method !== 'OPTIONS';
+            const isRpcRead = /\/rest\/v1\/rpc\/get_camp_cache_epoch/.test(url);
+            if (ours && write && !isRpcRead && (_EG.reloading || window.__campistryStalePage)) {
+                return Promise.resolve(new Response(JSON.stringify({ message: 'This page is reloading: a camper was erased or merged in another tab or on another computer.' }),
+                    { status: 409, headers: { 'Content-Type': 'application/json' } }));
+            }
+            if (ours && write && /\/functions\/v1\//.test(url)) {
+                return _eraseGuardCheck(rawRpc, client, 0).then(function (ok) {
+                    return ok ? rawFetch(input, init)
+                              : new Response(JSON.stringify({ error: 'page_reloading' }), { status: 409, headers: { 'Content-Type': 'application/json' } });
+                });
+            }
+            return rawFetch(input, init);
+        };
+        wrapped.__eraseGuardFetch = true;
+        Object.keys(window.fetch).forEach(function (k) { try { wrapped[k] = window.fetch[k]; } catch (_) {} });
+        window.fetch = wrapped;
+    }
+    function _withEraseGuard(client) {
+        if (!client || client.__eraseGuarded || typeof client.from !== 'function' || typeof client.rpc !== 'function') return client;
+        client.__eraseGuarded = true;
+        const rawRpc = client.rpc;
+        const blocked = { data: null, error: { message: 'A camper was erased or merged in another tab or on another computer — this page is reloading.' } };
+        // Hold a request until the check says this page's copy is current.
+        function guardThen(builder, maxAgeMs) {
+            if (!builder || typeof builder.then !== 'function') return builder;
+            const rawThen = builder.then.bind(builder);
+            builder.then = function (onOk, onErr) {
+                return _eraseGuardCheck(rawRpc, client, maxAgeMs).then(function (ok) {
+                    return ok ? rawThen(onOk, onErr) : Promise.resolve(blocked).then(onOk, onErr);
+                });
+            };
+            return builder;
+        }
+        const rawFrom = client.from.bind(client);
+        client.from = function (table) {
+            const qb = rawFrom(table);
+            // Camp documents: checked right before every write. Other tables: at most every 15 s.
+            // Every write checks afresh (TED-040): a write that names a camper by
+            // number must never land after an erase this page has not heard of.
+            const maxAge = 0;
+            ['insert', 'upsert', 'update', 'delete'].forEach(function (m) {
+                const raw = qb && qb[m];
+                if (typeof raw !== 'function') return;
+                qb[m] = function () { return guardThen(raw.apply(qb, arguments), maxAge); };
+            });
+            return qb;
+        };
+        // A call that names a camper (a number or a name: a canteen sale, a
+        // payment, a health entry…) checks afresh; any other call at most every
+        // 15 s (TED-040).
+        const namesCamper = function (args) {
+            try { return /"(p_)?(camper|person|child)[_a-z]*"\s*:/i.test(JSON.stringify(args || {})); } catch (_) { return true; }
+        };
+        client.rpc = function (fn, args) {
+            const b = rawRpc.apply(client, arguments);
+            if (fn === 'get_camp_cache_epoch') return b;
+            // This page's own erase or merge: checked first like any write, then
+            // counted while it is on its way, so a check in between waits for its
+            // answer instead of taking it for another computer's (TED-042/044).
+            if ((fn === 'erase_camper' || fn === 'merge_campers') && b && typeof b.then === 'function') {
+                const rawThen = b.then.bind(b);
+                b.then = function (onOk, onErr) {
+                    return _eraseGuardCheck(rawRpc, client, 0).then(function (ok) {
+                        if (!ok) return Promise.resolve(blocked).then(onOk, onErr);
+                        _EG.own++;
+                        let done = false;
+                        const fin = function () { if (!done) { done = true; _EG.own = Math.max(0, _EG.own - 1); } };
+                        return rawThen(function (v) { try { return onOk ? onOk(v) : v; } finally { fin(); } },
+                                       function (e) { fin(); if (onErr) return onErr(e); throw e; });
+                    });
+                };
+                return b;
+            }
+            return guardThen(b, namesCamper(args) ? 0 : 15000);
+        };
+        // The server's own functions (refunds, auto-reloads — they act on a
+        // camper by number): a fresh check first, every time (TED-040).
+        try {
+            const guardFns = function (fns) {
+                if (!fns || typeof fns.invoke !== 'function' || fns.__eraseGuarded) return fns;
+                const rawInvoke = fns.invoke.bind(fns);
+                fns.invoke = function () {
+                    const args = arguments;
+                    return _eraseGuardCheck(rawRpc, client, 0).then(function (ok) {
+                        return ok ? rawInvoke.apply(null, args)
+                                  : { data: null, error: { message: 'This page is reloading: a camper was erased or merged in another tab or on another computer.' } };
+                    });
+                };
+                fns.__eraseGuarded = true;
+                return fns;
+            };
+            // supabase-js builds a NEW functions client on every access (a
+            // getter), so the guard goes on the getter, not on one instance.
+            let proto = client, desc = null;
+            while (proto && !desc) { desc = Object.getOwnPropertyDescriptor(proto, 'functions'); proto = Object.getPrototypeOf(proto); }
+            if (desc && typeof desc.get === 'function') {
+                Object.defineProperty(client, 'functions', {
+                    configurable: true,
+                    get: function () { return guardFns(desc.get.call(client)); }
+                });
+            } else {
+                guardFns(client.functions);
+            }
+        } catch (_) {}
+        try { _installEraseGuardFetch(client, rawRpc); } catch (_) {}
+        // A page that wakes (a laptop opened, a tab brought back) checks at once.
+        try {
+            const wake = function () {
+                if (document.visibilityState === 'visible') { _EG.checkedAt = 0; _eraseGuardCheck(rawRpc, client, 0); }
+            };
+            document.addEventListener('visibilitychange', wake);
+            window.addEventListener('focus', wake);
+            window.addEventListener('online', wake);
+            // …and a page just opened from this browser's cache, once the camp
+            // is known, without waiting for its first save.
+            [2500, 8000].forEach(function (ms) {
+                setTimeout(function () { _eraseGuardCheck(rawRpc, client, 0); }, ms);
+            });
+        } catch (_) {}
+        return client;
+    }
+
+
     console.log('🔌 Campistry Supabase Client v5.3 loading...');
 
     // =========================================================================
@@ -115,14 +383,14 @@
                 });
                 
                 if (_client && _client.auth) {
-                    window.supabase = _client;
+                    window.supabase = _withCamperIds(_client);
                     log('✅ Supabase client created successfully');
                     return _client;
                 } else {
                     logError('Client created but auth is missing!', _client);
                 }
             } else if (window.supabase && window.supabase.auth) {
-                _client = window.supabase;
+                _client = _withCamperIds(window.supabase);
                 log('Using existing window.supabase client');
                 return _client;
             } else {
@@ -803,13 +1071,13 @@
                 });
                 
                 if (_client && _client.auth) {
-                    window.supabase = _client;
+                    window.supabase = _withCamperIds(_client);
                     log('✅ Supabase client created successfully');
                 } else {
                     logError('Client created but auth is missing!', _client);
                 }
             } else if (window.supabase && window.supabase.auth) {
-                _client = window.supabase;
+                _client = _withCamperIds(window.supabase);
                 log('Using existing window.supabase client');
             } else {
                 logError('Supabase JS library not loaded. Expected supabase.createClient to be a function.');

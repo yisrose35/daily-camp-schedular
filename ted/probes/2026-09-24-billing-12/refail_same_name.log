@@ -1,0 +1,14 @@
+Case: the refund of #7 fails
+  wallets at the start: Avi Katz (#7) $50 | Avi Katz #102 (#102) $50
+  after both $20 refunds: Avi Katz (#7) $30.00 | Avi Katz #102 (#102) $30.00
+  refund rows: re_102 camper="Avi Katz #102" camper_id=102 | re_7 camper="Avi Katz" camper_id=7
+  Stripe fails re_7 → 278 answers {"amount": 20.00, "account": "Avi Katz", "balance": 50.00, "canteen": true, "success": true}
+  wallets after: Avi Katz (#7) $50.00 | Avi Katz #102 (#102) $30.00
+  ok  the $20 goes back to #7's own wallet
+Case: the refund of #102 fails
+  wallets at the start: Avi Katz (#7) $50 | Avi Katz #102 (#102) $50
+  after both $20 refunds: Avi Katz (#7) $30.00 | Avi Katz #102 (#102) $30.00
+  refund rows: re_102 camper="Avi Katz #102" camper_id=102 | re_7 camper="Avi Katz" camper_id=7
+  Stripe fails re_102 → 278 answers {"amount": 20.00, "account": "Avi Katz #102", "balance": 50.00, "canteen": true, "success": true}
+  wallets after: Avi Katz (#7) $30.00 | Avi Katz #102 (#102) $50.00
+  ok  the $20 goes back to #102's own wallet

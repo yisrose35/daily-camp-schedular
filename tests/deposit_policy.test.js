@@ -488,7 +488,11 @@ test('a missing deposit box says which kind of missing it is', () => {
 // diagnostic line that was supposed to explain the box's absence.
 function runDeposit({ policy, sessions, selected }) {
     const src = fs.readFileSync(path.join(ROOT, 'campistry_register.html'), 'utf8');
-    const body = [...src.matchAll(/<script(?![^>]*\bsrc=)[^>]*>([\s\S]*?)<\/script>/g)].map((m) => m[1])[1];
+    // The inline script that DEFINES the renderer — found by what it holds, not by
+    // position. It was `[1]`, and adding one unrelated <script> block above it
+    // made every test here report the function "missing".
+    const body = [...src.matchAll(/<script(?![^>]*\bsrc=)[^>]*>([\s\S]*?)<\/script>/g)]
+        .map((m) => m[1]).find((b) => b.includes('function _regRenderDeposit(')) || '';
     const grab = (name) => {
         const i = body.indexOf('function ' + name + '(');
         assert.ok(i >= 0, 'missing ' + name);

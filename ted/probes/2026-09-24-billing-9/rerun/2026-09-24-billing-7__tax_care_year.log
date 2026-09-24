@@ -1,0 +1,12 @@
+careYear from Me for e26 (dated): "2026" (undated): ""
+A dated      | 2025: claimable 0 | prepaid 500 | paidEarlier 0 | paid.net 500 | child-row total 0 | warnings 2
+A dated      | 2026: claimable 3000 | prepaid 0 | paidEarlier 500 | paid.net 2500 | child-row total 3000 | warnings 1
+B undated    | 2025: claimable 0 | prepaid 500 | paidEarlier 0 | paid.net 500 | child-row total 0 | warnings 3
+B undated    | 2026: claimable 3000 | prepaid 0 | paidEarlier 500 | paid.net 2500 | child-row total 3000 | warnings 2
+C cancelled  | 2025: claimable 0 | prepaid 500 | paidEarlier 0 | paid.net 500 | child-row total 0 | warnings 2
+C cancelled  | 2026: claimable 0 | prepaid 0 | paidEarlier 0 | paid.net -500 | child-row total 0
+D arrears    | 2025: claimable 2000 | prepaid 0 | paidEarlier 0 | paid.net 2000 | child-row total 2000
+D arrears    | 2026: claimable 1000 | prepaid 0 | paidEarlier 0 | paid.net 1000 | child-row total 1000
+E part-refnd | 2025: claimable 0 | prepaid 500 | paidEarlier 0 | paid.net 500 | child-row total 0 | warnings 2
+E part-refnd | 2026: claimable 2750 | prepaid 0 | paidEarlier 500 | paid.net 2250 | child-row total 2750 | warnings 1
+Expected (Pub 503 as the module quotes it): A → 2025 0/prepaid 500, 2026 3000. C → 0 claimable both years. D → 2025 2000, 2026 1000. E → 2026 2750 (3000 care − 250 refunded).

@@ -301,15 +301,14 @@ body {
     border-radius: var(--radius-md);
     padding: 14px 16px;
     cursor: pointer;
-    box-shadow: var(--shadow-note);
-    transition: transform .15s ease, box-shadow .15s ease;
+    transition: border-color .15s ease;
     position: relative;
-    border: 1px solid transparent;
+    border: 1px solid rgba(15,23,42,.08);
     min-height: 100px;
     display: flex; flex-direction: column; gap: 6px;
     word-break: break-word;
 }
-.nt-card:hover { transform: translateY(-2px); box-shadow: 0 4px 16px rgba(0,0,0,.1); }
+.nt-card:hover { border-color: rgba(15,23,42,.18); }
 .nt-card.selected { border-color: var(--notes-color); }
 .nt-card-title {
     font-size: .9rem; font-weight: 700; color: var(--slate-900);

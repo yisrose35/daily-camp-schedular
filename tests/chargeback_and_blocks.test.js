@@ -120,10 +120,24 @@ test('it matches the payment on a SET of references, not one field', () => {
     // gives the charge id and the payment_intent. Matching one field would fail
     // to find the payment.
     assert.match(SQL, /p_refs\s+text\[\]/, 'the refs argument is no longer a set');
-    for (const f of ['stripePaymentIntentId', 'reference', 'byopTransactionId']) {
-        assert.ok(SQL.includes("e->>'" + f + "' = ANY(p_refs)"),
-            'no longer matches a payment by ' + f);
+    // Migration 215 took this off the camp document. The four-field test is now
+    // `dedupe_keys && p_refs` — array overlap against 213's indexed column — so
+    // the GUARANTEE is unchanged and the expression is not. Asserting the chain
+    // rather than trusting it: the match must be on dedupe_keys, AND dedupe_keys
+    // must be built from exactly those four fields.
+    assert.ok((SQL.match(/dedupe_keys && p_refs/g) || []).length >= 2,
+        'both the family lookup and the annotation must match on the ref SET');
+    const dedupeDef = read('migrations/213_payments_row_truth.sql');
+    const gen = dedupeDef.slice(dedupeDef.indexOf('dedupe_keys text[]'),
+                                dedupeDef.indexOf('STORED;'));
+    for (const f of ['id', 'reference', 'stripePaymentIntentId', 'byopTransactionId']) {
+        assert.ok(gen.includes("'" + f + "'"),
+            `dedupe_keys no longer carries ${f}, so a chargeback can no longer match on it`);
     }
+    // RECORD_CB, not the combined SQL: flag_plan_collection still walks an array,
+    // legitimately, over plans rather than over every payment in the camp.
+    assert.doesNotMatch(RECORD_CB, /FOR i IN 0 \.\. GREATEST\(jsonb_array_length/,
+        'the payment array walk is gone — it scanned every payment the camp ever took');
 });
 
 test('it refuses to guess a family rather than post against the wrong one', () => {
@@ -174,7 +188,8 @@ test('the runner flags every way collection stops, and clears on success', () =>
         assert.ok(src.includes(reason), 'the runner no longer flags ' + reason);
     }
     // Cleared on a successful charge, with the same call.
-    assert.match(src, /await flagPlan\(String\(row\.camp_id\), famKey, String\(plan\.id \|\| ""\), null\);/,
+    // (the plan is named by id or, without one, by position — TED-084)
+    assert.match(src, /await flagPlan\(String\(row\.camp_id\), famKey, refOf\(plan\), null\);/,
         'a successful charge no longer clears the block');
     // The no-card case is flagged BEFORE the skip, or nothing in the run ever
     // mentions that family again.
@@ -194,7 +209,7 @@ test('the webhook handles dispute CLOSED as well as created', () => {
     const hook = read('supabase/functions/stripe-webhook/index.ts');
     assert.match(hook, /"charge\.dispute\.closed"/,
         'a dispute the camp WINS never puts the money back');
-    assert.match(hook, /const won = String\(obj\.status \|\| ""\) === "won";/,
+    assert.match(hook, /const status = String\(obj\.status \|\| ""\);[\s\S]*const won = status === "won";/,
         'the outcome is no longer read from the dispute status');
     // Ledger before email: if the mail provider is down the money must still be right.
     const ledger = hook.indexOf('await handleDisputeLedger(supabase, event)');
@@ -235,9 +250,13 @@ test('a chargeback with no amount uses the amount of the payment it disputes', (
     const ledgerPath = RECORD_CB.slice(RECORD_CB.indexOf('FOR famRec'), RECORD_CB.indexOf('Not in a ledger'));
     assert.match(ledgerPath, /\(e->>'amount'\)::numeric INTO v_matched/,
         'a chargeback matched via the LEDGER never picks up an amount');
+    // 215 moved this path to the payment ROWS, so the amount comes off the row's
+    // payload rather than an array element. Same guarantee, different column.
     const financePath = RECORD_CB.slice(RECORD_CB.indexOf('Not in a ledger'), RECORD_CB.indexOf('family_not_found'));
-    assert.match(financePath, /\(e->>'amount'\)::numeric/,
-        'a chargeback matched via finance.payments never picks up an amount');
+    assert.match(financePath, /\((?:e|payload)->>'amount'\)::numeric/,
+        'a chargeback matched via the payment rows never picks up an amount');
+    assert.match(financePath, /FROM public\.camp_payments/,
+        'the fallback lookup must read the rows — the document branch is not maintained');
 });
 
 test('matched but still amountless is refused, not posted as $0', () => {
@@ -319,7 +338,8 @@ test('the secret compare is no longer conditional on having one', () => {
     // entirely when the secret is absent.
     assert.ok(!/if \(WEBHOOK_SECRET && req\.headers\.get/.test(BYOP_CODE),
         'a conditional check is an open door with extra steps');
-    assert.match(BYOP_CODE, /if \(req\.headers\.get\("x-webhook-secret"\) !== WEBHOOK_SECRET\)/);
+    // the header, or &key= for a processor that cannot send one (TED-206)
+    assert.match(BYOP_CODE, /const sent = req\.headers\.get\("x-webhook-secret"\) \|\| url\.searchParams\.get\("key"\) \|\| "";\s*if \(sent !== WEBHOOK_SECRET\)/);
 });
 
 test('the header no longer tells an operator it is fine to leave it unset', () => {

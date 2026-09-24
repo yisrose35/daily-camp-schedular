@@ -1,0 +1,37 @@
+TAP version 13
+# \# Stripe   lost     one   [50]: answers ["200 $20","200 $20"] | MONEY MOVED 1: ["pi_top1 $20"] | calls 1 | claims ["scanteen:pi_top1 settled 20"]
+# \# Cardknox lost     one   [50]: answers ["200 $20","200 $20"] | MONEY MOVED 1: ["X1 $20.00"] | calls 1 | claims ["canteen:X1 settled 20"]
+# \# Stripe   lost     two   [50,50]: answers ["200 $20","200 $20"] | MONEY MOVED 1: ["pi_top1 $20"] | calls 1 | claims ["scanteen:pi_top1 settled 20"]
+# \# Cardknox lost     two   [50,50]: answers ["200 $20","200 $20"] | MONEY MOVED 1: ["X1 $20.00"] | calls 1 | claims ["canteen:X1 settled 20"]
+# \# Stripe   lost     small [10,50]: answers ["200 $20","200 $20"] | MONEY MOVED 2: ["pi_top1 $10","pi_top2 $10"] | calls 2 | claims ["scanteen:pi_top1 settled 10","scanteen:pi_top2 settled 10"]
+# \# Cardknox lost     small [10,50]: answers ["200 $20","200 $20"] | MONEY MOVED 2: ["X1 $10.00","X2 $10.00"] | calls 2 | claims ["canteen:X1 settled 10","canteen:X2 settled 10"]
+# \# Stripe   netlost  one   [50]: answers ["200 ERR Stripe did not answer, so this refund may have gone through. Check the","200 ERR An earlier try at this refund has not been confirmed by Stripe yet, so"] | MONEY MOVED 1: ["pi_top1 $20"] | calls 1 | claims ["scanteen:pi_top1 OPEN"]
+# \# Cardknox netlost  one   [50]: answers ["200 ERR The card company did not answer, so a canteen refund may or may not ha","200 ERR An earlier try at this refund was never confirmed by the card company."] | MONEY MOVED 1: ["X1 $20.00"] | calls 1 | claims ["canteen:X1 OPEN"]
+# \# Stripe   netlost  two   [50,50]: answers ["200 ERR Stripe did not answer, so this refund may have gone through. Check the","200 ERR An earlier try at this refund has not been confirmed by Stripe yet, so"] | MONEY MOVED 1: ["pi_top1 $20"] | calls 1 | claims ["scanteen:pi_top1 OPEN"]
+# \# Cardknox netlost  two   [50,50]: answers ["200 ERR The card company did not answer, so a canteen refund may or may not ha","200 ERR An earlier try at this refund was never confirmed by the card company."] | MONEY MOVED 1: ["X1 $20.00"] | calls 1 | claims ["canteen:X1 OPEN"]
+# \# Stripe   netlost  small [10,50]: answers ["200 ERR Stripe did not answer, so this refund may have gone through. Check the","200 ERR An earlier try at this refund has not been confirmed by Stripe yet, so"] | MONEY MOVED 1: ["pi_top1 $10"] | calls 1 | claims ["scanteen:pi_top1 OPEN"]
+# \# Cardknox netlost  small [10,50]: answers ["200 ERR The card company did not answer, so a canteen refund may or may not ha","200 ERR An earlier try at this refund was never confirmed by the card company."] | MONEY MOVED 1: ["X1 $10.00"] | calls 1 | claims ["canteen:X1 OPEN"]
+# \# Stripe   partfail small [10,50]: answers ["200 $10","200 $20"] | MONEY MOVED 2: ["pi_top1 $10","pi_top2 $10"] | calls 2 | claims ["scanteen:pi_top1 settled 10","scanteen:pi_top2 settled 10"]
+# \# Cardknox partfail small [10,50]: answers ["200 $10","200 $20"] | MONEY MOVED 2: ["X1 $10.00","X2 $10.00"] | calls 3 | claims ["canteen:X1 settled 10","canteen:X2 settled 10"]
+# \# Stripe   race     one   [50]: answers ["2nd click: $20","200 $20"] | MONEY MOVED 1: ["pi_top1 $20"] | calls 1 | claims ["scanteen:pi_top1 settled 20"]
+# \# Cardknox race     one   [50]: answers ["2nd click: $20","200 $20"] | MONEY MOVED 1: ["X1 $20.00"] | calls 1 | claims ["canteen:X1 settled 20"]
+# \# Stripe   race     two   [50,50]: answers ["2nd click: $20","200 $20"] | MONEY MOVED 1: ["pi_top1 $20"] | calls 1 | claims ["scanteen:pi_top1 settled 20"]
+# \# Cardknox race     two   [50,50]: answers ["2nd click: $20","200 $20"] | MONEY MOVED 1: ["X1 $20.00"] | calls 1 | claims ["canteen:X1 settled 20"]
+# \# Stripe   race     small [10,50]: answers ["2nd click: $20","200 $20"] | MONEY MOVED 2: ["pi_top1 $10","pi_top2 $10"] | calls 2 | claims ["scanteen:pi_top1 settled 10","scanteen:pi_top2 settled 10"]
+# \# Cardknox race     small [10,50]: answers ["2nd click: $20","200 $20"] | MONEY MOVED 2: ["X1 $10.00","X2 $10.00"] | calls 2 | claims ["canteen:X1 settled 10","canteen:X2 settled 10"]
+# \# the office meant ONE $20 refund in every case
+# Subtest: probe
+ok 1 - probe
+  ---
+  duration_ms: 3713.438588
+  type: 'test'
+  ...
+1..1
+# tests 1
+# suites 0
+# pass 1
+# fail 0
+# cancelled 0
+# skipped 0
+# todo 0
+# duration_ms 3802.078572

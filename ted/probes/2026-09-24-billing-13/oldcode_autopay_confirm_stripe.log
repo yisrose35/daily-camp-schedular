@@ -1,0 +1,104 @@
+TAP version 13
+# Subtest: TED-120: Gold's own payment — succeeded, Gold's card, $500, after autopay tried — is recorded
+ok 1 - TED-120: Gold's own payment — succeeded, Gold's card, $500, after autopay tried — is recorded
+  ---
+  duration_ms: 165.488535
+  type: 'test'
+  ...
+# Subtest: TED-120: Silver's $500 pasted for Gold is refused, and nothing is recorded
+ok 2 - TED-120: Silver's $500 pasted for Gold is refused, and nothing is recorded
+  ---
+  duration_ms: 158.509082
+  type: 'test'
+  ...
+# Subtest: TED-120: a payment stamped for another family is refused, and nothing is recorded
+ok 3 - TED-120: a payment stamped for another family is refused, and nothing is recorded
+  ---
+  duration_ms: 155.285621
+  type: 'test'
+  ...
+# Subtest: TED-120: a typo is refused, and nothing is recorded
+ok 4 - TED-120: a typo is refused, and nothing is recorded
+  ---
+  duration_ms: 157.881827
+  type: 'test'
+  ...
+# Subtest: TED-120: a payment for another amount is refused, and nothing is recorded
+ok 5 - TED-120: a payment for another amount is refused, and nothing is recorded
+  ---
+  duration_ms: 174.626477
+  type: 'test'
+  ...
+# Subtest: TED-120: a payment still processing is refused, and nothing is recorded
+ok 6 - TED-120: a payment still processing is refused, and nothing is recorded
+  ---
+  duration_ms: 161.98359
+  type: 'test'
+  ...
+# Subtest: TED-120: an earlier payment is refused, and nothing is recorded
+ok 7 - TED-120: an earlier payment is refused, and nothing is recorded
+  ---
+  duration_ms: 164.700718
+  type: 'test'
+  ...
+# Subtest: TED-120: a charge id is refused, and nothing is recorded
+ok 8 - TED-120: a charge id is refused, and nothing is recorded
+  ---
+  duration_ms: 160.543845
+  type: 'test'
+  ...
+# Subtest: TED-120: Stripe not answering records nothing
+ok 9 - TED-120: Stripe not answering records nothing
+  ---
+  duration_ms: 166.000576
+  type: 'test'
+  ...
+# Subtest: TED-120: the database refusing (booked for someone else) is passed on in words
+ok 10 - TED-120: the database refusing (booked for someone else) is passed on in words
+  ---
+  duration_ms: 163.234417
+  type: 'test'
+  ...
+# Subtest: TED-120: a charge already answered is not answered again
+ok 11 - TED-120: a charge already answered is not answered again
+  ---
+  duration_ms: 164.33213
+  type: 'test'
+  ...
+# Subtest: TED-120: someone who is not the camp's owner or an admin is refused before Stripe is asked
+not ok 12 - TED-120: someone who is not the camp's owner or an admin is refused before Stripe is asked
+  ---
+  duration_ms: 158.848885
+  type: 'test'
+  location: '/tmp/claude-0/-home-user-daily-camp-schedular/39278441-0cf3-5f6a-bf8e-a51bef67e95d/scratchpad/wt_old/tests/autopay_confirm_stripe.test.js:91:1'
+  failureType: 'testCodeFailure'
+  error: |-
+    Expected values to be strictly equal:
+    + actual - expected
+    
+    + 'Only camp owners/admins can charge a stored card.'
+    - 'Only the camp owner or an admin can confirm a Stripe autopay payment.'
+    
+  code: 'ERR_ASSERTION'
+  name: 'AssertionError'
+  expected: 'Only the camp owner or an admin can confirm a Stripe autopay payment.'
+  actual: 'Only camp owners/admins can charge a stored card.'
+  operator: 'strictEqual'
+  stack: |-
+    TestContext.<anonymous> (/tmp/claude-0/-home-user-daily-camp-schedular/39278441-0cf3-5f6a-bf8e-a51bef67e95d/scratchpad/wt_old/tests/autopay_confirm_stripe.test.js:95:12)
+    Test.runInAsyncScope (node:async_hooks:214:14)
+    Test.run (node:internal/test_runner/test:1047:25)
+    Test.processPendingSubtests (node:internal/test_runner/test:744:18)
+    Test.postRun (node:internal/test_runner/test:1173:19)
+    Test.run (node:internal/test_runner/test:1101:12)
+    async Test.processPendingSubtests (node:internal/test_runner/test:744:7)
+  ...
+1..12
+# tests 12
+# suites 0
+# pass 11
+# fail 1
+# cancelled 0
+# skipped 0
+# todo 0
+# duration_ms 2047.586679

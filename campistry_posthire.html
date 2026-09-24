@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <title>Post-Hire Form</title>
-<link rel="stylesheet" href="campistry-unified.css?v=20260903-03">
+<link rel="stylesheet" href="campistry-unified.css?v=20260918-25">
 <meta name="viewport" content="width=device-width,initial-scale=1">
 <link href="https://fonts.googleapis.com/css2?family=DM+Sans:opsz,wght@9..40,400;9..40,500;9..40,600;9..40,700;9..40,800&display=swap" rel="stylesheet">
 <style>
@@ -114,10 +114,11 @@ body{font-family:var(--font);background:var(--s50);color:var(--s800);-webkit-fon
 <!-- Cloud sync (loads silently — if scripts not found, falls back to localStorage only) -->
 <script src="config.js?v=20260903-03" onerror="console.log('[PostHire] Supabase config (config.js) not loaded — local only')"></script>
 <script src="supabase-js@2.js?v=20260903-03" onerror="console.log('[PostHire] Supabase client not loaded — local only')"></script>
-<script src="supabase_client.js?v=20260903-03" onerror="console.log('[PostHire] Supabase config not loaded — local only')"></script>
+<script src="campistry_camper_id_rpc.js?v=20260923-20"></script>
+<script src="supabase_client.js?v=20260923-08" onerror="console.log('[PostHire] Supabase config not loaded — local only')"></script>
 <script src="local_cache_idb.js?v=20260903-03" onerror="console.log('[PostHire] LocalCacheIDB not loaded — falling back to localStorage')"></script>
-<script src="campistry_finance_merge.js?v=20260915-01"></script>
-<script src="integration_hooks.js?v=20260917-02" onerror="console.log('[PostHire] Integration hooks not loaded — local only')"></script>
+<script src="campistry_finance_merge.js?v=20260924-01"></script>
+<script src="integration_hooks.js?v=20260923-22" onerror="console.log('[PostHire] Integration hooks not loaded — local only')"></script>
 
 <script>
 (function(){
@@ -564,16 +565,21 @@ async function saveResponse(rec){
         var res=await client.rpc('submit_posthire_response',{p_camp_id:campId,p_app_id:_appId,p_posthire:rec});
         if(res&&res.error)throw new Error(res.error.message);
         if(res&&res.data&&res.data.success===false)throw new Error(res.data.error);
-        // Best-effort local cache nudge — only helps an admin on this SAME device.
-        try{
-            if(window.saveGlobalSettings&&window.saveGlobalSettings._isAuthoritativeHandler){
-                var g=JSON.parse(localStorage.getItem('campGlobalSettings_v1')||'{}');
-                var me=Object.assign({},g.campistryMe);
-                me.staffApplications=Object.assign({},me.staffApplications||{});
-                me.staffApplications[_appId]=Object.assign({},me.staffApplications[_appId]||_appRecord||{},{postHire:rec});
-                window.saveGlobalSettings('campistryMe',me);
-            }
-        }catch(_){}
+        // NO LOCAL CACHE NUDGE. Removed alongside the identical ones on the register
+        // and post-acceptance forms.
+        //
+        // This one was not destructive today: staffApplications is not one of the
+        // branches the lite localStorage snapshot strips (families, enrollments,
+        // payments, finance, bunkAssignments are), so it pushed the real list rather
+        // than a one-entry replacement of it.
+        //
+        // It went anyway, because the reason it was safe is an accident of which five
+        // keys happen to be on that strip list, and adding a sixth is a one-line
+        // change somebody will make for good reasons. A public form has no business
+        // pushing the camp's whole state row.
+        //
+        // submit_posthire_response above is the real path: atomic, server-side,
+        // scoped to one application id.
         showState('successWrap');
         window.scrollTo(0,0);
     }catch(ex){

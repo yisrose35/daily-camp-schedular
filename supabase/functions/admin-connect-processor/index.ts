@@ -130,6 +130,13 @@ serve(async (req) => {
     const { data: camp } = await service.from("camps").select("id, name").eq("id", campId).maybeSingle();
     if (!camp) return json({ success: false, error: "No camp with that id." }, 404);
 
+    // Sola only tells us about hosted payments through its webhook, and the
+    // webhook cannot be verified without the PIN: connecting without one means
+    // every hosted payment is silently never recorded (TED-087).
+    if (processorKey === "cardknox" && !String((credentials as Record<string, unknown>).webhookPin || "").trim()) {
+      return json({ success: false, error: "Cardknox/Sola needs its webhookPin (Sola portal → Settings → Webhooks) — without it no hosted payment can be recorded." }, 400);
+    }
+
     // Test BEFORE storing — an unverified credential is never persisted.
     // Inlined per processor (see the header block re: Dashboard deploy).
     let test: { success: boolean; error?: string };

@@ -120,6 +120,11 @@ function brandFooterHtml(b: Branding): string {
   if (!b.footer) return "";
   return `<div style="margin-top:18px;padding-top:12px;border-top:1px solid #e2e8f0;font-size:12px;line-height:1.55;color:#64748b;white-space:pre-wrap;">${escHtml(b.footer)}</div>`;
 }
+// Turn plain URLs in an already-escaped body into clickable links, so a form
+// link (or any link) the camp writes in a message is actually clickable.
+function linkifyHtml(escaped: string): string {
+  return escaped.replace(/(https?:\/\/[^\s<]+[^\s<.,;:!?)\]])/g, (u) => `<a href="${u}" style="color:#2563eb;text-decoration:underline;">${u}</a>`);
+}
 function buildBrandedEmailHtml(o: { subject?: string; body?: string; branding?: any; campName?: string; unsubLink?: string; campAddress?: string }): string {
   const b = normalizeBranding(o.branding);
   const campName = o.campName || "Camp";
@@ -138,7 +143,7 @@ function buildBrandedEmailHtml(o: { subject?: string; body?: string; branding?: 
 <tr><td>${brandHeaderHtml(b, campName)}</td></tr>
 <tr><td style="${bodyBg}padding:26px 28px 30px;">
 ${o.subject ? `<div style="font-size:17px;font-weight:700;color:#0f172a;margin:0 0 12px;">${escHtml(o.subject)}</div>` : ""}
-<div style="font-size:14.5px;line-height:1.65;color:#334155;white-space:pre-wrap;">${escHtml(o.body || "")}</div>
+<div style="font-size:14.5px;line-height:1.65;color:#334155;white-space:pre-wrap;">${linkifyHtml(escHtml(o.body || ""))}</div>
 ${brandFooterHtml(b)}
 </td></tr>
 <tr><td style="padding:14px 20px;background:#f8fafc;text-align:center;font-size:11px;color:#94a3b8;">Sent by ${escHtml(campName)} via Campistry${extras ? ` · ${extras}` : ""}</td></tr>
@@ -174,6 +179,27 @@ async function callerRole(req: Request): Promise<string | null> {
   return typeof role === "string" ? role : null;
 }
 
+// get_user_role() only proves a role in the CALLER'S OWN camp
+// (auth.uid() -> get_user_camp_id()) — nothing ties that to the campId the
+// request body claims. Without this, an owner/admin of Camp A could pass
+// Camp B's id and have this function (running on the service-role key)
+// broadcast to Camp B's families. Confirming the two match is what actually
+// authorizes "send for this specific camp."
+async function callerCampId(req: Request): Promise<string | null> {
+  const supabaseUrl = Deno.env.get("SUPABASE_URL");
+  const anonKey = Deno.env.get("SUPABASE_ANON_KEY");
+  const authHeader = req.headers.get("Authorization");
+  if (!supabaseUrl || !anonKey || !authHeader) return null;
+  const res = await fetch(`${supabaseUrl}/rest/v1/rpc/get_user_camp_id`, {
+    method: "POST",
+    headers: { apikey: anonKey, Authorization: authHeader, "Content-Type": "application/json" },
+    body: "{}",
+  });
+  if (!res.ok) return null;
+  const id = await res.json();
+  return typeof id === "string" ? id : null;
+}
+
 // Every phone number that belongs to this camp — same shape as send-sms's
 // campPhoneBook, scoped by the caller's own JWT/RLS.
 async function campPhoneBook(req: Request): Promise<Set<string> | null> {
@@ -201,7 +227,82 @@ async function campPhoneBook(req: Request): Promise<Set<string> | null> {
   return book;
 }
 
-async function sendTelnyxSMS(to: string, body: string, fromNumber?: string): Promise<{ ok: boolean; error?: string }> {
+// ── Pacing, concurrency and retry ───────────────────────────────────────────
+//
+// The send loop used to be strictly serial with a deliberate 100ms sleep after
+// every recipient, plus one awaited `notifications` INSERT per recipient before
+// it. At roughly half a second each for email + SMS, a broadcast to 400
+// families needed ~200 seconds and was killed by the platform's wall clock part
+// way through — the exact size of camp this feature exists for.
+//
+// Concurrency alone is not the fix, because the sleep was doing a job: it kept
+// the request rate under the providers' limits. So pacing is now explicit (a
+// shared rate gate per provider) and separate from concurrency (a worker pool
+// that hides each call's latency). Throughput becomes the rate limit instead of
+// one-over-latency, and both numbers are env-tunable from the Dashboard without
+// touching this file.
+const CONCURRENCY = Math.max(1, Number(Deno.env.get("BROADCAST_CONCURRENCY") || 6));
+const EMAIL_PER_SEC = Math.max(1, Number(Deno.env.get("BROADCAST_EMAIL_PER_SEC") || 8));
+const SMS_PER_SEC = Math.max(1, Number(Deno.env.get("BROADCAST_SMS_PER_SEC") || 8));
+// Leaves headroom under the platform's wall-clock limit so the function can
+// report an honest partial result instead of being killed mid-send.
+const BUDGET_MS = Math.max(5000, Number(Deno.env.get("BROADCAST_BUDGET_MS") || 100000));
+
+/** Spaces calls out so no more than `perSecond` start in any second. */
+function rateGate(perSecond: number) {
+  const gap = 1000 / perSecond;
+  let next = 0;
+  return async () => {
+    const now = Date.now();
+    const at = Math.max(now, next);
+    next = at + gap;
+    if (at > now) await new Promise((r) => setTimeout(r, at - now));
+  };
+}
+
+/** Runs `worker` over `items` with at most `limit` in flight. */
+async function pool<T>(items: T[], limit: number, worker: (item: T) => Promise<void>) {
+  let i = 0;
+  await Promise.all(
+    Array.from({ length: Math.min(limit, items.length) }, async () => {
+      for (;;) {
+        const n = i++;
+        if (n >= items.length) return;
+        await worker(items[n]);
+      }
+    }),
+  );
+}
+
+type SendResult = { ok: boolean; error?: string; retryable?: boolean };
+
+/**
+ * Retries a transient provider failure instead of counting it as a permanent
+ * one. A rate-limit rejection used to mark that parent as failed for good —
+ * and because the idempotency marker had already been written, retrying the
+ * whole broadcast skipped them for ever. So a 429 silently cost a family the
+ * message at exactly the recipient counts where 429s start happening.
+ */
+async function withRetry(send: () => Promise<SendResult>, tries = 3): Promise<SendResult> {
+  let last: SendResult = { ok: false, error: "not attempted" };
+  for (let attempt = 0; attempt < tries; attempt++) {
+    last = await send();
+    if (last.ok || !last.retryable) return last;
+    // 0.5s, 1.5s — short enough to stay inside the budget, long enough for a
+    // per-second rate window to roll over.
+    await new Promise((r) => setTimeout(r, 500 + attempt * 1000));
+  }
+  return last;
+}
+
+/** Whether a provider's rejection is worth trying again. */
+function isRetryable(status: number | undefined, message: string): boolean {
+  if (status === 429) return true;
+  if (status !== undefined && status >= 500) return true;
+  return /rate.?limit|too many requests|timeout|temporar|econnreset|socket|network/i.test(message);
+}
+
+async function sendTelnyxSMS(to: string, body: string, fromNumber?: string): Promise<SendResult> {
   // A camp's own number (Dashboard → Camp Profile → SMS Sending Number)
   // takes priority — isolates deliverability/reputation per camp instead of
   // every camp sharing one platform-wide number. Falls back to the shared
@@ -224,9 +325,11 @@ async function sendTelnyxSMS(to: string, body: string, fromNumber?: string): Pro
     });
     const data = await res.json().catch(() => ({}));
     if (res.ok) return { ok: true };
-    return { ok: false, error: data?.errors?.[0]?.detail || `Telnyx error ${res.status}` };
+    const msg = data?.errors?.[0]?.detail || `Telnyx error ${res.status}`;
+    return { ok: false, error: msg, retryable: isRetryable(res.status, msg) };
   } catch (e) {
-    return { ok: false, error: (e as Error).message };
+    const msg = (e as Error).message;
+    return { ok: false, error: msg, retryable: isRetryable(undefined, msg) };
   }
 }
 
@@ -242,8 +345,43 @@ serve(async (req) => {
     if (!role || !SENDER_ROLES.includes(role)) {
       return json({ error: "Not authorized to send broadcasts (owner/admin/scheduler only)." }, 403);
     }
+    const ownCampId = await callerCampId(req);
+    if (!ownCampId || ownCampId !== campId) {
+      return json({ error: "Not authorized for this camp." }, 403);
+    }
 
     const supabase = createClient(Deno.env.get("SUPABASE_URL")!, Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!);
+
+    // The client-side check (campistry_me.js's _emailServiceOn()) is what
+    // shows the office a friendly "not in your plan" message before they
+    // even try — this is the real gate, since a client-side-only check can
+    // be skipped by anyone calling this function directly with a valid
+    // token. Same _camp_may_send_email(camp_id) RPC migration 196 defines
+    // for exactly this purpose.
+    const { data: mayEmail, error: mayEmailErr } = await supabase.rpc("_camp_may_send_email", { p_camp_id: campId });
+    if (mayEmailErr) {
+      console.error("[send-broadcast] email-gate check failed:", mayEmailErr.message);
+      return json({ error: "Could not verify this camp's emailing plan." }, 500);
+    }
+    if (!mayEmail) {
+      return json({ error: "This camp's plan doesn't include emailing. Contact Campistry to add it." }, 403);
+    }
+
+    // Overall logo/branding: when the caller doesn't pass one (or passes one
+    // with no logo), fall back to the camp's own saved Link branding, so every
+    // email — acceptance notes, receipts, broadcasts — carries the camp's logo
+    // without each send path having to remember to attach it.
+    let brandingResolved: any = branding;
+    if ((method === "email" || method === "all" || method === "All Channels" || method === "Email")
+        && (!brandingResolved || !brandingResolved.logo)) {
+      try {
+        const { data: kv } = await supabase.from("camp_state_kv").select("value")
+          .eq("camp_id", campId).eq("key", "campistryLink").maybeSingle();
+        const stored = (kv?.value as any)?.settings?.branding || (kv?.value as any)?.branding;
+        if (stored && stored.logo) brandingResolved = stored;
+      } catch (_e) { /* keep whatever was passed */ }
+    }
+
     const results = { emailSent: 0, emailFailed: 0, emailSkipped: 0, smsSent: 0, smsFailed: 0, smsSkipped: 0 };
     const sendEmail = method === "email" || method === "all" || method === "All Channels" || method === "Email";
     const sendSms = method === "sms" || method === "SMS" || method === "all" || method === "All Channels";
@@ -286,66 +424,146 @@ serve(async (req) => {
       return `${base}/email-unsubscribe?email=${encodeURIComponent(email)}&t=${t}`;
     };
 
+    // ── Consent, in one pass, before anything costs a round trip ────────────
+    // Default-allow when consent isn't specified at all — existing callers
+    // (post-acceptance form links, a parent's own transactional emails
+    // they triggered by applying/enrolling) predate this field and are
+    // relationship/transactional mail, not the unsolicited marketing-style
+    // sends this gate exists for. Only an EXPLICIT consent:false (the new
+    // composer fallback passing a non-consenting non-adopter) is skipped.
+    const consented: any[] = [];
     for (const recipient of to as any[]) {
-      // Default-allow when consent isn't specified at all — existing callers
-      // (post-acceptance form links, a parent's own transactional emails
-      // they triggered by applying/enrolling) predate this field and are
-      // relationship/transactional mail, not the unsolicited marketing-style
-      // sends this gate exists for. Only an EXPLICIT consent:false (the new
-      // composer fallback passing a non-consenting non-adopter) is skipped.
-      if (recipient.consent === false) { if (recipient.email) results.emailSkipped++; if (recipient.phone) results.smsSkipped++; continue; }
-
-      // Idempotency — skip a recipient we've already sent this exact event to.
-      let alreadySent = false;
-      if (eventKey) {
-        const sourceId = `${eventKey}:${recipient.email || recipient.phone || ""}`;
-        const { data: ins } = await supabase
-          .from("notifications")
-          .insert({ camp_id: campId, source: "broadcast_fallback", source_id: sourceId, title: subject || "", body: body })
-          .select("id");
-        alreadySent = !ins || ins.length === 0;
+      if (recipient.consent === false) {
+        if (recipient.email) results.emailSkipped++;
+        if (recipient.phone) results.smsSkipped++;
+        continue;
       }
-      if (alreadySent) continue;
+      consented.push(recipient);
+    }
+
+    // ── Idempotency, in ONE round trip for the whole broadcast ──────────────
+    // This was one awaited INSERT per recipient: 400 families meant 400
+    // sequential round trips before a single message went out. The unique
+    // constraint on (camp_id, source, source_id) does the same job in a single
+    // statement — `ignoreDuplicates` skips the ones already marked, and the
+    // returned rows are exactly the recipients this invocation has claimed.
+    //
+    // Two recipients can share an address (siblings on one parent email), so
+    // the rows are deduped by source_id first. That matches the old behaviour
+    // exactly: the second INSERT used to conflict and the recipient was
+    // treated as already sent.
+    const sourceIdOf = (r: any) => `${eventKey}:${r.email || r.phone || ""}`;
+    let queue = consented;
+    if (eventKey) {
+      const bySource = new Map<string, any>();
+      for (const r of consented) {
+        const sid = sourceIdOf(r);
+        if (!bySource.has(sid)) bySource.set(sid, r);
+      }
+      const rows = [...bySource.keys()].map((sid) => ({
+        camp_id: campId, source: "broadcast_fallback", source_id: sid,
+        title: subject || "", body: body,
+      }));
+      const { data: claimed, error: claimErr } = await supabase
+        .from("notifications")
+        .upsert(rows, { onConflict: "camp_id,source,source_id", ignoreDuplicates: true })
+        .select("source_id");
+      if (claimErr) {
+        // Can't tell who has already been sent to. Sending anyway risks
+        // double-messaging every family; refusing costs one retry. Refuse.
+        console.error("[send-broadcast] idempotency claim failed:", claimErr.message);
+        return json({ error: "Could not reserve this send — nothing was sent. Try again." }, 503);
+      }
+      const fresh = new Set((claimed || []).map((r: any) => r.source_id));
+      queue = [...bySource.values()].filter((r) => fresh.has(sourceIdOf(r)));
+    }
+
+    // ── Send, paced and in parallel, within a wall-clock budget ─────────────
+    const emailGate = rateGate(EMAIL_PER_SEC);
+    const smsGate = rateGate(SMS_PER_SEC);
+    const startedAt = Date.now();
+    let outOfTime = false;
+    const deferred: any[] = [];   // claimed but never attempted — must be released
+
+    await pool(queue, CONCURRENCY, async (recipient) => {
+      if (outOfTime) { deferred.push(recipient); return; }
+      if (Date.now() - startedAt > BUDGET_MS) { outOfTime = true; deferred.push(recipient); return; }
 
       // Per-recipient subject/body (merge-tag-personalized by the composer)
       // override the shared top-level ones when present.
       const rSubject = recipient.subject || subject;
       const rBody = recipient.body || body;
+      let anySent = false, anyFailed = false;
 
       if (sendEmail && recipient.email) {
         if (unsubscribedEmails.has(String(recipient.email).toLowerCase())) { results.emailSkipped++; }
         else {
-          try {
-            const link = await unsubLink(recipient.email);
-            const htmlBody = buildBrandedEmailHtml({ subject: rSubject, body: rBody, branding, campName, unsubLink: link, campAddress });
-            const { error } = await resend.emails.send({
-              from: FROM_EMAIL, to: [recipient.email],
-              subject: rSubject || `Message from ${campName || "Camp"}`, html: htmlBody,
-              replyTo: campReplyTo,
-              headers: link ? { "List-Unsubscribe": `<${link}>`, "List-Unsubscribe-Post": "List-Unsubscribe=One-Click" } : undefined,
-            });
-            if (error) results.emailFailed++; else results.emailSent++;
-          } catch { results.emailFailed++; }
+          const link = await unsubLink(recipient.email);
+          const htmlBody = buildBrandedEmailHtml({ subject: rSubject, body: rBody, branding: brandingResolved, campName, unsubLink: link, campAddress });
+          const r = await withRetry(async () => {
+            await emailGate();
+            try {
+              const { error } = await resend.emails.send({
+                from: FROM_EMAIL, to: [recipient.email],
+                subject: rSubject || `Message from ${campName || "Camp"}`, html: htmlBody,
+                replyTo: campReplyTo,
+                headers: link ? { "List-Unsubscribe": `<${link}>`, "List-Unsubscribe-Post": "List-Unsubscribe=One-Click" } : undefined,
+              });
+              if (!error) return { ok: true };
+              const msg = (error as any).message || (error as any).name || "send failed";
+              return { ok: false, error: msg, retryable: isRetryable((error as any).statusCode, msg) };
+            } catch (e) {
+              const msg = (e as Error).message;
+              return { ok: false, error: msg, retryable: isRetryable(undefined, msg) };
+            }
+          });
+          if (r.ok) { results.emailSent++; anySent = true; }
+          else { results.emailFailed++; anyFailed = true; }
         }
       }
 
       if (sendSms && recipient.phone) {
         const smsTo = normalizePhone(recipient.phone);
         const key = smsTo ? phoneKey(smsTo) : null;
-        if (!smsTo || !key || !phoneBook?.has(key)) { results.smsFailed++; }
+        if (!smsTo || !key || !phoneBook?.has(key)) { results.smsFailed++; anyFailed = true; }
         else if (optedOutPhones.has(key)) { results.smsSkipped++; }
         else {
           const smsBody = (rSubject ? rSubject + "\n\n" : "") + rBody + "\n\n— " + (campName || "Camp") + "\nReply STOP to opt out.";
-          const r = await sendTelnyxSMS(smsTo, smsBody, campTelnyxNumber);
-          if (r.ok) results.smsSent++; else results.smsFailed++;
+          const r = await withRetry(async () => { await smsGate(); return await sendTelnyxSMS(smsTo, smsBody, campTelnyxNumber); });
+          if (r.ok) { results.smsSent++; anySent = true; }
+          else { results.smsFailed++; anyFailed = true; }
         }
       }
 
-      if ((to as any[]).length > 5) await new Promise((r) => setTimeout(r, 100));
+      // Nothing reached this family and the marker says it did. Release it, or
+      // a retry of the broadcast skips them for ever: the marker is written
+      // BEFORE the send (so a crash can never double-message anyone), which
+      // means a failed send has to undo it or the failure is permanent. Only
+      // when nothing at all got through — a family that got the email but not
+      // the SMS has been reached, and re-sending would message them twice.
+      if (anyFailed && !anySent) deferred.push(recipient);
+    });
+
+    // Release every claim we could not honour — the ones we ran out of time for
+    // and the ones that failed outright — so the next invocation picks them up.
+    if (eventKey && deferred.length) {
+      const sids = [...new Set(deferred.map(sourceIdOf))];
+      const { error: relErr } = await supabase
+        .from("notifications")
+        .delete()
+        .eq("camp_id", campId).eq("source", "broadcast_fallback")
+        .in("source_id", sids);
+      if (relErr) console.error("[send-broadcast] could not release claims:", relErr.message);
     }
 
-    console.log(`[send-broadcast] Results:`, results);
-    return json({ success: true, ...results });
+    const remaining = deferred.length;
+    const done = !outOfTime;
+    console.log(`[send-broadcast] Results:`, results,
+      done ? `(complete, ${remaining} to retry)` : `(budget reached, ${remaining} not attempted)`);
+    // `done:false` means the platform's clock, not a failure: the claims for
+    // everyone unsent have been released, so calling again with the same
+    // eventKey and the same list resumes exactly where this left off.
+    return json({ success: true, ...results, done, remaining, attempted: queue.length - remaining });
   } catch (err) {
     console.error("[send-broadcast] Error:", (err as Error).message);
     return json({ error: (err as Error).message }, 500);

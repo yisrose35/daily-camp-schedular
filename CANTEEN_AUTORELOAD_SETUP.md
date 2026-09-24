@@ -136,17 +136,43 @@ select cron.schedule(
 );
 ```
 
+## When it charges — only while camp is in session
+
+Auto-reload must not charge parents outside camp (TED-143). The runner charges
+a parent only on a day that falls inside one of the camp's **sessions**:
+
+1. **The session dates.** Dashboard → **Dates & Pricing** → each session's
+   start and end date. Before the first session starts (for example after you
+   enter next summer's sessions in the spring), between two sessions, and
+   after the last one ends, the runner charges nobody at this camp. A camp
+   with **no session dates at all** has no season, so nobody is charged
+   automatically until you add them.
+2. **The office's switch.** Snacks → **Settings** → *Parents' auto-reload* →
+   **Off** → Save. It stops every parent's auto-reload at once, whatever dates
+   they chose. Use it at the end of the season, before Refund All, or any time.
+3. **Refunds.** Refund All (and a child's own Refund that empties the wallet)
+   switches that child's auto-reload off; the parent sees "Auto-reload was
+   switched off" in Link and can switch it back on.
+
+To test the runner outside the season (step below), add a test session that
+covers today, and delete it afterwards.
+
 ## How to verify it's working
 
-Use Stripe **test mode**. You can trigger the runner manually at any time
-(not just via cron) by POSTing to it with the `x-cron-secret` header — e.g.
-from PowerShell:
-```powershell
-Invoke-RestMethod -Method Post -Uri 'https://<PROJECT_REF>.supabase.co/functions/v1/canteen-auto-reload' -Headers @{ 'x-cron-secret' = '<CANTEEN_AUTORELOAD_CRON_SECRET>' }
+Use Stripe **test mode**. You can run the runner once by hand at any time
+(not just via cron): Supabase Dashboard → **SQL Editor** → New query → paste,
+filling in your project ref and the secret from step 4 → **Run**:
+```sql
+select net.http_post(
+  url     := 'https://<PROJECT_REF>.supabase.co/functions/v1/canteen-auto-reload',
+  headers := jsonb_build_object('Content-Type','application/json','x-cron-secret','<CANTEEN_AUTORELOAD_CRON_SECRET>'),
+  body    := '{}'::jsonb
+);
 ```
-It always returns a JSON summary (`charged`, `failed`, `details[]`) even when
-nothing was due. Check `Dashboard → Edge Functions → canteen-auto-reload →
-Logs` to see what it saw on each run.
+A few seconds later, run `select status_code, content from net._http_response order by id desc limit 1;`
+to read its answer — a JSON summary (`charged`, `failed`, `details[]`), even
+when nothing was due. `Dashboard → Edge Functions → canteen-auto-reload →
+Logs` shows what it saw on each run.
 
 1. As a parent in Link → Canteen, scroll to the new **Auto-Reload** card.
    Turn on "Reload when balance drops below a threshold", set threshold $5 /
@@ -156,7 +182,7 @@ Logs` to see what it saw on each run.
    is on" and the card's brand/last4 shown.
 2. Manually drop the test camper's balance below $5 (spend it at the POS, or
    edit the balance in the Snacks admin Accounts tab), then trigger the
-   runner manually (the PowerShell command above). Confirm the response shows
+   runner by hand (the SQL Editor step above). Confirm the response shows
    one `"result":"charged"` entry for that camper.
 3. Within moments, confirm the balance increased by $20 in both Link and the
    Snacks admin dashboard, and a transaction with method "stripe"/kind

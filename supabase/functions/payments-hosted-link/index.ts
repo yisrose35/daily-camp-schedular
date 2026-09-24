@@ -52,24 +52,45 @@ function bqAuth(c: Record<string, string>): string {
 }
 
 async function campOwnsFamily(service: ReturnType<typeof createClient>, campId: string, familyKey: string): Promise<boolean> {
-  const { data } = await service.from("camp_state_kv").select("value")
-    .eq("camp_id", campId).eq("key", "campistryMe").maybeSingle();
-  const families = data?.value && typeof data.value === "object" ? (data.value as Record<string, any>).families : null;
-  return !!(families && typeof families === "object" && Object.prototype.hasOwnProperty.call(families, familyKey));
+  // The family ROW (camp_family), not the campistryMe document's copy of it.
+  const { data, error } = await service.rpc("camp_family", { p_camp_id: campId, p_family_key: familyKey });
+  return !error && !!data && typeof data === "object";
 }
 
-async function campHasCamper(service: ReturnType<typeof createClient>, campId: string, camperName: string): Promise<boolean> {
-  const { data } = await service.from("camp_state_kv").select("value")
-    .eq("camp_id", campId).eq("key", "campistrySnacks").maybeSingle();
-  const accts = data?.value && typeof data.value === "object" ? (data.value as Record<string, any>).accounts : null;
-  return !!(accts && typeof accts === "object" && Object.prototype.hasOwnProperty.call(accts, camperName));
+async function campHasCamper(service: ReturnType<typeof createClient>, campId: string, camperName: string, camperId: number | null = null): Promise<boolean> {
+  // The canteen accounts are ROWS since 219, and the page strips `accounts`
+  // out of every campistrySnacks document save — so reading the document said
+  // "no such camper" for everyone, and every canteen card deposit was refused.
+  // canteen_camper_known (migration 243) asks the roster and the account rows.
+  const { data, error } = await service.rpc("canteen_camper_known", {
+    p_camp_id: campId, p_camper_name: camperName, p_camper_id: camperId,
+  });
+  if (error) {
+    console.error("[campHasCamper] canteen_camper_known failed:", error.message);
+    return false;   // fail closed: money is never taken for a camper we cannot confirm
+  }
+  return data === true;
+}
+
+
+/** A camper id sent by the page (campistry_camper_id_rpc.js adds it), or null. */
+function camperIdIn(v: unknown): number | null {
+  return v != null && /^\d+$/.test(String(v)) ? Number(v) : null;
+}
+
+/** A camper's name as a person reads it: without the roster's internal
+ *  " #<number>" that tells two campers with one name apart. For what a parent
+ *  sees; never for identifying the camper. */
+function displayName(s: unknown): string {
+  return String(s ?? "").replace(/\s#\d+(?:-\d+)?$/, "");
 }
 
 serve(async (req) => {
   if (req.method === "OPTIONS") return new Response("ok", { headers: corsHeaders });
 
   try {
-    const { campId, purpose, familyKey, camperName, amount, returnUrl, description } = await req.json();
+    const { campId, purpose, familyKey, camperName, camperId: bodyCamperId, amount, returnUrl, description } = await req.json();
+    const camperId = camperIdIn(bodyCamperId);
     if (!campId || !purpose || !returnUrl) {
       return json({ success: false, error: "campId, purpose, and returnUrl are required" }, 400);
     }
@@ -90,9 +111,10 @@ serve(async (req) => {
     // (camperName); a tuition payment and a family card-save are family-scoped
     // (familyKey). save_card can be either — canteen auto-reload passes a
     // camperName, tuition autopay passes a familyKey.
-    const isCamperScoped = purpose === "canteen" || (purpose === "save_card" && !!camperName);
+    const isCamperScoped = purpose === "canteen" || (purpose === "save_card" && (camperId != null || !!camperName));
     if (isCamperScoped) {
-      if (!camperName || !(await campHasCamper(service, campId, String(camperName)))) {
+      // The number decides (canteen_camper_known resolves it); name only without one.
+      if ((camperId == null && !camperName) || !(await campHasCamper(service, campId, String(camperName ?? ""), camperId))) {
         return json({ success: false, error: "Camper not found for this camp" }, 400);
       }
     } else {
@@ -127,7 +149,9 @@ serve(async (req) => {
       custom_fields: {
         custom1: purpose,
         custom2: familyKey ? String(familyKey) : "",
-        custom3: camperName ? String(camperName) : "",
+        // A label on the Banquest transaction, never read back: the pending row's
+        // person_id is what identifies the camper.
+        custom3: camperName ? displayName(camperName) : "",
         custom4: String(campId),
       },
       general_fields: {
@@ -158,7 +182,8 @@ serve(async (req) => {
       camp_id: campId,
       purpose,
       family_key: familyKey ? String(familyKey) : null,
-      camper_name: camperName ? String(camperName) : null,
+      // The camper's ID, which payments-hosted-complete credits by (250).
+      person_id: (isCamperScoped || camperName) ? camperId : null, camper_name: camperName ? String(camperName) : null,
       amount: purpose === "save_card" ? null : Number(Number(amount).toFixed(2)),
     });
     if (insErr) {

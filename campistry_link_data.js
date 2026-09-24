@@ -251,6 +251,7 @@
                 parent_name:  m.to || '',
                 parent_email: (m.metadata && m.metadata.parentEmail) || '',
                 camper_name:  (m.metadata && m.metadata.camperName) || null,
+                person_id:    (m.metadata && /^\d+$/.test(String(m.metadata.camperId))) ? Number(m.metadata.camperId) : undefined,
                 subject:      m.subject || '',
                 body:         m.body    || '',
                 channels:     m.channels || ['app'],
@@ -358,7 +359,7 @@
         limit = limit || 200;
         db.client
             .from('link_messages')
-            .select('id, thread_id, direction, parent_name, parent_email, camper_name, subject, body, channels, read, archived, important, hidden_for_admin, recipient_user_id, recipient_label, created_at')
+            .select('id, thread_id, direction, parent_name, parent_email, camper_name, person_id, subject, body, channels, read, archived, important, hidden_for_admin, recipient_user_id, recipient_label, created_at')
             .eq('camp_id', db.campId)
             .order('created_at', { ascending: false })
             .limit(limit)
@@ -398,7 +399,7 @@
                         threadId: row.thread_id,
                         recipientUserId: row.recipient_user_id || null,
                         recipientLabel: row.recipient_label || null,
-                        metadata: { parentEmail: row.parent_email, camperName: row.camper_name }
+                        metadata: { parentEmail: row.parent_email, camperName: row.camper_name, camperId: row.person_id != null ? row.person_id : null }
                     });
                 });
                 saveStore();
@@ -669,7 +670,7 @@
                 var c = roster[cid];
                 if (!c) return;
                 map[cid] = Object.assign({}, c, {
-                    camperName: cid,
+                    camperName: cid, camperId: c.camperId != null ? c.camperId : null,
                     parentName: p.name,
                     parentEmail: p.email || '',
                     parentPhone: p.phone || '',
@@ -684,7 +685,7 @@
             var name = entry[0], c = entry[1];
             if (map[name]) return;
             map[name] = Object.assign({}, c, {
-                camperName: name,
+                camperName: name, camperId: c.camperId != null ? c.camperId : null,
                 parentName: c.parent1Name || '',
                 parentEmail: c.parent1Email || '',
                 parentPhone: c.parent1Phone || '',
@@ -1335,7 +1336,10 @@
             // Find canteen balance for this camper
             var balance = null;
             Object.values(accounts).forEach(function(acct) {
-                if (acct.camperName === name || acct.name === name) {
+                // By number when the account and the camper both have one;
+                // by name only for an account written before numbers.
+                var hasIds = acct.camperId != null && acct.camperId !== '' && info.camperId != null && info.camperId !== '';
+                if (hasIds ? String(acct.camperId) === String(info.camperId) : (acct.camperName === name || acct.name === name)) {
                     balance = acct.balance;
                 }
             });
@@ -1346,7 +1350,7 @@
                 .replace(/{balance}/g, balance.toFixed(2));
 
             notifications.push({
-                camperName: name, parentName: info.parentName,
+                camperName: name, camperId: info.camperId != null ? info.camperId : null, parentName: info.parentName,
                 parentEmail: info.parentEmail, parentPhone: info.parentPhone,
                 familyId: info.familyId,
                 subject: _resolveTemplate(subject, name, info, null, campName),
@@ -1360,6 +1364,8 @@
 
     /** Internal template resolver */
     function _resolveTemplate(template, camperName, info, busInfo, campName) {
+        // The text a parent reads: never the roster's internal "#number".
+        camperName = (typeof window !== 'undefined' && window.campistryName || String)(camperName);
         var firstName = camperName.split(' ')[0];
         var parentFirst = (info.parentName || '').split(' ')[0];
         var result = template
@@ -1561,7 +1567,7 @@
                 to: n.parentEmail,
                 subject: n.subject,
                 body: n.body,
-                camper: n.camperName
+                camper: n.camperName, camperId: n.camperId != null ? n.camperId : null
             };
         }).filter(function(n) { return n.to; });
     };

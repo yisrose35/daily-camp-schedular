@@ -1,0 +1,10 @@
+DIFF  2026-09-24-billing-13__refundable_scale.log
+DIFF  2026-09-24-billing-14__canteen_index_cpu.log
+DIFF  2026-09-24-billing-16__finance_page_payment16.log
+NEW   2026-09-24-billing-16__negative_payment16.test.log
+DIFF  2026-09-24-billing-16__postgrest_sessions16.log
+NEW   2026-09-24-billing-16__recheck_harness16.test.log
+NEW   2026-09-24-billing-16__reload16.test.log
+DIFF  2026-09-24-billing-5__ledger_start_scale.log
+DIFF  2026-09-24-billing-7__negative_payment.test.log
+same 112 · differ 6 · new 3

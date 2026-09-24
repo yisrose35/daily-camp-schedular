@@ -1,0 +1,29 @@
+TAP version 13
+# \# case 1: one hand-typed $250; office says same for A, same for B (dialog shows the hand payment)
+# \#   questions after Billing load: ["pi_A->pay_h1"]
+# Subtest: probe
+not ok 1 - probe
+  ---
+  duration_ms: 5.024246
+  type: 'test'
+  location: '/home/user/daily-camp-schedular/ted/probes/2026-09-24-billing-6/sibling_review.test.js:48:1'
+  failureType: 'testCodeFailure'
+  error: '_markCardPayment is not defined'
+  code: 'ERR_TEST_FAILURE'
+  name: 'ReferenceError'
+  stack: |-
+    Object.resolveDepositReview (evalmachine.<anonymous>:150:44)
+    async run (/home/user/daily-camp-schedular/ted/probes/2026-09-24-billing-6/sibling_review.test.js:39:5)
+    async TestContext.<anonymous> (/home/user/daily-camp-schedular/ted/probes/2026-09-24-billing-6/sibling_review.test.js:50:5)
+    async Test.run (node:internal/test_runner/test:1054:7)
+    async startSubtestAfterBootstrap (node:internal/test_runner/harness:296:3)
+  ...
+1..1
+# tests 1
+# suites 0
+# pass 0
+# fail 1
+# cancelled 0
+# skipped 0
+# todo 0
+# duration_ms 107.56276

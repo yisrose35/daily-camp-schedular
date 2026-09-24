@@ -1,0 +1,2 @@
+CAUGHT  MB1 TED-180 void window opens behind history again  (exit 1; node tests/snacks_refund_windows.e2e.js)
+      FAIL TED-180: the Void window is the one you see (on top, the history closed)   → {"ok":true,"historyOpen":true,"text":"$2.00 · Ices · Avi Katz2026-09-24 · 02:15 PMThe $2.00 goes back on Avi Katz’s ca

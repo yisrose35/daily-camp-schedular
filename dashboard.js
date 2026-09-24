@@ -892,6 +892,7 @@
         if (profileTaxId) {
             profileTaxId.textContent = campTaxId ? (campTaxId + (campShowTaxId ? ' (shown on statements)' : ' (not shown on statements)')) : 'Not set';
         }
+        if (typeof window._renderProfileLogoView === 'function') window._renderProfileLogoView();
 
         // Pre-fill edit form (only relevant for owners)
         if (editCampName) {
@@ -939,10 +940,9 @@
         // setup — see BYOP_SETUP.md). Read-only: connecting a different
         // processor is deliberately not a self-serve action from here.
         if (campData?.id) loadCampPaymentProcessorStatus(campData.id);
-        // Which Link programs (Photos/Canteen/Shop/Tips/Camper Mail/Pickup)
-        // this camp actually offers — read-only for non-owner/admin roles,
-        // set_link_program_settings itself is the real (server-side) gate.
-        if (campData?.id) loadLinkProgramSettings(campData.id);
+        // Link Programs (Photos/Canteen/Shop/Tips/Camper Mail/Pickup) config
+        // moved into Link itself (campistry_link_admin.html → Settings) —
+        // nothing to load here anymore.
     }
 
     // ========================================
@@ -1085,17 +1085,94 @@
     // EDIT PROFILE (Owners only)
     // ========================================
     
+    // ── Camp logo ────────────────────────────────────────────────────────────
+    // Stored in the same place the emails read their branding from
+    // (campistryLink.settings.branding.logo), so a logo set here appears at the
+    // top of every branded email the camp sends — no extra wiring per send.
+    var _dashLogoData; // undefined = unchanged, '' = remove, dataURL = new pick
+    function _dashGetLogo(){
+        try{ var gs=window.loadGlobalSettings?window.loadGlobalSettings():JSON.parse(localStorage.getItem('campGlobalSettings_v1')||'{}');
+            return (gs&&gs.campistryLink&&gs.campistryLink.settings&&gs.campistryLink.settings.branding&&gs.campistryLink.settings.branding.logo)||''; }
+        catch(e){ return ''; }
+    }
+    function _dashSaveLogo(dataUrl){
+        try{
+            var gs=window.loadGlobalSettings?window.loadGlobalSettings():JSON.parse(localStorage.getItem('campGlobalSettings_v1')||'{}');
+            var link=(gs&&gs.campistryLink)?gs.campistryLink:{};
+            link.settings=link.settings||{}; link.settings.branding=link.settings.branding||{};
+            link.settings.branding.logo=dataUrl||'';
+            if(window.saveGlobalSettings) window.saveGlobalSettings('campistryLink', link);
+        }catch(e){ console.warn('[Dashboard] logo save failed', e); }
+    }
+    window._renderProfileLogoView=function(){
+        var el=document.getElementById('profileLogo'); if(!el)return;
+        var logo=_dashGetLogo();
+        el.innerHTML=logo?('<img src="'+logo+'" alt="Camp logo" style="max-height:40px;max-width:130px;border-radius:6px;vertical-align:middle;">'):'Not set';
+    };
+    function _syncLogoEditUI(){
+        var logo=(_dashLogoData!==undefined)?_dashLogoData:_dashGetLogo();
+        var prev=document.getElementById('editLogoPreview'), rm=document.getElementById('editLogoRemove');
+        if(prev){ if(logo){ prev.src=logo; prev.style.display=''; } else { prev.removeAttribute('src'); prev.style.display='none'; } }
+        if(rm) rm.style.display=logo?'':'none';
+    }
+    // The logo is embedded as a raw base64 data: URL directly in every email
+    // this camp sends (buildBrandedEmailHtml) — it never gets its own hosted
+    // URL. That's what made a hard 300KB cap necessary in the first place:
+    // a straight-off-the-phone photo/export can be several MB, and that much
+    // inline image data bloats every single send and risks spam-filter
+    // penalties for oversized HTML. Rather than just raising the number (an
+    // owner shouldn't have to know or care what a "reasonable" file size for
+    // an email is), downscale it here to the size it's actually ever
+    // displayed at (max ~340px — the largest headerHtml() ever renders it,
+    // 170px at up to 2x for retina) before it's ever turned into a data URL.
+    // A 12MP phone photo comes out the other side as a normal small PNG.
+    var LOGO_MAX_DIM = 340;
+    var LOGO_RAW_CAP = 8*1024*1024; // sanity ceiling on the ORIGINAL upload, pre-resize
+    window.onLogoPicked=function(input){
+        var f=input&&input.files&&input.files[0]; if(!f)return;
+        if(f.size>LOGO_RAW_CAP){ alert('That image is too large to use (max 8 MB). Please pick a smaller file.'); input.value=''; return; }
+        var img=new Image();
+        var url=URL.createObjectURL(f);
+        img.onload=function(){
+            URL.revokeObjectURL(url);
+            var scale=Math.min(1, LOGO_MAX_DIM/Math.max(img.naturalWidth||1, img.naturalHeight||1));
+            var w=Math.max(1, Math.round((img.naturalWidth||LOGO_MAX_DIM)*scale));
+            var h=Math.max(1, Math.round((img.naturalHeight||LOGO_MAX_DIM)*scale));
+            var canvas=document.createElement('canvas');
+            canvas.width=w; canvas.height=h;
+            var ctx=canvas.getContext('2d');
+            ctx.drawImage(img,0,0,w,h);
+            // PNG keeps transparency (most logos have a transparent background) and,
+            // at these display dimensions, is already small — no lossy re-compression
+            // needed on top of the resize.
+            _dashLogoData=canvas.toDataURL('image/png');
+            _syncLogoEditUI();
+        };
+        img.onerror=function(){
+            URL.revokeObjectURL(url);
+            // SVG and a handful of formats <img> can't rasterize this way in every
+            // browser — fall back to using the file as-is rather than failing silently.
+            var rd=new FileReader();
+            rd.onload=function(){ _dashLogoData=String(rd.result||''); _syncLogoEditUI(); };
+            rd.readAsDataURL(f);
+        };
+        img.src=url;
+    };
+    window.removeLogo=function(){ _dashLogoData=''; var i=document.getElementById('editLogoInput'); if(i)i.value=''; _syncLogoEditUI(); };
+
     window.toggleEditMode = function() {
         // Only owners can edit
         if (isTeamMember) {
             alert('Only camp owners can edit the camp profile.');
             return;
         }
-        
+
         isEditMode = !isEditMode;
-        
+
         if (profileView) profileView.style.display = isEditMode ? 'none' : 'block';
         if (profileEditForm) profileEditForm.style.display = isEditMode ? 'flex' : 'none';
+        if (isEditMode) { _dashLogoData = undefined; _syncLogoEditUI(); }
+        else { var li=document.getElementById('editLogoInput'); if(li)li.value=''; }
         
         const editBtn = document.getElementById('editProfileBtn');
         if (editBtn) {
@@ -1224,6 +1301,10 @@
             // Update local state
             campName = newCampName;
 
+            // Persist the logo (into the branding the emails read) if it changed.
+            if (_dashLogoData !== undefined) _dashSaveLogo(_dashLogoData);
+            if (typeof window._renderProfileLogoView === 'function') window._renderProfileLogoView();
+
             // Update displays
             if (profileCampName) profileCampName.textContent = newCampName;
             if (profileAddress) profileAddress.textContent = newAddress || 'Not set';
@@ -1346,73 +1427,11 @@
     };
 
     // ========================================
-    // LINK PROGRAMS — per-camp on/off switches for parent-facing Link
-    // features (migration 106). Any authenticated user can read them
-    // (get_link_program_settings), but only owner/admin can flip one
-    // (set_link_program_settings enforces that server-side regardless of
-    // what this UI shows) — so a non-owner/admin viewer just sees the
-    // current state as disabled checkboxes rather than this card being
-    // hidden outright.
+    // LINK PROGRAMS — moved into Link itself (campistry_link_admin.html →
+    // Settings, migration 106's get_link_program_settings /
+    // set_link_program_settings) so a camp owner configures Link's own
+    // settings from within Link. The card here now just links out.
     // ========================================
-    var LINK_PROGRAMS = [
-        { key: 'photos', label: 'Photos', desc: 'Facial-recognition folders + HD downloads' },
-        { key: 'canteen', label: 'Canteen', desc: 'Add Funds / prepaid camper wallet' },
-        { key: 'shop', label: 'Camp Shop', desc: 'Swag & merch store' },
-        { key: 'tips', label: 'Tips', desc: 'Parents tipping staff' },
-        { key: 'camperMail', label: 'Camper Mail', desc: 'Parents sending mail to their camper' },
-        { key: 'pickup', label: 'Pickup & Arrival', desc: 'Bus/dismissal tracking and requests' }
-    ];
-    var _linkProgramsCampId = null;
-
-    window.loadLinkProgramSettings = async function(campId) {
-        _linkProgramsCampId = campId;
-        var box = document.getElementById('linkProgramsBox');
-        if (!box) return;
-        try {
-            var canWrite = (typeof userRole === 'string')
-                ? ['owner', 'admin'].indexOf(userRole) !== -1
-                : true; // unknown role: let the RPC be the real gate, don't hide the control
-            var res = await window.supabase.rpc('get_link_program_settings', { p_camp_id: campId });
-            var data = res && res.data;
-            if (res.error || !data || !data.success) {
-                var reason = (res.error && res.error.message) || (data && data.error) || '';
-                box.textContent = 'Could not load Link program settings.' + (reason ? ' (' + reason + ')' : '');
-                return;
-            }
-            box.innerHTML = LINK_PROGRAMS.map(function(p) {
-                var on = data[p.key] !== false;
-                return '<label style="display:flex;align-items:center;justify-content:space-between;gap:12px;padding:9px 0;border-bottom:1px solid var(--slate-100,#f1f5f9);cursor:' + (canWrite ? 'pointer' : 'default') + ';">' +
-                    '<span><strong style="font-size:0.86rem;">' + p.label + '</strong><br><span style="font-size:0.76rem;color:var(--slate-400);">' + p.desc + '</span></span>' +
-                    '<input type="checkbox" ' + (on ? 'checked' : '') + (canWrite ? '' : ' disabled') + ' style="width:18px;height:18px;flex-shrink:0;" onchange="toggleLinkProgram(\'' + p.key + '\', this.checked, this)">' +
-                    '</label>';
-            }).join('') + '<div id="linkProgramsStatus" style="font-size:0.78rem;color:var(--slate-400);margin-top:8px;"></div>';
-        } catch (e) {
-            box.textContent = 'Could not load Link program settings.';
-        }
-    };
-
-    window.toggleLinkProgram = async function(key, enabled, checkboxEl) {
-        var statusEl = document.getElementById('linkProgramsStatus');
-        if (checkboxEl) checkboxEl.disabled = true;
-        if (statusEl) statusEl.textContent = 'Saving…';
-        try {
-            var settings = {}; settings[key] = enabled;
-            var res = await window.supabase.rpc('set_link_program_settings', { p_camp_id: _linkProgramsCampId, p_settings: settings });
-            var data = res && res.data;
-            if (res.error || !data || !data.success) {
-                if (statusEl) statusEl.textContent = 'Could not save — ' + ((data && data.error) || (res.error && res.error.message) || 'try again.');
-                if (checkboxEl) { checkboxEl.checked = !enabled; checkboxEl.disabled = false; }
-                return;
-            }
-            if (statusEl) statusEl.textContent = 'Saved.';
-            setTimeout(function() { if (statusEl) statusEl.textContent = ''; }, 2000);
-        } catch (e) {
-            if (statusEl) statusEl.textContent = 'Could not save — try again.';
-            if (checkboxEl) checkboxEl.checked = !enabled;
-        } finally {
-            if (checkboxEl) checkboxEl.disabled = false;
-        }
-    };
 
     window.openTelnyxRequestModal = function() {
         const overlay = document.getElementById('telnyxRequestOverlay');
@@ -1586,9 +1605,8 @@
                 ? '<button type="button" class="btn-secondary" style="margin-left:8px;" onclick="disconnectCampStripe(this)">Disconnect</button>' : '';
 
             if (!data.connected) {
-                box.innerHTML = '<p style="margin:0 0 10px;">Right now tuition payments deposit into Campistry\'s account. Connect your camp\'s own Stripe account so payments go straight to your bank.</p>' +
-                    (canConnect ? '<button type="button" class="btn-primary" onclick="startCampStripeConnect(this)">Connect your Stripe account</button>' : '') + ownerNote +
-                    '<p style="margin:10px 0 0;font-size:0.78rem;color:var(--slate-400);">Want to bring your own processor (Banquest, Sola/Cardknox, etc.) instead of Stripe? Contact the office — connecting a different processor needs a quick verification call.</p>';
+                box.innerHTML = '<p style="margin:0 0 10px;">Not connected — tuition payments deposit into Campistry\'s account until you connect your own. This is entirely self-serve, no call needed.</p>' +
+                    (canConnect ? '<button type="button" class="btn-primary" onclick="startCampStripeConnect(this)">Connect your Stripe account</button>' : '') + ownerNote;
             } else if (data.charges_enabled) {
                 box.innerHTML = '<p style="margin:0 0 10px;color:#059669;"><strong>Connected</strong> — tuition payments go directly to your bank account' +
                     (data.connected_at ? ' since ' + new Date(data.connected_at).toLocaleDateString() : '') + '.</p>' + disconnectBtn;
@@ -1654,24 +1672,23 @@
                 if (showCff && window.renderCampCardFormFields) window.renderCampCardFormFields();
             }
             if (data.processorKey === 'none' || data.status === 'not_connected') {
-                // Stripe is no longer the default, so this is a real state now:
-                // no processor connected means no online tuition or canteen
-                // payments at all. Say so plainly instead of letting the camp
-                // assume payments work.
-                box.innerHTML = '<p style="margin:0 0 8px;color:#b45309;"><strong>No payment processor connected.</strong> Online tuition payments, saved cards and canteen deposits are switched off until one is set up.</p>' +
-                    '<p style="margin:0;font-size:0.78rem;color:var(--slate-400);">Connect <strong>Stripe</strong> using the "Where tuition money lands" card above, or use your own processor (Banquest, Sola/Cardknox) — contact the office, since connecting one needs a quick verification call.</p>';
+                // Neither option is connected. Say so plainly rather than let the
+                // camp assume payments work, but don't repeat Option 1's own
+                // messaging — just point at it and cover Option 2 (this box)
+                // on its own terms.
+                box.innerHTML = '<p style="margin:0 0 8px;color:#b45309;"><strong>No payment processor connected.</strong> Online tuition payments, saved cards and canteen deposits are switched off until one is set up — either option above.</p>' +
+                    '<p style="margin:0;font-size:0.78rem;color:var(--slate-400);">To bring your own (Banquest, Sola/Cardknox, etc.), contact Campistry — it needs a quick verification call.</p>';
             } else if (data.processorKey === 'stripe') {
-                box.innerHTML = '<p style="margin:0 0 8px;">On <strong>Stripe</strong>' +
+                box.innerHTML = '<p style="margin:0;">On <strong>Stripe</strong>' +
                     (data.status === 'verified' ? '' : ' — <span style="color:#b45309;">not finished setting up yet</span>') +
-                    '. The "Where tuition money lands" card above covers this.</p>' +
-                    '<p style="margin:0;font-size:0.78rem;color:var(--slate-400);">Prefer your own processor (Banquest, Sola/Cardknox)? Contact the office — connecting a different processor needs a quick verification call.</p>';
+                    '. See Option 1 above.</p>';
             } else if (data.status === 'verified') {
                 box.innerHTML = '<p style="margin:0 0 10px;color:#059669;">Connected to your own <strong>' + escTelnyx(data.processorLabel || data.processorKey) + '</strong> account' +
-                    (data.connectedAt ? ' since ' + new Date(data.connectedAt).toLocaleDateString() : '') + '. Payments run through your own processor, not Stripe.</p>' +
-                    '<button type="button" class="btn-secondary" onclick="disconnectCampProcessor(this)">Disconnect &amp; switch back to Stripe</button>';
+                    (data.connectedAt ? ' since ' + new Date(data.connectedAt).toLocaleDateString() : '') + '. Payments run through your own processor.</p>' +
+                    '<button type="button" class="btn-secondary" onclick="disconnectCampProcessor(this)">Disconnect &amp; use Stripe instead</button>';
             } else {
                 box.innerHTML = '<p style="margin:0 0 10px;color:#dc2626;">Connected to <strong>' + escTelnyx(data.processorLabel || data.processorKey) + '</strong> but not yet verified (status: ' + escTelnyx(data.status) + '). Contact Campistry support.</p>' +
-                    '<button type="button" class="btn-secondary" onclick="disconnectCampProcessor(this)">Disconnect &amp; switch back to Stripe</button>';
+                    '<button type="button" class="btn-secondary" onclick="disconnectCampProcessor(this)">Disconnect &amp; use Stripe instead</button>';
             }
         } catch (e) {
             console.error('[Dashboard] loadCampPaymentProcessorStatus threw:', e);
@@ -1931,29 +1948,26 @@
             }
 
             var startEl = document.getElementById('campStartDate');
-            var h1EndEl = document.getElementById('campHalf1End');
-            var h2StartEl = document.getElementById('campHalf2Start');
             var endEl = document.getElementById('campEndDate');
+
+            // The raw stored half1End/half2Start (pre-Sessions-as-source-of-truth
+            // camps) are kept in this module var purely so saveCampDates() can
+            // carry them forward without erasing that fallback data — there are
+            // no inputs for them any more.
+            _dashRawCampDatesHalves = campDates ? { half1End: campDates.half1End || null, half2Start: campDates.half2Start || null } : { half1End: null, half2Start: null };
 
             if (campDates) {
                 if (startEl && campDates.startDate) startEl.value = campDates.startDate;
-                if (h1EndEl && campDates.half1End) h1EndEl.value = campDates.half1End;
-                if (h2StartEl && campDates.half2Start) h2StartEl.value = campDates.half2Start;
                 if (endEl && campDates.endDate) endEl.value = campDates.endDate;
                 updateWeekPreview();
-                // Dates saved before this feature existed (or from any prior
-                // session) never got their half-sessions auto-created, since
-                // that used to only fire on Save — do it here too, on every
-                // load, so it's not just new saves that get it. Owner-only
-                // (matches saveCampDates' write gate); _dashSessions must
-                // already be loaded — see the call order in
-                // setupDashboardForRole().
-                if (!readOnly) _dashSyncHalfSessions(campDates.startDate, campDates.half1End, campDates.half2Start, campDates.endDate);
             }
+            _dashUpdateHalfInfo();
 
             if (readOnly) {
-                [startEl, h1EndEl, h2StartEl, endEl].forEach(function(el) {
-                    if (el) { el.disabled = true; el.style.backgroundColor = 'var(--slate-50)'; el.style.color = 'var(--slate-500)'; }
+                // Just `disabled` — .dash-input:disabled carries the look now, so this
+                // no longer hand-paints two properties the stylesheet already owns.
+                [startEl, endEl].forEach(function(el) {
+                    if (el) el.disabled = true;
                 });
                 var actions = document.getElementById('campDatesActions');
                 if (actions) actions.style.display = 'none';
@@ -1961,6 +1975,10 @@
         } catch (e) {
             console.warn('Could not load camp dates:', e);
         }
+        // The master key's default is DERIVED from the dates just loaded, so it is
+        // drawn here rather than on its own schedule. loadCampDates re-runs after
+        // cloud hydration, which is also when the pin and the session list arrive.
+        try { window.renderCurrentSession(); } catch (_e) {}
     }
 
     function buildWeekMap(startDate, endDate) {
@@ -2003,19 +2021,60 @@
     // snapping shut on the user mid-edit.
     var _weekPreviewOpen = false;
 
-    window._toggleWeekPreview = function() {
-        _weekPreviewOpen = !_weekPreviewOpen;
-        var body = document.getElementById('weekPreviewBody');
-        var chev = document.getElementById('weekPreviewChevron');
-        if (body) body.style.display = _weekPreviewOpen ? 'block' : 'none';
-        if (chev) chev.textContent = _weekPreviewOpen ? '▾' : '▸';
-    };
+    // Fallback-only copy of whatever half1End/half2Start Camp Dates already had
+    // stored before the half-boundary inputs were removed from this card — see
+    // loadCampDates(). saveCampDates() carries these forward unchanged so an
+    // older camp's fallback isn't wiped just because it no longer has inputs
+    // to re-populate them from.
+    var _dashRawCampDatesHalves = { half1End: null, half2Start: null };
+
+    // Read-only line under the Summer Schedule dates explaining where the half
+    // boundaries actually come from now (a "1st Half"/"2nd Half" Session), so
+    // Camp Dates doesn't look like it silently dropped a feature.
+    // The single lookup both the info line and the week preview use: the
+    // "1st Half"/"2nd Half" Sessions' own dates win, falling back to whatever
+    // half1End/half2Start Camp Dates had on file before this card's half
+    // inputs were removed (see loadCampDates()).
+    function _dashResolveHalfBoundaries() {
+        var half1 = _dashSessions.find(function(s) { return s.autoKey === 'half1'; })
+            || _dashSessions.find(function(s) { return !s.autoKey && (s.name || '').trim().toLowerCase() === '1st half'; });
+        var half2 = _dashSessions.find(function(s) { return s.autoKey === 'half2'; })
+            || _dashSessions.find(function(s) { return !s.autoKey && (s.name || '').trim().toLowerCase() === '2nd half'; });
+        return {
+            half1: half1, half2: half2,
+            h1End: (half1 && half1.endDate) || _dashRawCampDatesHalves.half1End || null,
+            h2Start: (half2 && half2.startDate) || _dashRawCampDatesHalves.half2Start || null
+        };
+    }
+
+    function _dashUpdateHalfInfo() {
+        var el = document.getElementById('campDatesHalfInfo');
+        if (!el) return;
+        var r = _dashResolveHalfBoundaries();
+        var half1 = r.half1, half2 = r.half2;
+        if (half1 || half2) {
+            var bits = [];
+            if (half1 && half1.endDate) bits.push('1st Half ends ' + half1.endDate);
+            if (half2 && half2.startDate) bits.push('2nd Half starts ' + half2.startDate);
+            el.style.display = 'block';
+            el.textContent = 'Half boundaries for Per-Half rotation and the calendar come from your '
+                + '"1st Half" / "2nd Half" Sessions below'
+                + (bits.length ? ' (' + bits.join(', ') + ')' : '') + '.';
+        } else if (_dashRawCampDatesHalves.half1End || _dashRawCampDatesHalves.half2Start) {
+            el.style.display = 'block';
+            el.textContent = 'No "1st Half"/"2nd Half" Session found — using the previously saved half boundaries as a fallback. Add those two Sessions below to take over.';
+        } else {
+            el.style.display = 'none';
+        }
+    }
+
 
     function updateWeekPreview() {
         var startDate = document.getElementById('campStartDate')?.value;
         var endDate = document.getElementById('campEndDate')?.value;
-        var h1End = document.getElementById('campHalf1End')?.value;
-        var h2Start = document.getElementById('campHalf2Start')?.value;
+        var _halves = _dashResolveHalfBoundaries();
+        var h1End = _halves.h1End;
+        var h2Start = _halves.h2Start;
         var preview = document.getElementById('campDatesWeekPreview');
         if (!preview) return;
 
@@ -2051,12 +2110,18 @@
             weeksHtml += 'Week ' + w.week + ': ' + fmt(w.start) + ' – ' + fmt(w.end) + halfTag + '<br>';
         });
 
+        // ONE DISCLOSURE PATTERN on this panel, the same <details> the Plan card
+        // uses. This was a hand-rolled chevron with its own click handler and its
+        // own open flag, and it looked like a different kind of thing.
         preview.innerHTML =
-            '<div style="cursor:pointer; user-select:none;" onclick="window._toggleWeekPreview()">' +
-                '<span id="weekPreviewChevron">' + (_weekPreviewOpen ? '▾' : '▸') + '</span> ' +
-                '<strong style="color:var(--slate-700);">Week breakdown (' + weeks.length + ' weeks)</strong>' +
-            '</div>' +
-            '<div id="weekPreviewBody" style="display:' + (_weekPreviewOpen ? 'block' : 'none') + '; margin-top:6px;">' + weeksHtml + '</div>';
+            '<details class="dash-more"' + (_weekPreviewOpen ? ' open' : '') + '>' +
+                '<summary>Week breakdown (' + weeks.length + ' weeks)</summary>' +
+                '<div class="dash-more-body" id="weekPreviewBody">' + weeksHtml + '</div>' +
+            '</details>';
+        // Remembered across the re-render a date change triggers, so opening it and
+        // then correcting a date does not close it under you.
+        var det = preview.querySelector('details');
+        if (det) det.addEventListener('toggle', function () { _weekPreviewOpen = det.open; });
         preview.style.display = 'block';
     }
 
@@ -2071,14 +2136,18 @@
             return;
         }
         var startDate = document.getElementById('campStartDate')?.value || null;
-        var h1End = document.getElementById('campHalf1End')?.value || null;
-        var h2Start = document.getElementById('campHalf2Start')?.value || null;
         var endDate = document.getElementById('campEndDate')?.value || null;
 
+        // half1End/half2Start are no longer edited here — the "1st Half"/"2nd
+        // Half" Sessions are the source of truth for those now (see
+        // Utils.getCampDates()). We still carry forward whatever was already
+        // stored under those keys unchanged, purely as the documented fallback
+        // for a camp with neither session named yet — this save must never be
+        // the thing that erases that fallback.
         var campDates = {
             startDate: startDate,
-            half1End: h1End,
-            half2Start: h2Start,
+            half1End: _dashRawCampDatesHalves.half1End,
+            half2Start: _dashRawCampDatesHalves.half2Start,
             endDate: endDate
         };
 
@@ -2094,43 +2163,183 @@
             if (window.saveGlobalSettings) window.saveGlobalSettings('campDates', campDates);
             if (status) { status.textContent = 'Saved!'; status.style.color = '#059669'; setTimeout(function() { status.textContent = ''; }, 3000); }
             updateWeekPreview();
-            _dashSyncHalfSessions(startDate, h1End, h2Start, endDate);
+            _dashUpdateHalfInfo();
         } catch (e) {
             console.error('Error saving camp dates:', e);
             if (status) { status.textContent = 'Error saving.'; status.style.color = '#dc2626'; }
         }
     };
 
-    // Attendance History — snapshots the CURRENT roster/hired staff into
-    // camp_person_seasons (migration 088) under a season label, so it
-    // survives a CSV re-import wipe or next year's reset. archive_camp_season
-    // reads camp_state_kv server-side (not a client payload) — this works the
-    // same whether called from here or from campistry_me.js's own automatic
-    // archive-before-import prompt, since neither page needs the full roster
-    // loaded into memory to trigger it.
-    window.archiveCurrentSeasonNow = async function() {
-        var input = document.getElementById('seasonArchiveLabel');
-        var status = document.getElementById('seasonArchiveStatus');
-        var label = (input && input.value || '').trim();
-        if (!label) {
-            var startEl = document.getElementById('campStartDate');
-            var y = (startEl && startEl.value) ? new Date(startEl.value).getFullYear() : new Date().getFullYear();
-            label = 'Summer ' + y;
-            if (input) input.value = label;
+    // Attendance History (the manual "Archive Current Season" trigger) moved
+    // to Me -> Roster -> "Archive Season" (CampistryMe.archiveSeasonNow()),
+    // so it lives only in Me alongside the per-person Attendance History view
+    // that was already there. Removed from here.
+
+    // ═══════════════════════════════════════════════════════════════
+    // THE MASTER KEY — which session the whole program is showing.
+    //
+    // The DEFAULT is not stored. It is derived from the dates in the Summer Schedule
+    // card: whichever session today falls in. That is the same reasoning that made us
+    // delete migrations 035/039's stamped per-camper windows — a derived answer cannot
+    // drift out of step with the calendar, and a stored one always eventually does.
+    //
+    // Saving "Follow the calendar" therefore CLEARS the stored value rather than
+    // writing today's answer into it. Writing the answer would freeze it, which is
+    // the whole failure this avoids.
+    // ═══════════════════════════════════════════════════════════════
+
+    /** '2026-07-20' -> 'Jul 20'. Built from LOCAL parts, never toISOString, which
+     *  rolls the day back one in every positive-UTC-offset timezone (see CB-97). */
+    function _dashFmtShort(ymd) {
+        if (!/^\d{4}-\d{2}-\d{2}$/.test(String(ymd || ''))) return String(ymd || '');
+        var d = new Date(ymd + 'T00:00:00');
+        if (isNaN(d.getTime())) return String(ymd);
+        return d.toLocaleDateString('en-US', { month: 'short', day: 'numeric' });
+    }
+
+    function _scopeRuleD() { return window.CampistrySessionScope || null; }
+
+    function _dashScope() {
+        try {
+            return (typeof window.campistrySessionScope === 'function')
+                ? window.campistrySessionScope() : null;
+        } catch (e) { return null; }
+    }
+
+    /** The sessions the picker offers — the same list Sessions & Pricing edits. */
+    function _dashScopeSessions() {
+        if (Array.isArray(_dashSessions) && _dashSessions.length) return _dashSessions;
+        try {
+            var gs = window.loadGlobalSettings ? (window.loadGlobalSettings() || {}) : {};
+            var me = gs.campistryMe;
+            return (me && Array.isArray(me.sessions)) ? me.sessions : [];
+        } catch (e) { return []; }
+    }
+
+    window.renderCurrentSession = function () {
+        var card = document.getElementById('currentSessionCard');
+        if (!card) return;
+        var R = _scopeRuleD();
+        var pick = document.getElementById('currentSessionPick');
+        var explain = document.getElementById('currentSessionExplain');
+        var actions = document.getElementById('currentSessionActions');
+        var list = _dashScopeSessions();
+        var named = list.filter(function (x) { return x && String(x.name || '').trim(); });
+
+        if (!R) {
+            // The rule is what knows the precedence and the expiry. Without it there
+            // is nothing honest to show, so the card goes away rather than offering a
+            // control that would not take effect anywhere.
+            card.style.display = 'none';
+            return;
         }
-        var btn = document.getElementById('archiveSeasonBtn');
-        if (btn) btn.disabled = true;
-        if (status) { status.textContent = 'Archiving…'; status.style.color = 'var(--slate-400)'; }
+        card.style.display = '';
+
+        if (named.length < 2) {
+            // Nothing to choose between. Said in words rather than as an empty
+            // dropdown, because an empty control reads as something being broken.
+            if (pick) pick.style.display = 'none';
+            if (actions) actions.style.display = 'none';
+            if (explain) {
+                explain.innerHTML = named.length === 1
+                    ? 'This camp has one session (<strong>' + _dashEsc(named[0].name)
+                      + '</strong>), so there is nothing to choose — everything shows it.'
+                    : 'Add your sessions below and this is where you pick which one the '
+                      + 'camp is working on.';
+            }
+            return;
+        }
+        if (pick) pick.style.display = '';
+        if (actions) actions.style.display = isTeamMember ? 'none' : '';
+
+        var sc = _dashScope();
+        var opts = R.optionsFor({ sessions: list });
+        if (pick) {
+            var cur = (sc && sc.pin && !sc.pinDropped) ? sc.pin : 'auto';
+            pick.innerHTML = opts.map(function (o) {
+                // The dates, not a warning. Picking a session that is over is how you
+                // tidy it up after the summer, and picking one that has not started is
+                // how you get set up before it \u2014 an option tagged as a mistake is
+                // an option nobody picks.
+                var when = '';
+                if (!o.auto && o.from) {
+                    when = ' \u2014 ' + _dashFmtShort(o.from)
+                         + (o.to ? ' to ' + _dashFmtShort(o.to) : '');
+                }
+                return '<option value="' + _dashEsc(o.value) + '"'
+                    + (o.value === cur ? ' selected' : '') + '>'
+                    + _dashEsc(o.label + when) + '</option>';
+            }).join('');
+            pick.disabled = !!isTeamMember;
+        }
+
+        if (explain) {
+            var bits = [];
+            if (sc && sc.pinDropped) {
+                bits.push('<strong style="color:#991B1B">' + _dashEsc(R.droppedNotice(sc))
+                        + '</strong>');
+            }
+            if (sc && sc.session) {
+                bits.push('Right now the camp is showing <strong>' + _dashEsc(sc.session)
+                    + '</strong>'
+                    + (sc.source === 'pin' ? ' because it is pinned here'
+                       : (sc.source === 'calendar' ? ' because that is what the calendar says'
+                          : ''))
+                    + '.');
+                // Said plainly rather than left to be inferred from a roster that
+                // looks wrong. The rule words it, because "has not started" and "is
+                // over" lead to completely different next actions and only it knows
+                // which way round this is.
+                var oos = R.outOfSeasonNotice(sc, _dashFmtShort);
+                if (oos) bits.push(_dashEsc(oos));
+            } else {
+                bits.push('No session covers today, so every list shows everyone.');
+            }
+            if (isTeamMember) bits.push('Only the camp owner can change this.');
+            explain.innerHTML = bits.join('<br>');
+        }
+    };
+
+    window.saveCurrentSession = async function () {
+        var status = document.getElementById('currentSessionStatus');
+        // Owner-only, for the same reason camp dates are: this moves what every
+        // person in the camp sees, including the front desk checking children in.
+        if (isTeamMember) {
+            if (status) { status.textContent = 'Only camp owners can change the current session.'; status.style.color = '#dc2626'; }
+            return;
+        }
+        var pick = document.getElementById('currentSessionPick');
+        var chosen = (pick && pick.value) || 'auto';
+        // 'auto' stores NOTHING. See the block comment above: writing today's answer
+        // into the pin is exactly the freezing this design avoids.
+        var value = (chosen === 'auto') ? { session: '' } : { session: chosen };
+
         try {
             var campId = localStorage.getItem('campistry_camp_id') || localStorage.getItem('campistry_user_id') || currentUser.id;
-            var { data, error } = await window.supabase.rpc('archive_camp_season', { p_camp_id: campId, p_season_label: label });
-            if (error || !data || !data.success) throw (error || new Error((data && data.error) || 'unknown'));
-            if (status) { status.textContent = 'Archived ' + (data.saved || 0) + ' — "' + label + '" saved.'; status.style.color = '#059669'; setTimeout(function() { status.textContent = ''; }, 5000); }
+            var { error } = await window.supabase
+                .from('camp_state_kv')
+                .upsert({ camp_id: campId, key: 'campSession', value: value, updated_at: new Date().toISOString() },
+                         { onConflict: 'camp_id,key' });
+            if (error) throw error;
+            if (window.saveGlobalSettings) window.saveGlobalSettings('campSession', value);
+            // The resolver memoizes, and presence memoizes its own as-of date on top
+            // of that. Both have to be told, or this page keeps describing the old
+            // answer until something else happens to clear them.
+            if (typeof window.campistrySessionScopeRefresh === 'function') {
+                window.campistrySessionScopeRefresh();
+            }
+            try { if (window.CampistryPresence && window.CampistryPresence.refresh) window.CampistryPresence.refresh(); } catch (e2) {}
+            try { window.dispatchEvent(new CustomEvent('campistry-session-scope', { detail: _dashScope() })); } catch (e3) {}
+            window.renderCurrentSession();
+            if (status) {
+                status.textContent = chosen === 'auto'
+                    ? 'Following the calendar.' : 'The camp is now showing ' + chosen + '.';
+                status.style.color = '#059669';
+                setTimeout(function () { status.textContent = ''; }, 4000);
+            }
         } catch (e) {
-            console.error('Error archiving season:', e);
-            if (status) { status.textContent = 'Error archiving — try again.'; status.style.color = '#dc2626'; }
-        } finally {
-            if (btn) btn.disabled = false;
+            console.error('Error saving current session:', e);
+            if (status) { status.textContent = 'Error saving.'; status.style.color = '#dc2626'; }
         }
     };
 
@@ -2141,11 +2350,11 @@
             if (_st) { _st.textContent = 'Only camp owners can edit camp dates.'; _st.style.color = '#dc2626'; }
             return;
         }
-        document.getElementById('campStartDate').value = '';
-        document.getElementById('campHalf1End').value = '';
-        document.getElementById('campHalf2Start').value = '';
-        document.getElementById('campEndDate').value = '';
-        document.getElementById('campDatesWeekPreview').style.display = 'none';
+        var _cs = document.getElementById('campStartDate'); if (_cs) _cs.value = '';
+        var _ce = document.getElementById('campEndDate'); if (_ce) _ce.value = '';
+        var _wp = document.getElementById('campDatesWeekPreview'); if (_wp) _wp.style.display = 'none';
+        _dashRawCampDatesHalves = { half1End: null, half2Start: null };
+        _dashUpdateHalfInfo();
 
         try {
             var campId = localStorage.getItem('campistry_camp_id') || localStorage.getItem('campistry_user_id') || currentUser.id;
@@ -2174,16 +2383,33 @@
             var cs = cm.campSettings || {};
             var localeEl = document.getElementById('settLocale');
             if (localeEl) localeEl.value = cm.locale || 'en-US';
+            if (window.CampistryI18n) window.CampistryI18n.applyCampLocale(cm.locale || 'en-US');
             var hebrewEl = document.getElementById('settHebrewDates');
             if (hebrewEl) hebrewEl.checked = !!cs.showHebrewDates;
             var altEl = document.getElementById('settAltNames');
             if (altEl) altEl.checked = cs.showAltNames !== false;
-            var rtlEl = document.getElementById('settRTL');
-            if (rtlEl) rtlEl.checked = !!cs.rtl;
+            _dashUpdateRtlNote();
         } catch (e) {
             console.warn('Could not load camp settings:', e);
         }
     }
+
+    // RTL is derived from the language, not a separate setting (see
+    // campistry_i18n.js's RTL_LANGS) -- this just shows/hides the note
+    // explaining that, and applies dir="rtl" to THIS page immediately when
+    // an owner picks one, so the settings panel itself previews the effect
+    // rather than only taking effect on other pages after a reload.
+    function _dashUpdateRtlNote() {
+        var localeEl = document.getElementById('settLocale');
+        var note = document.getElementById('settRtlNote');
+        if (!localeEl) return;
+        var isRtl = window.CampistryI18n ? window.CampistryI18n.isRTL(localeEl.value) : false;
+        if (note) note.style.display = isRtl ? 'block' : 'none';
+    }
+    document.addEventListener('DOMContentLoaded', function() {
+        var localeEl = document.getElementById('settLocale');
+        if (localeEl) localeEl.addEventListener('change', _dashUpdateRtlNote);
+    });
 
     window.saveLocaleSettings = function() {
         var status = document.getElementById('localeSettingsStatus');
@@ -2194,13 +2420,19 @@
         try {
             var gs = window.loadGlobalSettings ? (window.loadGlobalSettings() || {}) : {};
             if (!gs.campistryMe) gs.campistryMe = {};
-            gs.campistryMe.locale = document.getElementById('settLocale').value || 'en-US';
+            var locale = document.getElementById('settLocale').value || 'en-US';
+            gs.campistryMe.locale = locale;
             gs.campistryMe.campSettings = {
                 showHebrewDates: document.getElementById('settHebrewDates').checked,
                 showAltNames: document.getElementById('settAltNames').checked,
-                rtl: document.getElementById('settRTL').checked
+                // Derived, not a stored owner choice -- see campistry_i18n.js.
+                // Kept as a field (rather than removed outright) purely so any
+                // older reader of campSettings.rtl during rollout still sees a
+                // value consistent with the language actually saved.
+                rtl: window.CampistryI18n ? window.CampistryI18n.isRTL(locale) : false
             };
             if (window.saveGlobalSettings) window.saveGlobalSettings('campistryMe', gs.campistryMe);
+            if (window.CampistryI18n) window.CampistryI18n.applyCampLocale(locale);
             if (status) { status.textContent = 'Saved!'; status.style.color = '#059669'; setTimeout(function() { status.textContent = ''; }, 3000); }
         } catch (e) {
             console.error('Error saving language settings:', e);
@@ -2252,6 +2484,18 @@
             // Camp dates are ordinary configuration, not an ownership decision.
             if (userRole === 'owner' || userRole === 'admin') loadCampDates(false);
         }
+        // Camp Settings (Language & Regional) has the exact same bug shape as
+        // Sessions & Pricing did: loadCampSettingsSection() runs once, at page
+        // load, straight off setupDashboardForRole() — well before this cloud
+        // hydration event fires. On a browser whose local snapshot is stale or
+        // empty (new device, cleared storage, a value saved from elsewhere),
+        // the checkboxes render pre-hydration defaults and never get corrected
+        // once the real cloud values arrive, so the owner sees "my setting
+        // didn't take" even though the save itself worked. Re-read now that
+        // hydration has actually completed, same as Sessions above.
+        if (document.getElementById('settLocale') && (userRole === 'owner' || userRole === 'admin')) {
+            loadCampSettingsSection();
+        }
     });
     // Safety fallback — a camp with no cloud config, or a failed/unusually
     // slow hydration, must not permanently block legitimate auto-saves.
@@ -2266,6 +2510,47 @@
         if (!gs.campistryMe) gs.campistryMe = {};
         gs.campistryMe.sessions = _dashSessions;
         if (window.saveGlobalSettings) window.saveGlobalSettings('campistryMe', gs.campistryMe);
+        _dashDeriveCampDatesFromSessions();
+    }
+
+    // There is no separate "Camp Dates" step for the owner to fill in any more —
+    // Sessions ARE the summer schedule. Utils.getCampDates() (scheduler_core_utils.js)
+    // still reads camp_state_kv.campDates.startDate/endDate for older code paths
+    // (and half1End/half2Start as a fallback for a camp with no "1st Half"/"2nd Half"
+    // session yet), so this keeps that record populated automatically: the overall
+    // range is just the earliest session start and latest session end, re-derived
+    // and silently persisted every time a session is added/edited/deleted. The
+    // fallback half1End/half2Start fields are carried forward unchanged.
+    var _dashDeriveCampDatesDebounce = null;
+    function _dashDeriveCampDatesFromSessions() {
+        if (isTeamMember) return; // owner-only write, same guard saveCampDates() used
+        clearTimeout(_dashDeriveCampDatesDebounce);
+        _dashDeriveCampDatesDebounce = setTimeout(async function() {
+            try {
+                var starts = _dashSessions.map(function(s) { return s && s.startDate; }).filter(Boolean);
+                var ends = _dashSessions.map(function(s) { return s && s.endDate; }).filter(Boolean);
+                if (!starts.length || !ends.length) return;
+                var startDate = starts.reduce(function(a, b) { return b < a ? b : a; });
+                var endDate = ends.reduce(function(a, b) { return b > a ? b : a; });
+                var campDates = {
+                    startDate: startDate,
+                    half1End: _dashRawCampDatesHalves.half1End,
+                    half2Start: _dashRawCampDatesHalves.half2Start,
+                    endDate: endDate
+                };
+                var campId = localStorage.getItem('campistry_camp_id') || localStorage.getItem('campistry_user_id') || (currentUser && currentUser.id);
+                if (!campId) return;
+                var { error } = await window.supabase
+                    .from('camp_state_kv')
+                    .upsert({ camp_id: campId, key: 'campDates', value: campDates, updated_at: new Date().toISOString() },
+                             { onConflict: 'camp_id,key' });
+                if (error) throw error;
+                if (window.saveGlobalSettings) window.saveGlobalSettings('campDates', campDates);
+                _dashRawCampDatesHalves = { half1End: campDates.half1End, half2Start: campDates.half2Start };
+            } catch (e) {
+                console.warn('Could not derive camp dates from sessions:', e);
+            }
+        }, 400);
     }
 
     function _dashSaveBundles() {
@@ -2275,25 +2560,10 @@
         if (window.saveGlobalSettings) window.saveGlobalSettings('campistryMe', gs.campistryMe);
     }
 
-    // Whether an accepted/enrolled family can build their own installment
-    // schedule from Link (set_my_payment_plan RPC, migration 115) instead of
-    // the office building one manually via Me -> Billing -> Monthly Plan.
-    // Spread the existing enrollSettings first — it also holds promoCodes,
-    // which this must never clobber.
-    window.saveAllowParentPaymentPlans = function() {
-        var el = document.getElementById('allowParentPaymentPlans');
-        var gs = window.loadGlobalSettings ? (window.loadGlobalSettings() || {}) : {};
-        if (!gs.campistryMe) gs.campistryMe = {};
-        gs.campistryMe.enrollSettings = Object.assign({}, gs.campistryMe.enrollSettings || {}, {
-            allowParentPaymentPlans: !!(el && el.checked)
-        });
-        if (window.saveGlobalSettings) window.saveGlobalSettings('campistryMe', gs.campistryMe);
-        // Force the cloud sync now instead of waiting on the normal 500ms
-        // debounce — a camp owner flips this then immediately checks Link
-        // to confirm it worked, which is exactly the race that dropped
-        // saves elsewhere in this file (see updateSessionPriceInline).
-        if (window.flushPendingSettingsSync) window.flushPendingSettingsSync();
-    };
+    // "Let parents set up their own payment plan" now lives in Me -> Billing
+    // -> "Parent self-serve payment plans" (still the same
+    // enrollSettings.allowParentPaymentPlans key) — see campistry_me.js's
+    // manageParentPaymentPlanSetting(). Removed from here.
 
     function _dashFormatDateRange(startDate, endDate) {
         if (!startDate || !endDate) return '';
@@ -2319,8 +2589,10 @@
             if (idsAdded && _dashSessionsCloudHydrated) _dashSaveSessions();
             renderSessionsList();
             renderBundlesList();
-            var allowPPEl = document.getElementById('allowParentPaymentPlans');
-            if (allowPPEl) allowPPEl.checked = !!(gs.campistryMe && gs.campistryMe.enrollSettings && gs.campistryMe.enrollSettings.allowParentPaymentPlans);
+            // Half boundaries depend on the "1st Half"/"2nd Half" sessions just
+            // (re)loaded above — refresh both readers now that they're current.
+            _dashUpdateHalfInfo();
+            updateWeekPreview();
             var form = document.getElementById('sessionEditForm');
             if (form) form.style.display = 'none';
             var bform = document.getElementById('bundleEditForm');
@@ -2330,71 +2602,12 @@
         }
     }
 
-    // Keeps a "1st Half" and "2nd Half" session in sync with the Camp Dates
-    // halves — created the first time both boundary dates for that half are
-    // set, and just date-refreshed (name/price/everything else the owner
-    // may have customized left untouched) on every later save. Identified
-    // by autoKey rather than name, so renaming one doesn't create a
-    // duplicate or lose the sync.
-    function _dashSyncHalfSessions(startDate, h1End, h2Start, endDate) {
-        var halves = [
-            { key: 'half1', label: '1st Half', start: startDate, end: h1End },
-            { key: 'half2', label: '2nd Half', start: h2Start, end: endDate }
-        ];
-        var changed = false;
-        halves.forEach(function(h) {
-            if (!h.start || !h.end) return;
-            // Match by autoKey first, but ALSO fall back to matching by name —
-            // a session manually named "1st Half"/"2nd Half" (typed in before
-            // Camp Dates halves were ever set, so it has no autoKey) would
-            // otherwise never be found here, and this would push a SECOND,
-            // zero-priced "1st Half" session alongside the real one. Any
-            // reader that does sessions.find(s => s.name === X) then risks
-            // resolving to whichever duplicate happens to come first —
-            // silently pricing an enrollment at $0 even though the real
-            // session has a real price.
-            var existing = _dashSessions.find(function(s) { return s.autoKey === h.key; })
-                || _dashSessions.find(function(s) { return !s.autoKey && (s.name||'').trim().toLowerCase() === h.label.toLowerCase(); });
-            var dates = _dashFormatDateRange(h.start, h.end);
-            if (existing) {
-                if (!existing.autoKey) { existing.autoKey = h.key; changed = true; } // link the manual entry so it's never duplicated again
-                if (existing.startDate !== h.start || existing.endDate !== h.end) {
-                    existing.startDate = h.start;
-                    existing.endDate = h.end;
-                    existing.dates = dates;
-                    changed = true;
-                }
-            } else {
-                _dashSessions.push({
-                    id: _dashGenId(),
-                    autoKey: h.key,
-                    name: h.label,
-                    startDate: h.start,
-                    endDate: h.end,
-                    dates: dates,
-                    capacity: 0,
-                    tuition: 0,
-                    earlyBird: 0,
-                    earlyBirdDeadline: '',
-                    siblingDiscount: 0,
-                    paymentPlan: 'full',
-                    depositAmount: 0,
-                    notes: '',
-                    registrationOpen: true
-                });
-                changed = true;
-            }
-        });
-        if (changed) {
-            renderSessionsList();
-            renderBundlesList();
-            // Never auto-save from a pre-hydration snapshot — see the
-            // _dashSessionsCloudHydrated comment above _dashGenId(). Once
-            // hydration fires, loadCampDates() re-runs this whole function
-            // against the real cloud sessions and saves correctly then.
-            if (_dashSessionsCloudHydrated) _dashSaveSessions();
-        }
-    }
+    // _dashSyncHalfSessions() (Camp Dates halves -> auto-create/refresh a "1st
+    // Half"/"2nd Half" Session) was removed — sessions are now the source of
+    // truth for the half boundaries, not the other way around (see
+    // Utils.getCampDates() in scheduler_core_utils.js and
+    // _dashResolveHalfBoundaries() above). An owner who wants Per-Half
+    // rotation now names a Session "1st Half"/"2nd Half" directly, below.
 
     // Sessions and bundles render as ONE list — a bundle is just another
     // thing a parent can pick at registration, not a separate feature area.
@@ -2404,7 +2617,7 @@
         var list = document.getElementById('sessionsList');
         if (!list) return;
         if (!_dashSessions.length && !_dashBundles.length) {
-            list.innerHTML = '<p style="color:var(--slate-400); font-size:0.85rem; text-align:center; padding:10px;">No sessions yet — set your camp dates above to auto-create 1st/2nd Half sessions, or add one to open registration.</p>';
+            list.innerHTML = '<p style="color:var(--slate-400); font-size:0.85rem; text-align:center; padding:10px;">No sessions yet — add one to open registration.</p>';
             return;
         }
         // Live enrolled count per session name — same filter enrollCamper()/
@@ -2423,7 +2636,7 @@
             var isOpen = s.registrationOpen !== false;
             var html = '<div style="padding:12px 14px; border-radius:8px; border:1px solid ' + (isOpen ? 'var(--slate-200)' : '#fecaca') + '; background:' + (isOpen ? 'var(--slate-50)' : 'rgba(239,68,68,.04)') + ';">';
             html += '<div style="display:flex; justify-content:space-between; align-items:center; gap:8px;">';
-            html += '<span style="font-size:0.9rem; font-weight:700; color:var(--slate-800);">' + _dashEsc(s.name) + (s.autoKey ? ' <span style="font-size:0.68rem; font-weight:600; color:var(--slate-400);">(synced to Camp Dates)</span>' : '') + '</span>';
+            html += '<span style="font-size:0.9rem; font-weight:700; color:var(--slate-800);">' + _dashEsc(s.name) + (s.autoKey ? ' <span style="font-size:0.68rem; font-weight:600; color:var(--slate-400);">(sets Per-Half rotation boundaries)</span>' : '') + '</span>';
             html += '<div style="display:flex; gap:6px; flex-shrink:0;">';
             html += '<button type="button" class="btn-secondary" style="padding:3px 10px; font-size:0.72rem;" onclick="editSessionForm(' + i + ')">Edit</button>';
             html += '<button type="button" class="btn-secondary" style="padding:3px 10px; font-size:0.72rem;' + (isOpen ? '' : ' color:#059669;') + '" onclick="toggleSessionRegistration(' + i + ')">' + (isOpen ? 'Close' : 'Open') + '</button>';
@@ -2501,8 +2714,6 @@
 
     function _dashFillSessionForm(s) {
         document.getElementById('sesName').value = s.name || '';
-        document.getElementById('sesDatePreset').value = '';
-        document.getElementById('sesDatePresetHint').textContent = '';
         document.getElementById('sesStart').value = s.startDate || '';
         document.getElementById('sesEnd').value = s.endDate || '';
         document.getElementById('sesDates').value = s.dates || '';
@@ -2510,12 +2721,69 @@
         document.getElementById('sesTuition').value = s.tuition || '';
         document.getElementById('sesEarly').value = s.earlyBird || '';
         document.getElementById('sesEarlyDate').value = s.earlyBirdDeadline || '';
-        document.getElementById('sesSibDisc').value = s.siblingDiscount || '';
+        // Tiers are the current model; a session saved before this existed only
+        // has the old flat siblingDiscount %, so it's shown here as a single
+        // "2 kids" starter row rather than silently dropped.
+        var tiers = Array.isArray(s.siblingDiscountTiers) && s.siblingDiscountTiers.length
+            ? s.siblingDiscountTiers
+            : (s.siblingDiscount > 0 ? [{ count: 2, discount: s.siblingDiscount }] : []);
+        renderSiblingTiers(tiers);
         document.getElementById('sesOvernight').checked = !!s.overnight;
-        document.getElementById('sesPayPlan').value = s.paymentPlan || 'full';
-        document.getElementById('sesDeposit').value = s.depositAmount || '';
-        document.getElementById('sesDepositWrap').style.display = (s.paymentPlan === 'deposit') ? 'block' : 'none';
         document.getElementById('sesNotes').value = s.notes || '';
+    }
+
+    // ── Sibling discount tiers: "N kids enrolled -> X% off every sibling but
+    // the priciest" rows, replacing the old single flat percentage. Rendered
+    // as plain rows into #sesSibTiersWrap; read back into an array on save.
+    function renderSiblingTiers(tiers) {
+        var wrap = document.getElementById('sesSibTiersWrap');
+        if (!wrap) return;
+        if (!tiers || !tiers.length) tiers = [{ count: '', discount: '' }];
+        wrap.innerHTML = tiers.map(function(t, i) {
+            return '<div class="ses-tier-row" style="display:flex; align-items:center; gap:10px;">'
+                + '<div style="flex:1;"><label style="font-size:0.72rem; color:var(--slate-500); display:block; margin-bottom:3px;">Kids enrolled</label>'
+                + '<input type="number" min="2" step="1" class="dash-input ses-tier-count" value="' + (t.count != null ? t.count : '') + '" placeholder="e.g., 2"></div>'
+                + '<div style="flex:1;"><label style="font-size:0.72rem; color:var(--slate-500); display:block; margin-bottom:3px;">Discount %</label>'
+                + '<input type="number" min="0" max="100" class="dash-input ses-tier-discount" value="' + (t.discount != null ? t.discount : '') + '" placeholder="e.g., 10"></div>'
+                + '<button type="button" class="btn-secondary" style="margin-top:18px; padding:6px 10px;" onclick="removeSiblingTierRow(' + i + ')" title="Remove tier">✕</button>'
+                + '</div>';
+        }).join('');
+    }
+
+    window.addSiblingTierRow = function() {
+        var tiers = readSiblingTiers();
+        tiers.push({ count: '', discount: '' });
+        renderSiblingTiers(tiers);
+    };
+
+    window.removeSiblingTierRow = function(idx) {
+        var tiers = readSiblingTiers();
+        tiers.splice(idx, 1);
+        renderSiblingTiers(tiers);
+    };
+
+    // Reads whatever is currently in the rows (including a half-filled row
+    // being edited), so add/remove don't clobber what the owner already typed.
+    function readSiblingTiers() {
+        var wrap = document.getElementById('sesSibTiersWrap');
+        if (!wrap) return [];
+        var counts = wrap.querySelectorAll('.ses-tier-count');
+        var discounts = wrap.querySelectorAll('.ses-tier-discount');
+        var out = [];
+        for (var i = 0; i < counts.length; i++) {
+            out.push({ count: counts[i].value, discount: discounts[i] ? discounts[i].value : '' });
+        }
+        return out;
+    }
+
+    // The saved shape: only complete, valid rows (a positive kid count and a
+    // 0-100 discount), sorted by count so the "highest matching tier" lookup
+    // in campistry_sibling_discount.js can just walk them in order.
+    function collectSiblingTiers() {
+        return readSiblingTiers()
+            .map(function(t) { return { count: parseInt(t.count, 10) || 0, discount: Math.max(0, Math.min(100, parseFloat(t.discount) || 0)) }; })
+            .filter(function(t) { return t.count >= 2 && t.discount > 0; })
+            .sort(function(a, b) { return a.count - b.count; });
     }
 
     window.addSessionForm = function() {
@@ -2530,7 +2798,7 @@
         var title = document.getElementById('sessionFormTitle');
         if (title) title.textContent = 'Add Session';
         var form = document.getElementById('sessionEditForm');
-        if (form) form.style.display = 'block';
+        if (form) form.style.display = 'flex';
         var status = document.getElementById('sessionFormStatus');
         if (status) status.textContent = '';
     };
@@ -2542,7 +2810,7 @@
         var title = document.getElementById('sessionFormTitle');
         if (title) title.textContent = 'Edit Session';
         var form = document.getElementById('sessionEditForm');
-        if (form) form.style.display = 'block';
+        if (form) form.style.display = 'flex';
         var status = document.getElementById('sessionFormStatus');
         if (status) status.textContent = '';
     };
@@ -2553,25 +2821,9 @@
         _dashEditingSessionIdx = null;
     };
 
-    // Quick-fill Start/End from the Camp Dates section above — Full Summer /
-    // 1st Half / 2nd Half — instead of retyping the same boundaries per session.
-    window.applySessionDatePreset = function() {
-        var preset = document.getElementById('sesDatePreset').value;
-        var hint = document.getElementById('sesDatePresetHint');
-        if (!preset) { if (hint) hint.textContent = ''; return; }
-        var start = document.getElementById('campStartDate')?.value || '';
-        var half1End = document.getElementById('campHalf1End')?.value || '';
-        var half2Start = document.getElementById('campHalf2Start')?.value || '';
-        var end = document.getElementById('campEndDate')?.value || '';
-        var range = { full: [start, end], half1: [start, half1End], half2: [half2Start, end] }[preset];
-        if (!range || !range[0] || !range[1]) {
-            if (hint) hint.textContent = 'Set Camp Dates above first — that boundary isn\'t filled in yet.';
-            return;
-        }
-        document.getElementById('sesStart').value = range[0];
-        document.getElementById('sesEnd').value = range[1];
-        if (hint) hint.textContent = 'Filled from Camp Dates — you can still adjust below.';
-    };
+    // The "Quick-fill from Camp Dates" preset dropdown was removed along with
+    // the Camp Dates step itself — there's no separate Camp Dates range to
+    // copy from any more, sessions define their own dates directly.
 
     window.saveSessionForm = function() {
         var status = document.getElementById('sessionFormStatus');
@@ -2597,13 +2849,20 @@
             tuition: parseFloat(document.getElementById('sesTuition').value) || 0,
             earlyBird: parseFloat(document.getElementById('sesEarly').value) || 0,
             earlyBirdDeadline: document.getElementById('sesEarlyDate').value || '',
-            siblingDiscount: parseInt(document.getElementById('sesSibDisc').value) || 0,
+            siblingDiscountTiers: collectSiblingTiers(),
+            // Legacy flat field, kept only so an OLDER page/report reading
+            // siblingDiscount still sees a sane number (the lowest tier's
+            // rate) rather than nothing — campistry_sibling_discount.js
+            // itself always prefers siblingDiscountTiers when present.
+            siblingDiscount: (function() { var t = collectSiblingTiers(); return t.length ? t[0].discount : 0; })(),
             // Day camp unless the camp says otherwise — the common case, and
             // the safe default: a session wrongly marked overnight silently
             // strips a family's whole claim off their tax statement.
             overnight: !!document.getElementById('sesOvernight').checked,
-            paymentPlan: document.getElementById('sesPayPlan').value || 'full',
-            depositAmount: parseFloat(document.getElementById('sesDeposit').value) || 0,
+            // paymentPlan/depositAmount moved to a camp-wide Billing setting
+            // (Me -> Billing -> "Payment plan structure") -- no longer a
+            // per-session field. _buildInstallmentSchedule() in campistry_me.js
+            // reads enrollSettings.paymentPlan for every session now.
             notes: (document.getElementById('sesNotes').value || '').trim(),
             registrationOpen: existing ? (existing.registrationOpen !== false) : true
         };
@@ -2680,12 +2939,27 @@
             wrap.innerHTML = '<span style="font-size:0.8rem; color:var(--slate-400);">Add sessions above first.</span>';
             return;
         }
-        wrap.innerHTML = _dashSessions.map(function(s) {
+        // One row per session, stacked top to bottom (a grid layout here kept
+        // rendering broken — narrow, overlapping columns — so this is deliberately
+        // as plain as possible: a single-column list, no nested flex/grid tricks
+        // that any surrounding CSS could collide with).
+        var rows = _dashSessions.map(function(s) {
             var checked = selectedIds.indexOf(s.id) >= 0 ? ' checked' : '';
-            return '<label style="display:flex; align-items:center; gap:6px; font-size:0.85rem; color:var(--slate-700);">'
-                + '<input type="checkbox" value="' + _dashEsc(s.id) + '" class="bunSessionCheck"' + checked + '> ' + _dashEsc(s.name)
-                + '</label>';
-        }).join('');
+            var meta = [];
+            if (s.dates) meta.push(_dashEsc(s.dates));
+            if (s.tuition) meta.push('$' + Number(s.tuition).toLocaleString());
+            var metaText = meta.length ? (' &middot; ' + meta.join(' &middot; ')) : '';
+            return '<tr><td style="width:28px; padding:10px 0 10px 12px; vertical-align:top;">'
+                + '<input type="checkbox" value="' + _dashEsc(s.id) + '" class="bunSessionCheck"' + checked + '>'
+                + '</td><td style="padding:10px 12px 10px 0; vertical-align:top; font-size:0.85rem; color:var(--slate-700);">'
+                + '<strong>' + _dashEsc(s.name) + '</strong>'
+                + '<span style="color:var(--slate-400); font-size:0.78rem;">' + metaText + '</span>'
+                + '</td></tr>';
+        }).join('<tr><td colspan="2" style="border-top:1px solid var(--slate-200);"></td></tr>');
+        // A <table> lays each row out top-to-bottom by definition — no flex/grid
+        // sizing math for a nested span to get wrong.
+        wrap.innerHTML = '<table style="width:100%; border-collapse:collapse;"><tbody>' + rows + '</tbody></table>';
+        wrap.style.display = 'block';
     }
 
     window.addBundleForm = function() {
@@ -3158,7 +3432,7 @@
     }
 
     // Live preview on date change
-    ['campStartDate', 'campHalf1End', 'campHalf2Start', 'campEndDate'].forEach(function(id) {
+    ['campStartDate', 'campEndDate'].forEach(function(id) {
         var el = document.getElementById(id);
         if (el) el.addEventListener('change', updateWeekPreview);
     });

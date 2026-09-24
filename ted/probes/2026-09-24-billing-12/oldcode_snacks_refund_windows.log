@@ -1,0 +1,27 @@
+postgres up with 124 migrations applied
+
+0. A camper with $40 in cash and $25 paid through Sola
+  ok   the Sola deposit was credited   → {"balance":65,"success":true,"rosterVerified":false}
+
+1. Snacks → Accounts → Refund All, on a Sola camp with one unanswered refund
+  FAIL no page error from the click   → ["ReferenceError: _stripeRefundCapacity is not defined"]
+  FAIL the Refund All window opens
+  FAIL it counts the Sola-paid money only: 1 camper, $25.00, through Sola   → ""
+  FAIL the button offers exactly that   → "Refund All"
+  FAIL the unanswered refund is listed, by name without the number   → ""
+  FAIL with both answers   → []
+
+2. The Refund button on the child's row, with the same unanswered refund
+  ok   the row has a Refund button   → "openMFor('refund','refundCamper','Avi Katz')"
+  FAIL no page error drawing the window   → ["ReferenceError: _lbl is not defined"]
+  ok   the Refund window is open
+  FAIL "waiting for an answer" is shown for this child   → ""
+  FAIL with "It went through" and "Nothing went through"   → []
+  ok   the box offers the Sola-paid $25.00   → "Available to refund via Sola: $25.00$40.00 of this balance came from a cash/manual deposit (or a different processor) — refund that portion separately, it can't go through Sola."
+  FAIL the run finished   → page.click: Timeout 30000ms exceeded.
+Call log:
+[2m  - waiting for locator('#refundHolds button:has-text("Nothing went through")')[22m
+
+
+4/14 checks passed
+page errors seen: ["ReferenceError: _stripeRefundCapacity is not defined","ReferenceError: _lbl is not defined"]

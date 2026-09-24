@@ -1,0 +1,16 @@
+server copy carries the question: [{"ref":"pi_dep","date":"2026-05-01","amount":250,"paymentId":"pay_hand","camperName":"Avi"}]
+night 1: {"blocked": true, "changed": true, "success": true, "attempts": 1, "escalated": false, "nextRetryAt": "2026-09-27"}
+night 2: {"blocked": true, "changed": true, "success": true, "attempts": 2, "escalated": false, "nextRetryAt": "2026-09-29"}
+night 3: {"blocked": true, "changed": true, "success": true, "attempts": 3, "escalated": true, "nextRetryAt": "2026-10-01"}
+
+plan.collectionBlocked after 3 nights: {"since":"2026-09-24T03:45:58Z","detail":"\"a card deposit of $250.00 may already have been recorded by hand — answer the question on this family in Billing; autopay waits until then\"","reason":"deposit_review","attempts":3,"escalated":true,"nextRetryAt":"2026-10-01","lastAttemptAt":"2026-09-24T03:45:58Z"}
+
+notifications sent:
+  - Autopay cannot collect | Gold — autopay is waiting for you to answer a question about their card deposit. "a card deposit of $250.00 may already have been recorded by hand — answer the question on this family in Billing; autopay waits until then".
+  - This card is not going to start working | Gold — 3 attempts have now failed ("a card deposit of $250.00 may already have been recorded by hand — answer the question on this family in Billing; autopay waits until then"). Automatic retries continue every 7 days, but nothing will be collected until someone contacts the family for a new card.
+
+after the office answered and saved: depositReview = [] | plan.collectionBlocked = {"since":"2026-09-24T03:45:58Z","detail":"\"a card deposit of $250.00 may already have been recorded by hand — answer the question on this family in Billing; autopay waits until then\"","reason":"deposit_review","attempts":3,"escalated":true,"nextRetryAt":"2026-10-01","lastAttemptAt":"2026-09-24T03:45:58Z"}
+
+269 (3390aba copy) pasted: notice text knows deposit_review? false
+269 (66a65df copy) re-pasted:  notice text knows deposit_review? false
+fresh database with only today's 269 (the test chain): see pgtest 269 — this probe booted with it, and part 1 above shows its wording.

@@ -1,0 +1,40 @@
+CAUGHT  M8 TED-187/199 autopay-pause DB error answered 200  (exit 1; node --test tests/tuition_dispute_inquiry.test.js)
+      not ok 6 - TED-199 (M8): the autopay pause fails to save — 500, so Stripe sends the chargeback again
+CAUGHT  M9+M10+F TED-199 runner: all three dispute skips removed  (exit 1; node --test tests/tuition_dispute_inquiry.test.js tests/autopay_runner.test.js)
+      not ok 25 - TED-186: autopay skips a plan paused for a dispute — nothing is charged
+      not ok 27 - TED-199 (M9/M10): in the same night a family NOT in dispute is charged — the held family is held by its pause, not by chance
+MISSED  M9 TED-199 runner: dueDates-plan skip removed (other two kept)  (exit 0; node --test tests/tuition_dispute_inquiry.test.js tests/autopay_runner.test.js)
+MISSED  F1 TED-194 runner: family-level skip removed (per-plan kept)  (exit 0; node --test tests/tuition_dispute_inquiry.test.js tests/autopay_runner.test.js)
+CAUGHT  M12 TED-199 288 resume needs no Billing edit  (exit 1; bash scripts/run_pgtests.sh 288)
+      FAIL   288_autopay_waits_while_a_payment_is_disputed
+CAUGHT  M15 TED-199 tips funds_withdrawn not routed  (exit 1; node --test tests/tip_refund_dispute.test.js)
+      not ok 10 - TED-199 (M15): a tip dispute seen first as funds_withdrawn takes the tip back too
+CAUGHT  M17 TED-199 old payer cheque placed again  (exit 1; node --test tests/payer_split_billed.test.js)
+      not ok 13 - TED-199 (M17): a cheque that was split across two families is not placed again by an old page
+CAUGHT  M24 TED-199 Void window ignores soldItems  (exit 1; node --test tests/snacks_void_sale.test.js)
+      not ok 7 - TED-199 (M24): the Void window itself offers the items the sale kept by id
+CAUGHT  N1 TED-193 a win lifts the pause even with other disputes open  (exit 1; bash scripts/run_pgtests.sh 288)
+      FAIL   288_autopay_waits_while_a_payment_is_disputed
+CAUGHT  N2 TED-193 a second dispute is not added to the list  (exit 1; bash scripts/run_pgtests.sh 288)
+      FAIL   288_autopay_waits_while_a_payment_is_disputed
+CAUGHT  N3 TED-194 flag_plan_collection not patched (288 DO block returns at once)  (exit 1; bash scripts/run_pgtests.sh 288)
+      FAIL   288_autopay_waits_while_a_payment_is_disputed
+CAUGHT  N4 TED-194 patched flag drops the mark instead of keeping it under  (exit 1; bash scripts/run_pgtests.sh 288)
+      FAIL   288_autopay_waits_while_a_payment_is_disputed
+CAUGHT  N5 TED-195 Batch Charge keeps disputed families  (exit 1; node --test tests/ach_on_its_way.test.js tests/batch_charge_counts_failures.test.js)
+      not ok 11 - TED-195: Batch Charge and Charge Card leave out a family whose payment is disputed, and say so
+CAUGHT  N6 TED-195 Charge Card guard removed  (exit 1; node --test tests/ach_on_its_way.test.js tests/batch_charge_counts_failures.test.js tests/office_charge_retry.test.js)
+      not ok 11 - TED-195: Batch Charge and Charge Card leave out a family whose payment is disputed, and say so
+MISSED  N7 TED-196 webhook: won/lost counted as taking again  (exit 0; node --test tests/tuition_dispute_inquiry.test.js tests/canteen_stripe_reversal.test.js tests/chargeback_and_blocks.test.js)
+CAUGHT  N8 TED-196 hold: alreadyWon check removed  (exit 1; bash scripts/run_pgtests.sh 288)
+      FAIL   288_autopay_waits_while_a_payment_is_disputed
+CAUGHT  N9 TED-197 release forgets the mark kept under  (exit 1; bash scripts/run_pgtests.sh 288)
+      FAIL   288_autopay_waits_while_a_payment_is_disputed
+MISSED  N10 TED-197 first pause does not keep the earlier mark  (exit 0; bash scripts/run_pgtests.sh 288)
+CAUGHT  N11 TED-198 Account button back to charged>0 only  (exit 1; node --test tests/payer_split_billed.test.js)
+      not ok 12 - TED-198: a fund that paid $300 before its share was cancelled shows a credit, not "owes $-300", and keeps its Account button
+      // Stripe dashboard), or the row Campistry adds when a refund FAILED and the
+CAUGHT  N12 TED-198 standing says Owes for a credit  (exit 1; node --test tests/payer_split_billed.test.js)
+      not ok 12 - TED-198: a fund that paid $300 before its share was cancelled shows a credit, not "owes $-300", and keeps its Account button
+MISSED  N13 TED-198 Cancel share window no longer says what was paid  (exit 0; node --test tests/payer_split_billed.test.js)
+MISSED  N14 check script: earlier-288 row removed  (exit 0; bash scripts/run_pgtests.sh 288)

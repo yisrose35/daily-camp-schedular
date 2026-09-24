@@ -1,0 +1,48 @@
+TAP version 13
+# Subtest: Stripe: a same-amount charge later the same day after a lost answer
+not ok 1 - Stripe: a same-amount charge later the same day after a lost answer
+  ---
+  duration_ms: 1.705438
+  type: 'test'
+  location: '/home/user/daily-camp-schedular/ted/probes/2026-09-24-billing-10/charge_key_same_day.test.js:95:1'
+  failureType: 'testCodeFailure'
+  error: '_familyOnItsWay is not defined'
+  code: 'ERR_TEST_FAILURE'
+  name: 'ReferenceError'
+  stack: |-
+    Object.chargeStoredCard [as charge] (eval at page (/home/user/daily-camp-schedular/ted/probes/2026-09-24-billing-10/charge_key_same_day.test.js:91:18), <anonymous>:7:14)
+    TestContext.<anonymous> (/home/user/daily-camp-schedular/ted/probes/2026-09-24-billing-10/charge_key_same_day.test.js:99:22)
+    Test.runInAsyncScope (node:async_hooks:214:14)
+    Test.run (node:internal/test_runner/test:1047:25)
+    Test.start (node:internal/test_runner/test:944:17)
+    startSubtestAfterBootstrap (node:internal/test_runner/harness:296:17)
+  ...
+# Subtest: Cardknox: the same
+not ok 2 - Cardknox: the same
+  ---
+  duration_ms: 0.847179
+  type: 'test'
+  location: '/home/user/daily-camp-schedular/ted/probes/2026-09-24-billing-10/charge_key_same_day.test.js:107:1'
+  failureType: 'testCodeFailure'
+  error: '_familyOnItsWay is not defined'
+  code: 'ERR_TEST_FAILURE'
+  name: 'ReferenceError'
+  stack: |-
+    Object.chargeStoredCard [as charge] (eval at page (/home/user/daily-camp-schedular/ted/probes/2026-09-24-billing-10/charge_key_same_day.test.js:91:18), <anonymous>:7:14)
+    TestContext.<anonymous> (/home/user/daily-camp-schedular/ted/probes/2026-09-24-billing-10/charge_key_same_day.test.js:111:22)
+    Test.runInAsyncScope (node:async_hooks:214:14)
+    Test.run (node:internal/test_runner/test:1047:25)
+    Test.processPendingSubtests (node:internal/test_runner/test:744:18)
+    Test.postRun (node:internal/test_runner/test:1173:19)
+    Test.run (node:internal/test_runner/test:1101:12)
+    async startSubtestAfterBootstrap (node:internal/test_runner/harness:296:3)
+  ...
+1..2
+# tests 2
+# suites 0
+# pass 0
+# fail 2
+# cancelled 0
+# skipped 0
+# todo 0
+# duration_ms 100.963209

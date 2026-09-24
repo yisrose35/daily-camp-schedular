@@ -1,0 +1,80 @@
+TAP version 13
+# Subtest: TED-116: the office lists the held refunds
+ok 1 - TED-116: the office lists the held refunds
+  ---
+  duration_ms: 184.68389
+  type: 'test'
+  ...
+# Subtest: TED-116: "it went through" puts it on the child's history, and the wallet stays where it is
+ok 2 - TED-116: "it went through" puts it on the child's history, and the wallet stays where it is
+  ---
+  duration_ms: 189.124106
+  type: 'test'
+  ...
+# Subtest: TED-116: a reference already used for another refund is refused, not taken
+ok 3 - TED-116: a reference already used for another refund is refused, not taken
+  ---
+  duration_ms: 179.024493
+  type: 'test'
+  ...
+# Subtest: TED-116: "nothing went through" puts the $20 back — but never for a refund still on its way
+ok 4 - TED-116: "nothing went through" puts the $20 back — but never for a refund still on its way
+  ---
+  duration_ms: 366.040891
+  type: 'test'
+  ...
+# Subtest: TED-116: a new refund for that child waits for the earlier one; "not there" gives it back and sends the new one once
+ok 5 - TED-116: a new refund for that child waits for the earlier one; "not there" gives it back and sends the new one once
+  ---
+  duration_ms: 167.847098
+  type: 'test'
+  ...
+# Subtest: TED-116: a Stripe refund is not settled by hand
+ok 6 - TED-116: a Stripe refund is not settled by hand
+  ---
+  duration_ms: 170.039973
+  type: 'test'
+  ...
+# Subtest: TED-116: Refund All names the child whose earlier refund is unanswered
+ok 7 - TED-116: Refund All names the child whose earlier refund is unanswered
+  ---
+  duration_ms: 167.773786
+  type: 'test'
+  ...
+# Subtest: TED-116/124: the helpers the refund windows call are reachable from the page
+not ok 8 - TED-116/124: the helpers the refund windows call are reachable from the page
+  ---
+  duration_ms: 0.754988
+  type: 'test'
+  location: '/tmp/claude-0/-home-user-daily-camp-schedular/39278441-0cf3-5f6a-bf8e-a51bef67e95d/scratchpad/old92/tests/canteen_held_refunds.test.js:122:1'
+  failureType: 'testCodeFailure'
+  error: '_lbl must be declared at the top level, not inside getCamperList'
+  code: 'ERR_ASSERTION'
+  name: 'AssertionError'
+  expected: true
+  actual: false
+  operator: '=='
+  stack: |-
+    TestContext.<anonymous> (/tmp/claude-0/-home-user-daily-camp-schedular/39278441-0cf3-5f6a-bf8e-a51bef67e95d/scratchpad/old92/tests/canteen_held_refunds.test.js:125:12)
+    Test.runInAsyncScope (node:async_hooks:214:14)
+    Test.run (node:internal/test_runner/test:1047:25)
+    Test.processPendingSubtests (node:internal/test_runner/test:744:18)
+    Test.postRun (node:internal/test_runner/test:1173:19)
+    Test.run (node:internal/test_runner/test:1101:12)
+    async Test.processPendingSubtests (node:internal/test_runner/test:744:7)
+  ...
+# Subtest: TED-116: Snacks shows the held refund with both answers, and sends the office's answer
+ok 9 - TED-116: Snacks shows the held refund with both answers, and sends the office's answer
+  ---
+  duration_ms: 3.047082
+  type: 'test'
+  ...
+1..9
+# tests 9
+# suites 0
+# pass 8
+# fail 1
+# cancelled 0
+# skipped 0
+# todo 0
+# duration_ms 1520.338212

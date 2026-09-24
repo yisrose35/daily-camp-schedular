@@ -4,9 +4,11 @@
 // Meant to be called on a recurring schedule by pg_cron (see
 // CANTEEN_AUTORELOAD_SETUP.md) — every 30 minutes during camp hours is the
 // suggested cadence, since a low canteen balance should resolve same-day, not
-// wait for a once-a-day job. For every camp it scans
-// campistrySnacks.accounts for camper accounts that have autoReload.enabled
-// === true and a saved card, then charges AT MOST ONE reload per run, based
+// wait for a once-a-day job. For every camp it reads the canteen account ROWS
+// (canteen_autoreload_accounts, migration 243 — never the campistrySnacks
+// document, whose accounts are stripped since 219) for camper accounts that
+// have autoReload.enabled === true and a saved card, then charges AT MOST ONE
+// reload per run, based
 // on whichever trigger is due:
 //   - THRESHOLD: thresholdEnabled && balance < thresholdAmount
 //   - SCHEDULE:  scheduleEnabled && today matches scheduleFrequency/scheduleDay
@@ -98,7 +100,7 @@ const corsHeaders = {
   "Access-Control-Allow-Headers": "authorization, x-client-info, apikey, content-type, x-cron-secret",
 };
 
-async function stripeCharge(customerId: string, pmId: string | null, amount: number, description: string, metadata: Record<string, string>, destinationAccountId?: string | null) {
+async function stripeCharge(customerId: string, pmId: string | null, amount: number, description: string, metadata: Record<string, string>, destinationAccountId?: string | null, idempotencyKey?: string) {
   const params: Record<string, string> = {
     amount: String(Math.round(amount * 100)),
     currency: "usd",
@@ -124,12 +126,29 @@ async function stripeCharge(customerId: string, pmId: string | null, amount: num
     params["transfer_data[destination]"] = destinationAccountId;
     params["on_behalf_of"] = destinationAccountId;
   }
-  const resp = await fetch(`${STRIPE_API}/payment_intents`, {
-    method: "POST",
-    headers: { "Authorization": `Bearer ${STRIPE_SECRET}`, "Content-Type": "application/x-www-form-urlencoded" },
-    body: new URLSearchParams(params).toString(),
-  });
-  return resp.json();
+  const headers: Record<string, string> = { "Authorization": `Bearer ${STRIPE_SECRET}`, "Content-Type": "application/x-www-form-urlencoded" };
+  if (idempotencyKey) headers["Idempotency-Key"] = idempotencyKey;
+  let resp: Response;
+  try {
+    resp = await fetch(`${STRIPE_API}/payment_intents`, {
+      method: "POST",
+      headers,
+      body: new URLSearchParams(params).toString(),
+    });
+  } catch (e) {
+    // Cut off: whether Stripe charged is unknown — NOT a decline (TED-094).
+    return { error: { message: (e as Error).message }, unknownOutcome: true };
+  }
+  let body: any = {};
+  try { body = await resp.json(); } catch { /* not JSON */ }
+  // A Stripe server error (or a concurrent try with the same key) is not a
+  // decline either: the retry must repeat THIS key so Stripe answers with what
+  // it did, instead of starting a second charge under a new one.
+  if (resp.status >= 500 || resp.status === 409 || body?.error?.type === "api_error"
+      || body?.error?.type === "idempotency_error") {
+    return Object.assign({ error: { message: `Stripe ${resp.status}` } }, body, { unknownOutcome: true });
+  }
+  return body;
 }
 
 // Inlined rather than imported — same "no shared module between Edge
@@ -302,6 +321,14 @@ async function callerIsStaffOfCamp(req: Request, campId: string): Promise<boolea
   return !!membership;
 }
 
+
+/** A camper's name as a person reads it: without the roster's internal
+ *  " #<number>" that tells two campers with one name apart. For what a parent
+ *  sees; never for identifying the camper. */
+function displayName(s: unknown): string {
+  return String(s ?? "").replace(/\s#\d+(?:-\d+)?$/, "");
+}
+
 serve(async (req) => {
   if (req.method === "OPTIONS") return new Response("ok", { headers: corsHeaders });
 
@@ -313,12 +340,16 @@ serve(async (req) => {
   // without the cron secret.
   let scopeCampId: string | null = null;
   let scopeCamperName: string | null = null;
+  // The camper's number, when the page sends it, decides which account this
+  // is; the name is only the fallback for a caller that has no number.
+  let camperIdScope: number | null = null;
   if (!isCron) {
     let body: Record<string, unknown> = {};
     try { body = await req.json(); } catch { /* no/invalid body */ }
     scopeCampId = typeof body.campId === "string" ? body.campId : null;
-    scopeCamperName = typeof body.camperName === "string" ? body.camperName : null;
-    if (!scopeCampId || !scopeCamperName || !(await callerIsStaffOfCamp(req, scopeCampId))) {
+    camperIdScope = /^\d+$/.test(String(body.camperId ?? "")) && Number(body.camperId) > 0 ? Number(body.camperId) : null;
+    scopeCamperName = camperIdScope == null && typeof body.camperName === "string" ? body.camperName : null;
+    if (!scopeCampId || (camperIdScope == null && !scopeCamperName) || !(await callerIsStaffOfCamp(req, scopeCampId))) {
       return new Response(JSON.stringify({ error: "unauthorized" }), {
         status: 401, headers: { ...corsHeaders, "Content-Type": "application/json" },
       });
@@ -330,14 +361,42 @@ serve(async (req) => {
   let charged = 0, failed = 0;
   const details: Record<string, unknown>[] = [];
 
-  let kvQuery = supabase.from("camp_state_kv").select("camp_id, value").eq("key", "campistrySnacks");
-  if (scopeCampId) kvQuery = kvQuery.eq("camp_id", scopeCampId);
-  const { data: rows, error } = await kvQuery;
+  // The accounts come from camp_canteen_accounts, through
+  // canteen_autoreload_accounts (migration 243) — NOT from
+  // campistrySnacks.accounts. 219 made the rows the truth and the page strips
+  // `accounts` out of every document save, so reading the document found
+  // nobody after a camp's first save and this job charged no one, every night.
+  //
+  // Each account is keyed here by the camper's CURRENT name, which every
+  // canteen writer resolves to that person's account. The account key is not
+  // used: after a rename it is the old spelling, and if another child now
+  // carries it the writers would resolve it to them.
+  const { data: acctRows, error } = await supabase.rpc("canteen_autoreload_accounts",
+    scopeCampId ? { p_camp_id: scopeCampId } : {});
   if (error) {
     return new Response(JSON.stringify({ error: error.message }), {
       status: 500, headers: { ...corsHeaders, "Content-Type": "application/json" },
     });
   }
+  const unresolvable: Record<string, unknown>[] = [];
+  const byCamp = new Map<string, Array<{ camperName: string; camperId: number | null; acct: Record<string, any> }>>();
+  for (const a of (acctRows || []) as Record<string, any>[]) {
+    if (!a.resolvable) {
+      // An unattributed account whose key is now somebody else's name. Charging
+      // its card would credit the wrong child — skipped, and reported.
+      unresolvable.push({ camp: a.camp_id, camper: a.account_key, result: "skipped_unresolvable_account" });
+      continue;
+    }
+    const campKey = String(a.camp_id);
+    if (!byCamp.has(campKey)) byCamp.set(campKey, []);
+    // The camper's ID rides with the account, and every write below sends it.
+    // The name beside it is the camper's current name: for display, and the
+    // fallback for an account that has no number yet.
+    const camperId = a.person_id != null && /^\d+$/.test(String(a.person_id)) ? Number(a.person_id) : null;
+    byCamp.get(campKey)!.push({ camperId, camperName: String(a.camper_name), acct: Object.assign({}, a.account || {}, { camperId }) });
+  }
+  // One entry per camp with its list of accounts.
+  const rows = [...byCamp.entries()].map(([camp_id, accounts]) => ({ camp_id, accounts }));
 
   const { data: connectedCamps } = await supabase
     .from("camps")
@@ -365,6 +424,58 @@ serve(async (req) => {
   for (const c of (allCamps || [])) {
     if (c.payment_processor_key && c.payment_processor_key !== "stripe") campProcessors.set(c.id, c.payment_processor_key);
   }
+  // The camp's own say, per camp (TED-143): auto-reload charges only on days
+  // the camp is IN SESSION — within one of its sessions' dates (Dashboard →
+  // Dates & Pricing). Before the season (next summer's sessions entered in
+  // spring), between sessions and after the last one, nobody is charged; a
+  // camp with no session dates at all has no season to charge in, so it
+  // charges nobody either. The office can also switch it off for the whole
+  // camp (Snacks → Settings). A parent who left the dates blank was otherwise
+  // charged after the end-of-season Refund All, every week, into next spring.
+  const campIdsHere = [...byCamp.keys()];
+  const campOff = new Map<string, string>();   // camp -> why it is off
+  if (campIdsHere.length) {
+    const isDay = (d: unknown) => typeof d === "string" && /^\d{4}-\d{2}-\d{2}$/.test(d);
+    const { data: kvRows } = await supabase.from("camp_state_kv").select("camp_id, key, value")
+      .in("camp_id", campIdsHere).in("key", ["campDates", "campistrySnacks"]);
+    // Only the sessions of each camp's Me document, not the whole of it.
+    const { data: meRows } = await supabase.from("camp_state_kv").select("camp_id, key, sessions:value->sessions")
+      .in("camp_id", campIdsHere).eq("key", "campistryMe");
+    const ranges = new Map<string, Array<[string, string]>>();
+    for (const r of (meRows || []) as Record<string, any>[]) {
+      const ss = Array.isArray(r.sessions) ? r.sessions : (Array.isArray(r.value?.sessions) ? r.value.sessions : []);
+      const list = ss.filter((x: any) => x && isDay(x.startDate) && isDay(x.endDate) && x.startDate <= x.endDate)
+        .map((x: any) => [String(x.startDate), String(x.endDate)] as [string, string]);
+      if (list.length) ranges.set(String(r.camp_id), list);
+    }
+    const datesOf = new Map<string, Record<string, any>>();
+    for (const kv of (kvRows || []) as Record<string, any>[]) {
+      const v = kv.value || {};
+      if (kv.key === "campistrySnacks" && v.settings && v.settings.autoReloadOff === true) {
+        campOff.set(String(kv.camp_id), "switched_off_by_camp");
+      }
+      if (kv.key === "campDates" && isDay(v.startDate) && isDay(v.endDate)) datesOf.set(String(kv.camp_id), v);
+    }
+    for (const id of campIdsHere.map(String)) {
+      if (campOff.has(id)) continue;
+      const rs = ranges.get(id);
+      if (rs) {
+        if (!rs.some(([a, b]) => today >= a && today <= b)) {
+          const last = rs.reduce((m, [, b]) => (b > m ? b : m), "");
+          campOff.set(id, today > last ? "season_over" : "not_in_session");
+        }
+        continue;
+      }
+      // No dated sessions: the overall camp dates, if the camp has them.
+      const cd = datesOf.get(id);
+      if (cd) {
+        if (today > cd.endDate) campOff.set(id, "season_over");
+        else if (today < cd.startDate) campOff.set(id, "not_in_session");
+        continue;
+      }
+      campOff.set(id, "no_session_dates");
+    }
+  }
   const credCache = new Map<string, Record<string, string> | null>();
   async function byopCredentials(campId: string): Promise<Record<string, string> | null> {
     if (credCache.has(campId)) return credCache.get(campId) || null;
@@ -381,28 +492,86 @@ serve(async (req) => {
   // blob: on the Cardknox path credit_canteen_balance_from_processor has
   // already committed the balance+deposit to this row, and a full-blob upsert
   // of the pre-credit in-memory snapshot would erase it (confirmed live).
-  async function persistAr(campId: string, camperName: string, ar: Record<string, any>) {
+  async function persistAr(campId: string, camperName: string, ar: Record<string, any>, camperId: number | null = null) {
     const res = await supabase.rpc("update_canteen_autoreload_state", {
-      p_camp_id: campId, p_camper_name: camperName, p_autoreload: ar,
+      p_camp_id: campId, p_camper_name: camperName, p_camper_id: camperId, p_autoreload: ar,
     });
     if (res.error || !res.data?.success) {
       console.warn(`[canteen-auto-reload] autoReload-state write failed for ${campId}/${camperName}: ${res.error?.message || res.data?.error}`);
     }
   }
 
-  for (const row of (rows || [])) {
-    const snacks = (row.value && typeof row.value === "object") ? row.value as Record<string, any> : null;
-    if (!snacks || !snacks.accounts) continue;
+  // A family whose payment is disputed with their bank (288, TED-205): its
+  // card is not charged again — by auto-reload either — while the bank decides.
+  // Asked once per camp; a camp whose families cannot be read reloads nothing
+  // this run (the next run asks again).
+  const disputedOf = new Map<string, { cards: Set<string>; campers: Set<string> } | null>();
+  async function disputedAt(campId: string) {
+    if (disputedOf.has(campId)) return disputedOf.get(campId) || null;
+    const { data, error } = await supabase.rpc("camp_families_object", { p_camp_id: campId });
+    let out: { cards: Set<string>; campers: Set<string> } | null = null;
+    if (!error && data && typeof data === "object") {
+      out = { cards: new Set(), campers: new Set() };
+      for (const f of Object.values(data as Record<string, any>)) {
+        if (!f || typeof f !== "object") continue;
+        const held = (f.disputeHold && Array.isArray(f.disputeHold.disputeIds) && f.disputeHold.disputeIds.length > 0)
+          || [...(Array.isArray(f.plans) ? f.plans : []), f.plan].some((p: any) => p && p.collectionBlocked && p.collectionBlocked.reason === "chargeback");
+        if (!held) continue;
+        for (const c of [f.stripeCustomerId, f.byopCustomerRef]) if (c) out.cards.add(String(c));
+        for (const c of (Array.isArray(f.camperIds) ? f.camperIds : [])) if (c != null) out.campers.add(displayName(c));
+      }
+    } else {
+      console.warn(`[canteen-auto-reload] camp ${campId}: families could not be read (${error?.message || "no answer"}) — no auto-reload this run`);
+    }
+    disputedOf.set(campId, out);
+    return out;
+  }
 
-    for (const [camperName, acctRaw] of Object.entries(snacks.accounts)) {
-      if (scopeCamperName && camperName !== scopeCamperName) continue;
-      const acct = acctRaw as Record<string, any>;
+  details.push(...unresolvable);
+
+  for (const row of (rows || [])) {
+    const offWhy = campOff.get(String(row.camp_id));
+    if (offWhy) {
+      details.push({ camp: row.camp_id, result: "skipped_" + offWhy });
+      continue;
+    }
+    for (const { camperName, camperId, acct } of row.accounts) {
+      // The number decides; a name-only caller (no number sent) matches by name.
+      if (camperIdScope != null ? camperId !== camperIdScope : (scopeCamperName && camperName !== scopeCamperName)) continue;
       const ar = acct.autoReload;
       if (!ar || !ar.enabled || !ar.cardOnFile) continue;
       if (!ar.stripeCustomerId && !ar.byopCustomerRef) continue; // enabled but no card saved through either flow yet
 
       const due = dueAmount(ar, Number(acct.balance) || 0, today);
       if (!due || due.amount <= 0) continue;
+
+      const disputed = await disputedAt(String(row.camp_id));
+      if (!disputed) {
+        details.push({ camp: row.camp_id, camper: camperName, camperId, amount: due.amount, kind: due.kind, result: "skipped_family_read_failed" });
+        continue;
+      }
+      if ((ar.stripeCustomerId && disputed.cards.has(String(ar.stripeCustomerId)))
+          || (ar.byopCustomerRef && disputed.cards.has(String(ar.byopCustomerRef)))
+          || disputed.campers.has(displayName(camperName))) {
+        details.push({ camp: row.camp_id, camper: camperName, camperId, amount: due.amount, kind: due.kind, result: "held_for_dispute",
+                       reason: "a payment of this family's is disputed with the bank" });
+        continue;
+      }
+
+      // ONE reload per camper per slot (TED-075). Two runs at once — the
+      // 30-minute cron and a parent's purchase triggering it, say — both read
+      // the same balance and both charged. The claim is taken before the card
+      // is charged: the loser skips; a decline gives it back.
+      const reloadsToday = (Array.isArray(ar.reloadHistory) ? ar.reloadHistory : []).filter((d: string) => d === today).length;
+      const reloadKey = `reload:${camperId != null ? camperId : camperName}:${today}:${reloadsToday}`;
+      const { data: rclaim } = await supabase.rpc("claim_refund_intent", {
+        p_camp_id: row.camp_id, p_key: reloadKey, p_amount: due.amount, p_payment_ref: String(camperId ?? camperName),
+      });
+      if (rclaim && rclaim.claimed === false) {
+        details.push({ camp: row.camp_id, camper: camperName, camperId, amount: due.amount, kind: due.kind, result: "already_reloaded" });
+        continue;
+      }
+      const releaseReload = () => supabase.rpc("release_refund_intent", { p_camp_id: row.camp_id, p_key: reloadKey });
 
       if (ar.byopCustomerRef) {
         // Cardknox/Sola path — a direct gateway charge, synchronous, so
@@ -414,28 +583,31 @@ serve(async (req) => {
           // charge yet (or the camp switched processors since saving it) —
           // leave enabled, don't burn a failure on the family for something
           // that isn't their fault. Flagged, not silently dropped.
-          details.push({ camp: row.camp_id, camper: camperName, amount: due.amount, kind: due.kind, result: "skipped_no_processor", processor: processorKey || "unknown" });
+          details.push({ camp: row.camp_id, camper: camperName, camperId, amount: due.amount, kind: due.kind, result: "skipped_no_processor", processor: processorKey || "unknown" });
+          await releaseReload();
           continue;
         }
         const creds = await byopCredentials(String(row.camp_id));
         const hasCred = processorKey === "cardknox" ? !!creds?.apiKey : (!!creds?.sourceKey && !!creds?.pin);
         if (!creds || !hasCred) {
-          details.push({ camp: row.camp_id, camper: camperName, amount: due.amount, kind: due.kind, result: "skipped_no_processor", processor: processorKey });
+          details.push({ camp: row.camp_id, camper: camperName, camperId, amount: due.amount, kind: due.kind, result: "skipped_no_processor", processor: processorKey });
+          await releaseReload();
           continue;
         }
         const res = processorKey === "cardknox"
           ? await cardknoxCharge(String(creds.apiKey), Math.round(due.amount * 100), String(ar.byopCustomerRef))
           : await banquestCharge(creds, Math.round(due.amount * 100), String(ar.byopCustomerRef));
         if (!res.success || !res.externalTransactionId) {
+          await releaseReload();
           markFailure(ar, today, res.error || "Declined");
           failed++;
-          details.push({ camp: row.camp_id, camper: camperName, amount: due.amount, kind: due.kind, result: "failed", reason: res.error || "Declined" });
-          await persistAr(String(row.camp_id), camperName, ar);
+          details.push({ camp: row.camp_id, camper: camperName, camperId, amount: due.amount, kind: due.kind, result: "failed", reason: res.error || "Declined" });
+          await persistAr(String(row.camp_id), camperName, ar, camperId);
           continue;
         }
         const creditRes = await supabase.rpc("credit_canteen_balance_from_processor", {
           p_camp_id: row.camp_id,
-          p_camper_name: camperName,
+          p_camper_id: camperId, p_camper_name: camperName,
           p_amount: due.amount,
           p_processor_key: processorKey,
           p_external_transaction_id: res.externalTransactionId,
@@ -454,31 +626,45 @@ serve(async (req) => {
         }
         markSuccess(ar, today, due.amount);
         charged++;
-        details.push({ camp: row.camp_id, camper: camperName, amount: due.amount, kind: due.kind, result: "charged", processor: processorKey });
+        details.push({ camp: row.camp_id, camper: camperName, camperId, amount: due.amount, kind: due.kind, result: "charged", processor: processorKey });
         // persist autoReload bookkeeping ONLY — the balance/deposit was
         // already committed by credit_canteen_balance_from_processor above.
-        await persistAr(String(row.camp_id), camperName, ar);
+        await persistAr(String(row.camp_id), camperName, ar, camperId);
         continue;
       }
 
       // Stripe path (unchanged from before BYOP support was added).
       if (!STRIPE_SECRET) {
-        details.push({ camp: row.camp_id, camper: camperName, amount: due.amount, kind: due.kind, result: "skipped_no_processor", processor: "stripe" });
+        details.push({ camp: row.camp_id, camper: camperName, camperId, amount: due.amount, kind: due.kind, result: "skipped_no_processor", processor: "stripe" });
+        await releaseReload();
         continue;
       }
       const pi = await stripeCharge(
         ar.stripeCustomerId, ar.stripePaymentMethodId || null, due.amount,
-        `${campNames.get(String(row.camp_id)) || "Camp"} — canteen auto-reload (${due.kind}), ${camperName}`,
-        { campId: String(row.camp_id), camperName, source: "campistry-canteen-deposit", auto: "true" },
+        `${campNames.get(String(row.camp_id)) || "Camp"} — canteen auto-reload (${due.kind}), ${displayName(camperName)}`,
+        { campId: String(row.camp_id), camperName, camperId: camperId != null ? String(camperId) : "", source: "campistry-canteen-deposit", auto: "true" },
         campDestinations.get(String(row.camp_id)) || null,
+        // The failure count makes a retry after a decline a NEW request
+        // (TED-085): Stripe replays a key's first answer — the decline — for
+        // 24 hours, and three replays would switch auto-reload off for a
+        // parent who had already fixed their card.
+        `${row.camp_id}:${reloadKey}:f${Number(ar.consecutiveFailures) || 0}`,
       );
 
+      if (pi.unknownOutcome) {
+        // Neither a charge nor a decline: give the slot back WITHOUT counting a
+        // failure, so the next check repeats this same Stripe key (TED-094).
+        await releaseReload();
+        details.push({ camp: row.camp_id, camper: camperName, camperId, amount: due.amount, kind: due.kind, result: "retry_same_key", reason: pi.error?.message });
+        continue;
+      }
       if (pi.error || pi.status === "requires_action") {
+        await releaseReload();
         const reason = pi.error?.message || "requires_authentication";
         markFailure(ar, today, reason);
         failed++;
-        details.push({ camp: row.camp_id, camper: camperName, amount: due.amount, kind: due.kind, result: "failed", reason });
-        await persistAr(String(row.camp_id), camperName, ar);
+        details.push({ camp: row.camp_id, camper: camperName, camperId, amount: due.amount, kind: due.kind, result: "failed", reason });
+        await persistAr(String(row.camp_id), camperName, ar, camperId);
       } else if (pi.status === "succeeded" || pi.status === "processing") {
         // Balance crediting happens asynchronously via stripe-webhook's
         // handleCanteenDeposit once Stripe confirms payment_intent.succeeded
@@ -488,15 +674,22 @@ serve(async (req) => {
         // receipt for the same reason an instalment does. Keyed on the
         // PaymentIntent, so the webhook's copy and this one are one email.
         await sendReceipt({
-          campId: String(row.camp_id), camperName, ref: String(pi.id || ""),
+          campId: String(row.camp_id), camperName, camperId: camperId, ref: String(pi.id || ""),
           amount: due.amount, when: today, method: "Card on file",
           what: "Canteen auto-reload (" + due.kind + ")",
         });
         charged++;
-        details.push({ camp: row.camp_id, camper: camperName, amount: due.amount, kind: due.kind, result: "charged", stripeStatus: pi.status });
-        await persistAr(String(row.camp_id), camperName, ar);
+        details.push({ camp: row.camp_id, camper: camperName, camperId, amount: due.amount, kind: due.kind, result: "charged", stripeStatus: pi.status });
+        await persistAr(String(row.camp_id), camperName, ar, camperId);
       } else {
-        details.push({ camp: row.camp_id, camper: camperName, amount: due.amount, kind: due.kind, result: pi.status });
+        // requires_payment_method, canceled, …: no money moved. Give the slot
+        // back rather than holding it until tomorrow, and count it as the
+        // failure it is.
+        await releaseReload();
+        markFailure(ar, today, String(pi.status || "not_charged"));
+        failed++;
+        details.push({ camp: row.camp_id, camper: camperName, camperId, amount: due.amount, kind: due.kind, result: "failed", reason: pi.status });
+        await persistAr(String(row.camp_id), camperName, ar, camperId);
       }
     }
   }

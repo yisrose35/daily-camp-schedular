@@ -1,0 +1,5 @@
+start      : office 1000.00 | parent ledger=true balance=1000
+Zelle $400 : office 600.00 | parent ledger=true balance=600 (both should be 600)
+autopay $300 recorded: {"index": 0, "balance": 300.00, "charged": 300.00, "entryId": "le_ap_plan_1_0", "success": true, "alreadyRecorded": false}
+after it   : office 300.00 | parent ledger=true balance=300 (both should be 300)
+office save: office 300.00 | parent ledger=true balance=300

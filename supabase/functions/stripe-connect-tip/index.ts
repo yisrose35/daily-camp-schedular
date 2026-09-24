@@ -92,6 +92,12 @@ async function stripePost(endpoint: string, body: Record<string, string>) {
   return resp.json();
 }
 
+
+/** A camper id (from the page, or from metadata), or null. */
+function camperIdIn(v: unknown): number | null {
+  return v != null && /^\d+$/.test(String(v)) ? Number(v) : null;
+}
+
 serve(async (req) => {
   if (req.method === "OPTIONS") {
     return new Response("ok", { headers: corsHeaders });
@@ -113,7 +119,7 @@ serve(async (req) => {
       });
     }
 
-    const { campId, accountId, camperName, parentName, parentEmail, tipAmount } = await req.json();
+    const { campId, accountId, camperName, camperId, parentName, parentEmail, tipAmount } = await req.json();
     if (!campId || !accountId) {
       return new Response(JSON.stringify({ error: "campId and accountId are required" }), {
         status: 400,
@@ -201,7 +207,9 @@ serve(async (req) => {
       staffAccountId: String(acct.id),
       staffName: String(acct.staff_name || ""),
       staffRole: String(acct.role || ""),
-      camperName: String(camperName || ""),
+      // To stripe-connect-webhook, which records the tip on this camper by ID;
+      // the name beside it is for display.
+      camperId: camperIdIn(camperId) != null ? String(camperIdIn(camperId)) : "", camperName: String(camperName || ""),
       parentUserId: String(authUser?.user?.id || ""),
       parentName: String(parentName || invite.parent_name || ""),
       parentEmail: String(parentEmail || invite.parent_email || ""),

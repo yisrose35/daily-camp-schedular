@@ -1,0 +1,27 @@
+SETUP (each case its own camp): Avi (#7) "below $5 → add $20", Bea (#8) weekly on today's weekday → add $25; both wallets $0, no Active dates; today 2026-09-24
+
+D1. campDates 2026-07-26 → 2026-09-23 (the season ended yesterday)
+    run: camp → skipped_season_over
+  ok  D1 after the season ends, nobody is charged   → none
+
+D2. Spring: the owner has entered NEXT summer's sessions → campDates 2026-12-23 → 2027-02-21
+    run today (2026-09-24): camp → skipped_not_in_session
+    run week 2 (2026-10-01): camp → skipped_not_in_session
+    run week 3 (2026-10-08): camp → skipped_not_in_session
+    run week 4 (2026-10-15): camp → skipped_not_in_session
+  ok  D2 months before camp starts, nobody is charged   → 0 charge(s): none; wallets Avi $0, Bea $0
+
+D3. A camp with no session dates at all (no campDates row)
+    run: camp → skipped_no_session_dates
+    (the Link form now says: "Auto-reload only charges within this window — and the camp stops it after the season either way.")
+  NOTE D3 no dates → charged as before (the builder's stated behaviour): none
+
+D4. In season, but the office switched Parents' auto-reload Off (Snacks → Settings)
+    run: camp → skipped_switched_off_by_camp
+  ok  D4 the office's switch stops every charge   → none
+
+D5. Control: in season (ends 2026-10-24)
+    run: Avi threshold $20 → charged; Bea schedule $25 → charged
+  ok  D5 in season it still tops up (Avi $20 + Bea $25)   → $20 from cus_avi, $25 from cus_bea
+
+0 BAD

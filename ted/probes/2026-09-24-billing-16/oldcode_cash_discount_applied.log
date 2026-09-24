@@ -1,0 +1,36 @@
+TAP version 13
+# /tmp/claude-0/-home-user-daily-camp-schedular/39278441-0cf3-5f6a-bf8e-a51bef67e95d/scratchpad/ted16/old/tests/cash_discount_applied.test.js:26
+# const VARS = ME.match(/var _CASH_DISCOUNT_METHODS=\\{[^}]*\\};/)[0];
+#                                                               ^
+# TypeError: Cannot read properties of null (reading '0')
+#     at Object.<anonymous> (/tmp/claude-0/-home-user-daily-camp-schedular/39278441-0cf3-5f6a-bf8e-a51bef67e95d/scratchpad/ted16/old/tests/cash_discount_applied.test.js:26:63)
+#     at Module._compile (node:internal/modules/cjs/loader:1705:14)
+#     at Object..js (node:internal/modules/cjs/loader:1838:10)
+#     at Module.load (node:internal/modules/cjs/loader:1441:32)
+#     at Function._load (node:internal/modules/cjs/loader:1263:12)
+#     at TracingChannel.traceSync (node:diagnostics_channel:328:14)
+#     at wrapModuleLoad (node:internal/modules/cjs/loader:237:24)
+#     at Function.executeUserEntryPoint [as runMain] (node:internal/modules/run_main:171:5)
+#     at node:internal/main/run_main_module:36:49
+# Node.js v22.22.2
+# Subtest: tests/cash_discount_applied.test.js
+not ok 1 - tests/cash_discount_applied.test.js
+  ---
+  duration_ms: 72.048364
+  type: 'test'
+  location: '/tmp/claude-0/-home-user-daily-camp-schedular/39278441-0cf3-5f6a-bf8e-a51bef67e95d/scratchpad/ted16/old/tests/cash_discount_applied.test.js:1:1'
+  failureType: 'testCodeFailure'
+  exitCode: 1
+  signal: ~
+  error: 'test failed'
+  code: 'ERR_TEST_FAILURE'
+  ...
+1..1
+# tests 1
+# suites 0
+# pass 0
+# fail 1
+# cancelled 0
+# skipped 0
+# todo 0
+# duration_ms 82.464684

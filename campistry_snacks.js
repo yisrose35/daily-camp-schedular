@@ -66,7 +66,8 @@ const DEFAULT_SNACKS_SETTINGS = {
     defaultDailyLimit: 10,
     cashDailyMax: 20,           // per camper, per day; 0 = uncapped
     cashReasonRequired: true,
-    cashAllowNegative: false    // off = a camper can't withdraw money they don't have
+    cashAllowNegative: false,   // off = a camper can't withdraw money they don't have
+    autoReloadOff: false        // on = parents' auto-reload may charge (TED-143)
 };
 
 // ==========================================================================
@@ -84,10 +85,43 @@ function readGlobal() {
     // "campers not showing in Snacks" even after cloud hydration confirmed
     // finding real campers.
     const keys = [STORE_KEY, 'CAMPISTRY_LOCAL_CACHE', 'CAMPISTRY_UNIFIED_STATE'];
+    let g = {};
     for (const key of keys) {
-        try { const raw = localStorage.getItem(key); if (raw) return JSON.parse(raw) || {}; } catch (_) {}
+        try { const raw = localStorage.getItem(key); if (raw) { g = JSON.parse(raw) || {}; break; } } catch (_) {}
     }
-    return {};
+    return _withFullRoster(g);
+}
+
+// ★ THE ROSTER IS NOT IN localStorage, AND HAS NOT BEEN SINCE THE IDB MOVE.
+//
+// integration_hooks' setLocalSettings writes campGlobalSettings_v1 as a LITE
+// snapshot — it deliberately `delete`s app1.camperRoster (and the other keys that
+// grow without bound) so a large camp cannot blow localStorage's ~5MB ceiling.
+// The complete state lives in IndexedDB and is what window.loadGlobalSettings()
+// returns.
+//
+// So a page that reads the roster straight out of localStorage sees it exactly
+// once — in the window between campistry_cloud_bootstrap.js writing the raw cloud
+// keys and the first hydration replacing them with the lite snapshot — and
+// nothing after that. On this page the symptom is the whole canteen: no campers
+// to deposit for, no accounts, no cash out, no shop order, on every load. The
+// comment above blames CAMPISTRY_UNIFIED_STATE for "campers not showing in
+// Snacks", which was a real cause once; this is the other one.
+//
+// campistry_live.js and campistry_live_locator.js already prefer the full state.
+// Four more pages do now, and tests/full_state_readers.test.js is what keeps a
+// fifth from arriving without it.
+function _withFullRoster(lite) {
+    try {
+        if ((lite.app1 && lite.app1.camperRoster) ||
+            typeof window.loadGlobalSettings !== 'function') return lite;
+        const full = window.loadGlobalSettings();
+        const r = full && full.app1 && full.app1.camperRoster;
+        if (!r || !Object.keys(r).length) return lite;
+        const out = Object.assign({}, lite);
+        out.app1 = Object.assign({}, lite.app1, { camperRoster: r });
+        return out;
+    } catch (_) { return lite; }
 }
 
 function getRoster() {
@@ -107,15 +141,18 @@ function _snacksPresenceGate() {
     return !!(P && P.hasDates());
 }
 
-function getCamperList() {
-
 // ── Camper display name ────────────────────────────────────────────────────
 // Roster keys are unique but are not always the camper's name: a second camper
 // sharing a name is keyed "Malky Stein #102" (their camperId) — see
 // campistry_camper_identity.js. The suffix is always exactly " #<id>" appended to
 // the plain name, so stripping it needs no roster lookup. Identity — lookups,
 // accounts, ledgers, selection — keeps using the KEY; only humans see this.
+// Top level: it used to sit inside getCamperList, where nothing else could
+// reach it (TED-116/TED-125 — the cash-out toast and the held-refund list
+// crashed on it).
 function _lbl(key) { return String(key == null ? '' : key).replace(/\s#\d+$/, ''); }
+
+function getCamperList() {
     const roster = getRoster();
     const structure = getStructure();
     const campers = [];
@@ -197,6 +234,63 @@ function _txSig(t) {
     return [t.date, t.time, t.camper, t.type, t.amount, t.items].join('|');
 }
 
+// ── Ledger compaction ───────────────────────────────────────────────────────
+// The transactions array is prepend-only and, until this, unbounded: every
+// register sale, office save and parent deposit rewrote the whole season, and
+// every reader, sync and realtime event paid for it. It could not simply be
+// trimmed, because balances are Σ of that very array — trim it and the next
+// save rewrites every balance in the camp. So compaction FOLDS instead: rows
+// older than a watermark are summed into `ledgerCarry` (the exact three
+// buckets _reconcileBalances attributes by, so a recreated account finds its
+// history by the same rules as before) and removed, and `ledgerCompactedThrough`
+// records the watermark. Balance = carry + Σ(live rows) — identical by
+// construction, and compactSnacksLedger refuses to save if it is not.
+//
+// Nothing is folded that is not already archived: migration 203's trigger
+// copies every transaction the cloud ever sees into canteen_transactions, and
+// compaction verifies that before dropping a row. The archive is the floor.
+//
+// The merge has to know about the watermark, or a stale tab whose local copy
+// still holds folded rows would union them straight back in — and, keeping the
+// cloud's carry as well, count them twice. _mergeCompaction keeps the carry
+// that belongs to the higher watermark and drops anything at or below it.
+// This block is IDENTICAL in campistry_snacks_pos.js, and a test holds the two
+// copies together the way one already holds the two _reconcileBalances.
+function _txFolded(t, w) {
+    if (!w || !t) return false;
+    var d = t.date;
+    // Only a well-formed date can be compared; a legacy row with none is never
+    // folded and never dropped, so it can never be lost by either.
+    return typeof d === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(d) && d <= w;
+}
+function _ledgerBuckets(transactions, carry) {
+    var c = carry || {};
+    var byId = Object.assign({}, c.byId || {});
+    var byNameNoId = Object.assign({}, c.byNameNoId || {});
+    var byName = Object.assign({}, c.byName || {});
+    (transactions || []).forEach(function(t) {
+        if (!t) return;
+        var amt = parseFloat(t.amount) || 0;
+        var signed = (t.type === 'credit' ? amt : -amt);
+        var hasId = (t.camperId != null && t.camperId !== '');
+        if (hasId) byId[t.camperId] = (byId[t.camperId] || 0) + signed;
+        if (t.camper) {
+            byName[t.camper] = (byName[t.camper] || 0) + signed;
+            if (!hasId) byNameNoId[t.camper] = (byNameNoId[t.camper] || 0) + signed;
+        }
+    });
+    return { byId: byId, byNameNoId: byNameNoId, byName: byName };
+}
+function _mergeCompaction(merged, tx, cloud, local) {
+    var cw = (cloud && cloud.ledgerCompactedThrough) || '';
+    var lw = (local && local.ledgerCompactedThrough) || '';
+    var w = cw >= lw ? cw : lw;
+    if (!w) return tx;
+    merged.ledgerCompactedThrough = w;
+    merged.ledgerCarry = ((cw >= lw ? cloud : local).ledgerCarry) || {};
+    return tx.filter(function(t) { return !_txFolded(t, w); });
+}
+
 // The canteen is event-sourced: an account's balance is always Σ of its
 // transactions, recomputed here rather than stored. That is why a balance edited
 // without a matching transaction is erased by the next merge.
@@ -213,18 +307,9 @@ function _txSig(t) {
 // money used to move between two children sharing a name.
 function _reconcileBalances(data) {
     if (!data || !data.accounts) return data;
-    var byId = {}, byNameNoId = {}, byName = {};
-    (data.transactions || []).forEach(function(t) {
-        if (!t) return;
-        var amt = parseFloat(t.amount) || 0;
-        var signed = (t.type === 'credit' ? amt : -amt);
-        var hasId = (t.camperId != null && t.camperId !== '');
-        if (hasId) byId[t.camperId] = (byId[t.camperId] || 0) + signed;
-        if (t.camper) {
-            byName[t.camper] = (byName[t.camper] || 0) + signed;
-            if (!hasId) byNameNoId[t.camper] = (byNameNoId[t.camper] || 0) + signed;
-        }
-    });
+    // Seeded from the compaction carry, so a folded row still counts.
+    var b = _ledgerBuckets(data.transactions, data.ledgerCarry);
+    var byId = b.byId, byNameNoId = b.byNameNoId, byName = b.byName;
     Object.keys(data.accounts).forEach(function(name) {
         var a = data.accounts[name];
         if (!a) return;
@@ -249,32 +334,133 @@ function _reconcileBalances(data) {
 // tab cached its copy. Fetch the CURRENT cloud value first, union the
 // transaction ledgers, then recompute balances from the union — so no deposit
 // or purchase is ever lost, regardless of write order.
+// ★ 219: balances and the ledger live in rows now, not in this document.
+//
+// camp_canteen_accounts is the truth for every balance, daily limit and
+// auto-reload setting, and canteen_transactions is the truth for the ledger.
+// Reading them from the document would show whatever it held at the moment the
+// writers stopped maintaining it — frozen numbers, with no error to notice.
+//
+// get_canteen_accounts (218) serves both from the rows, already scoped: staff
+// get the whole camp, a parent gets only their own children.
+function _loadCanteenRows(then) {
+    try {
+        const db = window.CampistryDB;
+        const client = db && db.client;
+        const campId = db && db.getCampId && db.getCampId();
+        if (!client || !campId) { then(null); return; }
+        client.rpc('get_canteen_accounts', { p_camp_id: campId })
+            .then(function (res) {
+                const d = res && res.data;
+                // A failure must not be mistaken for an empty camp: showing
+                // every balance as zero is worse than showing none, because it
+                // looks like an answer.
+                if (!d || d.success !== true) { then(null); return; }
+                then({ accounts: d.accounts || {}, transactions: d.transactions || [],
+                       ledgerWindow: d.ledgerWindow || null });
+            }, function () { then(null); });
+    } catch (_) { then(null); }
+}
+
+// ── An account is found by its camper's NUMBER (Ted, TED-002) ─────────────────
+// The server keeps each account under the key it was opened with, and a rename
+// does not move that key (227: older sales that carry only a name are joined
+// through it). This page reads accounts by the camper's CURRENT roster key, so
+// a renamed child's account was not found — the page showed them an empty new
+// one. Each account the server sends carries camperId (245); here it is filed
+// under its camper's current key. Writes still reach the right row: every
+// canteen call carries the camper's number (campistry_camper_id_rpc.js).
+function _accountsUnderCurrentNames(accounts) {
+    if (!accounts || typeof accounts !== 'object') return accounts;
+    const keyOf = {};
+    try {
+        const roster = getRoster() || {};
+        Object.keys(roster).forEach(k => {
+            const id = roster[k] && roster[k].camperId;
+            if (id != null && /^\d+$/.test(String(id))) keyOf[String(id)] = k;
+        });
+    } catch (_) { return accounts; }
+    const out = {};
+    const rest = [];
+    // Campers on the roster first: each account under its camper's current key.
+    Object.keys(accounts).forEach(k => {
+        const a = accounts[k];
+        const cur = a && a.camperId != null ? keyOf[String(a.camperId)] : null;
+        if (cur && !out[cur]) out[cur] = (cur === k) ? a : Object.assign({}, a, { accountKey: k });
+        else rest.push(k);
+    });
+    // Then everything else (a camper who has left, an account with no number)
+    // under its own key — unless an enrolled camper now has that name, so the
+    // two never share a slot. Such a key is internal only: every place this
+    // page shows a name strips anything after the name (_lbl).
+    rest.forEach(k => {
+        const a = accounts[k];
+        let slot = k;
+        if (out[slot]) slot = k + ' #' + (a && a.camperId != null ? a.camperId : 'x');
+        let i = 2;
+        while (out[slot]) slot = k + ' #' + (a && a.camperId != null ? a.camperId : 'x') + '-' + (i++);
+        out[slot] = (slot === k) ? a : Object.assign({}, a, { accountKey: k });
+    });
+    return out;
+}
+
+// Overlay the row-backed truth onto whatever the document gave us. The
+// document still owns inventory, POS configuration and the rest.
+function _overlayCanteenRows(target, done) {
+    _loadCanteenRows(function (rows) {
+        if (rows && target && typeof target === 'object') {
+            target.accounts = _accountsUnderCurrentNames(rows.accounts);
+            target.transactions = rows.transactions;
+            // The server sends a recent WINDOW of the ledger (migration 245),
+            // not the season. Marking where it starts is what makes the
+            // history pane offer "Show archived history", which fetches the
+            // older rows for one camper through get_canteen_history.
+            if (rows.ledgerWindow && rows.ledgerWindow.from) {
+                target.ledgerCompactedThrough = _dateDaysBefore(rows.ledgerWindow.from, 1);
+            }
+        }
+        if (typeof done === 'function') done(!!rows);
+    });
+}
+
+// ★ 219: never write accounts or transactions back into the document. They are
+// not ours to write any more, and a whole-document save carrying a stale copy
+// is exactly the compare-and-set that would have overwritten live balances
+// while the projection trigger still existed.
+function _withoutRowBackedBranches(data) {
+    if (!data || typeof data !== 'object') return data;
+    const copy = Object.assign({}, data);
+    delete copy.accounts;
+    delete copy.transactions;
+    return copy;
+}
+
 function cloudSaveSnacks(data) {
     try {
         const db = window.CampistryDB;
         const client = db && db.client;
         const campId = db && db.getCampId && db.getCampId();
-        if (!client || !campId) { _cloudUpsertSnacks(data); return; }
+        if (!client || !campId) { _cloudUpsertSnacks(_withoutRowBackedBranches(data)); return; }
         client.from('camp_state_kv').select('value').eq('camp_id', campId).eq('key', 'campistrySnacks').maybeSingle()
             .then(function(res) {
                 var cloud = (res && res.data && res.data.value) || null;
-                var merged = data;
-                if (cloud && typeof cloud === 'object') {
-                    // Union transactions (cloud + local), deduped by signature.
-                    var seen = {}, tx = [];
-                    (data.transactions || []).concat(cloud.transactions || []).forEach(function(t) {
-                        var s = _txSig(t); if (seen[s]) return; seen[s] = 1; tx.push(t);
-                    });
-                    merged = Object.assign({}, cloud, data);          // local wins for inventory/config
-                    merged.accounts = Object.assign({}, cloud.accounts || {}, data.accounts || {});
-                    merged.transactions = tx;
-                    _reconcileBalances(merged);                        // balance := ledger truth
-                }
-                _cloudUpsertSnacks(merged);
+                var merged = _mergeSnacksInto(cloud, data);
+                // ★ 219: the document keeps inventory and configuration; the
+                // balances and the ledger it still holds are a frozen copy
+                // from before the writers moved to rows, so they are stripped
+                // rather than written back.
+                _cloudUpsertSnacks(_withoutRowBackedBranches(merged));
+                // …and they must not come back into THIS TAB either. The merge
+                // reconciles every balance from the ledger it was handed, which
+                // is the frozen document's list — so without this, saving an
+                // inventory change reset every balance on screen to a number
+                // from before 219. The rows this tab last read stay what it shows.
+                if (data && data.accounts) merged.accounts = data.accounts;
+                if (data && data.transactions) merged.transactions = data.transactions;
                 // Keep local mirror consistent with what we just wrote.
                 try { var g = JSON.parse(localStorage.getItem(STORE_KEY) || '{}'); g.campistrySnacks = merged; localStorage.setItem(STORE_KEY, JSON.stringify(g)); } catch (_) {}
                 snacks = merged;
-            }, function() { _cloudUpsertSnacks(data); });
+            }, function() { _cloudUpsertSnacks(_withoutRowBackedBranches(data)); });
     } catch (e) { console.warn('[Snacks] Cloud save error:', e); _cloudUpsertSnacks(data); }
 }
 
@@ -405,6 +591,22 @@ function ensureAccountsForRoster() {
 
 function getAccount(name) {
     const a = snacks.accounts[name] || { balance: 0, dailyLimit: getSettings().defaultDailyLimit, spentToday: 0 };
+    // ★ A ROW-BACKED ACCOUNT CAN BE MISSING FIELDS, and the default above only
+    //   applies when the whole account is missing.
+    //
+    //   218's _canteen_account_json omits dailyLimit, creditLimit and balanceFloor
+    //   when the column is NULL — deliberately, because NULL means "not set". And
+    //   the row writers create an account with payload '{}' and every numeric
+    //   column NULL: canteen_account_lock inserts it that way, so the first parent
+    //   deposit, POS sale or shop settlement for a camper produces exactly that
+    //   shape. rAccounts then reached a.dailyLimit.toFixed(2), threw, and the whole
+    //   Accounts table came out EMPTY — no error on screen, just no campers.
+    //
+    //   Filled here rather than at each of the dozen read sites, and with the same
+    //   defaults the missing-account branch uses so the two agree.
+    if (a.balance == null) a.balance = 0;
+    if (a.dailyLimit == null) a.dailyLimit = getSettings().defaultDailyLimit;
+    if (a.spentToday == null) a.spentToday = 0;
     // Daily spend resets at midnight
     const t = new Date();
     const today = t.getFullYear() + '-' + String(t.getMonth() + 1).padStart(2, '0') + '-' + String(t.getDate()).padStart(2, '0');
@@ -445,7 +647,7 @@ function cashOutLimit(name) {
     const cfg = getSettings();
     const lim = window.SnacksCash.limit({
         account: getAccount(name), transactions: snacks.transactions,
-        camper: name, date: todayStr(), settings: cfg
+        camper: name, camperId: _deskCamperId(name), date: todayStr(), settings: cfg
     });
     lim.cfg = cfg;
     return lim;
@@ -495,7 +697,7 @@ function renderStats() {
     // without selling anything, and a deposit refund reverses money that was
     // never a sale in the first place — neither should count as revenue.
     const salesToday = (snacks.transactions || [])
-        .filter(t => t.date === todayStr() && t.type !== 'credit' && t.kind !== 'cash_out' && t.kind !== 'refund')
+        .filter(t => t.date === todayStr() && _isSale(t))
         .reduce((s, t) => s + (parseFloat(t.amount) || 0), 0);
     document.getElementById('sS').textContent = '$' + salesToday.toFixed(0);
     const cashEl = document.getElementById('sC');
@@ -581,33 +783,194 @@ function _renderHistoryFilter() {
 function _renderHistoryBody() {
     const body = document.getElementById('histBody');
     if (!body) return;
-    let txs = (snacks.transactions || []).filter(t => t && t.camper === _histCamper);
+    // By the PERSON as well as the spelling: after a rename the older rows
+    // carry the old name, and a same-named child's rows carry the same one.
+    const _hAcct = snacks.accounts && snacks.accounts[_histCamper];
+    const _hId = _hAcct && _hAcct.camperId != null ? String(_hAcct.camperId) : null;
+    let txs = (snacks.transactions || []).filter(t => t && (_hId != null && t.camperId != null
+        ? String(t.camperId) === _hId
+        : t.camper === _histCamper));
     if (_histFilter === 'in') txs = txs.filter(t => t.type === 'credit');
     else if (_histFilter === 'out') txs = txs.filter(t => t.type !== 'credit');
     txs = txs.slice().sort((x, y) => _histSortKey(y) - _histSortKey(x)); // newest first
     if (!txs.length) {
         body.innerHTML = '<div style="text-align:center;padding:2.5rem 1rem;color:var(--text-muted);font-size:.85rem">No ' +
-            (_histFilter === 'in' ? 'incoming funds' : _histFilter === 'out' ? 'spending' : 'transactions') + ' yet.</div>';
+            (_histFilter === 'in' ? 'incoming funds' : _histFilter === 'out' ? 'spending' : 'transactions') +
+            (snacks.ledgerCompactedThrough ? ' in the live list.' : ' yet.') + '</div>' + _archivedHistoryHtml();
         return;
     }
-    body.innerHTML = txs.map(t => {
-        const credit = t.type === 'credit';
-        const auto = credit && (t.kind === 'autoreload' || /auto[- ]?(reload|pay)/i.test(t.items || ''));
-        const isRefund = t.kind === 'refund';
-        const isCashOut = t.kind === 'cash_out';
-        let label = t.items || (credit ? 'Deposit' : 'Purchase');
-        if (auto) label = 'Auto-reload top-up';
-        else if (isRefund) label = 'Refund';
-        else if (isCashOut) label = 'Cash out';
-        const tag = auto ? '<span class="hist-tag">Auto-Pay</span>' : '';
-        const when = (t.date || '') + (t.time ? ' · ' + t.time : '');
-        const amt = Number(t.amount) || 0;
-        const amtHtml = credit
-            ? '<span style="color:var(--green-600);font-weight:700">+$' + amt.toFixed(2) + '</span>'
-            : '<span style="color:var(--red-600);font-weight:700">−$' + amt.toFixed(2) + '</span>';
-        return '<div class="hist-row"><div class="hist-main"><div class="hist-label">' + esc(label) + tag +
-            '</div><div class="hist-when">' + esc(when) + '</div></div><div class="hist-amt">' + amtHtml + '</div></div>';
-    }).join('');
+    // The live rows, then — once the ledger has been compacted — a way to pull
+    // the older ones from the archive without ever writing them back.
+    _voidRows = [];
+    body.innerHTML = txs.map(_histRowHtml).join('') + _archivedHistoryHtml();
+}
+
+/**
+ * Is this line a SALE? Only purchases are. Deposits (credits), cash taken
+ * out, deposit refunds and the office's end-of-season close-out (TED-152)
+ * all move money without selling anything, so none of them is revenue —
+ * one rule, for the sales tile, the day's revenue and the week's chart.
+ */
+function _isSale(t) {
+    return !!t && t.type !== 'credit' && t.kind !== 'cash_out' && t.kind !== 'refund' && t.kind !== 'closeout'
+        // a sale the office voided (TED-175) never happened
+        && !(t.sig && _voidedSigs()[t.sig]);
+}
+
+// ── Voiding a register sale (TED-175) ──────────────────────────────────────
+// A child charged by mistake gets the money back as the reversal of THAT sale
+// (migration 284's canteen_void_sale: a 'void' line naming the sale, with no
+// payment method), never as a deposit that books cash nobody paid in.
+
+/** The sales that have been voided, by their ledger row's sig. */
+var _voidCache = { arr: null, len: -1, set: {} };
+function _voidedSigs() {
+    const txs = (typeof snacks !== 'undefined' && snacks && snacks.transactions) || [];
+    if (_voidCache.arr !== txs || _voidCache.len !== txs.length) {
+        const set = {};
+        txs.forEach(t => { if (t && t.kind === 'void' && t.voidOf) set[t.voidOf] = 1; });
+        _voidCache = { arr: txs, len: txs.length, set: set };
+    }
+    return _voidCache.set;
+}
+/** A register sale (in person or from the offline register), not yet voided. */
+function _canVoid(t) {
+    return !!t && !!t.sig && t.type === 'debit' && (!t.kind || t.kind === 'sale' || t.kind === 'offline_sale')
+        && !_voidedSigs()[t.sig];
+}
+function _mayEditAccounts() {
+    const S = window.CampistrySections;
+    return S && S.canEdit ? S.canEdit('accounts') : true;
+}
+/**
+ * What a sale sold, to offer back to stock: by item id when the register kept
+ * them with the sale (migration 289, TED-192) — an item named "Chips, BBQ" or
+ * "Trail Mix 2" included — else read from its line ("Ices ×2, Chips").
+ */
+function _saleItemsToRestock(items, sold) {
+    if (Array.isArray(sold) && sold.length) {
+        return sold.filter(x => x && x.id != null && Number(x.qty) > 0).map(x => {
+            const item = (snacks.inventory || []).find(i => i && String(i.id) === String(x.id));
+            return { id: item ? item.id : null, name: item ? item.name : ('item #' + x.id), qty: Number(x.qty), tracked: !!item && item.stock != null };
+        });
+    }
+    return String(items || '').split(',').map(x => x.trim()).filter(Boolean).map(part => {
+        const m = part.match(/^(.*?)\s*[×x]\s*(\d+)$/);
+        const name = (m ? m[1] : part).trim();
+        const qty = m ? parseInt(m[2], 10) : 1;
+        const item = (snacks.inventory || []).find(i => i && String(i.name || '').trim().toLowerCase() === name.toLowerCase());
+        return { id: item ? item.id : null, name: name, qty: qty, tracked: !!item && item.stock != null };
+    });
+}
+var _voidRows = [];        // the rows the history shows, so a button names one by index
+var _voidTarget = null;
+var _voidBusy = false;
+window.openVoidSale = function(idx) {
+    if (!_secEdit('accounts', 'Voiding a sale')) return;
+    const t = _voidRows[idx];
+    if (!_canVoid(t)) { toast('That sale cannot be voided', 1); return; }
+    _voidTarget = t;
+    const amt = Number(t.amount) || 0;
+    const who = t.camper || _histCamper || 'this child';
+    const sum = document.getElementById('voidSummary');
+    if (sum) sum.innerHTML = '<strong>$' + amt.toFixed(2) + '</strong> · ' + esc(t.items || 'Purchase') + ' · ' + esc(who) +
+        '<div style="font-size:.8rem;color:var(--text-muted)">' + esc((t.date || '') + (t.time ? ' · ' + t.time : '')) + '</div>' +
+        '<p style="font-size:.85rem;margin:.6rem 0 0">The $' + amt.toFixed(2) + ' goes back on ' + esc(who) +
+        '\u2019s canteen balance as a void of this sale \u2014 not as a deposit, so no cash or card is recorded, and it no longer counts as a sale.</p>';
+    const box = document.getElementById('voidItems');
+    if (box) {
+        const list = _saleItemsToRestock(t.items, t.soldItems);
+        box.innerHTML = list.length ? list.map((it, i) => it.id != null && it.tracked
+            ? '<label class="pay-row"><input type="checkbox" data-void-item="' + i + '" checked><span>Put ' + it.qty + ' \u00d7 ' + esc(it.name) + ' back in stock</span></label>'
+            : '<div style="font-size:.8rem;color:var(--text-muted)">' + esc(it.name) + (it.id == null ? ' \u2014 not on the item list any more, not restocked' : ' \u2014 stock is not counted for this item') + '</div>'
+        ).join('') + '<div style="font-size:.75rem;color:var(--text-muted);margin-top:.3rem">Untick an item the child kept or ate.</div>' : '';
+        box._list = list;
+    }
+    const note = document.getElementById('voidNote'); if (note) note.value = '';
+    const btn = document.getElementById('voidBtn'); if (btn) { btn.disabled = false; btn.textContent = 'Void sale'; }
+    // The history window closes first (TED-180): both are page-wide windows,
+    // and the void's opened underneath it, so pressing Void seemed to do
+    // nothing. Cancel, or a finished void, brings the history back.
+    closeM('history');
+    openM('void');
+};
+window.cancelVoidSale = function() {
+    closeM('void');
+    _voidTarget = null;
+    if (_histCamper) { try { viewAccountHistory(_histCamper); } catch (_) {} }
+};
+window.confirmVoidSale = function() {
+    const t = _voidTarget;
+    if (!t || _voidBusy) return;
+    if (!_secEdit('accounts', 'Voiding a sale')) return;
+    const rpc = _deskRpc();
+    if (!rpc) { toast('Not connected — a sale cannot be voided offline', 1); return; }
+    const box = document.getElementById('voidItems');
+    const list = (box && box._list) || [];
+    const restock = [];
+    if (box) box.querySelectorAll('input[data-void-item]').forEach(cb => {
+        const it = list[Number(cb.getAttribute('data-void-item'))];
+        if (cb.checked && it && it.id != null) restock.push({ id: it.id, qty: it.qty });
+    });
+    const noteEl = document.getElementById('voidNote');
+    const btn = document.getElementById('voidBtn');
+    _voidBusy = true;
+    if (btn) { btn.disabled = true; btn.textContent = 'Voiding…'; }
+    const who = t.camper || _histCamper;
+    rpc.client.rpc('canteen_void_sale', {
+        p_camp_id: rpc.campId, p_sig: t.sig, p_restock: restock, p_note: (noteEl && noteEl.value.trim()) || null
+    }).then(function (res) {
+        _voidBusy = false;
+        if (btn) { btn.disabled = false; btn.textContent = 'Void sale'; }
+        const d = res && res.data;
+        if ((res && res.error) || !d || !d.success) {
+            toast((d && d.message) || _deskMessage(res, d, 'Could not void the sale'), 1);
+            return;
+        }
+        closeM('void');
+        _voidTarget = null;
+        // the stock the server gave back, on this page's copy too
+        restock.forEach(r => { const item = (snacks.inventory || []).find(i => i.id === r.id);
+            if (item) { if (item.stock != null) item.stock += r.qty; item.totalSold = Math.max(0, (item.totalSold || 0) - r.qty);
+                        if (t.date === todayStr()) item.soldToday = Math.max(0, (item.soldToday || 0) - r.qty); } });
+        _deskRefresh(function () { if (_histCamper) { try { viewAccountHistory(_histCamper); } catch (_) {} } }, who, d);
+        toast('Voided — $' + Number(d.amount).toFixed(2) + ' back on ' + who + '\u2019s balance' + (d.restocked ? ' and ' + d.restocked + ' item' + (d.restocked === 1 ? '' : 's') + ' back in stock' : ''));
+    }, function () {
+        _voidBusy = false;
+        if (btn) { btn.disabled = false; btn.textContent = 'Void sale'; }
+        toast('Could not void the sale — connection error. Open the history again before retrying: it may have gone through.', 1);
+    });
+};
+
+function _histRowHtml(t) {
+    const credit = t.type === 'credit';
+    const auto = credit && (t.kind === 'autoreload' || /auto[- ]?(reload|pay)/i.test(t.items || ''));
+    const isRefund = t.kind === 'refund';
+    const isCashOut = t.kind === 'cash_out';
+    let label = t.items || (credit ? 'Deposit' : 'Purchase');
+    if (auto) label = 'Auto-reload top-up';
+    else if (isRefund) label = 'Refund';
+    else if (t.kind === 'refund_failed') label = t.disputeWon ? (t.items || 'Dispute won — money back on the wallet') : 'Refund failed — money back on the wallet';
+    else if (t.kind === 'closeout') label = t.items || 'Season close-out';
+    else if (t.kind === 'void') label = t.items || 'Sale voided';
+    else if (isCashOut) label = 'Cash out';
+    const voided = !!(t.sig && _voidedSigs()[t.sig]);
+    const tag = auto ? '<span class="hist-tag">Auto-Pay</span>'
+              : voided ? '<span class="hist-tag">Voided</span>'
+              : t.kind === 'void' ? '<span class="hist-tag">Void</span>' : '';
+    // TED-175: a sale made by mistake is voided here, not given back as a deposit
+    let voidBtn = '';
+    if (_canVoid(t) && _mayEditAccounts()) {
+        _voidRows.push(t);
+        voidBtn = ' <button class="btn btn-secondary btn-sm" style="margin-left:.4rem" onclick="openVoidSale(' + (_voidRows.length - 1) + ')">Void</button>';
+    }
+    const when = (t.date || '') + (t.time ? ' · ' + t.time : '');
+    const amt = Number(t.amount) || 0;
+    const amtHtml = credit
+        ? '<span style="color:var(--green-600);font-weight:700">+$' + amt.toFixed(2) + '</span>'
+        : '<span style="color:var(--red-600);font-weight:700">−$' + amt.toFixed(2) + '</span>';
+    return '<div class="hist-row"><div class="hist-main"><div class="hist-label">' + esc(label) + tag +
+        '</div><div class="hist-when">' + esc(when) + '</div></div><div class="hist-amt">' + amtHtml + voidBtn + '</div></div>';
 }
 
 /** Open a modal with its camper select pre-filled (and its dependent UI refreshed). */
@@ -659,7 +1022,7 @@ function rAnalytics() {
     // sell nothing — a refund is a debit (money leaving the camp's ledger
     // back to the parent, same sign as a purchase) but it's the opposite of
     // a sale, so it has to be excluded here just like credits/cash-outs are.
-    const saleTx = todayTx.filter(t => t.type !== 'credit' && t.kind !== 'cash_out' && t.kind !== 'refund');
+    const saleTx = todayTx.filter(_isSale);
     const sal = saleTx.reduce((s, t) => s + (parseFloat(t.amount) || 0), 0);
     const tc = saleTx.length;
     const I = snacks.inventory;
@@ -775,7 +1138,7 @@ function rAnalytics() {
         d.setDate(d.getDate() - i);
         const key = d.getFullYear() + '-' + String(d.getMonth() + 1).padStart(2, '0') + '-' + String(d.getDate()).padStart(2, '0');
         const amt = (snacks.transactions || [])
-            .filter(t => t.date === key && t.type !== 'credit' && t.kind !== 'cash_out' && t.kind !== 'refund')
+            .filter(t => t.date === key && _isSale(t))
             .reduce((s, t) => s + (parseFloat(t.amount) || 0), 0);
         WK.push({ day: DOW[d.getDay()], amount: Math.round(amt * 100) / 100 });
     }
@@ -795,8 +1158,12 @@ function rAnalytics() {
         const amt = Math.abs(parseFloat(t.amount) || 0);
         const credit = t.type === 'credit';
         const cashOut = t.kind === 'cash_out';
-        const refund = t.kind === 'refund';
-        const kind = refund  ? '<span class="badge badge-amber">Refund</span>'
+        const refund = t.kind === 'refund' || t.kind === 'closeout';
+        const kind = t.kind === 'void' ? '<span class="badge badge-amber">Sale voided</span>'
+                   : (t.sig && _voidedSigs()[t.sig]) ? '<span class="badge badge-neutral">Purchase \u00b7 voided</span>'
+                   : t.kind === 'closeout' ? '<span class="badge badge-amber">Season close-out</span>'
+                   : refund  ? '<span class="badge badge-amber">Refund</span>'
+                   : t.kind === 'refund_failed' ? '<span class="badge badge-amber">Refund failed</span>'
                    : cashOut ? '<span class="badge badge-amber">Cash out</span>'
                    : credit  ? '<span class="badge badge-green">Deposit</span>'
                              : '<span class="badge badge-neutral">Purchase</span>';
@@ -818,6 +1185,7 @@ function rSettings() {
     set('setCashDailyMax', cfg.cashDailyMax);
     set('setCashReasonRequired', cfg.cashReasonRequired ? 'yes' : 'no');
     set('setCashAllowNegative', cfg.cashAllowNegative ? 'yes' : 'no');
+    set('setAutoReloadOff', cfg.autoReloadOff ? 'yes' : 'no');
 
     const box = document.getElementById('setPayMethods');
     if (box) {
@@ -858,6 +1226,7 @@ function rSettings() {
     }
 
     loadPosPinStatus();
+    _renderCompactionCard();
 }
 
 window.saveSettingsForm = function() {
@@ -875,7 +1244,10 @@ window.saveSettingsForm = function() {
         defaultDailyLimit: num('setDefaultLimit', DEFAULT_SNACKS_SETTINGS.defaultDailyLimit),
         cashDailyMax: num('setCashDailyMax', DEFAULT_SNACKS_SETTINGS.cashDailyMax),
         cashReasonRequired: (document.getElementById('setCashReasonRequired') || {}).value !== 'no',
-        cashAllowNegative: (document.getElementById('setCashAllowNegative') || {}).value === 'yes'
+        cashAllowNegative: (document.getElementById('setCashAllowNegative') || {}).value === 'yes',
+        // the office's off switch for every parent's auto-reload (TED-143);
+        // canteen-auto-reload reads it from this document's settings
+        autoReloadOff: (document.getElementById('setAutoReloadOff') || {}).value === 'yes'
     });
     saveSnacksData(snacks);
     rSettings(); popSelects();
@@ -991,8 +1363,27 @@ window.savePosPin = function() {
 // that were recorded offline back into the main ledger.
 // ==========================================================================
 
-function buildOfflineExportData() {
-    var data = loadSnacksData();
+/**
+ * The document plus the LIVE balances, or null when the rows cannot be read.
+ *
+ * Both exports used loadSnacksData() alone, and since 219 the document's
+ * `accounts` is a frozen copy from before the writers moved to rows (or absent,
+ * once a save has stripped it). An offline register loaded from it starts every
+ * camper on a stale balance — money deposited since then is missing, money spent
+ * since then is spendable again. There is no safe stale answer here, so the
+ * exports refuse rather than guess.
+ */
+function _withLiveCanteenRows() {
+    return new Promise(function (resolve) {
+        var data = Object.assign({}, loadSnacksData());
+        _overlayCanteenRows(data, function (ok) { resolve(ok ? data : null); });
+    });
+}
+
+var OFFLINE_EXPORT_NEEDS_ROWS = 'Could not read the current balances from the cloud — '
+    + 'not exporting stale ones. Check the connection and try again.';
+
+function buildOfflineExportData(data) {
     var roster = getRoster();
     var exportAccounts = {};
     Object.keys(data.accounts || {}).forEach(function(name) {
@@ -1006,7 +1397,11 @@ function buildOfflineExportData() {
             balanceFloor: a.balanceFloor || 0,
             creditLimit: a.creditLimit || 0,
             division: camper.division || '',
-            bunk: camper.bunk || ''
+            bunk: camper.bunk || '',
+            // The register stamps this on every sale, so the import can post it
+            // to the PERSON even if the camper is renamed meanwhile (242).
+            camperId: a.camperId != null ? a.camperId
+                    : (camper.camperId != null ? camper.camperId : null)
         };
     });
     Object.keys(roster).forEach(function(name) {
@@ -1019,7 +1414,8 @@ function buildOfflineExportData() {
             exportAccounts[name] = {
                 balance: 0, dailyLimit: 10, spentToday: 0, lastSpendDate: '',
                 balanceFloor: 0, creditLimit: 0,
-                division: c.division || '', bunk: c.bunk || ''
+                division: c.division || '', bunk: c.bunk || '',
+                camperId: c.camperId != null ? c.camperId : null
             };
         }
     });
@@ -1048,16 +1444,28 @@ function buildOfflineExportData() {
     };
 }
 
+// The offline register this page hands out (TED-185): the same build as
+// OFFLINE_POS_BUILD inside campistry_snacks_pos_offline.html — bump both
+// together. The download asks for it by that version and never from the
+// browser's cache, so a stored older copy is never what a tablet gets.
+var OFFLINE_POS_BUILD = '20260924-02';
+
 window.downloadOfflinePOS = async function() {
+    if (!_secEdit('offline-pos', 'Downloading offline POS data')) return;
     var statusEl = document.getElementById('offlinePosStatus');
     if (statusEl) statusEl.textContent = 'Preparing download...';
 
     try {
-        var resp = await fetch('campistry_snacks_pos_offline.html');
+        var resp = await fetch('campistry_snacks_pos_offline.html?v=' + OFFLINE_POS_BUILD, { cache: 'no-store' });
         if (!resp.ok) throw new Error('Could not load offline POS template');
         var html = resp.text ? await resp.text() : '';
+        if (html.indexOf("OFFLINE_POS_BUILD = '" + OFFLINE_POS_BUILD + "'") < 0) {
+            throw new Error('The offline register on the server is not the version this page expects — reload Snacks and try again');
+        }
 
-        var exportData = buildOfflineExportData();
+        var live = await _withLiveCanteenRows();
+        if (!live) throw new Error(OFFLINE_EXPORT_NEEDS_ROWS);
+        var exportData = buildOfflineExportData(live);
         var preloadScript = '<script>window.__OFFLINE_POS_PRELOAD__ = ' +
             JSON.stringify(exportData) + ';<\/script>';
         html = html.replace('<!-- __PRELOAD_SLOT__ -->', preloadScript);
@@ -1082,8 +1490,10 @@ window.downloadOfflinePOS = async function() {
     }
 };
 
-window.exportForOfflinePOS = function() {
-    var data = loadSnacksData();
+window.exportForOfflinePOS = async function() {
+    if (!_secEdit('offline-pos', 'Exporting offline POS data')) return;
+    var data = await _withLiveCanteenRows();
+    if (!data) { toast(OFFLINE_EXPORT_NEEDS_ROWS, 1); return; }
     var roster = getRoster();
     var exportAccounts = {};
     Object.keys(data.accounts || {}).forEach(function(name) {
@@ -1097,7 +1507,11 @@ window.exportForOfflinePOS = function() {
             balanceFloor: a.balanceFloor || 0,
             creditLimit: a.creditLimit || 0,
             division: camper.division || '',
-            bunk: camper.bunk || ''
+            bunk: camper.bunk || '',
+            // The register stamps this on every sale, so the import can post it
+            // to the PERSON even if the camper is renamed meanwhile (242).
+            camperId: a.camperId != null ? a.camperId
+                    : (camper.camperId != null ? camper.camperId : null)
         };
     });
     // Also include roster campers who don't have an account yet
@@ -1111,7 +1525,8 @@ window.exportForOfflinePOS = function() {
             exportAccounts[name] = {
                 balance: 0, dailyLimit: 10, spentToday: 0, lastSpendDate: '',
                 balanceFloor: 0, creditLimit: 0,
-                division: c.division || '', bunk: c.bunk || ''
+                division: c.division || '', bunk: c.bunk || '',
+                camperId: c.camperId != null ? c.camperId : null
             };
         }
     });
@@ -1150,50 +1565,109 @@ window.exportForOfflinePOS = function() {
 window.importOfflinePOSTransactions = function() {
     var inp = document.getElementById('offlineTxImportInput');
     if (!inp) return;
+    if (!_secEdit('accounts', 'Importing offline sales')) return;
     inp.value = '';
     inp.onclick = null;
     inp.onchange = function() {
         var file = inp.files && inp.files[0];
         if (!file) return;
         file.text().then(function(text) {
-            try {
-                var data = JSON.parse(text);
-                if (!data.transactions || !Array.isArray(data.transactions)) {
-                    toast('No transactions found in file', 1);
-                    return;
-                }
-                var txs = data.transactions;
-                var existing = snacks.transactions || [];
-                var existingSigs = {};
-                existing.forEach(function(t) {
-                    existingSigs[[t.date, t.time, t.camper, t.type, t.amount, t.items].join('|')] = 1;
-                });
-                var added = 0;
-                txs.forEach(function(t) {
-                    var sig = [t.date, t.time, t.camper, t.type, t.amount, t.items].join('|');
-                    if (existingSigs[sig]) return;
-                    existing.unshift(t);
-                    existingSigs[sig] = 1;
-                    added++;
-                    // Apply balance changes
-                    if (t.camper && t.type === 'debit') {
-                        if (!snacks.accounts[t.camper]) snacks.accounts[t.camper] = { balance: 0, dailyLimit: 10, spentToday: 0 };
-                        snacks.accounts[t.camper].balance = Math.round((snacks.accounts[t.camper].balance - (parseFloat(t.amount) || 0)) * 100) / 100;
-                    }
-                });
-                snacks.transactions = existing;
-                saveSnacksData(snacks);
-                var el = document.getElementById('offlinePosStatus');
-                if (el) el.textContent = 'Imported ' + added + ' new transactions (' + (txs.length - added) + ' duplicates skipped)';
-                toast('Imported ' + added + ' offline transactions');
-                init();
-            } catch (e) {
-                toast('Import failed: ' + (e.message || 'Invalid file'), 1);
+            var data;
+            try { data = JSON.parse(text); }
+            catch (e) { toast('Import failed: ' + (e.message || 'Invalid file'), 1); return; }
+            if (!data || !Array.isArray(data.transactions)) {
+                toast('No transactions found in file', 1);
+                return;
             }
+            _importOfflineSales(data.transactions);
         });
     };
     inp.click();
 };
+
+/**
+ * Offline-register sales go to the SERVER, as history (migration 242).
+ *
+ * This used to unshift each sale into snacks.transactions, subtract it from
+ * snacks.accounts[name].balance and call saveSnacksData — a document write whose
+ * accounts and transactions _withoutRowBackedBranches deletes before it leaves the
+ * tab. "Imported 212 offline transactions" and none of them landed; the next
+ * hydration gave every camper who bought something offline their money back.
+ *
+ * Not replayed through submit_canteen_purchase: these sales already happened,
+ * and the live path would re-check caps against a balance the day has since
+ * moved and refuse the very rows that need recording. The server posts them,
+ * idempotent on the register's own sale id, so importing a file twice — or two
+ * people importing it at once — moves each balance exactly once.
+ */
+var OFFLINE_IMPORT_CHUNK = 500;
+var OFFLINE_IMPORT_ERRORS = {
+    missing_id:       'no sale id (file from a very old register)',
+    unsupported_type: 'not a sale',
+    invalid_amount:   'amount is not a valid sale',
+    invalid_date:     'no valid date',
+    unknown_camper:   'camper is no longer on the roster',
+    missing_camper:   'no camper on the sale',
+};
+
+function _importOfflineSales(rows) {
+    var el = document.getElementById('offlinePosStatus');
+    var ctx = _deskRpc();
+    if (!ctx) { toast('Not connected — offline sales can only be imported online.', 1); return; }
+    if (!rows.length) { toast('The file has no sales in it', 1); return; }
+
+    var chunks = [];
+    for (var i = 0; i < rows.length; i += OFFLINE_IMPORT_CHUNK) {
+        chunks.push(rows.slice(i, i + OFFLINE_IMPORT_CHUNK));
+    }
+    var total = { imported: 0, duplicates: 0, refused: [] };
+    if (el) el.textContent = 'Importing ' + rows.length + ' sales…';
+
+    function finish(stopMsg) {
+        var msg = 'Imported ' + total.imported + ' offline sales'
+            + (total.duplicates ? ' (' + total.duplicates + ' already imported)' : '');
+        if (total.refused.length) {
+            var why = {};
+            total.refused.forEach(function (r) {
+                var k = OFFLINE_IMPORT_ERRORS[r.error] || r.error;
+                why[k] = (why[k] || 0) + 1;
+            });
+            msg += '. Not imported: ' + Object.keys(why).map(function (k) {
+                return why[k] + ' — ' + k; }).join('; ');
+            console.warn('[Snacks] offline import refused rows:', total.refused);
+        }
+        if (stopMsg) msg = stopMsg + ' ' + msg + ' before it stopped.';
+        if (el) el.textContent = msg;
+        toast(msg, (stopMsg || total.refused.length) ? 1 : 0);
+        _deskRefresh();
+    }
+
+    (function next(k) {
+        if (k >= chunks.length) { finish(null); return; }
+        ctx.client.rpc('canteen_office_import_offline', { p_camp_id: ctx.campId, p_rows: chunks[k] })
+            .then(function (res) {
+                var d = res && res.data;
+                if (!d || d.success !== true) {
+                    var missing = res && res.error && /PGRST202|could not find|schema cache|does not exist/i
+                        .test(res.error.message || '');
+                    finish(missing ? 'Offline import is not set up yet on the server (migration 242).'
+                                   : _deskMessage(res, d, 'Import failed') + '.');
+                    return;
+                }
+                total.imported += d.imported || 0;
+                total.duplicates += d.duplicates || 0;
+                total.refused = total.refused.concat(d.refused || []);
+                if (el) el.textContent = 'Importing… ' + Math.min((k + 1) * OFFLINE_IMPORT_CHUNK, rows.length)
+                    + ' of ' + rows.length;
+                next(k + 1);
+            }, function (e) {
+                // Safe to retry: every sale carries its own id, so the chunks that
+                // did land are skipped as duplicates the second time.
+                finish('Import interrupted (' + ((e && e.message) || 'network error')
+                    + ') — run it again, nothing will be counted twice.');
+            });
+    })(0);
+}
 
 // ==========================================================================
 // MODALS & ACTIONS
@@ -1235,6 +1709,126 @@ function popSelects() {
     }
 }
 
+// ══════════════════════════════════════════════════════════════════════════
+// THE DESK'S THREE WRITERS — server-side since migration 240.
+//
+// They used to move a balance in `snacks` and push the document. 219 made the
+// ROWS the truth and _withoutRowBackedBranches (above) strips accounts and
+// transactions out of every document write, so all three wrote to a copy the
+// cloud throws away. The office took $40 in cash, the screen said "Added
+// $40.00", and the database never heard about it — and because _reconcileBalances
+// rebuilds every balance from the cloud ledger, the next hydration put that
+// camper back where they were. The money was gone and the camper was short.
+//
+// So each one is an RPC now, the balance shown afterwards is the SERVER's answer,
+// and a failure says so instead of pretending. There is deliberately no offline
+// fallback: a local-only deposit is the exact defect this replaces.
+// ══════════════════════════════════════════════════════════════════════════
+
+/** The RPC surface, or null when this tab has no connected camp. */
+function _deskRpc() {
+    const db = window.CampistryDB;
+    const client = db && (db.getClient ? db.getClient() : db.client);
+    const campId = db && db.getCampId && db.getCampId();
+    if (!client || typeof client.rpc !== 'function' || !campId) return null;
+    return { client: client, campId: campId };
+}
+
+/** The camper id on an account, so the write lands on a PERSON, not a spelling. */
+function _deskCamperId(name) {
+    const a = snacks.accounts && snacks.accounts[name];
+    return (a && a.camperId != null) ? a.camperId : null;
+}
+
+/**
+ * What to tell the office when a desk write is refused.
+ *
+ * Every code here is one the server can return; a code with no phrase would
+ * surface as "could not …" with no reason, which is how staff learn to click
+ * twice.
+ */
+const DESK_ERRORS = {
+    not_authorized:           'You do not have permission to change canteen accounts.',
+    missing_camper:           'Pick a camper first.',
+    unknown_camper:           'That camper is not on the roster any more.',
+    invalid_amount:           'Enter an amount greater than zero.',
+    invalid_limit:            'Enter a limit of zero or more (zero means no daily cap).',
+    reason_required:          'A reason is required for cash out.',
+    no_available_balance:     'No available balance to take out.',
+    daily_cash_limit_reached: 'The daily cash-out limit has already been reached.',
+    over_available:           'More than this camper has available to take out.',
+    sale_not_found:           'That sale is not on the ledger — reopen the history.',
+    not_a_sale:               'Only a register sale can be voided.',
+    already_voided:           'That sale was already voided.',
+    no_canteen_account:       'This child has no canteen account.',
+};
+
+function _deskMessage(res, d, fallback) {
+    if (res && res.error) {
+        // A missing function means 240 has not been pasted yet. Say that rather
+        // than letting the camp believe money moved.
+        return /PGRST202|could not find|schema cache|does not exist/i.test(res.error.message || '')
+            ? 'Canteen writes are not set up yet on the server (migration 240).'
+            : fallback + ': ' + res.error.message;
+    }
+    const code = d && d.error;
+    if (code && DESK_ERRORS[code]) {
+        let msg = DESK_ERRORS[code];
+        if (code === 'over_available' && d.max != null) {
+            msg = 'Only $' + Number(d.max).toFixed(2) + ' available to take out.';
+        }
+        return msg;
+    }
+    return fallback + (code ? ': ' + code : '');
+}
+
+/** Re-read the rows and repaint, so what is on screen is what the server has. */
+function _deskRefresh(done, who, result) {
+    // ONE camper, when the write named one: their new numbers are in the
+    // server's own reply, and their ledger rows come from get_canteen_history.
+    // Re-reading the whole camp after every deposit was 1.7 MB a click on a
+    // 600-camper camp (tests/scale_600.e2e.js) — on opening day, when the desk
+    // takes hundreds of deposits in a row, that is the page grinding to a halt.
+    if (who) { _deskRefreshOne(who, result || {}, done); return; }
+    _overlayCanteenRows(snacks, function () {
+        try { renderStats(); rAccounts(); rAnalytics(); rSettings(); } catch (_) {}
+        if (typeof done === 'function') done();
+    });
+}
+
+function _deskRefreshOne(who, result, done) {
+    const rerender = function () {
+        try { renderStats(); rAccounts(); rAnalytics(); rSettings(); } catch (_) {}
+        if (typeof done === 'function') done();
+    };
+    if (!snacks.accounts) snacks.accounts = {};
+    const a = snacks.accounts[who] || (snacks.accounts[who] = { balance: 0, dailyLimit: 0, spentToday: 0 });
+    // What the server just said, not what this tab computed.
+    if (result.balance != null) a.balance = Number(result.balance);
+    if (result.dailyLimit != null) a.dailyLimit = Number(result.dailyLimit);
+    if (result.camperId != null && a.camperId == null) a.camperId = result.camperId;
+
+    const rpc = _deskRpc();
+    if (!rpc) { rerender(); return; }
+    rpc.client.rpc('get_canteen_history', { p_camp_id: rpc.campId, p_camper: who, p_before: null, p_limit: 200 })
+        .then(function (res) {
+            const d = res && res.data;
+            if (!d || d.success !== true) { _deskRefresh(done); return; }   // fall back to the full read
+            const from = snacks.ledgerCompactedThrough || '';
+            const id = a.camperId != null ? String(a.camperId) : null;
+            const mine = function (t) {
+                return t && (id != null && t.camperId != null ? String(t.camperId) === id : t.camper === who);
+            };
+            // These rows ARE this camper's (the server matched them by id), so
+            // they carry the id the page joins on.
+            const fresh = (d.transactions || [])
+                .filter(function (t) { return t && (!from || String(t.date || '') > from); })
+                .map(function (t) { return id != null ? Object.assign({}, t, { camperId: t.camperId != null ? t.camperId : id }) : t; });
+            snacks.transactions = fresh.concat((snacks.transactions || []).filter(function (t) { return !mine(t); }));
+            rerender();
+        }, function () { _deskRefresh(done); });
+}
+
 window.addDep = function() {
     if (!_secEdit('accounts', 'Adding funds')) return;
     const name = document.getElementById('depCamper').value;
@@ -1249,30 +1843,28 @@ window.addDep = function() {
     // method the camp doesn't accept — debit included.
     if (!cfg.payMethods.includes(method)) { toast('That payment method isn\'t accepted', 1); return; }
 
-    if (!snacks.accounts[name]) snacks.accounts[name] = { balance: 0, dailyLimit: cfg.defaultDailyLimit, spentToday: 0 };
+    const rpc = _deskRpc();
+    if (!rpc) { toast('Not connected — a deposit cannot be recorded offline', 1); return; }
     const rounded = Math.round(amt * 100) / 100;
-    snacks.accounts[name].balance = Math.round((snacks.accounts[name].balance + rounded) * 100) / 100;
-    // The ledger is the durable record — _reconcileBalances() rebuilds every
-    // balance from it, so a deposit that isn't written here gets erased by the
-    // next cloud merge.
-    if (!snacks.transactions) snacks.transactions = [];
-    snacks.transactions.unshift({
-        time: new Date().toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' }),
-        camper: name,
-        // Stamped so this money is joined to a person, not a name — see
-        // _reconcileBalances. Absent on anything written before that change,
-        // which is why the name remains the fallback there.
-        camperId: (snacks.accounts[name] && snacks.accounts[name].camperId) != null
-            ? snacks.accounts[name].camperId : undefined,
-        items: 'Deposit' + (note ? ' — ' + note : ''), amount: rounded,
-        type: 'credit', kind: 'deposit', method: method, note: note, date: todayStr()
+
+    rpc.client.rpc('canteen_office_credit', {
+        p_camp_id: rpc.campId, p_camper_name: name, p_amount: rounded,
+        p_method: method, p_note: note, p_date: todayStr(),
+        p_camper_id: _deskCamperId(name)
+    }).then(function (res) {
+        const d = res && res.data;
+        if ((res && res.error) || !d || !d.success) {
+            toast(_deskMessage(res, d, 'Could not add the funds'), 1);
+            return;
+        }
+        closeM('dep');
+        _deskRefresh(null, name, d);
+        toast('Added $' + rounded.toFixed(2) + ' to ' + name + ' (' + payMethodLabel(method) + ')');
+        document.getElementById('depAmt').value = '';
+        if (noteEl) noteEl.value = '';
+    }, function (e) {
+        toast('Could not add the funds — connection error', 1);
     });
-    saveSnacksData(snacks);
-    closeM('dep');
-    renderStats(); rAccounts(); rAnalytics(); rSettings();
-    toast('Added $' + rounded.toFixed(2) + ' to ' + name + ' (' + payMethodLabel(method) + ')');
-    document.getElementById('depAmt').value = '';
-    if (noteEl) noteEl.value = '';
 };
 
 // ==========================================================================
@@ -1340,26 +1932,39 @@ window.cashOut = function() {
     // lands from another device, so the number the office saw may be stale.
     const check = window.SnacksCash.validate({
         account: getAccount(name), transactions: snacks.transactions,
-        camper: name, date: todayStr(), settings: cfg,
+        camper: name, camperId: _deskCamperId(name), date: todayStr(), settings: cfg,
         amount: amt, note: note
     });
+    // The client check above is UX: it disables the button and explains before a
+    // round trip. It is NOT the enforcement — canteen_office_cash_out applies the
+    // same rule (same floor, same cashDailyMax, same cashAllowNegative) under a
+    // row lock, which is the only place the balance can be held still.
     if (!check.ok) { toast(check.error, 1); cashPickCamper(); return; }
     const rounded = check.amount;
 
-    if (!snacks.accounts[name]) snacks.accounts[name] = { balance: 0, dailyLimit: cfg.defaultDailyLimit, spentToday: 0 };
-    snacks.accounts[name].balance = Math.round((snacks.accounts[name].balance - rounded) * 100) / 100;
-    if (!snacks.transactions) snacks.transactions = [];
-    // spentToday is deliberately untouched: dailyLimit caps canteen SPENDING,
-    // and cash out has its own cap (cashDailyMax).
-    snacks.transactions.unshift(window.SnacksCash.buildTransaction({
-        time: new Date().toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' }),
-        camper: name, amount: rounded, note: note, by: by, date: todayStr()
-    }));
-    saveSnacksData(snacks);
-    closeM('cash');
-    renderStats(); rAccounts(); rAnalytics(); rSettings();
-    toast('Paid out $' + rounded.toFixed(2) + ' cash to ' + name);
-    ['cashAmt', 'cashNote'].forEach(id => { const e = document.getElementById(id); if (e) e.value = ''; });
+    const rpc = _deskRpc();
+    if (!rpc) { toast('Not connected — cash out cannot be recorded offline', 1); return; }
+
+    rpc.client.rpc('canteen_office_cash_out', {
+        p_camp_id: rpc.campId, p_camper_name: name, p_amount: rounded,
+        p_note: note, p_by: by, p_date: todayStr(),
+        p_camper_id: _deskCamperId(name)
+    }).then(function (res) {
+        const d = res && res.data;
+        if ((res && res.error) || !d || !d.success) {
+            toast(_deskMessage(res, d, 'Could not pay out the cash'), 1);
+            // The refusal usually means the balance moved under us, so put the
+            // real numbers back on the modal rather than leaving a stale figure.
+            _deskRefresh(function () { try { cashPickCamper(); } catch (_) {} });
+            return;
+        }
+        closeM('cash');
+        _deskRefresh(null, name, d);
+        toast('Paid out $' + rounded.toFixed(2) + ' cash to ' + _lbl(name));
+        ['cashAmt', 'cashNote'].forEach(id => { const e = document.getElementById(id); if (e) e.value = ''; });
+    }, function () {
+        toast('Could not pay out the cash — connection error', 1);
+    });
 };
 
 // ==========================================================================
@@ -1385,7 +1990,10 @@ async function _getSnacksProcessorKey() {
         const client = db && db.client;
         if (!campId || !client) return 'stripe';
         const res = await client.rpc('get_camp_payment_processor_status', { p_camp_id: campId });
-        _snacksProcessorKey = (res.data && res.data.success && res.data.processorKey) || 'none';
+        // Only the owner or an admin may see the processor — and refund to a
+        // card (TED-134). Anyone else was told "no card processor connected".
+        _snacksProcessorKey = (res.data && res.data.error === 'not_authorized') ? 'forbidden'
+            : (res.data && res.data.success && res.data.processorKey) || 'none';
     } catch (e) {
         console.warn('[Snacks] Could not resolve payment processor, defaulting to stripe:', e);
         _snacksProcessorKey = 'stripe';
@@ -1399,8 +2007,13 @@ async function _getSnacksProcessorKey() {
 // has neither, so it never appears here — there's nothing for either
 // gateway to refund.
 function _onlineDeposits(name, processorKey) {
+    const id = _deskCamperId(name);
     return (snacks.transactions || []).filter(t => {
-        if (!t || t.camper !== name || t.kind !== 'deposit' || t.method !== processorKey) return false;
+        if (!t || t.kind !== 'deposit' || t.method !== processorKey) return false;
+        // this camper's deposit: by number when both carry one, by name only
+        // for a deposit from before numbers
+        if (id != null && t.camperId != null && t.camperId !== '') { if (String(t.camperId) !== String(id)) return false; }
+        else if (t.camper !== name) return false;
         return processorKey === 'stripe' ? !!t.stripePaymentIntentId : !!t.byopTransactionId;
     });
 }
@@ -1413,7 +2026,11 @@ function _onlineRefundCapacity(name, processorKey) {
     const txs = snacks.transactions || [];
     const idField = processorKey === 'stripe' ? 'stripePaymentIntentId' : 'byopTransactionId';
     return Math.round(_onlineDeposits(name, processorKey).reduce((sum, dep) => {
+        // less a refund that failed at the card company later and was put back
+        // on the wallet (TED-126): that money can be refunded again
         const refundedSoFar = txs.filter(t => t && t.kind === 'refund' && t[idField] === dep[idField])
+            .reduce((s, t) => s + (Number(t.amount) || 0), 0)
+            - txs.filter(t => t && t.kind === 'refund_failed' && t[idField] === dep[idField])
             .reduce((s, t) => s + (Number(t.amount) || 0), 0);
         return sum + Math.max(0, Number(dep.amount) - refundedSoFar);
     }, 0) * 100) / 100;
@@ -1432,11 +2049,30 @@ window.refundPickCamper = async function() {
         return;
     }
     const processorKey = await _getSnacksProcessorKey();
-    const gatewayLabel = processorKey === 'cardknox' ? 'Sola' : processorKey === 'stripe' ? 'Stripe' : processorKey;
+    if (processorKey === 'forbidden') {
+        box.style.display = '';
+        box.textContent = 'Only the camp owner or an admin can refund canteen money to a card.';
+        amtInput.value = ''; amtInput.max = '';
+        if (btn) btn.disabled = true;
+        return;
+    }
+    const gatewayLabel = _processorLabel(processorKey);
+    box.style.display = '';
+    box.textContent = 'Working out what can be refunded…';
+    amtInput.value = ''; amtInput.max = '';
+    if (btn) btn.disabled = true;
+    const got = await _loadCanteenHolds();
+    if ((document.getElementById('refundCamper') || {}).value !== name) return;   // another child was picked meanwhile
+    _showCanteenHolds(document.getElementById('refundHolds'), name, got);      // TED-116
     const a = getAccount(name);
-    const walletAvailable = Math.max(0, Math.round((a.balance - (a.balanceFloor || 0)) * 100) / 100);
-    const capacity = _onlineRefundCapacity(name, processorKey);
-    const max = Math.min(walletAvailable, capacity);
+    // What can go back to the card, from the server's FULL history (TED-130):
+    // this page holds only a week of it, so a July top-up read as $0.00 here.
+    // Worked out locally only when the server could not be asked.
+    const srv = _refundableFor(got.refundable, name);
+    // the whole balance — a floor limits spending, not a refund to the parent (TED-142)
+    const walletAvailable = srv ? srv.wallet : Math.max(0, Math.round((Number(a.balance) || 0) * 100) / 100);
+    const capacity = srv ? srv.card : _onlineRefundCapacity(name, processorKey);
+    const max = Math.round(Math.min(walletAvailable, capacity) * 100) / 100;
 
     box.style.display = '';
     box.innerHTML =
@@ -1462,6 +2098,9 @@ window.refundAmtChanged = function() {
     const amtInput = document.getElementById('refundAmt');
     const btn = document.getElementById('refundBtn');
     if (!amtInput || !btn) return;
+    // Never re-enabled while a refund is on its way (TED-109): a second press
+    // then would be a second refund racing the first.
+    if (window._canteenRefundBusy) { btn.disabled = true; return; }
     const max = Number(amtInput.max) || 0;
     const val = Number(amtInput.value) || 0;
     btn.disabled = !(val > 0 && val <= max + 0.001); // small epsilon for float rounding
@@ -1502,11 +2141,39 @@ window.refundCanteenDeposit = async function() {
     const processorKey = await _getSnacksProcessorKey();
     const fnName = processorKey === 'stripe' ? 'stripe-canteen-refund' : 'payments-canteen-refund';
     if (warn) warn.style.display = 'none';
+    if (window._canteenRefundBusy) return;                  // one at a time (TED-109)
+    window._canteenRefundBusy = true;
     if (btn) { btn.disabled = true; btn.textContent = 'Refunding…'; }
-    client.functions.invoke(fnName, { body: { camperName: name, amount: amount } })
+    const _rc = getRoster()[name];
+    const _rcid = _rc && /^\d+$/.test(String(_rc.camperId == null ? '' : _rc.camperId)) ? Number(_rc.camperId) : undefined;
+    // One key per refund the office means to make (TED-105): made the first
+    // time this refund is sent and kept while the same camper and amount are
+    // retried — so pressing Refund again after an answer was lost meets the
+    // first attempt instead of refunding twice. A different camper or amount,
+    // or a refund that went through, starts a new one.
+    var _sig = String(_rcid != null ? _rcid : name) + ':' + Math.round(amount * 100);
+    if (!window._canteenRefundKey || window._canteenRefundKey.sig !== _sig) {
+        window._canteenRefundKey = { sig: _sig, key: 'cref_' + Date.now().toString(36) + Math.random().toString(36).slice(2, 8) };
+    }
+    var _body = { camperName: name, camperId: _rcid, amount: amount, idempotencyKey: window._canteenRefundKey.key };
+    var _send = function() { return client.functions.invoke(fnName, { body: _body }); };
+    _send()
         .then(async function(res) {
-            if (btn) { btn.disabled = false; btn.textContent = 'Refund'; }
             var data = res && res.data;
+            // An earlier refund of this money was sent and the card company never
+            // answered (TED-093). Only its dashboard can say whether it went
+            // through; send it again only when the office says it did not.
+            if (data && data.uncertain && !_body.confirmNotRefunded && !data.totalRefunded &&
+                window.confirm((data.error || 'An earlier refund was never confirmed.') +
+                    '\n\nOnly press OK if the processor\'s dashboard shows NO such refund.')) {
+                _body.confirmNotRefunded = true;
+                // exactly the earlier refunds the server asked about (TED-110)
+                if (Array.isArray(data.confirmHolds)) _body.confirmHolds = data.confirmHolds;
+                res = await _send();
+                data = res && res.data;
+            }
+            window._canteenRefundBusy = false;
+            if (btn) { btn.disabled = false; btn.textContent = 'Refund'; }
             var hasError = !!(res && res.error) || !!(data && data.error);
             var err = hasError ? await _edgeFnErrorMessage(res) : null;
             if (err) {
@@ -1514,13 +2181,15 @@ window.refundCanteenDeposit = async function() {
                 else toast(err, 1);
                 return;
             }
+            window._canteenRefundKey = null;                  // done: the next refund is a new one
             closeM('refund');
             var acrossN = (data.refunds || []).length;
-            toast('Refunded $' + Number(data.totalRefunded).toFixed(2) + ' to ' + name +
+            toast('Refunded $' + Number(data.totalRefunded).toFixed(2) + ' to ' + _lbl(name) +
                 (acrossN > 1 ? ' (across ' + acrossN + ' deposits)' : '') +
                 (data.capped && data.cappedReason ? ' — ' + data.cappedReason : ''));
             _refreshSnacksFromCloud();
         }, function(e) {
+            window._canteenRefundBusy = false;
             if (btn) { btn.disabled = false; btn.textContent = 'Refund'; }
             var msg = (e && e.message) || 'Could not process the refund.';
             if (warn) { warn.style.display = ''; warn.textContent = msg; }
@@ -1528,42 +2197,184 @@ window.refundCanteenDeposit = async function() {
         });
 };
 
-// ── Refund All — every camper's leftover Stripe-paid balance in one go ─────
-// Client-side preview mirrors the edge function's own math exactly (walletAvailable
-// vs stripeCapacity) so the confirm screen shows a real number, not a guess —
-// the server is still the one that actually decides/executes it.
-function _refundAllPreview() {
+// ── Refunds the card company never answered (275, TED-116) ─────────────────
+// A canteen refund takes its money off the wallet before the card company is
+// asked. When the answer never comes back, that money stays held: it may be
+// with the parent. Stripe ones are looked up in Stripe's own records the next
+// time the child is refunded (or Refund All runs). A Sola/Banquest one only
+// the office can settle, from the processor's dashboard — here, either way.
+async function _loadCanteenHolds() {
+    const db = window.CampistryDB;
+    const client = db && db.client;
+    if (!client) return { holds: [], processorKey: null, refundable: null };
+    const processorKey = await _getSnacksProcessorKey();
+    if (processorKey === 'forbidden') return { holds: [], processorKey, refundable: null };
+    const fnName = processorKey === 'stripe' ? 'stripe-canteen-refund' : 'payments-canteen-refund';
+    try {
+        const res = await client.functions.invoke(fnName, { body: { action: 'holds' } });
+        const d = res && res.data;
+        return { holds: (d && Array.isArray(d.holds)) ? d.holds : [], processorKey,
+                 refundable: (d && d.refundable && typeof d.refundable === 'object') ? d.refundable : null };
+    } catch (_) { return { holds: [], processorKey, refundable: null }; }
+}
+// This child's line of the server's refundable-to-card answer (TED-130): by
+// camper number, else by the account's key.
+function _refundableFor(map, rosterKey) {
+    if (!map) return null;
+    const r = getRoster()[rosterKey];
+    const id = r && r.camperId != null ? String(r.camperId) : null;
+    if (id != null) {
+        const k = Object.keys(map).find(function(x) { return map[x] && map[x].camperId != null && String(map[x].camperId) === id; });
+        if (k) return map[k];
+    }
+    return map[rosterKey] || null;
+}
+function _holdCamperKey(h) {
+    const roster = getRoster();
+    if (h.camperId != null) {
+        const k = Object.keys(roster).find(function(n) { return roster[n] && String(roster[n].camperId) === String(h.camperId); });
+        if (k) return k;
+    }
+    return h.account || '';
+}
+function _holdAge(sec) {
+    sec = Number(sec) || 0;
+    if (sec < 120) return 'just now';
+    if (sec < 7200) return Math.round(sec / 60) + ' min ago';
+    if (sec < 172800) return Math.round(sec / 3600) + ' hours ago';
+    return Math.round(sec / 86400) + ' days ago';
+}
+// `onlyKey` (a roster key) limits it to one child — the refund window.
+async function _showCanteenHolds(el, onlyKey, preloaded) {
+    if (!el) return [];
+    const got = preloaded || await _loadCanteenHolds();
+    const roster = getRoster();
+    const onlyId = (onlyKey && roster[onlyKey] && roster[onlyKey].camperId != null) ? roster[onlyKey].camperId : null;   // by the camper's number
+    const holds = got.holds.filter(function(h) {
+        if (!onlyKey) return true;
+        return (onlyId != null && h.camperId != null) ? String(onlyId) === String(h.camperId) : _holdCamperKey(h) === onlyKey;
+    });
+    if (!holds.length) { el.style.display = 'none'; el.innerHTML = ''; return holds; }
+    const stripe = got.processorKey === 'stripe';
+    el.style.display = '';
+    el.innerHTML = '<div style="font-weight:700;margin-bottom:.3rem;">' + (holds.length === 1 ? 'A refund is' : holds.length + ' refunds are') +
+        ' waiting for an answer from the card company</div>' +
+        '<div style="color:var(--text-muted);margin-bottom:.4rem;">Its money is held off the wallet until it is settled — it may already be with the parent.</div>' +
+        holds.map(function(h) {
+            const who = _lbl(_holdCamperKey(h));
+            const line = '<strong>' + esc(who) + '</strong>: $' + Number(h.amount).toFixed(2) + ', sent ' + esc(_holdAge(h.ageSeconds));
+            if (stripe || h.method === 'stripe') {
+                return '<div style="margin:.25rem 0;">' + line + ' — looked up in Stripe the next time this child is refunded or Refund All runs.</div>';
+            }
+            const k = esc(String(h.key)).replace(/'/g, '&#39;');
+            return '<div style="margin:.35rem 0;">' + line + ' — check your processor\'s dashboard:<br>' +
+                '<button type="button" class="btn btn-sm btn-secondary" onclick="resolveCanteenRefundHold(\'' + k + '\', true)">It went through</button> ' +
+                '<button type="button" class="btn btn-sm btn-secondary" onclick="resolveCanteenRefundHold(\'' + k + '\', false)">Nothing went through</button></div>';
+        }).join('');
+    return holds;
+}
+window.resolveCanteenRefundHold = async function(key, went) {
+    if (!_secEdit('accounts', 'Settling a refund')) return;
+    const db = window.CampistryDB;
+    const client = db && db.client;
+    if (!client) { toast('Not signed in', 1); return; }
+    const body = { action: 'resolveHold', holdKey: key, wentThrough: !!went };
+    if (went) {
+        const ref = window.prompt('The refund\'s reference number from the processor\'s dashboard:', '');
+        if (!ref || !String(ref).trim()) { toast('Nothing recorded — the reference is needed', 1); return; }
+        body.reference = String(ref).trim();
+    } else if (!window.confirm('Only if the processor\'s dashboard shows NO such refund.\n\nThe money goes back on the child\'s wallet, and can be refunded again.')) {
+        return;
+    }
+    const res = await client.functions.invoke('payments-canteen-refund', { body: body });
+    const err = await _edgeFnErrorMessage(res);
+    if (err) { toast(err, 1); return; }
+    toast(went ? 'Recorded — the refund is on the child\'s history' : 'The money is back on the wallet');
+    _refreshSnacksFromCloud();
+    _showCanteenHolds(document.getElementById('refundHolds'), (document.getElementById('refundCamper') || {}).value || '');
+    _showCanteenHolds(document.getElementById('refundAllHolds'));
+    if (document.getElementById('refundCamper') && document.getElementById('refundCamper').value) refundPickCamper();
+};
+
+// ── Refund All — every camper's leftover card-paid balance in one go ───────
+// Client-side preview mirrors the edge function's own math exactly (wallet
+// available vs what the camp's processor can still refund) so the confirm
+// screen shows a real number, not a guess — the server is still the one that
+// actually decides/executes it.
+function _refundAllPreview(processorKey) {
     var total = 0, count = 0;
     (camperList || []).forEach(function(c) {
         var a = getAccount(c.name);
-        var walletAvailable = Math.max(0, Math.round((a.balance - (a.balanceFloor || 0)) * 100) / 100);
-        var capacity = _stripeRefundCapacity(c.name);
+        var walletAvailable = Math.max(0, Math.round((Number(a.balance) || 0) * 100) / 100);   // TED-142: the floor is not held back from a refund
+        var capacity = _onlineRefundCapacity(c.name, processorKey);
         var amt = Math.round(Math.min(walletAvailable, capacity) * 100) / 100;
         if (amt > 0) { total = Math.round((total + amt) * 100) / 100; count++; }
     });
     return { total: total, count: count };
 }
 
-window.openRefundAllModal = function() {
+function _refundAllPreviewFrom(map) {
+    var total = 0, count = 0;
+    Object.keys(map || {}).forEach(function(k) {
+        var amt = Math.round((Number(map[k] && map[k].now) || 0) * 100) / 100;
+        if (amt > 0) { total = Math.round((total + amt) * 100) / 100; count++; }
+    });
+    return { total: total, count: count };
+}
+
+function _processorLabel(processorKey) {
+    return processorKey === 'stripe' ? 'Stripe' : processorKey === 'cardknox' ? 'Sola'
+         : processorKey === 'banquest' ? 'Banquest' : String(processorKey || '');
+}
+
+window.openRefundAllModal = async function() {
     if (!_secEdit('accounts', 'Refunding all canteen balances')) return;
     var body = document.getElementById('refundAllBody');
     var btn = document.getElementById('refundAllBtn');
     var resultEl = document.getElementById('refundAllResult');
     if (resultEl) resultEl.style.display = 'none';
-    var preview = _refundAllPreview();
+    if (btn) { btn.style.display = 'none'; btn.disabled = true; }
+    if (body) body.innerHTML = '<p style="color:var(--text-muted);">Working out what can be refunded…</p>';
+    // It used to call a helper that never existed (TED-124), so the window
+    // never opened. It now asks which processor the camp is on — the same one
+    // the refund itself goes through — before it counts anything.
+    openM('refundall');
+    var processorKey = await _getSnacksProcessorKey();
+    if (processorKey === 'forbidden') {
+        if (body) body.innerHTML = '<p>Only the camp owner or an admin can refund canteen money to a card.</p>';
+        return;
+    }
+    var got = await _loadCanteenHolds();
+    var holdsShown = _showCanteenHolds(document.getElementById('refundAllHolds'), null, got);      // TED-116
     if (!body) return;
+    if (processorKey !== 'stripe' && processorKey !== 'cardknox' && processorKey !== 'banquest') {
+        body.innerHTML = '<p>This camp has no card processor connected, so there is nothing to refund to a card. Refund balances by hand (Take Out Cash).</p>';
+        return;
+    }
+    var gw = _processorLabel(processorKey);
+    // From the server's full history, less any refund still on its way (TED-130,
+    // TED-135); worked out locally only when the server could not be asked.
+    var preview = got.refundable ? _refundAllPreviewFrom(got.refundable) : _refundAllPreview(processorKey);
     if (!preview.count) {
-        body.innerHTML = '<p>No campers currently have a Stripe-paid balance to refund.</p>';
-        if (btn) btn.style.display = 'none';
+        body.innerHTML = '<p>No campers currently have a ' + esc(gw) + '-paid balance to refund.</p>';
+        // A Stripe refund still waiting for its answer is looked up when Refund
+        // All runs — even when nobody has money left to refund, which is exactly
+        // when a child's wallet is $0 and their own Refund button is off.
+        if (processorKey === 'stripe') {
+            var waiting = await holdsShown;
+            if ((waiting || []).some(function(h) { return h && h.method === 'stripe'; }) && btn) {
+                btn.style.display = ''; btn.disabled = false; btn.textContent = 'Look up the waiting refunds in Stripe';
+            }
+        }
     } else {
         body.innerHTML =
             '<p>This will refund <strong>' + preview.count + ' camper' + (preview.count === 1 ? '' : 's') +
-            '</strong>, totaling approximately <strong>$' + preview.total.toFixed(2) + '</strong> — sent back to whatever each parent originally paid with.</p>' +
-            '<p style="color:var(--text-muted);">Only Stripe-paid deposits are included. A balance that came entirely from a cash/manual deposit is skipped — refund that by hand.</p>' +
+            '</strong>, totaling approximately <strong>$' + preview.total.toFixed(2) + '</strong> through ' + esc(gw) +
+            ' — sent back to whatever each parent originally paid with.</p>' +
+            '<p style="color:var(--text-muted);">Only deposits paid through ' + esc(gw) + ' are included. A balance that came from a cash/manual deposit (or a different processor) is skipped — refund that by hand.</p>' +
             '<p style="color:var(--red-600);font-weight:600;">This cannot be undone.</p>';
         if (btn) { btn.style.display = ''; btn.disabled = false; btn.textContent = 'Refund All ($' + preview.total.toFixed(2) + ')'; }
     }
-    openM('refundall');
 };
 
 window.refundAllCanteenDeposits = function() {
@@ -1595,8 +2406,17 @@ window.refundAllCanteenDeposits = function() {
             if (btn) btn.style.display = 'none';
             var msg = 'Refunded $' + Number(data.totalRefunded).toFixed(2) + ' across ' + data.refundedCount + ' camper' + (data.refundedCount === 1 ? '' : 's') + '.';
             if (data.skippedCount) msg += ' ' + data.skippedCount + ' skipped (no online balance to refund).';
-            if (data.failedCount) msg += ' ' + data.failedCount + ' hit an error — check with the parent or try that camper individually.';
-            if (resultEl) { resultEl.style.display = ''; resultEl.style.color = data.failedCount ? 'var(--red-600)' : '#16A34A'; resultEl.textContent = msg; }
+            // What the look-up of refunds waiting for Stripe found (TED-135).
+            var lk = data.lookedUp || {};
+            if (lk.made) msg += ' ' + lk.made + ' waiting refund' + (lk.made === 1 ? '' : 's') + ' ($' + Number(lk.madeAmount || 0).toFixed(2) + ') had gone through and ' + (lk.made === 1 ? 'is' : 'are') + ' now recorded.';
+            if (lk.notMade) msg += ' ' + lk.notMade + ' waiting refund' + (lk.notMade === 1 ? '' : 's') + ' ($' + Number(lk.notMadeAmount || 0).toFixed(2) + ') had not gone through — the money is back on the wallet' + (lk.notMade === 1 ? '' : 's') + (data.refundedCount ? ' and was refunded again above.' : '.');
+            if (data.failedCount) msg += ' ' + data.failedCount + ' hit an error:';
+            // Each child that hit an error, by name, with why (TED-116).
+            var failedLines = (Array.isArray(data.details) ? data.details : []).filter(function(d) { return d && d.error; })
+                .map(function(d) { return '• ' + _lbl(_holdCamperKey({ camperId: d.camperId, account: d.camperName })) + ' — ' + d.error; });
+            if (resultEl) { resultEl.style.display = ''; resultEl.style.color = data.failedCount ? 'var(--red-600)' : '#16A34A';
+                resultEl.style.whiteSpace = 'pre-line'; resultEl.textContent = msg + (failedLines.length ? '\n' + failedLines.join('\n') : ''); }
+            _showCanteenHolds(document.getElementById('refundAllHolds'));
             _refreshSnacksFromCloud();
         }, function(e) {
             if (btn) { btn.disabled = false; btn.textContent = 'Try Again'; }
@@ -1626,12 +2446,278 @@ function _refreshSnacksFromCloud() {
             .then(function(res) {
                 var cloud = res && res.data && res.data.value;
                 if (!cloud || typeof cloud !== 'object') return;
-                snacks = cloud;
-                try { var g = JSON.parse(localStorage.getItem(STORE_KEY) || '{}'); g.campistrySnacks = cloud; localStorage.setItem(STORE_KEY, JSON.stringify(g)); } catch (_) {}
-                renderStats(); rAccounts(); rAnalytics(); rSettings();
+                // ★ 219: the document's own accounts/transactions are stale by
+                // design (and a saved document has none at all). Overlay the
+                // rows onto it BEFORE it becomes the page's copy: swapping it in
+                // first left `snacks.accounts` undefined for the length of the
+                // round trip, and anything that read an account meanwhile — the
+                // Refund window redrawing after an answer — threw.
+                _overlayCanteenRows(cloud, function (gotRows) {
+                    if (!gotRows) {                       // keep the balances we have
+                        cloud.accounts = snacks.accounts || {};
+                        cloud.transactions = snacks.transactions || [];
+                    }
+                    if (!cloud.accounts || typeof cloud.accounts !== 'object') cloud.accounts = {};
+                    if (!Array.isArray(cloud.transactions)) cloud.transactions = [];
+                    snacks = cloud;
+                    try { var g = JSON.parse(localStorage.getItem(STORE_KEY) || '{}'); g.campistrySnacks = snacks; localStorage.setItem(STORE_KEY, JSON.stringify(g)); } catch (_) {}
+                    renderStats(); rAccounts(); rAnalytics(); rSettings();
+                });
             });
     } catch (e) { console.warn('[Snacks] refresh after refund failed:', e); }
 }
+
+// ==========================================================================
+// LEDGER COMPACTION — the office action
+// ==========================================================================
+// See the block above _reconcileBalances for the model. This is the ONLY
+// writer of ledgerCarry / ledgerCompactedThrough; every other path merely
+// carries them through. Three things make it safe to drop rows:
+//
+//   1. Nothing is folded that is not archived. Step A saves the merged ledger
+//      first, so migration 203's trigger has archived every row this tab can
+//      see; verify_canteen_archive then has to say inSync for exactly that
+//      many rows before a single one is dropped.
+//   2. The fold cannot move a balance. The plan reconciles before and after
+//      and refuses to save if any account differs by a cent.
+//   3. The save is compare-and-set on camp_state_kv.updated_at, so a register
+//      sale landing between the read and the write makes the write fail and
+//      the whole thing retry from a fresh read — instead of the sale being
+//      overwritten by a value that never saw it.
+
+/** The merge cloudSaveSnacks does, as a function, so compaction runs the same one. */
+function _mergeSnacksInto(cloud, data) {
+    if (!cloud || typeof cloud !== 'object') return data;
+    // Union transactions (cloud + local), deduped by signature.
+    var seen = {}, tx = [];
+    (data.transactions || []).concat(cloud.transactions || []).forEach(function(t) {
+        var s = _txSig(t); if (seen[s]) return; seen[s] = 1; tx.push(t);
+    });
+    var merged = Object.assign({}, cloud, data);          // local wins for inventory/config
+    merged.accounts = Object.assign({}, cloud.accounts || {}, data.accounts || {});
+    merged.transactions = _mergeCompaction(merged, tx, cloud, data);
+    _reconcileBalances(merged);                            // balance := ledger truth
+    return merged;
+}
+
+/** YYYY-MM-DD, `days` before `today` (also YYYY-MM-DD). Calendar days, UTC-safe. */
+function _dateDaysBefore(today, days) {
+    var m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(today || '');
+    if (!m) return '';
+    var t = Date.UTC(+m[1], +m[2] - 1, +m[3]) - (Math.max(0, days | 0) * 86400000);
+    var d = new Date(t);
+    return d.getUTCFullYear() + '-' + String(d.getUTCMonth() + 1).padStart(2, '0') + '-' + String(d.getUTCDate()).padStart(2, '0');
+}
+
+function _cents(n) { return Math.round((Number(n) || 0) * 100) / 100; }
+
+/**
+ * The fold, as a pure plan over one ledger. Returns everything the action and
+ * the tests need to judge it, and never touches its input.
+ */
+function _snacksCompactPlan(data, days, today) {
+    var w = _dateDaysBefore(today, days);
+    var oldW = (data && data.ledgerCompactedThrough) || '';
+    if (!w) return { error: 'bad_date' };
+    if (w <= oldW) return { nothing: true, watermark: oldW };
+
+    var txs = (data && data.transactions) || [];
+    var dropped = [], folded = [], live = [];
+    txs.forEach(function(t) {
+        if (_txFolded(t, oldW)) dropped.push(t);          // already carried — must not fold twice
+        else if (_txFolded(t, w)) folded.push(t);
+        else live.push(t);
+    });
+
+    var carry = _ledgerBuckets(folded, data.ledgerCarry);
+    ['byId', 'byNameNoId', 'byName'].forEach(function(k) {
+        Object.keys(carry[k]).forEach(function(key) { carry[k][key] = _cents(carry[k][key]); });
+    });
+
+    // The baseline is the ledger as the merge contract defines it: rows at or
+    // below the OLD watermark are already in the carry, so a stale-code tab
+    // that resurrected one must not make the baseline count it twice — that
+    // would refuse a correct fold for the wrong reason.
+    var base = JSON.parse(JSON.stringify(data));
+    base.transactions = txs.filter(function(t) { return !_txFolded(t, oldW); });
+    var before = _reconcileBalances(base);
+    var result = Object.assign({}, data, {
+        accounts: JSON.parse(JSON.stringify(data.accounts || {})),
+        transactions: live,
+        ledgerCarry: carry,
+        ledgerCompactedThrough: w
+    });
+    _reconcileBalances(result);
+
+    var drift = [];
+    Object.keys(before.accounts || {}).forEach(function(name) {
+        var a = before.accounts[name], b = result.accounts[name];
+        if (!a || !b) return;
+        if (_cents(a.balance) !== _cents(b.balance)) drift.push(name);
+    });
+
+    return { watermark: w, oldWatermark: oldW, folded: folded, live: live, dropped: dropped,
+             result: result, invariantOk: drift.length === 0, drift: drift };
+}
+
+/**
+ * Compare-and-set write of the whole campistrySnacks value. Resolves to the
+ * new updated_at, or null if the row's updated_at no longer matched — someone
+ * wrote in between, and the caller must re-read rather than overwrite them.
+ */
+async function _casWriteSnacks(client, campId, value, expectStamp) {
+    var q = client.from('camp_state_kv')
+        .update({ value: value, updated_at: new Date().toISOString() })
+        .eq('camp_id', campId).eq('key', 'campistrySnacks');
+    if (expectStamp) q = q.eq('updated_at', expectStamp);
+    var res = await q.select('updated_at');
+    if (res.error) throw new Error(res.error.message || 'save failed');
+    if (!res.data || !res.data.length) return null;
+    return res.data[0].updated_at;
+}
+
+function _renderCompactionCard() {
+    var box = document.getElementById('ledgerCompactBox');
+    if (!box) return;
+    var txs = snacks.transactions || [];
+    var dates = txs.map(function(t) { return t && typeof t.date === 'string' ? t.date : ''; })
+                   .filter(function(d) { return /^\d{4}-\d{2}-\d{2}$/.test(d); }).sort();
+    var w = snacks.ledgerCompactedThrough || '';
+    box.innerHTML =
+        '<div style="display:flex;gap:1.5rem;flex-wrap:wrap;margin-bottom:.85rem">' +
+            '<div><div style="font-size:.72rem;color:var(--text-muted);font-weight:600;text-transform:uppercase;letter-spacing:.04em">Live transactions</div>' +
+                '<div style="font-size:1.15rem;font-weight:700">' + txs.length + '</div></div>' +
+            '<div><div style="font-size:.72rem;color:var(--text-muted);font-weight:600;text-transform:uppercase;letter-spacing:.04em">Oldest live</div>' +
+                '<div style="font-size:1.15rem;font-weight:700">' + esc(dates[0] || '—') + '</div></div>' +
+            '<div><div style="font-size:.72rem;color:var(--text-muted);font-weight:600;text-transform:uppercase;letter-spacing:.04em">Archived through</div>' +
+                '<div style="font-size:1.15rem;font-weight:700">' + esc(w || 'never') + '</div></div>' +
+        '</div>' +
+        '<p style="font-size:.82rem;color:var(--text-muted);margin:0 0 .75rem">Every transaction is kept permanently in the archive the moment it reaches the cloud. ' +
+        'Archiving moves older rows out of the live list so every register sale and sync stays fast all season. ' +
+        'Balances do not change — each camper\'s archived history is carried forward to the cent — and the full history stays viewable from a camper\'s History.</p>' +
+        '<div style="display:flex;gap:.5rem;align-items:center;flex-wrap:wrap">' +
+            '<label style="font-size:.85rem">Keep the last <input type="number" id="compactDays" class="input" value="30" min="7" max="365" style="width:5rem;display:inline-block;margin:0 .35rem"> days live</label>' +
+            '<button class="btn btn-secondary" id="compactBtn" onclick="compactSnacksLedger()">Archive older transactions</button>' +
+        '</div>' +
+        '<div id="compactResult" style="margin-top:.6rem;font-size:.82rem;display:none"></div>';
+}
+
+window.compactSnacksLedger = async function() {
+    if (!_secEdit('settings', 'Archiving old transactions')) return;
+    var db = window.CampistryDB;
+    var client = db && db.client;
+    var campId = db && db.getCampId && db.getCampId();
+    if (!client || !campId) { toast('Not signed in', 1); return; }
+    var daysEl = document.getElementById('compactDays');
+    var days = daysEl ? parseInt(daysEl.value, 10) : 30;
+    if (!isFinite(days) || days < 7) { toast('Keep at least 7 days live', 1); return; }
+    var btn = document.getElementById('compactBtn');
+    var out = document.getElementById('compactResult');
+    var say = function(msg, bad) {
+        if (out) { out.style.display = ''; out.style.color = bad ? 'var(--red-600)' : '#16A34A'; out.textContent = msg; }
+    };
+    if (btn) { btn.disabled = true; btn.textContent = 'Archiving…'; }
+    try {
+        for (var attempt = 0; attempt < 3; attempt++) {
+            // read
+            var res = await client.from('camp_state_kv').select('value, updated_at')
+                .eq('camp_id', campId).eq('key', 'campistrySnacks').maybeSingle();
+            if (res.error) throw new Error(res.error.message);
+            var cloud = res.data && res.data.value;
+            var stamp = res.data && res.data.updated_at;
+            if (!cloud || typeof cloud !== 'object') { say('Nothing to archive yet.'); return; }
+
+            // A: land everything this tab knows, so the archive sees it
+            var merged = _mergeSnacksInto(cloud, snacks);
+            var stamp1 = await _casWriteSnacks(client, campId, merged, stamp);
+            if (stamp1 === null) continue;                 // a sale landed — re-read
+
+            // the floor has to be under every row before any row is dropped
+            var v = await client.rpc('verify_canteen_archive', { p_camp_id: campId });
+            var vd = v && v.data;
+            if (v.error || !vd || !vd.success) {
+                say('Could not confirm the archive (' + ((v.error && v.error.message) || (vd && vd.error) || 'unknown') + '). Nothing was changed.', true);
+                return;
+            }
+            if (!vd.inSync) {
+                say('The archive is behind the live list (' + vd.missingFromArchive + ' missing). Nothing was changed — try again in a moment.', true);
+                return;
+            }
+            // In sync, but counting a different ledger than the one this tab
+            // just landed: a sale arrived between A and the check. That is a
+            // race, not a gap — re-read and go again rather than fold a value
+            // the verifier never looked at.
+            if (Number(vd.blobTransactions) !== merged.transactions.length) continue;
+
+            // the fold, checked
+            var plan = _snacksCompactPlan(merged, days, todayStr());
+            if (plan.error) { say('Could not work out the date.', true); return; }
+            if (plan.nothing) { say('Already archived through ' + plan.watermark + ' — nothing older than ' + days + ' days to move.'); return; }
+            if (!plan.invariantOk) {
+                console.error('[Snacks] compaction refused — balances would move:', plan.drift);
+                say('Refused: archiving would change ' + plan.drift.length + ' balance' + (plan.drift.length === 1 ? '' : 's') + '. Nothing was changed.', true);
+                return;
+            }
+            if (!plan.folded.length) { say('Nothing older than ' + days + ' days to move.'); return; }
+
+            // B: the compacted value, only if nobody wrote since A
+            var stamp2 = await _casWriteSnacks(client, campId, plan.result, stamp1);
+            if (stamp2 === null) continue;
+
+            snacks = plan.result;
+            try {
+                var g = JSON.parse(localStorage.getItem(STORE_KEY) || '{}');
+                g.campistrySnacks = snacks; g.updated_at = new Date().toISOString();
+                localStorage.setItem(STORE_KEY, JSON.stringify(g));
+                localStorage.setItem('CAMPISTRY_LOCAL_CACHE', JSON.stringify(g));
+                localStorage.setItem(SNACKS_LOCAL_KEY, JSON.stringify(snacks));
+            } catch (_) {}
+            renderStats(); rAccounts(); rAnalytics(); rSettings();
+            say('Archived ' + plan.folded.length + ' transaction' + (plan.folded.length === 1 ? '' : 's') +
+                ' through ' + plan.watermark + '. ' + plan.live.length + ' stay live. No balance changed.');
+            toast('Archived ' + plan.folded.length + ' older transactions');
+            return;
+        }
+        say('The register was busy — nothing was changed. Try again in a moment.', true);
+    } catch (e) {
+        console.error('[Snacks] compaction failed:', e);
+        say('Archiving failed: ' + (e && e.message || 'unknown error') + '. Nothing was changed.', true);
+    } finally {
+        if (btn) { btn.disabled = false; btn.textContent = 'Archive older transactions'; }
+    }
+};
+
+// ── Archived history, on demand, from the archive rather than the blob ──────
+// Fetched rows are rendered only; they are never written back into
+// snacks.transactions, which would undo the compaction on the next save.
+function _archivedHistoryHtml() {
+    var w = snacks.ledgerCompactedThrough;
+    if (!w) return '';
+    return '<div id="histArchived" style="margin-top:.75rem;border-top:1px dashed var(--border);padding-top:.6rem">' +
+        '<button class="btn btn-secondary btn-sm" onclick="loadArchivedHistory()">Show archived history (before ' + esc(w) + ')</button></div>';
+}
+
+window.loadArchivedHistory = async function() {
+    var host = document.getElementById('histArchived');
+    if (!host) return;
+    var db = window.CampistryDB, client = db && db.client, campId = db && db.getCampId && db.getCampId();
+    if (!client || !campId) { toast('Not signed in', 1); return; }
+    host.innerHTML = '<div style="font-size:.82rem;color:var(--text-muted)">Loading…</div>';
+    try {
+        var res = await client.rpc('get_canteen_history', { p_camp_id: campId, p_camper: _histCamper, p_before: null, p_limit: 1000 });
+        var d = res && res.data;
+        if (res.error || !d || !d.success) throw new Error((res.error && res.error.message) || (d && d.error) || 'unknown');
+        var w = snacks.ledgerCompactedThrough;
+        var rows = (d.transactions || []).filter(function(t) { return _txFolded(t, w); });
+        if (_histFilter === 'in') rows = rows.filter(function(t) { return t.type === 'credit'; });
+        else if (_histFilter === 'out') rows = rows.filter(function(t) { return t.type !== 'credit'; });
+        rows.sort(function(x, y) { return _histSortKey(y) - _histSortKey(x); });
+        host.innerHTML = '<div style="font-size:.72rem;color:var(--text-muted);font-weight:600;text-transform:uppercase;letter-spacing:.04em;margin-bottom:.4rem">Archived · through ' + esc(w) + '</div>' +
+            (rows.length ? rows.map(_histRowHtml).join('') : '<div style="font-size:.82rem;color:var(--text-muted)">No archived transactions.</div>');
+    } catch (e) {
+        host.innerHTML = '<div style="font-size:.82rem;color:var(--red-600)">Could not load the archive: ' + esc(e && e.message || 'unknown error') + '</div>';
+    }
+};
 
 window.setLimit = function() {
     if (!_secEdit('accounts', 'Changing a spending limit')) return;
@@ -1642,12 +2728,26 @@ window.setLimit = function() {
     // reject it as if it were blank/invalid, silently blocking the office
     // from ever setting "no limit" for a camper.
     if (!name || amt == null || isNaN(amt) || amt < 0) { toast('Enter valid info', 1); return; }
-    if (!snacks.accounts[name]) snacks.accounts[name] = { balance: 0, dailyLimit: getSettings().defaultDailyLimit, spentToday: 0 };
-    snacks.accounts[name].dailyLimit = amt;
-    saveSnacksData(snacks);
-    closeM('limit');
-    rAccounts();
-    toast(amt === 0 ? 'No daily limit set for ' + name : 'Limit set to $' + amt.toFixed(2) + ' for ' + name);
+
+    const rpc = _deskRpc();
+    if (!rpc) { toast('Not connected — a limit cannot be changed offline', 1); return; }
+
+    rpc.client.rpc('canteen_office_set_limit', {
+        p_camp_id: rpc.campId, p_camper_name: name, p_daily_limit: amt,
+        p_camper_id: _deskCamperId(name)
+    }).then(function (res) {
+        const d = res && res.data;
+        if ((res && res.error) || !d || !d.success) {
+            toast(_deskMessage(res, d, 'Could not change the limit'), 1);
+            return;
+        }
+        closeM('limit');
+        _deskRefresh(null, name, d);
+        toast(amt === 0 ? 'No daily limit set for ' + name
+                        : 'Limit set to $' + amt.toFixed(2) + ' for ' + name);
+    }, function () {
+        toast('Could not change the limit — connection error', 1);
+    });
 };
 
 // _editingItemId is null while the modal is in "Add Item" mode, or the id
@@ -1985,6 +3085,16 @@ window.addEventListener('campistry-cloud-hydrated', function () {
         console.log('[Snacks Manager DEBUG] loadSnacksData() returned inventory deltas:', afterSummary);
     } catch (e) {}
     _hydratedOnce = true;
-    init();
+    // ★ 219: balances and the ledger come from rows, not from the hydrated
+    // document. Overlay before init() renders, or the first thing a register
+    // shows is every balance as it stood when the writers moved off the
+    // document — plausible numbers, quietly wrong. If the rows cannot be
+    // reached, init() still runs: a POS that renders stale balances is bad,
+    // and a POS that renders nothing at all is worse.
+    _overlayCanteenRows(snacks, function (ok) {
+        if (!ok) console.warn('[Snacks] could not load balances from rows — showing the '
+                              + 'document copy, which is no longer maintained');
+        init();
+    });
 });
 })();

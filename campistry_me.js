@@ -43,10 +43,28 @@ var payers={};
 var bunkAliases={};
 var bunkCapacity={}; // max campers per bunk (capacity), keyed by bunk name — distinct from bunkManualCounts (headcount override)
 var enrollments={}, sessions=[], enrollSettings={}, formConfig=null;
+// WHICH PUBLIC SUBMISSIONS THIS BROWSER DELETED.
+//
+// campistryMe goes up WHOLE on every save, and submit_public_application writes
+// new applications into it server-side without asking this tab. So a save from a
+// tab that loaded before a family applied erases that application — the parent saw
+// "Success!" and nobody finds out.
+//
+// campistry_finance_merge.js puts back anything the cloud has and we do not, but
+// it cannot tell "never saw it" from "deleted it" without being told, and
+// deleteApplication() is a real action on an application at any status. Hence a
+// record of the deletes. Pruned by the merge once each one has landed, so this
+// holds only deletes still in flight.
+var deletedIds={};
 // Set when the form builder saves its payment-method ticks; written onto
 // campistryMe by save(), which owns that blob. Null until then, so an
 // unrelated save never invents a policy the camp did not choose.
 var _pendingPaymentPolicy=null;
+// Camp-wide billing rules that are neither a payment method nor a price: the
+// late-fee policy, and the keys of the late fees already charged. The applied
+// keys live here rather than being derived, because "have we charged this fee
+// before?" is not answerable from a charge list that a camp can edit.
+var billingRules={};
 var finStaff=[], finExpenses=[], finPayments=[], finBudget={revenue:0,payroll:0,expenses:0}, finIntegrations={};
 // Payroll — its own store, separate from the finance-tab staff list.
 //   staff:      full payroll records (pay, addresses, documents, youthCorps)
@@ -82,22 +100,41 @@ var _rosterWhen='today';
 // tied to a session gets to choose the opening one — see _rosterWhenDefault().
 var _rosterWhenTouched=false;
 /**
- * In a plan for 2nd Half, open the roster on 2nd Half.
+ * OPEN THE ROSTER ON WHATEVER SESSION THE PROGRAM IS SHOWING.
  *
- * Everything else in the app already does this (presence resolves its date from
- * the plan's session), and a Me page that alone opened on today's children while
- * the rest of the app showed next half's would be the one inconsistency a person
- * would have to hold in their head. The picker is right there and still says what
- * it is showing, so this changes the default, not the choice.
+ * This used to look only at a planning sandbox. That made the Me page the one place
+ * where "which session are we in" had a different answer from everywhere else: a camp
+ * pinned to 2nd Half, or a person peeking at it, saw next half's children on every
+ * other page and today's here.
+ *
+ * It now asks the master key (campistry_session_scope.js via campistrySessionScope),
+ * which resolves a sandbox, a pin, a peek and the plain calendar in one place. The
+ * sandbox read is kept as the fallback for a page without the scope, which is exactly
+ * what this did before.
+ *
+ * Only the DEFAULT. The picker is right there, still says what it is showing, and a
+ * person who touches it is obeyed from then on.
  */
 function _rosterWhenDefault(){
     if(_rosterWhenTouched)return _rosterWhen;
+    try{
+        if(typeof window!=='undefined'&&typeof window.campistrySessionScope==='function'){
+            var sc=window.campistrySessionScope();
+            // 'none' means no session covers today, and the honest opening view for
+            // that is the one this page has always had. A camp between halves should
+            // not be shown an empty roster.
+            if(sc&&!sc.ruleMissing&&sc.session&&sc.source!=='none'){
+                return 'session:'+sc.session;
+            }
+            if(sc&&!sc.ruleMissing)return _rosterWhen;
+        }
+    }catch(e){}
     try{
         var P=(typeof window!=='undefined'&&window.CampistryPresence)||null;
         if(!P||typeof P.asOfInfo!=='function')return _rosterWhen;
         var info=P.asOfInfo();
         if(info&&info.reason==='sandbox_session'&&info.session)return 'session:'+info.session;
-    }catch(e){}
+    }catch(e2){}
     return _rosterWhen;
 }
 // Slice an array to one page. Clamps pageNum into range so a stale page
@@ -155,7 +192,7 @@ function _hereToday(name){
     var W=_presenceAPI();
     if(!W)return true;
     _freshSessions();
-    return W.presenceOf({camperName:name,enrollments:enrollments,sessions:sessions,
+    return W.presenceOf({camperName:name,camperId:_camperIdOf(name),enrollments:enrollments,sessions:sessions,
                          roster:roster,on:W.today()}).state==='active';
 }
 /** True only when some session has dates, i.e. when presence can mean anything. */
@@ -200,6 +237,7 @@ var pplStaffSubTab='applicants';  // Hiring page's own top tab: applicants | hir
 var staffApplications={};   // Staff hiring: applicant id → application record
 var staffFormConfig=null;   // Staff application form config — mirrors formConfig, drives campistry_staff_apply.html
 var paFormConfig=null;      // Post-acceptance form config — mirrors formConfig, drives campistry_postaccept.html
+var acceptancePacketConfig=null;  // "On Acceptance" — what a family is sent when accepted (form link, Zelle info, camper-mail address, auto-send)
 var phFormConfig=null;      // Post-hire form config — mirrors paFormConfig, drives campistry_posthire.html
 var counselorVisibility=null; // What counselors see in Lite; null = catalogue defaults
 var _setupChecklistDismissed=false; // owner dismissed the onboarding progress card
@@ -247,6 +285,13 @@ function personIdHolder(id,exceptCamper,exceptStaffId){
     if(!want)return'';
     var who=camperNameById(want,exceptCamper);
     if(who)return who;
+    // Held by a camper who left and has not been erased (migration 253).
+    if(_serverHeldNumbers[want])return _lbl(_serverHeldNumbers[want])+' (removed — still holds the number)';
+    // A number a camper was moved off stays theirs (260) — they may go back to it.
+    if(_serverMovedNumbers[want]){
+        if(!(exceptCamper&&String(normalizePersonId(_camperIdOf(exceptCamper)))===String(_serverMovedNumbers[want])))
+            return 'the camper now numbered #'+_serverMovedNumbers[want]+' (their old number)';
+    }
     var staff='';
     Object.keys(staffApplications).forEach(function(k){
         var a=staffApplications[k];
@@ -260,6 +305,198 @@ function reservePersonId(id){
     var n=Number(normalizePersonId(id)||0);
     if(n>=nextPersonId)nextPersonId=n+1;
     return n;
+}
+
+// ── Camper numbers are the server's (migrations 253/254) ────────────────────
+// The server decides every camper's number when the roster is saved: a number
+// two campers asked for goes to one of them, and a departed camper's number is
+// never re-issued until they are erased. It writes the result back into the
+// saved roster. These keep THIS tab in step with that:
+//   * _reconcileCamperNumbers: after a save (and on load) adopt the server's
+//     number wherever ours is missing, duplicated, or somebody else's; and move
+//     nextPersonId above every number anyone holds, departed or not.
+//   * _serverHeldNumbers: numbers departed campers still hold, so the ID field
+//     says "taken" before the server has to refuse it.
+//   * _queueCamperErase: deleting a camper erases them on the server once the
+//     Undo window has passed — every row tied to their number goes, and the
+//     number is free again. Queued in localStorage so a tab closed in between
+//     finishes it on the next load.
+var _serverHeldNumbers={};
+// Numbers a camper was renumbered off: {old: new}. Never given to anyone else.
+var _serverMovedNumbers={};
+// Numbers of erased campers: {number: true}. Free, but never handed out by
+// itself (260) — typing one for a new camper gets a warning.
+var _serverErasedNumbers={};
+// Roster keys that belong to a child other than whoever shows them now (a
+// departed child, or a renamed child's old name): {key: their number}. A new
+// child is never filed under one (259) — they get "<name> #<number>".
+var _serverHeldKeys={};
+function _keyHeldByOther(key,myId){
+    var h=_serverHeldKeys&&_serverHeldKeys[key];
+    return h!=null&&String(h)!==String(myId==null?'':myId);
+}
+function _meRpc(){
+    var client=window.CampistryDB&&window.CampistryDB.getClient?window.CampistryDB.getClient():window.supabase;
+    var campId=window.CampistryDB&&window.CampistryDB.getCampId?window.CampistryDB.getCampId():null;
+    return (client&&typeof client.rpc==='function'&&campId)?{client:client,campId:campId}:null;
+}
+var _numberReconcileTimer=null;
+function _scheduleNumberReconcile(ms){
+    clearTimeout(_numberReconcileTimer);
+    _numberReconcileTimer=setTimeout(_reconcileCamperNumbers,ms||7000);
+}
+function _reconcileCamperNumbers(){
+    var c=_meRpc(); if(!c)return;
+    // A save still on its way would be compared against the old cloud copy.
+    if(Date.now()<_saveLockUntil){_scheduleNumberReconcile(3000);return}
+    c.client.rpc('get_camper_numbers',{p_camp_id:c.campId}).then(function(res){
+        var d=res&&res.data; if(!d||d.success!==true)return;
+        _serverHeldNumbers=d.departed&&typeof d.departed==='object'?d.departed:{};
+        _serverHeldKeys=d.held_keys&&typeof d.held_keys==='object'?d.held_keys:{};
+        var server=d.campers||{}, holderOf={}, localCount={};
+        Object.keys(server).forEach(function(k){holderOf[String(server[k])]=k});
+        // A key belongs to one child (259): where the server filed one of ours
+        // under its own key ("Avi Katz" → "Avi Katz #11", because "Avi Katz"
+        // is a departed child's), adopt it — by number when ours has one, or
+        // the single server key made from ours when it does not.
+        var adopted=[];
+        Object.keys(roster).forEach(function(k){
+            if(k in server||!roster[k])return;
+            var l=normalizePersonId(roster[k].camperId), to=null;
+            if(l&&holderOf[l]&&!(holderOf[l] in roster))to=holderOf[l];
+            else if(!l){
+                var cand=Object.keys(server).filter(function(sk){
+                    return !(sk in roster)&&sk.replace(/\s#\d+(?:-\d+)?$/,'')===k;
+                });
+                if(cand.length===1)to=cand[0];
+            }
+            if(!to)return;
+            var rec=Object.assign({},roster[k],{camperId:Number(server[to])});
+            if(!rec.displayName)rec.displayName=_lbl(k);
+            cascadeCamperRename(k,to);
+            delete roster[k];
+            roster[to]=rec;
+            adopted.push(_lbl(k));
+        });
+        if(adopted.length)console.warn('[Me] filed under their own roster key by the server:',adopted);
+        // A renumber the server has made: its hint has done its job.
+        Object.entries(roster).forEach(function([k,r]){
+            if(r&&r.renumberedFrom!=null&&(k in server)&&String(server[k])===String(normalizePersonId(r.camperId)))delete r.renumberedFrom;
+        });
+        // A number that moved to another child is taken, like a departed one.
+        _serverMovedNumbers=d.moved&&typeof d.moved==='object'?d.moved:{};
+        _serverErasedNumbers=d.erased&&typeof d.erased==='object'?d.erased:{};
+        Object.keys(roster).forEach(function(k){var l=normalizePersonId((roster[k]||{}).camperId);if(l)localCount[l]=(localCount[l]||0)+1});
+        var fixed=[];
+        Object.keys(roster).forEach(function(k){
+            if(!(k in server)||!roster[k])return;
+            var s=String(server[k]), l=normalizePersonId(roster[k].camperId), pend=roster[k].renumberedFrom!=null;
+            if(l===s)return;
+            // Only where OUR number is wrong. A number typed here and not yet
+            // saved is left alone: it is free, and the next save will claim it.
+            // (A renumber still on its way — renumberedFrom — is left alone too.)
+            if(!l||localCount[l]>1||_serverHeldNumbers[l]||(_serverMovedNumbers[l]&&!pend)||(holderOf[l]&&holderOf[l]!==k)){
+                fixed.push(_lbl(k)+' → #'+s);
+                roster[k].camperId=Number(s);
+                // This camper's enrollments carry the number too: move them with it.
+                Object.keys(enrollments).forEach(function(eid){
+                    var e=enrollments[eid];
+                    if(e&&e.camperName===k&&(e.camperId==null||String(e.camperId)===l))e.camperId=Number(s);
+                });
+            }
+        });
+        var next=Number(d.next)||0;
+        Object.keys(_serverHeldNumbers).forEach(function(n){if(Number(n)>=next)next=Number(n)+1});
+        if(next>nextPersonId)nextPersonId=next;
+        if(adopted.length&&!fixed.length){save();render(curPage);}
+        if(fixed.length){
+            console.warn('[Me] camper numbers corrected by the server:',fixed);
+            save();render(curPage);
+            toast(fixed.length+' camper number'+(fixed.length===1?' was':'s were')+' already taken and '
+                  +(fixed.length===1?'has':'have')+' been changed: '+fixed.slice(0,3).join(', ')
+                  +(fixed.length>3?'…':''),'error');
+        }
+    },function(){});
+}
+var _ERASE_QUEUE_KEY='campistry_camper_erase_queue';
+function _readEraseQueue(){try{var q=JSON.parse(localStorage.getItem(_ERASE_QUEUE_KEY)||'[]');return Array.isArray(q)?q:[]}catch(_){return[]}}
+function _writeEraseQueue(q){try{localStorage.setItem(_ERASE_QUEUE_KEY,JSON.stringify(q))}catch(_){}}
+function _queueCamperErase(id,label,kind,keepId){
+    id=Number(normalizePersonId(id)||0); if(!id)return;
+    var q=_readEraseQueue().filter(function(x){return x.id!==id});
+    q.push({id:id,label:label||'',kind:kind||'erase',keep:keepId?Number(keepId):null,tries:0,at:Date.now()});
+    _writeEraseQueue(q);
+}
+function _cancelCamperErase(id){
+    id=Number(normalizePersonId(id)||0);
+    _writeEraseQueue(_readEraseQueue().filter(function(x){return x.id!==id}));
+}
+var _eraseRunning=false;
+function _runCamperErases(){
+    var c=_meRpc(); if(!c||_eraseRunning)return;
+    var q=_readEraseQueue(); if(!q.length)return;
+    // Only numbers that are no longer on this roster: an Undo, or the camper
+    // being re-added, cancels the erase.
+    var live={};Object.keys(roster).forEach(function(k){var l=normalizePersonId((roster[k]||{}).camperId);if(l)live[l]=1});
+    _eraseRunning=true;
+    var left=[];
+    // One after another, never at once: each erase or merge moves the camp's
+    // cache version on by one, and this page accepts only its own next step —
+    // answers arriving out of order would read as another computer's erase and
+    // reload this page (TED-042).
+    var one=function(x){
+        if(live[String(x.id)])return Promise.resolve();
+        var call=x.kind==='merge'
+            ? c.client.rpc('merge_campers',{p_camp_id:c.campId,p_keep:x.keep,p_gone:x.id})
+            : c.client.rpc('erase_camper',{p_camp_id:c.campId,p_person_id:x.id,p_confirm:true});
+        return call.then(function(res){
+            var d=res&&res.data, err=d&&d.error;
+            // This page is current after its own erase or merge; every other
+            // page opened before it reloads before its next save (260).
+            if(d&&d.cache_epoch!=null&&window.__campistryEraseGuardAdvance)window.__campistryEraseGuardAdvance(d.cache_epoch);
+            if(d&&d.success===true){
+                if(x.kind!=='merge'&&d.files_queued>0)_eraseStoredFiles(c);
+                return;
+            }
+            if(err==='no_such_camper')return;                       // already done
+            if(err==='still_enrolled'&&x.tries<20){x.tries++;left.push(x);return}   // the save has not landed yet
+            if(err==='canteen_balance'){
+                toast((x.label||('Camper #'+x.id))+' was removed, but their canteen account still holds '
+                      +_fmtMoney(Number(d.balance)||0)+'. Refund or zero it, then delete again to free number #'+x.id+'.','error');
+                return;
+            }
+            if(err==='both_have_canteen_accounts'){
+                toast('Merged, but both campers have a canteen account — combine them in Snacks. Number #'+x.id+' stays held until then.','error');
+                return;
+            }
+            if(err){console.warn('[Me] erase #'+x.id+':',err);return}
+            x.tries++;if(x.tries<20)left.push(x);
+        },function(){x.tries++;if(x.tries<20)left.push(x)});
+    };
+    q.reduce(function(p,x){return p.then(function(){return one(x)})},Promise.resolve()).then(function(){
+        _eraseRunning=false;
+        // Merge with anything queued while this ran.
+        var now=_readEraseQueue(), ids={};
+        q.forEach(function(x){ids[x.id]=1});
+        _writeEraseQueue(left.concat(now.filter(function(x){return !ids[x.id]})));
+        if(left.length)setTimeout(_runCamperErases,5000);
+        _scheduleNumberReconcile(1500);
+    });
+}
+function _eraseStoredFiles(c){
+    try{
+        var url=(c.client&&c.client.supabaseUrl)||(window.__CAMPISTRY_SUPABASE__&&window.__CAMPISTRY_SUPABASE__.url)||'';
+        if(!url||!c.client.auth)return;
+        c.client.auth.getSession().then(function(r){
+            var token=r&&r.data&&r.data.session&&r.data.session.access_token;
+            if(!token)return;
+            fetch(url.replace(/\/$/,'')+'/functions/v1/erase-camper-files',{
+                method:'POST',
+                headers:{'Content-Type':'application/json','Authorization':'Bearer '+token},
+                body:JSON.stringify({campId:c.campId})
+            }).catch(function(){});
+        });
+    }catch(_){}
 }
 // Bunk auto-generator settings — camp-wide policy for friend requests,
 // do-not-bunk-with requests, and bunk size, consumed by autoGenerateBunks()
@@ -322,7 +559,7 @@ function init(){
     // nav()'s other targets (camperdetail, familydetail, ...) expect a
     // selected record that doesn't exist this early.
     (function(){
-        var SIDEBAR_PAGES={analytics:1,billing:1,campers:1,finance:1,hiring:1,payroll:1,registration:1,reports:1,structure:1};
+        var SIDEBAR_PAGES={analytics:1,billing:1,broadcasts:1,campers:1,finance:1,hiring:1,payroll:1,registration:1,reports:1,structure:1};
         var requested=(window.location.hash||'').replace(/^#/,'');
         nav(Object.prototype.hasOwnProperty.call(SIDEBAR_PAGES,requested)?requested:'campers');
     })();
@@ -416,8 +653,14 @@ function loadData(){
         }
         structure=s.campStructure||{};
         roster=(s.app1&&s.app1.camperRoster)||{};
+        _noteRosterSeen();
         var me=s.campistryMe||{};
-        families=me.families||{}; payments=me.payments||[];
+        // ★ 211/212: the family rows win when we have them. Same rule and same
+        // reason as finPayments below — camp_families is the second home today and
+        // the only one after the writer phase, at which point me.families stops
+        // being maintained. A reader that preferred the branch would then show a
+        // family list frozen at the moment of that deploy, with no error.
+        families=_familiesFromRows||me.families||{}; payments=me.payments||[];
         payers=(window.CampistryPayers?window.CampistryPayers.normalize(me.payers):(me.payers||{}));
         broadcasts=me.broadcasts||[]; bunkAsgn=me.bunkAssignments||{}; bunkManualCounts=me.bunkManualCounts||{};
         bunkCapacity=me.bunkCapacity||{};
@@ -425,13 +668,25 @@ function loadData(){
         bunkAliases=me.bunkAliases||{};
         divisionHeads=me.divisionHeads||{};
         enrollments=me.enrollments||{}; sessions=me.sessions||[]; enrollSettings=me.enrollSettings||{};
+        billingRules=(me.billingRules&&typeof me.billingRules==='object')?me.billingRules:{};
+        deletedIds=(me.deletedIds&&typeof me.deletedIds==='object')?me.deletedIds:{};
         staffApplications=me.staffApplications||{};
+        // The submissions that arrived as ROWS rather than into the blob
+        // (migration 200). Fired and not awaited: hydration must not wait on a
+        // network call, and the drain re-renders when it finds anything.
+        try{ _drainApplications(); }catch(_){}
+        // The payment ledger as ROWS rather than a jsonb array (migration 208,
+        // read by 210). Same shape as the drain above: fired, not awaited, and it
+        // re-renders if what it finds differs from what we hydrated with.
+        try{ _loadPaymentsFromRows(); }catch(_){}
+        try{ _loadFamiliesFromRows(); }catch(_){}
         leads=me.leads||{};
         counselorVisibility=(me.counselorVisibility&&typeof me.counselorVisibility==='object')?me.counselorVisibility:null;
         _setupChecklistDismissed=!!me.setupChecklistDismissed;
         formConfig=me.formConfig||null;
         staffFormConfig=me.staffFormConfig||null;
         paFormConfig=me.postAcceptFormConfig||null;
+        acceptancePacketConfig=me.acceptancePacketConfig||null;
         phFormConfig=me.postHireFormConfig||null;
         bunkGenConfig=Object.assign(_defaultBunkGenConfig(),me.bunkGenConfig||{});
         if(!Array.isArray(bunkGenConfig.criteria)||!bunkGenConfig.criteria.length)bunkGenConfig.criteria=_defaultBunkGenConfig().criteria;
@@ -509,7 +764,13 @@ function loadData(){
         // See the note on _loadedPayroll above — same stripped-snapshot hazard.
         _loadedFinance=(s.campistryMeFinance!==undefined)||(me.finance!==undefined);
         finStaff=fin.staff||[];finExpenses=fin.expenses||[];
-        finPayments=(me.finance&&me.finance.payments)||fin.payments||[];
+        // ★ 208/209: the rows win when we have them. camp_payments is the second
+        // home today and the only one after phase 2b, at which point the array
+        // below stops being maintained — so a reader that preferred the array
+        // would show a ledger frozen at the moment of that deploy, with no error.
+        // Preferring the rows NOW, while the two still agree, is what makes that
+        // later change safe. Same shape as _preferKey's new-home-wins rule.
+        finPayments=_paymentsFromRows||(me.finance&&me.finance.payments)||fin.payments||[];
         finBudget=fin.budget||{revenue:0,payroll:0,expenses:0};finIntegrations=fin.integrations||{};
         // Seed from the new shared field, but also from the two legacy
         // counters (nextCamperId/nextStaffId) that older saves may still
@@ -555,6 +816,9 @@ function loadData(){
         // them without anyone having to go dig up the original application.
         _syncPostAcceptBunkRequests();
         _syncCampTimezone();
+        // The server's camper numbers, and any erase a closed tab left behind.
+        _scheduleNumberReconcile(3000);
+        setTimeout(_runCamperErases,5000);
     }catch(e){console.warn('[Me]',e)}
 }
 // The camp's timezone (used by the pickup-alert reminder — see migration
@@ -578,6 +842,7 @@ function _syncCampTimezone(){
     }catch(e){}
 }
 function save(){
+    try{_migratePayerLedgers();}catch(_){}
     try{
         _saveLockUntil=Date.now()+5000;
         // Read current state from the in-memory cache (IDB-backed via
@@ -593,6 +858,11 @@ function save(){
         g.campStructure=structure;
         if(!g.app1)g.app1={};
         g.app1.camperRoster=roster;
+        // Every child this tab has had on screen, by number: the server never
+        // removes a child this tab has never seen (one added on another
+        // computer while this one was asleep or offline) — 260.
+        _noteRosterSeen();
+        g.app1._rosterSeen=Object.keys(_rosterSeenIds).map(Number);
         // app1.divisions is owned exclusively by app1/Flow — it holds grade-keyed
         // entries built from campStructure (startTime, endTime, parentDivision, etc.).
         // campStructure is the authoritative source for division/grade/bunk structure;
@@ -710,6 +980,8 @@ function save(){
             counselorVisibility:counselorVisibility,
             sessions:_savedSessions,
             enrollSettings:enrollSettings,
+            billingRules:billingRules,
+            deletedIds:deletedIds,
             // Only when the builder actually set it. Spreading `undefined`
             // here would be harmless; writing {} would not -- it would read as
             // "this camp accepts nothing".
@@ -717,6 +989,7 @@ function save(){
             formConfig:formConfig,
             staffFormConfig:staffFormConfig,
             postAcceptFormConfig:paFormConfig,
+            acceptancePacketConfig:acceptancePacketConfig,
             postHireFormConfig:phFormConfig,
             bunkGenConfig:bunkGenConfig,
             printSheets:printSheets,
@@ -746,6 +1019,19 @@ function save(){
             finance:Object.assign({},(_cachedMe.finance&&typeof _cachedMe.finance==='object')?_cachedMe.finance:{},{payments:finPayments})
         });
         g.updated_at=new Date().toISOString();
+
+        // ★ 213: the ROWS are the record for families and payments now. Every
+        // one of the 43 family sites and 9 payment sites still just mutates the
+        // object and calls save(), so this is the single place that needs to know:
+        // send what actually CHANGED since we loaded, and nothing else. The
+        // document's branches above are still written, harmlessly — nothing reads
+        // them, and the projection triggers only project entries whose value
+        // changed, which are the same values we are about to sync.
+        //
+        // Sending a diff rather than the whole document is also what removes the
+        // clobber the old full-document upsert could cause, which is what the
+        // comment about a parent's deposit was describing.
+        try{ _syncBillingRows(); }catch(_){}
 
         // saveGlobalSettings → setLocalSettings handles ALL persistence:
         //   - IndexedDB write-through with the FULL state (no quota)
@@ -797,6 +1083,8 @@ function save(){
         //   email makes that family claimable in the Link parent app the moment
         //   they're saved (debounced + signature-guarded, so repeat saves are free).
         try{_scheduleAutoParentInvites()}catch(ex){}
+        // The server may have changed a number (253): pick that up.
+        try{_scheduleNumberReconcile(7000)}catch(ex){}
     }catch(e){
         console.error('[Me] Save:',e);
         // ★ #V2-7: surface the failure instead of swallowing it. A throw out of the
@@ -925,7 +1213,7 @@ function _globalSearchIndex(query){
             var l=leads[id]||{};
             var nm=l.parentName||l.camperName||'';
             if(!nm||nm.toLowerCase().indexOf(q)<0) return;
-            pushIfRoom('lead',{type:'lead',label:nm,sublabel:l.camperName&&l.camperName!==nm?('Camper: '+l.camperName):'Lead',
+            pushIfRoom('lead',{type:'lead',label:nm,sublabel:l.camperName&&l.camperName!==nm?('Camper: '+l.camperName):'Lead', // name-ok: a lead, not a camper yet
                 open:function(){nav('leads');setTimeout(function(){viewLead(id)},50)}});
         });
     }catch(e){console.error('[Me] search: lead index failed',e)}
@@ -1576,7 +1864,17 @@ function managePayers(){
               +(p.note?'<div style="font-size:.76rem;color:var(--s500)">'+esc(p.note)+'</div>':'')
               +(p.contact||p.email||p.phone?'<div style="font-size:.74rem;color:var(--s400)">'
                  +esc([p.contact,p.email,p.phone].filter(Boolean).join(' \u00b7 '))+'</div>':'')
+              // what it owes, inside the name column (TED-179: an extra closing
+              // tag here pushed the buttons, and Save/Cancel, out of their boxes)
+              +(function(){var ac=_payerAccount(id);if(!ac.lines.length)return '';
+                  return '<div style="font-size:.76rem;color:var(--s600)">'+_payerStanding(ac)+' (shares '+fm(ac.charged)+', paid '+fm(ac.paid)+')</div>'})()
               +'</div>'
+              +(_payerAccount(id).charged>0?'<button type="button" class="me-btn me-btn--sec me-btn--sm" '
+                +'onclick="CampistryMe.recordPayerPayment(\''+je(id)+'\')">Record payment</button>':'')
+              // the account stays reachable whenever it has any line (TED-198) —
+              // a cheque left after its share was cancelled most of all
+              +(_payerAccount(id).lines.length?'<button type="button" class="me-btn me-btn--ghost me-btn--sm" '
+                +'onclick="CampistryMe.payerLines(\''+je(id)+'\')">Account</button>':'')
               +'<button type="button" class="me-btn me-btn--ghost me-btn--sm" '
               +'onclick="CampistryMe.togglePayerArchived(\''+je(id)+'\')">'
               +(p.archived?'Restore':'Archive')+'</button>'
@@ -1650,6 +1948,11 @@ function managePaymentMethods(){
     h+='<p style="font-size:.78rem;color:var(--s400);margin:0 0 14px">'
       +'A method you turn off still appears on past records, so last season\u2019s '
       +'payments keep reading correctly.</p>';
+    h+='<p style="font-size:.78rem;color:var(--s500);background:var(--s50);border-radius:var(--r);'
+      +'padding:9px 12px;margin:0 0 14px">'
+      +'\ud83d\udcb3 <strong>Already have your own card processor</strong> (Banquest, Sola/Cardknox, etc.)? '
+      +'Bring-Your-Own-Processor is supported \u2014 it isn\u2019t self-service here, so '
+      +'<strong>contact Campistry support</strong> to get it connected.</p>';
 
     (P.CONTEXTS||[]).forEach(function(ctx){
         var all=(P.METHODS||[]).filter(function(m){return m.contexts.indexOf(ctx)>=0});
@@ -1681,6 +1984,84 @@ function managePaymentMethods(){
     },'Save');
 }
 
+/**
+ * PARENT SELF-SERVE PAYMENT PLANS — camp-wide toggle.
+ *
+ * This used to be a checkbox on the Dashboard, inside Sessions & Pricing. It
+ * moved here because it's a Billing policy, not a session detail — same
+ * reasoning as managePaymentMethods() above. It reads/writes the SAME
+ * underlying setting Dashboard used (`enrollSettings.allowParentPaymentPlans`),
+ * so flipping it here has the same effect the old Dashboard checkbox had:
+ * once accepted, a family can build their own installment schedule from Link
+ * (set_my_payment_plan RPC, migration 115) instead of the office building one
+ * manually via Billing -> Monthly Plan.
+ */
+// TED-074: what this switch actually does is offer "Payment Plan" as a choice
+// on the registration form (campistry_register.html). It used to be described
+// as parents building their own plan in Link — a builder Link no longer has —
+// and it hid the office's own Set Up Payment Plan button, so nobody set the
+// plan up. The office always sets it up now; the words say so.
+function manageParentPaymentPlanSetting(){
+    if(!_secEdit('billing','Changing payment plan settings'))return;
+    var on=!!enrollSettings.allowParentPaymentPlans;
+    var h='<div class="me-modal-form">';
+    h+='<label class="ops-check" style="display:flex;align-items:flex-start;gap:9px;font-size:.85rem;'
+      +'font-weight:500;color:var(--s700);cursor:pointer">'
+      +'<input type="checkbox" id="ppAllowChk" style="margin-top:2px"'+(on?' checked':'')+'> '
+      +'<span>Let parents ask for a payment plan on the registration form'
+      +'<span style="display:block;font-weight:400;margin-top:3px;font-size:.78rem;color:var(--s500)">'
+      +'When a family picks it, their application shows a Set Up Payment Plan button, and '
+      +'the office sets the plan up from Billing. When off, the option is not offered.</span></span></label>';
+    h+='</div>';
+    showModal('Parent payment plans',h,function(){
+        var checked=!!(document.getElementById('ppAllowChk')||{}).checked;
+        enrollSettings.allowParentPaymentPlans=checked;
+        save();closeModal('dynModal');
+        toast('Payment plan '+(checked?'offered':'no longer offered')+' on the registration form');
+    },'Save');
+}
+
+/**
+ * DEFAULT PAYMENT PLAN STRUCTURE — camp-wide, replacing a per-session field.
+ *
+ * This used to live on every Session (Full/2/3/4/monthly/12/deposit), which
+ * meant the same choice got made once per session for no reason -- it's a
+ * Billing policy the office decides once, not a property of any individual
+ * session. It's a different thing from manageParentPaymentPlanSetting()
+ * above: that toggle is whether a FAMILY can build their OWN plan in Link;
+ * this is what schedule the OFFICE'S side auto-generates for every session
+ * once a family enrolls (_buildInstallmentSchedule, read camp-wide from
+ * enrollSettings.paymentPlan/paymentPlanDepositAmount instead of a session's
+ * own field, which is now gone).
+ */
+function managePaymentPlanStructure(){
+    if(!_secEdit('billing','Changing the payment plan structure'))return;
+    var plan=enrollSettings.paymentPlan||'full';
+    var dep=enrollSettings.paymentPlanDepositAmount||'';
+    var h='<div class="me-modal-form">';
+    h+='<div class="me-field"><label>How a family\'s tuition is split when they enroll</label>'
+      +'<select id="ppStructSel" class="me-input" onchange="document.getElementById(\'ppStructDepWrap\').style.display=this.value===\'deposit\'?\'\':\'none\'">'
+      +'<option value="full"'+(plan==='full'?' selected':'')+'>Full payment required</option>'
+      +'<option value="2"'+(plan==='2'?' selected':'')+'>2 installments (50/50)</option>'
+      +'<option value="3"'+(plan==='3'?' selected':'')+'>3 installments (34/33/33)</option>'
+      +'<option value="4"'+(plan==='4'?' selected':'')+'>4 installments (25 each)</option>'
+      +'<option value="monthly"'+(plan==='monthly'?' selected':'')+'>Monthly (recurring)</option>'
+      +'<option value="12"'+(plan==='12'?' selected':'')+'>12 monthly installments</option>'
+      +'<option value="deposit"'+(plan==='deposit'?' selected':'')+'>Down payment + remaining tuition</option>'
+      +'</select></div>';
+    h+='<div class="me-field" id="ppStructDepWrap" style="'+(plan==='deposit'?'':'display:none')+'">'
+      +'<label>Down Payment Amount ($)</label><input type="number" id="ppStructDep" class="me-input" step="0.01" min="0" value="'+esc(dep)+'"></div>';
+    h+='<p style="font-size:.78rem;color:var(--s500);margin:4px 0 0">Applies to every session — this is what actually generates the due dates/amounts on a family\'s invoice the moment they enroll (see Billing). It\'s separate from the toggle above: that\'s whether a family can build their own plan in Link, this is the plan the office\'s side uses automatically.</p>';
+    h+='</div>';
+    showModal('Payment Plan',h,function(){
+        var sel=document.getElementById('ppStructSel').value||'full';
+        enrollSettings.paymentPlan=sel;
+        enrollSettings.paymentPlanDepositAmount=parseFloat((document.getElementById('ppStructDep')||{}).value)||0;
+        save();closeModal('dynModal');
+        toast('Payment plan structure saved');
+    },'Save');
+}
+
 /** The close-out rule, or null on a page that did not load it. */
 function _closeoutAPI(){return (typeof window!=='undefined'&&window.CampistryCloseout)||null}
 
@@ -1689,9 +2070,9 @@ function _closeoutAPI(){return (typeof window!=='undefined'&&window.CampistryClo
  *
  * Canteen balances live under `campistrySnacks`, which this page does not own and
  * may not have hydrated at all — so this reads defensively and answers 0 rather
- * than guessing. `balanceFloor` is subtracted for the same reason
- * payments-canteen-refund-all subtracts it: money below the floor is not the
- * family's to take back.
+ * than guessing. The whole balance: a balance floor keeps a child from SPENDING
+ * below it, and at close-out the money goes back to the family, floor and all
+ * (TED-142) — the refund functions no longer hold it back either.
  */
 /**
  * A camper's name as a human reads it. Roster keys are unique but are not always
@@ -1700,14 +2081,43 @@ function _closeoutAPI(){return (typeof window!=='undefined'&&window.CampistryClo
 function _camperLabel(key){
     return String(key==null?'':key).replace(/\s#\d+$/,'');
 }
+// The canteen accounts as the ROWS hold them, read fresh for each close-out.
+// ★ This read campistrySnacks.accounts out of the settings document, which the
+// Snacks page strips from every save since migration 219 — so every family's
+// close-out said "no unspent canteen money" and the parents' canteen balances
+// were never offered back. get_canteen_accounts serves the rows; migration 245
+// puts each account's camperId on it, which is what this matches on.
+var _closeoutCanteen=null;
+function _loadCloseoutCanteen(then){
+    try{
+        var client=window.CampistryDB&&window.CampistryDB.getClient?window.CampistryDB.getClient():window.supabase;
+        var campId=window.CampistryDB&&window.CampistryDB.getCampId?window.CampistryDB.getCampId():null;
+        if(!client||typeof client.rpc!=='function'||!campId){then(false);return}
+        client.rpc('get_canteen_accounts',{p_camp_id:campId}).then(function(res){
+            var d=res&&res.data;
+            if(!d||d.success!==true){then(false);return}
+            _closeoutCanteen=d.accounts||{};
+            then(true);
+        },function(){then(false)});
+    }catch(e){then(false)}
+}
 function _canteenAvailableFor(camperName){
     try{
-        var g=(typeof loadGlobalSettings==='function')?loadGlobalSettings():null;
-        var acc=g&&g.campistrySnacks&&g.campistrySnacks.accounts
-                &&g.campistrySnacks.accounts[camperName];
+        var accts=_closeoutCanteen||{};
+        // The PERSON first: after a rename the account is still keyed by the old
+        // spelling, and a different child may carry the old spelling now.
+        var cid=roster&&roster[camperName]&&roster[camperName].camperId;
+        var acc=null;
+        if(cid!=null&&cid!==''){
+            Object.keys(accts).some(function(k){
+                if(accts[k]&&accts[k].camperId!=null&&String(accts[k].camperId)===String(cid)){acc=accts[k];return true}
+                return false;
+            });
+        }
+        // An account with no id at all (never attributed) — by name, and only then.
+        if(!acc&&accts[camperName]&&accts[camperName].camperId==null)acc=accts[camperName];
         if(!acc)return 0;
-        var avail=(Number(acc.balance)||0)-(Number(acc.balanceFloor)||0);
-        return Math.max(0,Math.round(avail*100)/100);
+        return Math.max(0,Math.round((Number(acc.balance)||0)*100)/100);
     }catch(e){return 0}
 }
 
@@ -1736,8 +2146,18 @@ function _closeoutCardCeiling(f){
  * applied until the office agrees to the whole disposition, because a card refund
  * that can only be partly done changes what happens to the rest.
  */
-function closeOutFamily(famKey){
+function closeOutFamily(famKey,_haveCanteen){
     if(!_secEdit('billing','Closing out a family'))return;
+    // The canteen money is part of what is being closed out, so it is read from
+    // the rows first — and a close-out that cannot see it does not proceed on a
+    // guess of zero.
+    if(!_haveCanteen){
+        _loadCloseoutCanteen(function(ok){
+            if(!ok){toast('Could not read canteen balances — not closing out without them. Check the connection and try again.','error');return}
+            closeOutFamily(famKey,true);
+        });
+        return;
+    }
     var C=_closeoutAPI();
     if(!C){toast('The close-out module did not load','error');return}
     var f=families[famKey];
@@ -1838,7 +2258,7 @@ function _applyCloseout(famKey,plan){
     var f=families[famKey];
     var C=_closeoutAPI();
     if(!f||!C||!plan)return;
-    var stamp=Date.now(), applied=0, deferred=[];
+    var stamp=Date.now(), applied=0, deferred=[], canteenJobs=[];
 
     plan.steps.forEach(function(st,i){
         var amt=Math.round((Number(st.amount)||0)*100)/100;
@@ -1847,9 +2267,11 @@ function _applyCloseout(famKey,plan){
                                      :'Account credit';
         var id='co_'+stamp+'_'+i;
 
-        if(st.do==='bill'||st.do==='hold'){
-            // Nothing to do, and that IS the disposition: the credit stays where it
-            // already is. Writing an entry here would move money for no reason.
+        // bill / hold / roll_forward LEAVE THE MONEY WHERE IT IS (TED-067). A
+        // family's account and a child's canteen account both carry into next
+        // season, so "roll into next season" is exactly "keep it". It used to
+        // post a charge that consumed the credit — the opposite of rolling it on.
+        if(st.do==='bill'||st.do==='hold'||st.do==='roll_forward'){
             applied++;
             return;
         }
@@ -1857,17 +2279,26 @@ function _applyCloseout(famKey,plan){
             deferred.push(amt);
             return;
         }
-        // donate / cash / check / roll_forward all CONSUME the credit, so each is a
-        // charge against the account with the reason attached. Crediting would double
-        // the family's credit; editing the balance would bypass the ledger entirely.
-        var reason=(st.do==='donate')?'donation'
-                  :(st.do==='roll_forward')?'carried_forward':'disbursement';
-        var note=C.labelFor(st.do)+' \u2014 '+who
-                +(st.do==='roll_forward'?' (opening credit next season)':'');
+        var note=C.labelFor(st.do)+' \u2014 '+who;
+        // A CHILD'S CANTEEN MONEY comes off the child's canteen account (TED-067),
+        // through the same call the Canteen page's cash-out uses. It used to be
+        // charged to the family's tuition account, leaving the canteen untouched
+        // — a paid-in-full family suddenly owed their child's snack money.
+        if(st.kind==='canteen'){
+            canteenJobs.push({camper:st.camper||'',camperId:(st.camperId!=null?st.camperId:(typeof _camperIdOf==='function'?_camperIdOf(st.camper):null)),
+                              amount:amt,note:note});
+            return;
+        }
+        // Account credit that is donated / paid out in cash or by check is
+        // CONSUMED, so it is a charge against the account with the reason
+        // attached. Crediting would double it; editing the balance would bypass
+        // the ledger entirely.
+        var reason=(st.do==='donate')?'donation':'disbursement';
         if(!f.charges)f.charges=[];
         f.charges.push({id:id,category:'Close-out',description:note,amount:amt,
                         date:today(),timestamp:stamp,closeout:{disposition:st.do,
-                        reason:reason,kind:st.kind||'family',camper:st.camper||''}});
+                        reason:reason,kind:'family'}});
+        _postLedgerCharge(f,f.charges[f.charges.length-1]);
         f.balance=(f.balance||0)+amt;
         applied++;
     });
@@ -1875,13 +2306,40 @@ function _applyCloseout(famKey,plan){
     save();closeModal('dynModal');
     if(curPage==='familydetail')renderFamilyDetailPage();else renderBilling();
 
-    var msg=applied?(applied+' close-out step'+(applied===1?'':'s')+' applied'):'';
-    if(deferred.length){
-        var total=deferred.reduce(function(n,x){return n+x},0);
-        msg+=(msg?'. ':'')+fm(Math.round(total*100)/100)+' is set to go back to a card '
-            +'\u2014 use Issue Credit/Refund so it goes through the refund checks';
+    function finish(canteenDone,canteenFailed){
+        var n=applied+canteenDone;
+        var msg=n?(n+' close-out step'+(n===1?'':'s')+' applied'):'';
+        if(canteenFailed.length){
+            msg+=(msg?'. ':'')+'Could not take canteen money off: '+canteenFailed.join('; ')
+                +' \u2014 do it from the Canteen page';
+        }
+        if(deferred.length){
+            var total=deferred.reduce(function(n,x){return n+x},0);
+            msg+=(msg?'. ':'')+fm(Math.round(total*100)/100)+' is set to go back to a card '
+                +'\u2014 use Issue Credit/Refund so it goes through the refund checks';
+        }
+        toast(msg||'Nothing to apply',canteenFailed.length?'error':undefined);
     }
-    toast(msg||'Nothing to apply');
+    if(!canteenJobs.length){finish(0,[]);return}
+    var client=window.CampistryDB&&window.CampistryDB.getClient?window.CampistryDB.getClient():null;
+    var campId=window.CampistryDB&&window.CampistryDB.getCampId?window.CampistryDB.getCampId():null;
+    if(!client||!campId){finish(0,canteenJobs.map(function(j){return _camperLabel(j.camper)+' (not connected)'}));return}
+    var done=0,failed=[];
+    // The close-out's own write (280), not the till's cash-out: the register's
+    // $20-a-day cash limit and the parent's balance floor stopped a close-out
+    // of more than that, or of a floored child, from taking anything (TED-142,
+    // TED-145). It takes up to the whole balance, never more, switches the
+    // child's auto-reload off (TED-143), and answers in words.
+    Promise.all(canteenJobs.map(function(j){
+        return client.rpc('canteen_season_closeout',{
+            p_camp_id:campId,p_camper_id:j.camperId,p_camper_name:j.camper,p_amount:j.amount,
+            p_note:'Season close-out: '+j.note
+        }).then(function(res){
+            var d=res&&res.data;
+            if(res&&res.error||!d||!d.success)failed.push(_camperLabel(j.camper)+' \u2014 '+((d&&(d.message||d.error))||(res&&res.error&&res.error.message)||'refused'));
+            else done++;
+        },function(e){failed.push(_camperLabel(j.camper)+' \u2014 '+((e&&e.message)||'error'))});
+    })).then(function(){finish(done,failed)});
 }
 
 /** Live arithmetic under the form, so a partial card refund is visible first. */
@@ -1942,6 +2400,10 @@ function addCardSurcharge(famKey){
             +'rules, which is why this will not guess one for you.</p>');
         return;
     }
+    // Cash-discount mode has no fee to add: its tool gives the discount for a
+    // bank payment made ONLINE (a pay link, a bank debit), which Record
+    // Payment never sees (TED-153).
+    if(pol.mode==='cash_discount')return _giveCashDiscount(famKey);
     var x=F.explain(pol);
     if(x&&x.blockers&&x.blockers.length){
         showModal('Not chargeable yet',
@@ -1959,7 +2421,9 @@ function addCardSurcharge(famKey){
       +'<input type="number" id="csBase" class="me-input" step="0.01" min="0" value="'
       +(owed>0?owed.toFixed(2):'')+'" placeholder="0.00" '
       +'oninput="CampistryMe._surchargePreview()"></div>';
-    h+='<div id="csPreview" style="margin-top:4px"></div>';
+    h+='<div id="csPreview" data-family="'+esc(String(famKey))+'" style="margin-top:4px"></div>';
+    h+='<p style="font-size:.78rem;color:var(--s500);margin:10px 0 0;line-height:1.6">Card on file: '
+      +esc(_familyCardLabel(f))+'. If the family ends up paying another way, remove this fee from their bill.</p>';
     h+='<p style="font-size:.78rem;color:var(--s400);margin:12px 0 0;line-height:1.6">'
       +esc(F.disclosure(pol,{fmt:fm}))+'</p>';
     h+='</div>';
@@ -1967,7 +2431,16 @@ function addCardSurcharge(famKey){
     showModal('Add card surcharge',h,function(){
         var base=parseFloat((document.getElementById('csBase')||{}).value)||0;
         if(!(base>0)){toast('Enter the amount being paid by card','error');return}
-        var q=F.quote(pol,{amount:base,method:'card',funding:'credit',channel:'online'});
+        // The family's OWN card decides it (TED-140): a surcharge on a debit or
+        // prepaid card is what the brands forbid, and a card whose type is not
+        // on file is treated the same — never assumed to be credit.
+        // ...and only when that card is what will be charged (TED-147). A flat
+        // convenience fee is for the channel, not the card, and bank payments
+        // may carry it (TED-155) — this is about the percentage surcharge.
+        if(pol.mode==='surcharge'&&_familyDefaultIsBank(f)){
+            toast('Not added: '+(f.name||'this family')+'\u2019s default payment method is a bank account, so Charge Card and autopay would take a card fee by bank debit \u2014 which the card brands forbid. Make their credit card the default first.','error');return;
+        }
+        var q=F.quote(pol,{amount:base,method:'card',funding:_familyCardFunding(f),channel:'online'});
         if(!q||!q.permitted){
             toast((q&&q.label)||'That fee is not permitted \u2014 see Card Fees','error');return;
         }
@@ -1978,13 +2451,95 @@ function addCardSurcharge(famKey){
             // the version that gets a camp in trouble with the brands.
             description:F.disclosure(pol,{fmt:fm})||'Card fee',
             amount:Math.round(q.fee*100)/100,date:today(),timestamp:Date.now(),
-            cardFee:{mode:q.mode,base:Math.round(base*100)/100,reason:q.reason}});
+            cardFee:{mode:q.mode,base:Math.round(base*100)/100,reason:q.reason,funding:_familyCardFunding(f),
+                token:(_familyCardOnFile(f)||{}).token||null}});
+        _postLedgerCharge(f,f.charges[f.charges.length-1]);
         f.balance=(f.balance||0)+Math.round(q.fee*100)/100;
         save();closeModal('dynModal');
         if(curPage==='familydetail')renderFamilyDetailPage();else renderBilling();
         toast('Card fee of '+fm(q.fee)+' added to '+(f.name||'the account'));
     },'Add fee');
     _surchargePreview();
+}
+
+// The discount for a bank payment made ONLINE (TED-160): a pay link, a bank
+// debit, a bank autopay instalment — Record Payment never sees those. The
+// office picks the payment; each gets its discount once (the same
+// cdisc_<payment id> line Record Payment posts), so it cannot be given twice.
+function _onlineBankPaymentsWithoutDiscount(famKey){
+    var f=families[famKey]; if(!f)return [];
+    var had={};
+    (f.credits||[]).forEach(function(c){ if(c&&c.cashDiscount&&c.paymentId!=null)had[String(c.paymentId)]=1; });
+    return _famPaymentsIn(f).filter(function(p){
+        return (p.stripePaymentIntentId||p.byopTransactionId)&&!_paidByCard(p)&&!had[String(p.id)];
+    });
+}
+function _giveCashDiscount(famKey){
+    var f=families[famKey];
+    if(!f){toast('Family not found','error');return}
+    var pays=_onlineBankPaymentsWithoutDiscount(famKey);
+    if(!pays.length){
+        showModal('Discount for not paying by card','<p style="font-size:.84rem;color:var(--s600);margin:0;line-height:1.6">'
+            +'Every bank payment '+esc(f.name||'this family')+' made online already has its discount. Cheques, cash and bank transfers you record with '
+            +'<strong>Record Payment</strong> get theirs automatically.</p>',function(){closeModal('dynModal');});
+        return;
+    }
+    var owed=Math.max(0,(buildFamilyLedgers()[famKey]||{}).balance||0);
+    var h='<div class="me-modal-form">';
+    h+='<p style="font-size:.84rem;color:var(--s600);margin:0 0 10px;line-height:1.6">Bank payments made <strong>online</strong> that have not had their discount yet. '
+      +'Cheques, cash and bank transfers you record with <strong>Record Payment</strong> get it automatically.</p>';
+    h+='<div class="me-field"><label>Bank payment</label><select id="cdPay" class="me-input">'
+      +pays.map(function(p){return '<option value="'+esc(String(p.id))+'">'+esc(p.date||'')+' \u2014 '+fm(p.amount)+(p.method?' ('+esc(p.method)+')':'')+'</option>'}).join('')
+      +'</select></div>';
+    h+='</div>';
+    showModal('Discount for not paying by card',h,function(){
+        var id=(document.getElementById('cdPay')||{}).value;
+        var p=pays.find(function(x){return String(x.id)===String(id)});
+        if(!p){toast('Pick the payment','error');return}
+        // What they owed before that payment is what it settled against.
+        var cd=_cashDiscountFor(owed+Number(p.amount||0),p.amount,'ach');
+        if(!(cd.discount>0)){toast('That works out to no discount','error');return}
+        var n=_postCashDiscount(f,p,cd);
+        if(!(n>0)){toast('That payment already has its discount','error');return}
+        save();closeModal('dynModal');
+        if(curPage==='familydetail')renderFamilyDetailPage();else renderBilling();
+        toast(fm(n)+' off '+(f.name||'the account')+' for the '+fm(p.amount)+' bank payment');
+    },'Give discount');
+}
+
+/**
+ * What kind of card the family pays with — 'credit', 'debit', 'prepaid', or
+ * 'unknown' — from the card Stripe classified when it was saved (stripe-webhook
+ * stores `funding` on savedPaymentMethods). The default card first; otherwise
+ * the only card on file; otherwise unknown, which is never surcharged (TED-140).
+ */
+// The card that Charge Card and autopay will actually charge (TED-147): the
+// family's DEFAULT method when one is set — and when that default is a bank
+// account there is no card to surcharge, whatever other card is saved, because
+// the fee would be collected by bank debit. With no default, the one card on
+// file (stripe-charge picks a card then).
+function _familyCardOnFile(f){
+    var all=(f&&Array.isArray(f.savedPaymentMethods))?f.savedPaymentMethods.filter(Boolean):[];
+    var pms=all.filter(function(m){return m.type!=='us_bank_account'});
+    var def=f&&f.stripePaymentMethodId;
+    if(def)return pms.find(function(m){return m.token===def})||null;
+    return pms.length===1?pms[0]:null;
+}
+function _familyDefaultIsBank(f){
+    var def=f&&f.stripePaymentMethodId;
+    return !!(def&&Array.isArray(f.savedPaymentMethods)&&f.savedPaymentMethods.some(function(m){return m&&m.token===def&&m.type==='us_bank_account'}));
+}
+function _familyCardFunding(f){
+    var m=_familyCardOnFile(f);
+    var fu=m&&String(m.funding||'').toLowerCase();
+    return fu||'unknown';
+}
+function _familyCardLabel(f){
+    if(_familyDefaultIsBank(f))return 'none that will be charged \u2014 the family\'s default payment method is a bank account, so Charge Card and autopay would take the fee by bank debit';
+    var m=_familyCardOnFile(f);
+    if(!m)return 'none on file whose type we know';
+    var fu=_familyCardFunding(f);
+    return (m.label||'card')+' ('+(fu==='unknown'?'type not known':fu)+')';
 }
 
 /** Live figure under the amount, so the office sees the fee before agreeing. */
@@ -1995,7 +2550,8 @@ function _surchargePreview(){
     var base=parseFloat((document.getElementById('csBase')||{}).value)||0;
     if(!(base>0)){box.innerHTML='';return}
     var pol=F.normalize(enrollSettings.cardFeePolicy);
-    var q=F.quote(pol,{amount:base,method:'card',funding:'credit',channel:'online'});
+    var _pf=families[box.getAttribute('data-family')||''];
+    var q=F.quote(pol,{amount:base,method:'card',funding:_familyCardFunding(_pf),channel:'online'});
     if(!q||!q.permitted||!(q.fee>0)){
         box.innerHTML='<div style="background:#FEF2F2;border:1px solid #FECACA;color:#991B1B;'
           +'border-radius:8px;padding:7px 10px;font-size:.78rem">'
@@ -2205,6 +2761,1017 @@ function _arAgingHtml(ledgers){
     return h;
 }
 
+/**
+ * DRAIN THE APPLICATIONS TABLE INTO enrollments / staffApplications.
+ *
+ * Migration 200 moved public submissions out of the campistryMe blob and into
+ * camp_applications, one row each — so a registration burst no longer serialises
+ * on the camp's single row and no longer rewrites megabytes per family. The
+ * office's working copy stays where every page already reads it, which is why
+ * this exists: the rows have to arrive in `enrollments`.
+ *
+ * It reuses campistry_finance_merge.js's mergePublicSubmissions rather than a
+ * second merge of its own. That function already answers the two questions that
+ * matter — local wins on an id we hold, a tombstoned id stays deleted — and having
+ * one answer is the point. Shape the RPC's reply like a cloud blob and hand it over.
+ *
+ * Async and best-effort. A camp whose migration has not been applied gets a
+ * function-missing error and behaves exactly as it did before, because the blob
+ * still holds everything 200's backfill copied out of it.
+ */
+// ─── the payment ledger, from rows ──────────────────────────────────────────
+// Migration 208 gave payments their own rows and a trigger that keeps them in
+// step with campistryMe.finance.payments; 210 added get_camp_payments to read
+// them. Phase 2b then stops the writers maintaining the array, so this has to be
+// in place and deployed BEFORE that, while the two homes still agree — otherwise
+// the first thing anyone notices is a Billing history that stopped growing.
+//
+// Null means "we have not heard from the rows", NOT "there are no payments": an
+// empty camp legitimately answers [], and conflating the two would blank a real
+// ledger whenever the call failed. loadData only prefers a non-null value.
+var _paymentsFromRows=null;
+
+async function _loadPaymentsFromRows(){
+    var client=window.CampistryDB&&window.CampistryDB.getClient?window.CampistryDB.getClient():window.supabase;
+    var campId=window.CampistryDB&&window.CampistryDB.getCampId?window.CampistryDB.getCampId():(window.getCampId?window.getCampId():null);
+    if(!client||typeof client.rpc!=='function'||!campId)return;
+    try{
+        var res=await client.rpc('get_camp_payments',{p_camp_id:campId});
+        if(res&&res.error){
+            // A camp that has not pasted 209 yet, or a user without me.billing.
+            // Neither is worth showing: the array still has everything, which is
+            // exactly what this screen had before any of this existed.
+            console.log('[Me] payment rows unavailable:',res.error.message);
+            return;
+        }
+        var d=res&&res.data;
+        if(!d||d.success===false||!Array.isArray(d.payments))return;
+        var before=JSON.stringify(finPayments||[]);
+        // ★ THE ROWS WE ALREADY HYDRATED WITH — and the guard that terminates
+        //   this. loadData() below calls this function again (it is one of the
+        //   loaders it fires), so re-hydrating on an ANSWER THAT DID NOT CHANGE
+        //   never stops: fetch → loadData → fetch → loadData, one RPC per hop,
+        //   for as long as the tab is open. The end-to-end harness measured ~350
+        //   get_camp_payments and ~350 get_camp_families in six seconds on an
+        //   empty camp, which is what that loop looks like when the round trip is
+        //   a local socket instead of the internet.
+        //
+        //   Comparing against finPayments (the `before` above) cannot serve: it
+        //   is what hydration PRODUCED, and hydration has not run yet. The
+        //   question that ends the loop is "did the server tell me something new",
+        //   and _paymentsFromRows is the only thing that records the last answer.
+        var rowsBefore=JSON.stringify(_paymentsFromRows);
+        _paymentsFromRows=d.payments;
+        if(JSON.stringify(_paymentsFromRows)===rowsBefore)return;
+        // Re-run the normal hydration so every consumer picks the rows up through
+        // the one path, rather than this function reaching into each of them.
+        if(typeof loadData==='function')loadData();
+        try{ _billSnapshot(); }catch(_){}
+        // Only repaint when it actually changed. Before phase 2b the two homes
+        // agree, so this is normally a no-op and Billing must not flicker.
+        if(JSON.stringify(finPayments||[])!==before){
+            if(typeof renderBilling==='function'&&document.getElementById('page-billing'))
+                try{ renderBilling(); }catch(_){}
+        }
+    }catch(e){
+        console.warn('[Me] could not load payment rows:',e&&e.message);
+    }
+}
+// Exposed so a writer can pull the ledger forward after recording a payment,
+// without waiting for the next full page load.
+window.reloadCampistryPayments=_loadPaymentsFromRows;
+
+// ─── families, from rows ────────────────────────────────────────────────────
+// Migration 211 gave families their own rows; 212 added get_camp_families and
+// moved every server-side reader onto them. This is the office half, and like
+// the payments loader it has to be deployed BEFORE the writer phase stops
+// maintaining me.families — otherwise the first symptom is a family list that
+// quietly stopped changing.
+//
+// Null means "not heard from the rows", NOT "this camp has no families". A camp
+// legitimately answers {}, and conflating the two would empty the Billing screen
+// whenever the call failed.
+//
+// Soft-deleted families are already absent from what the RPC returns, so a family
+// the office removed disappears here without this file knowing the rule.
+var _familiesFromRows=null;
+
+async function _loadFamiliesFromRows(){
+    var client=window.CampistryDB&&window.CampistryDB.getClient?window.CampistryDB.getClient():window.supabase;
+    var campId=window.CampistryDB&&window.CampistryDB.getCampId?window.CampistryDB.getCampId():(window.getCampId?window.getCampId():null);
+    if(!client||typeof client.rpc!=='function'||!campId)return;
+    try{
+        var res=await client.rpc('get_camp_families',{p_camp_id:campId});
+        if(res&&res.error){
+            // A camp that has not pasted 212 yet, or a user without me.billing.
+            // The branch still has everything it had before any of this existed.
+            console.log('[Me] family rows unavailable:',res.error.message);
+            return;
+        }
+        var d=res&&res.data;
+        if(!d||d.success===false||!d.families||typeof d.families!=='object'||Array.isArray(d.families))return;
+        var before=JSON.stringify(families||{});
+        // ★ Same guard, same reason as the payments loader above: loadData() fires
+        //   this function, so a re-hydrate on an unchanged answer is an unbounded
+        //   fetch loop. Compare the ANSWER, not what hydration made of it.
+        var rowsBefore=JSON.stringify(_familiesFromRows);
+        _familiesFromRows=d.families;
+        if(JSON.stringify(_familiesFromRows)===rowsBefore)return;
+        if(typeof loadData==='function')loadData();
+        try{ _billSnapshot(); }catch(_){}
+        // Before the writer phase the two homes agree, so this is normally a
+        // no-op and Billing must not flicker on every load.
+        if(JSON.stringify(families||{})!==before){
+            if(typeof renderBilling==='function'&&document.getElementById('page-billing'))
+                try{ renderBilling(); }catch(_){}
+        }
+    }catch(e){
+        console.warn('[Me] could not load family rows:',e&&e.message);
+    }
+}
+window.reloadCampistryFamilies=_loadFamiliesFromRows;
+
+// ─── the office's one write path for billing rows ───────────────────────────
+// The baseline: what the SERVER last told us, so a diff means "what this office
+// changed". Advanced only on a SUCCESSFUL sync — a failed one keeps the old
+// baseline so the next save retries the change instead of losing it.
+var _billBase=null;
+
+function _billSnapshot(){
+    var pays={};
+    (finPayments||[]).forEach(function(p){ var id=_payIdentity(p); if(id) pays[id]=p; });
+    _billBase={
+        fams:JSON.parse(JSON.stringify(families||{})),
+        pays:JSON.parse(JSON.stringify(pays))
+    };
+}
+
+// Byte-for-byte public.camp_payment_identity(jsonb). If these two ever disagree
+// the office would upsert a SECOND row for a payment the server already has, so
+// the order of the four ids and the signature's field list are load-bearing.
+function _payIdentity(p){
+    if(!p||typeof p!=='object'||Array.isArray(p))return '';
+    var t=function(v){ return (v===null||v===undefined)?'':String(v).trim(); };
+    var direct=t(p.id)||t(p.reference)||t(p.stripePaymentIntentId)||t(p.byopTransactionId);
+    if(direct)return direct;
+    var f=function(v){ return (v===null||v===undefined)?'':String(v); };
+    return 'sig:'+[f(p.date),f(p.amount),f(p.family),f(p.familyKey),
+                   f(p.enrollmentId),f(p.method),f(p.status),f(p.notes)].join('|');
+}
+
+async function _syncBillingRows(){
+    // No baseline means we never heard from the rows — syncing a diff against
+    // nothing would look like "the office created every family from scratch".
+    if(!_billBase)return;
+    var client=window.CampistryDB&&window.CampistryDB.getClient?window.CampistryDB.getClient():window.supabase;
+    var campId=window.CampistryDB&&window.CampistryDB.getCampId?window.CampistryDB.getCampId():(window.getCampId?window.getCampId():null);
+    if(!client||typeof client.rpc!=='function'||!campId)return;
+
+    var eq=function(a,b){ return JSON.stringify(a)===JSON.stringify(b); };
+    var famUp={},famDel=[],payUp=[],payDel=[];
+    var nowFams=families||{};
+    Object.keys(nowFams).forEach(function(k){
+        if(!eq(nowFams[k],_billBase.fams[k])) famUp[k]=nowFams[k];
+    });
+    Object.keys(_billBase.fams).forEach(function(k){
+        if(!Object.prototype.hasOwnProperty.call(nowFams,k)) famDel.push(k);
+    });
+
+    var nowPays={};
+    (finPayments||[]).forEach(function(p){ var id=_payIdentity(p); if(id) nowPays[id]=p; });
+    Object.keys(nowPays).forEach(function(id){
+        if(!eq(nowPays[id],_billBase.pays[id])) payUp.push(nowPays[id]);
+    });
+    Object.keys(_billBase.pays).forEach(function(id){
+        if(!Object.prototype.hasOwnProperty.call(nowPays,id)) payDel.push(id);
+    });
+
+    if(!Object.keys(famUp).length&&!famDel.length&&!payUp.length&&!payDel.length)return;
+    try{
+        var res=await client.rpc('sync_camp_billing',{
+            p_camp_id:campId, p_families_upsert:famUp, p_families_delete:famDel,
+            p_payments_upsert:payUp, p_payments_delete:payDel});
+        if(res&&res.error){
+            console.warn('[Me] billing rows not synced:',res.error.message);
+            return;   // baseline unchanged: the next save retries
+        }
+        if(res&&res.data&&res.data.success===false){
+            console.warn('[Me] billing rows refused:',res.data.error);
+            return;
+        }
+        _billSnapshot();
+    }catch(e){
+        console.warn('[Me] billing row sync failed:',e&&e.message);
+    }
+}
+window.syncCampistryBillingRows=_syncBillingRows;
+
+async function _drainApplications(){
+    var M=(typeof window!=='undefined'&&window.CampistryFinanceMerge)||null;
+    if(!M||typeof M.mergePublicSubmissions!=='function')return 0;
+    var client=window.CampistryDB&&window.CampistryDB.getClient?window.CampistryDB.getClient():window.supabase;
+    var campId=window.CampistryDB&&window.CampistryDB.getCampId?window.CampistryDB.getCampId():(window.getCampId?window.getCampId():null);
+    if(!client||typeof client.rpc!=='function'||!campId)return 0;
+
+    // The rule's own closed list, not a second copy of it. Two lists of "which
+    // branches are public submissions" is two chances to disagree, and the merge
+    // would silently skip whichever one this file forgot.
+    var kinds=(M.PUBLIC_KINDS||[]).slice();
+    var restored=0;
+    for(var i=0;i<kinds.length;i++){
+        var kind=kinds[i];
+        try{
+            var res=await client.rpc('get_camp_applications',{p_camp_id:campId,p_kind:kind});
+            if(res&&res.error){
+                // A camp that has not pasted 200 yet. Not an error worth showing:
+                // the blob still has everything, which is what it had before.
+                console.log('[Me] applications table unavailable ('+kind+'):',res.error.message);
+                continue;
+            }
+            var d=res&&res.data;
+            if(!d||d.success===false||!d.entries)continue;
+            var local={};
+            local[kind]=(kind==='enrollments')?enrollments:staffApplications;
+            local.deletedIds=deletedIds;
+            var cloud={};
+            cloud[kind]=d.entries;
+            var rep=M.mergePublicSubmissions(local,cloud);
+            restored+=(rep&&rep.restored)||0;
+        }catch(e){
+            console.warn('[Me] application drain failed for '+kind+':',e&&e.message);
+        }
+    }
+    if(restored){
+        console.log('[Me] drained',restored,'submission(s) from camp_applications');
+        // NOT saved from here. A save would push the whole blob back up, which is
+        // the write this migration exists to avoid doing once per application —
+        // and the next ordinary save carries them anyway. Rendering is what the
+        // office actually needs.
+        try{ render(curPage); }catch(_){}
+    }
+    return restored;
+}
+
+/**
+ * Record that this browser deleted a public submission, so the write-time merge
+ * honours the delete instead of restoring it from the cloud.
+ *
+ * Degrades to a no-op without the merge module: a page that cannot merge cannot
+ * resurrect anything either, so there is nothing for a tombstone to prevent.
+ */
+function _tombstoneSubmission(kind,id){
+    var M=(typeof window!=='undefined'&&window.CampistryFinanceMerge)||null;
+    if(!M||typeof M.tombstone!=='function')return;
+    var box={deletedIds:deletedIds};
+    M.tombstone(box,kind,id);
+    deletedIds=box.deletedIds||deletedIds;
+}
+/** Undo of a delete. Without this the next save re-deletes what was restored. */
+function _untombstoneSubmission(kind,id){
+    var M=(typeof window!=='undefined'&&window.CampistryFinanceMerge)||null;
+    if(!M||typeof M.untombstone!=='function')return;
+    M.untombstone({deletedIds:deletedIds},kind,id);
+}
+
+/** The bulk rule, or null on a page that did not load it. */
+function _bulkAPI(){return (typeof window!=='undefined'&&window.CampistryBulk)||null}
+
+/**
+ * WHICH FAMILY OWNS WHICH ENROLLMENT — asked of the ledger, not re-derived.
+ *
+ * buildFamilyLedgers() posts a Tuition charge for every enrolled and accepted
+ * enrollment, carrying the enrollment id as its ref, and it is the one thing that
+ * knows the whole attribution cascade (exact membership, a fuzzy match for an
+ * accepted applicant, an ephemeral `pending_` ledger for a camper no family owns
+ * yet). Reading that back is how a bulk run reaches exactly the accounts Billing
+ * shows, with no second copy of the cascade to drift.
+ */
+function _famKeyByEnrollment(ledgers){
+    var map={};
+    Object.keys(ledgers||{}).forEach(function(fk){
+        (((ledgers[fk]||{}).entries)||[]).forEach(function(en){
+            if(en&&en.type==='charge'&&en.category==='Tuition'&&en.ref)map[String(en.ref)]=fk;
+        });
+    });
+    return map;
+}
+
+/** Every enrollment carrying a payment plan, with the family it belongs to. */
+function _planRows(ledgers){
+    var byEid=_famKeyByEnrollment(ledgers);
+    var out=[];
+    Object.keys(enrollments||{}).forEach(function(eid){
+        var e=enrollments[eid];
+        if(!e||!Array.isArray(e.installments)||!e.installments.length)return;
+        var fk=byEid[eid];
+        if(!fk||!ledgers[fk])return;
+        out.push({
+            key:fk+'|'+eid, famKey:fk, eid:eid,
+            famName:((ledgers[fk].family||{}).name)||fk,
+            camperName:_camperLabel(e.camperName||''),camperId:e.camperId!=null?e.camperId:null,
+            name:(((ledgers[fk].family||{}).name)||fk)+' \u2014 '+_camperLabel(e.camperName||''),
+            schedule:e.installments
+        });
+    });
+    out.sort(function(a,b){return a.name.localeCompare(b.name)});
+    return out;
+}
+
+/**
+ * RUN AN INSTALLMENT — the half that was missing.
+ *
+ * campistry_installments.js made invoicing the event that advances a family's plan,
+ * and until now nothing in the app ever invoiced anybody: every schedule sat
+ * `pending` for ever, the aging report had nothing to age, and a camp on a payment
+ * plan had a plan that never asked for anything.
+ *
+ * An office runs an installment; every family in the run advances by exactly one.
+ * Nobody advances because a date passed, which is why two families on the same plan
+ * can legitimately sit on different installments.
+ */
+function runInstallments(){
+    if(!_secEdit('billing','Running an installment'))return;
+    var B=_bulkAPI();
+    if(!B){toast('The bulk rule did not load','error');return}
+    var ledgers=buildFamilyLedgers();
+    var rows=_planRows(ledgers);
+    if(!rows.length){
+        toast('Nobody is on a payment plan yet','error');return;
+    }
+    var preview=B.planInvoiceRun({families:rows});
+    var byKey={};
+    preview.run.forEach(function(r){byKey[r.key]=r});
+    var runnable=rows.filter(function(r){return byKey[r.key]});
+    if(!runnable.length){
+        // Said plainly rather than shown as an empty list: "every plan is fully
+        // invoiced" and "nobody is on a plan" are different facts and an office
+        // needs to know which one it is looking at.
+        toast('Every payment plan has already been fully invoiced','error');return;
+    }
+    var A=_arAPI();
+    var terms=(A&&A.DEFAULT_TERMS_DAYS)||30;
+    var today=new Date().toISOString().slice(0,10);
+    var due=(A&&A.addDays)?A.addDays(today,terms):today;
+
+    var h='<div class="me-modal-form">';
+    h+='<p style="font-size:.83rem;color:var(--s600);margin:0 0 4px">Each family below '
+      +'advances by <strong>one</strong> installment. Nobody advances because a date '
+      +'passed \u2014 being invoiced is the event.</p>';
+    h+='<div style="display:grid;grid-template-columns:1fr 1fr;gap:10px">';
+    h+='<div class="me-field"><label>Invoiced on</label>'
+      +'<input type="date" id="riOn" class="me-input" value="'+today+'"></div>';
+    h+='<div class="me-field"><label>Payment due by</label>'
+      +'<input type="date" id="riDue" class="me-input" value="'+esc(due)+'"></div>';
+    h+='</div>';
+    h+='<label style="display:inline-flex;align-items:center;gap:6px;font-size:.83rem;'
+      +'margin-bottom:8px"><input type="checkbox" id="riAll" checked '
+      +'onchange="CampistryMe._riToggleAll(this.checked)"> Everyone below</label>';
+    h+='<div style="max-height:260px;overflow-y:auto;border:1px solid var(--s200);'
+      +'border-radius:var(--r);margin-bottom:10px">';
+    runnable.forEach(function(r){
+        var nx=byKey[r.key];
+        h+='<label style="display:flex;justify-content:space-between;gap:10px;align-items:center;'
+          +'padding:7px 11px;border-bottom:1px solid var(--s100);font-size:.81rem;cursor:pointer">'
+          +'<span style="display:flex;gap:7px;align-items:center">'
+          +'<input type="checkbox" class="riChk" value="'+esc(r.key)+'" checked '
+          +'onchange="CampistryMe._riPreview()">'
+          +'<span><strong>'+esc(r.famName)+'</strong> \u00b7 '+esc(_lbl(r.camperName))
+          +'<span style="color:var(--s500)"> \u2014 '+esc(nx.label)+'</span></span></span>'
+          +'<span style="font-weight:700">'+fm(nx.amount)+'</span></label>';
+    });
+    h+='</div>';
+    if(preview.skipped.length){
+        h+='<details style="margin-bottom:10px"><summary style="cursor:pointer;font-size:.8rem;'
+          +'color:var(--s500)">'+preview.skipped.length+' not included</summary>'
+          +'<div style="font-size:.78rem;color:var(--s500);padding:7px 2px 0">';
+        preview.skipped.forEach(function(sk){
+            h+='<div>'+esc(sk.name||sk.key)+' \u2014 '+esc(sk.message||sk.reason)+'</div>';
+        });
+        h+='</div></details>';
+    }
+    // TICKED BY DEFAULT. An invoice nobody is told about is not an invoice, and a
+    // run that advances every schedule while reaching nobody leaves the office
+    // believing it has asked when the family has not been asked.
+    h+='<label style="display:inline-flex;align-items:center;gap:6px;font-size:.83rem">'
+      +'<input type="checkbox" id="riEmail" checked> Email each family their invoice</label>';
+    h+='<div id="riPreview"></div></div>';
+
+    showModal('Run an installment',h,async function(){
+        var picked={};
+        document.querySelectorAll('.riChk:checked').forEach(function(cb){picked[cb.value]=1});
+        var chosen=runnable.filter(function(r){return picked[r.key]});
+        if(!chosen.length){toast('Nobody is selected','error');return}
+        var on=(document.getElementById('riOn')||{}).value||today;
+        var dueBy=(document.getElementById('riDue')||{}).value||'';
+        // PLANNED AGAIN, on the selection actually chosen. The preview above was
+        // computed over everybody, and invoicing whoever the preview happened to
+        // include is exactly how a bulk action bills the wrong people.
+        var plan=B.planInvoiceRun({families:chosen,on:on,dueDate:dueBy});
+        if(!plan.count){toast('Nothing to invoice','error');return}
+        plan.run.forEach(function(r){
+            var eid=String(r.key).split('|')[1];
+            if(enrollments[eid])enrollments[eid].installments=r.schedule;
+        });
+        save();
+        var wantEmail=!!((document.getElementById('riEmail')||{}).checked);
+        closeModal('dynModal');renderBilling();
+        toast('Invoiced '+plan.count+' installment'+(plan.count===1?'':'s')+' \u00b7 '
+              +fm(plan.total));
+        // SENT AFTER THE SCHEDULES ARE SAVED, never before. A send that goes out and
+        // then fails to save would ask a family for money the app has no record of
+        // asking for — and the second run would ask them again.
+        if(!wantEmail)return;
+        var B2=_bulkAPI();
+        var sendPlan=B2.planSend({kind:'invoice',recipients:plan.run.map(function(r){
+            // The rule copies only key and name, so the family key comes back out of
+            // the composite key rather than off the run entry.
+            return {key:r.key,name:r.name,
+                    emails:_famEmails(families[String(r.key).split('|')[0]])};
+        })});
+        var byKey2={};
+        plan.run.forEach(function(r){byKey2[r.key]=r});
+        var sent=0,failed=0;
+        for(var si=0;si<sendPlan.send.length;si++){
+            var en=sendPlan.send[si];
+            var r2=byKey2[en.key]||{};
+            var ok=await _sendBillingDoc(en,
+                'Invoice from '+_campNameForSend(),
+                _invoiceBody(r2.name,r2.label||'Payment',r2.amount||0,dueBy));
+            if(ok)sent++;else failed++;
+        }
+        if(sent||failed||sendPlan.noEmail.length){
+            toast('Emailed '+sent+' famil'+(sent===1?'y':'ies')
+                +(failed?' \u2014 '+failed+' failed':'')
+                +(sendPlan.noEmail.length?' \u2014 '+sendPlan.noEmail.length
+                   +' had no email on file':''),
+                (failed||sendPlan.noEmail.length)?'error':undefined);
+        }
+    },{saveLabel:'Invoice them'});
+    _riPreview();
+}
+function _riToggleAll(on){
+    document.querySelectorAll('.riChk').forEach(function(cb){cb.checked=!!on});
+    _riPreview();
+}
+function _riPreview(){
+    var box=document.getElementById('riPreview'); if(!box)return;
+    var n=0,total=0;
+    var B=_bulkAPI();
+    var ledgers=buildFamilyLedgers();
+    var rows=_planRows(ledgers), byKey={};
+    if(B)B.planInvoiceRun({families:rows}).run.forEach(function(r){byKey[r.key]=r});
+    document.querySelectorAll('.riChk:checked').forEach(function(cb){
+        var r=byKey[cb.value]; if(!r)return;
+        n++; total+=r.amount;
+    });
+    box.innerHTML=n
+        ? '<div style="background:#F0FDF4;border:1px solid #BBF7D0;color:#166534;'
+          +'border-radius:8px;padding:8px 11px;font-size:.81rem">Invoicing <strong>'+n
+          +'</strong> famil'+(n===1?'y':'ies')+' for <strong>'
+          +fm(Math.round(total*100)/100)+'</strong></div>'
+        : '<div style="font-size:.81rem;color:var(--s500)">Nobody selected.</div>';
+}
+
+/**
+ * A BULK CREDIT OR CHARGE. Either the same amount to each account, or one total
+ * split between them — the split lands in cents and sums to exactly what was asked
+ * for, so a scholarship pot reconciles with what was granted.
+ */
+var _baKind='credit';
+function bulkAdjust(kind){
+    if(!_secEdit('billing',kind==='charge'?'Adding charges in bulk':'Issuing credits in bulk'))return;
+    var B=_bulkAPI();
+    if(!B){toast('The bulk rule did not load','error');return}
+    kind=kind==='charge'?'charge':'credit';
+    // Remembered rather than read back off the modal's title. A credit and a charge
+    // are opposites, and deriving the direction from display text is how a preview
+    // ends up describing the reverse of what the button will do.
+    _baKind=kind;
+    var ledgers=buildFamilyLedgers();
+    var list=Object.keys(ledgers).map(function(fk){
+        return {key:fk,name:((ledgers[fk].family||{}).name)||fk,balance:ledgers[fk].balance||0};
+    }).sort(function(a,b){return a.name.localeCompare(b.name)});
+    if(!list.length){toast('There are no accounts yet','error');return}
+
+    var h='<div class="me-modal-form">';
+    h+='<p style="font-size:.83rem;color:var(--s600);margin:0 0 10px">'
+      +(kind==='charge'
+         ? 'A charge is added to each selected account and shows on their next bill.'
+         : 'A credit comes off what each selected family owes. No money leaves the camp.')
+      +'</p>';
+    h+='<div style="display:grid;grid-template-columns:1fr 1fr;gap:10px">';
+    h+='<div class="me-field"><label>How</label><select id="baMode" class="me-input" '
+      +'onchange="CampistryMe._baPreview()">'
+      +(B.MODES||[]).map(function(m){
+          return '<option value="'+esc(m.id)+'">'+esc(m.label)+'</option>'}).join('')
+      +'</select></div>';
+    h+='<div class="me-field"><label>Amount ($)</label><input type="number" id="baAmt" '
+      +'class="me-input" step="0.01" min="0" oninput="CampistryMe._baPreview()"></div>';
+    h+='</div>';
+    h+='<div class="me-field"><label>What is this for?</label><input type="text" id="baReason" '
+      +'class="me-input" placeholder="'+(kind==='charge'?'e.g. Trip fee':'e.g. Scholarship')+'"></div>';
+    h+='<div style="display:flex;gap:12px;flex-wrap:wrap;margin-bottom:6px;font-size:.81rem">'
+      +'<label style="display:inline-flex;align-items:center;gap:6px"><input type="checkbox" '
+      +'id="baAll" checked onchange="CampistryMe._baToggleAll(this.checked)"> Everyone</label>'
+      +'<button type="button" class="me-btn me-btn--ghost me-btn--sm" '
+      +'onclick="CampistryMe._baOnlyOwing()">Only those with a balance</button></div>';
+    h+='<div style="max-height:220px;overflow-y:auto;border:1px solid var(--s200);'
+      +'border-radius:var(--r);margin-bottom:10px">';
+    list.forEach(function(x){
+        h+='<label style="display:flex;justify-content:space-between;gap:10px;align-items:center;'
+          +'padding:6px 11px;border-bottom:1px solid var(--s100);font-size:.81rem;cursor:pointer">'
+          +'<span style="display:flex;gap:7px;align-items:center"><input type="checkbox" '
+          +'class="baChk" value="'+esc(x.key)+'" data-owing="'+(x.balance>0?'1':'0')+'" checked '
+          +'onchange="CampistryMe._baPreview()"> '+esc(x.name)+'</span>'
+          +'<span style="color:var(--s500)">'+fm(x.balance)+'</span></label>';
+    });
+    h+='</div><div id="baPreview"></div></div>';
+
+    showModal(kind==='charge'?'Charge several accounts':'Credit several accounts',h,function(){
+        // The CLOSURE's kind, not the module's: this handler belongs to the modal
+        // that was opened with it, and _baKind only exists for the live preview.
+        var plan=_baPlan(kind);
+        if(!plan||!plan.ok){toast((plan&&plan.message)||'Nothing to post','error');return}
+        var today=new Date().toISOString().slice(0,10);
+        var stamp=Date.now(), posted=0;
+        plan.entries.forEach(function(en,i){
+            var f=families[en.key];
+            // A synthesized `pending_` ledger is not a family record, so there is
+            // nowhere to write to. Skipped rather than crashing the run half way
+            // through, and counted honestly in the toast below.
+            if(!f)return;
+            var id=(kind==='charge'?'bchg_':'bcr_')+stamp+'_'+i;
+            if(kind==='charge'){
+                if(!f.charges)f.charges=[];
+                f.charges.push({id:id,category:'Other',description:en.reason,
+                                amount:en.amount,date:today,timestamp:stamp});
+                _postLedgerCharge(f,f.charges[f.charges.length-1]);
+                f.balance=(f.balance||0)+en.amount;
+            }else{
+                if(!f.credits)f.credits=[];
+                f.credits.push({id:id,reason:en.reason,amount:en.amount,date:today,
+                                timestamp:stamp});
+                f.balance=Math.max(0,(f.balance||0)-en.amount);
+                _postLedgerCredit(f,{id:id,amount:en.amount,reason:'goodwill',
+                                     note:en.reason,date:today});
+            }
+            posted++;
+        });
+        save();closeModal('dynModal');renderBilling();
+        toast((kind==='charge'?'Charged ':'Credited ')+posted+' account'
+              +(posted===1?'':'s')+' \u00b7 '+fm(plan.total)
+              +(posted<plan.count?' \u2014 '+(plan.count-posted)
+                 +' had no household record yet':''));
+    },{saveLabel:kind==='charge'?'Post the charges':'Post the credits'});
+    _baPreview();
+}
+function _baToggleAll(on){
+    document.querySelectorAll('.baChk').forEach(function(cb){cb.checked=!!on});
+    _baPreview();
+}
+function _baOnlyOwing(){
+    var all=document.getElementById('baAll'); if(all)all.checked=false;
+    document.querySelectorAll('.baChk').forEach(function(cb){
+        cb.checked=cb.getAttribute('data-owing')==='1';
+    });
+    _baPreview();
+}
+function _baPlan(kind){
+    var B=_bulkAPI(); if(!B)return null;
+    var targets=[];
+    document.querySelectorAll('.baChk:checked').forEach(function(cb){
+        targets.push({key:cb.value,name:(cb.parentNode&&cb.parentNode.textContent||'').trim()});
+    });
+    return B.planBulkEntry({
+        targets:targets, kind:kind,
+        mode:((document.getElementById('baMode')||{}).value)||'each',
+        amount:parseFloat((document.getElementById('baAmt')||{}).value)||0,
+        reason:((document.getElementById('baReason')||{}).value||'').trim()
+    });
+}
+function _baPreview(){
+    var box=document.getElementById('baPreview'); if(!box)return;
+    var plan=_baPlan(_baKind);
+    var B=_bulkAPI();
+    if(!plan||!plan.ok){
+        box.innerHTML='<div style="font-size:.81rem;color:var(--s500)">'
+          +esc((plan&&plan.message)||'Fill in an amount and a reason.')+'</div>';
+        return;
+    }
+    var each=plan.mode==='split'
+        ? ' \u00b7 '+fm(plan.entries[0].amount)+' each'
+          +(plan.entries.length>1&&plan.entries[0].amount!==plan.entries[1].amount
+             ? ' (the odd pennies ride on the first)':'')
+        : '';
+    box.innerHTML='<div style="background:#F0FDF4;border:1px solid #BBF7D0;color:#166534;'
+      +'border-radius:8px;padding:8px 11px;font-size:.81rem">'
+      +esc(B.describeBulk(plan))+esc(each)+'</div>';
+}
+
+/**
+ * CREDITS COVERING WHAT WAS ASKED FOR.
+ *
+ * A family with money on account being invoiced for a deposit is the app failing at
+ * arithmetic in public. This settles invoiced installments out of a credit balance
+ * the family has already given us — deposits and registration first, because those
+ * are the ones that BLOCK something.
+ *
+ * It posts no money and no ledger entry, deliberately: the credit is already on the
+ * ledger and already in the balance. What changes is that the installment stops
+ * asking. Posting anything here would count the same credit twice.
+ */
+function applyCreditsToOwed(){
+    if(!_secEdit('billing','Applying credits'))return;
+    var B=_bulkAPI();
+    if(!B){toast('The bulk rule did not load','error');return}
+    var ledgers=buildFamilyLedgers();
+    var rows=_planRows(ledgers);
+    var plans=[];
+    rows.forEach(function(r){
+        var l=ledgers[r.famKey]||{};
+        var avail=Math.round(Math.max(0,-(l.balance||0))*100)/100;
+        if(!(avail>0))return;
+        var obs=[];
+        (r.schedule||[]).forEach(function(inst,i){
+            if(!inst||String(inst.status||'')!=='invoiced')return;
+            var label=String(inst.label||'');
+            obs.push({
+                id:r.eid+'_inst'+i, label:label||('Payment '+(i+1)),
+                kind:/down ?payment|deposit/i.test(label)?'deposit'
+                    :(/registration/i.test(label)?'registration':'installment'),
+                amount:Number(inst.amount)||0, paid:0,
+                dueDate:inst.invoiceDueDate||inst.dueDate||''
+            });
+        });
+        if(!obs.length)return;
+        var cov=B.planCoverage({credit:avail,obligations:obs});
+        // Only what the credit covers IN FULL. An installment cannot be half
+        // settled — a family half-asked is a family who gets a confusing bill —
+        // so a partial cover is reported and left alone.
+        var full=cov.applications.filter(function(a){return a.full});
+        if(!full.length)return;
+        plans.push({row:r,cov:cov,full:full,
+                    total:full.reduce(function(n,a){return n+a.amount},0)});
+    });
+
+    if(!plans.length){
+        toast('No family has credit sitting against an invoice right now');return;
+    }
+    var grand=Math.round(plans.reduce(function(n,p){return n+p.total},0)*100)/100;
+    var h='<div class="me-modal-form">';
+    h+='<p style="font-size:.83rem;color:var(--s600);margin:0 0 10px">These families have '
+      +'already given the camp this money. Settling the invoice out of their credit stops '
+      +'them being asked for it twice. <strong>No money moves and nothing is posted</strong> '
+      +'\u2014 the credit is already on their ledger.</p>';
+    h+='<div style="max-height:260px;overflow-y:auto;border:1px solid var(--s200);'
+      +'border-radius:var(--r);margin-bottom:10px">';
+    plans.forEach(function(pl){
+        h+='<div style="padding:7px 11px;border-bottom:1px solid var(--s100);font-size:.81rem">'
+          +'<div style="display:flex;justify-content:space-between;gap:10px">'
+          +'<span><strong>'+esc(pl.row.famName)+'</strong> \u00b7 '+esc(_lbl(pl.row.camperName))+'</span>'
+          +'<span style="font-weight:700">'+fm(Math.round(pl.total*100)/100)+'</span></div>'
+          +'<div style="color:var(--s500)">'+pl.full.map(function(a){
+              return esc(a.label)+' '+fm(a.amount)}).join(' \u00b7 ')+'</div>';
+        if(pl.cov.partial){
+            h+='<div style="color:#92400E">Not enough credit to settle '
+              +esc((pl.cov.applications.filter(function(a){return !a.full})[0]||{}).label||'')
+              +' in full \u2014 left as it is.</div>';
+        }
+        h+='</div>';
+    });
+    h+='</div>';
+    h+='<div style="background:#F0FDF4;border:1px solid #BBF7D0;color:#166534;border-radius:8px;'
+      +'padding:8px 11px;font-size:.81rem">Settling <strong>'+fm(grand)+'</strong> across '
+      +plans.length+' plan'+(plans.length===1?'':'s')+'</div></div>';
+
+    showModal('Settle invoices from credit',h,function(){
+        var today=new Date().toISOString().slice(0,10);
+        var n=0;
+        plans.forEach(function(pl){
+            var e=enrollments[pl.row.eid];
+            if(!e||!Array.isArray(e.installments))return;
+            pl.full.forEach(function(a){
+                var i=parseInt(String(a.id).split('_inst')[1],10);
+                var inst=e.installments[i];
+                if(!inst||String(inst.status||'')!=='invoiced')return;
+                inst.status='paid';
+                inst.paidAt=today;
+                // WHY it is settled, so a statement does not read as a payment that
+                // never arrived in the bank.
+                inst.paidFrom='credit';
+                n++;
+            });
+        });
+        save();closeModal('dynModal');renderBilling();
+        toast('Settled '+n+' installment'+(n===1?'':'s')+' from credit \u00b7 '+fm(grand));
+    },{saveLabel:'Settle them'});
+}
+
+/**
+ * LATE FEES. Off until a camp turns them on, and never charged twice.
+ *
+ * campistry_ar.js proposes fees and stamps each proposal with a key carrying the
+ * invoice and the period number. That key is only worth anything if somebody checks
+ * it, so the applied keys are stored on the camp and checked on every run: running
+ * the month twice charges nothing the second time.
+ */
+function manageLateFees(){
+    if(!_secEdit('billing','Changing the late-fee policy'))return;
+    var A=_arAPI();
+    if(!A){toast('The billing rule did not load','error');return}
+    var pol=A.normalizeLateFeePolicy((billingRules||{}).lateFee);
+    var h='<div class="me-modal-form">';
+    h+='<p style="font-size:.83rem;color:var(--s600);margin:0 0 10px">Nobody is charged a '
+      +'late fee unless you switch this on. A fee only ever applies to an invoice the '
+      +'family was actually sent \u2014 not to a date in a schedule that passed while the '
+      +'office was busy.</p>';
+    h+='<div class="me-field"><label>Late fee</label><select id="lfMode" class="me-input">'
+      +'<option value="off"'+(pol.mode==='off'?' selected':'')+'>Off</option>'
+      +'<option value="flat"'+(pol.mode==='flat'?' selected':'')+'>A flat amount</option>'
+      +'<option value="percent"'+(pol.mode==='percent'?' selected':'')+'>A percentage of what is owed</option>'
+      +'</select></div>';
+    h+='<div style="display:grid;grid-template-columns:1fr 1fr;gap:10px">';
+    h+='<div class="me-field"><label>Flat amount ($)</label><input type="number" id="lfFlat" '
+      +'class="me-input" step="0.01" min="0" value="'+(pol.flat||'')+'"></div>';
+    h+='<div class="me-field"><label>Percent (%)</label><input type="number" id="lfPct" '
+      +'class="me-input" step="0.01" min="0" max="100" value="'+(pol.percent||'')+'"></div>';
+    h+='<div class="me-field"><label>Grace days</label><input type="number" id="lfGrace" '
+      +'class="me-input" min="0" value="'+(pol.graceDays||0)+'"></div>';
+    h+='<div class="me-field"><label>How often</label><select id="lfFreq" class="me-input">'
+      +'<option value="once"'+(pol.frequency==='once'?' selected':'')+'>Once per invoice</option>'
+      +'<option value="monthly"'+(pol.frequency==='monthly'?' selected':'')+'>Every month it stays late</option>'
+      +'</select></div>';
+    h+='<div class="me-field"><label>Only above ($)</label><input type="number" id="lfMin" '
+      +'class="me-input" step="0.01" min="0" value="'+(pol.minBalance||'')+'"></div>';
+    h+='<div class="me-field"><label>Cap per invoice ($)</label><input type="number" id="lfCap" '
+      +'class="me-input" step="0.01" min="0" value="'+(pol.maxPerInvoice||'')+'"></div>';
+    h+='</div>';
+    h+='<p style="font-size:.78rem;color:var(--s400);margin:4px 0 0">A monthly percentage is '
+      +'the one that can run away, which is what the cap is for.</p>';
+    h+='</div>';
+    showModal('Late fees',h,function(){
+        var next={
+            mode:((document.getElementById('lfMode')||{}).value)||'off',
+            flat:parseFloat((document.getElementById('lfFlat')||{}).value)||0,
+            percent:parseFloat((document.getElementById('lfPct')||{}).value)||0,
+            graceDays:parseInt((document.getElementById('lfGrace')||{}).value,10)||0,
+            frequency:((document.getElementById('lfFreq')||{}).value)||'once',
+            minBalance:parseFloat((document.getElementById('lfMin')||{}).value)||0,
+            maxPerInvoice:parseFloat((document.getElementById('lfCap')||{}).value)||0
+        };
+        var norm=A.normalizeLateFeePolicy(next);
+        if(norm.mode==='flat'&&!(norm.flat>0)){
+            toast('Enter the flat amount, or switch late fees off','error');return;
+        }
+        if(norm.mode==='percent'&&!(norm.percent>0)){
+            toast('Enter the percentage, or switch late fees off','error');return;
+        }
+        billingRules=Object.assign({},billingRules||{},{lateFee:norm});
+        save();closeModal('dynModal');
+        toast(norm.mode==='off'?'Late fees are off':'Late fees saved');
+    });
+}
+
+/** Charge the late fees that are due and have not been charged before. */
+function assessLateFees(){
+    if(!_secEdit('billing','Charging late fees'))return;
+    var A=_arAPI(), B=_bulkAPI();
+    if(!A||!B){toast('The billing rules did not load','error');return}
+    var pol=A.normalizeLateFeePolicy((billingRules||{}).lateFee);
+    if(pol.mode==='off'){
+        toast('Late fees are switched off \u2014 set them up first','error');
+        manageLateFees();return;
+    }
+    var ledgers=buildFamilyLedgers();
+    var asOf=new Date().toISOString().slice(0,10);
+    var applied=((billingRules||{}).lateFeesApplied)||{};
+    var perFam=[];
+    Object.keys(ledgers).forEach(function(fk){
+        var docs=_arDocsFor(ledgers[fk]);
+        if(!docs.length)return;
+        var proposed=A.assessLateFees({docs:docs,policy:pol,asOf:asOf});
+        var plan=B.planLateFees({proposals:proposed,applied:applied});
+        if(!plan.count&&!plan.alreadyApplied.length)return;
+        perFam.push({famKey:fk,name:((ledgers[fk].family||{}).name)||fk,plan:plan});
+    });
+    var toCharge=perFam.filter(function(x){return x.plan.count});
+    if(!toCharge.length){
+        var seen=perFam.reduce(function(n,x){return n+x.plan.alreadyApplied.length},0);
+        toast(seen?'Every late fee due has already been charged'
+                  :'Nothing is late enough to charge a fee on');
+        return;
+    }
+    var grand=Math.round(toCharge.reduce(function(n,x){return n+x.plan.total},0)*100)/100;
+    var dupes=perFam.reduce(function(n,x){return n+x.plan.alreadyApplied.length},0);
+
+    var h='<div class="me-modal-form">';
+    h+='<p style="font-size:.83rem;color:var(--s600);margin:0 0 10px">'
+      +esc(pol.mode==='percent'?(pol.percent+'% of what is still owed'):('A flat '+fm(pol.flat)))
+      +(pol.frequency==='monthly'?', every month an invoice stays late':', once per invoice')
+      +(pol.graceDays?', after '+pol.graceDays+' grace day'+(pol.graceDays===1?'':'s'):'')
+      +'.</p>';
+    h+='<div style="max-height:250px;overflow-y:auto;border:1px solid var(--s200);'
+      +'border-radius:var(--r);margin-bottom:10px">';
+    toCharge.forEach(function(x){
+        x.plan.toApply.forEach(function(p){
+            h+='<div style="display:flex;justify-content:space-between;gap:10px;padding:7px 11px;'
+              +'border-bottom:1px solid var(--s100);font-size:.81rem">'
+              +'<span><strong>'+esc(x.name)+'</strong><span style="color:var(--s500)"> \u2014 '
+              +esc(p.note||'')+' ('+p.daysLate+'d late)</span></span>'
+              +'<span style="font-weight:700">'+fm(p.amount)+'</span></div>';
+        });
+    });
+    h+='</div>';
+    h+='<div style="background:#FFFBEB;border:1px solid #FDE68A;color:#92400E;border-radius:8px;'
+      +'padding:8px 11px;font-size:.81rem">Charging <strong>'+fm(grand)+'</strong> to '
+      +toCharge.length+' famil'+(toCharge.length===1?'y':'ies')
+      +(dupes?'. '+dupes+' fee'+(dupes===1?' was':'s were')+' already charged and '
+        +(dupes===1?'is':'are')+' not included.':'')
+      +'</div></div>';
+
+    showModal('Charge late fees',h,function(){
+        var stamp=Date.now(), nextApplied=applied, n=0, total=0;
+        toCharge.forEach(function(x){
+            var f=families[x.famKey];
+            if(!f)return;
+            if(!f.charges)f.charges=[];
+            x.plan.toApply.forEach(function(p){
+                // The proposal's own key is the charge id, so the ledger's per-charge
+                // dedupe and the late-fee dedupe are the same fact in two places
+                // rather than two facts that can disagree.
+                var id='lf_'+String(p.key).replace(/^lf_/,'');
+                if(f.charges.some(function(c){return c&&c.id===id}))return;
+                f.charges.push({id:id,category:'Late Fee',description:p.note||'Late fee',
+                                amount:p.amount,date:asOf,timestamp:stamp});
+                _postLedgerCharge(f,f.charges[f.charges.length-1]);
+                f.balance=(f.balance||0)+p.amount;
+                n++;total+=p.amount;
+            });
+            nextApplied=B.recordLateFees(nextApplied,x.plan,asOf);
+        });
+        billingRules=Object.assign({},billingRules||{},{lateFeesApplied:nextApplied});
+        save();closeModal('dynModal');renderBilling();
+        toast('Charged '+n+' late fee'+(n===1?'':'s')+' \u00b7 '
+              +fm(Math.round(total*100)/100));
+    },{saveLabel:'Charge them'});
+}
+
+/**
+ * Where a household's bill goes.
+ *
+ * The household marked `billingContact` first, and only then the rest — a camp that
+ * has said which parent handles the money has said something this must not ignore.
+ * Every address is returned rather than the first one found: two parents who both
+ * want the invoice is the ordinary case, and picking one of them quietly makes the
+ * other wonder why they never hear from the camp.
+ */
+function _famEmails(f){
+    var out=[];
+    var hh=(f&&Array.isArray(f.households))?f.households:[];
+    var ordered=hh.filter(function(h){return h&&h.billingContact})
+                  .concat(hh.filter(function(h){return !(h&&h.billingContact)}));
+    ordered.forEach(function(h){
+        ((h&&h.parents)||[]).forEach(function(pr){
+            if(pr&&pr.email)out.push(String(pr.email).trim());
+        });
+    });
+    return out;
+}
+
+/** The camp's name, as every other send on this page reads it. */
+function _campNameForSend(){
+    try{
+        var ss=JSON.parse(localStorage.getItem('campGlobalSettings_v1')||'{}');
+        return ss.campName||ss.camp_name||'Camp';
+    }catch(e){ return 'Camp'; }
+}
+
+/**
+ * Send one family their document. Returns a promise resolving true on success.
+ *
+ * Failures are per-family and reported as counts by the caller: a send that stops
+ * at the first bad address leaves half a run delivered with no record of where it
+ * got to.
+ */
+async function _sendBillingDoc(entry,subject,body){
+    try{
+        await callEdgeFunctionAuthed('send-broadcast',{
+            campId:getCampId(),
+            to:entry.to.map(function(e){return {email:e,name:entry.name||''}}),
+            subject:subject, body:body, method:'email',
+            campName:_campNameForSend(),
+            branding:(typeof _getLinkBranding==='function')?_getLinkBranding():undefined,
+            eventKey:'billing-'+entry.kind+':'+entry.key+':'+Date.now()
+        });
+        return true;
+    }catch(e){
+        console.error('[Me] billing send failed for',entry.key,e);
+        return false;
+    }
+}
+
+/**
+ * STATEMENTS TO MANY FAMILIES. A statement ASKS FOR NOTHING — it reports the
+ * account. That distinction is the whole reason campistry_ar.js refuses a statement
+ * a due date: a summary that carries a deadline is an invoice wearing the wrong
+ * name, and a family who pays it early has been billed for money nobody had asked
+ * for yet.
+ */
+async function sendStatements(){
+    if(!_secEdit('billing','Sending statements'))return;
+    var A=_arAPI(), B=_bulkAPI();
+    if(!A||!B){toast('The billing rules did not load','error');return}
+    var ledgers=buildFamilyLedgers();
+    var rows=Object.keys(ledgers).map(function(fk){
+        var l=ledgers[fk];
+        return {key:fk,name:((l.family||{}).name)||fk,
+                emails:_famEmails(families[fk]),
+                balance:Math.round((l.balance||0)*100)/100,
+                owed:A.age({docs:_arDocsFor(l)})};
+    }).filter(function(r){return r.balance>0||r.owed.total>0})
+      .sort(function(a,b){return a.name.localeCompare(b.name)});
+    if(!rows.length){toast('No family has a balance to report');return}
+    var plan=B.planSend({kind:'statement',recipients:rows});
+
+    var h='<div class="me-modal-form">';
+    h+='<p style="font-size:.83rem;color:var(--s600);margin:0 0 10px">A statement '
+      +'<strong>reports</strong> the account. It asks for nothing and carries no due '
+      +'date \u2014 only an invoice does that.</p>';
+    h+='<div style="max-height:250px;overflow-y:auto;border:1px solid var(--s200);'
+      +'border-radius:var(--r);margin-bottom:10px">';
+    plan.send.forEach(function(en){
+        var r=rows.filter(function(x){return x.key===en.key})[0]||{};
+        h+='<div style="display:flex;justify-content:space-between;gap:10px;padding:7px 11px;'
+          +'border-bottom:1px solid var(--s100);font-size:.81rem">'
+          +'<span><strong>'+esc(en.name)+'</strong><span style="color:var(--s500)"> \u2014 '
+          +esc(en.to.join(', '))+'</span></span>'
+          +'<span style="font-weight:700">'+fm(r.balance||0)+'</span></div>';
+    });
+    h+='</div>';
+    if(plan.noEmail.length){
+        h+='<div style="background:#FFFBEB;border:1px solid #FDE68A;color:#92400E;'
+          +'border-radius:8px;padding:8px 11px;font-size:.8rem;margin-bottom:10px">'
+          +plan.noEmail.length+' famil'+(plan.noEmail.length===1?'y has':'ies have')
+          +' no email address on file and will not be sent one: '
+          +esc(plan.noEmail.map(function(x){return x.name}).join(', '))+'</div>';
+    }
+    h+='<div style="font-size:.81rem;color:var(--s500)">'+esc(B.describeSend(plan))
+      +'</div></div>';
+
+    if(!plan.ok){
+        showModal('Send statements',h,null);
+        return;
+    }
+    showModal('Send statements',h,async function(){
+        var btn=document.getElementById('dynModalSave');
+        if(btn){btn.disabled=true;btn.textContent='Sending\u2026'}
+        var sent=0,failed=0;
+        for(var i=0;i<plan.send.length;i++){
+            var en=plan.send[i];
+            var r=rows.filter(function(x){return x.key===en.key})[0]||{};
+            var ok=await _sendBillingDoc(en,
+                'Your account with '+_campNameForSend(),
+                _statementBody(en.name,r));
+            if(ok)sent++;else failed++;
+        }
+        closeModal('dynModal');
+        toast('Sent '+sent+' statement'+(sent===1?'':'s')
+              +(failed?' \u2014 '+failed+' could not be delivered':''));
+    },{saveLabel:'Send them'});
+}
+
+/** The statement's words. No deadline, deliberately. */
+function _statementBody(name,r){
+    var lines=['Hello '+(name||'')+',','',
+        'This is a summary of your account with '+_campNameForSend()+'.','',
+        'Balance on the account: '+fm(r.balance||0)];
+    var aged=r.owed||{};
+    if(aged.total>0){
+        lines.push('Invoiced and not yet paid: '+fm(aged.total));
+        if(aged.pastDue>0){
+            lines.push('Of that, '+fm(aged.pastDue)+' is past its due date'
+                +(aged.oldestDays?' (the oldest by '+aged.oldestDays+' days)':'')+'.');
+        }
+    }
+    lines.push('',
+        'This is a statement, not a bill \u2014 there is nothing new to pay here. '
+        +'Anything we have asked you for was sent as its own invoice.','',
+        'Thank you,',''+_campNameForSend());
+    return lines.join('\n');
+}
+
+/** An invoice's words, for one installment of a plan. */
+function _invoiceBody(name,label,amount,dueBy){
+    var lines=['Hello '+(name||'')+',','',
+        _campNameForSend()+' has issued an invoice on your account.','',
+        label+': '+fm(amount)];
+    // Only when the office actually set one. "Due by:" with nothing after it reads
+    // as a mistake, and a family cannot tell whether that means today.
+    if(dueBy)lines.push('Due by: '+dueBy);
+    lines.push('','Thank you,',_campNameForSend());
+    return lines.join('\n');
+}
+
 function _liveOnlyNotice(what){
     var ws='';
     try{ if(typeof window.campistryWorkspace==='function')ws=window.campistryWorkspace()||''; }catch(e){}
@@ -2315,7 +3882,7 @@ function ff(label,id,val,type,opts){
 
 // ═══ RENDERERS ═══════════════════════════════════════════════════
 function render(p){
-    var m={campers:renderCampers,camperdetail:renderCamperDetailPage,staffdetail:renderStaffDetailPage,structure:renderStructure,bunkbuilder:renderBB,registration:renderRegistrationPage,hiring:renderHiringPage,leads:renderLeads,billing:renderBilling,familydetail:renderFamilyDetailPage,payroll:renderPayroll,analytics:renderAnalytics,finance:renderFinance,reports:renderReports,printsheets:renderPrintSheets};
+    var m={campers:renderCampers,camperdetail:renderCamperDetailPage,staffdetail:renderStaffDetailPage,structure:renderStructure,bunkbuilder:renderBB,registration:renderRegistrationPage,hiring:renderHiringPage,leads:renderLeads,billing:renderBilling,familydetail:renderFamilyDetailPage,payroll:renderPayroll,analytics:renderAnalytics,finance:renderFinance,reports:renderReports,printsheets:renderPrintSheets,broadcasts:renderBroadcasts};
     if(m[p])m[p]();else renderSoon(p);
 }
 
@@ -2332,7 +3899,8 @@ function _famAddr(street, city, state, zip){
     return [street, city, state, zip].join(' ').toLowerCase().replace(/[^a-z0-9]/g, '');
 }
 function _famItemRaw(name, street, city, state, zip, parentName, parentEmail){
-    var parts = (name || '').trim().split(/\s+/);
+    // The surname of the name a person reads — never the "#702" of a roster key.
+    var parts = String(name || '').trim().replace(/\s#\d+(?:-\d+)?$/, '').split(/\s+/);
     var lastName = parts.length > 1 ? parts[parts.length - 1] : '';
     return {
         name: name, lastName: lastName, last: lastName.toLowerCase(),
@@ -2530,6 +4098,58 @@ function acceptAddToFamily(famKey,camperName){
 // office's field-by-field picks; pass null to keep everything from A
 // wholesale (today's original, unconditional behavior — still used when a
 // suggestion is accepted without opening the guided tool).
+// ── Audit log ───────────────────────────────────────────────────────────────
+// Append-only "who changed what when" trail (camp_audit_log table, migration
+// 199). Fire-and-forget: a logging failure must never block or break the user
+// action it is recording, so everything is wrapped and errors are swallowed.
+async function _meAudit(action,details){
+    try{
+        var client=window.CampistryDB&&window.CampistryDB.getClient?window.CampistryDB.getClient():window.supabase;
+        var campId=window.CampistryDB&&window.CampistryDB.getCampId?window.CampistryDB.getCampId():(window.getCampId?window.getCampId():null);
+        if(!client||!campId)return;
+        var uid=null,email=null,role=null;
+        try{ var u=await client.auth.getUser(); if(u&&u.data&&u.data.user){uid=u.data.user.id;email=u.data.user.email;} }catch(_){}
+        try{ role=(window.CampistryDB&&(CampistryDB.getRole?CampistryDB.getRole():(CampistryDB.getUserRole?CampistryDB.getUserRole():null)))||null; }catch(_){}
+        await client.from('camp_audit_log').insert({camp_id:campId,user_id:uid,user_email:email,user_role:role,action:action,details:details||{}});
+    }catch(_){ /* never surface logging errors to the user */ }
+}
+function _alogAction(a){
+    var map={'family.merge':'Merged families','family.delete':'Deleted family','camper.delete':'Deleted camper','roster.import':'Imported roster'};
+    return map[a]||String(a||'').replace(/[._]/g,' ');
+}
+function _alogDetails(d){
+    if(d==null)return'';
+    if(typeof d==='string')return d;
+    try{ return Object.keys(d).map(function(k){return k+': '+d[k]}).join(' · '); }catch(_){ return ''; }
+}
+// Owner-facing viewer — opened from Billing's ⋯ menu. Read-only; RLS already
+// limits SELECT to owner/admin/manager.
+async function openActivityLog(){
+    var client=window.CampistryDB&&window.CampistryDB.getClient?window.CampistryDB.getClient():window.supabase;
+    var campId=window.CampistryDB&&window.CampistryDB.getCampId?window.CampistryDB.getCampId():(window.getCampId?window.getCampId():null);
+    showModal('Activity Log','<div id="alogBody" style="min-height:120px;font-size:.85rem">Loading…</div>',null,{maxWidth:720});
+    var el=document.getElementById('alogBody');
+    if(!client||!campId){ if(el)el.innerHTML='<div class="me-empty"><h3>Not connected</h3></div>'; return; }
+    try{
+        var res=await client.from('camp_audit_log').select('created_at,user_email,user_role,action,details')
+            .eq('camp_id',campId).order('created_at',{ascending:false}).limit(200);
+        if(res&&res.error)throw res.error;
+        var rows=(res&&res.data)||[];
+        if(!rows.length){ el.innerHTML='<div class="me-empty"><h3>No activity recorded yet</h3><p style="color:var(--s400)">Significant actions — merges, deletions, imports, schedule resets — will appear here.</p></div>'; return; }
+        var h='<div class="me-tw"><table class="me-t"><thead><tr><th>When</th><th>Who</th><th>Action</th><th>Details</th></tr></thead><tbody>';
+        rows.forEach(function(r){
+            var when=r.created_at?new Date(r.created_at).toLocaleString():'';
+            var who=esc(r.user_email||'—')+(r.user_role?' <span style="color:var(--s400)">('+esc(r.user_role)+')</span>':'');
+            h+='<tr><td style="white-space:nowrap;color:var(--s500)">'+esc(when)+'</td><td>'+who+'</td><td class="bold">'+esc(_alogAction(r.action))+'</td><td style="color:var(--s500)">'+esc(_alogDetails(r.details))+'</td></tr>';
+        });
+        h+='</tbody></table></div>';
+        el.innerHTML=h;
+    }catch(e){
+        var msg=(e&&(e.message||e.hint))||'';
+        if(el)el.innerHTML='<div class="me-empty"><h3>Couldn\'t load activity</h3><p style="color:var(--s400)">'+esc(msg||'The audit log table may not be set up yet.')+'</p></div>';
+    }
+}
+
 function mergeFamiliesReconciled(keyA,keyB,reconciled){
     var a=families[keyA],b=families[keyB];
     if(!a||!b)return;
@@ -2572,6 +4192,15 @@ function mergeFamiliesReconciled(keyA,keyB,reconciled){
     if(Array.isArray(b.plans)&&b.plans.length){
         a.plans=(Array.isArray(a.plans)?a.plans:[]).concat(b.plans);
     }
+    // B's extra charges and credits come with its entries (TED-081). The
+    // ledger is kept equal to charges[] by _postExistingCharges: leave a
+    // charge behind and its posted entry is reversed on the next save — the
+    // merged family would be quietly let off everything B was billed.
+    ['charges','credits'].forEach(function(k){
+        if(Array.isArray(b[k])&&b[k].length){
+            a[k]=(Array.isArray(a[k])?a[k]:[]).concat(b[k]);
+        }
+    });
     ['byopProcessor','byopCustomerRef','stripeCustomerId','stripePaymentMethodId',
      'cardOnFile','cardSavedDate','paymentMethodType','paymentMethodLabel'].forEach(function(k){
         if(a[k]==null&&b[k]!=null)a[k]=b[k];
@@ -2582,10 +4211,125 @@ function mergeFamiliesReconciled(keyA,keyB,reconciled){
         a.savedPaymentMethods=existing.concat(
             b.savedPaymentMethods.filter(function(m){return m&&!tokens[m.token]}));
     }
+    _meAudit('family.merge',{into:a.name||'',from:b.name||''});
     delete families[keyB];
     save();render(curPage);toast(b.name+' merged into '+a.name);
 }
 function mergeFamilies(keyA,keyB){ mergeFamiliesReconciled(keyA,keyB,null); }
+
+// ── Camper merge (fold a duplicate roster record into the one you keep) ───────
+// Re-points every reference to the duplicate (family membership, bunk,
+// enrollments — linked by camperName, payments, Go addresses) onto the survivor,
+// fills the survivor's blank fields from the duplicate, concatenates history,
+// then removes the duplicate roster entry. LOCAL records only: cloud-side
+// per-camper records (health documents, photos) attached specifically to the
+// duplicate are not moved — the confirm note tells the office to review those.
+function mergeCampers(keyA,keyB){
+    if(!keyA||!keyB||keyA===keyB){toast('Pick two different campers','error');return}
+    var a=roster[keyA],b=roster[keyB];
+    if(!a||!b){toast('Camper not found','error');return}
+    // 1. Fill A's blank content fields from B — never overwrite what A has.
+    var SKIP={history:1,displayName:1};
+    Object.keys(b).forEach(function(k){
+        if(SKIP[k])return;
+        var av=a[k];
+        var aEmpty=(av==null||av===''||(Array.isArray(av)&&!av.length));
+        if(aEmpty&&b[k]!=null&&b[k]!=='')a[k]=b[k];
+    });
+    // 2. Merge history timelines + a merge marker.
+    a.history=(Array.isArray(a.history)?a.history:[]).concat(Array.isArray(b.history)?b.history:[]);
+    a.history.push({ts:new Date().toISOString(),type:'edit',changes:[{field:'Merged from',from:_lbl(keyB),to:_lbl(keyA)}]});
+    // 3. Re-point enrollments (linked by camperName) from B → A.
+    try{var _aId=_camperIdOf(keyA);Object.keys(enrollments).forEach(function(eid){if(enrollments[eid]&&enrollments[eid].camperName===keyB){enrollments[eid].camperName=keyA;if(_aId!=null)enrollments[eid].camperId=_aId;}});}catch(_){}
+    // 4. Re-point family membership, bunks, payments and Go addresses.
+    cascadeCamperRename(keyB,keyA);
+    // 5. Dedup arrays the rename may have doubled (A was already present).
+    try{Object.values(families).forEach(function(f){if(Array.isArray(f.camperIds))f.camperIds=f.camperIds.filter(function(c,i,arr){return arr.indexOf(c)===i})});}catch(_){}
+    try{Object.keys(bunkAsgn).forEach(function(bn){if(Array.isArray(bunkAsgn[bn]))bunkAsgn[bn]=bunkAsgn[bn].filter(function(c,i,arr){return arr.indexOf(c)===i})});}catch(_){}
+    // 6. Remove the duplicate roster record — and on the server, move every
+    // record on B's number to A's and free B's number (254 merge_campers).
+    try{
+        var _gone=normalizePersonId((roster[keyB]||{}).camperId), _keep=normalizePersonId((roster[keyA]||{}).camperId);
+        if(_gone&&_keep&&_gone!==_keep){_queueCamperErase(_gone,_lbl(keyB),'merge',_keep);setTimeout(_runCamperErases,4000)}
+    }catch(_){}
+    delete roster[keyB];
+    _meAudit('camper.merge',{into:_lbl(keyA),from:_lbl(keyB)});
+    save();
+    if(curPage==='camperdetail'&&_camperDetailName===keyB)nav('campers');else render(curPage);
+    toast(_lbl(keyB)+' merged into '+_lbl(keyA));
+}
+function openMergeCampersTool(preKeep,preDrop){
+    var keys=Object.keys(roster).sort(function(x,y){return _lbl(x).localeCompare(_lbl(y))});
+    if(keys.length<2){toast('Need at least two campers to merge','error');return}
+    var keepSel=(preKeep&&roster[preKeep])?preKeep:keys[0];
+    var dropSel=(preDrop&&roster[preDrop]&&preDrop!==keepSel)?preDrop:(keys.filter(function(k){return k!==keepSel})[0]||keys[1]);
+    var opts=function(sel){return keys.map(function(k){return '<option value="'+esc(k)+'"'+(k===sel?' selected':'')+'>'+esc(_lbl(k))+'</option>'}).join('')};
+    var body=''
+        +'<p style="font-size:.85rem;color:var(--s600);margin:0 0 12px">Combine two duplicate camper records into one. The camper you <strong>keep</strong> stays; the <strong>duplicate</strong> is removed and its family, bunk, enrollments, billing and history move onto the kept record.</p>'
+        +'<label style="font-size:.75rem;font-weight:600;color:var(--s600)">Keep this camper</label>'
+        +'<select id="mcKeep" class="me-input" style="width:100%;margin:4px 0 12px;box-sizing:border-box">'+opts(keepSel)+'</select>'
+        +'<label style="font-size:.75rem;font-weight:600;color:var(--s600)">Merge &amp; remove this duplicate</label>'
+        +'<select id="mcDrop" class="me-input" style="width:100%;margin:4px 0 4px;box-sizing:border-box">'+opts(dropSel)+'</select>'
+        +'<p style="font-size:.72rem;color:var(--s400);margin-top:10px">Blank fields on the kept camper are filled in from the duplicate; fields it already has are left as-is. This cannot be undone. Health documents and photos uploaded under the duplicate should be reviewed on the kept camper afterward.</p>';
+    showModal('Merge Campers',body,function(){
+        var a=document.getElementById('mcKeep').value, b=document.getElementById('mcDrop').value;
+        if(a===b){toast('Pick two different campers','error');return;}
+        mergeCampers(a,b);
+    },{maxWidth:480});
+    var sb=document.getElementById('dynModalSave'); if(sb)sb.textContent='Merge';
+}
+// Family key that lists this camper, or '' — used by duplicate detection.
+function _famKeyOfCamper(name){
+    var hit='';
+    Object.keys(families).some(function(fk){
+        var f=families[fk];
+        if(f&&Array.isArray(f.camperIds)&&f.camperIds.indexOf(name)>=0){hit=fk;return true;}
+        return false;
+    });
+    return hit;
+}
+// Silent duplicate detection. Two roster records are a likely duplicate only
+// when they share the SAME display name AND corroborating evidence they're the
+// same child — the same family, the same date of birth, or the same camper id.
+// Name alone is not enough: this app deliberately supports two DIFFERENT campers
+// with the same name (keyed "Name #id"), so those must NOT be flagged. Returns
+// an array of [keyA,keyB] pairs. High precision by design; runs automatically,
+// no button.
+function _detectDuplicateCampers(){
+    var keys=Object.keys(roster);
+    var byName={};
+    keys.forEach(function(k){ var nm=_lbl(k).trim().toLowerCase(); if(!nm)return; (byName[nm]=byName[nm]||[]).push(k); });
+    var pairs=[], seen={};
+    Object.keys(byName).forEach(function(nm){
+        var grp=byName[nm]; if(grp.length<2)return;
+        for(var i=0;i<grp.length;i++){
+            for(var j=i+1;j<grp.length;j++){
+                var a=roster[grp[i]]||{}, b=roster[grp[j]]||{};
+                var sameFam=(function(){var fa=_famKeyOfCamper(grp[i]),fb=_famKeyOfCamper(grp[j]);return fa&&fb&&fa===fb;})();
+                var sameDob=a.dob&&b.dob&&String(a.dob).trim()===String(b.dob).trim();
+                var sameId=a.camperId&&b.camperId&&normalizePersonId(a.camperId)===normalizePersonId(b.camperId);
+                if(sameFam||sameDob||sameId){
+                    var sig=grp[i]+'|'+grp[j];
+                    if(!seen[sig]){seen[sig]=1;pairs.push([grp[i],grp[j]]);}
+                }
+            }
+        }
+    });
+    return pairs;
+}
+// A quiet, dismissible warning banner for the Roster when likely duplicates are
+// found. Clicking it opens the merge tool pre-filled with the first pair — the
+// only entry point to merging, so there's no standing "Merge" button.
+function _dupCamperBannerHtml(){
+    var pairs=_detectDuplicateCampers();
+    if(!pairs.length)return '';
+    var first=pairs[0];
+    var names=pairs.slice(0,3).map(function(p){return esc(_lbl(p[0]))}).join(', ');
+    return '<div style="background:#FFFBEB;border:1px solid #FDE68A;padding:10px 13px;border-radius:var(--r);margin-bottom:12px;font-size:.85rem;color:#92400E;cursor:pointer;display:flex;gap:10px;align-items:center;justify-content:space-between;flex-wrap:wrap" '
+        +'onclick="CampistryMe.openMergeCampersTool(\''+je(first[0])+'\',\''+je(first[1])+'\')">'
+        +'<span>⚠ <strong>'+pairs.length+'</strong> possible duplicate camper'+(pairs.length===1?'':'s')+' — '+names+(pairs.length>3?'…':'')+' look like the same child (same name and family, birth date, or ID).</span>'
+        +'<span style="font-weight:700;white-space:nowrap">Review &amp; merge &rarr;</span></div>';
+}
 
 // Guided side-by-side merge tool — an on-demand entry point (Billing's
 // ⋯ menu) for picking ANY two family records, or a pre-filled call from
@@ -2703,7 +4447,7 @@ function _famSuggestionsBannerHtml(){
     // Add-to-existing suggestions
     addToExisting.forEach(function(s){
         h+='<div style="display:flex;align-items:center;gap:12px;padding:10px 14px;background:#fff;border-radius:var(--r);margin-bottom:6px;border:1px solid var(--s200)">';
-        h+='<div style="flex:1"><div style="font-size:.8rem"><strong>'+esc(s.camperName)+'</strong> may belong to <strong>'+esc(s.familyName)+'</strong></div></div>';
+        h+='<div style="flex:1"><div style="font-size:.8rem"><strong>'+esc(_lbl(s.camperName))+'</strong> may belong to <strong>'+esc(s.familyName)+'</strong></div></div>';
         h+='<button class="me-btn me-btn--pri me-btn--sm" onclick="CampistryMe.acceptAddToFamily(\''+je(s.familyKey)+'\',\''+je(s.camperName)+'\')">Add</button>';
         h+='</div>';
     });
@@ -2743,7 +4487,7 @@ function _famHouseholdHtml(id,f){
 // Registration and Hiring are now two separate top-level sidebar entries
 // under Operations, matching CampMinder's separate-products approach —
 // _renderRegistrationPane()/_renderHiringPane() each carry their own
-// me.enrollment/me.staffing gating internally.
+// me.enrollment/me.hiring gating internally.
 function renderRegistrationPage(){
     var c=document.getElementById('page-registration');
     if(!c)return;
@@ -2825,6 +4569,7 @@ async function deleteFamily(id){
     if(!ok)return;
     var captured=families[id];
     var wasOnDetailPage=curPage==='familydetail'&&_familyDetailKey===id;
+    _meAudit('family.delete',{name:nm});
     delete families[id];
     save();closeModal('familyModal');
     if(wasOnDetailPage)nav('billing');else render(curPage);
@@ -2864,7 +4609,7 @@ function _refreshPplIfActive(){
     else if(curPage==='hiring')renderHiringPage();
 }
 // Registration and Staffing used to be their own gated pages — a role could
-// have me.campers without either, or me.enrollment without me.staffing (the
+// have me.campers without either, or me.enrollment without me.hiring (the
 // Office/Registrar preset is exactly that). Merging them into one page means
 // the generic per-page view/edit enforcement in campistry_access_sections.js
 // can no longer tell them apart, so the Registration/Hiring panes and the
@@ -3305,7 +5050,9 @@ function _renderRegistrationPane(){
     if(editReg){
         h+='<div class="me-more-wrap"><button class="me-btn me-btn--teal" onclick="CampistryMe._toggleMenu(\'pplFormsMenu\')">Customize Forms ▾</button>'
             +'<div class="me-more-menu" id="pplFormsMenu" style="min-width:210px">'
-            +'<button onclick="CampistryMe.openFormConfig()">Registration Form</button><button onclick="CampistryMe.openPostAcceptFormConfig()" title="Sent after a camper is accepted">Post-Acceptance Form</button>'
+            +'<button onclick="CampistryMe.openFormConfig()">Registration Form</button>'
+            +'<button onclick="CampistryMe.openAcceptancePacket()" title="What a family gets when accepted — the form, deposit info, camper-mail address, and whether it auto-sends">On Acceptance</button>'
+            +'<button onclick="CampistryMe.openPostAcceptFormConfig()" title="The post-acceptance form itself">Post-Acceptance Form</button>'
             +'</div></div>'
             +'<button class="me-btn me-btn--pri" onclick="CampistryMe.addApplication()">+ Manual Entry</button>';
     }
@@ -3352,12 +5099,12 @@ function _renderRegistrationPane(){
 }
 
 function _renderHiringPane(){
-    var canStaff=_secCan('me.staffing');
+    var canStaff=_secCan('me.hiring');
     if(!canStaff){
         return '<div class="me-empty"><h3>No access to Hiring</h3><p>Your account isn\'t set up to open this section.</p></div>';
     }
     _syncAcceptedContractsToPayroll();
-    var editStaff=_pplCanEdit('me.staffing');
+    var editStaff=_pplCanEdit('me.hiring');
     var list=buildPipelineList().filter(function(r){return r.type==='staff';});
     var hiredList=hiredStaff();
     if(pplStaffSubTab!=='applicants'&&pplStaffSubTab!=='hired')pplStaffSubTab='applicants';
@@ -3475,7 +5222,7 @@ function renderCampers(filter){
     // the Staffing or Payroll pages, each separately gated — showing it here
     // to anyone with plain me.campers access would leak it to roles that were
     // never granted either (Division Head, Nurse, Canteen, Bus Coordinator…).
-    var canStaff=_secCan('me.staffing')||_secCan('me.payroll');
+    var canStaff=_secCan('me.hiring')||_secCan('me.payroll');
     var allCamperEntries=Object.entries(roster);
     var enrolledEntries=allCamperEntries.filter(function(pair){return !pair[1].unenrolled;});
     var unenrolledEntries=allCamperEntries.filter(function(pair){return pair[1].unenrolled;});
@@ -3516,7 +5263,10 @@ function renderCampers(filter){
     // staged an application). No "+ Add Camper" button here anymore.
     var _sliceLabel=(showUnenrolled||_whenNow==='all')?''
         :(_whenNow==='today'?' in camp today':' on '+_whenNow.replace(/^session:/,''));
-    var h='<div class="sec-hd"><div><h2 class="sec-title">Roster</h2><p class="sec-desc">'+enrolledEntries.length+' camper'+(enrolledEntries.length!==1?'s':'')+_sliceLabel+(canStaff?' · '+allStaffRows.length+' staff':'')+(unenrolledEntries.length?' · '+unenrolledEntries.length+' unenrolled':'')+'</p></div><div class="sec-actions"><button class="me-btn me-btn--ghost me-btn--sm" onclick="CampistryMe.manageCustomFields()" title="Define custom fields">⚙ Custom Fields</button><button class="me-btn me-btn--sec me-btn--sm" onclick="CampistryMe.downloadTemplate()">Template</button><button class="me-btn me-btn--sec me-btn--sm" onclick="CampistryMe.openCsv()">Import</button></div></div>';
+    var h='<div class="sec-hd"><div><h2 class="sec-title">Roster</h2><p class="sec-desc">'+enrolledEntries.length+' camper'+(enrolledEntries.length!==1?'s':'')+_sliceLabel+(canStaff?' · '+allStaffRows.length+' staff':'')+(unenrolledEntries.length?' · '+unenrolledEntries.length+' unenrolled':'')+'</p></div><div class="sec-actions"><button class="me-btn me-btn--ghost me-btn--sm" onclick="CampistryMe.manageCustomFields()" title="Define custom fields">⚙ Custom Fields</button><button class="me-btn me-btn--sec me-btn--sm" onclick="CampistryMe.downloadTemplate()">Template</button><button class="me-btn me-btn--sec me-btn--sm" onclick="CampistryMe.openCsv()">Import</button><button class="me-btn me-btn--sec me-btn--sm" onclick="CampistryMe.archiveSeasonNow()" title="Snapshot the current roster/staff under a season label so it survives a CSV re-import or next year\'s reset">Archive Season</button></div></div>';
+    // Silent duplicate detection: a quiet warning banner appears here only when
+    // likely-duplicate camper records are found (no button triggers it).
+    h+=_dupCamperBannerHtml();
     h+=_setupChecklistHtml();
 
     var unplaced=(canStaff&&!showUnenrolled)?hiredStaff().filter(function(a){return !String(a.email||'').trim()||!bunksForStaffEmail(a.email).length;}):[];
@@ -4157,7 +5907,15 @@ function saveCamper(){
     // payments[].camper / Campistry-Go addresses all reference campers BY NAME. On a
     // rename we must update those refs or the camper is silently detached from their
     // family, bunk assignment, and billing.
-    if(editingCamper&&editingCamper!==full){cascadeCamperRename(editingCamper,full);delete roster[editingCamper]}
+    // A rename onto a key that belongs to another child (a departed camper, or
+    // somebody's old name) is filed under this child's own key instead (259).
+    var _editKey=null;
+    if(editingCamper&&editingCamper!==full){
+        var _rid=normalizePersonId((roster[editingCamper]||{}).camperId);
+        _editKey=_keyHeldByOther(full,_rid)&&_rid?(full+' #'+_rid):full;
+        if(_editKey!==editingCamper){cascadeCamperRename(editingCamper,_editKey);delete roster[editingCamper]}
+        if(_editKey===full)_editKey=null;
+    }
     // Gather teams
     var teams={};document.querySelectorAll('.ceTeamSel').forEach(function(sel){var lg=sel.dataset.league,v=sel.value;if(lg&&v)teams[lg]=v});
     function _v(id){var el=document.getElementById(id);return el?(el.value||''):'';}
@@ -4170,6 +5928,13 @@ function saveCamper(){
         if(!_typedId){toast('Camper ID must be a number','error');return}
         var _holder=personIdHolder(_typedId,editingCamper||full);
         if(_holder){toast('ID '+_typedId+' already belongs to '+_holder,'error');return}
+        if(_serverErasedNumbers[_typedId]&&String(normalizePersonId(_oldRec.camperId))!==String(_typedId))
+            toast('Note: #'+_typedId+' belonged to a camper who was erased. It is free, but a new number is safer.');
+        // A new number for this camper: every record this page holds for them
+        // moves with it (the server does the same for the tables and every
+        // saved document — 237/260), or the next save would put the old one back.
+        var _prevId=normalizePersonId(_oldRec.camperId);
+        if(_prevId&&String(_prevId)!==String(_typedId))_renumberLocal(_prevId,Number(_typedId));
         existingId=Number(_typedId);
         reservePersonId(existingId);
     }
@@ -4181,11 +5946,11 @@ function saveCamper(){
     // and carries displayName for every screen to show. Existing campers keep the
     // keys they have — see campistry_camper_identity.js for why the key stays a
     // string rather than becoming the id everywhere at once.
-    var _dupKey=null;
-    if(!editingCamper&&roster[full]){
+    var _dupKey=_editKey;
+    if(!editingCamper&&(roster[full]||_keyHeldByOther(full,existingId))){
         var _ID=(typeof window!=='undefined'&&window.CamperIdentity)||null;
         if(!_ID){toast('Already exists','error');return}
-        _dupKey=_ID.uniqueKey(roster,full,existingId);
+        _dupKey=roster[full]?_ID.uniqueKey(roster,full,existingId):(full+' #'+existingId);
         if(!_dupKey||roster[_dupKey]){toast('Already exists','error');return}
     }
     var _summerSameEl=document.getElementById('ceSummerSame');
@@ -4235,6 +6000,14 @@ function saveCamper(){
     // and history are preserved through an edit (they aren't on this form).
     var _key=_dupKey||full;
     if(_dupKey)_core.displayName=full;
+    // A renumber tells the server which number the child had, so a rename and
+    // a renumber in this one edit stay ONE child (260; the server never stores
+    // it, and the next number check drops it here). A new child says when it
+    // was added, so a freed number typed for them is not mistaken for a stale
+    // copy of an erased child.
+    var _wasId=normalizePersonId(_oldRec.camperId);
+    if(editingCamper&&_wasId&&String(_wasId)!==String(existingId))_core.renumberedFrom=Number(_wasId);
+    if(!editingCamper)_core.addedAt=Date.now();
     roster[_key]=Object.assign({},_oldRec,_core);
     // Change log: diff the tracked fields old→new and append a history entry.
     var _changes=_diffCamperFields(_oldRec,_core);
@@ -4246,25 +6019,25 @@ function saveCamper(){
     }
     if(roster[_key].history.length>200) roster[_key].history=roster[_key].history.slice(-200);
     // Sync address to Campistry Go format
-    syncAddressToGo(full,roster[_key]);
+    syncAddressToGo(_key,roster[_key]);
     // Every camper belongs to a family. Join an EXISTING family only when the
     // camper matches it on 3+ of {last name, address, parent email, parent
     // name} — a shared last name alone is NOT enough. Otherwise start a new,
     // uniquely-keyed family for them.
     if(last){
-        var famKey=_resolveFamilyKey(full,_famItem(full,roster[_key]));
+        var famKey=_resolveFamilyKey(_key,_famItem(_key,roster[_key]));
         if(!famKey){
             famKey='fam_'+last.toLowerCase().replace(/[^a-z0-9]/g,'')+'_'+(existingId||Date.now());
             var p1e={name:roster[_key].parent1Name||'',phone:roster[_key].parent1Phone||'',email:roster[_key].parent1Email||'',relation:'Parent'};
             families[famKey]={
                 name:last+' Family',
                 households:[{label:'Primary',parents:[p1e],address:[roster[_key].street,roster[_key].city,roster[_key].state,roster[_key].zip].filter(Boolean).join(', '),billingContact:true}],
-                camperIds:[full],
+                camperIds:[_key],
                 balance:0,totalPaid:0,notes:'Added via camper profile'
             };
         } else {
             // Add this camper to the matched family if not already there
-            if(families[famKey].camperIds.indexOf(full)<0)families[famKey].camperIds.push(full);
+            if(families[famKey].camperIds.indexOf(_key)<0)families[famKey].camperIds.push(_key);
             // Backfill parent info if the primary household had none
             var hh0=families[famKey].households&&families[famKey].households[0];
             if(hh0&&hh0.parents&&hh0.parents[0]&&!hh0.parents[0].name&&roster[_key].parent1Name){
@@ -4284,19 +6057,19 @@ function saveCamper(){
     // meant no Link invite could ever be generated for them and Registration
     // undercounted actual campers).
     var wasNew=!editingCamper;
-    if(wasNew)_autoCreateAcceptedEnrollment(full);
+    if(wasNew)_autoCreateAcceptedEnrollment(_key);
     var wasEdit=!!editingCamper;
     // A rename means roster[editingCamper] no longer exists — if their
     // profile page is what's open (which is where Edit is reached from),
     // point it at the new name so the re-render below doesn't hit "not found".
-    if(curPage==='camperdetail'&&_camperDetailName===editingCamper)_camperDetailName=full;
+    if(curPage==='camperdetail'&&_camperDetailName===editingCamper)_camperDetailName=_key;
     save();closeModal('camperEditModal');render(curPage);toast(editingCamper?'Updated':'Added');
     // Keep any already-issued parent portal invite in sync. The invite stores
     // a snapshot of camper_data at creation time (see _syncParentInviteSnapshot)
     // — without this, bunk/division/allergy/etc. edits made here would never
     // reach a parent who already has portal access until someone manually
     // clicked "Get Invite Link" again.
-    _syncInvitesForCamper(full);
+    _syncInvitesForCamper(_key);
     // Fix (b): the camp changed this parent's email on file → move their existing
     // invite to the new email IN PLACE (keeps the signed-up parent connected +
     // preserves token/code), instead of leaving an orphan for the old email.
@@ -4310,18 +6083,19 @@ function saveCamper(){
                     var d=res&&res.data;
                     if(d&&d.success&&d.moved)toast('Parent portal email updated');
                     else if(d&&d.error==='target_email_exists')toast('Note: an invite already exists for '+_newParentEmail);
+                    else if(d&&d.error==='not_camp_office')toast('The parent portal still uses the old email — only the camp office (owner, admin or manager) can change it.','error');
                 }).catch(function(){});
             }
         }catch(_){}
     }
 }
 function _autoCreateAcceptedEnrollment(camperName){
-    if(Object.values(enrollments).some(function(e){return e.camperName===camperName}))return;
+    if(Object.values(enrollments).some(function(e){return _enrIsFor(e,camperName)}))return;
     var c=roster[camperName]||{};
     var last=camperName.split(' ').slice(1).join(' ');
     var id='enr_'+Date.now()+'_'+Math.random().toString(36).substr(2,4);
     enrollments[id]={
-        camperName:camperName,camperLast:last,
+        camperName:camperName,camperId:c.camperId!=null?c.camperId:null,camperLast:last,
         parentName:c.parent1Name||'',parentEmail:c.parent1Email||'',parentPhone:c.parent1Phone||'',
         dob:c.dob||'',gender:c.gender||'',
         school:c.school||'',schoolGrade:c.schoolGrade||'',
@@ -4361,6 +6135,35 @@ function cascadeCamperRename(oldName,newName){
 // " #<id>" appended to the plain name, so stripping it needs no lookup and cannot
 // disagree with displayName. IDENTITY keeps the KEY — checkbox values, data-
 // attributes, roster/family/ledger lookups; only visible text comes through here.
+// Is this enrollment the camper with this roster key? By camper number when
+// both carry one — so a rename, or a second child with the same name, cannot
+// mix them up — and by name only for an older enrollment without a number.
+// Every record this page holds under camper number `from` now says `to`.
+function _renumberLocal(from,to){
+    var F=String(from);
+    function walk(o,d){
+        if(!o||typeof o!=='object'||d>8)return;
+        if(Array.isArray(o)){o.forEach(function(x){walk(x,d+1)});return}
+        ['camperId','personId','person_id','camper_id'].forEach(function(k){
+            if(o[k]!=null&&String(o[k])===F)o[k]=(typeof o[k]==='string')?String(to):to;
+        });
+        Object.keys(o).forEach(function(k){if(o[k]&&typeof o[k]==='object')walk(o[k],d+1)});
+    }
+    [enrollments,families,payments,finPayments].forEach(function(x){walk(x,0)});
+}
+// Numbers of every child this tab has had in its roster since it opened.
+var _rosterSeenIds={};
+function _noteRosterSeen(){
+    try{Object.values(roster||{}).forEach(function(c){var n=c&&normalizePersonId(c.camperId);if(n)_rosterSeenIds[n]=1})}catch(_){}
+}
+// The camper number for a roster key, or null.
+function _camperIdOf(key){var r=roster&&roster[key];return (r&&r.camperId!=null&&r.camperId!=='')?r.camperId:null}
+function _enrIsFor(e,key){
+    if(!e)return false;
+    var id=_camperIdOf(key);
+    if(e.camperId!=null&&e.camperId!==''&&id!=null)return String(e.camperId)===String(id);
+    return e.camperName===key;
+}
 function _lbl(k){var r=roster&&roster[k];return (r&&r.displayName)||String(k==null?'':k).replace(/\s#\d+$/,'')}
 function _billingCore(){return (typeof window!=='undefined'&&window.BillingCore)||null}
 
@@ -4436,7 +6239,7 @@ function _resyncSiblingDiscounts(fk){
             reason:'sibling',
             note:SD.explain(c,fm),
             by:'system',
-            source:{enrollmentId:eid,camperName:c.camperName,
+            source:{enrollmentId:eid,camperName:c.camperName,camperId:_camperIdOf(c.camperName),
                     was:c.was,now:c.now,reason:c.reason}
         });
         // The enrollment carries what it is NOW priced at, so the next diff
@@ -4462,7 +6265,7 @@ function _withdrawalQuotes(f,name,onDate){
     if(!B||!f)return out;
     Object.keys(enrollments||{}).forEach(function(eid){
         var e=enrollments[eid];
-        if(!e||e.camperName!==name)return;
+        if(!e||!_enrIsFor(e,name))return;
         if(!B.tuitionEntryFor(f,eid))return;   // nothing posted for it
         var net=B.netTuitionFor(f,eid);
         var ses=(sessions||[]).find(function(x){return x&&x.name===e.session})||{};
@@ -4505,7 +6308,7 @@ function _creditWithdrawalsFor(f,name,reason,policy){
         if(pol==null)pol='none';
         var res=B.creditWithdrawal(f,{
             enrollmentId:q.enrollmentId,camperName:name,
-            camperId:(roster[name]&&roster[name].camperId)||null,
+            camperId:_camperIdOf(name),
             policy:pol,
             note:'Camper '+(reason||'removed')+' — '+name+
                  (q.quote&&q.quote.decided?' ('+q.quote.label+')':''),
@@ -4626,15 +6429,239 @@ function _planSchedule(plan,balance){
     if(!dates.length)return [];
     var next=Number(plan.nextIndex)||0;
     var owed=Math.max(0,Number(balance)||0);
+    var fixed=Array.isArray(plan.amounts)?plan.amounts:[];
     var out=[];
     for(var i=0;i<dates.length;i++){
         if(i<next){out.push({dueDate:dates[i],amount:null,status:'paid',derived:true});continue}
         var left=dates.length-i;
-        var amt=left<=1?owed:Math.round((owed/left)*100)/100;
+        // The office's own amount when it set one (TED-068) — as autopay charges it.
+        var amt=(typeof fixed[i]==='number'&&fixed[i]>0)?Math.min(Math.round(fixed[i]*100)/100,owed)
+               :(left<=1?owed:Math.round((owed/left)*100)/100);
         out.push({dueDate:dates[i],amount:amt,status:'pending',derived:true});
         owed=Math.round((owed-amt)*100)/100;
     }
     return out;
+}
+
+/**
+ * A registration deposit charged by card is a PAYMENT on the family (TED-090).
+ *
+ * The deposit function records each card charge on the application
+ * (depositCharges — migration 271; older ones only depositReference). Nothing
+ * turned that into money on the family's account, so once enrolled the family
+ * was billed full tuition. Each charge becomes one payment row, keyed on the
+ * processor's reference — so it can be refunded like any other card payment,
+ * and it can never be counted twice — and is posted to the ledger.
+ * The office's "Mark deposit received" sets no reference and is untouched:
+ * that money is recorded in Billing by hand, as the button says.
+ */
+/** A typed payment found to BE a card charge becomes refundable to that card (TED-102). */
+function _markCardPayment(row,ref,proc,isStripe){
+    if(!row||!ref)return;
+    if(isStripe||/^pi_/.test(ref)){if(!row.stripePaymentIntentId)row.stripePaymentIntentId=ref;}
+    else{
+        if(!row.byopTransactionId)row.byopTransactionId=ref;
+        if(!row.byopProcessor&&proc)row.byopProcessor=proc;
+    }
+}
+function _postCardDepositsFor(f,fk,e,eid){
+    if(!f||!e)return 0;
+    var list=Array.isArray(e.depositCharges)?e.depositCharges.slice():[];
+    if(!list.length&&e.depositReference&&Number(e.depositPaid)>0){
+        list=[{ref:e.depositReference,amount:Number(e.depositPaid),date:e.depositPaidDate,processor:e.depositProcessor}];
+    }
+    var n=0;
+    list.forEach(function(c){
+        var ref=String((c&&c.ref)||''), amt=Math.round((Number(c&&c.amount)||0)*100)/100;
+        if(!ref||!(amt>0))return;
+        var proc=String(c.processor||''), isStripe=/^pi_/.test(ref)||proc==='stripe';
+        var row=(finPayments||[]).filter(function(p){
+            return p&&(p.depositReference===ref||p.stripePaymentIntentId===ref||p.byopTransactionId===ref);
+        })[0];
+        // Typed in by hand with the card reference in its Reference box: the
+        // same money (TED-095). Linked, never added a second time.
+        if(!row){
+            row=(finPayments||[]).filter(function(p){
+                return p&&p.familyKey===fk&&(Number(p.amount)||0)>0&&String(p.reference||'').trim()===ref;
+            })[0];
+            if(row){row.depositReference=ref;_markCardPayment(row,ref,proc,isStripe);n++;}
+        }
+        // Typed in by hand WITHOUT a reference, for the same amount around the
+        // same time: probably the same money — the office was told to record
+        // card deposits in Billing by hand before this existed. Not guessed
+        // either way: Billing asks the office (TED-095).
+        var decided=(f.depositReviewed&&f.depositReviewed[ref])||'';
+        if(!row&&decided!=='separate'){
+            var dAt=Date.parse(c.date||e.depositPaidDate||'')||0;
+            // A typed payment another open question already points at is not a
+            // candidate for this one too — two siblings' deposits must not both
+            // ask about the same typed payment (TED-102).
+            var asked={};
+            (Array.isArray(f.depositReview)?f.depositReview:[]).forEach(function(r){if(r&&r.ref!==ref&&r.paymentId!=null)asked[String(r.paymentId)]=1;});
+            var twin=(finPayments||[]).filter(function(p){
+                if(!p||p.familyKey!==fk||p.depositReference||p.stripePaymentIntentId||p.byopTransactionId)return false;
+                if(asked[String(p.id)])return false;
+                if(Math.abs((Number(p.amount)||0)-amt)>0.005)return false;
+                var pAt=Date.parse(p.date||'')||0;
+                return !dAt||!pAt||Math.abs(pAt-dAt)<=45*86400000;
+            })[0];
+            if(twin){
+                if(!Array.isArray(f.depositReview))f.depositReview=[];
+                if(!f.depositReview.some(function(r){return r&&r.ref===ref})){
+                    f.depositReview.push({ref:ref,amount:amt,paymentId:twin.id,processor:proc,date:c.date||e.depositPaidDate||'',camperName:e.camperName||'',camperId:e.camperId!=null?e.camperId:_camperIdOf(e.camperName)});
+                    n++;
+                }
+                return;
+            }
+        }
+        if(!row){
+            row={id:'dep_'+ref,family:f.name||'',familyKey:fk,
+                 camperName:e.camperName||'',camperId:e.camperId!=null?e.camperId:_camperIdOf(e.camperName),
+                 enrollmentId:eid,amount:amt,date:c.date||e.depositPaidDate||today(),
+                 method:(isStripe?'Card':(proc||'Card'))+' (registration deposit)',
+                 reference:ref,notes:'Registration deposit, charged to the card given when applying',
+                 stripePaymentIntentId:isStripe?ref:null,byopTransactionId:isStripe?null:ref,
+                 byopProcessor:isStripe?null:(proc||null),depositReference:ref,
+                 status:'succeeded',timestamp:Date.now()};
+            finPayments.push(row);
+            n++;
+        }
+        if(_postPaymentEntry(f,row))n++;
+    });
+    return n;
+}
+
+/** The office's answer to a card deposit that may already be recorded (TED-095). */
+async function resolveDepositReview(fk,ref){
+    var f=families[fk]; if(!f||!Array.isArray(f.depositReview))return;
+    var r=f.depositReview.filter(function(x){return x&&x.ref===ref})[0]; if(!r)return;
+    var twin=(finPayments||[]).filter(function(p){return p&&String(p.id)===String(r.paymentId)})[0];
+    // Settled meanwhile (the deposit was posted, or that typed payment was linked
+    // to another card charge): the question is out of date — drop it (TED-102).
+    var posted=(finPayments||[]).some(function(p){return p&&p!==twin&&p.depositReference===ref;});
+    if(posted||!twin||(twin.depositReference&&twin.depositReference!==ref)){
+        f.depositReview=f.depositReview.filter(function(x){return x&&x.ref!==ref});
+        save();try{if(curPage==='familydetail')renderFamilyDetailPage();else renderBilling()}catch(_){}
+        return toast('That question was already settled');
+    }
+    var same=await confirmDialog({title:'Is this the same money?',
+        message:(r.camperName?esc(r.camperName)+'\u2019s ':'')+'registration deposit of '+fm(r.amount)+' was paid by card'
+               +(r.date?' on '+esc(r.date):'')+'. '+(twin?'A payment of '+fm(twin.amount)+(twin.date?' on '+esc(twin.date):'')
+               +(twin.method?' ('+esc(twin.method)+')':'')+' was recorded by hand.':'')
+               +'<br><br>If they are the same money, it is linked to the card charge (so it can be refunded to the card) and counted once.',
+        confirmLabel:'Same money \u2014 link them'});
+    if(same){
+        if(twin){twin.depositReference=ref;_markCardPayment(twin,ref,r.processor||'',/^pi_/.test(ref));}
+    }else{
+        var sep=await confirmDialog({title:'Count the card deposit as well?',
+            message:'Only if the hand-recorded '+fm(r.amount)+' was a DIFFERENT payment. The card deposit is then added to the family as its own payment.',
+            confirmLabel:'Different money \u2014 add it',danger:true});
+        if(!sep)return;
+        if(!f.depositReviewed)f.depositReviewed={};
+        f.depositReviewed[ref]='separate';
+    }
+    f.depositReview=f.depositReview.filter(function(x){return x&&x.ref!==ref});
+    save();
+    try{if(curPage==='familydetail')renderFamilyDetailPage();else renderBilling()}catch(_){}
+}
+
+// The office answers an autopay charge the card company never confirmed
+// (TED-113). The server holds it on the plan; only the office can say, from
+// the processor's dashboard, whether the money moved — and autopay waits.
+async function resolveUnconfirmedAutopay(fk,planRef){
+    var f=families[fk]; if(!f)return;
+    var plans=Array.isArray(f.plans)?f.plans:[];
+    var p=plans.filter(function(x,i){return x&&((x.id&&String(x.id)===planRef)||(!x.id&&('#'+i)===planRef));})[0];
+    var h=p&&p.pendingCharge;
+    if(!h||!h.unconfirmed)return toast('That charge was already answered');
+    var where=h.processor==='stripe'?'the Stripe dashboard':'your processor\u2019s dashboard';
+    var went=await confirmDialog({title:'Did this autopay charge go through?',
+        message:'Autopay sent '+fm(Number(h.amount)||0)+' for '+esc(f.name||fk)+(h.since?' on '+esc(h.since):'')+' to the card company'
+               +', and it never answered'+(h.why?' ('+esc(h.why)+')':'')+'.<br><br>Look for it in '+where+'. '
+               +'If it is there, record it; autopay then carries on with the plan.',
+        confirmLabel:'It went through \u2014 record it'});
+    var ref=null;
+    if(went){
+        // On Stripe, the PAYMENT's id (pi_…) — what the webhook books the same
+        // money under — never the charge's (ch_…), or it is counted twice (TED-120).
+        ref=window.prompt(h.processor==='stripe'
+            ?'The payment\u2019s id from the Stripe dashboard \u2014 it starts with pi_ (not ch_ or py_):'
+            :'The charge\u2019s reference number from '+where+':','');
+        if(!ref||!String(ref).trim())return toast('Nothing recorded — a reference is needed','error');
+        ref=String(ref).trim();
+        if(h.processor==='stripe'&&!/^pi_[A-Za-z0-9]+$/.test(ref))return toast('On Stripe, use the payment\u2019s id \u2014 it starts with pi_','error');
+    }else{
+        var none=await confirmDialog({title:'Nothing went through?',
+            message:'Only if '+where+' shows NO such charge. Autopay will then try this instalment again on its next run.',
+            confirmLabel:'Nothing went through \u2014 try again',danger:true});
+        if(!none)return;
+    }
+    var client=window.CampistryDB&&window.CampistryDB.getClient?window.CampistryDB.getClient():null;
+    var campId=getCampId();
+    if(!client||!campId)return toast('Not signed in','error');
+    if(went&&h.processor==='stripe'){
+        // Checked with Stripe before it is recorded (279, TED-120): succeeded,
+        // this family's card, this instalment's amount, made after autopay
+        // tried — a look-alike payment of another family's, or a typo, is refused.
+        try{ await callEdgeFunctionAuthed('stripe-charge',{action:'confirmAutopay',familyKey:fk,planRef:planRef,paymentIntentId:ref}); }
+        catch(cErr){ return toast('Not recorded: '+(cErr&&cErr.message||'no answer'),'error'); }
+    }else{
+        var res=await client.rpc('resolve_unconfirmed_autopay',{p_camp_id:campId,p_family_key:fk,p_plan_ref:planRef,p_went_through:!!went,p_reference:ref});
+        var d=res&&res.data;
+        if(res&&res.error||!d||d.success!==true){
+            var why=(res&&res.error&&res.error.message)||(d&&d.error)||'no answer';
+            if(why==='stripe_needs_payment_id')why='on Stripe, use the payment\u2019s id \u2014 it starts with pi_';
+            else if(why==='reference_is_another_payment')why='that reference is already booked for another family or amount';
+            else if(why==='stripe_check_needed')why='reload the page and try again (Stripe payments are checked with Stripe)';
+            return toast('Could not save the answer: '+why,'error');
+        }
+    }
+    delete p.pendingCharge;
+    toast(went?'Recorded — autopay carries on':'Autopay will try again on its next run');
+    try{ await _loadFamiliesFromRows(); await _loadPaymentsFromRows(); }catch(_){}
+    try{if(curPage==='familydetail')renderFamilyDetailPage();else renderBilling()}catch(_){}
+}
+
+// A family's card paused by a chargeback (TED-186/200): it starts again by
+// itself when the camp wins; after a loss the office decides, here. While
+// another dispute of theirs is still open with the bank, the window says so
+// and the server refuses unless the office resumes anyway (TED-202).
+function _disputeCounts(f){
+    var h=f&&f.disputeHold||{};
+    var ids=Array.isArray(h.disputeIds)?h.disputeIds:[];
+    var lost=Array.isArray(h.lostIds)?h.lostIds:[];
+    var open=ids.filter(function(id){return lost.indexOf(id)<0}).length;
+    return {open:open,lost:ids.length-open};
+}
+async function resumeAutopayAfterDispute(fk){
+    if(!_secEdit('billing','Resuming card charges'))return;
+    var f=families[fk]; if(!f)return;
+    var c=_disputeCounts(f);
+    var openWords=c.open===1?'1 dispute is still open with the bank':c.open+' disputes are still open with the bank';
+    var ok=await confirmDialog({title:c.open?'A dispute is still open':'Charge their card again?',
+        confirmLabel:c.open?'Resume anyway':'Resume charges',
+        message:c.open
+            ?f.name+' disputed a payment with their bank and '+openWords+(c.lost?' (the camp lost '+c.lost+')':'')+'. Charging the card they are disputing is what the bank holds against the camp. Resume only if you have agreed with the family \u2014 autopay and Charge Card will charge their card again.'
+            :f.name+' disputed a payment with their bank and the camp lost it, so their card has not been charged since. Resume only if you have agreed with the family \u2014 autopay and Charge Card will charge their card again.'});
+    if(!ok)return;
+    var client=window.CampistryDB&&window.CampistryDB.getClient?window.CampistryDB.getClient():null;
+    var campId=window.CampistryDB&&window.CampistryDB.getCampId?window.CampistryDB.getCampId():null;
+    if(!client||!campId)return toast('Not connected','error');
+    var res=await client.rpc('resume_autopay_after_dispute',{p_camp_id:campId,p_family_key:fk,p_even_open:c.open>0});
+    var d=res&&res.data;
+    // The server knew of an open dispute this page did not (it loaded before
+    // the dispute arrived): ask again, with the server's count.
+    if(d&&d.error==='dispute_open'){
+        var again=await confirmDialog({title:'A dispute is still open',confirmLabel:'Resume anyway',
+            message:(d.message||'A dispute is still open with the bank.')+' Resume charging '+f.name+'\u2019s card anyway?'});
+        if(!again)return;
+        res=await client.rpc('resume_autopay_after_dispute',{p_camp_id:campId,p_family_key:fk,p_even_open:true});
+        d=res&&res.data;
+    }
+    if(res&&res.error||!d||d.success!==true)return toast('Could not resume: '+((res&&res.error&&res.error.message)||(d&&(d.message||d.error))||'no answer'),'error');
+    toast('Card charges resumed for '+f.name);
+    try{ await _loadFamiliesFromRows(); }catch(_){}
+    try{if(curPage==='familydetail')renderFamilyDetailPage();else renderBilling()}catch(_){}
 }
 
 function _postTuitionFor(f,eid){
@@ -4653,7 +6680,7 @@ function _postTuitionFor(f,eid){
         disc=(Number(e.discount.amt)||0)+Math.round(gross*(Number(e.discount.pct)||0)/100);
     }
     var res=B.postTuition(f,{
-        enrollmentId:eid,camperId:e.camperId!=null?e.camperId:((roster[e.camperName]&&roster[e.camperName].camperId)||null),
+        enrollmentId:eid,camperId:e.camperId!=null?e.camperId:_camperIdOf(e.camperName),
         camperName:e.camperName||'',session:e.session||'',
         tuition:gross,discount:disc,date:e.date||undefined
     });
@@ -4692,9 +6719,109 @@ function _postLedgerCredit(f,o){
         reason:(B.REASONS.indexOf(o.reason)>=0?o.reason:'goodwill'),
         date:o.date||undefined,note:o.note||'',
         by:'office',
-        source:{creditId:String(o.id||''),camperName:o.camperName||''}
+        source:{creditId:String(o.id||''),camperName:o.camperName||'',camperId:o.camperId!=null?o.camperId:_camperIdOf(o.camperName)}
     });
     return !!(res&&res.ok);
+}
+
+/**
+ * Post a charge to the family's LEDGER, once, keyed on the charge's own id
+ * (TED-053). Late fees, card surcharges, Add Charge, bulk charges and close-out
+ * entries used to go only onto `families[fk].charges[]`; once a family has a
+ * posted ledger both balances (the office's and the parent's) come from the
+ * ledger, so none of them was ever owed. Same pattern as _postLedgerCredit.
+ *
+ * A family with no ledger yet is left alone: its balance is still worked out
+ * from charges[] directly, and posting just this one entry would start a
+ * ledger holding nothing else.
+ */
+function _postLedgerCharge(f,c){
+    var B=_billingCore();
+    if(!B||!f||!c||c.id==null)return false;
+    if(!Array.isArray(f.entries)||!f.entries.length)return false;
+    var amt=Math.round((Number(c.amount)||0)*100)/100;
+    if(!(amt>0))return false;
+    var id='le_chg_'+String(c.id);
+    if(B.find(f,id))return false;
+    var cat=String(c.category||'').toLowerCase();
+    var res=B.post(f,{
+        id:id,kind:'charge',amount:amt,
+        reason:(cat.indexOf('fee')>=0)?'fee':'other',
+        date:c.date||undefined,note:c.description||c.category||'Charge',
+        by:'office',
+        source:{chargeId:String(c.id),category:c.category||''}
+    });
+    return !!(res&&res.ok);
+}
+
+/**
+ * Post the family's EXISTING charges to its ledger — the catch-up Billing runs
+ * on load (TED-053) — without posting any charge twice (TED-065).
+ *
+ * A camp that ran convert_family_ledgers (171/215) already has every charge
+ * that existed then on the ledger, as `le_conv_<family>_<n>` entries with
+ * reason 'fee' and nothing linking them to the charge's id. So each such
+ * converted charge "covers" one charge of the same amount (and date, when the
+ * conversion kept it), matched one to one; only a charge nothing covers is
+ * posted. A charge already on the ledger is kept EQUAL to charges[] (TED-066):
+ * re-priced, the difference is posted; gone (a cancelled Camp Shop order), it
+ * is taken back — the same entries migration 263's _sync_charge_to_ledger
+ * writes, so the two never double up. Returns how many entries were posted.
+ */
+function _postExistingCharges(f){
+    if(!f||!Array.isArray(f.entries)||!f.entries.length)return 0;
+    var B=_billingCore(); if(!B)return 0;
+    var charges=Array.isArray(f.charges)?f.charges:[];
+    var cents=function(v){return Math.round((Number(v)||0)*100)};
+    // A converted fee already linked to its charge (migration 267, or an
+    // earlier pass here) is counted under that charge below, never pooled.
+    var pool=f.entries.filter(function(e){
+        return e&&e.kind==='charge'&&e.reason==='fee'&&/^le_conv_/.test(String(e.id||''))
+            &&!(e.source&&e.source.chargeId!=null&&e.source.chargeId!=='');
+    }).map(function(e){return {e:e,cents:cents(e.amount),date:String(e.date||''),used:false}});
+    // What the ledger already holds for each charge id (TED-066): charges
+    // posted, less anything taken back.
+    var net={},count={};
+    f.entries.forEach(function(e){
+        var cid=e&&e.source&&e.source.chargeId; if(cid==null||cid==='')return;
+        cid=String(cid);
+        net[cid]=(net[cid]||0)+(e.kind==='charge'?cents(e.amount):(e.kind==='credit'?-cents(e.amount):0));
+        count[cid]=(count[cid]||0)+1;
+    });
+    var n=0, adjust=function(cid,diffC,desc){
+        if(!diffC)return;
+        var r=B.post(f,{id:'le_chgadj_'+cid+'_'+(count[cid]||0),kind:diffC>0?'charge':'credit',
+            amount:Math.abs(diffC)/100,reason:diffC>0?'other':'reversal',
+            note:(diffC<0&&!charges.some(function(c){return c&&String(c.id)===cid})?'Cancelled — ':'Changed — ')+(desc||'charge'),
+            by:'system',source:{chargeId:cid}});
+        if(r&&r.ok){n++;count[cid]=(count[cid]||0)+1;net[cid]=(net[cid]||0)+diffC;}
+    };
+    var seen={};
+    charges.forEach(function(c){
+        if(!c||c.id==null)return;
+        var cid=String(c.id); seen[cid]=1;
+        if(count[cid]){                                                          // posted before: keep it equal
+            adjust(cid,Math.max(0,cents(c.amount))-(net[cid]||0),c.description||c.category);
+            return;
+        }
+        var cc=cents(c.amount), cd=String(c.date||'');
+        var hit=pool.filter(function(p){return !p.used&&p.cents===cc&&p.date===cd})[0]
+              ||pool.filter(function(p){return !p.used&&p.cents===cc})[0];
+        if(hit){                                                                // the conversion posted it:
+            hit.used=true;                                                      // link it, so a later re-price
+            hit.e.source=Object.assign({},hit.e.source||{},{chargeId:cid});     // or cancel is seen (TED-082)
+            count[cid]=1; net[cid]=hit.cents;
+            return;
+        }
+        if(_postLedgerCharge(f,c))n++;
+    });
+    // A charge that is gone from charges[] comes off — except the shop's
+    // (shop_<order>): only the server bills, re-prices and cancels those, and it
+    // syncs the ledger itself as it does (263). One missing HERE is a tab that
+    // loaded before the shop billed it, and taking it off would let the family
+    // off the order (TED-091).
+    Object.keys(net).forEach(function(cid){ if(!seen[cid]&&net[cid]&&!/^shop_/.test(cid))adjust(cid,-net[cid],'charge'); });
+    return n;
 }
 
 /** Money helpers for the removal warnings. Read-only. */
@@ -4790,7 +6917,10 @@ function cascadeCamperDelete(name){
         // nothing is lost if the delete itself is undone.
         Object.keys(enrollments).forEach(function(eid){
             var e=enrollments[eid];
-            if(e&&e.camperName===name)delete enrollments[eid];
+            if(e&&_enrIsFor(e,name)){
+                delete enrollments[eid];
+                _tombstoneSubmission('enrollments',eid);
+            }
         });
     }catch(_){}
     // payments are intentionally KEPT — silently erasing billing history when a camper
@@ -4804,7 +6934,7 @@ async function deleteCamper(n){
     // be told that rather than discovering it later. Warn, don't block: a hard
     // block gets worked around by resetting the roster instead, which had the
     // same effect and no warning at all.
-    var _msg='<strong>'+esc(_lbl(n))+'</strong> will be permanently deleted.';
+    var _msg='<strong>'+esc(_lbl(n))+'</strong> will be permanently deleted, with everything tied to their camper number (canteen history, health and form submissions, photos, mail, pickup records). Their number becomes free for a new camper.';
     var _owed=_outstandingForCamper(n);
     if(_owed>0.005){
         _msg+='<br><br>⚠ <strong>'+esc(_famNameForCamper(n))+'</strong> still owes '
@@ -4838,10 +6968,15 @@ async function deleteCamper(n){
     // restore its exact prior status/statusHistory, not just re-link roster/family.
     var capturedEnrollments={};
     Object.entries(enrollments).forEach(function(pair){
-        if(pair[1]&&pair[1].camperName===n){
+        if(pair[1]&&_enrIsFor(pair[1],n)){
             try{capturedEnrollments[pair[0]]=JSON.parse(JSON.stringify(pair[1]));}catch(_){}
         }
     });
+    _meAudit('camper.delete',{name:_lbl(n)});
+    // Erased on the server once Undo has had its chance: every record tied to
+    // this camper's number goes, and the number is free again (254).
+    var _erasedId=normalizePersonId(capturedRoster&&capturedRoster.camperId);
+    if(_erasedId){_queueCamperErase(_erasedId,_lbl(n));setTimeout(_runCamperErases,8000)}
     delete roster[n];
     cascadeCamperDelete(n);
     save();
@@ -4855,6 +6990,7 @@ async function deleteCamper(n){
     // head back to the list instead of rendering a "not found" page.
     if(curPage==='camperdetail'&&_camperDetailName===n)nav('campers');else render(curPage);
     toast('Camper deleted','ok',{actionLabel:'Undo',onAction:function(){
+        if(_erasedId)_cancelCamperErase(_erasedId);
         roster[n]=capturedRoster;
         capturedFamilyLinks.forEach(function(fk){
             if(!families[fk]&&capturedFamilies[fk])families[fk]=capturedFamilies[fk];
@@ -4864,7 +7000,14 @@ async function deleteCamper(n){
         });
         capturedBunks.forEach(function(b){if(!bunkAsgn[b])bunkAsgn[b]=[];if(bunkAsgn[b].indexOf(n)<0)bunkAsgn[b].push(n)});
         Object.keys(capturedEnrollments).forEach(function(eid){
-            if(enrollments[eid])enrollments[eid]=capturedEnrollments[eid];
+            // UNCONDITIONAL. This used to be guarded on the enrollment still
+            // existing — but cascadeCamperDelete DELETES these keys, so the guard
+            // was false for exactly the enrollments Undo was snapshotted to bring
+            // back, and it silently restored none of them. The snapshot is the truth
+            // for these ids; if the key is still there, assigning it is a no-op.
+            enrollments[eid]=capturedEnrollments[eid];
+            // And the tombstone goes, or the next save re-deletes what Undo restored.
+            _untombstoneSubmission('enrollments',eid);
         });
         save();render(curPage);toast('Camper restored');
     }});
@@ -4902,7 +7045,7 @@ function unenrollCamper(n){
     var flipped=[];
     Object.keys(enrollments).forEach(function(id){
         var e=enrollments[id];
-        if(!e||e.camperName!==n)return;
+        if(!e||!_enrIsFor(e,n))return;
         if(e.status!=='accepted'&&e.status!=='enrolled')return;
         var prev=e.status;
         e.status='unenrolled';
@@ -4963,7 +7106,7 @@ function _reopenWithdrawals(fk,name){
     var f=families[fk],n=0;
     Object.keys(enrollments||{}).forEach(function(eid){
         var e=enrollments[eid];
-        if(!e||e.camperName!==name)return;
+        if(!e||!_enrIsFor(e,name))return;
         var credit=B.withdrawalCreditFor(f,eid);
         if(!credit||B.isReversed(f,credit.id))return;
         var res=B.reverse(f,credit.id,{note:'Re-enrolled — '+name,by:'office'});
@@ -4985,7 +7128,7 @@ function reenrollCamper(n){
     }
     Object.keys(enrollments).forEach(function(id){
         var e=enrollments[id];
-        if(!e||e.camperName!==n||e.status!=='unenrolled')return;
+        if(!e||!_enrIsFor(e,n)||e.status!=='unenrolled')return;
         e.status='enrolled';
         e.statusHistory=e.statusHistory||[];
         e.statusHistory.push({from:'unenrolled',to:'enrolled',date:new Date().toISOString(),by:'office'});
@@ -5176,8 +7319,9 @@ function renderStructure(){
         +(divs.length?'<p class="sec-desc">'+divs.length+' division'+(divs.length!==1?'s':'')+' · '+totGrades+' grade'+(totGrades!==1?'s':'')+' · '+totBunks+' bunk'+(totBunks!==1?'s':'')+'</p>':'')
         +'</div><div class="sec-actions">'
         +(divs.length>1?'<button class="me-btn me-btn--sec me-btn--sm" onclick="CampistryMe.setAllStructDivsOpen(true)">Expand all</button><button class="me-btn me-btn--sec me-btn--sm" onclick="CampistryMe.setAllStructDivsOpen(false)">Collapse all</button>':'')
+        +'<button class="me-btn me-btn--sec" onclick="CampistryMe.openQuickFillUpload()">⚡ Quick Fill</button>'
         +'<button class="me-btn me-btn--pri" onclick="CampistryMe.addDiv()">+ Add Division</button></div></div>';
-    if(!divs.length){h+='<div class="me-empty"><h3>No divisions yet</h3><p>Create your camp structure to get started — divisions, grades, and bunks.</p><button class="me-btn me-btn--pri" onclick="CampistryMe.addDiv()">+ Add Division</button></div>'}
+    if(!divs.length){h+='<div class="me-empty"><h3>No divisions yet</h3><p>Create your camp structure to get started — divisions, grades, and bunks.</p><button class="me-btn me-btn--sec" onclick="CampistryMe.openQuickFillUpload()" style="margin-right:8px">⚡ Quick Fill from a spreadsheet</button><button class="me-btn me-btn--pri" onclick="CampistryMe.addDiv()">+ Add Division</button></div>'}
     else{
         h+='<div id="meDivList"><div style="font-size:.75rem;color:var(--s600);background:var(--me-bg);border:1px solid var(--me-border);border-radius:var(--r);padding:8px 12px;margin-bottom:10px"><strong>Order matters:</strong> Flow, the schedule grid, and print sheets all follow the order set here — set divisions up <strong>youngest to oldest, top to bottom</strong> (grades within a division the same way). Drag the ⋮⋮ handles or any chip to reorder in place.</div>';
         divs.forEach(function([dn,dd],ix){
@@ -5188,10 +7332,14 @@ function renderStructure(){
             var rollup=_divisionHeadRollup(dn,grades);
             var dHeadChip=rollup.heads.length
                 ?rollup.heads.map(function(s){return esc(s.name);}).join(', ')
-                :(rollup.editable?'+ Assign division head':(rollup.mixed?'Set per grade below':'+ Assign per grade'));
-            var dHeadAttrs=rollup.editable
-                ?' onclick="event.stopPropagation();CampistryMe.openDivisionHeadModal(\''+je(dn)+'\')" style="cursor:pointer"'
-                :' style="cursor:default"';
+                :(rollup.mixed?'Mixed — click to set division-wide':'+ Assign division head');
+            // A division head can always be assigned directly at the division
+            // level, even when grades already have their own heads set — the
+            // rollup above only controls what's SHOWN (derived from grades
+            // when they're uniform), not whether the division-level record
+            // itself is editable. Without this, a division with grades could
+            // only ever get a head assigned per-grade.
+            var dHeadAttrs=' onclick="event.stopPropagation();CampistryMe.openDivisionHeadModal(\''+je(dn)+'\')" style="cursor:pointer"';
             var bodyId='structBody'+ix;
             var openKey='struct_'+dn;
             var isOpen=Object.prototype.hasOwnProperty.call(_accOpenState,openKey)?_accOpenState[openKey]:false;
@@ -5217,7 +7365,7 @@ function renderStructure(){
                 +'</div>'
                 +'</div>'
                 +'<div style="display:flex;gap:10px;align-items:center;flex-shrink:0">'
-                +'<span'+dHeadAttrs+' title="'+(rollup.editable?'Who gets notified for this division':'Assigned per grade below')+' " style="font-size:.74rem;'+(rollup.heads.length?'color:var(--s600)':'color:var(--me)')+';font-weight:600;white-space:nowrap">'
+                +'<span'+dHeadAttrs+' title="Who gets notified for this division — grade heads below can still override per grade" style="font-size:.74rem;'+(rollup.heads.length?'color:var(--s600)':'color:var(--me)')+';font-weight:600;white-space:nowrap">'
                 +'<span style="color:var(--s400);font-weight:600">Head:</span> '+dHeadChip+'</span>'
                 +'<button class="me-btn me-btn--ghost me-btn--sm" onclick="CampistryMe.editDiv(\''+je(dn)+'\')">Edit</button>'
                 +'<button class="me-btn me-btn--danger me-btn--sm" onclick="CampistryMe.deleteDiv(\''+je(dn)+'\')">Delete</button>'
@@ -5237,9 +7385,14 @@ function renderStructure(){
                 var gBunks=gd.bunks||[];
                 var gBunksId='structGB'+ix+'_'+gix;
                 var gOpenKey='structgb_'+dn+'_'+gn;
+                // Grades default to CLOSED when a division is first opened — with
+                // several grades each carrying their own bunk chips, an
+                // all-expanded division is a wall of bunks before you've even
+                // decided which grade you came in to look at. The user's
+                // explicit expand/collapse choice (_accOpenState) still wins.
                 var gOpen=Object.prototype.hasOwnProperty.call(_accOpenState,gOpenKey)
                     ?_accOpenState[gOpenKey]
-                    :(gBunks.length<=8);
+                    :false;
                 var gCampers=Object.values(roster).filter(function(c){return c.grade===gn&&c.division===dn}).length;
                 var gHeads=divisionHeads[gn]||[];
                 var gHeadChip=gHeads.length?gHeads.map(function(s){return esc(s.name);}).join(', '):'+ Assign';
@@ -5521,6 +7674,273 @@ function _wireBunkChip(chip){
 }
 
 // Division create/edit
+/**
+ * QUICK FILL — bulk camp structure from a downloaded/re-uploaded CSV.
+ *
+ * Clicking through Add Division -> Add Grade -> Add Bunk once per row of a
+ * camp with a dozen divisions is the whole reason this exists. A camp that
+ * already has its structure in a spreadsheet (which most do, going into
+ * their first season) should be able to bring it in at once instead.
+ *
+ * An in-page editable grid was tried first and dropped: browsers' own
+ * contenteditable/table quirks (cursor placement, column sizing) kept
+ * surfacing bugs that a real spreadsheet app doesn't have. Instead: give
+ * the camp a template CSV with the columns already labeled (Division,
+ * Grade, Bunk, Days Available, School Grade, Bunk Size, Alternate Name),
+ * let them fill it in Excel/Google Sheets/Numbers — actual spreadsheet
+ * software, with actual fill handles, actual copy/paste, actual undo —
+ * and upload the result back. Only Division, Grade and Bunk are required.
+ *
+ * Days Available and School Grade both accept any mix of values in one
+ * cell, space/semicolon separated so they can live inside a CSV cell
+ * without fighting the comma delimiter ("M W F" / "Mon Wed Fri" for days;
+ * a school grade cell can additionally use commas since it's the last
+ * column camps usually fill freely). Days left blank means every day,
+ * matching the app's existing "present all days" default. Bunk Size sets
+ * that bunk's capacity (same field as the manual per-bunk capacity input);
+ * Alternate Name sets that bunk's alias (same field as the manual bunk
+ * alias input) — both keyed by bunk name, same as the app's own storage.
+ *
+ * Merges into the EXISTING structure rather than replacing it: a division/
+ * grade already present gets new bunks appended (skipping exact-name
+ * duplicates), and school grades union in; a new division/grade is created
+ * fresh. Nothing already in the camp's structure is ever deleted by this
+ * tool.
+ */
+var QF_COLS=['Division','Grade','Bunk','Days Available','School Grade','Bunk Size','Alternate Name'];
+var _qfPendingResult=null;
+
+function downloadQuickFillTemplate(){
+    var rows=[
+        QF_COLS,
+        ['Example: Seniors','Grade 8','Bunk 1','Mon Wed Fri','8th Grade','14','Eagles'],
+        ['Example: Seniors','Grade 8','Bunk 2','','8th Grade','12','']
+    ];
+    var csv=rows.map(function(r){return r.map(_qfCsvField).join(',')}).join('\r\n');
+    var blob=new Blob([csv],{type:'text/csv;charset=utf-8;'});
+    var url=URL.createObjectURL(blob);
+    var a=document.createElement('a');
+    a.href=url;a.download='campistry_structure_template.csv';
+    document.body.appendChild(a);a.click();document.body.removeChild(a);
+    setTimeout(function(){URL.revokeObjectURL(url)},1000);
+}
+function _qfCsvField(v){
+    v=String(v==null?'':v);
+    return /[",\r\n]/.test(v)?'"'+v.replace(/"/g,'""')+'"':v;
+}
+
+function openQuickFillUpload(){
+    var body=
+        '<p style="font-size:.85rem;color:var(--s600);margin:0 0 14px;line-height:1.5">Download the template below, fill in one row per bunk in Excel/Google Sheets/Numbers, then upload it here. Division, Grade and Bunk are required; Days Available, School Grade, Bunk Size and Alternate Name are all optional. Divisions and grades that already exist just get new bunks added — nothing existing is overwritten or removed.</p>'
+        +'<button type="button" class="me-btn me-btn--sec" onclick="CampistryMe.downloadQuickFillTemplate()" style="margin-bottom:16px">⬇ Download Template (CSV)</button>'
+        +'<div class="fi-group"><label style="font-size:.8rem;font-weight:600;color:var(--s600);display:block;margin-bottom:6px">Upload filled-in CSV</label><input type="file" id="qfFileInput" accept=".csv,text/csv" class="fi" style="width:100%"></div>'
+        +'<div id="qfUploadPreview" style="margin-top:14px;font-size:.82rem;line-height:1.5;display:none"></div>';
+    _qfPendingResult=null;
+    showModal('Quick Fill Structure',body,function(){
+        if(!_qfPendingResult||!_qfPendingResult.rowCount){toast('Choose a filled-in CSV file first','error');return}
+        var res=_qfPendingResult;
+        _qfCommit(res);
+        closeModal('dynModal');
+        renderStructure();
+        toast('Added '+res.newDivs+' division'+(res.newDivs!==1?'s':'')+', '+res.newGrades+' grade'+(res.newGrades!==1?'s':'')+', '+res.newBunks+' bunk'+(res.newBunks!==1?'s':''));
+    },{saveLabel:'Create Structure'});
+    setTimeout(function(){
+        var inp=document.getElementById('qfFileInput');
+        if(inp)inp.addEventListener('change',_qfHandleFile);
+    },0);
+}
+function _qfHandleFile(e){
+    var file=e.target.files&&e.target.files[0];
+    var preview=document.getElementById('qfUploadPreview');
+    _qfPendingResult=null;
+    if(preview){preview.style.display='none';preview.innerHTML=''}
+    if(!file)return;
+    var reader=new FileReader();
+    reader.onload=function(){
+        var res=_qfParseCSV(String(reader.result||''));
+        if(!preview)return;
+        preview.style.display='block';
+        if(!res.rowCount){
+            preview.style.color='var(--err)';
+            preview.innerHTML='No valid rows found — make sure each row has at least a Division and a Grade filled in.';
+            return;
+        }
+        _qfPendingResult=res;
+        preview.style.color='var(--s600)';
+        var extras=[];
+        if(res.bunkSizeCount)extras.push(res.bunkSizeCount+' bunk size'+(res.bunkSizeCount!==1?'s':''));
+        if(res.altNameCount)extras.push(res.altNameCount+' alternate name'+(res.altNameCount!==1?'s':''));
+        preview.innerHTML='Will add: <strong>'+res.newDivs+'</strong> division'+(res.newDivs!==1?'s':'')+', <strong>'+res.newGrades+'</strong> grade'+(res.newGrades!==1?'s':'')+', <strong>'+res.newBunks+'</strong> bunk'+(res.newBunks!==1?'s':'')+(extras.length?' — plus '+extras.join(' and ')+'.':'.');
+    };
+    reader.readAsText(file);
+}
+
+
+// Recognizes a day cell in any of the app's own shapes so a pasted sheet
+// doesn't have to match DM_DAYS' exact spelling: first 2-3 letters,
+// case-insensitive, is enough ("Mon"/"mon"/"M" -> Monday). Tuesday and
+// Thursday both start with "T", and a bare single-letter "T,T" (as in the
+// modal's own "M,T,W,T,F" example) can't be told apart by spelling alone --
+// `lastIdx` (the previously resolved day's position in DM_DAYS) is used to
+// pick whichever of the two comes NEXT in week order, so a run of single
+// letters resolves the way a human reads them: in sequence.
+function _qfMatchDay(token,lastIdx){
+    var t=(token||'').trim().toLowerCase();
+    if(!t)return -1;
+    if(t.charAt(0)==='t'&&t.length<=1){
+        // Ambiguous bare "T": Tuesday is index 2, Thursday is index 4.
+        // Pick Thursday only once we're already past Tuesday's slot.
+        return lastIdx>=2?4:2;
+    }
+    if(t==='th')return 4;
+    if(t==='tu')return 2;
+    for(var i=0;i<DM_DAYS.length;i++){
+        if(DM_DAYS[i].toLowerCase().indexOf(t)===0)return i;
+    }
+    return -1;
+}
+function _qfParseDays(cell){
+    if(!cell||!cell.trim())return null; // null = every day, same as the manual form's default
+    var tokens=cell.split(/[,/;]+|\s+/).filter(Boolean);
+    var out=[],lastIdx=-1;
+    tokens.forEach(function(tok){
+        var idx=_qfMatchDay(tok,lastIdx);
+        if(idx>=0){lastIdx=idx;if(out.indexOf(DM_DAYS[idx])<0)out.push(DM_DAYS[idx])}
+    });
+    return out.length?out:null;
+}
+
+// Feeder school grade(s) a camp grade draws from -- free text against
+// SCHOOL_GRADE_CATALOG rather than a fixed set like days, so an exact
+// catalog match ("8th Grade") is normalized to it, but anything else typed
+// is kept as-is rather than silently dropped.
+function _qfParseSchoolGrades(cell){
+    if(!cell||!cell.trim())return null;
+    var tokens=cell.split(/[,;/]+/).map(function(t){return t.trim()}).filter(Boolean);
+    var out=[];
+    tokens.forEach(function(t){
+        var match=SCHOOL_GRADE_CATALOG.filter(function(sg){return sg.toLowerCase()===t.toLowerCase()})[0];
+        var val=match||t;
+        if(out.indexOf(val)<0)out.push(val);
+    });
+    return out.length?out:null;
+}
+
+// A small hand-rolled CSV parser -- handles quoted fields (so a value that
+// itself contains a comma or a newline survives round-tripping through
+// Excel/Sheets/Numbers, all of which quote such fields on export) without
+// pulling in a dependency for four columns of plain text.
+function _qfParseCSVLines(text){
+    var rows=[],row=[],field='',inQuotes=false;
+    text=text.replace(/\r\n/g,'\n').replace(/\r/g,'\n');
+    for(var i=0;i<text.length;i++){
+        var c=text[i];
+        if(inQuotes){
+            if(c==='"'){ if(text[i+1]==='"'){field+='"';i++} else inQuotes=false; }
+            else field+=c;
+        }else{
+            if(c==='"')inQuotes=true;
+            else if(c===','){row.push(field);field=''}
+            else if(c==='\n'){row.push(field);rows.push(row);row=[];field=''}
+            else field+=c;
+        }
+    }
+    row.push(field);rows.push(row);
+    return rows;
+}
+
+/** Pure parse -- reads the uploaded CSV's text, never touches `structure`.
+ *  Columns are fixed (Division, Grade, Bunk, Days Available, School Grade,
+ *  Bunk Size, Alternate Name); a header row matching that is auto-detected
+ *  and skipped, and the template's own "Example: ..." rows are ignored.
+ *  Bunk Size and Alternate Name key off the bunk name into flat maps —
+ *  same shape as the app's own bunkCapacity/bunkAliases globals, which
+ *  aren't nested under structure either. Returns
+ *  {rowCount, newDivs, newGrades, newBunks, byDivision, divOrder,
+ *   bunkCapacity, bunkAliases, bunkSizeCount, altNameCount}. */
+function _qfParseCSV(text){
+    var lines=_qfParseCSVLines(text||'').filter(function(r){return r.some(function(v){return (v||'').trim()!==''})});
+    var byDivision={}; // name -> {grades: {name: {bunks:[], days:[]|null, schoolGrades:[]|null}}, order:[]}
+    var divOrder=[],rowCount=0;
+    var bunkCap={},bunkAlias={};
+    if(!lines.length)return {rowCount:0,byDivision:byDivision,divOrder:divOrder,newDivs:0,newGrades:0,newBunks:0,bunkCapacity:bunkCap,bunkAliases:bunkAlias,bunkSizeCount:0,altNameCount:0};
+    var start=0;
+    var first=(lines[0][0]||'').trim().toLowerCase();
+    if(first==='division')start=1;
+    for(var r=start;r<lines.length;r++){
+        var row=lines[r];
+        var divName=(row[0]||'').trim();
+        if(!divName||/^example[:]/i.test(divName))continue; // blank row or the template's own example -- skip, don't error the whole thing
+        var gradeName=(row[1]||'').trim();
+        if(!gradeName)continue;
+        var bunkName=(row[2]||'').trim();
+        var days=_qfParseDays(row[3]||'');
+        var schoolGrades=_qfParseSchoolGrades(row[4]||'');
+        var sizeRaw=(row[5]||'').trim();
+        var size=sizeRaw?parseInt(sizeRaw,10):NaN;
+        var altName=(row[6]||'').trim();
+        if(!byDivision[divName]){byDivision[divName]={grades:{},order:[]};divOrder.push(divName)}
+        var dv=byDivision[divName];
+        if(!dv.grades[gradeName]){dv.grades[gradeName]={bunks:[],days:days,schoolGrades:schoolGrades};dv.order.push(gradeName)}
+        else{
+            if(days&&!dv.grades[gradeName].days)dv.grades[gradeName].days=days; // first non-blank Days cell for a grade wins
+            if(schoolGrades){ // school grades UNION across every bunk row under this grade
+                var sg=dv.grades[gradeName].schoolGrades||[];
+                schoolGrades.forEach(function(v){if(sg.indexOf(v)<0)sg.push(v)});
+                dv.grades[gradeName].schoolGrades=sg;
+            }
+        }
+        if(bunkName&&dv.grades[gradeName].bunks.indexOf(bunkName)<0)dv.grades[gradeName].bunks.push(bunkName);
+        if(bunkName&&!isNaN(size)&&size>0)bunkCap[bunkName]=size;
+        if(bunkName&&altName)bunkAlias[bunkName]=altName;
+        rowCount++;
+    }
+    // New-vs-existing counts, computed against the CURRENT structure so the
+    // office sees exactly what will change before committing.
+    var newDivs=0,newGrades=0,newBunks=0;
+    divOrder.forEach(function(dn){
+        var existing=structure[dn];
+        if(!existing)newDivs++;
+        byDivision[dn].order.forEach(function(gn){
+            var g=byDivision[dn].grades[gn];
+            var existingGrade=existing&&existing.grades&&existing.grades[gn];
+            if(!existingGrade)newGrades++;
+            var existingBunks=(existingGrade&&existingGrade.bunks)||[];
+            newBunks+=g.bunks.filter(function(b){return existingBunks.indexOf(b)<0}).length;
+        });
+    });
+    return {rowCount:rowCount,byDivision:byDivision,divOrder:divOrder,newDivs:newDivs,newGrades:newGrades,newBunks:newBunks,
+            bunkCapacity:bunkCap,bunkAliases:bunkAlias,bunkSizeCount:Object.keys(bunkCap).length,altNameCount:Object.keys(bunkAlias).length};
+}
+
+/** Writes the parsed result into `structure` (plus the flat bunkCapacity/
+ *  bunkAliases maps) and saves. Split from _qfParseCSV so the live preview
+ *  (fired on every file pick) never touches real data -- only the Create
+ *  Structure button does. */
+function _qfCommit(res){
+    res.divOrder.forEach(function(dn){
+        if(!structure[dn])structure[dn]={color:COLORS[Object.keys(structure).length%COLORS.length],grades:{}};
+        var dv=structure[dn];
+        if(!dv.grades)dv.grades={};
+        res.byDivision[dn].order.forEach(function(gn){
+            var g=res.byDivision[dn].grades[gn];
+            if(!dv.grades[gn])dv.grades[gn]={bunks:[]};
+            var target=dv.grades[gn];
+            if(!target.bunks)target.bunks=[];
+            g.bunks.forEach(function(b){if(target.bunks.indexOf(b)<0)target.bunks.push(b)});
+            if(g.days&&!target.daysPresent)target.daysPresent=g.days;
+            if(g.schoolGrades){
+                var sg=Array.isArray(target.schoolGrades)?target.schoolGrades:[];
+                g.schoolGrades.forEach(function(v){if(sg.indexOf(v)<0)sg.push(v)});
+                target.schoolGrades=sg;
+            }
+        });
+    });
+    Object.keys(res.bunkCapacity||{}).forEach(function(b){bunkCapacity[b]=res.bunkCapacity[b]});
+    Object.keys(res.bunkAliases||{}).forEach(function(b){bunkAliases[b]=res.bunkAliases[b]});
+    save();
+}
+
 function openDivForm(name){
     editingDiv=name;
     var d=name?structure[name]:{color:COLORS[Object.keys(structure).length%COLORS.length],grades:{}};
@@ -5535,7 +7955,7 @@ function openDivForm(name){
 
     var h='<div style="display:grid;grid-template-columns:260px minmax(0,1fr);gap:24px;align-items:start" id="dmGrid">';
 
-    h+='<div>'
+    h+='<div style="border-right:1px solid var(--s100);padding-right:24px" id="dmLeftCol">'
         +'<div style="font-size:.72rem;font-weight:700;letter-spacing:.04em;text-transform:uppercase;color:var(--s500);margin-bottom:10px">The division</div>'
         +ff('Division Name','dmName',name||'')
         +'<div class="fg"><label class="fl">Colour</label><div class="swatch-row">';
@@ -5564,15 +7984,25 @@ function openDivForm(name){
 
     h+='</div>';
     document.getElementById('dmBody').innerHTML=h;
-    // One column on a narrow window: a 260px sidebar beside grade chips is
-    // worse than stacking once there is no room for both.
-    var _dmGrid=document.getElementById('dmGrid');
-    if(_dmGrid&&_dmGrid.clientWidth<720)_dmGrid.style.gridTemplateColumns='minmax(0,1fr)';
     var dmGrades=document.getElementById('dmGrades');
     _meReorderInit(dmGrades,'.dm-grade-row');
     dmGrades.querySelectorAll('.dm-grade-row').forEach(_wireGradeRow);
     document.getElementById('dmSave').onclick=saveDiv;
+    // ★ BUG FIX: this modal starts hidden, so #dmGrid had zero width at the
+    // moment this ran -- every division, on every screen, always measured
+    // "narrow" and collapsed to one column, which is why the two-column
+    // layout never actually appeared and the modal read as a single bare
+    // stack. openModal() must run FIRST so the grid has real, laid-out
+    // width to measure.
     openModal('divModal');
+    var _dmGrid=document.getElementById('dmGrid');
+    if(_dmGrid&&_dmGrid.clientWidth<720){
+        _dmGrid.style.gridTemplateColumns='minmax(0,1fr)';
+        // The divider between columns only makes sense side-by-side; stacked,
+        // it would read as a stray line under "The division" instead.
+        var _dmLeft=document.getElementById('dmLeftCol');
+        if(_dmLeft){_dmLeft.style.borderRight='none';_dmLeft.style.paddingRight='0';_dmLeft.style.marginBottom='18px';_dmLeft.style.paddingBottom='18px';_dmLeft.style.borderBottom='1px solid var(--s100)'}
+    }
 }
 function _addGradeRow(){
     var cont=document.getElementById('dmGrades');
@@ -6911,7 +9341,7 @@ function _rebalanceCohort(bunks,bunkState,reqMap,targets,caps,cfg,locked){
                         if(heldByFriend(c,src))return;
                         if(bunkState[dest].occupants.length+1>caps[dest])return;
                         if(conflictsWith(c,bunkState[dest].occupants))return;
-                        pick={src:src,camper:c};
+                        pick={src:src,camper:c,camperId:(roster[c]||{}).camperId};
                     });
                 });
                 if(!pick)break;
@@ -7059,8 +9489,8 @@ function _bunkGenForGrade(poolNames,bunks,cfg,report){
         var res=resolveFor(n);
         reqMap[n]=res;
         report.requestsTotal+=res.friends.length+res.unmatched.length;
-        res.unmatched.forEach(function(f){report.unresolved.push({camper:n,requested:f,kind:'friend'});});
-        res.avoidUnmatched.forEach(function(f){report.unresolved.push({camper:n,requested:f,kind:'avoid'});});
+        res.unmatched.forEach(function(f){report.unresolved.push({camper:n,camperId:(roster[n]||{}).camperId,requested:f,kind:'friend'});});
+        res.avoidUnmatched.forEach(function(f){report.unresolved.push({camper:n,camperId:(roster[n]||{}).camperId,requested:f,kind:'avoid'});});
     });
     gradeCandidates.forEach(function(n){if(!reqMap[n])reqMap[n]=resolveFor(n);});
 
@@ -7889,7 +10319,7 @@ function addDivisionHead(divName){
     else divisionHeads[divName].push(rec);
     save();
     renderStructure();
-    _renderDivisionHeadModalBody(divName);
+    closeModal('dynModal');
     toast((idx>=0?'Saved ':'Added ')+name);
 }
 function removeDivisionHead(divName,idx){
@@ -8004,6 +10434,10 @@ function _leadLabel(s){var x=LEAD_STAGES.find(function(g){return g.key===s;});re
 
 function renderLeads(){
     var c=document.getElementById('page-leads');
+    if(!_secCan('me.leads')){
+        c.innerHTML='<div class="me-empty"><h3>No access to Leads</h3><p>Your account isn\'t set up to open this section.</p></div>';
+        return;
+    }
     var arr=Object.entries(leads);
     var total=arr.length;
     var by={}; LEAD_STAGES.forEach(function(g){if(g.key!=='all')by[g.key]=0;});
@@ -8097,8 +10531,9 @@ function setLeadStatus(id,status){var l=leads[id];if(!l)return;l.status=status;i
 function saveLeadNotes(id){var l=leads[id];if(!l)return;var el=document.getElementById('leadNote');if(el)l.notes=el.value;save();toast('Notes saved');}
 function setLeadFollowUp(id){var l=leads[id];if(!l)return;var el=document.getElementById('leadFU');if(el)l.nextFollowUp=el.value;save();renderLeads();viewLead(id);toast('Follow-up set');}
 function addLeadActivity(id){var l=leads[id];if(!l)return;var el=document.getElementById('leadAct');var t=el&&el.value.trim();if(!t)return;if(!l.activity)l.activity=[];l.activity.push({date:today(),text:t});save();viewLead(id);}
-async function deleteLead(id){if(!leads[id])return;var ok=await confirmDialog({title:'Delete Lead?',message:'This lead will be permanently deleted.',confirmLabel:'Delete',danger:true});if(!ok)return;delete leads[id];save();closeModal('dynModal');renderLeads();toast('Lead deleted');}
+async function deleteLead(id){if(!leads[id])return;if(!_secEdit('me.leads','Deleting a lead'))return;var ok=await confirmDialog({title:'Delete Lead?',message:'This lead will be permanently deleted.',confirmLabel:'Delete',danger:true});if(!ok)return;delete leads[id];save();closeModal('dynModal');renderLeads();toast('Lead deleted');}
 function addLead(){
+    if(!_secEdit('me.leads','Adding a lead'))return;
     var h='<div class="me-modal-form">';
     h+='<div class="me-field"><label>Parent / guardian name</label><input class="me-input" id="ldN"></div>';
     h+='<div style="display:grid;grid-template-columns:1fr 1fr;gap:10px"><div class="me-field"><label>Email</label><input class="me-input" id="ldE"></div><div class="me-field"><label>Phone</label><input class="me-input" id="ldP"></div></div>';
@@ -8109,7 +10544,7 @@ function addLead(){
         var name=document.getElementById('ldN').value.trim();
         if(!name){toast('Enter a parent name','error');return;}
         var id='lead_'+Date.now()+'_'+Math.random().toString(36).slice(2,6);
-        leads[id]={parentName:name,email:document.getElementById('ldE').value.trim(),phone:document.getElementById('ldP').value.trim(),camperName:document.getElementById('ldC').value.trim(),camperGrade:document.getElementById('ldG').value.trim(),interests:document.getElementById('ldI').value.trim(),source:document.getElementById('ldS').value.trim()||'Manual',status:'new',createdDate:today(),createdAt:new Date().toISOString(),notes:'',activity:[]};
+        leads[id]={parentName:name,email:document.getElementById('ldE').value.trim(),phone:document.getElementById('ldP').value.trim(),camperName:document.getElementById('ldC').value.trim(),camperGrade:document.getElementById('ldG').value.trim(),interests:document.getElementById('ldI').value.trim(),source:document.getElementById('ldS').value.trim()||'Manual',status:'new',createdDate:today(),createdAt:new Date().toISOString(),notes:'',activity:[]}; // name-ok: a lead, not a camper yet
         save();closeModal('dynModal');renderLeads();toast('Lead added');
     });
 }
@@ -8503,7 +10938,7 @@ async function _sendContractOfferNow(id){
     var subject='Your offer from '+(campName||'Camp');
     var body='Hi '+firstName+',\n\nWe\'d like to offer you a position for the upcoming season! Please review and accept your offer here:\n\n'+url+'\n\nWe look forward to having you on the team.';
     try{
-        await callEdgeFunctionAuthed('send-broadcast',{campId:getCampId(),to:[{email:a.email,name:a.name||''}],subject:subject,body:body,method:'email',campName:campName});
+        await callEdgeFunctionAuthed('send-broadcast',{campId:getCampId(),to:[{email:a.email,name:a.name||''}],subject:subject,body:body,method:'email',campName:campName,branding:(typeof _getLinkBranding==='function')?_getLinkBranding():undefined});
         a.contract.emailSentAt=new Date().toISOString();
         save();
         toast('Contract offer emailed to '+a.email);
@@ -8932,7 +11367,11 @@ async function rescindEnrollment(id){
     // record) to 'withdrawn' itself, so `e.status` may already be
     // 'withdrawn' by the time we get here — reading prev first keeps the
     // audit entry below accurate instead of logging a no-op 'withdrawn'→'withdrawn'.
-    if(e.camperName && roster[e.camperName]){ delete roster[e.camperName]; cascadeCamperDelete(e.camperName); }
+    if(e.camperName && roster[e.camperName]){
+        var _rid=normalizePersonId(roster[e.camperName].camperId);
+        if(_rid){_queueCamperErase(_rid,_lbl(e.camperName));setTimeout(_runCamperErases,8000)}
+        delete roster[e.camperName]; cascadeCamperDelete(e.camperName);
+    }
     if(e.status!=='withdrawn'){
         e.status='withdrawn';
         e.statusHistory=e.statusHistory||[];
@@ -8971,11 +11410,15 @@ async function deleteApplication(id){
     var captured;
     try{captured=JSON.parse(JSON.stringify(e));}catch(_){captured=e;}
     delete enrollments[id];
+    // BEFORE the save, so the write-time merge sees the tombstone and does not put
+    // the application straight back from the cloud.
+    _tombstoneSubmission('enrollments',id);
     save();
     closeModal('appViewModal');
     _refreshPplIfActive();
     toast('Application deleted','ok',{actionLabel:'Undo',onAction:function(){
         enrollments[id]=captured;
+        _untombstoneSubmission('enrollments',id);
         save();render(curPage);toast('Application restored');
     }});
 }
@@ -9126,7 +11569,8 @@ var PAF_SECTIONS=[
     // that never asks for paperwork or money after acceptance must see exactly
     // the form it had before.
     {key:'documents',label:'Required Documents',desc:'The same named list as the registration form — for camps that take the paperwork after acceptance',default:false},
-    {key:'payment',label:'Payment Preference & Deposit',desc:'How the family intends to pay, and what they still owe on their deposit',default:false}
+    {key:'payment',label:'Payment Preference & Deposit',desc:'How the family intends to pay, and what they still owe on their deposit',default:false},
+    {key:'camperMail',label:'Camper Mail',desc:'Show families how to email letters to their camper — the camp address and the child’s code',default:false}
 ];
 var PAF_FIELD_CATALOG={
     bunk:[
@@ -9150,6 +11594,207 @@ function getPostAcceptFormConfig(){
     var sections={};
     PAF_SECTIONS.forEach(function(s){sections[s.key]={enabled:s.default}});
     return{sections:sections,customQuestions:[],customSections:[],welcomeMessage:'',instructions:'',fields:{},sectionOrder:PAF_SECTIONS.map(function(s){return s.key}),branding:{},autoSend:false,attachedListIds:[],printableList:{name:'',items:[]}};
+}
+
+// ── "On Acceptance" packet — what a family receives the moment they're accepted.
+// The Post-Acceptance FORM is just the form; THIS is the builder for what's sent
+// out. Auto-send lives here now (moved off the form). Seeds auto-send from the
+// old form setting so nothing a camp already turned on is lost.
+var PKT_ITEMS=['form','zelle','camperMail'];
+function getAcceptancePacketConfig(){
+    if(acceptancePacketConfig)return acceptancePacketConfig;
+    return {
+        autoSend:!!(paFormConfig&&paFormConfig.autoSend),
+        subject:'',
+        message:'',
+        order:PKT_ITEMS.slice(),
+        form:{enabled:true},
+        zelle:{enabled:false,sendTo:'',showMemo:true},
+        camperMail:{enabled:false,address:'',showCode:false}
+    };
+}
+// The order the included items appear in, validated to the known keys with any
+// missing ones appended (older saved configs).
+function _pktResolveOrder(ord){
+    var out=[]; (ord||[]).forEach(function(k){ if(PKT_ITEMS.indexOf(k)>=0&&out.indexOf(k)<0)out.push(k); });
+    PKT_ITEMS.forEach(function(k){ if(out.indexOf(k)<0)out.push(k); });
+    return out;
+}
+// The included items' current order (reorderable in the builder) and the last
+// rendered preview HTML (for the "Preview" button's new tab).
+var _pktOrder=PKT_ITEMS.slice(), _pktPreviewHtml='';
+// Reads the builder's live inputs into a config shape (before Save), so the
+// preview reflects exactly what's on screen.
+function _pktLiveConfig(){
+    var g=function(id){var el=document.getElementById(id);return el?!!el.checked:false;};
+    var v=function(id){var el=document.getElementById(id);return el?(el.value||''):'';};
+    return {
+        autoSend:g('pktAutoSend'),
+        subject:v('pktSubject').trim(),
+        message:v('pktMessage'),
+        order:_pktOrder.slice(),
+        form:{enabled:g('pktForm')},
+        zelle:{enabled:g('pktZelle'),sendTo:v('pktZelleTo').trim(),showMemo:g('pktZelleMemo')},
+        camperMail:{enabled:g('pktMail'),address:v('pktMailAddr').trim(),showCode:g('pktMailCode')}
+    };
+}
+// One includable item's toggle row (with up/down reorder) + its fields.
+function _pktBlockHtml(k,cfg){
+    function rowc(id,checked,title,desc){
+        return '<label style="display:flex;align-items:flex-start;gap:10px;padding:6px 0;cursor:pointer">'
+          +'<input type="checkbox" id="'+id+'" '+(checked?'checked':'')+' style="accent-color:var(--me);flex-shrink:0;width:16px;height:16px;margin-top:2px">'
+          +'<div style="flex:1;min-width:0"><div style="font-size:.85rem;font-weight:600;color:var(--s800)">'+title+'</div>'
+          +'<div style="font-size:.72rem;color:var(--s400)">'+desc+'</div></div></label>';
+    }
+    var mailDefault=_defaultMailAddr();
+    if(k==='form') return rowc('pktForm',cfg.form.enabled,'Post-Acceptance Form','Include a link to the form (bunkmate requests, t-shirt size, consent, etc.).');
+    if(k==='zelle') return rowc('pktZelle',cfg.zelle.enabled,'Zelle deposit instructions','Tell the family how to pay their deposit by Zelle.')
+      +'<div id="pktZelleFields" style="padding:2px 0 8px 26px;'+(cfg.zelle.enabled?'':'display:none')+'">'
+      +'<div class="fg"><label class="fl">Send Zelle to (email or phone)</label><input class="fi" id="pktZelleTo" value="'+esc(cfg.zelle.sendTo||'')+'" placeholder="e.g. payments@yourcamp.org"></div>'
+      +'<label style="display:flex;align-items:center;gap:8px;font-size:.8rem;color:var(--s600);cursor:pointer"><input type="checkbox" id="pktZelleMemo" '+(cfg.zelle.showMemo!==false?'checked':'')+' style="accent-color:var(--me);width:15px;height:15px">Show each family their deposit reference to put in the Zelle memo</label></div>';
+    if(k==='camperMail') return rowc('pktMail',cfg.camperMail.enabled,'Camper mail address','Tell the family the email address to send printed letters to.')
+      +'<div id="pktMailFields" style="padding:2px 0 8px 26px;'+(cfg.camperMail.enabled?'':'display:none')+'">'
+      +'<div class="fg"><label class="fl">Letters email address</label><input class="fi" id="pktMailAddr" value="'+esc(cfg.camperMail.address||'')+'" placeholder="'+esc(mailDefault||'Leave blank to use your Campistry letters address')+'"><div style="font-size:.7rem;color:var(--s400);margin-top:4px">Leave blank to use your Campistry letters address'+(mailDefault?' ('+esc(mailDefault)+')':'')+'.</div></div>'
+      +'<label style="display:flex;align-items:center;gap:8px;font-size:.8rem;color:var(--s600);cursor:pointer"><input type="checkbox" id="pktMailCode" '+(cfg.camperMail.showCode?'checked':'')+' style="accent-color:var(--me);width:15px;height:15px">Ask families to put their camper’s code in the subject so we can route the letter</label></div>';
+    return '';
+}
+// Each includable item is a draggable row (grip on the left); dragging reorders
+// the DOM nodes directly — the same reorder helpers the form builders use — so
+// input values are preserved through a drag (nothing is re-rendered).
+function _pktIncludedHtml(cfg){
+    return _pktOrder.map(function(k){
+        return '<div class="pktOrderRow" data-key="'+k+'" style="display:flex;align-items:flex-start;gap:8px;border:1px solid transparent;border-radius:8px">'
+          +'<span class="pktGrip" title="Drag to reorder" style="cursor:grab;color:var(--s300);font-size:15px;line-height:1;user-select:none;flex-shrink:0;padding:9px 2px 0">⠿</span>'
+          +'<div style="flex:1;min-width:0">'+_pktBlockHtml(k,cfg)+'</div></div>';
+    }).join('');
+}
+function _pktSyncOrderFromDom(){
+    var list=document.getElementById('pktIncluded'); if(!list)return;
+    var ord=[]; list.querySelectorAll('.pktOrderRow').forEach(function(r){ var kk=r.getAttribute('data-key'); if(kk&&ord.indexOf(kk)<0)ord.push(kk); });
+    if(ord.length)_pktOrder=_pktResolveOrder(ord);
+    _pktRenderPreview();
+}
+function _pktInitDrag(){
+    var list=document.getElementById('pktIncluded'); if(!list)return;
+    _meReorderInit(list,'.pktOrderRow');
+    list.querySelectorAll('.pktOrderRow').forEach(function(row){
+        if(row._pktDragWired)return; row._pktDragWired=true;
+        var grip=row.querySelector('.pktGrip');
+        // Draggable only while a drag begins from the grip, so the checkboxes
+        // and text fields inside the row stay fully usable: arm on grip press,
+        // and disarm on any press that isn't the grip.
+        if(grip){
+            var arm=function(){ row.draggable=true; };
+            grip.addEventListener('mousedown',arm);
+            grip.addEventListener('touchstart',arm,{passive:true});
+        }
+        row.addEventListener('mousedown',function(e){ if(!(e.target&&e.target.closest&&e.target.closest('.pktGrip'))) row.draggable=false; });
+        row.addEventListener('dragstart',function(e){ e.stopPropagation(); row.classList.add('me-dragging'); row.style.opacity='.5'; try{e.dataTransfer.effectAllowed='move';e.dataTransfer.setData('text/plain','reorder');}catch(_){} });
+        row.addEventListener('dragend',function(e){ e.stopPropagation(); row.classList.remove('me-dragging'); row.style.opacity=''; row.draggable=false; _pktSyncOrderFromDom(); });
+    });
+}
+// Live email preview — same split-view format as the form builders, and it
+// renders the ACTUAL branded email (logo/colour/footer) via the shared
+// LinkBranding template, so what's on the right is what recipients receive.
+function _pktRenderPreview(){
+    var host=document.getElementById('packetPreview'); if(!host)return;
+    var p=_pktLiveConfig();
+    var sampleName='Jordan Miller';
+    var campName='';try{var ss=JSON.parse(localStorage.getItem('campGlobalSettings_v1')||'{}');campName=ss.campName||ss.camp_name||'Your Camp';}catch(_){}
+    var subject=(p.subject)?p.subject.replace(/\{camper\}/gi,sampleName):('A few more choices for '+sampleName);
+    var sampleMemo=(_pktSettings&&_pktSettings.campNumber)?(String(_pktSettings.campNumber).replace(/\D/g,'')+'-2087'):'1234-2087';
+    var mailAddr=p.camperMail.address||_defaultMailAddr()||('letters+yourcamp@'+(window.CAMPISTRY_INBOUND_DOMAIN||'inbound.campistry.org'));
+    var formUrl=window.location.origin+'/campistry_postaccept.html?id=SAMPLE&camp='+encodeURIComponent((window.getCampId?getCampId():'')||'');
+    var body=_composeBodyFromParts(p,{camperName:sampleName,formUrl:formUrl,memo:sampleMemo,mailAddr:mailAddr}); // name-ok: a sample
+    var branding=(typeof _getLinkBranding==='function')?_getLinkBranding():{};
+    _pktPreviewHtml=(window.LinkBranding&&window.LinkBranding.buildEmailHtml)
+      ? window.LinkBranding.buildEmailHtml({subject:subject,body:body,branding:branding,campName:campName||'Your Camp'})
+      : ('<div style="padding:20px;white-space:pre-wrap;font-family:sans-serif">'+esc(body)+'</div>');
+    var f=document.getElementById('pktPreviewFrame');
+    if(!f){ host.innerHTML='<iframe id="pktPreviewFrame" title="Email preview" style="width:100%;max-width:640px;height:100%;min-height:560px;border:1px solid var(--s200);border-radius:10px;background:#fff;box-shadow:0 4px 24px rgba(0,0,0,.08)"></iframe>'; f=document.getElementById('pktPreviewFrame'); }
+    try{ f.srcdoc=_pktPreviewHtml; }catch(_){ try{ f.contentWindow.document.open(); f.contentWindow.document.write(_pktPreviewHtml); f.contentWindow.document.close(); }catch(__){} }
+}
+function _pktOpenPreview(){
+    if(!_pktPreviewHtml)_pktRenderPreview();
+    var w=window.open('','_blank'); if(!w){ toast('Allow pop-ups to preview the email','error'); return; }
+    w.document.open(); w.document.write(_pktPreviewHtml||''); w.document.close();
+}
+function openAcceptancePacket(){
+    if(typeof _toggleMenu==='function')_toggleMenu('pplFormsMenu');
+    var p=getAcceptancePacketConfig();
+    _pktOrder=_pktResolveOrder(p.order);
+    function row(id,checked,title,desc){
+        return '<label style="display:flex;align-items:flex-start;gap:10px;padding:6px 0;cursor:pointer">'
+          +'<input type="checkbox" id="'+id+'" '+(checked?'checked':'')+' style="accent-color:var(--me);flex-shrink:0;width:16px;height:16px;margin-top:2px">'
+          +'<div><div style="font-size:.85rem;font-weight:600;color:var(--s800)">'+title+'</div>'
+          +'<div style="font-size:.72rem;color:var(--s400)">'+desc+'</div></div></label>';
+    }
+    var initCfg={form:{enabled:p.form&&p.form.enabled!==false},zelle:{enabled:!!(p.zelle&&p.zelle.enabled),sendTo:(p.zelle&&p.zelle.sendTo)||'',showMemo:!(p.zelle&&p.zelle.showMemo===false)},camperMail:{enabled:!!(p.camperMail&&p.camperMail.enabled),address:(p.camperMail&&p.camperMail.address)||'',showCode:!!(p.camperMail&&p.camperMail.showCode)}};
+    var h='<p style="font-size:.82rem;color:var(--s500);margin:0 0 14px;line-height:1.5">What a family receives the moment you accept them. The <strong>Post-Acceptance Form</strong> button sets up the form itself; this controls the message and what goes in it.</p>';
+
+    // Your message — first, and easy to edit. {camper} fills in each child's name.
+    h+='<div style="font-size:.78rem;font-weight:700;color:var(--s700);text-transform:uppercase;letter-spacing:.04em;margin:2px 0 8px">Your message</div>';
+    h+='<div class="fg"><label class="fl">Email subject</label><input class="fi" id="pktSubject" value="'+esc(p.subject||'')+'" placeholder="A few more choices for {camper}"></div>';
+    h+='<div class="fg"><label class="fl">Greeting / message</label><textarea class="fi" id="pktMessage" style="min-height:90px;resize:vertical" placeholder="Congratulations — {camper} is accepted!">'+esc(p.message||'')+'</textarea>'
+      +'<div style="font-size:.7rem;color:var(--s400);margin-top:4px">Type <code>{camper}</code> anywhere to drop in the child’s name. Leave blank for the default greeting. The items you turn on below are added under your message.</div></div>';
+
+    h+='<div style="border-top:1px solid var(--s100);margin:14px 0 8px"></div>';
+    h+='<div style="font-size:.78rem;font-weight:700;color:var(--s700);text-transform:uppercase;letter-spacing:.04em;margin:0 0 2px">What’s included <span style="font-weight:500;text-transform:none;letter-spacing:0;color:var(--s400)">— drag ⠿ to reorder</span></div>';
+    h+='<div id="pktIncluded">'+_pktIncludedHtml(initCfg)+'</div>';
+
+    h+='<div style="border-top:1px solid var(--s100);margin:14px 0 8px"></div>';
+    h+='<div style="font-size:.78rem;font-weight:700;color:var(--s700);text-transform:uppercase;letter-spacing:.04em;margin:0 0 4px">Delivery</div>';
+    h+=row('pktAutoSend',p.autoSend,'Send automatically on acceptance','When on, this goes out the moment an applicant is marked Accepted. When off, send it yourself from the applicant’s Review panel.');
+
+    var panel=document.getElementById('packetPanel'); if(panel){
+        panel.innerHTML=h;
+        panel.oninput=_pktRenderPreview;
+        panel.onchange=function(e){
+            var t=e&&e.target;
+            if(t&&t.id==='pktZelle'){var f=document.getElementById('pktZelleFields'); if(f)f.style.display=t.checked?'':'none';}
+            if(t&&t.id==='pktMail'){var f2=document.getElementById('pktMailFields'); if(f2)f2.style.display=t.checked?'':'none';}
+            _pktRenderPreview();
+        };
+    }
+    _pktInitDrag();
+    document.getElementById('packetBuilderOverlay').style.display='flex';
+    _pktRenderPreview();
+    _loadPktSettings().then(function(){ _pktRenderPreview(); });
+}
+function closeAcceptancePacket(){ var o=document.getElementById('packetBuilderOverlay'); if(o)o.style.display='none'; }
+function saveAcceptancePacket(){
+    var c=_pktLiveConfig();
+    acceptancePacketConfig={
+        autoSend:c.autoSend,
+        subject:c.subject,
+        message:c.message,
+        order:_pktResolveOrder(c.order),
+        form:{enabled:c.form.enabled},
+        zelle:{enabled:c.zelle.enabled,sendTo:c.zelle.sendTo,showMemo:c.zelle.showMemo},
+        camperMail:{enabled:c.camperMail.enabled,address:c.camperMail.address,showCode:c.camperMail.showCode}
+    };
+    // Keep the legacy field in step so anything still reading it agrees.
+    if(paFormConfig)paFormConfig.autoSend=acceptancePacketConfig.autoSend;
+    save();
+    closeAcceptancePacket();
+    toast('On-acceptance settings saved');
+}
+// The camp's letters address + camp number, fetched once for the builder
+// placeholder and for composing the acceptance message.
+var _pktSettings=null;
+async function _loadPktSettings(){
+    if(_pktSettings)return _pktSettings;
+    try{
+        var client=window.CampistryDB&&window.CampistryDB.getClient?window.CampistryDB.getClient():window.supabase;
+        var campId=window.CampistryDB&&window.CampistryDB.getCampId?window.CampistryDB.getCampId():(window.getCampId?window.getCampId():null);
+        if(client&&client.rpc&&campId){
+            var res=await client.rpc('get_camper_mail_inbox_settings',{p_camp_id:campId});
+            if(res&&res.data&&res.data.success)_pktSettings=res.data;
+        }
+    }catch(_){}
+    // Refresh the placeholder if the builder is still open.
+    try{ var ph=document.getElementById('pktMailAddr'); if(ph&&_pktSettings&&_pktSettings.inboundToken){ ph.placeholder='letters+'+_pktSettings.inboundToken+'@'+(window.CAMPISTRY_INBOUND_DOMAIN||'inbound.campistry.org'); } }catch(_){}
+    return _pktSettings;
 }
 
 // ── POST-HIRE FORM ───────────────────────────────────────────────────────
@@ -9396,7 +12041,7 @@ function _collectPostAcceptFormConfigDraft(){
         instructions:(document.getElementById('pafInstructions')?.value||'').trim(),
         fields:_readAdvFields('paf',PAF_FIELD_CATALOG),
         sectionOrder:_readSectionOrder('paf'),
-        autoSend:!!(document.getElementById('pafAutoSend')&&document.getElementById('pafAutoSend').checked),
+        autoSend:(acceptancePacketConfig?!!acceptancePacketConfig.autoSend:!!(paFormConfig&&paFormConfig.autoSend)),
         // Read here because this is where the tick lives, but it is a camp
         // setting rather than part of this form's config -- _paSaveInviteAuto
         // puts it on enrollSettings where _autoInviteOn looks for it.
@@ -10343,10 +12988,7 @@ function _buildPafPanelHtml(){
         +'<div class="fg" style="margin-bottom:0"><label class="fl">Instructions for Parents</label><textarea class="fi" id="pafInstructions" style="min-height:50px;resize:vertical" placeholder="Any special instructions shown at the top of the form">'+(fc.instructions||'')+'</textarea></div>';
     h+=_accCard('Welcome Message',welcomeHtml,{open:true});
 
-    var sendHtml='<label style="display:flex;align-items:center;gap:10px;padding:4px 0;cursor:pointer">'
-        +'<input type="checkbox" id="pafAutoSend" '+(fc.autoSend?'checked':'')+' style="accent-color:var(--me);flex-shrink:0;width:16px;height:16px">'
-        +'<div><div style="font-size:.85rem;font-weight:600;color:var(--s800)">Send automatically on acceptance</div>'
-        +'<div style="font-size:.72rem;color:var(--s400)">When on, this form is emailed the moment an applicant is marked Accepted. When off, send it yourself from the applicant\'s Review panel whenever you\'re ready.</div></div></label>';
+    var sendHtml='<div style="font-size:.72rem;color:var(--s400);padding:2px 0 8px;line-height:1.5">Whether this form is emailed automatically on acceptance — along with deposit and camper-mail info — is now set under <strong>On Acceptance</strong>.</div>';
     // The portal invite is a separate email with its own switch, but it is the
     // same question asked at the same moment, so it belongs beside it rather
     // than in a settings screen nobody would think to open.
@@ -10868,8 +13510,12 @@ function viewApplication(id){
                             ? 'their card is on file, so you can take it now.'
                             : 'no card reached us, so there is nothing to charge.')
                           +'</div>';
-                        if(_hasCard){
+                        // Only the owner or an admin can charge a card (the
+                        // function refuses anyone else) — so only they see it (TED-149).
+                        if(_hasCard&&_canChargeCards()){
                             b+='<button class="me-btn me-btn--pri me-btn--sm" style="margin-top:6px" onclick="CampistryMe.chargeDepositNow(\''+je(id)+'\')">Charge '+fm(_out)+' now</button> ';
+                        }else if(_hasCard){
+                            b+='<div style="font-size:.76rem;color:var(--s500);margin-top:6px">The camp\u2019s owner or an admin can charge it from here.</div>';
                         }
                         b+='<button class="me-btn me-btn--ghost me-btn--sm" style="margin-top:6px" onclick="CampistryMe.markDepositPaid(\''+je(id)+'\')">Mark received anyway</button>';
                     }else{
@@ -10890,9 +13536,10 @@ function viewApplication(id){
             // remember what to do about it.
             var famKeyForApp=_resolveFamilyKey(e.camperName,_famItemRaw(e.camperName,e.street,e.city,e.state,e.zip,e.parentName,e.parentEmail));
             if(e.paymentMethod==='payment_plan'){
-                if(enrollSettings.allowParentPaymentPlans){
-                    b+='<div style="font-size:.8rem;color:var(--s500);margin-top:6px;">Self-serve payment plans are on — once accepted, this family can build their own plan from their Link portal.</div>';
-                }else if(famKeyForApp){
+                // The office sets the plan up (TED-074). A "parents build their
+                // own plan in Link" setting used to hide this button and promise
+                // a builder that Link no longer has, so nobody set the plan up.
+                if(famKeyForApp){
                     b+='<button class="me-btn me-btn--sec me-btn--sm" style="margin-top:6px;" onclick="CampistryMe.monthlyPlan(\''+je(famKeyForApp)+'\')">Set Up Payment Plan</button>';
                 }else{
                     b+='<div style="font-size:.8rem;color:var(--s500);margin-top:6px;">Accept &amp; enroll this application, then set up a payment plan from Billing.</div>';
@@ -11049,7 +13696,7 @@ function printApplication(id){
 
     var h='<html><head><title>'+esc('Application — '+e.camperName)+'</title><style>body{font-family:Arial,sans-serif;padding:30px;font-size:13px;color:#1E293B}h1{font-size:18px;margin:0 0 4px}h2{font-size:13px;color:#D97706;text-transform:uppercase;margin:16px 0 6px;border-bottom:1px solid #E2E8F0;padding-bottom:3px}table{width:100%;border-collapse:collapse}td{padding:3px 0;vertical-align:top}td:first-child{width:120px;color:#64748B;font-weight:600}.med{color:#EF4444;font-weight:600}.badge{display:inline-block;padding:2px 8px;border-radius:4px;font-size:11px;font-weight:700}img{max-width:250px;height:70px;object-fit:contain;border:1px solid #E2E8F0;border-radius:4px}@media print{body{padding:15px}}</style></head><body>';
     if(e.camperPhoto&&isSafeImageDataUrl(e.camperPhoto))h+='<img src="'+e.camperPhoto+'" style="float:right;width:90px;height:90px;object-fit:cover;max-width:90px">';
-    h+='<h1>'+esc(e.camperName)+'</h1>';
+    h+='<h1>'+esc(_lbl(e.camperName))+'</h1>';
     h+='<div style="color:#64748B;font-size:12px;margin-bottom:12px">Application ID: '+esc(id)+' · Status: '+esc(e.status)+' · Applied: '+esc(e.appliedDate)+'</div>';
 
     h+=sec('Camper');
@@ -11273,8 +13920,19 @@ async function _sendLinkNow(isStaff){
     var btn=document.getElementById('slSendBtn');
     if(btn){btn.disabled=true;btn.textContent='Sending…';}
     try{
-        await callEdgeFunctionAuthed('send-broadcast',{campId:getCampId(),to:recipients,subject:subject,body:body,method:'email',campName:campName});
-        toast('Sent to '+recipients.length+' recipient'+(recipients.length!==1?'s':''));
+        // eventKey added so this can resume when the send outgrows one
+        // invocation — without it, a second pass would email everyone twice.
+        // One key per click, so re-opening the modal and sending again is a
+        // genuinely new send rather than a no-op.
+        var r=await sendBroadcastComplete({campId:getCampId(),to:recipients,subject:subject,body:body,method:'email',campName:campName,eventKey:'me-sendlink:'+Date.now()})||{};
+        // Report what was actually sent. This used to announce
+        // recipients.length regardless, so a send that reached 180 of 400
+        // families still said "Sent to 400".
+        var sent=Number(r.emailSent||0),failed=Number(r.emailFailed||0);
+        toast('Sent to '+sent+' recipient'+(sent!==1?'s':'')
+            +(failed?' — '+failed+' could not be delivered':'')
+            +(r.truncated?' (still more to go — send again to continue)':''),
+            failed||r.truncated?'error':undefined);
         closeModal('sendLinkModal');
     }catch(err){
         toast('Send failed: '+(err&&err.message||'unknown error'),'error');
@@ -11292,14 +13950,63 @@ async function _sendLinkNow(isStaff){
 function _postAcceptUrl(id){
     return window.location.origin+'/campistry_postaccept.html?id='+encodeURIComponent(id)+'&camp='+encodeURIComponent(getCampId());
 }
-function openSendPostAcceptModal(id){
+// This camper's deposit reference, <camp number>-<camper id>, or '' when either
+// half isn't known yet.
+function _acceptanceMemo(e){
+    var num=(_pktSettings&&_pktSettings.campNumber)?String(_pktSettings.campNumber).replace(/\D/g,''):'';
+    var r=(e&&e.camperName&&typeof roster!=='undefined')?roster[e.camperName]:null;
+    var cid=(r&&r.camperId!=null)?String(r.camperId).replace(/\D/g,''):((e&&e.camperId!=null)?String(e.camperId).replace(/\D/g,''):'');
+    return (num&&cid)?(num+'-'+cid):'';
+}
+function _defaultMailAddr(){
+    return (_pktSettings&&_pktSettings.inboundToken)?('letters+'+_pktSettings.inboundToken+'@'+(window.CAMPISTRY_INBOUND_DOMAIN||'inbound.campistry.org')):'';
+}
+// The one composer both the real send and the builder preview call, so the two
+// can never drift. `parts` holds the values that differ between a real camper
+// and the sample the preview shows: { camperName, formUrl, memo, mailAddr }.
+// The camp's own message (with a {camper} token) leads; the blocks follow.
+function _composeBodyFromParts(p,parts){
+    p=p||{}; parts=parts||{};
+    var nm=parts.camperName||'your camper';
+    var intro=(p.message&&p.message.trim())?p.message.replace(/\{camper\}/gi,nm):('Congratulations — '+nm+' is accepted!');
+    var out=[intro];
+    _pktResolveOrder(p.order).forEach(function(k){
+        if(k==='form'){
+            if(p.form&&p.form.enabled!==false&&parts.formUrl){
+                out.push('','Please fill out this post-acceptance form:',parts.formUrl);
+            }
+        }else if(k==='zelle'){
+            if(p.zelle&&p.zelle.enabled&&(p.zelle.sendTo||'').trim()){
+                out.push('','To pay your deposit by Zelle, send it to: '+p.zelle.sendTo.trim()+'.');
+                if(p.zelle.showMemo!==false&&parts.memo)out.push('Put this reference in the Zelle memo so it’s credited to you: '+parts.memo+'.');
+            }
+        }else if(k==='camperMail'){
+            if(p.camperMail&&p.camperMail.enabled&&parts.mailAddr){
+                out.push('','You can email letters to your camper any time — the office prints them and hands them out. Send them to: '+parts.mailAddr+'.');
+                if(p.camperMail.showCode&&parts.memo)out.push('Please put your camper’s code in the subject so we can get it to the right child: '+parts.memo+'.');
+            }
+        }
+    });
+    return out.join('\n');
+}
+function _composeAcceptanceBody(id){
+    var e=enrollments[id]||{}; var p=getAcceptancePacketConfig();
+    var addr=(p.camperMail&&(p.camperMail.address||'').trim())||_defaultMailAddr();
+    return _composeBodyFromParts(p,{camperName:_lbl(e.camperName||'')||'your camper',formUrl:_postAcceptUrl(id),memo:_acceptanceMemo(e),mailAddr:addr}); // name-ok: the words of an email
+}
+function _acceptanceSubject(id){
+    var e=enrollments[id]||{}; var p=getAcceptancePacketConfig();
+    var nm=e.camperName||'your camper';
+    return (p.subject&&p.subject.trim())?p.subject.replace(/\{camper\}/gi,nm):('A few more choices for '+nm);
+}
+async function openSendPostAcceptModal(id){
     var e=enrollments[id]; if(!e){toast('Application not found','error');return;}
     if(!e.parentEmail){toast('No parent email on file for this applicant','error');return;}
-    var url=_postAcceptUrl(id);
+    await _loadPktSettings();
     document.getElementById('slTitle').textContent='Send Post-Acceptance Form';
     var h='<div class="fg"><label class="fl">To</label><input class="fi" value="'+esc(e.parentEmail)+'" disabled></div>';
-    h+='<div class="fg"><label class="fl">Subject</label><input class="fi" id="slSubject" value="'+esc('A few more choices for '+(e.camperName||'your camper'))+'"></div>';
-    h+='<div class="fg"><label class="fl">Message</label><textarea class="fi" id="slBodyText" style="min-height:110px;resize:vertical">'+esc('Congratulations — '+(e.camperName||'your camper')+' is accepted! Please complete a few more choices here:\n\n'+url)+'</textarea></div>';
+    h+='<div class="fg"><label class="fl">Subject</label><input class="fi" id="slSubject" value="'+esc(_acceptanceSubject(id))+'"></div>';
+    h+='<div class="fg"><label class="fl">Message</label><textarea class="fi" id="slBodyText" style="min-height:110px;resize:vertical">'+esc(_composeAcceptanceBody(id))+'</textarea></div>';
     document.getElementById('slBody').innerHTML=h;
     var btn=document.getElementById('slSendBtn');
     if(btn){ btn.disabled=false; btn.textContent='Send'; btn.onclick=function(){ _sendPostAcceptNow(id); }; }
@@ -11314,7 +14021,7 @@ async function _sendPostAcceptNow(id){
     var btn=document.getElementById('slSendBtn');
     if(btn){btn.disabled=true;btn.textContent='Sending…';}
     try{
-        await callEdgeFunctionAuthed('send-broadcast',{campId:getCampId(),to:[{email:e.parentEmail,name:e.parentName||''}],subject:subject,body:body,method:'email',campName:campName});
+        await callEdgeFunctionAuthed('send-broadcast',{campId:getCampId(),to:[{email:e.parentEmail,name:e.parentName||''}],subject:subject,body:body,method:'email',campName:campName,branding:(typeof _getLinkBranding==='function')?_getLinkBranding():undefined});
         e.postAcceptSentDate=new Date().toISOString();
         save();
         toast('Post-acceptance form sent to '+e.parentEmail);
@@ -11335,12 +14042,12 @@ async function _autoSendPostAccept(id){
         toast(_emailBlockedReason(svc)+' Send the post-acceptance form from the applicant\u2019s Review panel.','error');
         return;
     }
-    var url=_postAcceptUrl(id);
+    await _loadPktSettings();
     var campName='';try{var ss=JSON.parse(localStorage.getItem('campGlobalSettings_v1')||'{}');campName=ss.campName||ss.camp_name||'Camp';}catch(ex){}
-    var subject='A few more choices for '+(e.camperName||'your camper');
-    var body='Congratulations — '+(e.camperName||'your camper')+' is accepted! Please complete a few more choices here:\n\n'+url;
+    var subject=_acceptanceSubject(id);
+    var body=_composeAcceptanceBody(id);
     try{
-        await callEdgeFunctionAuthed('send-broadcast',{campId:getCampId(),to:[{email:e.parentEmail,name:e.parentName||''}],subject:subject,body:body,method:'email',campName:campName});
+        await callEdgeFunctionAuthed('send-broadcast',{campId:getCampId(),to:[{email:e.parentEmail,name:e.parentName||''}],subject:subject,body:body,method:'email',campName:campName,branding:(typeof _getLinkBranding==='function')?_getLinkBranding():undefined});
         e.postAcceptSentDate=new Date().toISOString();
         save();
         toast('Post-acceptance form auto-sent to '+e.parentEmail);
@@ -11380,7 +14087,7 @@ async function _sendPostHireNow(id){
     var btn=document.getElementById('slSendBtn');
     if(btn){btn.disabled=true;btn.textContent='Sending…';}
     try{
-        await callEdgeFunctionAuthed('send-broadcast',{campId:getCampId(),to:[{email:a.email,name:a.name||''}],subject:subject,body:body,method:'email',campName:campName});
+        await callEdgeFunctionAuthed('send-broadcast',{campId:getCampId(),to:[{email:a.email,name:a.name||''}],subject:subject,body:body,method:'email',campName:campName,branding:(typeof _getLinkBranding==='function')?_getLinkBranding():undefined});
         a.postHireSentDate=new Date().toISOString();
         save();
         toast('Post-hire form sent to '+a.email);
@@ -11401,7 +14108,7 @@ async function _autoSendPostHire(id){
     var subject='A few more details for '+(a.name||'your onboarding');
     var body='Welcome to the team, '+((a.first||a.name||'').split(' ')[0]||'')+'! Please complete a few more details here:\n\n'+url;
     try{
-        await callEdgeFunctionAuthed('send-broadcast',{campId:getCampId(),to:[{email:a.email,name:a.name||''}],subject:subject,body:body,method:'email',campName:campName});
+        await callEdgeFunctionAuthed('send-broadcast',{campId:getCampId(),to:[{email:a.email,name:a.name||''}],subject:subject,body:body,method:'email',campName:campName,branding:(typeof _getLinkBranding==='function')?_getLinkBranding():undefined});
         a.postHireSentDate=new Date().toISOString();
         save();
         toast('Post-hire form auto-sent to '+a.email);
@@ -11655,7 +14362,7 @@ function addApplication(){
 
         var id='enr_'+Date.now()+'_'+Math.random().toString(36).substr(2,4);
         var rec={
-            camperName:camperName,camperFirst:first,camperLast:last,
+            camperName:camperName,camperFirst:first,camperLast:last, // name-ok: an applicant — enrolling gives them their number (_rosterKeyForApplication)
             dob:values.dob||'',gender:values.gender||'',school:values.school||'',schoolGrade:values.schoolGrade||'',teacher:values.teacher||'',camperPhoto:values.photo||'',
             parentName:parentName,parentRelation:values.parentRelation||'',parentPhone:values.parentPhone||'',parentEmail:values.parentEmail||'',
             maritalStatus:values.maritalStatus||'',
@@ -11735,12 +14442,11 @@ function updateEnrollStatus(id,status,opts){
         });
     }else if(!opts.silent && firstAccept){
         generateParentInvite(id);
-        // Post-acceptance form: only fires if the camp turned "Send automatically
-        // on acceptance" on in that form's builder — otherwise the office sends
-        // it manually from the applicant's Review panel whenever they're ready.
+        // Acceptance packet: only fires if the camp turned "Send automatically
+        // on acceptance" on in the On-Acceptance builder — otherwise the office
+        // sends it manually from the applicant's Review panel when they're ready.
         try{
-            var pfc=getPostAcceptFormConfig();
-            if(pfc.autoSend && enrollments[id] && enrollments[id].parentEmail) _autoSendPostAccept(id);
+            if(getAcceptancePacketConfig().autoSend && enrollments[id] && enrollments[id].parentEmail) _autoSendPostAccept(id);
         }catch(ex){}
     }
 }
@@ -11935,7 +14641,7 @@ async function _autoSendParentInvite(enrollId){
 function _enrollIdsForCamper(camperName){
     return Object.keys(enrollments).filter(function(id){
         var en=enrollments[id];
-        return en&&en.camperName===camperName&&(en.status==='accepted'||en.status==='enrolled');
+        return en&&_enrIsFor(en,camperName)&&(en.status==='accepted'||en.status==='enrolled');
     });
 }
 function _syncInvitesForCamper(camperName){
@@ -11994,7 +14700,15 @@ function _sweepOrphanedParentInvites(){
     var campId=window.CampistryDB&&window.CampistryDB.getCampId?window.CampistryDB.getCampId():null;
     if(!db||!campId)return;
     var rosterNames=Object.keys(roster).filter(function(n){return !roster[n].unenrolled;});
-    db.rpc('revoke_orphaned_parent_invites',{p_camp_id:campId,p_roster_names:rosterNames}).then(function(res){
+    // Decided by number (261): the numbers of every camper still enrolled.
+    var rosterIds=Object.values(roster).filter(function(c){return c&&!c.unenrolled;})
+        .map(function(c){return normalizePersonId(c.camperId);}).filter(Boolean).map(Number);
+    db.rpc('revoke_orphaned_parent_invites',{p_camp_id:campId,p_roster_names:rosterNames,p_roster_ids:rosterIds}).then(function(res){
+        // A database without 261 yet has only the by-name version.
+        if(res&&res.error&&/PGRST202|could not find the function|does not exist/i.test(res.error.message||res.error.code||''))
+            return db.rpc('revoke_orphaned_parent_invites',{p_camp_id:campId,p_roster_names:rosterNames});
+        return res;
+    }).then(function(res){
         var rev=res&&res.data&&res.data.revoked;
         if(rev)console.log('[Me] Parent sign-up: disconnected '+rev+' invite'+(rev===1?'':'s')+' (children no longer enrolled)');
     }).catch(function(){});
@@ -12218,6 +14932,8 @@ function _syncParentInviteSnapshot(enrollId,silent,opts){
             var r=roster[en.camperName]||{};
             var _w=_linkCamperWindow(en.camperName);
             camperData[en.camperName]={
+                // The number decides which child this slot is (260), not the name.
+                camperId:normalizePersonId(r.camperId)?Number(normalizePersonId(r.camperId)):(normalizePersonId(en.camperId)?Number(normalizePersonId(en.camperId)):null),
                 name:en.camperName,dob:en.dob||r.dob||'',gender:en.gender||r.gender||'',
                 division:r.division||'',grade:r.grade||'',bunk:r.bunk||'',bunkAlias:bunkAlias(r.bunk),
                 session:en.session||'',
@@ -12253,6 +14969,9 @@ function _syncParentInviteSnapshot(enrollId,silent,opts){
             }
             var d=res.data;
             if(!d||!d.success){
+                // Only the camp office (owner, admin, manager) writes parent
+                // invitations (migration 261): say so, rather than "unknown".
+                if(d&&d.error==='not_camp_office')return {error:'office_only'};
                 console.error('[Me] upsert_parent_invite returned failure:',d);
                 return {error:'unknown'};
             }
@@ -12273,6 +14992,7 @@ function _syncParentInviteSnapshot(enrollId,silent,opts){
         }
         work.then(function(results){
             var primary=results[0],secondary=results[1];
+            if(primary&&primary.error==='office_only'){toast('Only the camp office (owner, admin or manager) can invite parents.','error');return;}
             if(!primary||primary.error){toast('Could not save invite'+(primary&&primary.error?': '+primary.error:'')+'. Run migration 011 in Supabase.');return;}
             if(secondary&&secondary.error){console.error('[Me] Second parent invite failed:',secondary.error);secondary=null;}
             _showInviteModal(enrollId,primary,secondary);
@@ -12499,7 +15219,7 @@ async function _sendInviteEmailNow(which,btnEl){
     var origLabel=btn?btn.textContent:'';
     if(btn){btn.disabled=true;btn.textContent='Sending…';}
     try{
-        await callEdgeFunctionAuthed('send-broadcast',{campId:getCampId(),to:[{email:p.email,name:p.name||''}],subject:subject,body:body,method:'email',campName:campName});
+        await callEdgeFunctionAuthed('send-broadcast',{campId:getCampId(),to:[{email:p.email,name:p.name||''}],subject:subject,body:body,method:'email',campName:campName,branding:(typeof _getLinkBranding==='function')?_getLinkBranding():undefined});
         toast('Invite emailed to '+p.email);
         if(btn){btn.textContent='Sent ✓';}
     }catch(err){
@@ -12547,8 +15267,42 @@ function _sessionCapacityOf(sessionName){
     return {capacity:cap,taken:taken,remaining:Math.max(0,cap-taken),full:taken>=cap};
 }
 
+// Which roster camper an application is for. Names do not decide it: an
+// application that carries a camper number is that camper; one that does not,
+// whose name is already on the roster, is the SAME child only when nothing
+// says otherwise. A different date of birth, or a parent email that matches
+// neither of the camper's parents, is a different child who shares the name —
+// they get their own roster entry and number, not the other child's record.
+// Returns the roster key to use (the application is re-pointed to it).
+function _rosterKeyForApplication(e){
+    if(!e)return '';
+    var name=String(e.camperName||'').trim();
+    if(e.camperId!=null&&e.camperId!==''){
+        var ks=Object.keys(roster);
+        for(var i=0;i<ks.length;i++){var r=roster[ks[i]];if(r&&r.camperId!=null&&String(r.camperId)===String(e.camperId))return ks[i];}
+    }
+    var cur=roster[name];
+    // A key that belongs to a departed child, or to somebody's old name: this
+    // is a new child, and gets their own (259).
+    if(!cur)return _keyHeldByOther(name,null)&&!roster[name+' #'+nextPersonId]?(name+' #'+nextPersonId):name;
+    var dobA=String(e.dob||'').trim(),dobB=String(cur.dob||'').trim();
+    var em=String(e.parentEmail||'').trim().toLowerCase();
+    var ems=[cur.parent1Email,cur.parent2Email].map(function(x){return String(x||'').trim().toLowerCase()}).filter(Boolean);
+    var different=(dobA&&dobB)?dobA!==dobB:(em&&ems.length?ems.indexOf(em)<0:false);
+    if(!different)return name;
+    var _ID=(typeof window!=='undefined'&&window.CamperIdentity)||null;
+    var key=_ID?_ID.uniqueKey(roster,name,nextPersonId):(name+' #'+nextPersonId);
+    return key&&!roster[key]?key:name;
+}
+
 function enrollCamper(id){
     var e=enrollments[id];if(!e)return;
+    // Point the application at its own camper before anything below reads
+    // roster[e.camperName].
+    var _rk=_rosterKeyForApplication(e);
+    var _newDup=_rk&&_rk!==e.camperName&&!roster[_rk];
+    var _typedName=String(e.camperName||'').trim();
+    if(_rk&&_rk!==e.camperName)e.camperName=_rk;
     // Over capacity is the office's call to make, not ours — a camp does
     // squeeze one more in. But it has to be a call, made knowingly: the
     // number was collected by the dashboard and read by nothing, so a camp
@@ -12569,8 +15323,10 @@ function enrollCamper(id){
     // Auto-create camper in roster with ALL application data
     if(!roster[e.camperName]){
         var newId=nextPersonId;nextPersonId++;
+        e.camperId=newId;
         roster[e.camperName]={
             camperId:newId,
+            displayName:_newDup?_typedName:undefined,
             dob:e.dob||'',gender:e.gender||'',
             school:e.school||'',schoolGrade:e.schoolGrade||'',teacher:e.teacher||'',
             division:'',grade:'',bunk:'',teams:{},team:'',
@@ -12595,10 +15351,13 @@ function enrollCamper(id){
         // Enroll was clicked, this camper would otherwise show no bunk
         // requests until the next full page load.
         _syncPostAcceptBunkRequests();
-        toast('Enrolled — camper added to roster with all info');
+        if(!_newDup)delete roster[e.camperName].displayName;
+        toast(_newDup?'Enrolled — a new camper who shares the name '+_typedName+' (different birthday or parents)'
+                     :'Enrolled — camper added to roster with all info');
     }else{
         // Update existing camper with any missing data from application
         var c=roster[e.camperName];
+        if(e.camperId==null&&c.camperId!=null)e.camperId=c.camperId;
         if(!c.dob&&e.dob)c.dob=e.dob;
         if(!c.gender&&e.gender)c.gender=e.gender;
         if(!c.school&&e.school)c.school=e.school;
@@ -12633,7 +15392,7 @@ function enrollCamper(id){
     }
     // Auto-family: join an EXISTING family only on a 3-of-4 match (last name,
     // address, parent email, parent name) — not on a shared last name alone.
-    var lastName=e.camperName.split(' ').pop();
+    var lastName=_lbl(e.camperName).split(' ').pop();
     var addr=[e.street,e.city,e.state,e.zip].filter(Boolean).join(', ');
     var famKey=_resolveFamilyKey(e.camperName,_famItemRaw(e.camperName,e.street,e.city,e.state,e.zip,e.parentName,e.parentEmail));
     var sesObj=sessions.find(function(s){return s.name===e.session});
@@ -12738,6 +15497,32 @@ function enrollCamper(id){
 
     e.enrolledDate=new Date().toISOString().split('T')[0];
     save();_refreshPplIfActive();
+    // ★ REFRESH THIS FAMILY'S INVITE, because this is where the camper first
+    //   EXISTS as a person.
+    //
+    //   An invite's camper list is stamped with camper ids when it is written
+    //   (migration 223), and migration 232 stopped a null slot being re-resolved
+    //   by name at check time — "a matching name that appeared later" cannot be
+    //   told from "a different child with the same name who appeared later", and
+    //   the second one hands a parent somebody else's child.
+    //
+    //   The ordinary Registration flow trips over that on its own:
+    //
+    //     1. Accept  → updateEnrollStatus(id,'accepted') generates the invite and
+    //                  emails the parent. There is no roster entry yet, so there is
+    //                  no camp_people row, so 223 stamps a NULL in her slot.
+    //     2. Enroll  → this function creates the roster entry. Her camp_people row
+    //                  is born now, with first_seen AFTER the invite's stamp.
+    //
+    //   Without this line the parent logs in to the portal and their own child is
+    //   not there — until somebody happens to open her in the Me page, because
+    //   saveCamper refreshes the invite and this did not. Rewriting the invite's
+    //   camper list re-stamps it, which fills the slot.
+    //
+    //   (parent_invites_needing_attention() lists any family already in that state,
+    //   and restamp_parent_invite() repairs one.)
+    try{ _syncInvitesForCamper(e.camperName); }
+    catch(_e){ console.warn('[Me] enroll: could not refresh the parent invite:',_e&&_e.message) }
 }
 
 // Down payment (deposit) vs. the rest of tuition are genuinely different
@@ -12762,6 +15547,19 @@ function enrollCamper(id){
  * The fallback is the old shape, for a page that did not load the rule.
  */
 function _buildInstallmentSchedule(sesObj,tuition){
+    // The installment STRUCTURE (full/2/3/4/monthly/12/deposit) used to be set
+    // per-session, which put the same choice in front of the office once per
+    // session for no reason -- it's a Billing policy, one thing a camp decides
+    // for itself, not a property of any one session. It now lives camp-wide in
+    // enrollSettings.paymentPlan (Me -> Billing -> Payment Plan), overriding
+    // whatever the session object carries here so nothing downstream has to
+    // change. A session saved before this move keeps working exactly the same
+    // -- enrollSettings.paymentPlan just decides for every session now,
+    // instead of each session's own (now-removed) field.
+    sesObj=Object.assign({},sesObj,{
+        paymentPlan:enrollSettings.paymentPlan||'full',
+        depositAmount:enrollSettings.paymentPlanDepositAmount||0
+    });
     var R=(typeof window!=='undefined'&&window.CampistryInstallments)||null;
     if(R)return R.build({session:sesObj,tuition:tuition});
     if(!sesObj||!sesObj.paymentPlan||sesObj.paymentPlan==='full')return null;
@@ -12827,6 +15625,9 @@ function renderAnalytics(){
     var _charged=_anList.reduce(function(s,l){return s+(l.totalCharges||0)},0);
     var _collected=_anList.reduce(function(s,l){return s+(l.totalPayments||0)},0);
     var _outstanding=_anList.reduce(function(s,l){return s+Math.max(l.balance||0,0)},0);
+    // plus what funds owe and have paid on their shares of split charges (TED-178)
+    var _anPay=_payerTotals();
+    _charged+=_anPay.charged; _collected+=_anPay.paid; _outstanding+=_anPay.outstanding;
     var _rate=_charged>0?Math.round(_collected/_charged*100):0;
     var _overdue=_anList.filter(function(l){return l.status==='overdue'}).length;
 
@@ -12888,12 +15689,15 @@ function renderFinance(){
         //   per camper. Family-level money is therefore attributed to the FIRST
         //   enrollment of that family only, and the per-family totals below are
         //   taken from the ledgers rather than re-summed from these rows.
-        var _efk=(e.familyKey&&families[e.familyKey])?e.familyKey:_payFamilyByName({family:e.camperName,camper:e.camperName});
+        var _efk=(e.familyKey&&families[e.familyKey])?e.familyKey:_payFamilyByName({family:e.camperName,camper:e.camperName,camperId:e.camperId});
         var _firstOfFamily=!_efk||!_finFamSeen[_efk];
         if(_efk)_finFamSeen[_efk]=1;
         var manualPay=finPayments.filter(function(p){
             if(p.enrollmentId===id)return true;                       // recorded against this camper
-            if(p.family===e.camperName||p.camper===e.camperName)return true;
+            // This camper's own payment: by number when the payment and the
+            // enrollment both carry one, by name only for one from before numbers.
+            if(p.camperId!=null&&p.camperId!==''&&e.camperId!=null&&e.camperId!==''){if(String(p.camperId)===String(e.camperId))return true;}
+            else if(p.family===e.camperName||p.camper===e.camperName)return true;
             if(!_efk||!_firstOfFamily)return false;                   // don't pay a family twice
             var pfk=(p.familyKey&&families[p.familyKey])?p.familyKey:_payFamilyByName(p);
             return pfk===_efk&&!p.enrollmentId;
@@ -12944,6 +15748,10 @@ function renderFinance(){
     var _finLedgers=buildFamilyLedgers();
     var totalCollected=Object.values(_finLedgers).reduce(function(s,l){return s+(l.totalPayments||0)},0);
     var totalOutstanding=Object.values(_finLedgers).reduce(function(s,l){return s+Math.max(l.balance||0,0)},0);
+    // Funds' shares of split charges and their cheques are the camp's money
+    // too, kept on the funds' own accounts, not on the families' (TED-178).
+    var _finPayers=_payerTotals();
+    totalCollected+=_finPayers.paid; totalOutstanding+=_finPayers.outstanding;
     var paidCount=autoInvoices.filter(function(inv){return inv.status==='paid'}).length;
     var partialCount=autoInvoices.filter(function(inv){return inv.status==='partial'}).length;
     var overdueCount=autoInvoices.filter(function(inv){return inv.status==='overdue'}).length;
@@ -13102,8 +15910,12 @@ function renderFinance(){
         h+='</tbody></table>'+_pagerHtml(autoInvoices.length,PAGE_SIZE,_analyticsInvoicePage,'setAnalyticsInvoicePage')+'</div></div>';
 
         // Manual payment log (supplementary)
-        if(finPayments.length){
-            var sortedPayments=finPayments.slice().sort(function(a,b){return(b.date||'').localeCompare(a.date||'')});
+        // with the funds' payments (TED-178), corrected in Manage payers → Account
+        var _logRows=finPayments.concat(_finPayers.payments.map(function(fp){
+            return {id:'payer:'+fp.paymentId,_payer:fp,family:fp.name+' (fund)',amount:fp.amount,date:fp.date,method:fp.method};
+        }));
+        if(_logRows.length){
+            var sortedPayments=_logRows.slice().sort(function(a,b){return(b.date||'').localeCompare(a.date||'')});
             var payPaged=_paginate(sortedPayments,PAGE_SIZE,_analyticsPaymentPage);
             h+='<div class="me-card" style="margin-top:14px"><div class="me-card-head"><h3>Payment Log</h3></div><div class="me-tw"><table class="me-t"><thead><tr><th>Date</th><th>Family/Camper</th><th>Amount</th><th>Method</th><th></th></tr></thead><tbody>';
             payPaged.items.forEach(function(p,i){
@@ -13113,8 +15925,12 @@ function renderFinance(){
                 var _pend=(_st==='pending'||_st==='failed');
                 var _amtTxt=_isRef?'−'+fm(Math.abs(p.amount)):fm(p.amount);
                 var _amtCol=_isRef?'var(--err)':_pend?'var(--s400)':'var(--ok)';
-                var _stBadge=_st==='pending'?' '+bdg('pending','warn'):_st==='failed'?' '+bdg('failed','err'):'';
-                var _acts='<button class="me-btn me-btn--ghost me-btn--sm" style="color:var(--err)" onclick="CampistryMe.finRemovePayment(\''+je(String(p.id))+'\')">✕</button>';
+                var _stBadge=_st==='pending'?' '+bdg((Number(p.amount)>0&&(p.stripePaymentIntentId||p.byopTransactionId))?'on its way':'pending','warn'):_st==='failed'?' '+bdg('failed','err'):'';
+                // Only what the office typed in can be removed (TED-163); money a
+                // processor moved — a payment, a refund, a failed refund's put-back —
+                // was really moved, and is corrected with a refund, not a ✕.
+                var _acts=p._payer?'<button class="me-btn me-btn--ghost me-btn--sm" title="This fund\u2019s account" onclick="CampistryMe.payerLines(\''+je(String(p._payer.payerId))+'\')">Account</button>'
+                    :_throughProcessor(p)?'':'<button class="me-btn me-btn--ghost me-btn--sm" style="color:var(--err)" title="Remove this payment you recorded" onclick="CampistryMe.finRemovePayment(\''+je(String(p.id))+'\')">✕</button>';
                 h+='<tr><td style="font-size:.75rem;color:var(--s400)">'+esc(p.date||'—')+'</td><td class="bold">'+esc(p.family)+(_isRef&&p.notes?' <span style="font-size:.7rem;font-weight:400;color:var(--s400)">'+esc(p.notes)+'</span>':'')+'</td><td style="font-weight:700;color:'+_amtCol+'">'+_amtTxt+'</td><td>'+bdg((_payLabel(p.method)||p.method||'—'),_isRef?'err':_st==='failed'?'err':_st==='pending'?'warn':'ok')+_stBadge+'</td><td style="text-align:right;white-space:nowrap">'+_acts+'</td></tr>';
             });
             h+='</tbody></table>'+_pagerHtml(sortedPayments.length,PAGE_SIZE,_analyticsPaymentPage,'setAnalyticsPaymentPage')+'</div></div>';
@@ -13440,39 +16256,24 @@ function finAddExpense(){
     save();renderFinance();toast('Expense added');
 }
 function finRemoveExpense(i){finExpenses.splice(i,1);save();renderFinance();toast('Removed')}
+// Finance's "+ Record Payment" is Billing's (TED-157). It used to save a row
+// with only a typed family name and nothing on the family's bill, so Billing,
+// the parent's balance in Link and the nightly autopay never saw it — a $1,000
+// cheque recorded there was charged again that night. A family's payment has
+// one way in: the family picker, the ledger entry, the cheque discount.
 function finAddPayment(){
-    if(!_secEdit('finance','Recording a payment'))return;
-
-    // A modal rather than a prompt chain, so the method comes from the camp's
-    // payment policy instead of whatever the user types into a text box.
-    var today=new Date().toISOString().split('T')[0];
-    var h='<div class="me-modal-form">';
-    h+='<div class="me-field"><label>Family</label><input type="text" id="fapFamily" class="me-input" placeholder="Family name"></div>';
-    h+='<div style="display:grid;grid-template-columns:1fr 1fr;gap:10px">';
-    h+='<div class="me-field"><label>Amount ($)</label><input type="number" id="fapAmount" class="me-input" step="0.01" min="0" placeholder="0.00"></div>';
-    h+='<div class="me-field"><label>Date</label><input type="date" id="fapDate" class="me-input" value="'+today+'"></div>';
-    h+='</div>';
-    h+='<div class="me-field"><label>Method</label><select id="fapMethod" class="me-input">'+_payOptions('tuition')+'</select>'+_payBlockedNote('tuition')+'</div>';
-    h+='</div>';
-    showModal('Record Payment',h,function(){
-        var family=(document.getElementById('fapFamily').value||'').trim();
-        if(!family){toast('Family name is required','error');return}
-        var amount=parseFloat(document.getElementById('fapAmount').value)||0;
-        if(!amount){toast('Enter an amount','error');return}
-        var method=document.getElementById('fapMethod').value;
-        if(!_payAllowed(method,'tuition')){toast('That payment method isn\'t accepted for tuition.','error');return}
-        finPayments.push({id:Date.now(),family:family,amount:amount,method:method,
-                          date:document.getElementById('fapDate').value||today,status:'paid'});
-        closeModal('dynModal');
-        save();renderFinance();toast('Payment recorded');
-    });
+    if(!_secEdit('billing','Recording a payment'))return;
+    openPaymentForFamily(null);
 }
-function finRemovePayment(id){
+// Finance's ✕ takes the payment off the family's bill too (TED-158) — it used
+// to remove only the list row, leaving the payment (and its discount) on the
+// ledger, so the family owed nothing for money the camp never kept.
+async function finRemovePayment(id){
     // ★ remove by stable id, not by render-index (the list is sorted before display, so an
     //   index would target the wrong row; identical rows were also indistinguishable).
-    var idx=finPayments.findIndex(function(p){return String(p.id)===String(id)});
-    if(idx<0){toast('Payment not found','error');return}
-    finPayments.splice(idx,1);save();renderFinance();toast('Removed');
+    var p=finPayments.find(function(x){return x&&String(x.id)===String(id)});
+    if(!p){toast('Payment not found','error');return}
+    await _removeRecordedPayment(p);
 }
 
 function finSetBudget(){
@@ -13508,7 +16309,7 @@ function finExportQB(){
         var tuition=e.sessionTuition||0;if(!tuition)return;
         var camperData=roster[e.camperName]||{};
         var camperId=camperData.camperId?String(camperData.camperId).padStart(4,'0'):'0000';
-        csv+='"'+esc(e.appliedDate||'')+'","Invoice","INV-'+camperId+'","'+esc(e.camperName)+'","Tuition Income","'+tuition+'","'+esc(e.session||'')+' tuition","'+esc(e.paymentStatus||'pending')+'"\n';
+        csv+='"'+esc(e.appliedDate||'')+'","Invoice","INV-'+camperId+'","'+esc(_lbl(e.camperName))+'","Tuition Income","'+tuition+'","'+esc(e.session||'')+' tuition","'+esc(e.paymentStatus||'pending')+'"\n';
     });
     // Manual payments
     finPayments.forEach(function(p){
@@ -13561,7 +16362,7 @@ function finExportXero(){
         var tuition=e.sessionTuition||0;if(!tuition)return;
         var camperData=roster[e.camperName]||{};
         var camperId=camperData.camperId?String(camperData.camperId).padStart(4,'0'):'0000';
-        csv+='"'+esc(e.parentName||e.camperName)+'","'+esc(e.parentEmail||'')+'","INV-'+camperId+'","'+esc(e.appliedDate||'')+'","'+esc(e.appliedDate||'')+'","'+tuition+'","'+esc(e.session||'')+' tuition — '+esc(e.camperName)+'","200"\n';
+        csv+='"'+esc(e.parentName||e.camperName)+'","'+esc(e.parentEmail||'')+'","INV-'+camperId+'","'+esc(e.appliedDate||'')+'","'+esc(e.appliedDate||'')+'","'+tuition+'","'+esc(e.session||'')+' tuition — '+esc(_lbl(e.camperName))+'","200"\n';
     });
     finPayments.forEach(function(p,i){
         csv+='"'+esc(p.family)+'","","PMT-'+String(i+1).padStart(4,'0')+'","'+p.date+'","'+p.date+'","'+p.amount+'","Payment received via '+esc(p.method)+'","200"\n';
@@ -13582,8 +16383,8 @@ function finExportJournal(){
         var tuition=e.sessionTuition||0;if(!tuition)return;
         var camperData=roster[e.camperName]||{};
         var camperId=camperData.camperId?String(camperData.camperId).padStart(4,'0'):'0000';
-        csv+='"'+esc(e.appliedDate||'')+'","INV-'+camperId+'","Accounts Receivable","'+tuition+'","","Tuition: '+esc(e.camperName)+'","'+esc(e.session||'')+'"\n';
-        csv+='"'+esc(e.appliedDate||'')+'","INV-'+camperId+'","Tuition Revenue","","'+tuition+'","Tuition: '+esc(e.camperName)+'",""\n';
+        csv+='"'+esc(e.appliedDate||'')+'","INV-'+camperId+'","Accounts Receivable","'+tuition+'","","Tuition: '+esc(_lbl(e.camperName))+'","'+esc(e.session||'')+'"\n';
+        csv+='"'+esc(e.appliedDate||'')+'","INV-'+camperId+'","Tuition Revenue","","'+tuition+'","Tuition: '+esc(_lbl(e.camperName))+'",""\n';
     });
     finPayments.forEach(function(p){
         csv+='"'+p.date+'","","Cash/Bank","'+p.amount+'","","Payment: '+esc(p.family)+'","'+esc(p.method)+'"\n';
@@ -13676,6 +16477,12 @@ function _buildPayNameIndex(){
     return idx;
 }
 function _payFamilyByName(p){
+    // The camper's number first: the family that lists that child.
+    var _pid=normalizePersonId(p&&p.camperId);
+    if(_pid){
+        var _key=camperNameById(_pid);
+        if(_key){var _fk=Object.keys(families).find(function(k){return (families[k].camperIds||[]).indexOf(_key)>=0});if(_fk)return _fk}
+    }
     if(!_payNameIndex) _payNameIndex=_buildPayNameIndex();
     return _payNameIndex[_payNameKey(p.family)]||_payNameIndex[_payNameKey(p.camper)]||null;
 }
@@ -13729,12 +16536,21 @@ function buildFamilyLedgers(){
                     _famItemRaw(e.camperName,e.street,e.city,e.state,e.zip,e.parentName,e.parentEmail));
             }
             if(fk&&families[fk]&&_postTuitionFor(families[fk],eid))_posted++;
+            // ...and a deposit the parent paid by card when applying (TED-090)
+            if(fk&&families[fk])_posted+=_postCardDepositsFor(families[fk],fk,e,eid);
         });
         // buildFamilyLedgers is a READ — search, analytics, finance and Billing
         // all call it — so posting here and not saving left the charge in memory
         // only, where the next hydration dropped it. Save once, out of band, if
         // anything was genuinely new. postTuition is idempotent, so the save's
         // own re-render posts nothing and cannot loop.
+        // ...and every family charge (late fee, card fee, Add Charge, bulk
+        // charge, close-out), including ones added before they were posted.
+        // Keyed on the charge's id, so this posts each one once, ever.
+        Object.keys(families||{}).forEach(function(fk){
+            var f=families[fk];
+            _posted+=_postExistingCharges(f);
+        });
         if(_posted){try{setTimeout(function(){try{save()}catch(_){}} ,0)}catch(_){}}
     }
 
@@ -13774,7 +16590,7 @@ function buildFamilyLedgers(){
             // ledger rather than dropping it (revenue would vanish from
             // Billing) or guessing at a family (the wrong parent gets billed).
             if(!e.parentName&&!e.camperName) return;
-            var lastName=(e.camperName||'').split(' ').pop();
+            var lastName=_lbl(e.camperName||'').split(' ').pop();
             fk='pending_'+lastName.toLowerCase().replace(/[^a-z0-9]/g,'')+'_'+eid;
             if(!ledgers[fk]){
                 var parents=[];
@@ -13825,11 +16641,11 @@ function buildFamilyLedgers(){
         // went into totalCharges AND the discount went into totalCredits, so
         // balance = charges - payments - credits subtracted every discount
         // TWICE — understating what the family owed by the discount amount.
-        ledgers[fk].entries.push({type:'charge',category:'Tuition',desc:esc(e.camperName)+' — '+esc(e.session||''),amount:tuition,date:e.enrolledDate||e.appliedDate||'',ref:eid});
+        ledgers[fk].entries.push({type:'charge',category:'Tuition',desc:esc(_lbl(e.camperName))+' — '+esc(e.session||''),amount:tuition,date:e.enrolledDate||e.appliedDate||'',ref:eid});
         ledgers[fk]._seen['t:'+eid]=1;
         ledgers[fk].totalCharges+=tuition;
         if(discAmt>0){
-            ledgers[fk].entries.push({type:'credit',category:'Discount',desc:(e.discount.pct?e.discount.pct+'% ':'')+'discount for '+esc(e.camperName),amount:discAmt,date:e.enrolledDate||e.appliedDate||'',ref:eid+'_disc'});
+            ledgers[fk].entries.push({type:'credit',category:'Discount',desc:(e.discount.pct?e.discount.pct+'% ':'')+'discount for '+esc(_lbl(e.camperName)),amount:discAmt,date:e.enrolledDate||e.appliedDate||'',ref:eid+'_disc'});
             ledgers[fk].totalCredits+=discAmt;
             ledgers[fk]._seen['d:'+eid]=1;
         }
@@ -13853,7 +16669,7 @@ function buildFamilyLedgers(){
             schedule.forEach(function(inst,ii){
                 // invoicedAt/dueOn ride along so aging can be derived from the
                 // ledger instead of re-deciding which family owns this enrollment.
-                ledgers[fk].entries.push({type:'installment',category:inst.label,desc:esc(e.camperName)+' — '+esc(inst.label),amount:inst.amount,date:inst.dueDate||'',status:inst.status||'pending',ref:eid+'_inst'+ii,invoicedAt:inst.invoicedAt||'',dueOn:inst.invoiceDueDate||inst.dueDate||''});
+                ledgers[fk].entries.push({type:'installment',category:inst.label,desc:esc(_lbl(e.camperName))+' — '+esc(inst.label),amount:inst.amount,date:inst.dueDate||'',status:inst.status||'pending',ref:eid+'_inst'+ii,invoicedAt:inst.invoicedAt||'',dueOn:inst.invoiceDueDate||inst.dueDate||''});
             });
         }
     });
@@ -13979,6 +16795,10 @@ function buildFamilyLedgers(){
                 if(e.kind==='charge'&&e.reason==='tuition'&&src.enrollmentId)key='t:'+src.enrollmentId;
                 else if(e.kind==='credit'&&(e.reason==='discount'||e.reason==='sibling')&&src.enrollmentId)key='d:'+src.enrollmentId;
                 else if((e.kind==='payment'||e.kind==='refund')&&src.paymentId)key='p:'+src.paymentId;
+                // A bank deposit posted to the ledger (migration 265) is the row
+                // 3b already shows for it — but only THAT row: a deposit moved to
+                // another family leaves a payment and its reversal here, both shown.
+                else if((e.kind==='payment'||e.kind==='refund')&&src.depositId)key='p:'+src.depositId;
                 else if(e.kind==='credit'&&src.creditId)key='x:'+src.creditId;
                 else if(e.kind==='charge'&&src.chargeId)key='c:'+src.chargeId;
                 if(key&&l._seen[key])return;
@@ -14000,7 +16820,7 @@ function buildFamilyLedgers(){
                     l.entries.push({type:'payment',category:label||'Payment',desc:e.note||'Payment received',amount:amt,date:e.date||'',ref:e.id,status:''});
                     l.totalPayments+=amt;l.totalGrossPayments+=amt;
                 }
-                if(key)l._seen[key]=1;
+                if(key&&!src.depositId)l._seen[key]=1;
             });
         });
     }
@@ -14033,7 +16853,8 @@ function buildFamilyLedgers(){
         // card, or a disconnected processor. Surfaced on the ledger so Billing can
         // show it — a notification alone is missed, and the plan otherwise still
         // reads as active while nothing is being taken.
-        l.collectionBlocked=(Array.isArray(l.family.plans)?l.family.plans:[])
+        // The old single plan too (TED-084): the nightly run flags it now.
+        l.collectionBlocked=(Array.isArray(l.family.plans)?l.family.plans:(l.family.plan&&typeof l.family.plan==='object'?[l.family.plan]:[]))
             .map(function(p){return p&&p.collectionBlocked?
                 Object.assign({planId:p.id},p.collectionBlocked):null})
             .filter(Boolean);
@@ -14995,20 +17816,65 @@ function _prRunsTab(){
     return h;
 }
 
+// ── Which weeks a pay run covers (TED-166) ─────────────────────────────────
+// A timesheet is a Sunday–Saturday week, and a run takes every sheet whose
+// Sunday falls in its From–To. The window used to fill in "Sunday of last week
+// → today", which takes THIS week while it is still being worked: weekly runs
+// a week apart both paid the middle week (Ana 112 h paid for 96 worked), and
+// two-weekly runs never paid the rest of that week. The defaults are now the
+// COMPLETE weeks since the last run ended; a range that takes a week another
+// run already paid, or a week that is not over, is said out loud before saving.
+function _prAddDays(iso,n){
+    var p=iso.split('-'), d=new Date(+p[0],+p[1]-1,+p[2]);
+    d.setDate(d.getDate()+n);
+    return d.getFullYear()+'-'+String(d.getMonth()+1).padStart(2,'0')+'-'+String(d.getDate()).padStart(2,'0');
+}
+function _prDefaultRange(){
+    var today=_prToday();
+    var lastSat=_prAddDays(_prWeekStart(today),-1);           // the last week that is over
+    var prevEnd=(payroll.payRuns||[]).reduce(function(m,r){return r&&r.to&&r.to>m?r.to:m},'');
+    var from=prevEnd?_prShiftWeek(_prWeekStart(prevEnd),1):_prShiftWeek(_prWeekStart(today),-1);
+    return {from:from,to:lastSat,nothingNew:from>lastSat};
+}
+/** The weeks (by their Sunday) a range would pay that another run already paid. */
+function _prOverlappingRuns(from,to,exceptId){
+    return (payroll.payRuns||[]).filter(function(r){
+        if(!r||r.id===exceptId||!r.from||!r.to)return false;
+        var lo=from>r.from?from:r.from, hi=to<r.to?to:r.to;
+        if(lo>hi)return false;
+        // a Sunday in [lo, hi] is a week both runs pay
+        var sun=_prWeekStart(lo); if(sun<lo)sun=_prShiftWeek(sun,1);
+        return sun<=hi;
+    });
+}
 function prNewRun(){
     var core=PC(); if(!core)return;
     if(!payroll.staff.length){toast('Add staff first','error');return}
-    var to=_prToday(), from=_prShiftWeek(_prWeekStart(to),-1);
-    var h=ff('From','runFrom',from,'date')+ff('To','runTo',to,'date');
+    var _def=_prDefaultRange();
+    var to=_def.nothingNew?_def.from:_def.to, from=_def.from;
+    var h=(_def.nothingNew?'<p style="font-size:.78rem;color:#92400E;margin:0 0 8px">No complete week since the last pay run ended. The week that is still going is paid in the next run, once it is over.</p>':'')
+        +ff('From','runFrom',from,'date')+ff('To','runTo',to,'date');
+    h+='<p style="font-size:.7rem;color:var(--s400);margin:-4px 0 8px">Timesheets are Sunday\u2013Saturday weeks; a week is in the run when its Sunday is between these dates.</p>';
     h+='<div class="fg"><label class="fl" style="display:flex;align-items:center;gap:7px;cursor:pointer"><input type="checkbox" id="runFinal"> Final period of the season</label>'+
         '<p style="font-size:.68rem;color:var(--s400);margin:2px 0 0">Flat stipends pay out on the final period only, so they don\'t repeat every run.</p></div>';
     h+='<p style="font-size:.72rem;color:var(--s400);margin:8px 0 0">Season salaries are divided across the number of runs you expect — set that below.</p>';
     h+=ff('Runs in the season','runPeriods','7','number');
-    showModal('New Pay Run',h,function(){
+    showModal('New Pay Run',h,async function(){
         function v(id){var e=document.getElementById(id);return e?(e.value||'').trim():''}
         var f=v('runFrom'), t=v('runTo');
         if(!f||!t){toast('Pick both dates','error');return}
         if(f>t){toast('The end date is before the start date','error');return}
+        // Said before saving: a week another run already paid, or a week still going.
+        var _ov=_prOverlappingRuns(f,t);
+        var _thisWeek=_prWeekStart(_prToday());
+        var _warn=[];
+        if(_ov.length)_warn.push('It takes week(s) the pay run of '+_ov.map(function(r){return esc(r.from)+' \u2013 '+esc(r.to)}).join(', ')
+            +' already paid \u2014 those hours would be paid twice.');
+        if(t>=_thisWeek)_warn.push('It takes the week of '+esc(_thisWeek)+', which is not over \u2014 its hours so far would be paid, and the rest of that week would not be paid by a later run.');
+        if(_warn.length){
+            var _go=await confirmDialog({title:'Check these dates',message:_warn.join('<br><br>'),confirmLabel:'Create it anyway',danger:true});
+            if(!_go)return;
+        }
         var run=core.buildPayRun(payroll.staff,payroll.timesheets,{
             from:f, to:t,
             periodsInSeason:parseFloat(v('runPeriods'))||7,
@@ -15092,17 +17958,49 @@ function viewFamily(famKey){
 function _collectionWarning(l){
     if(!l)return '';
     var out=[];
+    // A disputed payment (TED-186/200, 288): the family's card is not charged
+    // — by autopay or from here — shown once, plan or no plan; clicking asks
+    // whether to resume (after a dispute the camp did not win).
+    if(_famDisputeHeld(l.family)){
+        out.push('<span style="font-size:.78rem;font-weight:700;color:var(--err);cursor:pointer;text-decoration:underline" '
+            +'onclick="event.stopPropagation();CampistryMe.resumeAutopayAfterDispute(\''+je(l.famKey)+'\')">'
+            +esc('Payment disputed \u2014 card not charged')+'</span>');
+    }
     (l.collectionBlocked||[]).forEach(function(b){
         if(!b)return;
         var n=Number(b.attempts)||0;
+        if(b.reason==='chargeback')return;
         var label=b.reason==='no_card'?'No card on file'
                  :b.reason==='declined'?'Card declined'
                  :b.reason==='no_processor'?'Processor not connected'
+                 :b.reason==='bank_debit_unheld'?'Bank debit not recorded — may be debited again'
+                 :b.reason==='bank_debit_stuck'?'Bank debit not cleared after 10 days'
+                 :b.reason==='bank_debit_unverified'?'Bank debit cannot be checked'
+                 :b.reason==='deposit_review'?'Autopay waiting — answer the card deposit question'
                  :String(b.reason||'Cannot collect');
         if(n>1)label+=' ×'+n;
         if(b.escalated)label='Not collecting — '+label;
         if(b.nextRetryAt)label+=' · retries '+esc(b.nextRetryAt);
         out.push(_flatStatus(label,b.escalated?'err':'warn'));
+    });
+    // An autopay charge the card company never answered (TED-113): held on the
+    // plan, and nothing more is charged there until the office says whether it
+    // went through.
+    ((l.family&&Array.isArray(l.family.plans)?l.family.plans:[])).forEach(function(p,i){
+        var h=p&&p.pendingCharge;
+        if(!h||!h.unconfirmed)return;
+        var ref=p.id?String(p.id):('#'+i);
+        out.push('<span style="font-size:.78rem;font-weight:700;color:var(--err);cursor:pointer;text-decoration:underline" '
+            +'onclick="event.stopPropagation();CampistryMe.resolveUnconfirmedAutopay(\''+je(l.famKey)+'\',\''+je(ref)+'\')">'
+            +esc('Autopay '+fm(Number(h.amount)||0)+(h.since?' ('+h.since+')':'')+' never confirmed — did it go through?')+'</span>');
+    });
+    // A card deposit that may already have been typed in by hand (TED-095):
+    // nothing was posted for it; the office says which it is.
+    ((l.family&&l.family.depositReview)||[]).forEach(function(r){
+        if(!r||!r.ref)return;
+        out.push('<span style="font-size:.78rem;font-weight:700;color:var(--warn);cursor:pointer;text-decoration:underline" '
+            +'onclick="event.stopPropagation();CampistryMe.resolveDepositReview(\''+je(l.famKey)+'\',\''+je(r.ref)+'\')">'
+            +esc('Card deposit '+fm(r.amount)+' — already recorded by hand?')+'</span>');
     });
     if(l.cardExpiry&&l.cardExpiry.status==='expired')
         out.push(_flatStatus('Card expired'+(l.cardExpiry.label?' ('+l.cardExpiry.label+')':''),'err'));
@@ -15198,10 +18096,22 @@ function renderBilling(){
         +'<div class="me-more-menu" id="'+billMoreId+'">'
         +'<button onclick="CampistryMe.addFamily()">Add Household</button>'
         +'<button onclick="CampistryMe.addCharge()">Add Charge</button>'
+        // The bulk actions. Run an installment is the one that makes a payment
+        // plan actually ask for money — without it a schedule sits pending for ever.
+        +'<button onclick="CampistryMe.runInstallments()">Run an installment\u2026</button>'
+        +'<button onclick="CampistryMe.bulkAdjust(\'credit\')">Credit several accounts\u2026</button>'
+        +'<button onclick="CampistryMe.bulkAdjust(\'charge\')">Charge several accounts\u2026</button>'
+        +'<button onclick="CampistryMe.applyCreditsToOwed()">Settle invoices from credit\u2026</button>'
+        +'<button onclick="CampistryMe.sendStatements()">Send statements\u2026</button>'
+        +'<button onclick="CampistryMe.assessLateFees()">Charge late fees\u2026</button>'
+        +'<button onclick="CampistryMe.manageLateFees()">Late-fee policy\u2026</button>'
         +'<button onclick="CampistryMe.issueCredit()">Issue Credit/Refund</button>'
         +'<button onclick="CampistryMe.managePaymentMethods()">Accepted payments</button>'
+        +'<button onclick="CampistryMe.manageParentPaymentPlanSetting()">Parent self-serve payment plans</button>'
+        +'<button onclick="CampistryMe.managePaymentPlanStructure()">Payment plan structure</button>'
         +'<button onclick="CampistryMe.managePayers()">Payers &amp; Organizations</button>'
         +'<button onclick="CampistryMe.openMergeFamiliesTool()">Merge Families</button>'
+        +'<button onclick="CampistryMe.openActivityLog()">Activity Log</button>'
         // Printing/exporting the household list moved to Reports (a
         // "Family Directory" template, filterable/groupable/printable) —
         // no need for a second, less capable copy of that feature here.
@@ -15267,33 +18177,40 @@ function renderBilling(){
         h+='<div class="me-empty"><h3>No accounts match this filter</h3></div>';
     } else {
         var billPaged=_paginate(filtered,PAGE_SIZE,_billingPage);
+        // A clean table (same .me-t style used across the app — Roster,
+        // Payroll) rather than a stack of cards, so Billing reads
+        // consistently. Each row clicks through to the full-page family/
+        // billing detail (renderFamilyDetailPage).
+        h+='<div class="me-card"><div class="me-tw"><table class="me-t"><thead><tr>'
+            +'<th>Family</th><th>Campers</th><th>Status</th><th>Autopay</th><th style="text-align:right">Balance</th><th></th>'
+            +'</tr></thead><tbody>';
         billPaged.items.forEach(function(l){
-            // A single scannable row per family — click anywhere on it to open
-            // the full-page family/billing detail (renderFamilyDetailPage),
-            // same click-through pattern Roster uses for a camper. This used
-            // to expand inline into the household + ledger + 8 action buttons
-            // right here, which is what made the list feel crowded.
-            var statusBadge=l.status==='unbilled'?_flatStatus('Not Billed'):l.status==='paid'?_flatStatus('Paid','ok'):l.status==='overdue'?_flatStatus('Overdue','err'):l.status==='partial'?_flatStatus('Partial','warn'):_flatStatus('Pending','warn');
-            var camperNames=(l.family.camperIds||[]).concat((l.pendingCamperIds||[]).map(function(n){return n+' (pending)'})).join(', ');
+            // Status as a pill badge (bdg) to match the app's table look.
+            var stMap={paid:['Paid','ok'],overdue:['Overdue','err'],partial:['Partial','warn'],unbilled:['Not Billed','gray']};
+            var st=stMap[l.status]||['Pending','warn'];
+            var statusCell=bdg(st[0],st[1])
+                +(l.pendingEnrollment?' '+bdg('Pending enrollment','warn'):'')
+                +_collectionWarning(l);
+            var camperNames=(l.family.camperIds||[]).map(_lbl).concat((l.pendingCamperIds||[]).map(function(n){return _lbl(n)+' (pending)'})).join(', ');
 
-            // A quick "N x $amount" tag when this family is on an even
-            // installment plan — so a plan's shape is scannable from the
-            // list without opening the family, same as the family-detail
-            // page's Payment Plan card.
-            // One clean row: name + campers + status on the left (status
-            // folded into the descriptive line instead of its own pill),
-            // balance + a chevron on the right. The plan's "N x $amount"
-            // shape used to also live here — dropped from the list view,
-            // it's still on the family's own Payment Plan card, this row
-            // only needs to answer "who, and how much."
-            h+='<div class="me-card" id="billfam-'+je(l.famKey)+'" style="margin-bottom:10px;cursor:pointer" onclick="CampistryMe.viewFamily(\''+je(l.famKey)+'\')">';
-            h+='<div style="display:flex;align-items:center;gap:12px">';
-            h+='<div style="flex:1;min-width:0"><h3 style="margin:0;font-size:.95rem;font-weight:700;color:var(--s800)">'+esc(l.family.name||'')+'</h3><span style="font-size:.75rem;color:var(--s400)">'+esc(camperNames)+'</span> · '+statusBadge+(l.pendingEnrollment?' · '+_flatStatus('Accepted — pending enrollment','warn'):'')+_collectionWarning(l)+'</div>';
-            h+='<div style="display:flex;align-items:center;gap:10px;flex-shrink:0">';
-            h+='<span style="font-size:1rem;font-weight:800;color:'+(l.balance>0?'var(--err)':'var(--ok)')+'">'+fm(l.balance)+'</span>';
-            h+='<span style="font-size:1rem;color:var(--s300)">›</span></div>';
-            h+='</div></div>';
+            // Autopay — shown only when a plan is actively on autopay. Read
+            // straight off the canonical family record (same shape the family
+            // detail page's autopay pill reads via _famPlans) without mutating
+            // it during render.
+            var _billFam=families[l.famKey]||l.family||{};
+            var _billPlans=_billFam.plans||((_billFam.plan&&_billFam.plan.installments&&_billFam.plan.installments.length)?[_billFam.plan]:[]);
+            var _autopayOn=_billPlans.some(function(p){return p&&p.autopay});
+
+            h+='<tr class="click" id="billfam-'+je(l.famKey)+'" onclick="CampistryMe.viewFamily(\''+je(l.famKey)+'\')">'
+                +'<td class="bold">'+esc(l.family.name||'')+'</td>'
+                +'<td style="color:var(--s500)">'+(camperNames?esc(camperNames):'<span style="color:var(--s300)">—</span>')+'</td>'
+                +'<td>'+statusCell+'</td>'
+                +'<td>'+(_autopayOn?bdg('On','ok'):'<span style="color:var(--s300)">—</span>')+'</td>'
+                +'<td style="text-align:right;font-weight:800;color:'+(l.balance>0?'var(--err)':'var(--ok)')+'">'+fm(l.balance)+'</td>'
+                +'<td style="text-align:right;color:var(--me);font-weight:600">View</td>'
+                +'</tr>';
         });
+        h+='</tbody></table></div></div>';
         h+=_pagerHtml(filtered.length,PAGE_SIZE,_billingPage,'setBillingPage');
     }
 
@@ -15317,7 +18234,7 @@ function renderFamilyDetailPage(){
         return;
     }
     var statusBadge=l.status==='unbilled'?_flatStatus('Not Billed'):l.status==='paid'?_flatStatus('Paid','ok'):l.status==='overdue'?_flatStatus('Overdue','err'):l.status==='partial'?_flatStatus('Partial','warn'):_flatStatus('Pending','warn');
-    var camperNames=(l.family.camperIds||[]).concat((l.pendingCamperIds||[]).map(function(n){return n+' (pending)'})).join(', ');
+    var camperNames=(l.family.camperIds||[]).map(_lbl).concat((l.pendingCamperIds||[]).map(function(n){return _lbl(n)+' (pending)'})).join(', ');
     var hasCard=_famChargeable(families[l.famKey]);
     var _fam=families[l.famKey];
     var moreId='famDetailMoreMenu';
@@ -15363,8 +18280,30 @@ function renderFamilyDetailPage(){
         }
     }
     h+='</div>';
+    var _wayD=_familyOnItsWay(l.famKey);
     h+='<div style="text-align:right"><div style="font-size:.72rem;font-weight:700;color:var(--s400);text-transform:uppercase;letter-spacing:.05em">Balance</div>'
-        +'<div style="font-size:2rem;font-weight:800;line-height:1.1;color:'+(l.balance>0?'var(--err)':'var(--ok)')+'">'+fm(l.balance)+'</div></div>';
+        +'<div style="font-size:2rem;font-weight:800;line-height:1.1;color:'+(l.balance>0?'var(--err)':'var(--ok)')+'">'+fm(l.balance)+'</div>'
+        +(_wayD.amount>0?'<div style="font-size:.78rem;color:var(--s600);margin-top:4px">'+fm(_wayD.amount)+' on its way \u2014 bank debits take a few business days</div>':'')
+        +(function(){
+            // Others paying part of this family's bill (TED-165): their shares are
+            // on their own accounts, not in the balance above.
+            try{
+                var op=_familyOtherPayers(l.famKey);
+                return op.length?'<div style="font-size:.78rem;color:var(--s600);margin-top:4px">Also paying part of this bill: '
+                    +op.map(function(o){return esc(o.name)+' '+fm(o.share)+(o.owes>0?' (still owes '+fm(o.owes)+')':' (paid)')}).join(', ')
+                    +' \u2014 <a href="#" onclick="CampistryMe.managePayers();return false">payers</a></div>':'';
+            }catch(_){return ''}
+        })()
+        +(function(){
+            // Bank payments made online that have not had the camp's "not paying
+            // by card" discount yet (TED-160) — said here, where the office looks.
+            try{
+                var F=_cfAPI(); if(!F||F.normalize(enrollSettings.cardFeePolicy).mode!=='cash_discount')return '';
+                var n=_onlineBankPaymentsWithoutDiscount(l.famKey).length;
+                return n?'<div style="font-size:.78rem;color:var(--s600);margin-top:4px">'+n+' bank payment'+(n!==1?'s':'')+' made online without the not-paying-by-card discount \u2014 '
+                    +'<a href="#" onclick="CampistryMe.addCardSurcharge(\''+je(l.famKey)+'\');return false">give it</a></div>':'';
+            }catch(_){return ''}
+        })()+'</div>';
     h+='</div>';
 
     // Action bar — moved above everything else. What you can DO on this
@@ -15379,7 +18318,9 @@ function renderFamilyDetailPage(){
     else if(l.balance>0.005) moreItems+='<button onclick="CampistryMe.monthlyPlan(\''+je(l.famKey)+'\')">Set up Payment Plan</button>';
     moreItems+=hasCard?'<button onclick="CampistryMe.requestCardSetup(\''+je(l.famKey)+'\')">Replace payment method</button>':'<button onclick="CampistryMe.requestCardSetup(\''+je(l.famKey)+'\')">Set up payment method</button>';
     moreItems+='<button onclick="CampistryMe.addChargeForFamily(\''+je(l.famKey)+'\')">Add Charge</button>';
-    moreItems+='<button onclick="CampistryMe.addCardSurcharge(\''+je(l.famKey)+'\')">Add card surcharge\u2026</button>';
+    var _cfMode=(function(){try{var F=_cfAPI();return F?F.normalize(enrollSettings.cardFeePolicy).mode:'off'}catch(_){return 'off'}})();
+    moreItems+='<button onclick="CampistryMe.addCardSurcharge(\''+je(l.famKey)+'\')">'
+        +(_cfMode==='cash_discount'?'Discount for not paying by card\u2026':_cfMode==='convenience'?'Add online payment fee\u2026':'Add card surcharge\u2026')+'</button>';
     moreItems+='<button onclick="CampistryMe.closeOutFamily(\''+je(l.famKey)+'\')">Close out\u2026</button>';
     moreItems+='<button onclick="CampistryMe.issueCreditForFamily(\''+je(l.famKey)+'\')">Issue Credit/Refund</button>';
     moreItems+='<button onclick="CampistryMe.printStatement(\''+je(l.famKey)+'\')">Print Statement</button>';
@@ -15519,6 +18460,58 @@ function setBillSearch(q){
     if(el){ el.focus(); var p=el.value.length; el.setSelectionRange(p,p); }
 }
 
+// ── The "discount for not paying by card" (TED-153) ──────────────────────
+// In that card-fee mode the card price is the posted price and a family paying
+// by cheque, cash or bank transfer is promised X% off (the registration form
+// says so). It was never given: a family paying $970 by cheque against $1,000
+// still owed $30. Now a payment the office records by one of those methods
+// carries its discount, as its own credit line on the bill.
+//
+// The discount is on the part of the bill the payment settles: $970 at 3%
+// settles $1,000 (970 is 97% of it) and earns $30; a payment of the full
+// posted $1,000 settles the $1,000 owed and earns the same $30 back as credit.
+var _CASH_DISCOUNT_METHODS={cash:'cash',check:'check',ach:'ach',zelle:'ach',wire:'ach'};
+function _cashDiscountFor(owedBefore,amount,method){
+    var F=_cfAPI(); if(!F)return {discount:0};
+    var pol=F.normalize(enrollSettings.cardFeePolicy);
+    if(pol.mode!=='cash_discount')return {discount:0};
+    var m=_CASH_DISCOUNT_METHODS[String(method||'').toLowerCase()];
+    var amt=Math.round((Number(amount)||0)*100)/100;
+    var owed=Math.max(0,Math.round((Number(owedBefore)||0)*100)/100);
+    if(!m||!(amt>0)||!(owed>0))return {discount:0};
+    var pct=Math.min(99.99,pol.cashDiscountPct)/100;
+    var settles=Math.min(owed,(amt+pol.cashDiscountFlat)/(1-pct));
+    var q=F.quote(pol,{amount:settles,method:m,channel:'office'});
+    var d=Math.max(0,Math.round((Number(q.discount)||0)*100)/100);
+    return {discount:d,settles:Math.round(settles*100)/100,pct:pol.cashDiscountPct,flat:pol.cashDiscountFlat};
+}
+// Posted with the payment it belongs to, once (keyed on the payment's id).
+function _postCashDiscount(f,payRow,cd){
+    if(!f||!payRow||!cd||!(cd.discount>0))return 0;
+    if(!Array.isArray(f.credits))f.credits=[];
+    var id='cdisc_'+String(payRow.id);
+    if(f.credits.some(function(c){return c&&c.id===id}))return 0;
+    var bits=[];
+    if(cd.pct>0)bits.push(cd.pct+'%');
+    if(cd.flat>0)bits.push(fm(cd.flat));
+    var cr={id:id,amount:cd.discount,date:payRow.date||today(),reason:'discount',cashDiscount:true,paymentId:payRow.id,
+        note:'Discount for not paying by card ('+bits.join(' + ')+' on '+fm(cd.settles)+')',timestamp:Date.now()};
+    f.credits.push(cr);
+    _postLedgerCredit(f,cr);
+    f.balance=Math.round(((f.balance||0)-cd.discount)*100)/100;
+    return cd.discount;
+}
+function _payDiscountPreview(){
+    var box=document.getElementById('payDiscount'); if(!box)return;
+    var fk=(document.getElementById('payFamKey')||{}).value;
+    var amt=parseFloat((document.getElementById('payAmount')||{}).value)||0;
+    var method=(document.getElementById('payMethod')||{}).value;
+    var cd=fk&&families[fk]?_cashDiscountFor((buildFamilyLedgers()[fk]||{}).balance||0,amt,method):{discount:0};
+    box.innerHTML=cd.discount>0
+        ?'<div style="font-size:.8rem;color:var(--ok);margin:4px 0 8px">Discount for not paying by card: <strong>'+fm(cd.discount)+'</strong> \u2014 also taken off their bill with this payment.</div>'
+        :'';
+}
+
 function openPaymentModal(){openPaymentForFamily(null)}
 
 function openPaymentForFamily(famKey){
@@ -15551,14 +18544,16 @@ function openPaymentForFamily(famKey){
     // Reference # neighbor, which is what made the row look broken rather
     // than just informative.
     h+=_payBlockedNote('tuition');
+    h+='<div id="payDiscount"></div>';
     h+='<div class="me-field"><label>Notes (optional)</label><input type="text" id="payNotes" class="me-input" placeholder="e.g., June installment"></div>';
     h+='</div>';
     showModal('Record Payment',h,function(){
         var fk=document.getElementById('payFamKey').value;
         var f=families[fk];
         if(!fk||!f){toast('Select a family','error');return}
-        var amt=parseFloat(document.getElementById('payAmount').value)||0;
-        if(!amt){toast('Enter an amount','error');return}
+        var amt=Math.round((parseFloat(document.getElementById('payAmount').value)||0)*100)/100;
+        // Money IN only (TED-108) — see the Finance page's Record Payment.
+        if(!(amt>0)){toast('Enter an amount above zero — to give money back, use Issue Credit/Refund','error');return}
         var date=document.getElementById('payDate').value;
         var method=document.getElementById('payMethod').value;
         // Guard the save path too — a stale tab or an edited DOM must not slip
@@ -15566,13 +18561,23 @@ function openPaymentForFamily(famKey){
         if(!_payAllowed(method,'tuition')){toast('That payment method isn\'t accepted for tuition.','error');return}
         var ref=document.getElementById('payRef').value.trim();
         var notes=document.getElementById('payNotes').value.trim();
-        var _payRow={id:'pay_'+Date.now(),family:f.name,familyKey:fk,amount:amt,date:date,method:method,reference:ref,notes:notes,timestamp:Date.now()};
+        var _payRow={id:'pay_'+Date.now()+'_'+Math.random().toString(36).slice(2,7),family:f.name,familyKey:fk,amount:amt,date:date,method:method,reference:ref,notes:notes,timestamp:Date.now()};
+        // What the family owed before this payment decides its discount (TED-153).
+        var _cd=_cashDiscountFor((buildFamilyLedgers()[fk]||{}).balance||0,amt,method);
         finPayments.push(_payRow);
         _postPaymentEntry(f,_payRow);   // the balance, not just the receipt
         f.totalPaid=(f.totalPaid||0)+amt;
         f.balance=Math.max(0,(f.balance||0)-amt);
-        save();closeModal('dynModal');if(curPage==='familydetail')renderFamilyDetailPage();else renderBilling();toast('Payment of '+fm(amt)+' recorded for '+f.name);
+        var _disc=_postCashDiscount(f,_payRow,_cd);
+        save();closeModal('dynModal');
+        if(curPage==='finance')renderFinance();else if(curPage==='familydetail')renderFamilyDetailPage();else renderBilling();
+        toast('Payment of '+fm(amt)+' recorded for '+f.name+(_disc>0?' \u2014 with '+fm(_disc)+' off for not paying by card':''));
     });
+    ['payFamKey','payAmount','payMethod'].forEach(function(id){
+        var el=document.getElementById(id);
+        if(el){el.addEventListener('input',_payDiscountPreview);el.addEventListener('change',_payDiscountPreview);}
+    });
+    _payDiscountPreview();
 }
 
 function addCharge(){
@@ -15623,8 +18628,9 @@ function addChargeForFamily(famKey){
         var fk=document.getElementById('chgFamKey').value;
         var f=families[fk];
         if(!fk||!f){toast('Select a family','error');return}
-        var amt=parseFloat(document.getElementById('chgAmount').value)||0;
-        if(!amt){toast('Enter an amount','error');return}
+        var amt=Math.round((parseFloat(document.getElementById('chgAmount').value)||0)*100)/100;
+        // A charge is money owed; taking some off is a credit (TED-062's twin).
+        if(!(amt>0)){toast('Enter an amount above zero — to take money off, use Issue Credit','error');return}
         // The split, if one was entered. REFUSED rather than clamped when it
         // over-allocates: a household shown a negative balance and an organization
         // billed for money nobody owes is worse than being made to fix the figures.
@@ -15638,9 +18644,268 @@ function addChargeForFamily(famKey){
         // Stored only when there IS a split, so an ordinary charge is byte-identical
         // to one written before this feature existed.
         if(_shares.length)_chg.payers=_shares;
+        // The household is billed ITS share only (TED-165): the fund's $800 of a
+        // $1,000 charge was on the family's bill, in Link and in autopay. The
+        // other payers' shares go on their own accounts (Manage payers).
+        var _others=_shares.length?_splitToPayers(_chg,fk,f):[];
+        if(_others.length){
+            _chg.fullAmount=amt;
+            _chg.amount=Math.round((amt-_others.reduce(function(t,o){return t+o.amount},0))*100)/100;
+        }
         f.charges.push(_chg);
-        f.balance=(f.balance||0)+amt;
-        save();closeModal('dynModal');if(curPage==='familydetail')renderFamilyDetailPage();else renderBilling();toast('Charge of '+fm(amt)+' added to '+f.name);
+        _postLedgerCharge(f,_chg);
+        f.balance=(f.balance||0)+_chg.amount;
+        save();closeModal('dynModal');if(curPage==='familydetail')renderFamilyDetailPage();else renderBilling();
+        toast(_others.length
+            ? 'Charge of '+fm(amt)+' added \u2014 '+f.name+' owes '+fm(_chg.amount)+'; '
+              +_others.map(function(o){return o.name+' owes '+fm(o.amount)}).join(', ')+' (on their own account, in Manage payers)'
+            : 'Charge of '+fm(amt)+' added to '+f.name);
+    });
+}
+
+// ── A payer's own account (TED-165, TED-177) ────────────────────────────────
+// A payer that is not the household — a fund — owes its share of each split
+// charge and pays it with its own cheques. Those lines live on the HOUSEHOLD's
+// family record (f.payerLedger), each naming its payer: a family is saved as
+// its own row and merged by entry id on the server (migration 286), so an
+// office computer left open from before cannot drop them, as it could when
+// they sat on the payer in the settings document. The list only grows: a
+// correction is a 'void' line naming the line it cancels.
+function _payerLedgerOf(f){ if(!Array.isArray(f.payerLedger))f.payerLedger=[]; return f.payerLedger; }
+// Lines kept on a payer before 286's layout, moved onto the families once.
+function _migratePayerLedgers(){
+    Object.keys(payers||{}).forEach(function(pid){
+        var py=payers[pid]; if(!py||!Array.isArray(py.ledger)||!py.ledger.length)return;
+        var pays=[];
+        py.ledger.forEach(function(e){
+            if(!e||!e.id)return;
+            if(e.kind==='charge'&&e.familyKey&&families[e.familyKey]){
+                var L=_payerLedgerOf(families[e.familyKey]);
+                if(!L.some(function(x){return x&&x.id===e.id}))L.push(Object.assign({},e,{payerId:pid}));
+            } else if(e.kind==='payment') pays.push(e);
+        });
+        delete py.ledger;   // first: placing a payment reads the accounts again
+        // A cheque already moved (an office computer still on the old page wrote
+        // the old list back after the move) is not placed twice (TED-190).
+        var placed={};
+        Object.keys(families||{}).forEach(function(fk){ var f=families[fk];
+            (f&&Array.isArray(f.payerLedger)?f.payerLedger:[]).forEach(function(x){ if(x&&x.paymentId)placed[x.paymentId]=1; }); });
+        pays.forEach(function(e){ if(placed[e.id])return;
+            _placePayerPayment(pid,e.amount,{date:e.date,method:e.method,reference:e.reference,paymentId:e.id}); });
+    });
+}
+// Every line for one payer, across the families it pays for.
+function _payerLines(pid){
+    _migratePayerLedgers();
+    var out=[];
+    Object.keys(families||{}).forEach(function(fk){
+        var f=families[fk]; if(!f||!Array.isArray(f.payerLedger))return;
+        f.payerLedger.forEach(function(e){ if(e&&e.payerId===pid) out.push(Object.assign({familyKey:fk,family:f.name},e)); });
+    });
+    return out;
+}
+// "Owes $500", or, when a payer has paid more than its shares, what to do with
+// the difference (TED-198) — never "owes $-300".
+function _payerStanding(a){
+    return a.balance>0?'Owes '+fm(a.balance)
+         : a.balance<0?'Credit '+fm(-a.balance)+' \u2014 return it to them, or keep it for a later share'
+         : 'Settled';
+}
+function _payerAccount(pid){
+    var lines=_payerLines(pid), voided={}, ch=0, pd=0;
+    lines.forEach(function(e){ if(e.kind==='void'&&e.voidOf)voided[e.voidOf]=1; });
+    lines.forEach(function(e){
+        if(voided[e.id])return;
+        var c=Math.round((Number(e.amount)||0)*100);
+        if(e.kind==='charge')ch+=c; else if(e.kind==='payment')pd+=c;
+    });
+    return {charged:ch/100,paid:pd/100,balance:(ch-pd)/100,lines:lines,voided:voided};
+}
+// Every payer's money together, for Finance and Analytics (TED-178).
+function _payerTotals(){
+    var ids={};
+    Object.keys(families||{}).forEach(function(fk){ var f=families[fk];
+        (f&&Array.isArray(f.payerLedger)?f.payerLedger:[]).forEach(function(e){ if(e&&e.payerId)ids[e.payerId]=1; }); });
+    Object.keys(payers||{}).forEach(function(pid){ if(payers[pid]&&Array.isArray(payers[pid].ledger)&&payers[pid].ledger.length)ids[pid]=1; });
+    var t={charged:0,paid:0,outstanding:0,payments:[]};
+    Object.keys(ids).forEach(function(pid){
+        var a=_payerAccount(pid);
+        t.charged+=a.charged; t.paid+=a.paid; t.outstanding+=Math.max(a.balance,0);
+        var byPay={};
+        a.lines.forEach(function(e){
+            if(e.kind!=='payment'||a.voided[e.id])return;
+            var k=e.paymentId||e.id;
+            if(!byPay[k])byPay[k]={payerId:pid,name:(payers[pid]&&payers[pid].name)||pid,paymentId:k,amount:0,date:e.date||'',method:e.method||'',reference:e.reference||''};
+            byPay[k].amount=Math.round((byPay[k].amount+(Number(e.amount)||0))*100)/100;
+        });
+        Object.keys(byPay).forEach(function(k){t.payments.push(byPay[k])});
+    });
+    t.charged=Math.round(t.charged*100)/100; t.paid=Math.round(t.paid*100)/100; t.outstanding=Math.round(t.outstanding*100)/100;
+    return t;
+}
+// A split charge's shares that are not the household's, onto the household's
+// record as that payer's lines. Returns [{payerId,name,amount}].
+function _splitToPayers(chg,fk,f){
+    var P=_payersAPI(); if(!P)return [];
+    var out=[], L=_payerLedgerOf(f);
+    P.allocate(chg.amount,chg.payers,'__family__').forEach(function(a){
+        if(a.payerId==='__family__'||!(a.cents>0))return;
+        var py=payers[a.payerId];
+        if(!py){py=payers[a.payerId]={id:a.payerId,name:a.payerId,kind:'organization'};}
+        var id='prc_'+chg.id+'_'+a.payerId;
+        if(L.some(function(e){return e&&e.id===id}))return;
+        L.push({id:id,payerId:a.payerId,kind:'charge',amount:a.amount,chargeId:chg.id,
+            description:(chg.description||chg.category||'Charge')+' \u2014 share for '+f.name+(a.note?' ('+a.note+')':''),
+            date:chg.date||today(),timestamp:Date.now()});
+        out.push({payerId:a.payerId,name:py.name||a.payerId,amount:a.amount});
+    });
+    return out;
+}
+// What the other payers owe on this family's split charges, for its page.
+function _familyOtherPayers(fk){
+    var f=families[fk]; if(!f||!Array.isArray(f.payerLedger))return [];
+    var voided={}, share={};
+    f.payerLedger.forEach(function(e){ if(e&&e.kind==='void'&&e.voidOf)voided[e.voidOf]=1; });
+    f.payerLedger.forEach(function(e){
+        if(!e||e.kind!=='charge'||voided[e.id])return;
+        share[e.payerId]=(share[e.payerId]||0)+Math.round((Number(e.amount)||0)*100);
+    });
+    return Object.keys(share).filter(function(pid){return share[pid]>0}).map(function(pid){
+        return {payerId:pid,name:(payers[pid]&&payers[pid].name)||pid,share:share[pid]/100,owes:_payerAccount(pid).balance};
+    });
+}
+// A payer's payment, onto the families whose shares it pays (oldest share
+// first); anything over what it owes stays with the last family it pays for.
+function _placePayerPayment(pid,amount,o){
+    o=o||{};
+    var cents=Math.round((Number(amount)||0)*100); if(!(cents>0))return 0;
+    var a=_payerAccount(pid);
+    var owed={}, order=[];
+    a.lines.forEach(function(e){ if(a.voided[e.id]||e.kind==='void')return;
+        var c=Math.round((Number(e.amount)||0)*100);
+        if(!(e.familyKey in owed)){owed[e.familyKey]=0;order.push(e.familyKey);}
+        owed[e.familyKey]+=e.kind==='charge'?c:-c; });
+    if(!order.length)return 0;
+    var base=o.paymentId||('prp_'+Date.now()+'_'+Math.random().toString(36).slice(2,7));
+    var left=cents, pieces=[];
+    order.forEach(function(fk){ if(left<=0)return; var take=Math.min(left,Math.max(owed[fk],0)); if(take>0){pieces.push([fk,take]);left-=take;} });
+    if(left>0){ if(pieces.length)pieces[pieces.length-1][1]+=left; else pieces.push([order[order.length-1],left]); }
+    pieces.forEach(function(pc,i){
+        var L=_payerLedgerOf(families[pc[0]]);
+        var id=base+(pieces.length>1?'_'+i:'');
+        if(L.some(function(e){return e&&e.id===id}))return;
+        L.push({id:id,payerId:pid,kind:'payment',paymentId:base,amount:pc[1]/100,date:o.date||today(),
+            method:o.method||'',reference:o.reference||'',timestamp:Date.now()});
+    });
+    return pieces.length;
+}
+// A payment from a payer that is not the household — the fund's cheque — on
+// the payer's own account, never on the family's (TED-165).
+function recordPayerPayment(id){
+    if(!_secEdit('billing','Recording a payment'))return;
+    var py=payers[id];
+    if(!py){toast('Payer not found','error');return}
+    var acct=_payerAccount(id);
+    if(!(acct.charged>0)){toast((py.name||id)+' has no share of any charge to pay','error');return}
+    var h='<div class="me-modal-form">';
+    h+='<p style="font-size:.84rem;color:var(--s600);margin:0 0 10px">'+esc(py.name||id)+' owes <strong>'+fm(acct.balance)+'</strong> on the charges it shares.</p>';
+    h+='<div style="display:grid;grid-template-columns:1fr 1fr;gap:10px">';
+    h+='<div class="me-field"><label>Amount ($)</label><input type="number" id="ppAmt" class="me-input" step="0.01" min="0" value="'+(acct.balance>0?acct.balance.toFixed(2):'')+'"></div>';
+    h+='<div class="me-field"><label>Date</label><input type="date" id="ppDate" class="me-input" value="'+today()+'"></div>';
+    h+='</div>';
+    h+='<div style="display:grid;grid-template-columns:1fr 1fr;gap:10px">';
+    // A fund pays by cheque (TED-178): the method starts there.
+    h+='<div class="me-field"><label>Method</label><select id="ppMethod" class="me-input">'+_payOptions('tuition','check')+'</select></div>';
+    h+='<div class="me-field"><label>Reference #</label><input type="text" id="ppRef" class="me-input" placeholder="Check #, grant ref"></div>';
+    h+='</div></div>';
+    showModal('Payment from '+(py.name||id),h,function(){
+        var amt=Math.round((parseFloat((document.getElementById('ppAmt')||{}).value)||0)*100)/100;
+        if(!(amt>0)){toast('Enter an amount above zero','error');return}
+        _placePayerPayment(id,amt,{date:(document.getElementById('ppDate')||{}).value||today(),
+            method:(document.getElementById('ppMethod')||{}).value||'',
+            reference:((document.getElementById('ppRef')||{}).value||'').trim()});
+        save();closeModal('dynModal');
+        toast(fm(amt)+' from '+(py.name||id)+' recorded \u2014 '+_payerStanding(_payerAccount(id)));
+        if(curPage==='familydetail')renderFamilyDetailPage();
+    },'Record payment');
+}
+// A payer's lines, and taking one back (TED-178): a share billed by mistake
+// goes back onto the household's bill; a payment entered by mistake (or given
+// back to the payer) comes off, and the payer owes it again.
+function payerLines(id){
+    if(!_secEdit('billing','Correcting a payer\u2019s account'))return;
+    var py=payers[id]; if(!py){toast('Payer not found','error');return}
+    var a=_payerAccount(id), seenPay={};
+    var h='<div class="me-modal-form"><p style="font-size:.84rem;color:var(--s600);margin:0 0 10px">'+esc(py.name||id)
+        +' \u2014 shares '+fm(a.charged)+', paid '+fm(a.paid)+' \u2014 <strong>'+esc(_payerStanding(a))+'</strong></p>';
+    var rows=a.lines.filter(function(e){return e.kind!=='void'}).map(function(e){
+        var off=!!a.voided[e.id];
+        if(e.kind==='payment'){ var k=e.paymentId||e.id; if(seenPay[k])return ''; seenPay[k]=1;
+            var tot=a.lines.filter(function(x){return x.kind==='payment'&&(x.paymentId||x.id)===k}).reduce(function(t,x){return t+(Number(x.amount)||0)},0);
+            return '<tr><td>'+esc(e.date||'')+'</td><td>Payment'+(e.method?' ('+esc(_payLabel(e.method)||e.method)+')':'')+(e.reference?' #'+esc(e.reference):'')+'</td><td style="text-align:right">'+fm(tot)+'</td><td style="text-align:right">'
+                +(off?'<span style="color:var(--s400)">removed</span>':'<button class="me-btn me-btn--ghost me-btn--sm" style="color:var(--err)" onclick="CampistryMe.voidPayerLine(\''+je(id)+'\',\''+je(k)+'\')">Remove</button>')+'</td></tr>'; }
+        // A share the payer's money fully covers has nothing to move back (TED-209).
+        var paidUp=!off&&Math.round((a.paid-(a.charged-(Number(e.amount)||0)))*100)>=Math.round((Number(e.amount)||0)*100);
+        return '<tr><td>'+esc(e.date||'')+'</td><td>'+esc(e.description||'Share')+'</td><td style="text-align:right">'+fm(e.amount)+'</td><td style="text-align:right">'
+            +(off?'<span style="color:var(--s400)">taken back</span>':'<button class="me-btn me-btn--ghost me-btn--sm" style="color:var(--err)" onclick="CampistryMe.voidPayerLine(\''+je(id)+'\',\''+je(e.id)+'\',\'cancel\')">Cancel share</button>'
+                +(paidUp?'<span style="font-size:.78rem;color:var(--s500);margin-left:6px">paid</span>'
+                    :'<button class="me-btn me-btn--ghost me-btn--sm" onclick="CampistryMe.voidPayerLine(\''+je(id)+'\',\''+je(e.id)+'\')">Move back to family</button>'))+'</td></tr>';
+    }).join('');
+    h+=rows?'<table class="me-t"><tbody>'+rows+'</tbody></table>':'<p style="color:var(--s500)">Nothing on this account yet.</p>';
+    h+='</div>';
+    showModal(py.name||id,h,null);
+}
+// mode 'cancel' (TED-189): the share is simply not owed by anyone any more —
+// a charge billed by mistake, or waived — so nothing goes to the household.
+function voidPayerLine(pid,lineId,mode){
+    var cancel=mode==='cancel';
+    if(!_secEdit('billing','Correcting a payer\u2019s account'))return;
+    var a=_payerAccount(pid);
+    var targets=a.lines.filter(function(e){return !a.voided[e.id]&&e.kind!=='void'&&(e.id===lineId||(e.kind==='payment'&&(e.paymentId||e.id)===lineId))});
+    if(!targets.length){toast('Already taken back','error');return}
+    var isPay=targets[0].kind==='payment', name=(payers[pid]&&payers[pid].name)||pid;
+    var tot=targets.reduce(function(t,e){return t+(Number(e.amount)||0)},0);
+    // Move back after the payer has paid (TED-203): what it paid that its other
+    // shares do not need stays on THIS share, and only the unpaid part moves to
+    // the family — never billing the family for money the payer already gave.
+    var kept=0;
+    if(!isPay&&!cancel&&targets.length===1){
+        var left=Math.round((a.paid-(a.charged-tot))*100)/100;
+        kept=Math.max(0,Math.min(tot,left));
+    }
+    var back=Math.round((tot-kept)*100)/100;
+    // Fully paid by the payer (TED-209): nothing to move, and nothing is written.
+    if(!isPay&&!cancel&&!(back>0)){toast('Nothing to move back \u2014 '+name+' has paid this share in full','error');return}
+    var msg=isPay?'Remove this '+fm(tot)+' payment from '+name+'? Use this for a payment entered by mistake, or one you gave back. '+name+' will owe it again.'
+                 :cancel?'Cancel this '+fm(tot)+' share? Nobody will owe it \u2014 not '+name+', not the '+targets[0].family+' family. Use this when the charge was a mistake or is waived.'
+                    +(a.paid>0?' '+name+' has paid '+fm(a.paid)+' so far; whatever that leaves over its other shares stays on its account as a credit, to return to them or keep for a later share.':'')
+                 :kept>0?'Move this '+fm(tot)+' share back to the '+targets[0].family+' family\u2019s own bill? '+name+' has already paid '+fm(kept)+' toward it, so that '+fm(kept)+' stays on this share and '
+                    +'only the unpaid '+fm(back)+' moves to the '+targets[0].family+' family.'
+                    +' (To move all '+fm(tot)+' back and return '+name+'\u2019s money, remove its payment first.)'
+                 :'Move this '+fm(tot)+' share back to the '+targets[0].family+' family\u2019s own bill? '+name+' will no longer owe it.';
+    confirmDialog({title:isPay?'Remove payment?':cancel?'Cancel share?':'Move share back?',message:msg,confirmLabel:isPay?'Remove':cancel?'Cancel share':'Move back',danger:isPay||cancel}).then(function(ok){
+        if(!ok)return;
+        targets.forEach(function(e){
+            var f=families[e.familyKey]; if(!f)return;
+            var L=_payerLedgerOf(f), vid='prv_'+e.id;
+            if(L.some(function(x){return x&&x.id===vid}))return;
+            L.push({id:vid,payerId:pid,kind:'void',voidOf:e.id,amount:e.amount,date:today(),timestamp:Date.now()});
+            if(e.kind==='charge'&&!cancel){
+                if(kept>0&&!L.some(function(x){return x&&x.id==='prkeep_'+e.id}))
+                    L.push({id:'prkeep_'+e.id,payerId:pid,kind:'charge',amount:kept,chargeId:e.chargeId,
+                        description:String(e.description||'Share').replace(/ \u2014 the part .* paid$/,'')+' \u2014 the part '+name+' paid',date:today(),timestamp:Date.now()});
+                if(!Array.isArray(f.charges))f.charges=[];
+                var chg={id:'prback_'+e.id,category:'Share moved back',description:(e.description||'Share')+' \u2014 moved back from '+name,
+                    amount:back,date:today(),timestamp:Date.now()};
+                f.charges.push(chg); _postLedgerCharge(f,chg); f.balance=(f.balance||0)+chg.amount;
+            }
+        });
+        save(); closeModal('dynModal');
+        toast(isPay?fm(tot)+' payment removed \u2014 '+name+': '+_payerStanding(_payerAccount(pid))
+            :cancel?fm(tot)+' share cancelled \u2014 '+name+': '+_payerStanding(_payerAccount(pid))
+            :kept>0?fm(back)+' moved back to '+targets[0].family+'\u2019s bill \u2014 '+name+'\u2019s '+fm(kept)+' stays on the share'
+            :fm(tot)+' moved back to '+targets[0].family+'\u2019s bill');
+        if(curPage==='familydetail')renderFamilyDetailPage(); else if(typeof renderBilling==='function')renderBilling();
     });
 }
 
@@ -15648,12 +18913,37 @@ function addChargeForFamily(famKey){
 // unrefunded money left on it — the candidate list for the Refund side of
 // Issue Credit/Refund.
 function _famRefundablePayments(f){
-    return finPayments.filter(function(p){
-        if((p.amount||0)<=0) return false;
-        if(!(f.name===p.family||f.name===p.camper||(f.camperIds||[]).indexOf(p.family)>=0||(f.camperIds||[]).indexOf(p.camper)>=0)) return false;
-        var priorRefunded=finPayments.filter(function(x){return x.refundOf!=null&&String(x.refundOf)===String(p.id)}).reduce(function(s,x){return s+Math.abs(x.amount||0)},0);
-        return Math.round((p.amount-priorRefunded)*100)/100>0;
+    return _famPaymentsIn(f).filter(function(p){
+        return Math.round((p.amount-_refundedFrom(p))*100)/100>0;
     });
+}
+// Every payment in (amount > 0) this family made that the money arrived for:
+// not one still on its way or one that failed (TED-144) — there is nothing
+// there to refund yet. A payment that names its family by key is that
+// family's; the rest by the child's number, or the name for an old one.
+function _famPaymentsIn(f){
+    return finPayments.filter(function(p){
+        if(!p||(p.amount||0)<=0) return false;
+        if(p.status==='pending'||p.status==='failed') return false;
+        if(p.familyKey&&families[p.familyKey]) return families[p.familyKey]===f;
+        // A payment for one of this family's children: by the child's number
+        // when the payment carries one, by name only for one from before numbers.
+        var _pk=normalizePersonId(p.camperId)?camperNameById(normalizePersonId(p.camperId)):null;
+        if(_pk!=null){ if((f.camperIds||[]).indexOf(_pk)<0) return false; }
+        else if(!(f.name===p.family||f.name===p.camper||(f.camperIds||[]).indexOf(p.family)>=0||(f.camperIds||[]).indexOf(p.camper)>=0)) return false;
+        return true;
+    });
+}
+// What has been refunded from a payment — less a refund the processor failed
+// after accepting it, which Campistry put back (278 writes a row carrying
+// failedRefundId): that money was never refunded, so the payment can be
+// refunded again (TED-132).
+function _refundedFrom(p){
+    var putBack={};
+    finPayments.forEach(function(x){ if(x&&x.failedRefundId)putBack[String(x.failedRefundId)]=1; });
+    return finPayments.filter(function(x){return x&&x.refundOf!=null&&String(x.refundOf)===String(p.id)
+            &&!((x.stripeRefundId&&putBack[String(x.stripeRefundId)])||(x.byopRefundId&&putBack[String(x.byopRefundId)]));})
+        .reduce(function(s,x){return s+Math.abs(x.amount||0)},0);
 }
 // How old a card payment can be and still be refundable through the gateway.
 //
@@ -15699,7 +18989,7 @@ function _famRefundableOnlineAll(f){
     return _famRefundablePayments(f)
         .filter(function(p){return !!p.stripePaymentIntentId || !!p.byopTransactionId})
         .map(function(p){
-            var priorRefunded=finPayments.filter(function(x){return x.refundOf!=null&&String(x.refundOf)===String(p.id)}).reduce(function(s,x){return s+Math.abs(x.amount||0)},0);
+            var priorRefunded=_refundedFrom(p);
             return {p:p,remaining:Math.round((p.amount-priorRefunded)*100)/100};
         })
         .filter(function(d){return d.remaining>0})
@@ -15716,6 +19006,113 @@ function _famRefundExpired(f){
     });
 }
 function _crFamChanged(){ _crUpdateRefundSummary(); }
+// Which card payment carried which surcharge (TED-146). A surcharge is a fee
+// on a CARD payment, and the card brands return it in proportion to what is
+// refunded OF THAT PAYMENT — not of everything the family ever paid. So each
+// surcharge ("3% on $3,000", i.e. $3,090 to be collected) is matched to the
+// card payments made after it was added, oldest first, until its $3,090 is
+// covered; each of those payments carries the fee in proportion. A deposit
+// paid before the fee existed, or a bank payment, carries none of it.
+function _paidByCard(p){
+    if(!p||!(Number(p.amount)>0))return false;
+    if(p.status==='pending'||p.status==='failed')return false;
+    if(!p.stripePaymentIntentId&&!p.byopTransactionId)return false;
+    if(p.paidWith)return p.paidWith==='card';
+    return !/ach|bank/i.test(String(p.method||''));
+}
+function _surchargeCarried(f){
+    var out={};
+    if(!f)return out;
+    var when=function(o){return Number(o.timestamp)||Date.parse(o.date||'')||0};
+    var fees=(f.charges||[]).filter(function(c){return c&&c.cardFee&&c.cardFee.mode==='surcharge'&&!c.voided&&Number(c.amount)>0;})
+        .map(function(c){var fee=Number(c.amount);return {fee:fee,need:Math.round(((Number(c.cardFee.base)||0)+fee)*100)/100,at:when(c),day:String(c.date||'')};})
+        .sort(function(a,b){return a.at-b.at});
+    if(!fees.length)return out;
+    var pays=_famPaymentsIn(f).filter(_paidByCard)
+        .map(function(p){return {p:p,at:when(p),day:String(p.date||''),left:Number(p.amount)}})
+        .sort(function(a,b){return a.at-b.at});
+    fees.forEach(function(s){
+        var need=s.need;
+        pays.forEach(function(x){
+            if(need<=0.005||x.left<=0.005)return;
+            // paid before the fee was added: not with it (by the clock when both
+            // have one, else by the day)
+            if(x.p.timestamp&&s.at?(x.at<s.at-300000):(x.day<s.day))return;
+            var take=Math.min(need,x.left);
+            x.left-=take; need-=take;
+            var k=String(x.p.id);
+            out[k]=(out[k]||0)+s.fee*take/s.need;
+        });
+    });
+    Object.keys(out).forEach(function(k){out[k]=Math.round(out[k]*100)/100});
+    return out;
+}
+// What of a payment's surcharge a refund of `chunk` returns, when `before` of
+// the payment had already been refunded: the difference of the two shares, so
+// several partial refunds add up to exactly the fee, never a cent more.
+function _feeShareOfRefund(carried,p,before,chunk){
+    if(!(carried>0))return 0;
+    var amt=Number(p.amount)||0;
+    return Math.max(0,Math.round((_surchargeShare(carried,amt,Math.min(amt,before+chunk))-_surchargeShare(carried,amt,before))*100)/100);
+}
+// The surcharge still kept on the family's card payments: each payment's
+// share, less what its refunds took back (a refund that failed and was put
+// back does not count, TED-148).
+function _surchargeKept(f){
+    if(!f)return 0;
+    var carried=_surchargeCarried(f), t=0;
+    _famPaymentsIn(f).forEach(function(p){
+        var c=carried[String(p.id)]; if(!(c>0))return;
+        t+=c-_surchargeShare(c,Number(p.amount),Math.min(Number(p.amount),_refundedFrom(p)));
+    });
+    return Math.max(0,Math.round(t*100)/100);
+}
+// The "not paying by card" discount a payment earned, and the share of it a
+// refund of `chunk` takes back when `before` of the payment was already
+// refunded (TED-160): refunding the payment, the family keeps no discount for
+// it. Differences of cumulative shares, so partial refunds add up exactly.
+function _cashDiscountOf(f,p){
+    return (f&&Array.isArray(f.credits)?f.credits:[]).filter(function(c){return c&&c.cashDiscount&&String(c.paymentId)===String(p.id)})
+        .reduce(function(t,c){return t+(Number(c.amount)||0)},0);
+}
+function _cashDiscountBackOf(f,p,before,chunk){
+    var d=_cashDiscountOf(f,p), amt=Number(p.amount)||0;
+    if(!(d>0)||!(amt>0))return 0;
+    var r2=function(n){return Math.round(n*100)/100};
+    return Math.max(0,r2(r2(d*Math.min(amt,before+chunk)/amt)-r2(d*before/amt)));
+}
+function _refundDiscountBack(f,amount){
+    var left=amount, t=0;
+    _famRefundableOnline(f).forEach(function(d){
+        if(left<=0.001)return;
+        var chunk=Math.round(Math.min(d.remaining,left)*100)/100;
+        t+=_cashDiscountBackOf(f,d.p,Number(d.p.amount)-d.remaining,chunk);
+        left=Math.round((left-chunk)*100)/100;
+    });
+    return Math.round(t*100)/100;
+}
+// The surcharge a refund of `amount` returns — worked out chunk by chunk the
+// way the refund itself is drawn (newest payment first), for the window's
+// "balance owed after this refund" (TED-146).
+function _refundFeeShare(f,amount){
+    var carried=_surchargeCarried(f), left=amount, t=0;
+    _famRefundableOnline(f).forEach(function(d){
+        if(left<=0.001)return;
+        var chunk=Math.round(Math.min(d.remaining,left)*100)/100;
+        t+=_feeShareOfRefund(carried[String(d.p.id)]||0,d.p,Number(d.p.amount)-d.remaining,chunk);
+        left=Math.round((left-chunk)*100)/100;
+    });
+    return Math.round(t*100)/100;
+}
+// Its share of a refund, by the card-fee rules' own refundShare: in proportion
+// to the refund against what is still on the card (the whole of it when the
+// whole is refunded).
+function _surchargeShare(feeKept,paidOnCard,refunded){
+    var F=_cfAPI();
+    if(!F||!(feeKept>0)||!(paidOnCard>0)||!(refunded>0))return 0;
+    var r=F.refundShare({mode:'surcharge'},{feeCharged:feeKept,paymentAmount:paidOnCard,refundAmount:refunded});
+    return Math.max(0,Math.round((Number(r&&r.fee)||0)*100)/100);
+}
 // Three named refund/credit types (mirrors the standard camp-billing
 // vocabulary: gateway refund / ledger credit / offline refund). "Partial or
 // fee-adjusted" isn't a fourth type of its own — it's just entering a smaller
@@ -15771,7 +19168,11 @@ function _crUpdateRefundSummary(){
         ? '<div style="margin-top:6px;font-size:.72rem;color:#92400E">'+soon.length+' of these payment'+(soon.length!==1?'s are':' is')
           +' within days of the '+REFUND_WINDOW_DAYS+'-day refund window closing.</div>'
         : '';
-        if(sumEl) sumEl.innerHTML='<strong>'+fm(onlineTotal)+'</strong> refundable to card/bank across '+online.length+' online payment'+(online.length!==1?'s':'')+'. Enter any amount up to that — it draws from the most recent charges first, so the refund stays inside the window the card networks allow.'+soonNote+expiredNote;
+        var _kept=_surchargeKept(f);
+        var feeNote=_kept>0
+            ? '<div style="margin-top:6px;font-size:.74rem;color:var(--s600)">This family paid a card surcharge ('+fm(_kept)+' still kept). The card brands require its share to go back with any refund: refunding everything returns all of it, and the fee on their bill comes down by the same share.</div>'
+            : '';
+        if(sumEl) sumEl.innerHTML='<strong>'+fm(onlineTotal)+'</strong> refundable to card/bank across '+online.length+' online payment'+(online.length!==1?'s':'')+'. Enter any amount up to that — it draws from the most recent charges first, so the refund stays inside the window the card networks allow.'+feeNote+soonNote+expiredNote;
         if(amtEl){amtEl.setAttribute('max',onlineTotal); if(!amtEl.value) amtEl.value=onlineTotal.toFixed(2);}
         if(noteEl) noteEl.innerHTML='<div style="font-size:.72rem;color:var(--s400);margin-top:4px">Sends money back to the original card/bank through '+esc(Object.keys(procs).join(' & '))+' — you don\'t pick a charge, Campistry applies it newest-first. For anything beyond '+fm(onlineTotal)+', use Offline Refund.</div>';
     } else {
@@ -15796,8 +19197,25 @@ function _crUpdateBalancePreview(){
     var amtEl=document.getElementById('crRefundAmount');
     var amt=amtEl?parseFloat(amtEl.value)||0:0;
     if(!f||!amt){previewEl.textContent='';return}
-    var newBalance=(f.balance||0)+amt;
-    previewEl.innerHTML='Balance owed after this refund: <strong>'+fm(newBalance)+'</strong> (currently '+fm(f.balance||0)+')';
+    // From the balance Billing shows — the family's ledger — not the old
+    // per-family figure, which a payment recorded by the processor's webhook
+    // never moves (TED-167: "$1,400 (currently $1,000)" for a family who owed $0).
+    var _now=(function(){ try{ var L=buildFamilyLedgers()[fk]; if(L&&typeof L.balance==='number')return L.balance; }catch(_){} return f.balance||0; })();
+    // A card refund also takes the surcharge's share off the bill (TED-146).
+    var _type=(document.getElementById('crType')||{}).value;
+    var _fee=_type==='refund_gateway'?_refundFeeShare(f,amt):0;
+    var _dback=_type==='refund_gateway'?_refundDiscountBack(f,amt):0;
+    var newBalance=Math.round((_now+amt-_fee+_dback)*100)/100;
+    previewEl.innerHTML='Balance owed after this refund: <strong>'+fm(newBalance)+'</strong> (currently '+fm(_now)+')'
+        +(_fee>0?' \u2014 '+fm(_fee)+' of the refund is card surcharge, which comes off their bill too':'')
+        +(_dback>0?' \u2014 the '+fm(_dback)+' not-paying-by-card discount that payment earned goes back on their bill':'');
+    // An offline refund is not tied to a payment, so its discount cannot be
+    // worked out here — say so, rather than leave the family with it (TED-160).
+    if(_type==='refund_offline'){
+        var _cdT=(f.credits||[]).filter(function(c){return c&&c.cashDiscount}).reduce(function(t,c){return t+(Number(c.amount)||0)},0);
+        if(_cdT>0)previewEl.innerHTML+='<div style="font-size:.74rem;color:#92400E;margin-top:4px">This family was given '+fm(_cdT)
+            +' off for not paying by card. If this refund gives back a payment that earned it, add that discount back with <strong>Add Charge</strong>.</div>';
+    }
 }
 // The "Unmatched" stat tile on Billing sums real money (payments recorded
 // with a family/camper name that never matched an actual family record) that
@@ -15900,6 +19318,14 @@ function issueCreditForFamily(famKey){
     h+='<div id="crCreditFields">';
     h+='<div style="background:var(--s50);padding:10px 14px;border-radius:var(--r);margin-bottom:14px;font-size:.8rem;color:var(--s600)">A credit only adjusts what the family owes in Campistry — no money is returned to a card. It stays on the household account for next summer, a sibling, or a canteen top-up. To actually send money back to a parent, use one of the Refund types instead.</div>';
     h+='<div style="display:grid;grid-template-columns:2fr 1fr;gap:10px">';
+    // A credit here is the household's (TED-189): a fund's share of a split
+    // charge is cancelled on the fund's own account, never by this credit.
+    if(famKey){try{var _op=_familyOtherPayers(famKey);
+        if(_op.length)h+='<div style="background:#FFFBEB;padding:8px 12px;border-radius:var(--r);margin-bottom:10px;font-size:.78rem;color:var(--s600)">Part of this bill is paid by '
+            +_op.map(function(o){return esc(o.name)+' ('+fm(o.share)+')'}).join(', ')
+            +'. A credit here comes off <strong>'+esc((families[famKey]||{}).name||'')+'</strong>\u2019s own share only. To cancel a fund\u2019s share, use '
+            +'<a href="#" onclick="CampistryMe.payerLines(\''+je(_op[0].payerId)+'\');return false">that payer\u2019s account \u2192 Cancel share</a>.</div>';
+    }catch(_){}}
     h+='<div class="me-field"><label>Reason</label><input type="text" id="crReason" class="me-input" placeholder="e.g., Referral credit, adjustment"></div>';
     h+='<div class="me-field"><label>Amount ($)</label><input type="number" id="crAmount" class="me-input" placeholder="0.00" step="0.01" min="0"></div>';
     h+='</div></div>';
@@ -15944,9 +19370,21 @@ function issueCreditForFamily(famKey){
             // (migration 198), so a retry of this same action resumes instead of
             // refunding twice. A second, deliberate refund is a second click and
             // gets its own key, which is the distinction only the client can make.
-            var _refundKey='rfnd_'+fk+'_'+Date.now()+'_'
-                          +Math.random().toString(36).slice(2,8);
+            // ...and the SAME key for the same refund on a later click (TED-093):
+            // keyed on the payment, what is still refundable on it and the
+            // amount, so a retry after a lost answer meets its first attempt
+            // instead of refunding twice, while a refund that was recorded changes
+            // what is left and so gives a deliberate second refund its own key.
+            var _refundKey='rfnd_'+fk;
+            var _chunkKey=function(p,left,amt){
+                return _refundKey+':'+String(p.id||p.stripePaymentIntentId||p.byopTransactionId)
+                    +':'+Math.round((Number(left)||0)*100)+':'+Math.round((Number(amt)||0)*100);
+            };
             var remaining=refundAmt, done=0, failMsg=null;
+            // Which card payment carried which surcharge, before any of this
+            // refund is booked (TED-141, TED-146); each chunk returns its own
+            // payment's share.
+            var _carried=_surchargeCarried(f), _feeBack=0, _feeCredits=[], _discBack=0, _discBackCharges=[];
             toast('Processing refund…');
             for(var ci=0; ci<chunks.length && remaining>0.001; ci++){
                 var p=chunks[ci].p;
@@ -15957,10 +19395,28 @@ function issueCreditForFamily(famKey){
                 try{
                     if(isStripe){
                         var stripeReason=(reasonSel==='requested_by_customer'||reasonSel==='duplicate'||reasonSel==='fraudulent')?reasonSel:'requested_by_customer';
-                        var res=await callEdgeFunction('stripe-refund',{paymentIntentId:p.stripePaymentIntentId,amount:chunk,reason:stripeReason,metadata:{campId:getCampId(),family:p.family||''}});
+                        // Signed in (owner/admin only, TED-052), with this click's key so a retry
+                        // replays instead of refunding twice.
+                        var res=await callEdgeFunctionAuthed('stripe-refund',{paymentIntentId:p.stripePaymentIntentId,amount:chunk,reason:stripeReason,metadata:{family:p.family||''},idempotencyKey:_chunkKey(p,chunks[ci].remaining,chunk)});
+                        if(res&&res.replayed)console.log('[Me] refund chunk replayed:',ci);
                         refId=res.refundId;
                     } else {
-                        var byopRes=await callEdgeFunctionAuthed('payments-refund',{externalTransactionId:p.byopTransactionId,amount:chunk,idempotencyKey:_refundKey+':'+ci});
+                        var _bBody={externalTransactionId:p.byopTransactionId,amount:chunk,idempotencyKey:_chunkKey(p,chunks[ci].remaining,chunk)};
+                        var byopRes;
+                        try{ byopRes=await callEdgeFunctionAuthed('payments-refund',_bBody); }
+                        catch(uErr){
+                            // An earlier try was cut off after the card company was
+                            // asked (TED-093). Only the processor's dashboard can say
+                            // whether it went through; never send it again on a guess.
+                            if(!(uErr&&uErr.data&&uErr.data.uncertain))throw uErr;
+                            var _sure=await confirmDialog({title:'Did the earlier refund go through?',
+                                message:esc(uErr.message)+'<br><br>Only continue if the processor\u2019s dashboard shows NO refund of '
+                                       +fm(chunk)+' on this payment.',
+                                confirmLabel:'Nothing went through \u2014 refund '+fm(chunk)});
+                            if(!_sure)throw uErr;
+                            _bBody.confirmNotRefunded=true;
+                            byopRes=await callEdgeFunctionAuthed('payments-refund',_bBody);
+                        }
                         // A replayed claim means this chunk already moved money on
                         // an earlier attempt. Treat it as the success it repeats.
                         if(byopRes&&byopRes.replayed)console.log('[Me] refund chunk replayed:',ci);
@@ -15984,13 +19440,52 @@ function issueCreditForFamily(famKey){
                     byopRefundId:isStripe?null:(refId||null),
                     byopProcessor:isStripe?null:p.byopProcessor,offline:false,timestamp:Date.now()
                 };
+                var _before=Math.round((Number(p.amount)-chunks[ci].remaining)*100)/100;
                 finPayments.push(_refRow);
                 _postPaymentEntry(f,_refRow);   // a refund the family no longer holds as credit
                 f.totalPaid=Math.max(0,(f.totalPaid||0)-chunk);f.balance=(f.balance||0)+chunk;
                 done=Math.round((done+chunk)*100)/100;
+                // This payment's surcharge share, one credit per refund, carrying
+                // the refund's id — so if that refund fails later the share goes
+                // back on the bill with it (281, TED-148).
+                var _share=_feeShareOfRefund(_carried[String(p.id)]||0,p,_before,chunk);
+                if(_share>0){
+                    _feeBack=Math.round((_feeBack+_share)*100)/100;
+                    _feeCredits.push({id:'cfr_'+Date.now()+'_'+ci,amount:_share,date:today(),reason:'correction',cardFeeReturn:true,
+                        refundId:refId||null,refundOf:p.id,
+                        note:'Card surcharge returned in proportion to the '+fm(chunk)+' refund of this card payment',timestamp:Date.now()});
+                }
+                // ...and the "not paying by card" discount this payment earned
+                // comes back in the same proportion (TED-160), carrying the
+                // refund's id so a refund that fails gives it back again (281).
+                var _db=_cashDiscountBackOf(f,p,_before,chunk);
+                if(_db>0){
+                    _discBack=Math.round((_discBack+_db)*100)/100;
+                    _discBackCharges.push({id:'cdback_'+Date.now()+'_'+ci,category:'Discount returned',
+                        description:'Discount for not paying by card, returned with the '+fm(chunk)+' refund of this payment',
+                        amount:_db,date:today(),timestamp:Date.now(),cashDiscountBack:true,paymentId:p.id,refundId:refId||null});
+                }
                 remaining=Math.round((remaining-chunk)*100)/100;
             }
             if(done<=0){toast('Refund failed'+(failMsg?': '+failMsg:''),'error');return}
+            // A card surcharge goes back in proportion to what is refunded — a
+            // card-brand rule, not the camp's choice (TED-141). The refund to the
+            // card already carries it (the fee was part of the payment); this is
+            // the fee on the bill coming down by the same share, so the family
+            // keeps only the fee on what they kept.
+            if(_feeCredits.length){
+                if(!Array.isArray(f.credits))f.credits=[];
+                _feeCredits.forEach(function(_fc){
+                    f.credits.push(_fc);
+                    _postLedgerCredit(f,_fc);
+                });
+                f.balance=Math.round(((f.balance||0)-_feeBack)*100)/100;
+            }
+            if(_discBackCharges.length){
+                if(!Array.isArray(f.charges))f.charges=[];
+                _discBackCharges.forEach(function(_dc){ f.charges.push(_dc); _postLedgerCharge(f,_dc); });
+                f.balance=Math.round(((f.balance||0)+_discBack)*100)/100;
+            }
             save();closeModal('dynModal');
             // The refunds (finPayments pushes + save) are already done here — a
             // rendering failure below must never look like the refund vanished.
@@ -16001,7 +19496,8 @@ function issueCreditForFamily(famKey){
                 toast('Refund recorded, but the page failed to refresh (see console) — reload to see it.','error');
             }
             if(failMsg){ toast('Refunded '+fm(done)+' before an error stopped the rest: '+failMsg,'error'); }
-            else { toast('Refunded '+fm(done)+' to card/bank for '+(f.name||'family')); }
+            else { toast('Refunded '+fm(done)+' to card/bank for '+(f.name||'family')+(_feeBack>0?' \u2014 '+fm(_feeBack)+' of it was the card surcharge, taken off their bill':'')
+                +(_discBack>0?' \u2014 the '+fm(_discBack)+' discount that payment earned is back on their bill':'')); }
             return;
         }
         if(type==='refund_offline'){
@@ -16026,8 +19522,10 @@ function issueCreditForFamily(famKey){
             toast('Recorded offline refund of '+fm(offAmt)+' for '+(f.name||'family'));
             return;
         }
-        var amt=parseFloat(document.getElementById('crAmount').value)||0;
-        if(!amt){toast('Enter an amount','error');return}
+        var amt=Math.round((parseFloat(document.getElementById('crAmount').value)||0)*100)/100;
+        // A credit takes money OFF (TED-062). A negative one used to show in the
+        // credit list while the ledger silently skipped it, so the two disagreed.
+        if(!(amt>0)){toast('Enter an amount above zero — to add money owed, use Add Charge','error');return}
         if(!f.credits) f.credits=[];
         var _crId='cr_'+Date.now();
         var _crReason=document.getElementById('crReason').value.trim();
@@ -16153,7 +19651,10 @@ async function printTaxStatement(famKey,year){
         var e=(enrollments||{})[eid];
         if(!e)return{};
         var ses=(sessions||[]).find(function(x){return x.name===e.session});
-        return{camperName:e.camperName||'',session:e.session||'',overnight:!!(ses&&ses.overnight)};
+        // The year the care is given — the session's start (TED-101) — not the
+        // date the tuition was charged, which is the enrolment date.
+        var careYear=String((ses&&(ses.startDate||ses.start))||e.sessionStart||'').slice(0,4);
+        return{camperName:e.camperName||'',camperId:e.camperId!=null?e.camperId:_camperIdOf(e.camperName),session:e.session||'',overnight:!!(ses&&ses.overnight),careYear:careYear};
     }
     var camperDobs={};
     ((l.family.camperIds)||[]).concat(l.pendingCamperIds||[]).forEach(function(n){
@@ -16179,15 +19680,15 @@ async function printTaxStatement(famKey,year){
 
     h+='<table><thead><tr><th>Child</th><th class="right">Qualifying care paid</th><th class="right">Not qualifying</th><th class="right">Total paid</th></tr></thead><tbody>';
     if(!rep.byCamper.length){
-        h+='<tr><td colspan="4" class="muted">No payments were applied to charges in '+year+'.</td></tr>';
+        h+='<tr><td colspan="4" class="muted">'+((rep.prepaid||0)>0.004?'Nothing paid in '+year+' was for camp given in '+year+'.':'No payments were applied to charges in '+year+'.')+'</td></tr>';
     }
     rep.byCamper.forEach(function(b){
-        h+='<tr><td>'+esc(b.camperName)+(b.notes.length?'<br><span class="muted">'+esc(b.notes.join(' · '))+'</span>':'')+
+        h+='<tr><td>'+esc(_lbl(b.camperName))+(b.notes.length?'<br><span class="muted">'+esc(b.notes.join(' · '))+'</span>':'')+
            '</td><td class="right bold">'+fm(b.qualifying)+'</td><td class="right">'+fm(b.notQualifying+b.needsReview)+
            '</td><td class="right">'+fm(b.total)+'</td></tr>';
     });
     h+='<tr style="border-top:2px solid #333"><td class="bold">Total</td><td class="right bold">'+fm(rep.qualifying)+
-       '</td><td class="right bold">'+fm(rep.notQualifying+rep.needsReview)+'</td><td class="right bold">'+fm(rep.paid.net)+'</td></tr>';
+       '</td><td class="right bold">'+fm(rep.notQualifying+rep.needsReview)+'</td><td class="right bold">'+fm(rep.claimedTotal!=null?rep.claimedTotal:rep.paid.net)+'</td></tr>';
     h+='</tbody></table>';
 
     if(rep.paid.refunds>0.004){
@@ -16214,23 +19715,81 @@ async function printTaxStatement(famKey,year){
 }
 
 async function removePayment(idx){
-    var ok=await confirmDialog({title:'Remove Payment?',message:'This will remove the payment record and adjust the family balance.',confirmLabel:'Remove',danger:true});
-    if(!ok)return;
     var p=finPayments[idx];
-    var captured=p?JSON.parse(JSON.stringify(p)):null;
-    if(p){
-        var f=Object.values(families).find(function(f){return f.name===p.family});
-        if(f){f.totalPaid=Math.max(0,(f.totalPaid||0)-p.amount);f.balance=(f.balance||0)+p.amount}
+    if(!p){toast('Payment not found','error');return}
+    await _removeRecordedPayment(p);
+}
+
+// Take a payment the office recorded back off the books (TED-158): a cheque
+// entered by mistake, or one that bounced. The family owes it again: its
+// ledger entry is reversed (the history keeps both), the "not paying by card"
+// discount that came with it goes too, and the row leaves the payments list.
+// Money that went through a processor is not removed here — it was really
+// taken, and giving it back is a refund.
+// Money a processor actually moved, in either direction (TED-163): a payment
+// (Stripe, Sola), a refund sent through one (Billing's, or one made in the
+// Stripe dashboard), or the row Campistry adds when a refund FAILED and the
+// money came back (278). None of these is the office's typing to undo.
+function _throughProcessor(p){
+    return !!(p&&(p.stripePaymentIntentId||p.byopTransactionId||p.stripeRefundId||p.byopRefundId||p.failedRefundId
+        ||p.stripeChargeId||p.stripeDisputeId));
+}
+async function _removeRecordedPayment(p){
+    if(!_secEdit('billing','Removing a payment'))return false;
+    if(_throughProcessor(p)){
+        var _isRefund=(Number(p.amount)||0)<0||p.stripeRefundId||p.byopRefundId;
+        toast(p.failedRefundId
+            ? 'That row is a refund the processor failed \u2014 the money really came back. To send it again, use Issue Credit/Refund.'
+            : _isRefund
+                ? 'That refund went through the card processor \u2014 the money really went back to the family, so it cannot be undone here.'
+                : 'That payment went through the card processor \u2014 to give the money back, use Issue Credit/Refund.','error');
+        return false;
     }
-    finPayments.splice(idx,1);save();if(curPage==='familydetail')renderFamilyDetailPage();else renderBilling();
-    toast('Payment removed','ok',{actionLabel:'Undo',onAction:function(){
-        if(captured){
-            var f=Object.values(families).find(function(f){return f.name===captured.family});
-            if(f){f.totalPaid=(f.totalPaid||0)+captured.amount;f.balance=Math.max(0,(f.balance||0)-captured.amount)}
-            finPayments.splice(idx,0,captured);
+    var fk=(p.familyKey&&families[p.familyKey])?p.familyKey:(typeof _payFamilyByName==='function'?_payFamilyByName(p):null);
+    var f=fk?families[fk]:null;
+    var disc=f&&Array.isArray(f.credits)?f.credits.filter(function(c){return c&&c.cashDiscount&&String(c.paymentId)===String(p.id)}):[];
+    var discAmt=disc.reduce(function(t,c){return t+(Number(c.amount)||0)},0);
+    var amt=Number(p.amount)||0;
+    // Is it on the family's bill at all? An old row from before Finance's form
+    // was Billing's never reached it — removing that changes no balance.
+    var _refs=_paymentRefsOf(p);
+    var onBill=!!(f&&((Array.isArray(f.entries)&&f.entries.some(function(e){return e&&!e.reverses&&(e.kind==='payment'||e.kind==='refund')
+            &&_refs.some(function(r){return e.id==='le_pay_'+r||(e.source&&String(e.source.paymentId||'')===r)})}))
+        ||!(Array.isArray(f.entries)&&f.entries.length)));
+    var ok=await confirmDialog({title:'Remove this payment?',
+        message:(amt<0?'The '+fm(-amt)+' refund':'The '+fm(amt)+' payment')+(p.method?' ('+esc(_payLabel(p.method)||p.method)+')':'')
+            +(f&&onBill?' comes off '+esc(f.name)+'\u2019s account \u2014 '+(amt<0?'the refund is undone.':'they will owe it again'
+              +(discAmt>0?', and the '+fm(discAmt)+' discount that came with it goes too.':'.'))
+              :' is removed from the list. It was never on '+(f?esc(f.name)+'\u2019s':'a family\u2019s')+' bill, so no balance changes.'),
+        confirmLabel:'Remove payment',danger:true});
+    if(!ok)return false;
+    if(f&&!onBill)f=null;
+    if(f){
+        var B=_billingCore();
+        var refs=_refs;
+        if(B&&Array.isArray(f.entries)){
+            f.entries.filter(function(e){
+                return e&&!e.reverses&&(e.kind==='payment'||e.kind==='refund')&&refs.some(function(r){
+                    return e.id==='le_pay_'+r||(e.source&&String(e.source.paymentId||'')===r);
+                });
+            }).forEach(function(e){
+                if(!B.isReversed(f,e.id))B.reverse(f,e.id,{note:'Payment removed by the office'+(p.reference?' ('+p.reference+')':'')});
+            });
+            disc.forEach(function(c){
+                var le='le_'+c.id;
+                if(B.find(f,le)&&!B.isReversed(f,le))B.reverse(f,le,{note:'The discount that came with a removed payment'});
+            });
         }
-        save();if(curPage==='familydetail')renderFamilyDetailPage();else renderBilling();toast('Payment restored');
-    }});
+        if(disc.length)f.credits=f.credits.filter(function(c){return disc.indexOf(c)<0});
+        if(amt>0){f.totalPaid=Math.max(0,(f.totalPaid||0)-amt);f.balance=Math.round(((f.balance||0)+amt+discAmt)*100)/100;}
+        else{f.balance=Math.round(((f.balance||0)+amt)*100)/100;}
+    }
+    var i=finPayments.indexOf(p);
+    if(i>=0)finPayments.splice(i,1);
+    save();
+    try{ if(curPage==='finance')renderFinance();else if(curPage==='familydetail')renderFamilyDetailPage();else renderBilling(); }catch(_){}
+    toast('Payment removed'+(f?' \u2014 '+(f.name||'the family')+'\u2019s balance is '+(amt<0?'back down by '+fm(-amt):'back up by '+fm(amt+discAmt)):''));
+    return true;
 }
 
 // ═══════════════════════════════════════════════════════════════
@@ -16280,10 +19839,69 @@ async function callEdgeFunctionAuthed(fnName,body){
     var client=window.CampistryDB&&window.CampistryDB.getClient?window.CampistryDB.getClient():null;
     if(!client) throw new Error('Not signed in');
     var res=await client.functions.invoke(fnName,{body:body});
-    if(res.error) throw new Error(res.error.message||'Edge function error');
+    if(res.error){
+        // supabase-js reports every non-2xx as "Edge Function returned a non-2xx
+        // status code"; the function's own { error } is on the response it
+        // carries (TED-134) — "Only the camp owner or an admin…", Stripe's
+        // reason for refusing a refund, "No payment method on file". Read it, so
+        // the office sees why.
+        var _ctx=res.error.context;
+        var _msg=res.error.message||'Edge function error', _body=null;
+        try{
+            if(_ctx&&typeof _ctx.json==='function'){
+                _body=await (typeof _ctx.clone==='function'?_ctx.clone():_ctx).json();
+                if(_body&&typeof _body.error==='string'&&_body.error)_msg=_body.error;
+            }
+        }catch(_){ /* not JSON: keep the generic message */ }
+        var _he=new Error(_msg);
+        // Whether the request got an answer at all (TED-111): a network failure
+        // or a 5xx from the platform says nothing about what the function did.
+        _he.status=_ctx&&typeof _ctx.status==='number'?_ctx.status:null;
+        _he.noAnswer=_he.status==null||_he.status>=500;
+        // Only the words change: _he.data stays unset, so "did it go through?"
+        // is still decided by status alone (TED-111).
+        throw _he;
+    }
     var data=res.data;
-    if(data&&data.error) throw new Error(data.error);
+    if(data&&data.error){var _e=new Error(data.error);_e.data=data;throw _e;}
     return data;
+}
+
+// A broadcast to a whole camp does not fit in one edge-function invocation.
+//
+// send-broadcast paces itself against the email/SMS providers' rate limits and
+// stops before the platform's wall-clock limit, answering `done:false` with the
+// number it did not reach. Left at one call, a send to several hundred families
+// simply stopped part way through and reported whatever it had managed — which
+// looked like a successful send of a fraction of the list.
+//
+// Calling again with the SAME eventKey and the SAME recipients resumes exactly
+// where it stopped: the function claims each recipient in the notifications
+// table before sending and releases every claim it could not honour, so an
+// already-messaged family is skipped and an unsent one is picked up. THE
+// eventKey IS WHAT MAKES THAT SAFE — without one there are no claims, and a
+// second pass would message everyone again. So this refuses to resume without
+// it rather than risk double-sending.
+//
+// Returns the summed counts across every pass, plus `truncated:true` if it hit
+// the pass limit with work still outstanding.
+async function sendBroadcastComplete(body){
+    var COUNTS=['emailSent','emailFailed','emailSkipped','smsSent','smsFailed','smsSkipped'];
+    var totals=null,pass=0;
+    for(;;){
+        var d=await callEdgeFunctionAuthed('send-broadcast',body)||{};
+        if(!totals) totals=d;
+        else{
+            COUNTS.forEach(function(k){ totals[k]=(totals[k]||0)+(d[k]||0); });
+            totals.done=d.done; totals.remaining=d.remaining;
+        }
+        // An older deployment of the function sends no `done` at all — treat
+        // that as complete rather than looping for a field it will never send.
+        if(d.done!==false) break;
+        if(!body.eventKey){ totals.truncated=true; break; }
+        if(++pass>=20){ totals.truncated=true; break; }
+    }
+    return totals;
 }
 
 // Office-side fallback for getting a payment method on file — e.g. a family
@@ -16392,11 +20010,89 @@ async function requestCardSetup(famKey){
     }
 }
 
-// Charge a family's stored card
-async function chargeStoredCard(famKey,amount,description){
-    var f=families[famKey];
-    if(!f||(!f.stripeCustomerId&&!f.byopCustomerRef)){toast('No payment method on file yet','error');return}
+// The kind of method stripe-charge takes from this family: its default, or a
+// card when none is set (stripe-charge picks one then). null when unknown.
+function _methodTypeCharged(f){
+    var def=f&&f.stripePaymentMethodId;
+    if(!def)return 'card';
+    var m=Array.isArray(f.savedPaymentMethods)?f.savedPaymentMethods.find(function(x){return x&&x.token===def}):null;
+    return m?(m.type==='us_bank_account'?'us_bank_account':'card'):null;
+}
+// A bank debit still on its way (TED-144). A bank (ACH) debit is "processing"
+// for several business days, and until the bank settles it the family's
+// balance still reads in full — so a second press of Charge Card, here or on
+// another computer, used to start a SECOND debit for the same bill. A payment
+// the processor has started and not yet answered, in the last fortnight, is
+// money on its way: shown, taken off what is offered, and no second charge is
+// started while it is there (stripe-charge refuses one too, asking Stripe).
+// A payment of this family's is charged back and the bank is still deciding
+// (TED-186/195/200, migration 288): the family carries the dispute pause
+// (disputeHold) — autopay or not, plan or not — and so do its plans.
+function _familyDisputed(famKey){
+    return _famDisputeHeld(families[famKey]);
+}
+function _famDisputeHeld(f){
+    if(!f)return false;
+    if(f.disputeHold&&Array.isArray(f.disputeHold.disputeIds)&&f.disputeHold.disputeIds.length)return true;
+    var plans=Array.isArray(f.plans)?f.plans:(f.plan&&typeof f.plan==='object'?[f.plan]:[]);
+    return plans.some(function(p){return p&&p.collectionBlocked&&p.collectionBlocked.reason==='chargeback'});
+}
+function _familyOnItsWay(famKey){
+    var out={amount:0,items:[]};
+    (finPayments||[]).forEach(function(p){
+        if(!p||p.status!=='pending'||!(Number(p.amount)>0))return;
+        if(!p.stripePaymentIntentId&&!p.byopTransactionId)return;
+        var fk=(p.familyKey&&families[p.familyKey])?p.familyKey:(typeof _payFamilyByName==='function'?_payFamilyByName(p):null);
+        if(fk!==famKey)return;
+        var at=Number(p.timestamp)||(p.date?Date.parse(p.date):NaN);
+        if(!isFinite(at)||Date.now()-at>=14*86400000)return;
+        out.amount=Math.round((out.amount+Number(p.amount))*100)/100;
+        out.items.push({amount:Number(p.amount),date:p.date||'',ref:p.stripePaymentIntentId||p.byopTransactionId});
+    });
+    return out;
+}
+function _onItsWayWords(w){
+    var first=w.items[0]||{};
+    return 'A '+fm(w.amount)+' bank debit'+(first.date?' started '+first.date:'')+' is still on its way \u2014 bank debits take a few business days';
+}
+// The debit a charge just started (or found already started): on this page at
+// once, as on its way, under the SAME id the webhook gives it — one row.
+function _recordOnItsWay(f,famKey,piId,amount){
+    if(!piId)return;
+    var id='pi_'+piId;
+    var twin=(finPayments||[]).filter(function(p){return p&&(p.id===id||p.stripePaymentIntentId===piId)})[0];
+    if(twin){if(!twin.status||twin.status==='pending')twin.status='pending';return;}
+    finPayments.push({id:id,family:f.name,familyKey:famKey,amount:amount,date:new Date().toISOString().split('T')[0],
+        method:'Bank debit (ACH)',reference:piId,stripePaymentIntentId:piId,status:'pending',
+        notes:'Bank debit \u2014 on its way (bank debits take a few business days)',timestamp:Date.now()});
+    save();
+}
 
+// Charge a family's stored card
+// Answers {ok:true} only when the money really moved, so batchCharge can count
+// real failures (TED-059). `quiet` leaves the per-family toasts to the batch.
+async function chargeStoredCard(famKey,amount,description,quiet){
+    var f=families[famKey];
+    if(!f||(!f.stripeCustomerId&&!f.byopCustomerRef)){if(!quiet)toast('No payment method on file yet','error');return {ok:false,error:'No payment method on file'}}
+
+    // A family disputing a payment with their bank is not charged from here
+    // either (TED-195): resume autopay once the dispute is settled, then charge.
+    if(_familyDisputed(famKey)){
+        var _dw=f.name+' is disputing a payment with their bank \u2014 nothing is charged until that is settled. Once it is, click \u201cPayment disputed\u201d on their row to resume.';
+        if(!quiet)toast(_dw,'error');
+        return {ok:false,disputed:true,error:_dw};
+    }
+    var _way=_familyOnItsWay(famKey);
+    if(!amount&&_way.amount>0){
+        showModal('Charge Card','<div class="me-modal-form"><p style="font-size:.85rem;color:var(--s600);margin-bottom:12px"><strong>'+esc(f.name)+'</strong>: '+esc(_onItsWayWords(_way))+'.</p>'
+            +'<p style="font-size:.8rem;color:var(--s500)">Nothing more is charged to this family until the bank settles it (it then shows as paid) or returns it (Billing then says it failed, and you can charge again).</p></div>',
+            function(){closeModal('dynModal');});
+        return {ok:false,onItsWay:true,error:_onItsWayWords(_way)};
+    }
+    if(amount&&_way.amount>0){
+        if(!quiet)toast(_onItsWayWords(_way)+' \u2014 nothing more was charged.','error');
+        return {ok:false,onItsWay:true,error:_onItsWayWords(_way)};
+    }
     if(!amount){
         // Ask for amount
         var ledgers=buildFamilyLedgers();
@@ -16418,27 +20114,76 @@ async function chargeStoredCard(famKey,amount,description){
     }
 
     var isBYOP=!f.stripeCustomerId&&!!f.byopCustomerRef;
+    // One key per charge the office MEANS to make (TED-111). It is kept — on
+    // this computer, across a reload — until that charge succeeds or is
+    // definitely declined, so pressing Charge Card again after an answer was
+    // lost meets the first attempt instead of charging the parent twice: Stripe
+    // answers with the charge it made, and the other processors' claim refuses
+    // to charge again until the office has checked. A different amount, or a
+    // charge that went through or was declined, starts a new key.
+    var _pk=_pendingChargeGet(famKey,amount);
+    // ...but only when the office means THAT charge (TED-118). Sent again with
+    // its key, Stripe answers with the first charge — right for a retry, and a
+    // "succeeded" with nothing charged for a new, separate one. So they say.
+    if(_pk){
+        var _at=new Date(Number(_pk.at)||Date.now());
+        var _when=_at.toLocaleTimeString([],{hour:'numeric',minute:'2-digit'})+(_at.toDateString()===new Date().toDateString()?'':' on '+_at.toLocaleDateString());
+        if(quiet)return {ok:false,uncertain:true,error:'an earlier '+fm(amount)+' charge ('+_when+') never got an answer \u2014 check it in the processor, then charge this family on its own'};
+        var _same=await confirmDialog({title:'The same charge, or a new one?',
+            message:'A '+fm(amount)+' charge to '+esc(f.name)+' at '+esc(_when)+' never got an answer from the card company \u2014 it may have gone through.'
+                   +'<br><br><strong>The same charge:</strong> it is sent again and cannot be taken twice.'
+                   +'<br><strong>A new charge:</strong> a separate '+fm(amount)+' on top of that one.',
+            confirmLabel:'The same charge \u2014 try it again'});
+        if(!_same){
+            var _fresh=await confirmDialog({title:'Charge a separate '+fm(amount)+'?',
+                message:'Only if '+esc(f.name)+' owes a SEPARATE '+fm(amount)+'. Check the processor first: the earlier one may already have taken the money.',
+                confirmLabel:'Yes \u2014 a new charge',danger:true});
+            if(!_fresh)return {ok:false,error:'Cancelled'};
+            _pendingChargeClear(famKey,amount);
+            _pk=null;
+        }
+    }
+    var _chargeKey=_pk?_pk.key:('chg_'+famKey+'_'+Date.now()+'_'+Math.random().toString(36).slice(2,8));
+    if(_pk&&_pk.desc)description=_pk.desc;              // the same request, or Stripe refuses the key
+    _pendingChargeSet(famKey,amount,{key:_chargeKey,desc:description||'',at:Date.now()});
 
-    toast('Charging '+fm(amount)+' to '+f.name+'...');
+    if(!quiet)toast('Charging '+fm(amount)+' to '+f.name+'...');
     try{
-        var result=isBYOP
-            ? await callEdgeFunctionAuthed('payments-charge',{
+        var _byopBody={
                 customerRef:f.byopCustomerRef,
                 amount:amount,
-                description:description||'Campistry payment'
-            })
+                description:description||'Campistry payment',
+                familyKey:famKey,
+                idempotencyKey:_chargeKey
+            };
+        var result;
+        try{
+            result=isBYOP
+            ? await callEdgeFunctionAuthed('payments-charge',_byopBody)
             : await callEdgeFunctionAuthed('stripe-charge',{
                 customerId:f.stripeCustomerId,
                 paymentMethodId:f.stripePaymentMethodId||null,
                 amount:amount,
                 currency:'usd',
                 description:description||'Campistry payment',
-                metadata:{campId:getCampId(),familyName:f.name,familyKey:famKey}
+                metadata:{familyName:f.name,familyKey:famKey},
+                idempotencyKey:_chargeKey
             });
+        }catch(err0){
+            // An earlier try the card company never confirmed: only the office
+            // can say whether it went through. Sent again only when they say it
+            // did not (the claim is released only once it has waited).
+            if(isBYOP&&!quiet&&err0.data&&err0.data.uncertain&&err0.data.canConfirm&&
+               window.confirm(err0.message+'\n\nOnly press OK if the processor\'s dashboard shows NO such charge.')){
+                _byopBody.confirmNotCharged=true;
+                result=await callEdgeFunctionAuthed('payments-charge',_byopBody);
+            }else throw err0;
+        }
 
         if(!isBYOP&&result.status==='requires_action'){
-            toast('Card requires authentication — parent must approve','error');
-            return;
+            _pendingChargeClear(famKey,amount);
+            if(!quiet)toast('Card requires authentication — parent must approve','error');
+            return {ok:false,error:'Card requires the parent to approve it'};
         }
 
         // payments-charge only ever resolves (without throwing) on a real
@@ -16448,9 +20193,14 @@ async function chargeStoredCard(famKey,amount,description){
         // (Stripe's off-session PaymentIntents can resolve into other
         // states like requires_action, handled above).
         if(isBYOP||result.status==='succeeded'){
+            _pendingChargeClear(famKey,amount);                // done: the next charge is a new one
             // Record payment locally
+            // The SAME id the processor's webhook gives this payment (TED-119):
+            // whichever arrives first, the other lands on that row instead of
+            // becoming a second $500 in the payments list and the exports.
+            var _chgRef=isBYOP?result.externalTransactionId:result.paymentIntentId;
             var _chgRow={
-                id:'pay_'+Date.now(),
+                id:_chgRef?((isBYOP?'byop_':'pi_')+_chgRef):('pay_'+Date.now()),
                 family:f.name,
                 familyKey:famKey,
                 amount:amount,
@@ -16461,9 +20211,16 @@ async function chargeStoredCard(famKey,amount,description){
                 stripePaymentIntentId:isBYOP?null:result.paymentIntentId,
                 byopTransactionId:isBYOP?result.externalTransactionId:null,
                 byopProcessor:isBYOP?f.byopProcessor:null,
+                // card or bank — which a card surcharge's refund share depends on (TED-146)
+                paidWith:isBYOP?'card':_methodTypeCharged(f),
                 timestamp:Date.now()
             };
-            finPayments.push(_chgRow);
+            // Already here (the webhook's row reached this page first): one row.
+            var _chgTwin=(finPayments||[]).filter(function(p){return p&&(p.id===_chgRow.id
+                ||(_chgRow.stripePaymentIntentId&&p.stripePaymentIntentId===_chgRow.stripePaymentIntentId)
+                ||(_chgRow.byopTransactionId&&p.byopTransactionId===_chgRow.byopTransactionId));})[0];
+            if(_chgTwin){var _twinId=_chgTwin.id;Object.assign(_chgTwin,_chgRow);_chgTwin.id=_twinId;_chgRow=_chgTwin;}
+            else finPayments.push(_chgRow);
             // The webhook posts this too, keyed on the intent/transaction id —
             // and posting is idempotent on that id, so whichever arrives second
             // does nothing rather than crediting the family twice.
@@ -16471,14 +20228,61 @@ async function chargeStoredCard(famKey,amount,description){
             f.totalPaid=(f.totalPaid||0)+amount;
             f.balance=Math.max(0,(f.balance||0)-amount);
             save();if(curPage==='familydetail')renderFamilyDetailPage();else renderBilling();
-            toast('Charged '+fm(amount)+' to '+f.name+' — payment succeeded!');
+            if(!quiet)toast('Charged '+fm(amount)+' to '+f.name+' — payment succeeded!');
+            return {ok:true};
+        }else if(!isBYOP&&result.status==='processing'){
+            // A bank debit: started, and on its way for a few business days
+            // (TED-144) — not a failure, and not paid yet.
+            _pendingChargeClear(famKey,amount);
+            _recordOnItsWay(f,famKey,result.paymentIntentId,amount);
+            if(curPage==='familydetail')renderFamilyDetailPage();else renderBilling();
+            if(!quiet)toast('A '+fm(amount)+' bank debit has started for '+f.name+' \u2014 it is on its way. Bank debits take a few business days; Billing shows it as paid once the bank settles it.');
+            // Not ok (the money has not arrived) and not failed: its own answer.
+            return {ok:false,pending:true,error:'bank debit on its way'};
         }else{
-            toast('Payment status: '+result.status,'error');
+            if(!quiet)toast('Payment status: '+result.status,'error');
+            return {ok:false,error:'Payment status: '+result.status};
         }
     }catch(err){
         console.error('[Me] Charge error:',err);
-        toast('Charge failed: '+err.message,'error');
+        // Stripe says a bank debit for this family is already on its way
+        // (TED-144): nothing was charged now. Shown as on its way here too.
+        if(err.data&&err.data.onItsWay){
+            _pendingChargeClear(famKey,amount);
+            _recordOnItsWay(f,famKey,err.data.paymentIntentId,Number(err.data.amount)||amount);
+            if(curPage==='familydetail')renderFamilyDetailPage();else renderBilling();
+            if(!quiet)toast(err.message,'error');
+            return {ok:false,onItsWay:true,error:err.message};
+        }
+        // A definite "no" (a decline, a refused request) starts fresh next time.
+        // No answer at all may have charged the card: never "failed" (TED-111).
+        var _unsure=(err.data&&err.data.uncertain)||(!err.data&&err.noAnswer!==false);
+        if(!_unsure)_pendingChargeClear(famKey,amount);
+        var _msg=_unsure
+            ? (err.data&&err.data.uncertain?err.message:'No answer from the card company ('+err.message+'), so this charge may have gone through. Check the family\'s payments or the processor\'s dashboard before charging again — pressing Charge Card again for the same amount will not charge twice.')
+            : 'Charge failed: '+err.message;
+        if(!quiet)toast(_msg,'error');
+        return {ok:false,error:_unsure?_msg:err.message,uncertain:!!_unsure};
     }
+}
+
+// The charge the office is part-way through, per family and amount (TED-111):
+// kept in this browser until it succeeds or is declined, for up to 23 hours
+// (Stripe remembers a key for 24).
+function _pendingChargeStoreKey(){return 'campistry_pending_charges_'+(typeof getCampId==='function'?(getCampId()||''):'')}
+function _pendingChargeAll(){try{return JSON.parse(localStorage.getItem(_pendingChargeStoreKey())||'{}')||{}}catch(_){return {}}}
+function _pendingChargeGet(famKey,amount){
+    var p=_pendingChargeAll()[famKey+':'+Math.round((Number(amount)||0)*100)];
+    return p&&p.key&&(Date.now()-(Number(p.at)||0))<23*3600*1000?p:null;
+}
+function _pendingChargeSet(famKey,amount,v){
+    try{var all=_pendingChargeAll();var k=famKey+':'+Math.round((Number(amount)||0)*100);
+        if(all[k]&&all[k].key===v.key)v.at=all[k].at;          // the first try's time decides how long it is kept
+        all[k]=v;localStorage.setItem(_pendingChargeStoreKey(),JSON.stringify(all));}catch(_){}
+}
+function _pendingChargeClear(famKey,amount){
+    try{var all=_pendingChargeAll();delete all[famKey+':'+Math.round((Number(amount)||0)*100)];
+        localStorage.setItem(_pendingChargeStoreKey(),JSON.stringify(all));}catch(_){}
 }
 
 // Batch charge all families with outstanding balance
@@ -16487,7 +20291,15 @@ async function batchCharge(){
     var eligible=Object.entries(ledgers).filter(function([fk,l]){
         return l.balance>0&&_famChargeable(families[fk]);
     });
-    if(!eligible.length){toast('No families with card on file and outstanding balance','error');return}
+    // A family with a bank debit still on its way is not charged again (TED-144).
+    var onWay=eligible.filter(function([fk]){return _familyOnItsWay(fk).amount>0});
+    eligible=eligible.filter(function([fk]){return !(_familyOnItsWay(fk).amount>0)});
+    // Nor a family whose payment is disputed with their bank (TED-195): charging
+    // the card they are disputing is the one thing that must not happen.
+    var disputed=eligible.filter(function([fk]){return _familyDisputed(fk)});
+    eligible=eligible.filter(function([fk]){return !_familyDisputed(fk)});
+    if(!eligible.length&&disputed.length){toast('Nothing to charge \u2014 '+disputed.map(function([fk,l]){return l.family.name}).join(', ')+': a payment is disputed with the bank','error');return}
+    if(!eligible.length){toast(onWay.length?'Nothing to charge \u2014 '+onWay.length+' famil'+(onWay.length!==1?'ies have':'y has')+' a bank debit still on its way':'No families with card on file and outstanding balance','error');return}
 
     var total=eligible.reduce(function(s,[,l]){return s+l.balance},0);
     var h='<div>';
@@ -16497,25 +20309,30 @@ async function batchCharge(){
         h+='<div style="display:flex;justify-content:space-between;padding:8px 12px;border-bottom:1px solid var(--s100);font-size:.8rem"><span class="bold">'+esc(l.family.name)+'</span><span style="font-weight:700;color:var(--err)">'+fm(l.balance)+'</span></div>';
     });
     h+='</div>';
+    if(disputed.length)h+='<p style="font-size:.78rem;color:var(--err);margin-bottom:10px">Not charged \u2014 a payment is disputed: '+disputed.map(function([fk,l]){return esc(l.family.name)}).join(', ')+'. Their card is not charged by autopay either; resume from their row (\u201cPayment disputed\u201d) once the dispute is settled.</p>';
+    if(onWay.length)h+='<p style="font-size:.78rem;color:var(--s600);margin-bottom:10px">Not charged: '+onWay.map(function([fk,l]){return esc(l.family.name)}).join(', ')+' \u2014 a bank debit is still on its way (bank debits take a few business days).</p>';
     h+='<p style="font-size:.75rem;color:var(--warn);font-weight:600">⚠ This action will charge real credit cards. Proceed with caution.</p>';
     h+='</div>';
 
     showModal('Batch Charge — '+eligible.length+' Families',h,async function(){
         closeModal('dynModal');
         toast('Processing batch charges...');
-        var success=0,failed=0;
+        var success=0,failed=0,failedNames=[],onTheirWay=0;
         for(var[fk,l]of eligible){
-            try{
-                await chargeStoredCard(fk,l.balance,'Batch payment — '+families[fk].name);
-                success++;
-            }catch(e){
-                console.error('[Me] Batch charge failed for',fk,e);
+            var r;
+            try{ r=await chargeStoredCard(fk,l.balance,'Batch payment — '+families[fk].name,true); }
+            catch(e){ r={ok:false,error:e&&e.message}; }
+            if(r&&r.pending) onTheirWay++;
+            else if(r&&r.ok) success++;
+            else{
                 failed++;
+                failedNames.push((families[fk]&&families[fk].name||fk)+(r&&r.error?' ('+r.error+')':''));
+                console.error('[Me] Batch charge failed for',fk,r&&r.error);
             }
             // Small delay between charges to avoid rate limits
             await new Promise(function(r){setTimeout(r,500)});
         }
-        toast('Batch complete: '+success+' charged, '+failed+' failed');
+        toast('Batch complete: '+success+' charged, '+(onTheirWay?onTheirWay+' bank debit'+(onTheirWay!==1?'s':'')+' on the way (a few business days), ':'')+failed+' failed'+(failedNames.length?' — '+failedNames.join('; '):''),failed?'error':undefined);
         renderBilling();
     });
 }
@@ -16783,7 +20600,13 @@ function monthlyPlan(famKey,planId){
     // Starting rows: the existing plan's own installments when editing (so
     // the office sees exactly what's there and can tweak individual rows),
     // otherwise a 3-monthly scaffold from the current balance.
-    var startRows=existingPlan?existingPlan.installments.map(function(i){return{amount:i.amount,dueDate:i.dueDate}}):_mpGenRows(targetTotal||1,3,defStart,'monthly');
+    // Only the payments still to come are editable; what has been collected
+    // stays on the plan's history (TED-056 — reopening a parent-built plan used
+    // to read .installments, which a ledger plan does not have).
+    var startRows=existingPlan
+        ?_planSchedule(existingPlan,curBalance).filter(function(i){return i.status!=='paid'}).map(function(i){return{amount:i.amount,dueDate:i.dueDate}})
+        :_mpGenRows(targetTotal||1,3,defStart,'monthly');
+    if(existingPlan&&!startRows.length)startRows=_mpGenRows(targetTotal||1,3,defStart,'monthly');
 
     // Two tabs instead of one long scroll: "Generate" only ever produces
     // rows and drops you into "Edit" to review them — it never saves
@@ -16858,6 +20681,7 @@ function monthlyPlan(famKey,planId){
     h+='<div style="font-size:.7rem;font-weight:700;color:var(--s500);text-transform:uppercase;letter-spacing:.05em;margin-bottom:6px">Payments — edit any date or amount, add or remove rows freely</div>';
     h+='<div id="mpRowsBody" style="margin-bottom:8px">'+_mpRowsHtml(startRows)+'</div>';
     h+='<button type="button" class="me-btn me-btn--ghost me-btn--sm" onclick="CampistryMe._mpAddRow()">+ Add payment</button>';
+    h+='<div style="font-size:.75rem;color:var(--s500);margin:6px 0 0">Each payment is charged exactly as entered here, on its date — never more than the family still owes by then.</div>';
     h+='<div style="text-align:right;font-size:.8rem;color:var(--s500);margin:8px 0 14px">Total scheduled: <strong id="mpRunningTotal" style="color:var(--s800)">'+fm(startRows.reduce(function(s,r){return s+(Number(r.amount)||0)},0))+'</strong></div>';
     h+='</div>';
 
@@ -16884,13 +20708,53 @@ function monthlyPlan(famKey,planId){
         insts.forEach(function(inst,idx){inst.n=idx+1});
         var total=insts.reduce(function(s,i){return s+i.amount},0);
         var auto=hasCard&&document.getElementById('mpAuto')&&document.getElementById('mpAuto').checked;
-        var newPlan={id:existingPlan?existingPlan.id:('plan_'+Date.now().toString(36)+Math.random().toString(36).slice(2,6)),enrollmentIds:null,installments:insts,autopay:!!auto,total:Math.round(total*100)/100,createdAt:new Date().toISOString(),source:'office'};
+        var newPlan=_mpBuildLedgerPlan(existingPlan,insts,!!auto,total);
         if(existingPlan){ plans[plans.indexOf(existingPlan)]=newPlan; }
         else{ plans.push(newPlan); }
         save();closeModal('dynModal');if(curPage==='familydetail')renderFamilyDetailPage();else renderBilling();
         toast('Payment plan saved — '+insts.length+' payment'+(insts.length>1?'s':'')+(auto?', autopay on':''));
-    },{maxWidth:920,maxHeight:'94vh',minHeight:'80vh'});
+    },{maxWidth:920,maxHeight:'94vh',minHeight:'80vh',saveLabel:existingPlan?'Update Plan':'Create Plan'});
     _mpSwitchTab(startTab);
+}
+// ONE plan model (TED-056): the office writes the same ledger plan a parent's
+// does (dates only; the amount is worked out at charge time from what is still
+// owed), so both get the same autopay, retries and alerts. What an existing plan
+// already collected is kept as its history and never rewritten — including an
+// old-style installments[] plan, whose paid instalments become that history.
+function _mpBuildLedgerPlan(existingPlan,insts,auto,total){
+    var done=[],hist=[],nextIdx=0;
+    if(existingPlan&&Array.isArray(existingPlan.dueDates)){
+        nextIdx=Number(existingPlan.nextIndex)||0;
+        done=existingPlan.dueDates.slice().sort().slice(0,nextIdx);
+        hist=Array.isArray(existingPlan.history)?existingPlan.history.slice():[];
+    }else if(existingPlan&&Array.isArray(existingPlan.installments)){
+        existingPlan.installments.filter(function(i){return i&&i.status==='paid'})
+            .sort(function(a,b){return String(a.dueDate||'').localeCompare(String(b.dueDate||''))})
+            .forEach(function(i,idx){
+                done.push(i.dueDate);
+                hist.push({index:idx,dueDate:i.dueDate,charged:Number(i.amount)||0,reason:'paid',
+                           paymentId:i.paymentId||i.stripePaymentIntentId||i.byopTransactionId||null,at:i.paidDate||null});
+            });
+        nextIdx=done.length;
+    }
+    var sorted=insts.slice().sort(function(a,b){return String(a.dueDate).localeCompare(String(b.dueDate))});
+    var future=sorted.map(function(i){return i.dueDate});
+    // The amounts the office typed, one per date (TED-068): autopay charges
+    // exactly these, never more than is owed. Past dates keep what they had.
+    var pastAmounts=(existingPlan&&Array.isArray(existingPlan.amounts))?existingPlan.amounts.slice(0,done.length):[];
+    while(pastAmounts.length<done.length)pastAmounts.push(null);
+    var amounts=pastAmounts.concat(sorted.map(function(i){return Math.round((Number(i.amount)||0)*100)/100}));
+    var plan={id:existingPlan&&existingPlan.id?existingPlan.id:('plan_'+Date.now().toString(36)+Math.random().toString(36).slice(2,6)),
+        enrollmentIds:null,dueDates:done.concat(future),amounts:amounts,
+        count:done.length+future.length,nextIndex:nextIdx,history:hist,
+        autopay:!!auto,paused:!!(existingPlan&&existingPlan.paused),total:Math.round(total*100)/100,
+        createdAt:existingPlan&&existingPlan.createdAt||new Date().toISOString(),source:existingPlan&&existingPlan.source||'office'};
+    // Editing the schedule changes neither whether the plan is paused nor what
+    // is stopping collection (TED-076): a card that was declined is still the
+    // same card, and a bank debit still clearing is still in flight.
+    if(existingPlan&&existingPlan.collectionBlocked)plan.collectionBlocked=existingPlan.collectionBlocked;
+    if(existingPlan&&existingPlan.pendingCharge)plan.pendingCharge=existingPlan.pendingCharge;
+    return plan;
 }
 function _mpSwitchTab(tab){
     var gen=document.getElementById('mpTabGenerate'), edit=document.getElementById('mpTabEdit');
@@ -17064,6 +20928,14 @@ async function markDepositPaid(id,undo){
  * owed on this application and charges that, the same way it does from the
  * form, so the office cannot overcharge by having a stale page open.
  */
+// Whether this person can charge a stored card: the owner or an admin — the
+// same rule every charge function checks (callerCampId). A hint for what to
+// show; the function still decides.
+function _canChargeCards(){
+    var role=null;
+    try{ role=(window.CampistryDB&&(window.CampistryDB.getRole?window.CampistryDB.getRole():null))||null; }catch(_){}
+    return role==='owner'||role==='admin';
+}
 async function chargeDepositNow(id){
     var e=enrollments[id];
     var P=_depPolicyAPI();
@@ -17086,12 +20958,42 @@ async function chargeDepositNow(id){
 
     toast('Charging…');
     try{
-        var r=await client.functions.invoke('registration-deposit-checkout',{
-            body:{campId:campId,enrollmentId:id,
+        var body={campId:campId,enrollmentId:id,
                   returnUrl:window.location.origin+window.location.pathname,
-                  officeCharge:true}
-        });
-        var d=r&&r.data;
+                  officeCharge:true};
+        // The function's own answer, whatever its status (TED-149): a refusal
+        // (403 "Only the camp's owner or an admin…", 404 no such application)
+        // comes back as r.error with the body on its response, and reading only
+        // r.data made every refusal "The card was declined" — a card that was
+        // never tried.
+        var _ask=async function(){
+            var rr=await client.functions.invoke('registration-deposit-checkout',{body:body});
+            if(rr&&rr.data)return rr.data;
+            var ctx=rr&&rr.error&&rr.error.context, out=null;
+            try{ if(ctx&&typeof ctx.json==='function')out=await (typeof ctx.clone==='function'?ctx.clone():ctx).json(); }catch(_){}
+            // A refusal (4xx) charged nothing; a 5xx may have been cut off after
+            // the card company was asked, so it is never called "not charged".
+            var st=ctx&&typeof ctx.status==='number'?ctx.status:null;
+            if(out&&typeof out==='object'&&st!=null&&st<500)return Object.assign({notTried:true},out);
+            if(out&&typeof out==='object'&&out.error)return Object.assign({},out,{notTried:true,noAnswer:true,
+                error:out.error+' \u2014 it may have gone through; check the processor\u2019s dashboard before charging again'});
+            return {notTried:true,noAnswer:true,error:'No answer from the payment service'+(rr&&rr.error&&rr.error.message?' ('+rr.error.message+')':'')+' \u2014 check the processor\u2019s dashboard before charging again'};
+        };
+        var d=await _ask();
+        // An earlier charge was cut off after the card company was asked, and
+        // nobody knows if it went through (TED-083). Only the office can say —
+        // by looking at the processor's dashboard — and only then charge.
+        if(d&&d.reason==='needs_check'){
+            var sure=await confirmDialog({
+                title:'Did the earlier charge go through?',
+                message:esc(d.error||'')+'<br><br>Only continue if the processor\u2019s dashboard shows NO charge of '
+                       +fm(owed)+' for '+esc(e.camperName||'this family')+(d.since?' since '+esc(String(d.since).slice(0,16).replace('T',' ')):'')+'.',
+                confirmLabel:'Nothing went through \u2014 charge '+fm(owed)
+            });
+            if(!sure)return toast('Not charged');
+            body.confirmNotCharged=true;
+            d=await _ask();
+        }
         if(d&&d.success&&(d.paid||d.alreadyPaid)){
             // The function already recorded it server-side; re-reading is what
             // makes this page agree with the database rather than guessing.
@@ -17104,7 +21006,8 @@ async function chargeDepositNow(id){
             renderRegistrationPage();
             return toast(d.alreadyPaid?'Already paid':'Charged '+fm(d.amount||owed));
         }
-        toast((d&&d.error)||'The card was declined');
+        // "Declined" only when the card company said so.
+        toast((d&&d.error)?(d.notTried&&!d.noAnswer?'Not charged: '+d.error:d.error):'The card was declined','error');
     }catch(err){
         toast('Could not charge the card — '+((err&&err.message)||'try again'));
     }
@@ -17226,7 +21129,7 @@ function _cfCardHtml(pol){
         ['off','Nothing passed on','The camp absorbs the processing cost.'],
         ['surcharge','Credit-card surcharge (%)','A percentage on credit cards only. Capped at 3%. Never on debit.'],
         ['convenience','Online payment fee (flat)','A fixed amount per online payment. Applies to debit and bank transfers too.'],
-        ['cash_discount','Discount for not paying by card','The card price is the posted price. Safest of the three.']
+        ['cash_discount','Discount for not paying by card','The card price is the posted price. Safest of the three. Taken off automatically when you record a cheque, cash or bank-transfer payment in Billing; for a bank payment made online, give it from the family\u2019s More menu.']
     ];
     h+='<div style="margin-bottom:14px">';
     MODES.forEach(function(m){
@@ -17617,6 +21520,10 @@ function _dpSetHtml(el,html){
 // ═══════════════════════════════════════════════════════════════
 function renderBroadcasts(){
     var c=document.getElementById('page-broadcasts');
+    if(!_secCan('me.broadcasts')){
+        c.innerHTML='<div class="me-empty"><h3>No access to Broadcasts</h3><p>Your account isn\'t set up to open this section.</p></div>';
+        return;
+    }
     var h='<div class="sec-hd"><div><h2 class="sec-title">Broadcasts & Messaging</h2><p class="sec-desc">'+broadcasts.length+' message'+(broadcasts.length!==1?'s':'')+' sent</p></div><div class="sec-actions"><button class="me-btn me-btn--sec me-btn--sm" onclick="CampistryMe.sendPaymentReminders()">💰 Payment Reminders</button><button class="me-btn me-btn--sec me-btn--sm" onclick="CampistryMe.sendFormReminders()">📋 Form Reminders</button><button class="me-btn me-btn--pri" onclick="CampistryMe.openBroadcastModal()">+ New Broadcast</button></div></div>';
 
     // Quick stats
@@ -17664,6 +21571,7 @@ function _bcRefreshPreview(){
     wrap.innerHTML=window.LinkBranding.buildPreviewHtml({variant:variant,campName:campName,branding:_getLinkBranding(),subject:subject?subject.value:'',body:body?body.value:''});
 }
 function openBroadcastModal(){
+    if(!_secEdit('me.broadcasts','Sending a broadcast'))return;
     var divOpts=Object.keys(structure).map(function(d){return'<option value="'+esc(d)+'">'+esc(d)+'</option>'}).join('');
     var h='<div class="me-modal-form" style="display:grid;grid-template-columns:1fr 1fr;gap:18px;align-items:start">';
     h+='<div><div class="me-field"><label>To</label><select id="bcTo" class="me-input" onchange="document.getElementById(\'bcDivWrap\').style.display=this.value===\'division\'?\'block\':\'none\'"><option value="all">All Families</option><option value="division">Specific Division</option><option value="enrolled">Enrolled Families Only</option><option value="staff">Staff Only</option></select></div>';
@@ -17693,6 +21601,12 @@ function openBroadcastModal(){
         //   Now: confirm before a real send (safety gate), then deliver; In-App is a portal record.
         var realSend=/email|sms|all channels/i.test(method);
         if(realSend){
+            // Broadcasts are one of the things migration 196 named as part of
+            // the paid emailing service — gate the real send the same way the
+            // automatic acceptance letter already is. The In-App portal post
+            // below is unaffected; that's free either way.
+            var svcBc=await _emailServiceOn();
+            if(!svcBc.enabled){toast(_emailBlockedReason(svcBc),'error');return}
             var okSend=await confirmDialog({title:'Send Broadcast?',message:'Send this '+method+' broadcast to '+label+' (~'+count+' recipient'+(count!==1?'s':'')+') now? This delivers to real parents/staff immediately.',confirmLabel:'Send',danger:false});
             if(!okSend)return;
         }
@@ -17933,13 +21847,16 @@ async function deleteForm(idx){
 }
 function viewFormResponses(idx){
     var f=campForms[idx];if(!f)return;
-    var completed=new Set((f.responses||[]).map(function(r){return r.camper}));
-    var missing=Object.keys(roster).filter(function(n){return!completed.has(n)}).sort();
+    // Who has answered: by camper number when the response carries one, by
+    // name only for a response from before numbers.
+    var doneIds=new Set(),doneNames=new Set();
+    (f.responses||[]).forEach(function(r){if(r.camperId!=null&&r.camperId!=='')doneIds.add(String(r.camperId));else doneNames.add(r.camper)});
+    var missing=Object.keys(roster).filter(function(n){var c=roster[n]||{};return!((c.camperId!=null&&doneIds.has(String(c.camperId)))||doneNames.has(n))}).sort();
     var h='<div style="margin-bottom:14px"><strong>'+esc(f.name)+'</strong> — '+(f.responses||[]).length+' responses</div>';
     if((f.responses||[]).length){
         h+='<div class="me-tw"><table class="me-t"><thead><tr><th>Camper</th><th>Submitted</th><th>Status</th></tr></thead><tbody>';
         f.responses.forEach(function(r){
-            h+='<tr><td class="bold">'+esc(r.camper)+'</td><td>'+(r.date?new Date(r.date).toLocaleDateString():'')+'</td><td>'+bdg('Completed','ok')+'</td></tr>';
+            h+='<tr><td class="bold">'+esc(_lbl(r.camper))+'</td><td>'+(r.date?new Date(r.date).toLocaleDateString():'')+'</td><td>'+bdg('Completed','ok')+'</td></tr>';
         });
         h+='</tbody></table></div>';
     }
@@ -18369,7 +22286,7 @@ function _reportSources(){
                 return Object.keys(families).map(function(k){
                     var f=families[k]||{}; var hh=(f.households||[])[0]||{}; var pp=(hh.parents||[])[0]||{};
                     var l=ledgers[k]||{totalPayments:0,balance:0};
-                    return {name:f.name||'',campers:(f.camperIds||[]).join('; '),camperCount:(f.camperIds||[]).length,
+                    return {name:f.name||'',campers:(f.camperIds||[]).map(_lbl).join('; '),camperCount:(f.camperIds||[]).length,
                         parent:pp.name||'',phone:pp.phone||'',email:pp.email||'',address:hh.address||'',
                         totalPaid:l.totalPayments||0,balance:l.balance||0,status:l.balance>0?'Outstanding':l.totalPayments>0?'Paid':'Pending'};
                 });
@@ -18382,7 +22299,7 @@ function _reportSources(){
             rows:function(){
                 return Object.keys(enrollments).map(function(k){
                     var e=enrollments[k]||{};
-                    return {camperName:e.camperName||'',session:e.session||'',status:e.status||'',appliedDate:e.appliedDate||'',
+                    return {camperName:_lbl(e.camperName||''),camperId:e.camperId!=null?e.camperId:'',session:e.session||'',status:e.status||'',appliedDate:e.appliedDate||'',
                         sessionTuition:e.sessionTuition||0,paymentStatus:e.paymentStatus||'',formsCompleted:e.formsCompleted||0,
                         formsRequired:e.formsRequired||0,parentName:e.parentName||'',parentEmail:e.parentEmail||''};
                 });
@@ -19079,7 +22996,7 @@ function exportFamilyReport(){
         var addr=(f.households||[])[0]?.address||'';
         var l=ledgers[k]||{totalPayments:0,balance:0};
         var status=l.balance>0?'Outstanding':l.totalPayments>0?'Paid':'Pending';
-        csv+=[f.name||'',(f.camperIds||[]).join('; '),pp.name||'',pp.phone||'',pp.email||'',addr,l.totalPayments||0,l.balance||0,status].map(function(v){return'"'+String(v).replace(/"/g,'""')+'"'}).join(',')+'\n';
+        csv+=[f.name||'',(f.camperIds||[]).map(_lbl).join('; '),pp.name||'',pp.phone||'',pp.email||'',addr,l.totalPayments||0,l.balance||0,status].map(function(v){return'"'+String(v).replace(/"/g,'""')+'"'}).join(',')+'\n';
     });
     dlCsv('campistry_families_'+new Date().toISOString().split('T')[0]+'.csv',csv);
 }
@@ -19172,7 +23089,7 @@ async function sendBroadcastNow(broadcast){
     // consent (smsEmailConsent, captured on the registration/staff-apply
     // forms) — a recipient added before that consent flow existed is
     // correctly skipped rather than texted/emailed without consent on file.
-    try{return await callEdgeFunctionAuthed('send-broadcast',{campId:getCampId(),to:recipients,subject:broadcast.subject||'',body:broadcast.body||'',method:broadcast.method||'Email',campName:campName,branding:_getLinkBranding(),eventKey:'me-broadcast:'+(broadcast.timestamp||Date.now())})}
+    try{return await sendBroadcastComplete({campId:getCampId(),to:recipients,subject:broadcast.subject||'',body:broadcast.body||'',method:broadcast.method||'Email',campName:campName,branding:_getLinkBranding(),eventKey:'me-broadcast:'+(broadcast.timestamp||Date.now())})}
     catch(err){toast('Send failed: '+err.message,'error');return{sent:0,failed:0}}
 }
 
@@ -19183,29 +23100,35 @@ async function sendAutoNotification(type,enrollmentId){
     var e=enrollments[enrollmentId];if(!e)return;
     var campName='';try{var ss=JSON.parse(localStorage.getItem('campGlobalSettings_v1')||'{}');campName=ss.camp_name||ss.campName||'Camp'}catch(ex){}
     if(!e.parentEmail)return;
-    try{await callEdgeFunction('auto-notify',{recipients:[{email:e.parentEmail,name:e.parentName||''}],type:type,data:{campName:campName,camperName:e.camperName||'',parentName:e.parentName||'',amount:fm(e.sessionTuition||0)}})}catch(err){console.error('[Me] Auto-notify:',err)}
+    try{await callEdgeFunction('auto-notify',{campId:getCampId(),recipients:[{email:e.parentEmail,name:e.parentName||''}],type:type,data:{campName:campName,camperName:_lbl(e.camperName||''),parentName:e.parentName||'',amount:fm(e.sessionTuition||0)}})}catch(err){console.error('[Me] Auto-notify:',err)} // name-ok: the words of an email
 }
 async function sendPaymentReminders(){
+    if(!_secEdit('me.broadcasts','Sending reminders'))return;
+    var svcPr=await _emailServiceOn();
+    if(!svcPr.enabled){toast(_emailBlockedReason(svcPr),'error');return}
     var campName='';try{var ss=JSON.parse(localStorage.getItem('campGlobalSettings_v1')||'{}');campName=ss.camp_name||ss.campName||'Camp'}catch(ex){}
     var today=new Date().toISOString().split('T')[0];var sevenDays=new Date(Date.now()+7*86400000).toISOString().split('T')[0];
     // ★ pre-collect recipients so we can CONFIRM before emailing real parents (no silent mass-send).
     var jobs=[];
-    Object.entries(enrollments).forEach(function([eid,e]){if(e.status!=='enrolled'||!e.installments)return;e.installments.forEach(function(inst){if(inst.status!=='pending')return;if(inst.dueDate===sevenDays||inst.dueDate===today||(inst.dueDate&&inst.dueDate<today)){if(e.parentEmail){var type=inst.dueDate<today?'payment_overdue':'payment_reminder';jobs.push({email:e.parentEmail,name:e.parentName||'',type:type,data:{campName:campName,camperName:e.camperName||'',parentName:e.parentName||'',amount:fm(inst.amount||0),dueDate:inst.dueDate}})}}})});
+    Object.entries(enrollments).forEach(function([eid,e]){if(e.status!=='enrolled'||!e.installments)return;e.installments.forEach(function(inst){if(inst.status!=='pending')return;if(inst.dueDate===sevenDays||inst.dueDate===today||(inst.dueDate&&inst.dueDate<today)){if(e.parentEmail){var type=inst.dueDate<today?'payment_overdue':'payment_reminder';jobs.push({email:e.parentEmail,name:e.parentName||'',type:type,data:{campName:campName,camperName:_lbl(e.camperName||''),parentName:e.parentName||'',amount:fm(inst.amount||0),dueDate:inst.dueDate}})}}})}); // name-ok: the words of an email
     if(!jobs.length){toast('No payment reminders due','error');return}
     var okPr=await confirmDialog({title:'Send Payment Reminders?',message:'Send '+jobs.length+' payment reminder email'+(jobs.length!==1?'s':'')+' to parents now? This emails them immediately.',confirmLabel:'Send',danger:false});
     if(!okPr)return;
-    jobs.forEach(function(j){callEdgeFunction('auto-notify',{recipients:[{email:j.email,name:j.name}],type:j.type,data:j.data}).catch(function(){})});
+    jobs.forEach(function(j){callEdgeFunction('auto-notify',{campId:getCampId(),recipients:[{email:j.email,name:j.name}],type:j.type,data:j.data}).catch(function(){})});
     toast(jobs.length+' payment reminder'+(jobs.length!==1?'s':'')+' sent');
 }
 async function sendFormReminders(){
+    if(!_secEdit('me.broadcasts','Sending reminders'))return;
+    var svcFr=await _emailServiceOn();
+    if(!svcFr.enabled){toast(_emailBlockedReason(svcFr),'error');return}
     var campName='';try{var ss=JSON.parse(localStorage.getItem('campGlobalSettings_v1')||'{}');campName=ss.camp_name||ss.campName||'Camp'}catch(ex){}
     loadForms();
     var jobs=[];
-    campForms.filter(function(f){return f.required}).forEach(function(f){var completed=new Set((f.responses||[]).map(function(r){return r.camper}));Object.entries(roster).forEach(function([name,c]){if(completed.has(name))return;if(!c.parent1Email)return;jobs.push({email:c.parent1Email,name:c.parent1Name||'',data:{campName:campName,camperName:name,parentName:c.parent1Name||'',formName:f.name}})})});
+    campForms.filter(function(f){return f.required}).forEach(function(f){var doneIds=new Set(),doneNames=new Set();(f.responses||[]).forEach(function(r){if(r.camperId!=null&&r.camperId!=='')doneIds.add(String(r.camperId));else doneNames.add(r.camper)});Object.entries(roster).forEach(function([name,c]){if((c.camperId!=null&&doneIds.has(String(c.camperId)))||doneNames.has(name))return;if(!c.parent1Email)return;jobs.push({email:c.parent1Email,name:c.parent1Name||'',data:{campName:campName,camperName:_lbl(name),parentName:c.parent1Name||'',formName:f.name}})})});
     if(!jobs.length){toast('No form reminders to send','error');return}
     var okFr=await confirmDialog({title:'Send Form Reminders?',message:'Send '+jobs.length+' form reminder email'+(jobs.length!==1?'s':'')+' to parents now? This emails them immediately.',confirmLabel:'Send',danger:false});
     if(!okFr)return;
-    jobs.forEach(function(j){callEdgeFunction('auto-notify',{recipients:[{email:j.email,name:j.name}],type:'form_reminder',data:j.data}).catch(function(){})});
+    jobs.forEach(function(j){callEdgeFunction('auto-notify',{campId:getCampId(),recipients:[{email:j.email,name:j.name}],type:'form_reminder',data:j.data}).catch(function(){})});
     toast(jobs.length+' form reminder'+(jobs.length!==1?'s':'')+' sent');
 }
 
@@ -19254,7 +23177,7 @@ function renderCamperHistory(camperName){
     // Fold in enrollment status changes so the profile shows the full story.
     var enrollEvents=[];
     Object.keys(enrollments).forEach(function(id){
-        var e=enrollments[id]; if(!e||e.camperName!==camperName)return;
+        var e=enrollments[id]; if(!e||!_enrIsFor(e,camperName))return;
         (e.statusHistory||[]).forEach(function(sh){
             enrollEvents.push({ts:sh.date,type:'status',label:(e.session?e.session+': ':'')+(sh.from?sh.from+' → ':'')+sh.to,by:sh.by});
         });
@@ -19291,7 +23214,7 @@ function reEnrollCamper(camperName){
     showModal('Re-Enroll Camper',h,function(){
         var session=document.getElementById('reSession').value;var sesObj=sessions.find(function(s){return s.name===session});
         var id='enr_'+Date.now()+'_'+Math.random().toString(36).substr(2,4);
-        enrollments[id]={camperName:camperName,camperLast:camperName.split(' ').pop(),parentName:d.parent1Name||'',parentEmail:d.parent1Email||'',parentPhone:d.parent1Phone||'',dob:d.dob||'',gender:d.gender||'',school:d.school||'',schoolGrade:d.schoolGrade||'',street:d.street||'',city:d.city||'',state:d.state||'',zip:d.zip||'',allergies:d.allergies||'',medications:d.medications||'',session:session,sessionTuition:sesObj?sesObj.tuition:0,status:'accepted',appliedDate:new Date().toISOString().split('T')[0],formsRequired:3,formsCompleted:0,paymentStatus:'pending',notes:'Re-enrollment — returning camper',isReturning:true};
+        enrollments[id]={camperName:camperName,camperId:d.camperId!=null?d.camperId:null,camperLast:_lbl(camperName).split(' ').pop(),parentName:d.parent1Name||'',parentEmail:d.parent1Email||'',parentPhone:d.parent1Phone||'',dob:d.dob||'',gender:d.gender||'',school:d.school||'',schoolGrade:d.schoolGrade||'',street:d.street||'',city:d.city||'',state:d.state||'',zip:d.zip||'',allergies:d.allergies||'',medications:d.medications||'',session:session,sessionTuition:sesObj?sesObj.tuition:0,status:'accepted',appliedDate:new Date().toISOString().split('T')[0],formsRequired:3,formsCompleted:0,paymentStatus:'pending',notes:'Re-enrollment — returning camper',isReturning:true};
         save();closeModal('dynModal');_refreshPplIfActive();toast(camperName+' re-enrolled (auto-accepted)');
         if(d.parent1Email)sendAutoNotification('enrollment_confirmation',id);
     });
@@ -19377,7 +23300,7 @@ function addScholarship(camperName){
             // The award has to reach the LEDGER or it reduces nothing the
             // family is actually charged — see _postLedgerCredit. Without this
             // the aid was awarded, shown on screen, and billed for anyway.
-            _postLedgerCredit(_f,{id:_schId,amount:amt,reason:'scholarship',note:_schReason,date:aidDate,camperName:camperName});
+            _postLedgerCredit(_f,{id:_schId,amount:amt,reason:'scholarship',note:_schReason,date:aidDate,camperName:camperName,camperId:_camperIdOf(camperName)});
         }
         save();closeModal('dynModal');viewCamper(camperName);
         // Aid awarded to a camper who is in no household has no bill to reduce.
@@ -19418,6 +23341,21 @@ function downloadTemplate(){
 // with different homes/parents, or simply no other info on file) is not a
 // duplicate; two siblings/re-entries in the SAME household with the same
 // name are.
+// The child in a previous roster that a file row is, or null. Same name
+// (by what the page shows), and the same child by what does not change with
+// a name — a date of birth, else a parent's email or home address. Exactly
+// one match, or none: an ambiguous row is a new camper, never a guess.
+function _returningCamper(prev,r,claimed){
+    var hits=Object.keys(prev||{}).filter(function(k){
+        var c=prev[k]; if(!c||claimed[k])return false;
+        var shown=(c.displayName||String(k).replace(/\s#\d+(?:-\d+)?$/,''));
+        if(shown!==r.name||normalizePersonId(c.camperId)==null)return false;
+        var dA=String(c.dob||'').trim(),dB=String(r.dob||'').trim();
+        if(dA&&dB)return dA===dB;
+        return _sameCamperSignal(c,r);
+    });
+    return hits.length===1?{key:hits[0],id:Number(normalizePersonId(prev[hits[0]].camperId)),rec:prev[hits[0]]}:null;
+}
 function _sameCamperSignal(a,b){
     var emA=(a.parent1Email||'').trim().toLowerCase(),emB=(b.parent1Email||'').trim().toLowerCase();
     if(emA&&emA===emB)return true;
@@ -19534,66 +23472,105 @@ function handleCsv(file){
             if(m)leagueCols[m[1].trim()]=idx;
         });
 
-        var start=1; // skip header
-        var rows=[];
-        for(var i=start;i<Math.min(lines.length,5001);i++){
-            var c=parseCsvLine(lines[i]);
-            var firstName=(iFirst>=0?c[iFirst]:'').trim();
-            var lastName=(iLast>=0?c[iLast]:'').trim();
-            var fullName='';
-            if(firstName||lastName){fullName=(firstName+' '+lastName).trim()}
-            else if(iName>=0){fullName=(c[iName]||'').trim()}
-            if(!fullName)continue;
-
-            var teams={};
-            Object.entries(leagueCols).forEach(function([lg,idx]){
-                var v=(c[idx]||'').trim();
-                if(v)teams[lg]=v;
-            });
-
-            rows.push({
-                name:fullName,
-                camperId:iCamperId>=0?normalizePersonId(c[iCamperId]):'',
-                dob:iDob>=0?(c[iDob]||'').trim():'',
-                gender:iGender>=0?(c[iGender]||'').trim():'',
-                school:iSchool>=0?(c[iSchool]||'').trim():'',
-                schoolGrade:iSchoolGr>=0?(c[iSchoolGr]||'').trim():'',
-                teacher:iTeacher>=0?(c[iTeacher]||'').trim():'',
-                division:iDiv>=0?(c[iDiv]||'').trim():'',
-                grade:iGrade>=0?(c[iGrade]||'').trim():'',
-                bunk:iBunk>=0?(c[iBunk]||'').trim():'',
-                street:iStreet>=0?(c[iStreet]||'').trim():'',
-                city:iCity>=0?(c[iCity]||'').trim():'',
-                state:iState>=0?(c[iState]||'').trim():'',
-                zip:iZip>=0?(c[iZip]||'').trim():'',
-                summerStreet:iSumStreet>=0?(c[iSumStreet]||'').trim():'',
-                summerCity:iSumCity>=0?(c[iSumCity]||'').trim():'',
-                summerState:iSumState>=0?(c[iSumState]||'').trim():'',
-                summerZip:iSumZip>=0?(c[iSumZip]||'').trim():'',
-                summerPhone:iSumPhone>=0?(c[iSumPhone]||'').trim():'',
-                parent1Name:iP1>=0?(c[iP1]||'').trim():'',
-                parent1Relation:iP1Rel>=0?(c[iP1Rel]||'').trim():'',
-                parent1Phone:iP1Ph>=0?(c[iP1Ph]||'').trim():'',
-                parent1Email:iP1Em>=0?(c[iP1Em]||'').trim():'',
-                parent2Name:iP2>=0?(c[iP2]||'').trim():'',
-                parent2Relation:iP2Rel>=0?(c[iP2Rel]||'').trim():'',
-                parent2Phone:iP2Ph>=0?(c[iP2Ph]||'').trim():'',
-                parent2Email:iP2Em>=0?(c[iP2Em]||'').trim():'',
-                emergencyName:iEmN>=0?(c[iEmN]||'').trim():'',
-                emergencyPhone:iEmPh>=0?(c[iEmPh]||'').trim():'',
-                emergencyRel:iEmR>=0?(c[iEmR]||'').trim():'',
-                allergies:iAlg>=0?(c[iAlg]||'').trim():'',
-                medications:iMed>=0?(c[iMed]||'').trim():'',
-                dietary:iDiet>=0?(c[iDiet]||'').trim():'',
-                teams:teams
-            });
+        // Auto-detected field → column index map. Every field is remappable in
+        // the preview below, so a wrong guess or an unrecognized header can be
+        // fixed by hand instead of being silently dropped.
+        var mapping={
+            camperId:iCamperId,first:iFirst,last:iLast,name:iName,dob:iDob,gender:iGender,
+            school:iSchool,schoolGrade:iSchoolGr,teacher:iTeacher,division:iDiv,grade:iGrade,bunk:iBunk,
+            street:iStreet,city:iCity,state:iState,zip:iZip,
+            summerStreet:iSumStreet,summerCity:iSumCity,summerState:iSumState,summerZip:iSumZip,summerPhone:iSumPhone,
+            parent1Name:iP1,parent1Relation:iP1Rel,parent1Phone:iP1Ph,parent1Email:iP1Em,
+            parent2Name:iP2,parent2Relation:iP2Rel,parent2Phone:iP2Ph,parent2Email:iP2Em,
+            emergencyName:iEmN,emergencyPhone:iEmPh,emergencyRel:iEmR,
+            allergies:iAlg,medications:iMed,dietary:iDiet
+        };
+        // [key,label] in the order shown in the remap UI. Keys match the row
+        // properties built by buildRows() (first/last/name are name-only).
+        var IMPORT_FIELDS=[
+            ['camperId','Camper ID'],['first','First name'],['last','Last name'],['name','Full name'],
+            ['dob','Date of birth'],['gender','Gender'],['school','School'],['schoolGrade','School grade'],['teacher','Teacher'],
+            ['division','Division'],['grade','Grade'],['bunk','Bunk'],
+            ['street','Address'],['city','City'],['state','State'],['zip','Zip'],
+            ['summerStreet','Summer address'],['summerCity','Summer city'],['summerState','Summer state'],['summerZip','Summer zip'],['summerPhone','Summer phone'],
+            ['parent1Name','Parent 1 name'],['parent1Relation','Parent 1 relation'],['parent1Phone','Parent 1 phone'],['parent1Email','Parent 1 email'],
+            ['parent2Name','Parent 2 name'],['parent2Relation','Parent 2 relation'],['parent2Phone','Parent 2 phone'],['parent2Email','Parent 2 email'],
+            ['emergencyName','Emergency name'],['emergencyPhone','Emergency phone'],['emergencyRel','Emergency relation'],
+            ['allergies','Allergies'],['medications','Medications'],['dietary','Dietary']
+        ];
+        function _impCell(c,idx){ return (idx!=null&&idx>=0)?(c[idx]||'').trim():''; }
+        function buildRows(m){
+            var out=[];
+            for(var i=1;i<Math.min(lines.length,5001);i++){
+                var c=parseCsvLine(lines[i]);
+                var firstName=_impCell(c,m.first);
+                var lastName=_impCell(c,m.last);
+                var fullName='';
+                if(firstName||lastName){fullName=(firstName+' '+lastName).trim()}
+                else if(m.name!=null&&m.name>=0){fullName=(c[m.name]||'').trim()}
+                if(!fullName)continue;
+                var teams={};
+                Object.keys(leagueCols).forEach(function(lg){var v=(c[leagueCols[lg]]||'').trim();if(v)teams[lg]=v;});
+                out.push({
+                    name:fullName,
+                    camperId:(m.camperId!=null&&m.camperId>=0)?normalizePersonId(c[m.camperId]):'',
+                    dob:_impCell(c,m.dob),gender:_impCell(c,m.gender),school:_impCell(c,m.school),
+                    schoolGrade:_impCell(c,m.schoolGrade),teacher:_impCell(c,m.teacher),division:_impCell(c,m.division),
+                    grade:_impCell(c,m.grade),bunk:_impCell(c,m.bunk),
+                    street:_impCell(c,m.street),city:_impCell(c,m.city),state:_impCell(c,m.state),zip:_impCell(c,m.zip),
+                    summerStreet:_impCell(c,m.summerStreet),summerCity:_impCell(c,m.summerCity),summerState:_impCell(c,m.summerState),summerZip:_impCell(c,m.summerZip),summerPhone:_impCell(c,m.summerPhone),
+                    parent1Name:_impCell(c,m.parent1Name),parent1Relation:_impCell(c,m.parent1Relation),parent1Phone:_impCell(c,m.parent1Phone),parent1Email:_impCell(c,m.parent1Email),
+                    parent2Name:_impCell(c,m.parent2Name),parent2Relation:_impCell(c,m.parent2Relation),parent2Phone:_impCell(c,m.parent2Phone),parent2Email:_impCell(c,m.parent2Email),
+                    emergencyName:_impCell(c,m.emergencyName),emergencyPhone:_impCell(c,m.emergencyPhone),emergencyRel:_impCell(c,m.emergencyRel),
+                    allergies:_impCell(c,m.allergies),medications:_impCell(c,m.medications),dietary:_impCell(c,m.dietary),
+                    teams:teams
+                });
+            }
+            return out;
         }
+        // Read the (possibly user-overridden) mapping from the remap selects.
+        function currentMapping(){
+            var m={};
+            IMPORT_FIELDS.forEach(function(f){
+                var sel=document.getElementById('csvMap_'+f[0]);
+                var v=sel?parseInt(sel.value,10):mapping[f[0]];
+                m[f[0]]=(v==null||isNaN(v))?-1:v;
+            });
+            return m;
+        }
+        var rows=buildRows(mapping);
 
-        if(rows.length){
+        if(hdr.length){
             var pvEl=document.getElementById('csvPV');
-            if(pvEl){pvEl.style.display='block';pvEl.innerHTML='<div style="font-weight:600;margin:8px 0 4px">'+rows.length+' campers found</div><div style="font-size:.75rem;color:var(--s400)">Columns detected: '+hdr.filter(function(h){return h}).length+'</div>'}
+            if(pvEl){
+                var _optsFor=function(sel){
+                    var o='<option value="-1"'+(sel<0?' selected':'')+'>— not imported —</option>';
+                    hdr.forEach(function(h,idx){ if(!h)return; o+='<option value="'+idx+'"'+(sel===idx?' selected':'')+'>'+esc(h)+'</option>'; });
+                    return o;
+                };
+                var _mapHtml=IMPORT_FIELDS.map(function(f){
+                    var cur=mapping[f[0]]!=null?mapping[f[0]]:-1;
+                    return '<label style="display:flex;align-items:center;gap:8px;font-size:.75rem">'
+                        +'<span style="flex:0 0 118px;color:var(--s600);font-weight:600">'+esc(f[1])+'</span>'
+                        +'<select id="csvMap_'+f[0]+'" data-impfield="'+f[0]+'" class="me-input" style="flex:1;min-width:0;padding:4px 6px;font-size:.75rem">'+_optsFor(cur)+'</select>'
+                        +'</label>';
+                }).join('');
+                pvEl.style.display='block';
+                pvEl.innerHTML='<div style="font-weight:600;margin:8px 0 4px" id="csvCount">'+rows.length+' campers found</div>'
+                    +'<details style="margin-top:4px"><summary style="cursor:pointer;font-size:.78rem;color:var(--me);font-weight:600">Check / fix column mapping ('+hdr.filter(function(h){return h}).length+' columns detected)</summary>'
+                    +'<div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(230px,1fr));gap:6px 16px;margin-top:8px;max-height:280px;overflow:auto;padding:4px 2px">'+_mapHtml+'</div></details>';
+                pvEl.querySelectorAll('select[data-impfield]').forEach(function(sel){
+                    sel.addEventListener('change',function(){
+                        rows=buildRows(currentMapping());
+                        var cnt=document.getElementById('csvCount'); if(cnt)cnt.textContent=rows.length+' campers found';
+                    });
+                });
+            }
             var btn=document.getElementById('csvBtn');
             if(btn){btn.disabled=false;btn.onclick=async function(){
+                // Rebuild from the current (possibly corrected) mapping.
+                rows=buildRows(currentMapping());
+                if(!rows.length){toast('No campers to import — check the Full name (or First/Last) column mapping.');return}
                 // ★ #3 + footgun: Replace mode WIPES all current campers/structure/
                 //   families/bunks (and fans the wipe to cloud) — confirm first, and
                 //   let the office choose Update instead when they just want to
@@ -19704,6 +23681,28 @@ function _defaultSeasonLabel(){
 // it works from either caller without needing roster/staffApplications
 // loaded into this page's memory — save() already keeps the cloud copy
 // current on every edit, so there's nothing this page needs to send.
+// Manual trigger — used to be Dashboard's "Attendance History" card
+// (Archive Current Season button); moved here so Attendance History lives
+// only in Me. Same RPC/label default as the automatic pre-CSV-import call.
+function archiveSeasonNow(){
+    if(!_secEdit('campers','Archiving the current season'))return;
+    var h='<div class="me-modal-form">';
+    h+='<p style="font-size:.83rem;color:var(--s500);margin:0 0 12px">'
+      +'Snapshot everyone currently on the roster and hired staff under a season '
+      +'label, so their attendance survives a CSV re-import or next year’s reset. '
+      +'This never changes today’s roster — it only adds a record to look back on.</p>';
+    h+='<div class="form-group dash-field"><label for="archSeasonLabel">Season Label</label>'
+      +'<input type="text" id="archSeasonLabel" class="dash-input" value="'+esc(_defaultSeasonLabel())+'"></div>';
+    h+='</div>';
+    showModal('Archive Current Season',h,async function(){
+        var label=(document.getElementById('archSeasonLabel').value||'').trim()||_defaultSeasonLabel();
+        var res=await archiveCurrentSeason(label);
+        if(!res||res.success===false){toast('Error archiving — '+((res&&res.error)||'try again'),'error');return}
+        closeModal('dynModal');
+        toast('Archived '+(res.saved||0)+' — "'+label+'" saved');
+    },'Archive');
+}
+
 async function archiveCurrentSeason(label){
     var db=window.CampistryDB&&window.CampistryDB.getClient?window.CampistryDB.getClient():null;
     var campId=window.CampistryDB&&window.CampistryDB.getCampId?window.CampistryDB.getCampId():null;
@@ -19720,6 +23719,10 @@ function importRows(rows,mode){
     var added=0,updated=0,newDivisions=0,newGrades=0,newBunks=0,newFamilies=0;
     var _preservedGradeTimes={};
 
+    // Who was on the roster before a Replace: a returning child in the file
+    // keeps their camper number and key — their money and history are on it —
+    // when the file shows it is the same child (not by name alone).
+    var _prevRoster=mode==='replace'?roster:null;
     if(mode==='replace'){
     // ═══ WIPE EXISTING DATA — CSV is the new source of truth ═══
     roster={};
@@ -19872,8 +23875,15 @@ function importRows(rows,mode){
             team:Object.values(r.teams)[0]||''
         };
     }
+    var _claimedPrev={},_claimedCur={},_importKept=0,_importNotMatched=[];
     rows.forEach(function(r){
         var targetName=r.name,camperId,oldBunk=null,isUpdate=false;
+        if(_prevRoster&&!r.camperId){
+            var _pv=_returningCamper(_prevRoster,r,_claimedPrev);
+            if(_pv){r.camperId=_pv.id;targetName=_pv.key;_claimedPrev[_pv.key]=1;_importKept++;}
+            else if(Object.keys(_prevRoster).some(function(k){return (_prevRoster[k]&&_prevRoster[k].displayName||String(k).replace(/\s#\d+(?:-\d+)?$/,''))===r.name}))
+                _importNotMatched.push(r.name);
+        }
         // An id the camp gave out is stronger identity than a name: it survives
         // a marriage, a nickname and a spelling fix, which is the whole reason
         // camps hand them out. So when a row carries one we already know, that
@@ -19890,11 +23900,23 @@ function importRows(rows,mode){
             isUpdate=true;
             camperId=roster[byId].camperId;
             oldBunk=roster[byId].bunk;
-            if(byId!==r.name){cascadeCamperRename(byId,r.name);delete roster[byId];_importRenamedById.push(byId+' \u2192 '+r.name);}
-            targetName=r.name;
+            // Renamed onto a key that belongs to someone else (a departed child,
+            // or somebody's old name): filed under their own key (259).
+            var _to=_keyHeldByOther(r.name,camperId)?(r.name+' #'+camperId):r.name;
+            if(byId!==_to){cascadeCamperRename(byId,_to);delete roster[byId];_importRenamedById.push(_lbl(byId)+' \u2192 '+r.name);}
+            targetName=_to;
         }else{
-        var existing=roster[r.name];
-        if(mode==='update'&&existing&&_sameCamperSignal(existing,r)){
+        var existing=roster[r.name], _needOwnKey=false;
+        // Update mode, no ID column: the row is the ONE camper shown with that
+        // name who is the same child (birthday, else parent email/address) —
+        // whichever key they are filed under ("Avi Katz" or "Avi Katz #11").
+        var _cur=(mode==='update'&&!r.camperId)?_returningCamper(roster,r,_claimedCur):null;
+        if(_cur){
+            isUpdate=true;
+            targetName=_cur.key;_claimedCur[_cur.key]=1;
+            camperId=_cur.id;
+            oldBunk=_cur.rec.bunk;
+        }else if(mode==='update'&&existing&&_sameCamperSignal(existing,r)){
             // Same camper (name + same family) — update in place, keep
             // their camperId, and move them off any OLD bunk they're no
             // longer listed in.
@@ -19907,8 +23929,9 @@ function importRows(rows,mode){
             // roster; in Replace mode it's two rows in THIS file sharing a
             // name (the earlier de-dupe pass only collapses TRUE duplicates
             // — same name AND same family). Either way, don't overwrite —
-            // give them their own roster slot.
-            targetName=_disambiguateRosterName(r.name);
+            // give them their own roster slot — their own key, made from their
+            // number below, shown as their plain name.
+            _needOwnKey=true;
             _importDupeNames.push(r.name);
         }
         }
@@ -19924,9 +23947,24 @@ function importRows(rows,mode){
                 if(r.camperId)_importIdClashes.push(r.name+' (#'+r.camperId+')');
                 camperId=nextPersonId;nextPersonId++;
             }
+            // A new child never takes a key that belongs to someone else: a
+            // camper on the roster, a departed child, or somebody's old name (259).
+            if(_needOwnKey||roster[targetName]||_keyHeldByOther(targetName,camperId)){
+                var _ID2=(typeof window!=='undefined'&&window.CamperIdentity)||null;
+                targetName=(_ID2&&roster[r.name])?_ID2.uniqueKey(roster,r.name,camperId):(r.name+' #'+camperId);
+            }
         }
 
-        roster[targetName]=_buildCamperRecord(r,camperId);
+        // No invite refresh here, unlike saveCamper and enrollCamper, and the
+        // reason is not that it was forgotten: Link access is ENROLLMENT-based
+        // (migration 039) and an invite's camper list is built from accepted
+        // enrollments. A CSV import creates roster entries and no enrollments, so
+        // an imported camper is not on any invite to be stamped into. They reach a
+        // parent portal when they are enrolled, and enrollCamper refreshes it then.
+        // A new child says when it was added: a freed number the file gives
+        // them is then not mistaken for a stale copy of an erased child (260).
+        roster[targetName]=Object.assign(_buildCamperRecord(r,camperId),isUpdate?{}:{addedAt:Date.now()});
+        if(targetName!==r.name)roster[targetName].displayName=r.name;
         if(oldBunk&&oldBunk!==r.bunk&&bunkAsgn[oldBunk]){
             var oi=bunkAsgn[oldBunk].indexOf(targetName);
             if(oi!==-1)bunkAsgn[oldBunk].splice(oi,1);
@@ -20045,6 +24083,13 @@ function importRows(rows,mode){
         summary+=' \u2014 '+_importRenamedById.length+' matched by Camper ID and renamed ('+_importRenamedById.join(', ')+')';
         console.log('[Me] CSV import: renamed by camper id \u2014',_importRenamedById);
     }
+    if(_importKept>0)summary+=' \u2014 '+_importKept+' returning camper'+(_importKept===1?'':'s')+' kept their Camper ID';
+    if(_importNotMatched.length>0){
+        summary+=' \u2014 \u26a0 '+_importNotMatched.length+' row'+(_importNotMatched.length===1?'':'s')+' named like a camper who was here could not be matched to them (no birthday or parent email to tell), so '
+                 +(_importNotMatched.length===1?'it is':'they are')+' a NEW camper with a new number ('+_importNotMatched.slice(0,5).map(_lbl).join(', ')
+                 +'). Add a Camper ID column to keep a returning child\'s number.';
+        console.warn('[Me] CSV import: rows not matched to a returning camper \u2014',_importNotMatched);
+    }
     if(_importIdClashes.length>0){
         summary+=' \u2014 \u26a0 '+_importIdClashes.length+' Camper ID'+(_importIdClashes.length>1?'s were':' was')+
                  ' already in use, so '+(_importIdClashes.length>1?'those campers':'that camper')+
@@ -20053,7 +24098,7 @@ function importRows(rows,mode){
     }
     if(_importDupeNames.length>0){
         var uniqDupes=Array.from(new Set(_importDupeNames));
-        summary+=' — ⚠ '+uniqDupes.length+' camper'+(uniqDupes.length>1?'s':'')+' shared a name with someone else in the roster but were from a different family, so '+(uniqDupes.length>1?'they were':'it was')+' kept separately and renamed with a "(2)" suffix to tell them apart ('+uniqDupes.join(', ')+')';
+        summary+=' — ⚠ '+uniqDupes.length+' camper'+(uniqDupes.length>1?'s':'')+' shared a name with someone else in the roster but were from a different family, so '+(uniqDupes.length>1?'they were':'it was')+' kept as separate campers, each with their own Camper ID ('+uniqDupes.join(', ')+')';
         console.warn('[Me] CSV import: same-name-different-family camper(s) disambiguated in roster —',uniqDupes);
     }
     toast(summary);
@@ -20257,10 +24302,47 @@ function _psStaffAsRow(s){
         emergencyName:s.parentName||'',emergencyPhone:s.parentPhone||'',emergencyRel:s.parentRelation||''
     }];
 }
+/**
+ * WHICH CAMPERS A PRINT SHEET IS FOR.
+ *
+ * This used to filter on `unenrolled` alone, which meant a printed sheet listed the
+ * whole roster whatever session the camp was working on. That is the worst place in
+ * the app for it to be wrong: a bunk sign-in sheet is the thing a counsellor
+ * physically carries, and a name on it for a child who is not at camp this half gets
+ * called at roll and marked absent.
+ *
+ * It follows the master key by default, so a printed sheet matches the roster screen
+ * it was built from. `whoWhen` is the escape hatch for a sheet that deliberately
+ * wants everybody — a full family directory, an end-of-summer mailing list — and it
+ * takes exactly the values the roster picker uses, so there is one vocabulary for
+ * "which campers" rather than two.
+ */
+function psWhoWhen(sheet){
+    var v=String((sheet&&sheet.whoWhen)||'');
+    // '' means follow the camp. Resolved here rather than stored on the sheet,
+    // because a sheet that stored 'session:1st Half' in June would still print 1st
+    // Half in August — the same freezing the master key's pin exists to avoid.
+    if(v)return v;
+    return _rosterWhenDefault();
+}
 function psFilteredCampers(sheet){
     var who=sheet.whoScope||'campers';
     var rows=[];
-    if(who!=='staff')rows=rows.concat(Object.entries(roster).filter(function(r){return !r[1].unenrolled;}));
+    if(who!=='staff'){
+        var camperRows=Object.entries(roster).filter(function(r){return !r[1].unenrolled;});
+        var _W=_presenceAPI();
+        if(_W&&typeof _W.filterNames==='function'){
+            _freshSessions();
+            var keep={};
+            _W.filterNames(psWhoWhen(sheet),{
+                camperNames:camperRows.map(function(r){return r[0]}),
+                enrollments:enrollments, sessions:sessions, roster:roster,
+                on:_rosterOn()
+            }).forEach(function(n){keep[n]=1});
+            camperRows=camperRows.filter(function(r){return !!keep[r[0]]});
+        }
+        rows=rows.concat(camperRows);
+    }
     if(who!=='campers')rows=rows.concat(hiredStaff().map(_psStaffAsRow));
     if(sheet.scopeDiv)rows=rows.filter(function(r){return r[1].division===sheet.scopeDiv});
     var sortKey=sheet.sortBy||'lastName';
@@ -20564,7 +24646,11 @@ function renderPrintSheets(){
         var cols=(s.columns||[]).filter(psColPrints);
         var grpLabel={'':'One combined sheet',division:'One sheet per division',grade:'One sheet per grade',bunk:'One sheet per bunk',team:'One sheet per team'}[s.groupBy||'']||'';
         var whoLabel={staff:'Staff only',both:'Campers + Staff'}[s.whoScope]||'';
-        var scope=(s.scopeDiv?('Division: '+s.scopeDiv):'All campers')+(whoLabel?' · '+whoLabel:'');
+        var _whenLabel=!s.whoWhen?'' : (s.whoWhen==='all'?'Everyone enrolled'
+            : (s.whoWhen==='today'?'In camp today'
+               : (s.whoWhen.indexOf('session:')===0?s.whoWhen.slice(8):'')));
+        var scope=(s.scopeDiv?('Division: '+s.scopeDiv):'All campers')+(whoLabel?' · '+whoLabel:'')
+            +(_whenLabel?' · '+_whenLabel:'');
         h+='<div class="me-card" style="padding:16px;display:flex;flex-direction:column;gap:8px">'
             +'<div style="font-size:.95rem;font-weight:700">'+esc(s.name||'Untitled Sheet')+'</div>'
             +'<div style="font-size:.72rem;color:var(--s400)">'+cols.length+' column'+(cols.length===1?'':'s')+' · '+esc(grpLabel)+'</div>'
@@ -20588,6 +24674,22 @@ function psEditorHtml(s){
 
     var whoOpts=[['campers','Campers only'],['staff','Staff only'],['both','Campers + Staff']];
     h+='<div class="me-field"><label>Who</label><select class="me-input" onchange="CampistryMe.psSetProp(\''+je(s.id)+'\',\'whoScope\',this.value)">'+whoOpts.map(function(o){return'<option value="'+o[0]+'"'+(o[0]===(s.whoScope||'campers')?' selected':'')+'>'+o[1]+'</option>'}).join('')+'</select></div>';
+
+    // WHICH CAMPERS, BY SESSION. Blank follows the camp, so a sheet built in June
+    // prints 2nd Half's children in August without anybody remembering to change it.
+    var _sesOpts='<option value=""'+(!s.whoWhen?' selected':'')+'>Follow the camp'
+        +(function(){try{
+            var sc=(typeof window.campistrySessionScope==='function')?window.campistrySessionScope():null;
+            return (sc&&sc.session)?(' \u2014 '+sc.session+' now'):'';
+        }catch(_e){return ''}})()+'</option>';
+    _sesOpts+='<option value="all"'+(s.whoWhen==='all'?' selected':'')+'>Everyone enrolled</option>';
+    _sesOpts+='<option value="today"'+(s.whoWhen==='today'?' selected':'')+'>In camp today</option>';
+    (sessions||[]).forEach(function(x){
+        if(!x||!x.name)return;
+        var v='session:'+x.name;
+        _sesOpts+='<option value="'+esc(v)+'"'+(s.whoWhen===v?' selected':'')+'>'+esc(x.name)+'</option>';
+    });
+    h+='<div class="me-field"><label>Which campers</label><select class="me-input" onchange="CampistryMe.psSetProp(\''+je(s.id)+'\',\'whoWhen\',this.value)">'+_sesOpts+'</select></div>';
 
     var divOpts='<option value="">All campers</option>'+Object.keys(structure).sort().map(function(d){return'<option value="'+esc(d)+'"'+(d===s.scopeDiv?' selected':'')+'>'+esc(d)+'</option>'}).join('');
     h+='<div class="me-field"><label>Include (division scope — campers only)</label><select class="me-input" onchange="CampistryMe.psSetProp(\''+je(s.id)+'\',\'scopeDiv\',this.value)">'+divOpts+'</select></div>';
@@ -20616,23 +24718,39 @@ function psEditorHtml(s){
 
 window.CampistryMe={
     nav:nav,closeModal:closeModal,
+    // The erase queue runner (deletes past their Undo window) — called on a
+    // timer; exposed so the office can nudge it, and for the browser test.
+    runCamperErases:_runCamperErases,
     viewCamper:viewCamper,editCamper:editCamper,deleteCamper:deleteCamper,unenrollCamper:unenrollCamper,reenrollCamper:reenrollCamper,ceToggleSummer:ceToggleSummer,ceMaritalChanged:ceMaritalChanged,ceToggleOtherParentSummer:ceToggleOtherParentSummer,
+    resolveDepositReview:resolveDepositReview,resolveUnconfirmedAutopay:resolveUnconfirmedAutopay,
     addFamily:function(){openFamilyForm(null)},editFamily:function(id){openFamilyForm(id)},deleteFamily:deleteFamily,removeCamperFromFamily:removeCamperFromFamily,
     setPplStaffSubTab:setPplStaffSubTab,viewStaffMember:viewStaffMember,openEditStaffModal:openEditStaffModal,saveStaffMember:saveStaffMember,
     acceptFamilySuggestion:acceptFamilySuggestion,dismissFamilySuggestion:dismissFamilySuggestion,acceptAddToFamily:acceptAddToFamily,
-    mergeFamilies:mergeFamilies,dismissMergeFamilies:dismissMergeFamilies,openMergeFamiliesTool:openMergeFamiliesTool,
+    mergeFamilies:mergeFamilies,dismissMergeFamilies:dismissMergeFamilies,openMergeFamiliesTool:openMergeFamiliesTool,openActivityLog:openActivityLog,mergeCampers:mergeCampers,openMergeCampersTool:openMergeCampersTool,
     openUnmatchedPaymentsModal:openUnmatchedPaymentsModal,
     openDepositInbox:openDepositInbox,
     _bcRefreshPreview:_bcRefreshPreview,
     _colResizeStart:_colResizeStart,_colHeaderDragStart:_colHeaderDragStart,_colHeaderDragOver:_colHeaderDragOver,_colHeaderDrop:_colHeaderDrop,_colHeaderDragEnd:_colHeaderDragEnd,
     addSectionTextBlock:addSectionTextBlock,_richTextExec:_richTextExec,
     addDiv:function(){openDivForm(null)},editDiv:function(n){openDivForm(n)},deleteDiv:deleteDiv,
+    openQuickFillUpload:openQuickFillUpload,downloadQuickFillTemplate:downloadQuickFillTemplate,
     openCsv:function(){openModal('csvModal')},downloadTemplate:downloadTemplate,
     finReconcileCharges:finReconcileCharges,
     _dpToggle:_dpToggle,_cpToggle:_cpToggle,_cfToggle:_cfToggle,_fbRetryPreview:_fbRetryPreview,markDepositPaid:markDepositPaid,chargeDepositNow:chargeDepositNow,
     managePayers:managePayers,togglePayerArchived:togglePayerArchived,
-    managePaymentMethods:managePaymentMethods,setArQuery:setArQuery,
+    managePaymentMethods:managePaymentMethods,manageParentPaymentPlanSetting:manageParentPaymentPlanSetting,managePaymentPlanStructure:managePaymentPlanStructure,archiveSeasonNow:archiveSeasonNow,setArQuery:setArQuery,
     toggleAging:toggleAging,
+    runInstallments:runInstallments,
+    _riToggleAll:_riToggleAll,
+    _riPreview:_riPreview,
+    bulkAdjust:bulkAdjust,
+    _baToggleAll:_baToggleAll,
+    _baOnlyOwing:_baOnlyOwing,
+    _baPreview:_baPreview,
+    applyCreditsToOwed:applyCreditsToOwed,
+    manageLateFees:manageLateFees,
+    assessLateFees:assessLateFees,
+    sendStatements:sendStatements,
     closeOutFamily:closeOutFamily,_closeoutPreview:_closeoutPreview,
     addCardSurcharge:addCardSurcharge,_surchargePreview:_surchargePreview,
     _addPayerRow:_addPayerRow,_payerSplitPreview:_payerSplitPreview,
@@ -20666,6 +24784,7 @@ window.CampistryMe={
     openFormConfig:openFormConfig,saveFormConfig:saveFormConfig,addCustomQ:addCustomQ,addPromoRow:addPromoRow,
     openStaffFormConfig:openStaffFormConfig,saveStaffFormConfig:saveStaffFormConfig,addStaffCustomQ:addStaffCustomQ,
     openPostAcceptFormConfig:openPostAcceptFormConfig,savePostAcceptFormConfig:savePostAcceptFormConfig,addPafCustomQ:addPafCustomQ,
+    openAcceptancePacket:openAcceptancePacket,saveAcceptancePacket:saveAcceptancePacket,closeAcceptancePacket:closeAcceptancePacket,_pktOpenPreview:_pktOpenPreview,
     openPostHireFormConfig:openPostHireFormConfig,savePostHireFormConfig:savePostHireFormConfig,addPhfCustomQ:addPhfCustomQ,
     _phfHandbookPick:_phfHandbookPick,_phfHandbookClear:_phfHandbookClear,addPhfPolicyRow:addPhfPolicyRow,
     addCustomSection:addCustomSection,addSectionField:addSectionField,addCustomQToSection:addCustomQToSection,_toggleSectionQuestions:_toggleSectionQuestions,
@@ -20692,7 +24811,7 @@ window.CampistryMe={
     ptDownloadTemplate:ptDownloadTemplate,ptUploadTemplate:ptUploadTemplate,
     finSetTab:finSetTab,finAddStaff:finAddStaff,finEditStaff:finEditStaff,finStaffModal:finStaffModal,_staffPhotoPick:_staffPhotoPick,_staffPhotoClear:_staffPhotoClear,finRemoveStaff:finRemoveStaff,
     finAddExpense:finAddExpense,finRemoveExpense:finRemoveExpense,
-    finAddPayment:finAddPayment,finRemovePayment:finRemovePayment,
+    finAddPayment:finAddPayment,finRemovePayment:finRemovePayment,recordPayerPayment:recordPayerPayment,resumeAutopayAfterDispute:resumeAutopayAfterDispute,payerLines:payerLines,voidPayerLine:voidPayerLine,
     sendPayLink:sendPayLink,copyPayLink:copyPayLink,toggleBillingAccess:toggleBillingAccess,
     monthlyPlan:monthlyPlan,toggleFamilyAutopay:toggleFamilyAutopay,cancelMonthlyPlan:cancelMonthlyPlan,
     _mpGenerate:_mpGenerate,_mpBasis:_mpBasis,_mpPreview:_mpPreview,_mpAddRow:_mpAddRow,_mpUpdateTotal:_mpUpdateTotal,_mpSwitchTab:_mpSwitchTab,

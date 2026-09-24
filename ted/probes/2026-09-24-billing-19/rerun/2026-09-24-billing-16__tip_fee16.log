@@ -1,0 +1,11 @@
+lifted: const PLATFORM_FEE_RATE = 0.02; const STRIPE_PCT = 0.029; const STRIPE_FIXED_CENTS = 30;
+tip $1.00 → parent pays $1.36 (fee $0.36 = 36.0% of the tip); staff gets $1.00; Stripe takes ~$0.34, Campistry keeps ~$0.02 (2% = $0.02)
+tip $2.00 → parent pays $2.41 (fee $0.41 = 20.5% of the tip); staff gets $2.00; Stripe takes ~$0.37, Campistry keeps ~$0.04 (2% = $0.04)
+tip $5.00 → parent pays $5.57 (fee $0.57 = 11.4% of the tip); staff gets $5.00; Stripe takes ~$0.46, Campistry keeps ~$0.11 (2% = $0.10)
+tip $10.00 → parent pays $10.82 (fee $0.82 = 8.2% of the tip); staff gets $10.00; Stripe takes ~$0.61, Campistry keeps ~$0.21 (2% = $0.20)
+tip $20.00 → parent pays $21.32 (fee $1.32 = 6.6% of the tip); staff gets $20.00; Stripe takes ~$0.92, Campistry keeps ~$0.40 (2% = $0.40)
+tip $50.00 → parent pays $52.84 (fee $2.84 = 5.7% of the tip); staff gets $50.00; Stripe takes ~$1.83, Campistry keeps ~$1.01 (2% = $1.00)
+tip $100.00 → parent pays $105.36 (fee $5.36 = 5.4% of the tip); staff gets $100.00; Stripe takes ~$3.36, Campistry keeps ~$2.00 (2% = $2.00)
+tip $500.00 → parent pays $525.55 (fee $25.55 = 5.1% of the tip); staff gets $500.00; Stripe takes ~$15.54, Campistry keeps ~$10.01 (2% = $10.00)
+
+the product's own card-fee rules: a 10% surcharge setting is stored as 3%; on a debit card: "Set the camp’s state before surcharging — it is banned in some"

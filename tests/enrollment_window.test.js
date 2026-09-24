@@ -379,3 +379,26 @@ test('the migration parses as SQL', () => {
     }
     assert.match(out, /ok/);
 });
+
+test('two campers who share a name: each is present by their own enrollment, by number', () => {
+    const W2 = require('../campistry_enrollment_window.js');
+    const sessions = [
+        { name: 'July', startDate: '2026-07-01', endDate: '2026-07-31' },
+        { name: 'August', startDate: '2026-08-01', endDate: '2026-08-31' },
+    ];
+    // Both enrollments say "Rivka Stern"; the numbers tell them apart.
+    const enrollments = {
+        a: { camperName: 'Rivka Stern', camperId: 701, session: 'July', status: 'enrolled' },
+        b: { camperName: 'Rivka Stern', camperId: 702, session: 'August', status: 'enrolled' },
+        old: { camperName: 'Old Timer', session: 'July', status: 'enrolled' },
+    };
+    const roster = { 'Rivka Stern': { camperId: 701 }, 'Rivka Stern #702': { camperId: 702 }, 'Old Timer': {} };
+    const on = '2026-07-15';
+    assert.strictEqual(W2.presenceOf({ camperName: 'Rivka Stern', enrollments, sessions, roster, on }).state, 'active');
+    assert.strictEqual(W2.presenceOf({ camperName: 'Rivka Stern #702', enrollments, sessions, roster, on }).state, 'upcoming',
+        '#702 is on August only — July belongs to #701');
+    assert.strictEqual(W2.presenceOf({ camperName: 'Rivka Stern', camperId: 702, enrollments, sessions, roster, on }).state, 'upcoming',
+        'a number given decides, whatever the name');
+    assert.strictEqual(W2.presenceOf({ camperName: 'Old Timer', enrollments, sessions, roster, on }).state, 'active',
+        'an enrollment with no number still matches by name');
+});

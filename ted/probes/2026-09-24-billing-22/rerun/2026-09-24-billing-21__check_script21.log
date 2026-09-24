@@ -1,0 +1,21 @@
+V0 ok
+  ok  V0 today's chain → 288 ok   → ok
+V1 apply 288 again — an earlier copy is in place: a second dispute, a replaced card or a late message can restart autopay mid-dispute
+  ok  V1 last pass's 288 pasted over today's → apply 288 again   → apply 288 again — an earlier copy is in place: a second dispute, a replaced card or a late message can restart autopay mid-dispute
+  ok  V1b today's 288 again → ok   → ok
+V2 before: v_cb count 0; row: apply 288 again — an earlier copy is in place: a second dispute, a replaced card or a late message can restart autopay mid-dispute
+    pause stored by the old 288: {"since": "2026-09-24T16:28:50Z", "detail": "fraudulent", "reason": "chargeback", "disputeId": "dp_old"}
+V2 after today's 288: row ok; v_cb count 6
+  ok  V2 today's 288 over the old one → ok, flag_plan_collection patched   → ok
+    second dispute joins: {"since": "2026-09-24T16:28:50Z", "detail": "fraudulent", "reason": "chargeback", "disputeId": "dp_old", "disputeIds": ["dp_old", "dp_new"]}
+    old one won: {"since": "2026-09-24T16:28:50Z", "detail": "fraudulent", "reason": "chargeback", "disputeId": "dp_new", "disputeIds": ["dp_new"]}
+    new one won: none
+  ok  V2a an old-style pause takes a second dispute into its list   → {"since": "2026-09-24T16:28:50Z", "detail": "fraudulent", "reason": "chargeback", "disputeId": "dp_old", "disputeIds": ["dp_old", "dp_new"]}
+  ok  V2b winning the old one keeps the pause for the new one   → {"since": "2026-09-24T16:28:50Z", "detail": "fraudulent", "reason": "chargeback", "disputeId": "dp_new", "disputeIds": ["dp_new"]}
+  ok  V2c winning both lifts it   → none
+  ok  V3 today's 288 twice more → ok, flag_plan_collection unchanged   → ok true
+V4 214 re-pasted after 288: apply 288 again — an earlier copy is in place: a second dispute, a replaced card or a late message can restart autopay mid-dispute
+  ok  V4 214 re-pasted after 288 → the 288 row is not ok   → apply 288 again — an earlier copy is in place: a second dispute, a replaced card or a late message can restart autopay mid-dispute
+  ok  V4b 269 + 288 again → ok   → ok
+
+0 BAD

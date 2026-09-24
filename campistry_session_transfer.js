@@ -148,7 +148,7 @@
         steps.push({ do: 'retire', enrollmentId: eid, status: 'transferred', to: to });
         steps.push({ do: 'enroll', session: to, tuition: newGross, discount: disc,
                      from: from, fromEnrollmentId: eid,
-                     camperName: str(enr.camperName) });
+                     camperName: str(enr.camperName), camperId: enr.camperId != null ? enr.camperId : null });
 
         // What the family will owe as a result, which is the only number the office
         // actually wants to hear before confirming.

@@ -30,7 +30,14 @@
 // A camp that hasn't connected (stripe_account_id IS NULL) is unaffected —
 // this stays the exact same platform-account charge as before.
 //
-// Request:  { customerId, paymentMethodId, amount, currency, description, metadata, campId? }
+// WHOSE CARD (TED-058). The customer must be one of the caller's own camp's
+// families, and a given payment method must be that customer's; otherwise the
+// charge is REFUSED. (It used to go ahead with no destination, charging a
+// stranger's card into the platform's account.) An idempotencyKey from the
+// click is sent to Stripe as its Idempotency-Key, so a retry cannot charge
+// twice.
+//
+// Request:  { customerId, paymentMethodId, amount, currency, description, metadata, idempotencyKey?, campId? }
 //           header: Authorization: Bearer <caller's Supabase access token>
 //           (campId in the body is kept for metadata/logging only — it is
 //           NEVER used to pick a Stripe Connect destination)
@@ -104,15 +111,13 @@ async function callerCampId(req: Request): Promise<string | null> {
 async function campOwnsCustomer(campId: string | undefined, customerId: string | undefined): Promise<boolean> {
   if (!campId || !customerId || !SUPABASE_URL || !SUPABASE_SERVICE_KEY) return false;
   const supabase = createClient(SUPABASE_URL, SUPABASE_SERVICE_KEY);
-  const { data } = await supabase
-    .from("camp_state_kv")
-    .select("value")
-    .eq("camp_id", campId)
-    .eq("key", "campistryMe")
-    .maybeSingle();
-  const families = data?.value && typeof data.value === "object" ? (data.value as Record<string, any>).families : null;
-  if (!families || typeof families !== "object") return false;
-  return Object.values(families).some((f: any) => f && f.stripeCustomerId === customerId);
+  // The family ROWS (camp_families_object): a Stripe customer saved by
+  // stripe-webhook is written to the row, and the campistryMe document's copy
+  // only catches up when somebody saves the Me page — so this refused to charge
+  // a card the camp had just saved.
+  const { data: families, error } = await supabase.rpc("camp_families_object", { p_camp_id: campId });
+  if (error || !families || typeof families !== "object") return false;
+  return Object.values(families as Record<string, any>).some((f: any) => f && f.stripeCustomerId === customerId);
 }
 
 // Returns the camp's connected account AND its name. The name is not a nicety:
@@ -136,16 +141,23 @@ async function lookupCamp(campId: string | undefined, customerId: string | undef
   };
 }
 
-async function stripePost(endpoint: string, body: Record<string, string>) {
+async function stripePost(endpoint: string, body: Record<string, string>, idempotencyKey?: string) {
+  const headers: Record<string, string> = {
+    "Authorization": `Bearer ${STRIPE_SECRET}`,
+    "Content-Type": "application/x-www-form-urlencoded",
+  };
+  if (idempotencyKey) headers["Idempotency-Key"] = idempotencyKey;
   const resp = await fetch(`${STRIPE_API}${endpoint}`, {
     method: "POST",
-    headers: {
-      "Authorization": `Bearer ${STRIPE_SECRET}`,
-      "Content-Type": "application/x-www-form-urlencoded",
-    },
+    headers,
     body: new URLSearchParams(body).toString(),
   });
-  return resp.json();
+  const out = await resp.json();
+  // A "no" Stripe stands by (a 4xx it keeps for the key: a decline, a bad
+  // request) is definite. A 5xx, a 409 (the same key still running) or a 429
+  // decides nothing — the charge may yet be made.
+  if (out && typeof out === "object" && out.error) out.__definite = resp.status >= 400 && resp.status < 500 && resp.status !== 409 && resp.status !== 429;
+  return out;
 }
 
 async function stripeGet(endpoint: string) {
@@ -154,6 +166,122 @@ async function stripeGet(endpoint: string) {
   });
   return resp.json();
 }
+
+// ── A bank debit still on its way (TED-144) ───────────────────────────────
+// A bank (ACH) debit is "processing" for several business days before the
+// bank settles or returns it, and until then the family's balance still reads
+// in full. So pressing Charge Card again — on another computer, or the next
+// day — started a SECOND debit for the same bill. Stripe is asked, not this
+// camp's own records (a webhook may not have arrived yet): any of this
+// family's payments at this camp still processing — an office charge or an
+// autopay instalment, not a canteen top-up or a photo purchase, which have
+// their own money — stops another charge until it settles or fails.
+// Answers { pi } for the one on its way, {} for none, { unknown } when Stripe
+// could not be asked (then nothing is charged: a second debit is the one
+// mistake this exists to prevent).
+const OWN_MONEY_SOURCES = new Set(["campistry-canteen-deposit", "campistry-link-photo-purchase", "registration_deposit"]);
+async function bankDebitInFlight(campId: string, customerId: string): Promise<{ pi?: any; unknown?: boolean }> {
+  const since = Math.floor(Date.now() / 1000) - 30 * 86400;
+  let list: any;
+  try {
+    const resp = await fetch(`${STRIPE_API}/payment_intents?customer=${encodeURIComponent(customerId)}&limit=100&created%5Bgte%5D=${since}`, {
+      headers: { "Authorization": `Bearer ${STRIPE_SECRET}` },
+    });
+    if (!resp.ok) return { unknown: true };
+    list = await resp.json();
+  } catch (_) {
+    return { unknown: true };
+  }
+  if (!list || !Array.isArray(list.data)) return { unknown: true };
+  const pi = list.data.find((x: any) => x && x.status === "processing"
+    && String(x.metadata?.campId || "") === campId
+    && !OWN_MONEY_SOURCES.has(String(x.metadata?.source || "")));
+  return pi ? { pi } : {};
+}
+
+// ── An autopay charge the card company never answered (276), answered "it
+// went through" by the office (TED-120) ────────────────────────────────────
+// On an autopay night many families pay the same amount, so a payment id
+// pasted from the Stripe dashboard can easily be another family's — or a typo.
+// Recorded as it stood, that credited this family twice (or for money never
+// collected). So Stripe is asked about the payment, and it is recorded only
+// when it is: succeeded; this family's Stripe customer; for this instalment's
+// amount; made on or after the day autopay tried (a day's slack for time
+// zones); and, when it carries Campistry's stamp, this camp's and this
+// family's. The database then refuses it again if it is booked for anyone else.
+async function confirmAutopay(campId: string, body: Record<string, any>): Promise<Record<string, unknown>> {
+  const familyKey = String(body.familyKey || "");
+  const planRef = String(body.planRef || "");
+  const piId = String(body.paymentIntentId || "").trim();
+  if (!familyKey || !planRef) return { success: false, error: "Which family and plan?" };
+  if (!/^pi_[A-Za-z0-9]+$/.test(piId)) return { success: false, error: "On Stripe, use the payment's id — it starts with pi_." };
+  const service = createClient(SUPABASE_URL, SUPABASE_SERVICE_KEY);
+  const { data: families, error: famErr } = await service.rpc("camp_families_object", { p_camp_id: campId });
+  if (famErr || !families || typeof families !== "object") return { success: false, error: "Could not read this camp's families — try again." };
+  const fam = (families as Record<string, any>)[familyKey];
+  if (!fam) return { success: false, error: "That family is not at your camp." };
+  const plans: any[] = Array.isArray(fam.plans) ? fam.plans : [];
+  const plan = plans.find((p: any, i: number) => p && ((p.id && String(p.id) === planRef) || (!p.id && `#${i}` === planRef)));
+  const hold = plan && plan.pendingCharge;
+  if (!hold || !hold.unconfirmed) return { success: false, error: "That charge was already answered." };
+  if (String(hold.processor || "") !== "stripe") return { success: false, error: "That charge did not go through Stripe." };
+  if (!fam.stripeCustomerId) return { success: false, error: "This family has no Stripe customer on file, so the payment cannot be checked." };
+
+  let pi: any;
+  try {
+    const resp = await fetch(`${STRIPE_API}/payment_intents/${encodeURIComponent(piId)}`, {
+      headers: { "Authorization": `Bearer ${STRIPE_SECRET}` } });
+    if (resp.status >= 500 || resp.status === 429) return { success: false, error: "Stripe did not answer — try again in a minute." };
+    pi = await resp.json();
+  } catch (_) {
+    return { success: false, error: "Stripe did not answer — try again in a minute." };
+  }
+  if (!pi || pi.error || !pi.id) return { success: false, error: `Stripe has no payment ${piId} — check the id (it is on the payment's page in the Stripe dashboard).` };
+  const customer = typeof pi.customer === "string" ? pi.customer : pi.customer?.id;
+  const cents = Math.round(Number(hold.amount) * 100);
+  const got = Number(pi.amount_received ?? pi.amount) || 0;
+  const meta = pi.metadata || {};
+  if (pi.status !== "succeeded") return { success: false, error: `That payment has not gone through (Stripe says "${pi.status}").` };
+  if (customer !== fam.stripeCustomerId) return { success: false, error: `That payment is not ${fam.name || "this family"}'s — it was made on another customer's card.` };
+  if (got !== cents) return { success: false, error: `That payment is for $${(got / 100).toFixed(2)}, not this instalment's $${(cents / 100).toFixed(2)}.` };
+  if ((meta.campId && String(meta.campId) !== campId) || (meta.familyKey && String(meta.familyKey) !== familyKey)) {
+    return { success: false, error: "That payment was made for another family." };
+  }
+  if (meta.planId && hold.planId && String(meta.planId) !== String(hold.planId)) {
+    return { success: false, error: "That payment was made for another payment plan." };
+  }
+  const since = Date.parse(String(hold.since || "") + "T00:00:00Z");
+  if (Number.isFinite(since) && Number(pi.created) * 1000 < since - 86400000) {
+    return { success: false, error: `That payment was made before autopay tried this instalment (${hold.since}) — it is an earlier payment.` };
+  }
+
+  const { data: rec, error: recErr } = await service.rpc("resolve_unconfirmed_autopay_checked", {
+    p_camp_id: campId, p_family_key: familyKey, p_plan_ref: planRef, p_reference: piId });
+  if (recErr) return { success: false, error: "Could not record it — try again. (" + recErr.message + ")" };
+  if (!rec || rec.success !== true) {
+    const why = rec?.error === "reference_is_another_payment" ? "that payment is already booked for another family or amount"
+      : rec?.error === "nothing_to_answer" ? "that charge was already answered" : (rec?.error || "not recorded");
+    return { success: false, error: "Not recorded: " + why + "." };
+  }
+  return { success: true, recorded: true };
+}
+
+// A family whose payment is disputed with their bank (288, TED-200) is not
+// charged again from the office while the bank decides — the server's check,
+// so an office computer that loaded Billing before the dispute cannot either.
+function disputedFamily(families: unknown, match: (f: any) => boolean): any | null {
+  if (!families || typeof families !== "object") return null;
+  for (const f of Object.values(families as Record<string, any>)) {
+    if (!f || !match(f)) continue;
+    const held = (f.disputeHold && Array.isArray(f.disputeHold.disputeIds) && f.disputeHold.disputeIds.length > 0)
+      || [...(Array.isArray(f.plans) ? f.plans : []), f.plan].some((p: any) => p && p.collectionBlocked && p.collectionBlocked.reason === "chargeback");
+    if (held) return f;
+  }
+  return null;
+}
+const DISPUTED_MSG = (name: string) =>
+  `${name || "This family"} disputed a payment with their bank, so their card is not charged again until the dispute is over ` +
+  `(or someone who can edit Billing resumes it, from the family's "Payment disputed" label). Nothing was charged.`;
 
 serve(async (req) => {
   if (req.method === "OPTIONS") {
@@ -168,21 +296,67 @@ serve(async (req) => {
       });
     }
 
+    let reqBody: Record<string, any> = {};
+    try { reqBody = await req.json(); } catch (_) { reqBody = {}; }
     const authedCampId = await callerCampId(req);
     if (!authedCampId) {
-      return new Response(JSON.stringify({ error: "Only camp owners/admins can charge a stored card." }), {
+      // Said for what was asked (TED-134): confirming an autopay payment charges nothing.
+      const why = reqBody && reqBody.action === "confirmAutopay"
+        ? "Only the camp owner or an admin can confirm a Stripe autopay payment."
+        : "Only the camp owner or an admin can charge a stored card.";
+      return new Response(JSON.stringify({ error: why }), {
         status: 403,
         headers: { ...corsHeaders, "Content-Type": "application/json" },
       });
     }
 
-    const { customerId, paymentMethodId, amount, currency, description, metadata } = await req.json();
+    // "The autopay charge went through" on Stripe (279, TED-120): checked with
+    // Stripe here, never taken from the browser.
+    if (reqBody && reqBody.action === "confirmAutopay") {
+      const out = await confirmAutopay(authedCampId, reqBody);
+      return new Response(JSON.stringify(out), {
+        status: 200, headers: { ...corsHeaders, "Content-Type": "application/json" },
+      });
+    }
+    const { customerId, paymentMethodId, amount, currency, description, metadata, idempotencyKey } = reqBody;
 
-    if (!customerId || !amount) {
-      return new Response(JSON.stringify({ error: "customerId and amount required" }), {
+    if (!customerId || !amount || !(Number(amount) > 0)) {
+      return new Response(JSON.stringify({ error: "customerId and a positive amount required" }), {
         status: 400,
         headers: { ...corsHeaders, "Content-Type": "application/json" },
       });
+    }
+
+    // Only a family of the caller's own camp.
+    if (!(await campOwnsCustomer(authedCampId, customerId))) {
+      return new Response(JSON.stringify({ error: "That card is not on file for a family at your camp." }), {
+        status: 403,
+        headers: { ...corsHeaders, "Content-Type": "application/json" },
+      });
+    }
+    {
+      const svc = createClient(SUPABASE_URL, SUPABASE_SERVICE_KEY);
+      const { data: fams, error: famErr } = await svc.rpc("camp_families_object", { p_camp_id: authedCampId });
+      if (famErr) {
+        return new Response(JSON.stringify({ error: "Could not read the family's record, so nothing was charged. Try again in a minute." }), {
+          status: 503, headers: { ...corsHeaders, "Content-Type": "application/json" } });
+      }
+      const disputed = disputedFamily(fams, (f: any) => f.stripeCustomerId === customerId);
+      if (disputed) {
+        return new Response(JSON.stringify({ error: DISPUTED_MSG(disputed.name), disputed: true }), {
+          status: 409, headers: { ...corsHeaders, "Content-Type": "application/json" } });
+      }
+    }
+    // ...and a given payment method must be that family's own.
+    if (paymentMethodId) {
+      const pm = await stripeGet(`/payment_methods/${encodeURIComponent(String(paymentMethodId))}`);
+      const pmCustomer = typeof pm?.customer === "string" ? pm.customer : pm?.customer?.id;
+      if (!pm || pm.error || pmCustomer !== customerId) {
+        return new Response(JSON.stringify({ error: "That payment method does not belong to this family." }), {
+          status: 403,
+          headers: { ...corsHeaders, "Content-Type": "application/json" },
+        });
+      }
     }
 
     // If no paymentMethodId provided, get the customer's default payment method
@@ -199,6 +373,23 @@ serve(async (req) => {
           { status: 400, headers: { ...corsHeaders, "Content-Type": "application/json" } }
         );
       }
+    }
+
+    // A bank debit for this family still on its way: no second charge (TED-144).
+    const inFlight = await bankDebitInFlight(authedCampId, customerId);
+    if (inFlight.unknown) {
+      return new Response(JSON.stringify({ notCharged: true,
+        error: "Could not check with Stripe whether an earlier bank debit for this family is still on its way, so nothing was charged. Try again in a minute." }),
+        { status: 200, headers: { ...corsHeaders, "Content-Type": "application/json" } });
+    }
+    if (inFlight.pi) {
+      const p = inFlight.pi;
+      const amt = ((Number(p.amount) || 0) / 100).toFixed(2);
+      const day = p.created ? new Date(Number(p.created) * 1000).toISOString().slice(0, 10) : "";
+      return new Response(JSON.stringify({ onItsWay: true, paymentIntentId: p.id, amount: (Number(p.amount) || 0) / 100,
+        started: day, paymentMethodType: (p.payment_method_types && p.payment_method_types[0]) || "",
+        error: `A $${amt} bank debit for this family${day ? ", started " + day + "," : ""} is still on its way — bank debits take a few business days. Nothing more was charged; charge again only if that one fails.` }),
+        { status: 200, headers: { ...corsHeaders, "Content-Type": "application/json" } });
     }
 
     // Create PaymentIntent — off_session means customer not present
@@ -218,6 +409,8 @@ serve(async (req) => {
         params[`metadata[${k}]`] = String(v);
       });
     }
+    // The camp is the server's, never the request's.
+    params["metadata[campId]"] = authedCampId;
 
     const camp = await lookupCamp(authedCampId, customerId);
     const destinationAccountId = camp.destination;
@@ -239,8 +432,20 @@ serve(async (req) => {
       params["on_behalf_of"] = destinationAccountId;
     }
 
-    const paymentIntent = await stripePost("/payment_intents", params);
+    const claimKey = typeof idempotencyKey === "string" && idempotencyKey.trim() ? idempotencyKey.trim() : "";
+    const unsure = (why: string) => new Response(JSON.stringify({ uncertain: true,
+      error: `Stripe did not give a final answer (${why}), so this charge may have gone through. Check the family's payments or the Stripe dashboard before charging again — pressing Charge Card again for the same amount is safe: Stripe answers with the first charge instead of making a second.` }),
+      { status: 200, headers: { ...corsHeaders, "Content-Type": "application/json" } });
+    let paymentIntent: any;
+    try {
+      paymentIntent = await stripePost("/payment_intents", params,
+        claimKey ? `charge:${authedCampId}:${claimKey}` : undefined);
+    } catch (e) {
+      // Cut off after Stripe may have charged (TED-111): never "failed".
+      return unsure((e as Error).message || "no answer");
+    }
 
+    if (paymentIntent.error && !paymentIntent.__definite) return unsure(paymentIntent.error.message || "no answer");
     if (paymentIntent.error) {
       // If card requires authentication, return the client secret
       // so frontend can handle 3D Secure
@@ -255,7 +460,10 @@ serve(async (req) => {
           { status: 200, headers: { ...corsHeaders, "Content-Type": "application/json" } }
         );
       }
-      throw new Error(paymentIntent.error.message);
+      // A definite decline: nothing was charged. Said as such (TED-111), so
+      // the page starts a fresh charge next time instead of replaying this one.
+      return new Response(JSON.stringify({ declined: true, error: paymentIntent.error.message || "Declined" }),
+        { status: 200, headers: { ...corsHeaders, "Content-Type": "application/json" } });
     }
 
     console.log(`[stripe-charge] PaymentIntent ${paymentIntent.id}: ${paymentIntent.status} — $${amount}`);

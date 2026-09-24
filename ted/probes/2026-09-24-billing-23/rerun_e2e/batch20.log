@@ -1,0 +1,6 @@
+  Batch Charge button: true; window: ""
+  Teal plan mark in the cloud: {"since": "2026-09-24T17:28:12Z", "detail": "fraudulent", "reason": "chargeback", "disputeId": "dp_t", "disputeIds": ["dp_t"]}
+  ok  Teal (payment disputed, autopay paused) is left out of Batch Charge or named as disputed
+page errors: []
+
+0 BAD

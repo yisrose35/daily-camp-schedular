@@ -154,7 +154,9 @@ test('saveCamper no longer refuses a duplicate name outright', () => {
     assert.ok(!/if\(!editingCamper&&roster\[full\]\)\{toast\('Already exists','error'\);return\}/.test(fn),
         'the hard refusal is back — two kids with the same name cannot be enrolled');
 
-    assert.match(fn, /_dupKey=_ID\.uniqueKey\(roster,full,existingId\)/,
+    // (a key held by a departed child, or somebody's old name, gets
+    // "<name> #<id>" too — 259)
+    assert.match(fn, /_dupKey=roster\[full\]\?_ID\.uniqueKey\(roster,full,existingId\):\(full\+' #'\+existingId\)/,
         'the unique key is no longer generated');
     assert.match(fn, /if\(_dupKey\)_core\.displayName=full;/,
         'displayName is not stamped — every screen would show the suffixed key');
@@ -167,7 +169,7 @@ test('the unique key is chosen AFTER the camper id is settled', () => {
     // would fall back to the unstable counter every time.
     const ME = read('campistry_me.js');
     const idAt = ME.indexOf('if(!existingId){existingId=nextPersonId;nextPersonId++}');
-    const keyAt = ME.indexOf('_dupKey=_ID.uniqueKey(roster,full,existingId)');
+    const keyAt = ME.indexOf('_ID.uniqueKey(roster,full,existingId)');
     assert.ok(idAt > 0 && keyAt > idAt,
         'the key is generated before the id is known — suffixes would be counters');
 });

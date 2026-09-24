@@ -1,0 +1,20 @@
+TAP version 13
+# \# press 1: HTTP 200 {"uncertain":true,"error":"Stripe did not answer, so this refund may have gone through. Check the child's wallet before trying again."}
+# \# press 2: HTTP 200 {"uncertain":true,"error":"An earlier try at this refund has not been confirmed by Stripe yet, so it may have gone through — wait a minute and check the Stripe dashboard 
+# \# press 3: HTTP 200 {"uncertain":true,"error":"An earlier try at this refund has not been confirmed by Stripe yet, so it may have gone through — wait a minute and check the Stripe dashboard 
+# \# money moved: ["pi_top1 $20"]
+# Subtest: probe
+ok 1 - probe
+  ---
+  duration_ms: 204.856978
+  type: 'test'
+  ...
+1..1
+# tests 1
+# suites 0
+# pass 1
+# fail 0
+# cancelled 0
+# skipped 0
+# todo 0
+# duration_ms 301.013877

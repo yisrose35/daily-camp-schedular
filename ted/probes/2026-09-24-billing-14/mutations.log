@@ -1,0 +1,35 @@
+== NEW pgtests 275 + 278, OLD migrations 275/278 (fef6edb)
+  FAIL   275_a_canteen_refund_takes_its_money_first
+           psql:scripts/pgtests/275_a_canteen_refund_takes_its_money_first.sql:104: ERROR:  more than the balance: {"error": "insufficient", "success": false, "available": 15.00}
+           CONTEXT:  PL/pgSQL function inline_code_block line 69 at RAISE
+  FAIL   278_a_refund_that_fails_later_puts_the_money_back
+           psql:scripts/pgtests/278_a_refund_that_fails_later_puts_the_money_back.sql:133: ERROR:  function public.reverse_failed_stripe_refund(uuid, unknown, unknown, integer, unknown, unknown) does not exist
+           CONTEXT:  PL/pgSQL function inline_code_block line 91 at assignment
+
+0 passed, 2 failed — against 126 migrations, one database copy per test
+failed: 275_a_canteen_refund_takes_its_money_first 278_a_refund_that_fails_later_puts_the_money_back
+== new pgtest 278, TODAY's 278 with the TED-137 once-only claim removed (always 'first')
+  FAIL   278_a_refund_that_fails_later_puts_the_money_back
+           psql:scripts/pgtests/278_a_refund_that_fails_later_puts_the_money_back.sql:133: ERROR:  TED-137: the no-camp alert is not once-only
+           CONTEXT:  PL/pgSQL function inline_code_block line 98 at RAISE
+
+0 passed, 1 failed — against 126 migrations, one database copy per test
+failed: 278_a_refund_that_fails_later_puts_the_money_back
+== new pgtest 278, TODAY's 278 with the TED-138 hold look-up removed
+  FAIL   278_a_refund_that_fails_later_puts_the_money_back
+           psql:scripts/pgtests/278_a_refund_that_fails_later_puts_the_money_back.sql:133: ERROR:  TED-138: the waiting canteen refund's notice: Stripe could not send a $30.00 refund (re_lost, on payment pi_b) — account closed. The parent did not get it. It is not on Campistry's books (it may have been made in the Stripe dashboard), so nothing was changed here: find the payment in Stripe, then refund it again or record it by hand. Stripe returned the money to Campistry's platform account; Campistry has been alerted to pass it back to yours.
+           CONTEXT:  PL/pgSQL function inline_code_block line 95 at RAISE
+
+0 passed, 1 failed — against 126 migrations, one database copy per test
+failed: 278_a_refund_that_fails_later_puts_the_money_back
+== new pgtests 275 + 278, TODAY's migrations unchanged (control)
+           psql:scripts/pgtests/278_a_refund_that_fails_later_puts_the_money_back.sql:143: ERROR:  the checking script's 278 row says: apply 278 BEFORE redeploying stripe-webhook — a refund Stripe fails later still shows as refunded
+           CONTEXT:  PL/pgSQL function inline_code_block line 5 at RAISE
+
+1 passed, 1 failed — against 126 migrations, one database copy per test
+failed: 278_a_refund_that_fails_later_puts_the_money_back
+== (re-run) control: today's 275/278 + today's check script, unchanged
+  ok     275_a_canteen_refund_takes_its_money_first
+  ok     278_a_refund_that_fails_later_puts_the_money_back
+
+2 passed, 0 failed — against 126 migrations, one database copy per test

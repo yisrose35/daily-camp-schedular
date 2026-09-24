@@ -1,0 +1,35 @@
+CAUGHT  M1 TED-163 ✕ refuses only payments again (refund / put-back rows removable)  (exit 1; node --test tests/finance_payments_reach_the_bill.test.js)
+      not ok 6 - TED-163: a refund that went through Stripe or Sola, or a failed refund's put-back, cannot be "removed"
+CAUGHT  M2 TED-164 webhook answers 200 when the payment is not recorded  (exit 1; node --test tests/stripe_webhook_write_fails.test.js)
+      not ok 1 - TED-164: Link Pay Now (tuition) — the database fails: 500 and no receipt; Stripe's next delivery records it and sends one
+      not ok 5 - TED-164: the database ANSWERS "not recorded" — also 500, as the Sola webhook does
+CAUGHT  M3 TED-165 household billed the full split charge  (exit 1; node --test tests/payer_split_billed.test.js)
+      not ok 1 - TED-165: $1,000 with $800 from the Scholarship Fund — Pine is billed $200; the fund owes $800 on its own account
+      not ok 2 - TED-165: the fund's cheque is recorded on the fund — the family's balance does not move
+      not ok 3 - TED-165: a percentage split, and no split at all
+CAUGHT  M4 TED-166 default pay run from the Sunday of last week  (exit 1; node --test tests/payroll_run_dates.test.js)
+      not ok 2 - TED-166: two-weekly runs with the defaults — nothing skipped
+      not ok 4 - TED-166: nothing new to pay — the window says so
+CAUGHT  M5 TED-174 same-name households auto-posted again  (exit 1; node --test tests/deposit_match.test.js)
+      not ok 11 - TED-174: two households whose parent has the same name never auto-post, whichever owes the amount
+CAUGHT  M6 TED-170 offline register without its one-sale lock  (exit 1; node --test tests/offline_register_once.test.js)
+      not ok 1 - TED-170: a double tap at the same instant records one sale, one debit, one item
+CAUGHT  M7 TED-172 Link forgets a pending tick  (exit 1; node --test tests/link_autoreload_paused.test.js)
+      not ok 6 - TED-161: ticking a trigger is still how a parent switches it on; edits while on keep it on
+      not ok 7 - TED-172: tick, then an amount edit inside the half-second wait — saved ON
+      not ok 8 - TED-172: tick, then an amount edit while the first save is still on its way — saved ON
+CAUGHT  M8 TED-168 Clear All keeps the pending sale key  (exit 1; node --test tests/pos_charge_once.test.js)
+      not ok 6 - TED-168: after "could not confirm", Clear All ends that sale — the same child's next identical sale IS charged
+MISSED  M9 TED-169 finish() counts the current cart  (exit 0; node --test tests/pos_charge_once.test.js)
+CAUGHT  M10 TED-175 a sale can be voided twice  (exit 1; scripts/run_pgtests.sh 284)
+      FAIL   284_a_register_sale_can_be_voided
+CAUGHT  M11 TED-176 a late older refund event lowers the refund  (exit 1; scripts/run_pgtests.sh 285)
+      FAIL   285_a_refunded_or_disputed_tip
+CAUGHT  M12 TED-176 transfer reversal without a stable key  (exit 1; node --test tests/tip_refund_dispute.test.js)
+      not ok 1 - TED-176: a tip refunded in full — taken back from the staff member once, marked, one email; the repeat does nothing
+CAUGHT  M13 TED-167 preview from the old per-family balance  (exit 1; node --test tests/card_surcharge_billing.test.js)
+      not ok 16 - TED-167: the preview starts from the ledger balance Billing shows, not the stale per-family figure
+CAUGHT  M14 TED-175 a voided sale still counts as a sale  (exit 1; node --test tests/snacks_void_sale.test.js tests/closeout_not_a_sale.test.js)
+      not ok 7 - TED-175: a voided sale is no longer a sale, and cannot be voided again
+CAUGHT  M15 TED-173 check script without the 281 discount row  (exit 1; scripts/run_pgtests.sh 281)
+      FAIL   281_a_failed_refund_takes_its_surcharge_share_back

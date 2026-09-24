@@ -73,8 +73,11 @@
                 { key: 'structure',   label: 'Camp Structure',     desc: 'Divisions, grades and bunks' },
                 { key: 'bunkbuilder', label: 'Bunk Builder',       desc: 'Placing campers into bunks' },
                 { key: 'enrollment',  label: 'Registration',       desc: 'Applications, enrolment status, forms' },
+                { key: 'hiring',      label: 'Hiring',             desc: 'Staff applications, hiring pipeline, and staff bio/pay fields shown on the roster', sensitive: true },
                 { key: 'billing',     label: 'Billing',            desc: 'Tuition, family balances, payments', sensitive: true },
                 { key: 'payroll',     label: 'Payroll',            desc: 'Staff pay, rates and Youth Corps', sensitive: true },
+                { key: 'broadcasts',  label: 'Broadcasts',         desc: 'Mass emails and payment reminders to parents', sensitive: true },
+                { key: 'leads',       label: 'Leads & Inquiries',  desc: 'Prospective-family CRM' },
                 { key: 'analytics',   label: 'Analytics',          desc: 'Enrollment funnel and camp-wide operational metrics', viewOnly: true },
                 { key: 'finance',     label: 'Finance',            desc: 'Revenue, expenses, payroll costs, budget', viewOnly: true, sensitive: true },
                 { key: 'reports',     label: 'Reports',            desc: 'Camper and roster reports', viewOnly: true },
@@ -133,7 +136,8 @@
                 { key: 'menu',         label: 'Menu Items',   desc: 'Canteen stock and pricing' },
                 { key: 'pos',          label: 'POS Terminal', desc: 'Ringing up canteen sales at the window' },
                 { key: 'shop',         label: 'Camp Shop',    desc: 'Swag catalogue, orders and fulfilment' },
-                { key: 'settings',     label: 'Settings',     desc: 'Canteen settings and payment methods', sensitive: true }
+                { key: 'settings',     label: 'Settings',     desc: 'Canteen settings and payment methods', sensitive: true },
+                { key: 'offline-pos',  label: 'Offline POS',  desc: 'Downloadable offline register data', sensitive: true }
             ]
         },
         {
@@ -143,8 +147,7 @@
                 { key: 'absences',         label: 'Absences',         desc: 'Absence log' },
                 { key: 'camper-locator',   label: 'Camper Locator',   desc: 'Find a camper, what\'s happening now, and the read-only day schedule', viewOnly: true },
                 { key: 'early-pickup',     label: 'Early Pickup',     desc: 'Early pickup requests' },
-                { key: 'messages',         label: 'Messages',         desc: 'Late-arrival messages from parents' },
-                { key: 'changes',          label: 'Changes',          desc: 'Early pickup, pickup change, and bus change requests from parents' },
+                { key: 'activity',         label: 'Activity',         desc: 'Late-arrival messages, pickup/bus change requests, and other parent activity' },
                 { key: 'camper-mail',      label: 'Camper Mail',      desc: 'Mail to campers' },
                 { key: 'reports',          label: 'Reports',          desc: 'Attendance reporting', viewOnly: true }
             ]
@@ -158,7 +161,8 @@
                 { key: 'forms',     label: 'Forms',     desc: 'Forms sent to parents' },
                 { key: 'lists',     label: 'Lists',     desc: 'Packing and camp lists' },
                 { key: 'photos',    label: 'Photos',    desc: 'Photo sharing' },
-                { key: 'tips',      label: 'Tips',      desc: 'Staff tips from parents', sensitive: true }
+                { key: 'tips',      label: 'Tips',      desc: 'Staff tips from parents', sensitive: true },
+                { key: 'settings',  label: 'Program Settings', desc: 'Which parent-facing Link programs are turned on', sensitive: true }
             ]
         },
         {
@@ -166,8 +170,8 @@
             sections: [{ key: 'notes', label: 'Notes', desc: 'Shared camp notes' }]
         },
         {
-            key: 'guard', label: 'Campistry Guard', hint: 'Safety',
-            sections: [{ key: 'guard', label: 'Guard', desc: 'Safety and incident tracking', sensitive: true }]
+            key: 'guard', label: 'Campistry Lifeguard', hint: 'Waterfront safety',
+            sections: [{ key: 'guard', label: 'Lifeguard', desc: 'Waterfront safety and incident tracking', sensitive: true }]
         }
     ];
 

@@ -196,9 +196,9 @@
 .ops-prod {
     background: var(--ops-card); border: 1px solid var(--ops-line);
     border-radius: var(--ops-r); padding: 14px; cursor: pointer;
-    transition: box-shadow 0.15s, border-color 0.15s;
+    transition: border-color 0.15s;
 }
-.ops-prod:hover { border-color: var(--ops-accent); box-shadow: 0 4px 14px rgba(0, 0, 0, 0.06); }
+.ops-prod:hover { border-color: var(--ops-accent); }
 .ops-prod-emoji { font-size: 2rem; line-height: 1; margin-bottom: 8px; }
 .ops-prod-name { font-size: 0.92rem; font-weight: 700; color: var(--ops-ink); }
 .ops-prod-meta { font-size: 0.75rem; color: var(--ops-faint); margin-top: 2px; }

@@ -29,7 +29,9 @@ a{color:inherit;text-decoration:none}button{font-family:inherit;cursor:pointer;b
    item's own min-width:0 + the quick-switch-bar's overflow-x:auto let it
    shrink and internally scroll — rather than overlap anything — the
    moment the header runs out of room. */
-.app-header{display:flex;align-items:center;height:56px;padding:0 16px;background:#fff;border-bottom:1px solid var(--s200);position:sticky;top:0;z-index:30}
+/* Continuous with the page: same background as the content area, no divider,
+   so the top of the page reads as one surface rather than a separate bar. */
+.app-header{display:flex;align-items:center;height:56px;padding:0 16px;background:var(--s50);border-bottom:none;position:sticky;top:0;z-index:30}
 .header-left{display:flex;align-items:center;gap:12px;flex:0 0 auto;justify-content:flex-start}
 .header-right{display:flex;align-items:center;gap:10px;min-width:0;flex:0 1 auto;justify-content:flex-end;overflow:hidden}
 .app-header-center{display:flex;justify-content:center;min-width:0;overflow:hidden;flex:1 1 auto}
@@ -159,6 +161,11 @@ body.sidebar-open .sidebar{transform:translateX(0)}
 .me-t tbody tr:hover td{background:var(--s50)}
 .me-t tbody tr.click{cursor:pointer}
 .me-t .bold{font-weight:600;color:var(--s800)}
+/* Cleaner edges: generous side gutters and no trailing divider under the last
+   row (matches the calm, roomy table feel across Billing/Payroll/Roster). */
+.me-t th:first-child,.me-t td:first-child{padding-left:16px}
+.me-t th:last-child,.me-t td:last-child{padding-right:16px}
+.me-t tbody tr:last-child td{border-bottom:none}
 
 /* ── BADGES ─────────────────────────── */
 .badge{display:inline-flex;align-items:center;padding:2px 8px;border-radius:999px;font-size:.7rem;font-weight:600}
@@ -451,3 +458,6 @@ select.me-input{cursor:pointer}
 .rb-advanced>summary::-webkit-details-marker{display:none}
 .rb-advanced>summary::before{content:'▸ ';color:var(--s400)}
 .rb-advanced[open]>summary::before{content:'▾ '}
+
+/* Auto-hide header styles now live in campistry-unified.css (body.hoverbar),
+   shared across every app. Me needs no page-specific header overrides. */

@@ -1,0 +1,567 @@
+TAP version 13
+# Subtest: a credit card is surcharged
+ok 1 - a credit card is surcharged
+  ---
+  duration_ms: 1.751648
+  type: 'test'
+  ...
+# Subtest: a debit card is never surcharged
+ok 2 - a debit card is never surcharged
+  ---
+  duration_ms: 0.216385
+  type: 'test'
+  ...
+# Subtest: an UNKNOWN funding type is not surcharged either
+ok 3 - an UNKNOWN funding type is not surcharged either
+  ---
+  duration_ms: 0.249116
+  type: 'test'
+  ...
+# Subtest: only "credit" is surchargeable, and it is the sole entry in the list
+ok 4 - only "credit" is surchargeable, and it is the sole entry in the list
+  ---
+  duration_ms: 1.666627
+  type: 'test'
+  ...
+# Subtest: the reason says WHICH problem, so a camp collecting nothing learns why
+ok 5 - the reason says WHICH problem, so a camp collecting nothing learns why
+  ---
+  duration_ms: 0.263979
+  type: 'test'
+  ...
+# Subtest: the surcharge is capped at 3% however large the setting
+ok 6 - the surcharge is capped at 3% however large the setting
+  ---
+  duration_ms: 0.160178
+  type: 'test'
+  ...
+# Subtest: and at the camp’s own cost of acceptance when that is lower
+ok 7 - and at the camp’s own cost of acceptance when that is lower
+  ---
+  duration_ms: 0.32894
+  type: 'test'
+  ...
+# Subtest: a cost of acceptance of zero means "not stated", not "charge nothing"
+ok 8 - a cost of acceptance of zero means "not stated", not "charge nothing"
+  ---
+  duration_ms: 0.134309
+  type: 'test'
+  ...
+# Subtest: the clamp is in normalize, so a policy edited in the cloud cannot exceed it
+ok 9 - the clamp is in normalize, so a policy edited in the cloud cannot exceed it
+  ---
+  duration_ms: 0.278965
+  type: 'test'
+  ...
+# Subtest: and again server-side, in the save RPC
+ok 10 - and again server-side, in the save RPC
+  ---
+  duration_ms: 0.563268
+  type: 'test'
+  ...
+# Subtest: a surcharge is refused in every state that bans it
+ok 11 - a surcharge is refused in every state that bans it
+  ---
+  duration_ms: 0.254349
+  type: 'test'
+  ...
+# Subtest: Louisiana’s ban starts on its own date, not before and not after
+ok 12 - Louisiana’s ban starts on its own date, not before and not after
+  ---
+  duration_ms: 0.117385
+  type: 'test'
+  ...
+# Subtest: not knowing the state is not permission
+ok 13 - not knowing the state is not permission
+  ---
+  duration_ms: 0.081052
+  type: 'test'
+  ...
+# Subtest: no surcharge until the processor has been told
+ok 14 - no surcharge until the processor has been told
+  ---
+  duration_ms: 0.063916
+  type: 'test'
+  ...
+# Subtest: a surcharge never touches a payment that is not a card
+ok 15 - a surcharge never touches a payment that is not a card
+  ---
+  duration_ms: 0.202222
+  type: 'test'
+  ...
+# Subtest: a convenience fee is flat and indifferent to card type
+ok 16 - a convenience fee is flat and indifferent to card type
+  ---
+  duration_ms: 0.149385
+  type: 'test'
+  ...
+# Subtest: it needs no state, no notice and no funding type
+ok 17 - it needs no state, no notice and no funding type
+  ---
+  duration_ms: 0.063373
+  type: 'test'
+  ...
+# Subtest: there is nowhere to put a percentage, because that would be a surcharge
+ok 18 - there is nowhere to put a percentage, because that would be a surcharge
+  ---
+  duration_ms: 0.14689
+  type: 'test'
+  ...
+# Subtest: cash and cheques are not charged an electronic-payment fee
+ok 19 - cash and cheques are not charged an electronic-payment fee
+  ---
+  duration_ms: 0.086762
+  type: 'test'
+  ...
+# Subtest: an online-only fee does not apply at the office door
+ok 20 - an online-only fee does not apply at the office door
+  ---
+  duration_ms: 0.081176
+  type: 'test'
+  ...
+# Subtest: the fee never exceeds the payment it is on
+ok 21 - the fee never exceeds the payment it is on
+  ---
+  duration_ms: 0.067008
+  type: 'test'
+  ...
+# Subtest: a cash discount charges nobody and discounts the non-card payer
+ok 22 - a cash discount charges nobody and discounts the non-card payer
+  ---
+  duration_ms: 0.21642
+  type: 'test'
+  ...
+# Subtest: the discount cannot exceed the payment
+ok 23 - the discount cannot exceed the payment
+  ---
+  duration_ms: 0.095485
+  type: 'test'
+  ...
+# Subtest: an unset policy charges nothing
+ok 24 - an unset policy charges nothing
+  ---
+  duration_ms: 0.086139
+  type: 'test'
+  ...
+# Subtest: nothing is charged on a zero payment
+ok 25 - nothing is charged on a zero payment
+  ---
+  duration_ms: 0.060865
+  type: 'test'
+  ...
+# Subtest: a surcharge is returned in proportion, which the brands require
+ok 26 - a surcharge is returned in proportion, which the brands require
+  ---
+  duration_ms: 0.138672
+  type: 'test'
+  ...
+# Subtest: a whole reversal returns the whole surcharge
+ok 27 - a whole reversal returns the whole surcharge
+  ---
+  duration_ms: 0.062667
+  type: 'test'
+  ...
+# Subtest: a convenience fee is not prorated, but a whole reversal returns it
+ok 28 - a convenience fee is not prorated, but a whole reversal returns it
+  ---
+  duration_ms: 0.070278
+  type: 'test'
+  ...
+# Subtest: nothing is returned when nothing was charged
+ok 29 - nothing is returned when nothing was charged
+  ---
+  duration_ms: 0.056762
+  type: 'test'
+  ...
+# Subtest: every live mode produces a sentence a parent can read
+ok 30 - every live mode produces a sentence a parent can read
+  ---
+  duration_ms: 0.279713
+  type: 'test'
+  ...
+# Subtest: a mode with nothing set discloses nothing
+ok 31 - a mode with nothing set discloses nothing
+  ---
+  duration_ms: 0.109685
+  type: 'test'
+  ...
+# Subtest: explain names every blocker an owner has to clear
+ok 32 - explain names every blocker an owner has to clear
+  ---
+  duration_ms: 0.473979
+  type: 'test'
+  ...
+# Subtest: explain warns that a processor which hides funding collects nothing
+ok 33 - explain warns that a processor which hides funding collects nothing
+  ---
+  duration_ms: 0.128184
+  type: 'test'
+  ...
+# Subtest: the convenience notes say a percentage is not permitted
+ok 34 - the convenience notes say a percentage is not permitted
+  ---
+  duration_ms: 0.116618
+  type: 'test'
+  ...
+# Subtest: stripe-webhook records the funding type at both card-saving sites
+ok 35 - stripe-webhook records the funding type at both card-saving sites
+  ---
+  duration_ms: 0.594188
+  type: 'test'
+  ...
+# Subtest: the capture table and RPC carry it, and never widen a known value
+ok 36 - the capture table and RPC carry it, and never widen a known value
+  ---
+  duration_ms: 0.147955
+  type: 'test'
+  ...
+# Subtest: 189's own guards survive the RPC rewrite
+ok 37 - 189's own guards survive the RPC rewrite
+  ---
+  duration_ms: 0.077776
+  type: 'test'
+  ...
+# Subtest: only the camp owner may read or write the policy
+ok 38 - only the camp owner may read or write the policy
+  ---
+  duration_ms: 0.292614
+  type: 'test'
+  ...
+# Subtest: the save is a one-path jsonb_set, not a read-modify-write
+ok 39 - the save is a one-path jsonb_set, not a read-modify-write
+  ---
+  duration_ms: 0.130789
+  type: 'test'
+  ...
+# Subtest: a bad mode is refused rather than stored
+ok 40 - a bad mode is refused rather than stored
+  ---
+  duration_ms: 0.084637
+  type: 'test'
+  ...
+# Subtest: the camp address is a hint, not a parsed state code
+ok 41 - the camp address is a hint, not a parsed state code
+  ---
+  duration_ms: 0.07129
+  type: 'test'
+  ...
+# Subtest: the public form is told the rule, and 164’s other fields all survive
+ok 42 - the public form is told the rule, and 164’s other fields all survive
+  ---
+  duration_ms: 0.155226
+  type: 'test'
+  ...
+# Subtest: the settings card offers all four modes and reads them back
+ok 43 - the settings card offers all four modes and reads them back
+  ---
+  duration_ms: 4.736202
+  type: 'test'
+  ...
+# Subtest: the card is on the page, beside the cancellation policy
+ok 44 - the card is on the page, beside the cancellation policy
+  ---
+  duration_ms: 0.88358
+  type: 'test'
+  ...
+# Subtest: the badge distinguishes "on" from "configured but not live"
+ok 45 - the badge distinguishes "on" from "configured but not live"
+  ---
+  duration_ms: 0.822951
+  type: 'test'
+  ...
+# Subtest: the save goes through the clamping RPC, not only into the blob
+ok 46 - the save goes through the clamping RPC, not only into the blob
+  ---
+  duration_ms: 0.486977
+  type: 'test'
+  ...
+# Subtest: the register form discloses the fee BEFORE the method is chosen
+ok 47 - the register form discloses the fee BEFORE the method is chosen
+  ---
+  duration_ms: 0.178451
+  type: 'test'
+  ...
+# Subtest: the form says nothing when the policy would charge nothing
+ok 48 - the form says nothing when the policy would charge nothing
+  ---
+  duration_ms: 0.132239
+  type: 'test'
+  ...
+# Subtest: the year-end tax statement excludes card fees from care
+ok 49 - the year-end tax statement excludes card fees from care
+  ---
+  duration_ms: 2.116685
+  type: 'test'
+  ...
+# Subtest: the migration parses as SQL
+ok 50 - the migration parses as SQL
+  ---
+  duration_ms: 55.533766
+  type: 'test'
+  ...
+# Subtest: the fee is computed by the RULE, never recalculated at the call site
+ok 51 - the fee is computed by the RULE, never recalculated at the call site
+  ---
+  duration_ms: 0.402555
+  type: 'test'
+  ...
+# Subtest: three things refuse the charge outright
+ok 52 - three things refuse the charge outright
+  ---
+  duration_ms: 0.164769
+  type: 'test'
+  ...
+# Subtest: the disclosure IS the charge description
+ok 53 - the disclosure IS the charge description
+  ---
+  duration_ms: 0.118765
+  type: 'test'
+  ...
+# Subtest: a zero fee is not posted as a charge
+ok 54 - a zero fee is not posted as a charge
+  ---
+  duration_ms: 0.104563
+  type: 'test'
+  ...
+# Subtest: the charge records what it was a fee ON, and increases the balance
+not ok 55 - the charge records what it was a fee ON, and increases the balance
+  ---
+  duration_ms: 2.6635
+  type: 'test'
+  location: '/tmp/claude-0/-home-user-daily-camp-schedular/39278441-0cf3-5f6a-bf8e-a51bef67e95d/scratchpad/old114/tests/card_fees.test.js:455:1'
+  failureType: 'testCodeFailure'
+  error: |-
+    The input did not match the regular expression /cardFee:\{mode:q\.mode,base:Math\.round\(base\*100\)\/100,reason:q\.reason,funding:_familyCardFunding\(f\),\s*token:\(_familyCardOnFile\(f\)\|\|\{\}\)\.token\|\|null\}/. Input:
+    
+    'function addCardSurcharge(famKey){\n' +
+      "    if(!_secEdit('billing','Adding a card surcharge'))return;\n" +
+      '    var F=_cfAPI();\n' +
+      "    if(!F){toast('The card-fee module did not load','error');return}\n" +
+      '    var f=families[famKey];\n' +
+      "    if(!f){toast('Family not found','error');return}\n" +
+      '\n' +
+      '    var pol=F.normalize(enrollSettings.cardFeePolicy);\n' +
+      "    if(pol.mode==='off'){\n" +
+      "        showModal('Card fees are switched off',\n" +
+      `            '<p style="margin:0 0 10px;font-size:.86rem">Nothing is set up to charge. '\n` +
+      "            +'Open <strong>Card Fees</strong> in settings and choose how you pass card '\n" +
+      "            +'costs on \\u2014 surcharge, convenience fee, or a cash discount.</p>'\n" +
+      `            +'<p style="margin:0;font-size:.8rem;color:var(--s500)">Each has different '\n` +
+      "            +'rules, which is why this will not guess one for you.</p>');\n" +
+      '        return;\n' +
+      '    }\n' +
+      '    var x=F.explain(pol);\n' +
+      '    if(x&&x.blockers&&x.blockers.length){\n' +
+      "        showModal('Not chargeable yet',\n" +
+      `            '<p style="margin:0 0 8px;font-size:.86rem">This has to be sorted out first:</p>'\n` +
+      `            +'<ul style="margin:0;padding-left:18px;font-size:.83rem;line-height:1.7">'\n` +
+      "            +x.blockers.map(function(b){return '<li>'+esc(b)+'</li>'}).join('')+'</ul>');\n" +
+      '        return;\n' +
+      '    }\n' +
+      '\n' +
+      '    // Default to what they owe: the surcharge is normally on the amount about to be\n' +
+      '    // paid by card, and the outstanding balance is the best guess at that.\n' +
+      '    var owed=Math.max(0,Number(f.balance)||0);\n' +
+      `    var h='<div class="me-modal-form">';\n` +
+      `    h+='<div class="me-field"><label>Amount being paid by card ($)</label>'\n` +
+      `      +'<input type="number" id="csBase" class="me-input" step="0.01" min="0" value="'\n` +
+      `      +(owed>0?owed.toFixed(2):'')+'" placeholder="0.00" '\n` +
+      `      +'oninput="CampistryMe._surchargePreview()"></div>';\n` +
+      `    h+='<div id="csPreview" data-family="'+esc(String(famKey))+'" style="margin-top:4px"></div>';\n` +
+      `    h+='<p style="font-size:.78rem;color:var(--s500);margin:10px 0 0;line-height:1.6">Card on file: '\n` +
+      "      +esc(_familyCardLabel(f))+'. If the family ends up paying another way, remove this fee from their bill.</p>';\n" +
+      `    h+='<p style="font-size:.78rem;color:var(--s400);margin:12px 0 0;line-height:1.6">'\n` +
+      "      +esc(F.disclosure(pol,{fmt:fm}))+'</p>';\n" +
+      "    h+='</div>';\n" +
+      '\n' +
+      "    showModal('Add card surcharge',h,function(){\n" +
+      "        var base=parseFloat((document.getElementById('csBase')||{}).value)||0;\n" +
+      "        if(!(base>0)){toast('Enter the amount being paid by card','error');return}\n" +
+      "        // The family's OWN card decides it (TED-140): a surcharge on a debit or\n" +
+      '        // prepaid card is what the brands forbid, and a card whose type is not\n' +
+      '        // on file is treated the same — never assumed to be credit.\n' +
+      "        var q=F.quote(pol,{amount:base,method:'card',funding:_familyCardFunding(f),channel:'online'});\n" +
+      '        if(!q||!q.permitted){\n' +
+      "            toast((q&&q.label)||'That fee is not permitted \\u2014 see Card Fees','error');return;\n" +
+      '        }\n' +
+      "        if(!(q.fee>0)){toast('That works out to no fee','error');return}\n" +
+      '        if(!f.charges)f.charges=[];\n' +
+      "        f.charges.push({id:'sur_'+Date.now(),category:'Card Fee',\n" +
+      '            // The disclosure IS the description. A line reading only "Card fee" is\n' +
+      '            // the version that gets a camp in trouble with the brands.\n' +
+      "            description:F.disclosure(pol,{fmt:fm})||'Card fee',\n" +
+      '            amount:Math.round(q.fee*100)/100,date:today(),timestamp:Date.now(),\n' +
+      '            cardFee:{mode:q.mode,base:Math.round(base*100)/100,reason:q.reason,funding:_familyCardFunding(f)}});\n' +
+      '        _postLedgerCharge(f,f.charges[f.charges.length-1]);\n' +
+      '        f.balance=(f.balance||0)+Math.round(q.fee*100)/100;\n' +
+      "        save();closeModal('dynModal');\n" +
+      "        if(curPage==='familydetail')renderFamilyDetailPage();else renderBilling();\n" +
+      "        toast('Card fee of '+fm(q.fee)+' added to '+(f.name||'the account'));\n" +
+      "    },'Add fee');\n" +
+      '    _surchargePreview();\n' +
+      '}\n' +
+      '\n' +
+      '/**\n' +
+      " * What kind of card the family pays with — 'credit', 'debit', 'prepaid', or\n" +
+      " * 'unknown' — from the card Stripe classified when it was saved (stripe-webhook\n" +
+      ' * stores `funding` on savedPaymentMethods). The default card first; otherwise\n' +
+      ' * the only card on file; otherwise unknown, which is never surcharged (TED-140).\n' +
+      ' */\n' +
+      'function _familyCardOnFile(f){\n' +
+      "    var pms=(f&&Array.isArray(f.savedPaymentMethods))?f.savedPaymentMethods.filter(function(m){return m&&m.type!=='us_bank_account'}):[];\n" +
+      '    var def=f&&f.stripePaymentMethodId;\n' +
+      '    return (def&&pms.find(function(m){return m.token===def}))||(pms.length===1?pms[0]:null);\n' +
+      '}\n' +
+      'function _familyCardFunding(f){\n' +
+      '    var m=_familyCardOnFile(f);\n' +
+      "    var fu=m&&String(m.funding||'').toLowerCase();\n" +
+      "    return fu||'unknown';\n" +
+      '}\n' +
+      'function _familyCardLabel(f){\n' +
+      '    var m=_familyCardOnFile(f);\n' +
+      "    if(!m)return 'none on file whose type we know';\n" +
+      '    var fu=_familyCardFunding(f);\n' +
+      "    return (m.label||'card')+' ('+(fu==='unknown'?'type not known':fu)+')';\n" +
+      '}\n' +
+      '\n' +
+      '/** Live figure under the amount, so the office sees the fee before agreeing. */\n' +
+      'function _surchargePreview(){\n' +
+      "    var box=document.getElementById('csPreview');\n" +
+      '    if(!box)return;\n' +
+      '    var F=_cfAPI(); if(!F)return;\n' +
+      "    var base=parseFloat((document.getElementById('csBase')||{}).value)||0;\n" +
+      '    if(!(base>0)){box.innerHT'
+    
+  code: 'ERR_ASSERTION'
+  name: 'AssertionError'
+  expected:
+  actual: |-
+    function addCardSurcharge(famKey){
+        if(!_secEdit('billing','Adding a card surcharge'))return;
+        var F=_cfAPI();
+        if(!F){toast('The card-fee module did not load','error');return}
+        var f=families[famKey];
+        if(!f){toast('Family not found','error');return}
+    
+        var pol=F.normalize(enrollSettings.cardFeePolicy);
+        if(pol.mode==='off'){
+            showModal('Card fees are switched off',
+                '<p style="margin:0 0 10px;font-size:.86rem">Nothing is set up to charge. '
+                +'Open <strong>Card Fees</strong> in settings and choose how you pass card '
+                +'costs on \u2014 surcharge, convenience fee, or a cash discount.</p>'
+                +'<p style="margin:0;font-size:.8rem;color:var(--s500)">Each has different '
+                +'rules, which is why this will not guess one for you.</p>');
+            return;
+        }
+        var x=F.explain(pol);
+        if(x&&x.blockers&&x.blockers.length){
+            showModal('Not chargeable yet',
+                '<p style="margin:0 0 8px;font-size:.86rem">This has to be sorted out first:</p>'
+                +'<ul style="margin:0;padding-left:18px;font-size:.83rem;line-height:1.7">'
+                +x.blockers.map(function(b){return '<li>'+esc(b)+'</li>'}).join('')+'</ul>');
+            return;
+        }
+    
+        // Default to what they owe: the surcharge is normally on the amount about to be
+        // paid by card, and the outstanding balance is the best guess at that.
+        var owed=Math.max(0,Number(f.balance)||0);
+        var h='<div class="me-modal-form">';
+        h+='<div class="me-field"><label>Amount being paid by card ($)</label>'
+          +'<input type="number" id="csBase" class="me-input" step="0.01" min="0" value="'
+          +(owed>0?owed.toFixed(2):'')+'" placeholder="0.00" '
+          +'oninput="CampistryMe._surchargePreview()"></div>';
+        h+='<div id="csPreview" data-family="'+esc(String(famKey))+'" style="margin-top:4px"></div>';
+        h+='<p style="font-size:.78rem;color:var(--s500);margin:10px 0 0;line-height:1.6">Card on file: '
+          +esc(_familyCardLabel(f))+'. If the family ends up paying another way, remove this fee from their bill.</p>';
+        h+='<p style="font-size:.78rem;color:var(--s400);margin:12px 0 0;line-height:1.6">'
+          +esc(F.disclosure(pol,{fmt:fm}))+'</p>';
+        h+='</div>';
+    
+        showModal('Add card surcharge',h,function(){
+            var base=parseFloat((document.getElementById('csBase')||{}).value)||0;
+            if(!(base>0)){toast('Enter the amount being paid by card','error');return}
+            // The family's OWN card decides it (TED-140): a surcharge on a debit or
+            // prepaid card is what the brands forbid, and a card whose type is not
+            // on file is treated the same — never assumed to be credit.
+            var q=F.quote(pol,{amount:base,method:'card',funding:_familyCardFunding(f),channel:'online'});
+            if(!q||!q.permitted){
+                toast((q&&q.label)||'That fee is not permitted \u2014 see Card Fees','error');return;
+            }
+            if(!(q.fee>0)){toast('That works out to no fee','error');return}
+            if(!f.charges)f.charges=[];
+            f.charges.push({id:'sur_'+Date.now(),category:'Card Fee',
+                // The disclosure IS the description. A line reading only "Card fee" is
+                // the version that gets a camp in trouble with the brands.
+                description:F.disclosure(pol,{fmt:fm})||'Card fee',
+                amount:Math.round(q.fee*100)/100,date:today(),timestamp:Date.now(),
+                cardFee:{mode:q.mode,base:Math.round(base*100)/100,reason:q.reason,funding:_familyCardFunding(f)}});
+            _postLedgerCharge(f,f.charges[f.charges.length-1]);
+            f.balance=(f.balance||0)+Math.round(q.fee*100)/100;
+            save();closeModal('dynModal');
+            if(curPage==='familydetail')renderFamilyDetailPage();else renderBilling();
+            toast('Card fee of '+fm(q.fee)+' added to '+(f.name||'the account'));
+        },'Add fee');
+        _surchargePreview();
+    }
+    
+    /**
+     * What kind of card the family pays with — 'credit', 'debit', 'prepaid', or
+     * 'unknown' — from the card Stripe classified when it was saved (stripe-webhook
+     * stores `funding` on savedPaymentMethods). The default card first; otherwise
+     * the only card on file; otherwise unknown, which is never surcharged (TED-140).
+     */
+    function _familyCardOnFile(f){
+        var pms=(f&&Array.isArray(f.savedPaymentMethods))?f.savedPaymentMethods.filter(function(m){return m&&m.type!=='us_bank_account'}):[];
+        var def=f&&f.stripePaymentMethodId;
+        return (def&&pms.find(function(m){return m.token===def}))||(pms.length===1?pms[0]:null);
+    }
+    function _familyCardFunding(f){
+        var m=_familyCardOnFile(f);
+        var fu=m&&String(m.funding||'').toLowerCase();
+        return fu||'unknown';
+    }
+    function _familyCardLabel(f){
+        var m=_familyCardOnFile(f);
+        if(!m)return 'none on file whose type we know';
+        var fu=_familyCardFunding(f);
+        return (m.label||'card')+' ('+(fu==='unknown'?'type not known':fu)+')';
+    }
+    
+    /** Live figure under the amount, so the office sees the fee before agreeing. */
+    function _surchargePreview(){
+        var box=document.getElementById('csPreview');
+        if(!box)return;
+        var F=_cfAPI(); if(!F)return;
+        var base=parseFloat((document.getElementById('csBase')||{}).value)||0;
+        if(!(base>0)){box.innerHT
+  operator: 'match'
+  stack: |-
+    TestContext.<anonymous> (/tmp/claude-0/-home-user-daily-camp-schedular/39278441-0cf3-5f6a-bf8e-a51bef67e95d/scratchpad/old114/tests/card_fees.test.js:461:12)
+    Test.runInAsyncScope (node:async_hooks:214:14)
+    Test.run (node:internal/test_runner/test:1047:25)
+    Test.processPendingSubtests (node:internal/test_runner/test:744:18)
+    Test.postRun (node:internal/test_runner/test:1173:19)
+    Test.run (node:internal/test_runner/test:1101:12)
+    async Test.processPendingSubtests (node:internal/test_runner/test:744:7)
+  ...
+# Subtest: surcharging is gated and reachable
+ok 56 - surcharging is gated and reachable
+  ---
+  duration_ms: 1.467536
+  type: 'test'
+  ...
+# Subtest: the office sees the fee before agreeing to it
+ok 57 - the office sees the fee before agreeing to it
+  ---
+  duration_ms: 0.246558
+  type: 'test'
+  ...
+1..57
+# tests 57
+# suites 0
+# pass 56
+# fail 1
+# cancelled 0
+# skipped 0
+# todo 0
+# duration_ms 214.650997

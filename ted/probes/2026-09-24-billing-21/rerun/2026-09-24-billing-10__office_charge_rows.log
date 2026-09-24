@@ -1,0 +1,5 @@
+page saves first, webhook after:
+  result: payment rows [pay_1790000000000 $500] (total collected per the rows: $500) | ledger payments [le_pay_pi_A $500] | balance owed 500.00
+webhook first, page saves after:
+  result: payment rows [pay_1790000000000 $500, pi_pi_B $500] (total collected per the rows: $1000) | ledger payments [le_pay_pi_B $500] | balance owed 500.00
+get_camp_payments as the owner (what Billing lists): pi_pi_B 500, pay_1790000000000 500

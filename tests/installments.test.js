@@ -243,8 +243,23 @@ test('the page delegates to this rule instead of keeping its own maths', () => {
     // an assertion that the rule merely exists says nothing about who uses it.
     const ME = require('node:fs').readFileSync(
         path.join(__dirname, '..', 'campistry_me.js'), 'utf8');
-    const fn = ME.slice(ME.indexOf('function _buildInstallmentSchedule(sesObj,tuition)'));
-    const body = fn.slice(0, 900);
+    // Bounded by the function's own braces, comments blanked. It was the first
+    // 900 characters, and a ten-line comment at the top pushed the delegation
+    // out of the window — the code was right and the test said it was not.
+    const src = ME.replace(/\/\*[\s\S]*?\*\//g, m => ' '.repeat(m.length))
+                  .replace(/\/\/[^\n]*/g, m => ' '.repeat(m.length));
+    const at = src.indexOf('function _buildInstallmentSchedule(sesObj,tuition)');
+    assert.ok(at >= 0, 'campistry_me.js no longer defines _buildInstallmentSchedule');
+    let depth = 0, end = src.length;
+    for (let k = src.indexOf('{', at); k < src.length; k++) {
+        if (src[k] === '{') depth++;
+        else if (src[k] === '}' && --depth === 0) { end = k + 1; break; }
+    }
+    const body = src.slice(at, end);
+    // "FIRST" means before the page's own arithmetic, so the rule's call has to
+    // come ahead of the fallback's first split.
+    assert.ok(body.indexOf('R.build(') >= 0 && body.indexOf('R.build(') < body.indexOf('Math.floor'),
+        'the rule is not asked before the page does its own split');
     assert.match(body, /window\.CampistryInstallments/);
     assert.match(body, /if\(R\)return R\.build\(\{session:sesObj,tuition:tuition\}\);/,
         'the rule must be asked FIRST, before the fallback runs');

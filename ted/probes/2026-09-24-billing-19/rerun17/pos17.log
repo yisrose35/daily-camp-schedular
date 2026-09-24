@@ -1,0 +1,44 @@
+the register's client is the one wrapped: true; start: Shaya $40, Avi $40, Leah $1; stock Ices 50 left/0 sold, Chips 50 left/0 sold
+
+P0. Control: one tap
+    sent ["submit_canteen_purchase_once key=sale_mufm0roo_femfh8rx"]; Shaya debits 1, $37.50; register says ["✓ $2.50 charged to Shaya Brickman"]
+  ok  P0 one tap → one $2.50 debit, through submit_canteen_purchase_once with a key   → debits 1
+
+P1. The answer takes 1.2 s; the counselor taps Charge again after 0.3 s
+    0.3 s after the first tap the button reads "[disabled] Charging…"; requests ["submit_canteen_purchase_once key=sale_mufm0syy_oad4m6xj"]; new debits 1; register says ["✓ $2.50 charged to Shaya Brickman"]
+  ok  P1 one request, one debit, the button locked while charging, and the toast names the child   → 1 debits, 1 requests
+
+P2. The server charged; the answer is lost
+    register says ["Could not confirm the charge to Shaya Brickman — it may have gone through. Check their transactions; pressing Charge again for the same items will not charge twice."]; button "Charge $2.50 → Shaya"; cart "Ices$2.50 ea−1+$2.50"; debits so far +1
+    tap again → requests ["submit_canteen_purchase_once key=sale_mufm0v9d_qvdnqsyh","submit_canteen_purchase_once key=sale_mufm0v9d_qvdnqsyh"]; register says ["Already charged — the earlier $2.50 charge to Shaya Brickman went through; not charged again"]; new debits 1; Shaya $32.50
+  ok  P2 the register says it could not confirm (never "Charge failed") and keeps the sale   → ["Could not confirm the charge to Shaya Brickman — it may have gone through. Check their transactions; pressing Charge again for the same items will not charge twice."]
+  ok  P2b the retry sends the same key and the child is charged once   → ["submit_canteen_purchase_once key=sale_mufm0v9d_qvdnqsyh","submit_canteen_purchase_once key=sale_mufm0v9d_qvdnqsyh"]
+
+P3. The request never reached the server (wifi down before it went)
+    first: ["Could not confirm the charge to Shaya Brickman — it may have gone through. Check their transactions; pressing Charge again for the same items will not charge twice."]; retry → ["✓ $2.50 charged to Shaya Brickman"]; requests ["submit_canteen_purchase_once key=sale_mufm0xr5_oc9lt9s4","submit_canteen_purchase_once key=sale_mufm0xr5_oc9lt9s4"]; new debits 1
+  ok  P3 charged exactly once after the retry   → 1 debits
+
+P4. Answer lost again; the counselor checks, sees it went through, clears the cart (no re-press). Ten minutes later Shaya buys another Ices — the very next sale on this register
+    after the lost answer: +1 debit on the server; cart after "clear": "Tap items to start"
+    the second Ices: requests ["submit_canteen_purchase_once key=sale_mufm1006_bw7u6ycz","submit_canteen_purchase_once key=sale_mufm11ah_dxkh2t48"]; register says ["✓ $2.50 charged to Shaya Brickman"]; new debits 1; Shaya $27.5 → $25.00
+  ok  P4 a genuinely new sale of the same item is charged   → the register said "charged" but the server replayed the first sale: 1 new debit(s), requests ["submit_canteen_purchase_once key=sale_mufm1006_bw7u6ycz","submit_canteen_purchase_once key=sale_mufm11ah_dxkh2t48"]
+
+P5. A slow charge for Shaya (2 s); while it is on its way the counselor starts Avi's sale (select Avi, add Chips)
+    during: ok; cart "Ices$2.50 ea−1+$2.50Chips$1.50 ea−1+$1.50"; button "[disabled] Charging…"
+    after Shaya's answer: register says ["✓ $2.50 charged to Shaya Brickman"]; cart "Ices$2.50 ea−1+$2.50Chips$1.50 ea−1+$1.50"; button "Charge $4.00 → Avi"
+    Shaya +1 debit, Avi +0; stock before Ices 45 left/5 sold, Chips 50 left/0 sold; after Ices 44 left/6 sold, Chips 50 left/0 sold
+  ok  P5 the stock counts follow what was sold (Ices −1, Chips unchanged)   → before Ices 45 left/5 sold, Chips 50 left/0 sold; after Ices 44 left/6 sold, Chips 50 left/0 sold
+  ok  P5b Avi's half-rung sale is still on the screen   → cart "Ices$2.50 ea−1+$2.50Chips$1.50 ea−1+$1.50"
+
+P6. Leah has $1: Ices $2.50 → blocked
+    register says ["Insufficient balance ($1.00 spendable)"]; Leah +0 debits, $1
+  ok  P6 refused before sending (the page's own pre-check) or by the server; nothing charged   → ["Insufficient balance ($1.00 spendable)"]
+
+P7. Migration 283 not applied yet (submit_canteen_purchase_once dropped)
+    requests ["submit_canteen_purchase_once key=sale_mufm17a7_gim1lptp","submit_canteen_purchase"]; register says ["✓ $2.50 charged to Avi Katz"]; Avi +1
+  ok  P7 without 283 the register still charges once (old function)   → ["submit_canteen_purchase_once key=sale_mufm17a7_gim1lptp","submit_canteen_purchase"]
+
+    Shaya's ledger: credit 40 ; debit 2.5 Ices; debit 2.5 Ices; debit 2.5 Ices; debit 2.5 Ices; debit 2.5 Ices; debit 2.5 Ices; debit 2.5 Ices
+page errors: []
+
+0 BAD

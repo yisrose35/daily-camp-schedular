@@ -1,0 +1,15 @@
+start: Pine owes $1000; ledger charge 100; payment 100; charge 1000
+
+K1. A records a $300 cheque; then B (stale) records a $200 cheque
+    after A: owes $700; payments 1 rows, $300
+    after B: owes $500; ledger charge 100; payment 100; charge 1000; payment 200; payment 300; payments 2 rows, $500
+  ok  K1 both cheques on Pine's bill (owes $500)   → $500
+
+K2. at the same instant: A adds a $50 trip charge, B records a $100 cash payment
+    owes $450; ledger charge 100; payment 100; charge 1000; payment 300; charge 50; payment 200; payment 100; payments 3 rows, $600
+  ok  K2 the charge and the payment both on the bill (owes $450)   → $450
+    a fresh computer C shows Pine's Balance $450
+  ok  K2 a fresh computer shows $450   → $450
+page errors: []
+
+0 BAD

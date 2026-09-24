@@ -1,0 +1,93 @@
+TAP version 13
+# Subtest: TED-159: two taps while the charge is on its way — one request, one charge
+not ok 1 - TED-159: two taps while the charge is on its way — one request, one charge
+  ---
+  duration_ms: 4.572185
+  type: 'test'
+  location: '/tmp/claude-0/-home-user-daily-camp-schedular/39278441-0cf3-5f6a-bf8e-a51bef67e95d/scratchpad/old_aa72c69/tests/pos_charge_once.test.js:80:1'
+  failureType: 'testCodeFailure'
+  error: |-
+    the button stayed live while charging
+    
+    false !== true
+    
+  code: 'ERR_ASSERTION'
+  name: 'AssertionError'
+  expected: true
+  actual: false
+  operator: 'strictEqual'
+  stack: |-
+    TestContext.<anonymous> (/tmp/claude-0/-home-user-daily-camp-schedular/39278441-0cf3-5f6a-bf8e-a51bef67e95d/scratchpad/old_aa72c69/tests/pos_charge_once.test.js:83:12)
+    Test.runInAsyncScope (node:async_hooks:214:14)
+    Test.run (node:internal/test_runner/test:1047:25)
+    Test.start (node:internal/test_runner/test:944:17)
+    startSubtestAfterBootstrap (node:internal/test_runner/harness:296:17)
+  ...
+# Subtest: TED-159: the answer is lost after the server charged — "could not confirm", and a second tap charges nothing more
+not ok 2 - TED-159: the answer is lost after the server charged — "could not confirm", and a second tap charges nothing more
+  ---
+  duration_ms: 41.044333
+  type: 'test'
+  location: '/tmp/claude-0/-home-user-daily-camp-schedular/39278441-0cf3-5f6a-bf8e-a51bef67e95d/scratchpad/old_aa72c69/tests/pos_charge_once.test.js:91:1'
+  failureType: 'testCodeFailure'
+  error: 'told "failed": [["Charge failed (TypeError: Failed to fetch)",true]]'
+  code: 'ERR_ASSERTION'
+  name: 'AssertionError'
+  expected: true
+  actual: false
+  operator: '=='
+  stack: |-
+    TestContext.<anonymous> (/tmp/claude-0/-home-user-daily-camp-schedular/39278441-0cf3-5f6a-bf8e-a51bef67e95d/scratchpad/old_aa72c69/tests/pos_charge_once.test.js:96:12)
+    async Test.run (node:internal/test_runner/test:1054:7)
+    async Test.processPendingSubtests (node:internal/test_runner/test:744:7)
+  ...
+# Subtest: TED-159: after a sale is answered, the next sale is a new one (a new key) and is charged
+ok 3 - TED-159: after a sale is answered, the next sale is a new one (a new key) and is charged
+  ---
+  duration_ms: 80.628965
+  type: 'test'
+  ...
+# Subtest: TED-159: a refusal is final for that sale — nothing charged, the next tap is a new try
+ok 4 - TED-159: a refusal is final for that sale — nothing charged, the next tap is a new try
+  ---
+  duration_ms: 41.277067
+  type: 'test'
+  ...
+# Subtest: TED-159: before migration 283 is pasted the register still charges (once per tap, as before)
+not ok 5 - TED-159: before migration 283 is pasted the register still charges (once per tap, as before)
+  ---
+  duration_ms: 43.050805
+  type: 'test'
+  location: '/tmp/claude-0/-home-user-daily-camp-schedular/39278441-0cf3-5f6a-bf8e-a51bef67e95d/scratchpad/old_aa72c69/tests/pos_charge_once.test.js:120:1'
+  failureType: 'testCodeFailure'
+  error: |-
+    Expected values to be strictly deep-equal:
+    + actual - expected
+    
+      [
+    -   'submit_canteen_purchase_once',
+        'submit_canteen_purchase'
+      ]
+    
+  code: 'ERR_ASSERTION'
+  name: 'AssertionError'
+  expected:
+    0: 'submit_canteen_purchase_once'
+    1: 'submit_canteen_purchase'
+  actual:
+    0: 'submit_canteen_purchase'
+  operator: 'deepStrictEqual'
+  stack: |-
+    TestContext.<anonymous> (/tmp/claude-0/-home-user-daily-camp-schedular/39278441-0cf3-5f6a-bf8e-a51bef67e95d/scratchpad/old_aa72c69/tests/pos_charge_once.test.js:124:12)
+    async Test.run (node:internal/test_runner/test:1054:7)
+    async Test.processPendingSubtests (node:internal/test_runner/test:744:7)
+  ...
+1..5
+# tests 5
+# suites 0
+# pass 2
+# fail 3
+# cancelled 0
+# skipped 0
+# todo 0
+# duration_ms 295.808879

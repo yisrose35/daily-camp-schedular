@@ -1,0 +1,154 @@
+TAP version 13
+# Subtest: TED-156: paused by the camp — the note, and a "Switch it back on" button that saves the settings shown
+ok 1 - TED-156: paused by the camp — the note, and a "Switch it back on" button that saves the settings shown
+  ---
+  duration_ms: 3.785656
+  type: 'test'
+  ...
+# Subtest: TED-156: on — no "Switch it back on"; off by the parent — no camp note
+ok 2 - TED-156: on — no "Switch it back on"; off by the parent — no camp note
+  ---
+  duration_ms: 3.588713
+  type: 'test'
+  ...
+# Subtest: TED-143: Link tells the parent it only charges while camp is in session
+ok 3 - TED-143: Link tells the parent it only charges while camp is in session
+  ---
+  duration_ms: 0.475665
+  type: 'test'
+  ...
+# Subtest: TED-161: turned off by the parent — "Switch it back on" is there when it was set up before
+ok 4 - TED-161: turned off by the parent — "Switch it back on" is there when it was set up before
+  ---
+  duration_ms: 1.659255
+  type: 'test'
+  ...
+# Subtest: TED-161: editing the amount while auto-reload is OFF saves it without switching it on
+not ok 5 - TED-161: editing the amount while auto-reload is OFF saves it without switching it on
+  ---
+  duration_ms: 1.512686
+  type: 'test'
+  location: '/tmp/claude-0/-home-user-daily-camp-schedular/39278441-0cf3-5f6a-bf8e-a51bef67e95d/scratchpad/old18/tests/link_autoreload_paused.test.js:81:1'
+  failureType: 'testCodeFailure'
+  error: '_arKey is missing'
+  code: 'ERR_ASSERTION'
+  name: 'AssertionError'
+  expected: true
+  actual: false
+  operator: '=='
+  stack: |-
+    cut (/tmp/claude-0/-home-user-daily-camp-schedular/39278441-0cf3-5f6a-bf8e-a51bef67e95d/scratchpad/old18/tests/link_autoreload_paused.test.js:19:12)
+    autoSave (/tmp/claude-0/-home-user-daily-camp-schedular/39278441-0cf3-5f6a-bf8e-a51bef67e95d/scratchpad/old18/tests/link_autoreload_paused.test.js:74:67)
+    TestContext.<anonymous> (/tmp/claude-0/-home-user-daily-camp-schedular/39278441-0cf3-5f6a-bf8e-a51bef67e95d/scratchpad/old18/tests/link_autoreload_paused.test.js:82:18)
+    Test.runInAsyncScope (node:async_hooks:214:14)
+    Test.run (node:internal/test_runner/test:1047:25)
+    Test.processPendingSubtests (node:internal/test_runner/test:744:18)
+    Test.postRun (node:internal/test_runner/test:1173:19)
+    Test.run (node:internal/test_runner/test:1101:12)
+    async Test.processPendingSubtests (node:internal/test_runner/test:744:7)
+  ...
+# Subtest: TED-161: ticking a trigger is still how a parent switches it on; edits while on keep it on
+not ok 6 - TED-161: ticking a trigger is still how a parent switches it on; edits while on keep it on
+  ---
+  duration_ms: 1.004542
+  type: 'test'
+  location: '/tmp/claude-0/-home-user-daily-camp-schedular/39278441-0cf3-5f6a-bf8e-a51bef67e95d/scratchpad/old18/tests/link_autoreload_paused.test.js:88:1'
+  failureType: 'testCodeFailure'
+  error: '_arKey is missing'
+  code: 'ERR_ASSERTION'
+  name: 'AssertionError'
+  expected: true
+  actual: false
+  operator: '=='
+  stack: |-
+    cut (/tmp/claude-0/-home-user-daily-camp-schedular/39278441-0cf3-5f6a-bf8e-a51bef67e95d/scratchpad/old18/tests/link_autoreload_paused.test.js:19:12)
+    autoSave (/tmp/claude-0/-home-user-daily-camp-schedular/39278441-0cf3-5f6a-bf8e-a51bef67e95d/scratchpad/old18/tests/link_autoreload_paused.test.js:74:67)
+    TestContext.<anonymous> (/tmp/claude-0/-home-user-daily-camp-schedular/39278441-0cf3-5f6a-bf8e-a51bef67e95d/scratchpad/old18/tests/link_autoreload_paused.test.js:89:24)
+    Test.runInAsyncScope (node:async_hooks:214:14)
+    Test.run (node:internal/test_runner/test:1047:25)
+    Test.processPendingSubtests (node:internal/test_runner/test:744:18)
+    Test.postRun (node:internal/test_runner/test:1173:19)
+    Test.run (node:internal/test_runner/test:1101:12)
+    async Test.processPendingSubtests (node:internal/test_runner/test:744:7)
+  ...
+# Subtest: TED-172: tick, then an amount edit inside the half-second wait — saved ON
+not ok 7 - TED-172: tick, then an amount edit inside the half-second wait — saved ON
+  ---
+  duration_ms: 1.205831
+  type: 'test'
+  location: '/tmp/claude-0/-home-user-daily-camp-schedular/39278441-0cf3-5f6a-bf8e-a51bef67e95d/scratchpad/old18/tests/link_autoreload_paused.test.js:118:1'
+  failureType: 'testCodeFailure'
+  error: '_arKey is missing'
+  code: 'ERR_ASSERTION'
+  name: 'AssertionError'
+  expected: true
+  actual: false
+  operator: '=='
+  stack: |-
+    cut (/tmp/claude-0/-home-user-daily-camp-schedular/39278441-0cf3-5f6a-bf8e-a51bef67e95d/scratchpad/old18/tests/link_autoreload_paused.test.js:19:12)
+    link (/tmp/claude-0/-home-user-daily-camp-schedular/39278441-0cf3-5f6a-bf8e-a51bef67e95d/scratchpad/old18/tests/link_autoreload_paused.test.js:109:91)
+    TestContext.<anonymous> (/tmp/claude-0/-home-user-daily-camp-schedular/39278441-0cf3-5f6a-bf8e-a51bef67e95d/scratchpad/old18/tests/link_autoreload_paused.test.js:119:15)
+    Test.runInAsyncScope (node:async_hooks:214:14)
+    Test.run (node:internal/test_runner/test:1047:25)
+    Test.processPendingSubtests (node:internal/test_runner/test:744:18)
+    Test.postRun (node:internal/test_runner/test:1173:19)
+    Test.run (node:internal/test_runner/test:1101:12)
+    async Test.processPendingSubtests (node:internal/test_runner/test:744:7)
+  ...
+# Subtest: TED-172: tick, then an amount edit while the first save is still on its way — saved ON
+not ok 8 - TED-172: tick, then an amount edit while the first save is still on its way — saved ON
+  ---
+  duration_ms: 1.139142
+  type: 'test'
+  location: '/tmp/claude-0/-home-user-daily-camp-schedular/39278441-0cf3-5f6a-bf8e-a51bef67e95d/scratchpad/old18/tests/link_autoreload_paused.test.js:126:1'
+  failureType: 'testCodeFailure'
+  error: '_arKey is missing'
+  code: 'ERR_ASSERTION'
+  name: 'AssertionError'
+  expected: true
+  actual: false
+  operator: '=='
+  stack: |-
+    cut (/tmp/claude-0/-home-user-daily-camp-schedular/39278441-0cf3-5f6a-bf8e-a51bef67e95d/scratchpad/old18/tests/link_autoreload_paused.test.js:19:12)
+    link (/tmp/claude-0/-home-user-daily-camp-schedular/39278441-0cf3-5f6a-bf8e-a51bef67e95d/scratchpad/old18/tests/link_autoreload_paused.test.js:109:91)
+    TestContext.<anonymous> (/tmp/claude-0/-home-user-daily-camp-schedular/39278441-0cf3-5f6a-bf8e-a51bef67e95d/scratchpad/old18/tests/link_autoreload_paused.test.js:127:15)
+    Test.runInAsyncScope (node:async_hooks:214:14)
+    Test.run (node:internal/test_runner/test:1047:25)
+    Test.processPendingSubtests (node:internal/test_runner/test:744:18)
+    Test.postRun (node:internal/test_runner/test:1173:19)
+    Test.run (node:internal/test_runner/test:1101:12)
+    async Test.processPendingSubtests (node:internal/test_runner/test:744:7)
+  ...
+# Subtest: TED-172: unticking again, or the parent's own Turn off, cancels a waiting switch-on
+not ok 9 - TED-172: unticking again, or the parent's own Turn off, cancels a waiting switch-on
+  ---
+  duration_ms: 1.460016
+  type: 'test'
+  location: '/tmp/claude-0/-home-user-daily-camp-schedular/39278441-0cf3-5f6a-bf8e-a51bef67e95d/scratchpad/old18/tests/link_autoreload_paused.test.js:136:1'
+  failureType: 'testCodeFailure'
+  error: '_arKey is missing'
+  code: 'ERR_ASSERTION'
+  name: 'AssertionError'
+  expected: true
+  actual: false
+  operator: '=='
+  stack: |-
+    cut (/tmp/claude-0/-home-user-daily-camp-schedular/39278441-0cf3-5f6a-bf8e-a51bef67e95d/scratchpad/old18/tests/link_autoreload_paused.test.js:19:12)
+    link (/tmp/claude-0/-home-user-daily-camp-schedular/39278441-0cf3-5f6a-bf8e-a51bef67e95d/scratchpad/old18/tests/link_autoreload_paused.test.js:109:91)
+    TestContext.<anonymous> (/tmp/claude-0/-home-user-daily-camp-schedular/39278441-0cf3-5f6a-bf8e-a51bef67e95d/scratchpad/old18/tests/link_autoreload_paused.test.js:137:15)
+    Test.runInAsyncScope (node:async_hooks:214:14)
+    Test.run (node:internal/test_runner/test:1047:25)
+    Test.processPendingSubtests (node:internal/test_runner/test:744:18)
+    Test.postRun (node:internal/test_runner/test:1173:19)
+    Test.run (node:internal/test_runner/test:1101:12)
+    async Test.processPendingSubtests (node:internal/test_runner/test:744:7)
+  ...
+1..9
+# tests 9
+# suites 0
+# pass 4
+# fail 5
+# cancelled 0
+# skipped 0
+# todo 0
+# duration_ms 104.902579

@@ -39,6 +39,9 @@ const STRIPE_SECRET = Deno.env.get("STRIPE_SECRET_KEY");
 const STRIPE_API = "https://api.stripe.com/v1";
 const SUPABASE_URL = Deno.env.get("SUPABASE_URL") || "";
 const SUPABASE_ANON_KEY = Deno.env.get("SUPABASE_ANON_KEY") || "";
+// Only to read this parent's own link_photo_purchases rows by camper number
+// (get_my_photo_purchases returns names only).
+const SUPABASE_SERVICE_KEY = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY") || "";
 
 // Server-side fixed prices — the client can never influence either amount.
 const FACIAL_RECOGNITION_FEE_CENTS = 895; // $8.95, one-time per camper for the season
@@ -62,6 +65,19 @@ async function stripePost(endpoint: string, body: Record<string, string>) {
   return resp.json();
 }
 
+
+/** A camper id sent by the page (campistry_camper_id_rpc.js adds it), or null. */
+function camperIdIn(v: unknown): number | null {
+  return v != null && /^\d+$/.test(String(v)) && Number(v) > 0 ? Number(v) : null;
+}
+
+/** A camper's name as a person reads it: without the roster's internal
+ *  " #<number>" that tells two campers with one name apart. For what a parent
+ *  sees; never for identifying the camper. */
+function displayName(s: unknown): string {
+  return String(s ?? "").replace(/\s#\d+(?:-\d+)?$/, "");
+}
+
 serve(async (req) => {
   if (req.method === "OPTIONS") return new Response("ok", { headers: corsHeaders });
 
@@ -71,12 +87,17 @@ serve(async (req) => {
     const jwt = (req.headers.get("Authorization") || "").replace(/^Bearer\s+/i, "");
     if (!jwt) return json({ error: "unauthorized" }, 401);
 
-    const { campId, kind, camperNames, photoId } = await req.json();
+    const { campId, kind, camperNames, camperIds, photoId } = await req.json();
+    // One entry per camper: the number (camperIds, position for position with
+    // camperNames — the portal adds them) decides who the camper is; the name
+    // is for display, and the fallback for a slot with no number.
+    type Camper = { camperId: number | null; name: string };
+    const campers: Camper[] = (Array.isArray(camperNames) ? camperNames as unknown[] : []).map((n, i) => ({ camperId: Array.isArray(camperIds) ? camperIdIn(camperIds[i]) : null, name: String(n ?? "") }));
     if (!campId || (kind !== "facial_recognition" && kind !== "hd_photo")) {
       return json({ error: "campId and a valid kind are required" }, 400);
     }
-    if (kind === "facial_recognition" && (!Array.isArray(camperNames) || !camperNames.length)) {
-      return json({ error: "camperNames is required" }, 400);
+    if (kind === "facial_recognition" && !campers.length) {
+      return json({ error: "camperNames (with camperIds) is required" }, 400);
     }
     if (kind === "hd_photo" && !photoId) return json({ error: "photoId is required" }, 400);
 
@@ -102,9 +123,9 @@ serve(async (req) => {
     // camper that isn't really this parent's fails the whole request
     // rather than silently dropping just that name.
     if (kind === "facial_recognition") {
-      for (const name of camperNames as string[]) {
-        const { data: owns } = await asUser.rpc("verify_my_camper", { p_camp_id: campId, p_camper_name: name });
-        if (!owns) return json({ error: `"${name}" isn't linked to your account for this camp.` }, 403);
+      for (const c of campers) {
+        const { data: owns } = await asUser.rpc("verify_my_camper", { p_camp_id: campId, p_camper_name: c.name, p_camper_id: c.camperId });
+        if (!owns) return json({ error: `"${displayName(c.name)}" isn't linked to your account for this camp.` }, 403);
       }
     } else {
       const { data: viewable } = await asUser.rpc("get_viewable_photo_ids", { p_photo_ids: [photoId] });
@@ -117,11 +138,36 @@ serve(async (req) => {
     // In normal use the client only ever offers un-purchased names as
     // checkboxes, so this is a defensive backstop, not the primary path.
     const { data: existing } = await asUser.rpc("get_my_photo_purchases", { p_camp_id: campId });
-    let names: string[] = kind === "facial_recognition" ? [...(camperNames as string[])] : [];
+    let toBuy: Camper[] = kind === "facial_recognition" ? [...campers] : [];
     if (kind === "facial_recognition") {
-      const already = new Set<string>((existing?.success && existing.facialRecognition) || []);
-      names = names.filter((n) => !already.has(n));
-      if (!names.length) return json({ alreadyPurchased: true });
+      // get_my_photo_purchases lists purchases by NAME only, so a camper with
+      // a number is checked against the purchase rows' person_id instead
+      // (read with the service role, only this parent's own rows). A row with
+      // a number matches by its number alone; the name is compared only for
+      // a camper or a row that has no number.
+      const boughtIds = new Set<number>();
+      const boughtUnnumbered = new Set<string>();
+      let rowsRead = false;
+      if (SUPABASE_SERVICE_KEY) {
+        const service = createClient(SUPABASE_URL, SUPABASE_SERVICE_KEY);
+        const { data: rows, error: rowsErr } = await service.from("link_photo_purchases")
+          .select("camper_name, person_id")
+          .eq("camp_id", campId).eq("parent_user_id", parentUserId).eq("kind", "facial_recognition");
+        if (!rowsErr && Array.isArray(rows)) {
+          rowsRead = true;
+          for (const r of rows as Array<{ camper_name: string | null; person_id: number | string | null }>) {
+            const rid = camperIdIn(r.person_id);
+            if (rid != null) boughtIds.add(rid);
+            else if (r.person_id == null && r.camper_name) boughtUnnumbered.add(String(r.camper_name));   // a row with no number: by its name
+          }
+        }
+      }
+      const boughtByName = new Set<string>((existing?.success && existing.facialRecognition) || []);
+      toBuy = toBuy.filter((c) => {
+        if (!rowsRead) return !boughtByName.has(c.name);   // rows unreadable: by name, as before
+        return c.camperId != null ? !boughtIds.has(c.camperId) : !(boughtUnnumbered.has(c.name) || boughtByName.has(c.name));   // no number: by name, as before
+      });
+      if (!toBuy.length) return json({ alreadyPurchased: true });
     } else if (existing?.success && (existing.hdPhotoIds || []).includes(photoId)) {
       return json({ alreadyPurchased: true });
     }
@@ -134,7 +180,8 @@ serve(async (req) => {
       campId: String(campId),
       parentUserId: String(parentUserId),
       kind: String(kind),
-      camperNames: kind === "facial_recognition" ? JSON.stringify(names) : "",
+      // Position for position: the webhook records each purchase by its number.
+      camperIds: kind === "facial_recognition" ? JSON.stringify(toBuy.map((c) => c.camperId)) : "", camperNames: kind === "facial_recognition" ? JSON.stringify(toBuy.map((c) => c.name)) : "",
       photoId: String(photoId || ""),
       source: "campistry-link-photo-purchase",
     };
@@ -147,14 +194,14 @@ serve(async (req) => {
     let totalCents: number;
     let description: string;
     if (kind === "facial_recognition") {
-      names.forEach((name, i) => {
+      toBuy.forEach((c, i) => {
         params[`line_items[${i}][quantity]`] = "1";
         params[`line_items[${i}][price_data][currency]`] = "usd";
         params[`line_items[${i}][price_data][unit_amount]`] = String(FACIAL_RECOGNITION_FEE_CENTS);
-        params[`line_items[${i}][price_data][product_data][name]`] = `Automatic photo matching — ${name}`;
+        params[`line_items[${i}][price_data][product_data][name]`] = `Automatic photo matching — ${displayName(c.name)}`;
       });
-      totalCents = FACIAL_RECOGNITION_FEE_CENTS * names.length;
-      description = `Automatic photo matching for ${names.join(", ")}`;
+      totalCents = FACIAL_RECOGNITION_FEE_CENTS * toBuy.length;
+      description = `Automatic photo matching for ${toBuy.map((c) => displayName(c.name)).join(", ")}`;
     } else {
       params["line_items[0][quantity]"] = "1";
       params["line_items[0][price_data][currency]"] = "usd";

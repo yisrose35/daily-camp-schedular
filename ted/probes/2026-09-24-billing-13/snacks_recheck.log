@@ -1,0 +1,39 @@
+postgres up with 126 migrations applied
+SETUP: Avi Katz and Avi Stern added on Me; $40 cash for Avi Katz at the Snacks desk
+  camper numbers: Avi Katz #1, Avi Stern #2
+
+R1. Avi Katz's parent topped up $30 by card on 2026-08-15 (40 days ago). Wallet $70.
+    Refund window: "Available to refund via Stripe: $30.00$40.00 of this balance came from a cash/manual deposit (or a different processor) — refund that portion separate" | amount "30.00" | button off: false
+  ok  R1a the window offers the 40-day-old $30
+    after pressing Refund: toast ["Refunded $30.00 to Avi Katz"], Stripe [re_1 $30 pi_OLD1 succeeded], wallet $40
+  ok  R1b the parent gets the $30 back once, wallet $40 (the cash) left
+
+R2. Avi Stern topped up $25 on 2026-08-20; Avi Katz topped up $15 twenty days ago. Refund All:
+    window: "This will refund 2 campers, totaling approximately $40.00 through Stripe — sent back to whatever each parent originally " | button "Refund All ($40.00)"
+  ok  R2a Refund All offers both children, $40.00
+    result: "Refunded $40.00 across 2 campers." → Stripe [re_1 $30 pi_OLD1 succeeded, re_2 $15 pi_OLD3 succeeded, re_3 $25 pi_OLD2 succeeded]; wallets Katz $40, Stern $0
+  ok  R2b each child refunded from their own top-up: Stern $25 (pi_OLD2), Katz $15 (pi_OLD3); wallets $40 / $0
+
+R3. Avi Katz tops up $20 today (pi_NEW4). The office refunds $20; Stripe makes it but the answer is lost; the office cancels the question
+    wallet $40, holds [posted $30.00, posted $15.00, posted $25.00, open $20.00], Stripe [re_1 $30 pi_OLD1 succeeded, re_2 $15 pi_OLD3 succeeded, re_3 $25 pi_OLD2 succeeded, re_4 $20 pi_NEW4 succeeded]
+    Refund All window: "No campers currently have a Stripe-paid balance to refund." | waiting "A refund is waiting for an answer from the card companyIts money is held off the wallet until it is settled — " | button "Look up the waiting refunds in Stripe"
+    result: "Refunded $0.00 across 0 campers. 1 skipped (no online balance to refund). 1 waiting refund ($20.00) had gone through and is now recorded." → holds [posted $30.00, posted $15.00, posted $25.00, posted $20.00], Stripe [re_1 $30 pi_OLD1 succeeded, re_2 $15 pi_OLD3 succeeded, re_3 $25 pi_OLD2 succeeded, re_4 $20 pi_NEW4 succeeded], wallet $40
+  ok  R3 the result says the waiting $20 had gone through and is recorded; nothing sent twice
+
+R4. Avi Katz tops up $20 (pi_NEW5). The office refunds $20; the request never reaches Stripe; the office cancels the question
+    wallet $40, holds [posted $30.00, posted $15.00, posted $25.00, posted $20.00, open $20.00], Stripe [re_1 $30 pi_OLD1 succeeded, re_2 $15 pi_OLD3 succeeded, re_3 $25 pi_OLD2 succeeded, re_4 $20 pi_NEW4 succeeded]
+    Refund All window: "No campers currently have a Stripe-paid balance to refund." | waiting "A refund is waiting for an answer from the card companyIts money is held off the wallet until it is settled — " | button "Look up the waiting refunds in Stripe"
+    result: "Refunded $20.00 across 1 camper. 1 waiting refund ($20.00) had not gone through — the money is back on the wallet and was refunded again above." → holds [posted $30.00, posted $15.00, posted $25.00, posted $20.00, released $20.00, posted $20.00], Stripe [re_1 $30 pi_OLD1 succeeded, re_2 $15 pi_OLD3 succeeded, re_3 $25 pi_OLD2 succeeded, re_4 $20 pi_NEW4 succeeded, re_5 $20 pi_NEW5 succeeded], wallet $40
+  ok  R4 the result says the waiting $20 had not gone through, and it really was refunded (pi_NEW5 $20 back once, wallet $40)
+
+R5. A camp MANAGER (manager@smoke.test, role manager) signs in to Snacks
+    role on the page: "manager" | Refund window: "Only the camp owner or an admin can refund canteen money to a card." | button off: true
+  ok  R5a the Refund window says only the owner or an admin can refund to a card
+    Refund All window: "Only the camp owner or an admin can refund canteen money to a card." | button null
+  ok  R5b Refund All says the same, with no "no card processor connected… Take Out Cash"
+
+edge calls: owner:stripe-canteen-refund(holds)→200, owner:stripe-canteen-refund→200, owner:stripe-canteen-refund(holds)→200, owner:stripe-canteen-refund-all→200, owner:stripe-canteen-refund(holds)→200, owner:stripe-canteen-refund(holds)→200, owner:stripe-canteen-refund→200, owner:stripe-canteen-refund(holds)→200, owner:stripe-canteen-refund-all→200, owner:stripe-canteen-refund(holds)→200, owner:stripe-canteen-refund(holds)→200, owner:stripe-canteen-refund→200, owner:stripe-canteen-refund(holds)→200, owner:stripe-canteen-refund-all→200, owner:stripe-canteen-refund(holds)→200
+page errors: []
+
+0 BAD
+exit 0

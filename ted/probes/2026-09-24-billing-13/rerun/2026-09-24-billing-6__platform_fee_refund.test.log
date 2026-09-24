@@ -1,0 +1,17 @@
+TAP version 13
+# \# camp office refunds Campistry's own SMS fee: HTTP 403 {"error":"That payment does not belong to your camp."} | refunds sent to Stripe: 0
+# Subtest: probe
+ok 1 - probe
+  ---
+  duration_ms: 181.732773
+  type: 'test'
+  ...
+1..1
+# tests 1
+# suites 0
+# pass 1
+# fail 0
+# cancelled 0
+# skipped 0
+# todo 0
+# duration_ms 259.586562

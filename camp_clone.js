@@ -213,21 +213,45 @@
         if (!campId || copies.indexOf(campId) < 0) {
             throw new Error('Not one of your debug copies.');
         }
-        // Join the copy so RLS (camp_id = get_user_camp_id) allows deleting its
-        // data rows.
-        await DB().setActiveCamp(campId);
-        await sb().from('rotation_counts').delete().eq('camp_id', campId);
-        await sb().from('daily_schedules').delete().eq('camp_id', campId);
-        await sb().from('camp_state_kv').delete().eq('camp_id', campId);
+        // The data is NOT cleared from here any more. This function used to
+        // delete three tables by name — rotation_counts, daily_schedules,
+        // camp_state_kv — out of the 67 that carry a camp_id, and it read none
+        // of the three results, so an RLS refusal deleted nothing and said
+        // nothing before the next line deleted the camp anyway. That is how
+        // this project ended up with 42 camps that no longer exist still
+        // holding 2,194 camper records and $95 of balances.
+        //
+        // Migration 222 put a BEFORE DELETE trigger on camps that clears every
+        // camp-scoped table, discovered from the catalog rather than listed, and
+        // refuses the deletion outright if anything will not clear. So deleting
+        // the camp row is now the whole operation, and a list here could only
+        // go stale again.
+        //
         // Drop my membership for the copy before unregistering it (the leave
-        // helper keys off debug_copies, so order matters).
+        // helper keys off debug_copies, so order matters). The trigger clears
+        // camp_users and debug_copies too; doing it here first keeps the
+        // membership from being the thing that points at a camp mid-delete.
         try { await sb().from('camp_users').delete().eq('user_id', userId).eq('camp_id', campId); } catch (_) {}
+
         var del = await sb().from('camps').delete().eq('id', campId);
+        if (del.error) {
+            throw new Error('Camp not deleted, and its data is untouched: ' + del.error.message);
+        }
         await sb().from('debug_copies').delete().eq('copy_camp_id', campId);
         // Back to my real camp.
         await DB().clearActiveCamp();
-        if (del.error) {
-            throw new Error('Data cleared, but camp row could not be deleted: ' + del.error.message);
+
+        // And then check, instead of announcing it. verify_camp_deleted runs as
+        // owner precisely because counting from here would not prove anything:
+        // once we have left the copy, RLS hides its rows, so a client-side count
+        // of 0 is what a total failure also looks like.
+        var chk = await sb().rpc('verify_camp_deleted', { p_camp_id: campId });
+        if (chk.error) {
+            throw new Error('Camp deleted, but the cleanup could not be verified: ' + chk.error.message);
+        }
+        if (chk.data && chk.data.fully_deleted !== true) {
+            throw new Error('Camp deleted but data was left behind: '
+                + JSON.stringify(chk.data.left_by_table || {}));
         }
     }
 

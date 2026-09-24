@@ -1,0 +1,16 @@
+
+P1. canteen top-up $20 for child #7 (a number that is no longer anyone)
+    first answer HTTP 500 {"error":"canteen deposit pi_p1 not credited: unknown_camper"}
+    4 deliveries answered [500,500,500,500]; receipts 0; platform emails 0; camp notices 0
+  BAD P1 someone is told a payment came in that can never be recorded   → Stripe gets 500/500/500/500 for 3 days and then gives up; no email, no notice — the parent paid, nothing is recorded, nobody knows
+
+P2. registration deposit $250 for an application deleted after the parent paid
+    first answer HTTP 500 {"error":"registration deposit pi_p2 not recorded: application_not_found"}
+    4 deliveries answered [500,500,500,500]; receipts 0; platform emails 0; camp notices 0
+  BAD P2 someone is told a payment came in that can never be recorded   → Stripe gets 500/500/500/500 for 3 days and then gives up; no email, no notice — the parent paid, nothing is recorded, nobody knows
+
+P3. control: an ordinary $20 top-up for Avi (#1), delivered twice
+    answers 200/200; receipts 1+1; Avi's wallet $20.00
+  ok  P3 credited once, both answered 200   → wallet $20.00
+
+2 BAD

@@ -1,0 +1,17 @@
+fresh chain:
+262  autopay waits for a bank debit => ok
+263  a cancelled charge leaves the ledger => ok
+264  a plan charges the amounts the office set => ok
+after re-running 262, 263, 264 twice each:
+262  autopay waits for a bank debit => ok
+263  a cancelled charge leaves the ledger => ok
+264  a plan charges the amounts the office set => ok
+times settle_shop_order calls _sync_charge_to_ledger: 1
+after putting back 239 settle_shop_order, 172 plan_due, and dropping hold_autopay_charge:
+262  autopay waits for a bank debit => apply 262 — a family paying by bank account on autopay can be debited again every night until the first debit clears
+263  a cancelled charge leaves the ledger => apply 263 — a Camp Shop order billed to a family and then cancelled keeps billing them
+264  a plan charges the amounts the office set => apply 264 — autopay ignores the amounts typed into a payment plan and splits the whole balance evenly
+after applying 262-264 again:
+262  autopay waits for a bank debit => ok
+263  a cancelled charge leaves the ledger => ok
+264  a plan charges the amounts the office set => ok

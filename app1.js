@@ -386,30 +386,32 @@
         style.id = "setup-shared-styles";
         style.textContent = `
             /* ===== Global Setup / Detail Pane Shell (Modern Pro Camp) ===== */
+            /* Flat: the pane is not its own box — it sits inside the Times panel. */
             .detail-pane {
-                border-radius: 18px;
-                border: 1px solid #E5E7EB;
-                padding: 18px 20px;
-                background: linear-gradient(135deg, #F7F9FA 0%, #FFFFFF 55%, #F7F9FA 100%);
+                border-radius: 0;
+                border: none;
+                padding: 0;
+                background: transparent;
                 min-height: 360px;
-                box-shadow: 0 18px 40px rgba(15, 23, 42, 0.06);
+                box-shadow: none;
             }
-            
+
+            /* Flat grade rows — a hairline border, no shadow, no hover lift. */
             .division-card {
-                border-radius: 18px;
+                border-radius: 12px;
                 border: 1px solid #E5E7EB;
                 background: #FFFFFF;
                 padding: 10px 16px;
                 margin: 4px 0;
-                box-shadow: 0 8px 18px rgba(15, 23, 42, 0.06);
+                box-shadow: none;
                 cursor: pointer;
-                transition: all 0.16s ease;
+                transition: background-color 0.16s ease, border-color 0.16s ease;
             }
-            
+
             .division-card:hover {
-                box-shadow: 0 12px 26px rgba(15, 23, 42, 0.12);
-                transform: translateY(-1px);
+                box-shadow: none;
                 background-color: #F9FAFB;
+                border-color: #D1D5DB;
             }
             
             /* ★ v5.2 FIX: Use outline instead of box-shadow spread 
@@ -508,12 +510,14 @@
                 gap: 14px;
             }
             
+            /* Flat sub-section: soft inset, no shadow, so it doesn't read as a
+               third stacked card. */
             .division-mini-card {
-                background: #FFFFFF;
-                border: 1px solid #E5E7EB;
+                background: #F8FAFC;
+                border: 1px solid #EEF2F6;
                 border-radius: 12px;
                 padding: 12px 14px;
-                box-shadow: 0 2px 8px rgba(15, 23, 42, 0.04);
+                box-shadow: none;
             }
             
             .division-mini-header {
@@ -610,7 +614,7 @@
             .builder-mode-wrapper {
                 display: flex;
                 justify-content: center;
-                margin: 10px 0 24px 0;
+                margin: 0 0 18px 0;
             }
             .builder-mode-slider {
                 display: flex;

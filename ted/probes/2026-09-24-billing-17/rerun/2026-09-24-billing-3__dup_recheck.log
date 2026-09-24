@@ -1,0 +1,6 @@
+convert: {"detail": [{"name": "Gold", "famKey": "gold", "balance": 625.00, "entries": 3}], "dryRun": false, "success": true, "families": 1}
+after convert: entries le_conv_gold_1:charge:1000, le_conv_gold_2:charge:25, le_conv_gold_3:payment:400
+ledger balance after convert: 625.00
+Me page backfill posted: [ 0, 0 ] -> le_conv_gold_1 $1000, le_conv_gold_2 $25
+BillingCore balance now: 625
+SQL family_ledger_balance of the backfilled family: 625.00

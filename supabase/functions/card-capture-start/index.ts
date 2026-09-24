@@ -256,7 +256,7 @@ serve(async (req) => {
         p_kind: "registration_card_capture",
         p_family_key: null,
         p_family_name: null,
-        p_camper_name: null,
+        p_camper_id: null, p_camper_name: null,   // a registration card check is for no camper yet
         p_amount_cents: 0,
         p_description: "Card check — registration",
       });

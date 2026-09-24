@@ -1,0 +1,6 @@
+old 270 + old 271 in place, new 273 applied:
+270  money notices for Billing only => apply 270 — every staff member sees unmatched card payments, declines and chargebacks with amounts and cards
+271  parents see what the server records => apply 271 BEFORE redeploying registration-deposit-checkout — parents see stale balances in Link and cannot pay a deposit right after applying
+272  an old tab keeps the shop's charges => ok
+273  a refund is released only when it is old => ok
+is autopay_setup Billing-only? false

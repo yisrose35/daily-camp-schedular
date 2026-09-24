@@ -1,0 +1,40 @@
+TAP version 13
+# Subtest: no edge function reads the campistrySnacks document
+ok 1 - no edge function reads the campistrySnacks document
+  ---
+  duration_ms: 2.737802
+  type: 'test'
+  ...
+# Subtest: the nightly auto-reload walks the account rows
+ok 2 - the nightly auto-reload walks the account rows
+  ---
+  duration_ms: 0.32522
+  type: 'test'
+  ...
+# Subtest: every campHasCamper asks the rows
+ok 3 - every campHasCamper asks the rows
+  ---
+  duration_ms: 1.380592
+  type: 'test'
+  ...
+# Subtest: the season close-out reads canteen balances from the rows, by camper id
+ok 4 - the season close-out reads canteen balances from the rows, by camper id
+  ---
+  duration_ms: 15.32403
+  type: 'test'
+  ...
+# Subtest: saving the snacks document does not reset the balances on screen
+ok 5 - saving the snacks document does not reset the balances on screen
+  ---
+  duration_ms: 2.253952
+  type: 'test'
+  ...
+1..5
+# tests 5
+# suites 0
+# pass 5
+# fail 0
+# cancelled 0
+# skipped 0
+# todo 0
+# duration_ms 131.557909

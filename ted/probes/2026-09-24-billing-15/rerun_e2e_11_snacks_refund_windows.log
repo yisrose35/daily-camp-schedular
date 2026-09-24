@@ -1,0 +1,47 @@
+postgres up with 128 migrations applied
+camp processor set to cardknox
+setup: camper "Avi Katz" has a $40 wallet; campers in Snacks = 1
+
+REFUND ALL button pressed:
+  page errors from the click: []
+  Refund All window open: true | class = "modal-overlay open"
+  window text: "No campers currently have a Sola-paid balance to refund."
+  "waiting for an answer" list shown: true | edge calls made: [["payments-canteen-refund","{\"action\":\"holds\"}"]]
+  typeof _stripeRefundCapacity in the page: undefined
+
+REFUND (one child) row button onclick: "openMFor('refund','refundCamper','Avi Katz')"
+  Refund window open: true | camper picked: "Avi Katz"
+  page errors: []
+  refund box: "Available to refund via Sola: $0.00$40.00 of this balance came from a cash/manual deposit (or a different processor) — refund that portion separately, it can't go through Sola."
+  "waiting for an answer" list shown: true | buttons: ["It went through","Nothing went through"]
+  list text: "A refund is waiting for an answer from the card companyIts money is held off the wallet until it is settled — it may already be with the parent.Avi Katz: $20.00, sent 10 min ago — check your processor's dashboard:It went through Nothing went through"
+  edge calls: [["payments-canteen-refund","{\"action\":\"holds\"}"]]
+PROBE ERROR: page.click: Timeout 30000ms exceeded.
+Call log:
+[2m  - waiting for locator('button[onclick="openM(\'cash\')"]')[22m
+[2m    - locator resolved to <button onclick="openM('cash')" class="btn btn-secondary btn-sm">Take Out Cash</button>[22m
+[2m  - attempting click action[22m
+[2m    2 × waiting for element to be visible, enabled and stable[22m
+[2m      - element is visible, enabled and stable[22m
+[2m      - scrolling into view if needed[22m
+[2m      - done scrolling[22m
+[2m      - <div id="m-refundall" class="modal-overlay open">…</div> intercepts pointer events[22m
+[2m    - retrying click action[22m
+[2m    - waiting 20ms[22m
+[2m    2 × waiting for element to be visible, enabled and stable[22m
+[2m      - element is visible, enabled and stable[22m
+[2m      - scrolling into view if needed[22m
+[2m      - done scrolling[22m
+[2m      - <div id="m-refundall" class="modal-overlay open">…</div> intercepts pointer events[22m
+[2m    - retrying click action[22m
+[2m      - waiting 100ms[22m
+[2m    58 × waiting for element to be visible, enabled and stable[22m
+[2m       - element is visible, enabled and stable[22m
+[2m       - scrolling into view if needed[22m
+[2m       - done scrolling[22m
+[2m       - <div id="m-refundall" class="modal-overlay open">…</div> intercepts pointer events[22m
+[2m     - retrying click action[22m
+[2m       - waiting 500ms[22m
+
+
+all page errors: []

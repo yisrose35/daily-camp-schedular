@@ -1,0 +1,903 @@
+TAP version 13
+# Subtest: TED-175: "Void" is offered on register sales only, and only to someone who can edit accounts
+not ok 1 - TED-175: "Void" is offered on register sales only, and only to someone who can edit accounts
+  ---
+  duration_ms: 2.196802
+  type: 'test'
+  location: '/tmp/claude-0/-home-user-daily-camp-schedular/39278441-0cf3-5f6a-bf8e-a51bef67e95d/scratchpad/old18/tests/snacks_void_sale.test.js:77:1'
+  failureType: 'testCodeFailure'
+  error: '_voidedSigs is missing'
+  code: 'ERR_ASSERTION'
+  name: 'AssertionError'
+  expected: true
+  actual: false
+  operator: '=='
+  stack: |-
+    cut (/tmp/claude-0/-home-user-daily-camp-schedular/39278441-0cf3-5f6a-bf8e-a51bef67e95d/scratchpad/old18/tests/snacks_void_sale.test.js:22:12)
+    Array.map (<anonymous>)
+    page (/tmp/claude-0/-home-user-daily-camp-schedular/39278441-0cf3-5f6a-bf8e-a51bef67e95d/scratchpad/old18/tests/snacks_void_sale.test.js:56:109)
+    TestContext.<anonymous> (/tmp/claude-0/-home-user-daily-camp-schedular/39278441-0cf3-5f6a-bf8e-a51bef67e95d/scratchpad/old18/tests/snacks_void_sale.test.js:78:15)
+    Test.runInAsyncScope (node:async_hooks:214:14)
+    Test.run (node:internal/test_runner/test:1047:25)
+    Test.start (node:internal/test_runner/test:944:17)
+    startSubtestAfterBootstrap (node:internal/test_runner/harness:296:17)
+  ...
+# Subtest: TED-175: the office voids the sale — which sale, which items back in stock; one request for a double click
+not ok 2 - TED-175: the office voids the sale — which sale, which items back in stock; one request for a double click
+  ---
+  duration_ms: 1.987205
+  type: 'test'
+  location: '/tmp/claude-0/-home-user-daily-camp-schedular/39278441-0cf3-5f6a-bf8e-a51bef67e95d/scratchpad/old18/tests/snacks_void_sale.test.js:89:1'
+  failureType: 'testCodeFailure'
+  error: '_voidedSigs is missing'
+  code: 'ERR_ASSERTION'
+  name: 'AssertionError'
+  expected: true
+  actual: false
+  operator: '=='
+  stack: |-
+    cut (/tmp/claude-0/-home-user-daily-camp-schedular/39278441-0cf3-5f6a-bf8e-a51bef67e95d/scratchpad/old18/tests/snacks_void_sale.test.js:22:12)
+    Array.map (<anonymous>)
+    page (/tmp/claude-0/-home-user-daily-camp-schedular/39278441-0cf3-5f6a-bf8e-a51bef67e95d/scratchpad/old18/tests/snacks_void_sale.test.js:56:109)
+    TestContext.<anonymous> (/tmp/claude-0/-home-user-daily-camp-schedular/39278441-0cf3-5f6a-bf8e-a51bef67e95d/scratchpad/old18/tests/snacks_void_sale.test.js:90:15)
+    Test.runInAsyncScope (node:async_hooks:214:14)
+    Test.run (node:internal/test_runner/test:1047:25)
+    Test.processPendingSubtests (node:internal/test_runner/test:744:18)
+    Test.postRun (node:internal/test_runner/test:1173:19)
+    Test.run (node:internal/test_runner/test:1101:12)
+    async startSubtestAfterBootstrap (node:internal/test_runner/harness:296:3)
+  ...
+# Subtest: TED-175: an item the child kept is not restocked; a refusal says why
+not ok 3 - TED-175: an item the child kept is not restocked; a refusal says why
+  ---
+  duration_ms: 0.938562
+  type: 'test'
+  location: '/tmp/claude-0/-home-user-daily-camp-schedular/39278441-0cf3-5f6a-bf8e-a51bef67e95d/scratchpad/old18/tests/snacks_void_sale.test.js:106:1'
+  failureType: 'testCodeFailure'
+  error: '_voidedSigs is missing'
+  code: 'ERR_ASSERTION'
+  name: 'AssertionError'
+  expected: true
+  actual: false
+  operator: '=='
+  stack: |-
+    cut (/tmp/claude-0/-home-user-daily-camp-schedular/39278441-0cf3-5f6a-bf8e-a51bef67e95d/scratchpad/old18/tests/snacks_void_sale.test.js:22:12)
+    Array.map (<anonymous>)
+    page (/tmp/claude-0/-home-user-daily-camp-schedular/39278441-0cf3-5f6a-bf8e-a51bef67e95d/scratchpad/old18/tests/snacks_void_sale.test.js:56:109)
+    TestContext.<anonymous> (/tmp/claude-0/-home-user-daily-camp-schedular/39278441-0cf3-5f6a-bf8e-a51bef67e95d/scratchpad/old18/tests/snacks_void_sale.test.js:107:15)
+    Test.runInAsyncScope (node:async_hooks:214:14)
+    Test.run (node:internal/test_runner/test:1047:25)
+    Test.processPendingSubtests (node:internal/test_runner/test:744:18)
+    Test.postRun (node:internal/test_runner/test:1173:19)
+    Test.run (node:internal/test_runner/test:1101:12)
+    async Test.processPendingSubtests (node:internal/test_runner/test:744:7)
+  ...
+# Subtest: TED-175: a voided sale is no longer a sale, and cannot be voided again
+not ok 4 - TED-175: a voided sale is no longer a sale, and cannot be voided again
+  ---
+  duration_ms: 0.844193
+  type: 'test'
+  location: '/tmp/claude-0/-home-user-daily-camp-schedular/39278441-0cf3-5f6a-bf8e-a51bef67e95d/scratchpad/old18/tests/snacks_void_sale.test.js:118:1'
+  failureType: 'testCodeFailure'
+  error: '_voidedSigs is missing'
+  code: 'ERR_ASSERTION'
+  name: 'AssertionError'
+  expected: true
+  actual: false
+  operator: '=='
+  stack: |-
+    cut (/tmp/claude-0/-home-user-daily-camp-schedular/39278441-0cf3-5f6a-bf8e-a51bef67e95d/scratchpad/old18/tests/snacks_void_sale.test.js:22:12)
+    Array.map (<anonymous>)
+    page (/tmp/claude-0/-home-user-daily-camp-schedular/39278441-0cf3-5f6a-bf8e-a51bef67e95d/scratchpad/old18/tests/snacks_void_sale.test.js:56:109)
+    TestContext.<anonymous> (/tmp/claude-0/-home-user-daily-camp-schedular/39278441-0cf3-5f6a-bf8e-a51bef67e95d/scratchpad/old18/tests/snacks_void_sale.test.js:119:15)
+    Test.runInAsyncScope (node:async_hooks:214:14)
+    Test.run (node:internal/test_runner/test:1047:25)
+    Test.processPendingSubtests (node:internal/test_runner/test:744:18)
+    Test.postRun (node:internal/test_runner/test:1173:19)
+    Test.run (node:internal/test_runner/test:1101:12)
+    async Test.processPendingSubtests (node:internal/test_runner/test:744:7)
+  ...
+# Subtest: TED-175: the dialog is on the page
+not ok 5 - TED-175: the dialog is on the page
+  ---
+  duration_ms: 1.994413
+  type: 'test'
+  location: '/tmp/claude-0/-home-user-daily-camp-schedular/39278441-0cf3-5f6a-bf8e-a51bef67e95d/scratchpad/old18/tests/snacks_void_sale.test.js:129:1'
+  failureType: 'testCodeFailure'
+  error: |-
+    The input did not match the regular expression /id="m-void"/. Input:
+    
+    '<!DOCTYPE html>\n' +
+      '<html lang="en" data-product="snacks">\n' +
+      '<head>\n' +
+      '<meta charset="UTF-8">\n' +
+      '<meta name="viewport" content="width=device-width, initial-scale=1.0">\n' +
+      '<title>Campistry Snacks — Manager Dashboard</title>\n' +
+      '<link rel="icon" type="image/png" href="Campistry_logo.png">\n' +
+      '<link rel="preconnect" href="https://fonts.googleapis.com">\n' +
+      '<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>\n' +
+      '<link href="https://fonts.googleapis.com/css2?family=DM+Sans:opsz,wght@9..40,400;9..40,500;9..40,600;9..40,700&family=Fraunces:opsz,wght@9..144,400;9..144,500;9..144,600;9..144,700&display=swap" rel="stylesheet">\n' +
+      '<link rel="stylesheet" href="campistry-unified.css?v=20260918-25">\n' +
+      '<link rel="stylesheet" href="campistry_snacks.css?v=20260918-24">\n' +
+      '<link rel="stylesheet" href="campistry_ops.css?v=20260918-24">\n' +
+      '<!-- Splash screen — inline so it appears before any external CSS -->\n' +
+      '<style>\n' +
+      '    #snacks-splash {\n' +
+      '        position: fixed; inset: 0; z-index: 9999999;\n' +
+      '        background: #fff;\n' +
+      '        display: flex; align-items: center; justify-content: center;\n' +
+      '        transition: opacity 0.55s ease;\n' +
+      '    }\n' +
+      '    #snacks-splash.hide { opacity: 0; pointer-events: none; }\n' +
+      '    #snacks-splash-wrap {\n' +
+      '        display: flex;\n' +
+      '        height: 80px;\n' +
+      '    }\n' +
+      '    /* The real Snacks_clean.png wordmark is hand-drawn with letters\n' +
+      '       physically joined mid-stroke (S into n, a into c, k into s) — there\n' +
+      '       is no clean vertical seam between every pair of letters to cut on,\n' +
+      '       only after "Sn", after "ac", and after "ks". So instead of 6\n' +
+      '       separately-cut letters (which would slice through connected ink and\n' +
+      '       look broken), each of those 3 natural pieces is cropped straight out\n' +
+      '       of the ACTUAL logo file as a sprite (no separate image assets) and\n' +
+      '       falls in on its own — same real artwork, just assembled in pieces.\n' +
+      "       Crop math from the source file's own 304x95 pixel layout: */\n" +
+      '    .snacks-chunk {\n' +
+      '        position: relative;\n' +
+      '        overflow: hidden;\n' +
+      '        height: 80px;\n' +
+      '        opacity: 0;\n' +
+      '        transform: translateY(-70px);\n' +
+      '        animation: chunk-drop 0.9s cubic-bezier(.34,1.56,.64,1) forwards;\n' +
+      '    }\n' +
+      '    .snacks-chunk img {\n' +
+      '        position: absolute;\n' +
+      '        top: 0;\n' +
+      '        width: 256px;\n' +
+      '        height: 80px;\n' +
+      '        max-width: none;\n' +
+      '    }\n' +
+      '    @keyframes chunk-drop {\n' +
+      '        0%   { transform: translateY(-70px) scale(1,1);     opacity: 0; }\n' +
+      '        55%  { transform: translateY(4px)   scale(1.04,.9); opacity: 1; }\n' +
+      '        75%  { transform: translateY(-6px)  scale(.99,1.02); opacity: 1; }\n' +
+      '        100% { transform: translateY(0)     scale(1,1);     opacity: 1; }\n' +
+      '    }\n' +
+      '</style>\n' +
+      '</head>\n' +
+      '<body>\n' +
+      '\n' +
+      '<!-- SPLASH — the real Snacks_clean.png logo, cropped into its 3 naturally\n' +
+      '     separable pieces (see the CSS comment above) and dropped in with a\n' +
+      '     bounce, staggered so the last piece lands at the same ~2s mark as\n' +
+      "     Flow's/Me's splash (see flow.html's #flow-logo-draw and\n" +
+      "     campistry_me.html's #me-logo-draw) -->\n" +
+      '<div id="snacks-splash">\n' +
+      '    <div id="snacks-splash-wrap">\n' +
+      '        <div class="snacks-chunk" style="width:92.63px; animation-delay:0s">\n' +
+      '            <img src="Snacks_clean.png" alt="" style="left:0">\n' +
+      '        </div>\n' +
+      '        <div class="snacks-chunk" style="width:82.53px; animation-delay:.55s">\n' +
+      '            <img src="Snacks_clean.png" alt="" style="left:-93.47px">\n' +
+      '        </div>\n' +
+      '        <div class="snacks-chunk" style="width:79.16px; animation-delay:1.10s">\n' +
+      '            <img src="Snacks_clean.png" alt="" style="left:-176.84px">\n' +
+      '        </div>\n' +
+      '    </div>\n' +
+      '    <script>\n' +
+      '    (function() {\n' +
+      "        var ov = document.getElementById('snacks-splash');\n" +
+      '        setTimeout(function() {\n' +
+      "            ov.classList.add('hide');\n" +
+      "            setTimeout(function() { if (ov) ov.style.display = 'none'; }, 500);\n" +
+      '        }, 2000);\n' +
+      '    })();\n' +
+      '    </script>\n' +
+      '</div>\n' +
+      '\n' +
+      '<!-- HEADER -->\n' +
+      '<header class="app-header">\n' +
+      '    <div class="header-left">\n' +
+      '        <button class="hamburger-btn" id="hamburgerBtn" aria-label="Toggle Navigation"><span></span><span></span><span></span></button>\n' +
+      '    </div>\n' +
+      '    <div class="app-header-center">\n' +
+      '        <div data-quick-switch-mount="snacks"></div>\n' +
+      '        <script src="campistry_app_switcher.js?v=20260918-25"></script>\n' +
+      '    </div>\n' +
+      '    <div class="header-right">\n' +
+      '        <div class="sync-badge"><div class="sync-dot"></div><span>Synced</span></div>\n' +
+      '        <span class="snacks-user-name" id="snacksUserName"></span>\n' +
+      '    </div>\n' +
+      '</header>\n' +
+      '\n' +
+      '<!-- SIDEBAR BACKDROP -->\n' +
+      '<div id="sidebarBackdrop" class="sidebar-backdrop"></div>\n' +
+      '\n' +
+      '<!-- SIDEBAR -->\n' +
+      '<aside id="sidebar" class="sidebar">\n' +
+      '    <div class="sidebar-label">Canteen</div>\n' +
+      '    <button class="sidebar-item active" data-page="dashboard"><span class="sidebar-dot"></span> Dashboard</button>\n' +
+      '    <button class="sidebar-item" data-page="transactions"><span class="sidebar-dot"></span> Transactions</button>\n' +
+      '    <button class="sidebar-item" data-page="accounts"><span class="sidebar-dot"></span> Accounts</button>\n' +
+      '    <div class="sidebar-label">Management</div>\n' +
+      '    <button class="sidebar-item" data-page="menu"><span class="sidebar-dot"></span> Menu Items</button>\n' +
+      '    <button class="sidebar-item" data-page="shop"><span class="sidebar-dot"></span> Camp Shop</button>\n' +
+      '    <button class="sidebar-item" data-page="settings"><span class="sidebar-dot"></span> Settings</button>\n' +
+      '    <div class="sidebar-label">Operations</div>\n' +
+      '    <a href="campistry_snacks_pos.html" class="sidebar-item sidebar-item-link" data-page="pos">\n' +
+      '        <span class="sidebar-dot"></span> POS Terminal\n' +
+      '        <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" style="margin-left:auto;opacity:.4"><path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6"/><polyline points="15 3 21 3 21 9"/><line x1="10" y1="14" x2="21" y2="3"/></svg>\n' +
+      '    </a>\n' +
+      '    <button class="sidebar-item" data-page="offline-pos"><span class="sidebar-dot"></span> Offline POS</button>\n' +
+      '</aside>\n' +
+      '\n' +
+      '<!-- MAIN CONTENT -->\n' +
+      '<div class="app-content">\n' +
+      '\n' +
+      '<!-- ═══════════════════════════════════════════════════ -->\n' +
+      '<!--  DASHBOARD PAGE                                     -->\n' +
+      '<!-- ═══════════════════════════════════════════════════ -->\n' +
+      '<div id="page-dashboard" class="snacks-page active">\n' +
+      '    <div class="snacks-page-hero">\n' +
+      '        <div class="snacks-page-hero-icon">\n' +
+      '            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="22" height="22"><rect x="3" y="3" width="7" height="7"/><rect x="14" y="3" width="7" height="7"/><rect x="14" y="14" width="7" height="7"/><rect x="3" y="14" width="7" height="7"/></svg>\n' +
+      '        </div>\n' +
+      '        <div>\n' +
+      '            <h1>Canteen Manager</h1>\n' +
+      '            <p>Accounts, inventory, and analytics</p>\n' +
+      '        </div>\n' +
+      '    </div>\n' +
+      '\n' +
+      '    <div class="stats-grid">\n' +
+      '        <div class="stat-card"><div class="stat-icon"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M23 21v-2a4 4 0 0 0-3-3.87M16 3.13a4 4 0 0 1 0 7.75"/></svg></div><div><div class="stat-value" id="sA">0</div><div class="stat-label">Accounts</div></div></div>\n' +
+      '        <div class="stat-card"><div class="stat-icon"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="2" y="5" width="20" height="14" rx="2"/><line x1="2" y1="10" x2="22" y2="10"/></svg></div><div><div class="stat-value" id="sB">$0</div><div class="stat-label">Total Balance</div></div></div>\n' +
+      '        <div class="stat-card"><div class="stat-icon"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M6 2L3 6v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2V6l-3-4z"/><line x1="3" y1="6" x2="21" y2="6"/><path d="M16 10a4 4 0 0 1-8 0"/></svg></div><div><div class="stat-value" id="sI">0</div><div class="stat-label">Items in Stock</div></div></div>\n' +
+      '        <div class="stat-card"><div class="stat-icon"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="12" y1="1" x2="12" y2="23"/><path d="M17 5H9.5a3.5 3.5 0 0 0 0 7h5a3.5 3.5 0 0 1 0 7H6"/></svg></div><div><div class="stat-value" id="sS">$0</div><div class="stat-label">Sales Today</div></div></div>\n' +
+      '        <div class="stat-card"><div class="stat-icon"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="2" y="6" width="20" height="12" rx="2"/><circle cx="12" cy="12" r="2.5"/><path d="M6 12h.01M18 12h.01"/></svg></div><div><div class="stat-value" id="sC">$0</div><div class="stat-label">Cash Out Today</div></div></div>\n' +
+      '    </div>\n' +
+      '\n' +
+      '    <div class="metric-row">\n' +
+      '        <div class="metric-card"><div class="metric-card-label">Revenue Today</div><div class="metric-card-value" id="mRev">$0</div><div class="metric-card-sub" id="mTxn">0 txns</div></div>\n' +
+      '        <div class="metric-card"><div class="metric-card-label">Top Seller</div><div class="metric-card-value" id="mTop">—</div><div class="metric-card-sub" id="mTopN"></div></div>\n' +
+      '        <div class="metric-card"><div class="metric-card-label">Avg Transaction</div><div class="metric-card-value" id="mAvg">$0</div></div>\n' +
+      '        <div class="metric-card"><div class="metric-card-label">Units Sold</div><div class="metric-card-value" id="mUnits">0</div></div>\n' +
+      '        <div class="metric-card"><div class="metric-card-label">Low Stock</div><div class="metric-card-value" id="mLow" style="color:var(--amber-600)">0</div></div>\n' +
+      '        <div class="metric-card"><div class="metric-card-label">Sell-Through</div><div class="metric-card-value" id="mST">0%</div></div>\n' +
+      '        <div class="metric-card"><div class="metric-card-label">Total Profit</div><div class="metric-card-value" id="mProfit">$0</div><div class="metric-card-sub" id="mProfitN"></div></div>\n' +
+      '        <div class="metric-card"><div class="metric-card-label">Avg Margin</div><div class="metric-card-value" id="mMargin">0%</div></div>\n' +
+      '    </div>\n' +
+      '\n' +
+      '    <div class="analytics-grid">\n' +
+      '        <div class="ca'... 34758 more characters
+    
+  code: 'ERR_ASSERTION'
+  name: 'AssertionError'
+  expected:
+  actual: |-
+    <!DOCTYPE html>
+    <html lang="en" data-product="snacks">
+    <head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Campistry Snacks — Manager Dashboard</title>
+    <link rel="icon" type="image/png" href="Campistry_logo.png">
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=DM+Sans:opsz,wght@9..40,400;9..40,500;9..40,600;9..40,700&family=Fraunces:opsz,wght@9..144,400;9..144,500;9..144,600;9..144,700&display=swap" rel="stylesheet">
+    <link rel="stylesheet" href="campistry-unified.css?v=20260918-25">
+    <link rel="stylesheet" href="campistry_snacks.css?v=20260918-24">
+    <link rel="stylesheet" href="campistry_ops.css?v=20260918-24">
+    <!-- Splash screen — inline so it appears before any external CSS -->
+    <style>
+        #snacks-splash {
+            position: fixed; inset: 0; z-index: 9999999;
+            background: #fff;
+            display: flex; align-items: center; justify-content: center;
+            transition: opacity 0.55s ease;
+        }
+        #snacks-splash.hide { opacity: 0; pointer-events: none; }
+        #snacks-splash-wrap {
+            display: flex;
+            height: 80px;
+        }
+        /* The real Snacks_clean.png wordmark is hand-drawn with letters
+           physically joined mid-stroke (S into n, a into c, k into s) — there
+           is no clean vertical seam between every pair of letters to cut on,
+           only after "Sn", after "ac", and after "ks". So instead of 6
+           separately-cut letters (which would slice through connected ink and
+           look broken), each of those 3 natural pieces is cropped straight out
+           of the ACTUAL logo file as a sprite (no separate image assets) and
+           falls in on its own — same real artwork, just assembled in pieces.
+           Crop math from the source file's own 304x95 pixel layout: */
+        .snacks-chunk {
+            position: relative;
+            overflow: hidden;
+            height: 80px;
+            opacity: 0;
+            transform: translateY(-70px);
+            animation: chunk-drop 0.9s cubic-bezier(.34,1.56,.64,1) forwards;
+        }
+        .snacks-chunk img {
+            position: absolute;
+            top: 0;
+            width: 256px;
+            height: 80px;
+            max-width: none;
+        }
+        @keyframes chunk-drop {
+            0%   { transform: translateY(-70px) scale(1,1);     opacity: 0; }
+            55%  { transform: translateY(4px)   scale(1.04,.9); opacity: 1; }
+            75%  { transform: translateY(-6px)  scale(.99,1.02); opacity: 1; }
+            100% { transform: translateY(0)     scale(1,1);     opacity: 1; }
+        }
+    </style>
+    </head>
+    <body>
+    
+    <!-- SPLASH — the real Snacks_clean.png logo, cropped into its 3 naturally
+         separable pieces (see the CSS comment above) and dropped in with a
+         bounce, staggered so the last piece lands at the same ~2s mark as
+         Flow's/Me's splash (see flow.html's #flow-logo-draw and
+         campistry_me.html's #me-logo-draw) -->
+    <div id="snacks-splash">
+        <div id="snacks-splash-wrap">
+            <div class="snacks-chunk" style="width:92.63px; animation-delay:0s">
+                <img src="Snacks_clean.png" alt="" style="left:0">
+            </div>
+            <div class="snacks-chunk" style="width:82.53px; animation-delay:.55s">
+                <img src="Snacks_clean.png" alt="" style="left:-93.47px">
+            </div>
+            <div class="snacks-chunk" style="width:79.16px; animation-delay:1.10s">
+                <img src="Snacks_clean.png" alt="" style="left:-176.84px">
+            </div>
+        </div>
+        <script>
+        (function() {
+            var ov = document.getElementById('snacks-splash');
+            setTimeout(function() {
+                ov.classList.add('hide');
+                setTimeout(function() { if (ov) ov.style.display = 'none'; }, 500);
+            }, 2000);
+        })();
+        </script>
+    </div>
+    
+    <!-- HEADER -->
+    <header class="app-header">
+        <div class="header-left">
+            <button class="hamburger-btn" id="hamburgerBtn" aria-label="Toggle Navigation"><span></span><span></span><span></span></button>
+        </div>
+        <div class="app-header-center">
+            <div data-quick-switch-mount="snacks"></div>
+            <script src="campistry_app_switcher.js?v=20260918-25"></script>
+        </div>
+        <div class="header-right">
+            <div class="sync-badge"><div class="sync-dot"></div><span>Synced</span></div>
+            <span class="snacks-user-name" id="snacksUserName"></span>
+        </div>
+    </header>
+    
+    <!-- SIDEBAR BACKDROP -->
+    <div id="sidebarBackdrop" class="sidebar-backdrop"></div>
+    
+    <!-- SIDEBAR -->
+    <aside id="sidebar" class="sidebar">
+        <div class="sidebar-label">Canteen</div>
+        <button class="sidebar-item active" data-page="dashboard"><span class="sidebar-dot"></span> Dashboard</button>
+        <button class="sidebar-item" data-page="transactions"><span class="sidebar-dot"></span> Transactions</button>
+        <button class="sidebar-item" data-page="accounts"><span class="sidebar-dot"></span> Accounts</button>
+        <div class="sidebar-label">Management</div>
+        <button class="sidebar-item" data-page="menu"><span class="sidebar-dot"></span> Menu Items</button>
+        <button class="sidebar-item" data-page="shop"><span class="sidebar-dot"></span> Camp Shop</button>
+        <button class="sidebar-item" data-page="settings"><span class="sidebar-dot"></span> Settings</button>
+        <div class="sidebar-label">Operations</div>
+        <a href="campistry_snacks_pos.html" class="sidebar-item sidebar-item-link" data-page="pos">
+            <span class="sidebar-dot"></span> POS Terminal
+            <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" style="margin-left:auto;opacity:.4"><path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6"/><polyline points="15 3 21 3 21 9"/><line x1="10" y1="14" x2="21" y2="3"/></svg>
+        </a>
+        <button class="sidebar-item" data-page="offline-pos"><span class="sidebar-dot"></span> Offline POS</button>
+    </aside>
+    
+    <!-- MAIN CONTENT -->
+    <div class="app-content">
+    
+    <!-- ═══════════════════════════════════════════════════ -->
+    <!--  DASHBOARD PAGE                                     -->
+    <!-- ═══════════════════════════════════════════════════ -->
+    <div id="page-dashboard" class="snacks-page active">
+        <div class="snacks-page-hero">
+            <div class="snacks-page-hero-icon">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="22" height="22"><rect x="3" y="3" width="7" height="7"/><rect x="14" y="3" width="7" height="7"/><rect x="14" y="14" width="7" height="7"/><rect x="3" y="14" width="7" height="7"/></svg>
+            </div>
+            <div>
+                <h1>Canteen Manager</h1>
+                <p>Accounts, inventory, and analytics</p>
+            </div>
+        </div>
+    
+        <div class="stats-grid">
+            <div class="stat-card"><div class="stat-icon"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M23 21v-2a4 4 0 0 0-3-3.87M16 3.13a4 4 0 0 1 0 7.75"/></svg></div><div><div class="stat-value" id="sA">0</div><div class="stat-label">Accounts</div></div></div>
+            <div class="stat-card"><div class="stat-icon"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="2" y="5" width="20" height="14" rx="2"/><line x1="2" y1="10" x2="22" y2="10"/></svg></div><div><div class="stat-value" id="sB">$0</div><div class="stat-label">Total Balance</div></div></div>
+            <div class="stat-card"><div class="stat-icon"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M6 2L3 6v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2V6l-3-4z"/><line x1="3" y1="6" x2="21" y2="6"/><path d="M16 10a4 4 0 0 1-8 0"/></svg></div><div><div class="stat-value" id="sI">0</div><div class="stat-label">Items in Stock</div></div></div>
+            <div class="stat-card"><div class="stat-icon"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="12" y1="1" x2="12" y2="23"/><path d="M17 5H9.5a3.5 3.5 0 0 0 0 7h5a3.5 3.5 0 0 1 0 7H6"/></svg></div><div><div class="stat-value" id="sS">$0</div><div class="stat-label">Sales Today</div></div></div>
+            <div class="stat-card"><div class="stat-icon"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="2" y="6" width="20" height="12" rx="2"/><circle cx="12" cy="12" r="2.5"/><path d="M6 12h.01M18 12h.01"/></svg></div><div><div class="stat-value" id="sC">$0</div><div class="stat-label">Cash Out Today</div></div></div>
+        </div>
+    
+        <div class="metric-row">
+            <div class="metric-card"><div class="metric-card-label">Revenue Today</div><div class="metric-card-value" id="mRev">$0</div><div class="metric-card-sub" id="mTxn">0 txns</div></div>
+            <div class="metric-card"><div class="metric-card-label">Top Seller</div><div class="metric-card-value" id="mTop">—</div><div class="metric-card-sub" id="mTopN"></div></div>
+            <div class="metric-card"><div class="metric-card-label">Avg Transaction</div><div class="metric-card-value" id="mAvg">$0</div></div>
+            <div class="metric-card"><div class="metric-card-label">Units Sold</div><div class="metric-card-value" id="mUnits">0</div></div>
+            <div class="metric-card"><div class="metric-card-label">Low Stock</div><div class="metric-card-value" id="mLow" style="color:var(--amber-600)">0</div></div>
+            <div class="metric-card"><div class="metric-card-label">Sell-Through</div><div class="metric-card-value" id="mST">0%</div></div>
+            <div class="metric-card"><div class="metric-card-label">Total Profit</div><div class="metric-card-value" id="mProfit">$0</div><div class="metric-card-sub" id="mProfitN"></div></div>
+            <div class="metric-card"><div class="metric-card-label">Avg Margin</div><div class="metric-card-value" id="mMargin">0%</div></div>
+        </div>
+    
+        <div class="analytics-grid">
+            <div class="card"><div class="card-header"><h2>Item Popularity</h2></div><div class="card-body" id="popList"></div></div>
+            <div class="card"><div class="card-header"><h2>Revenue by Category</h2></div><div class="card-body" id="catBrk"></div></div>
+        </div>
+        <div class="analytics-grid">
+            <div class="card"><div class="card-header"><h2>Best Margin</h2></div><div class="card-body" id="marginList"></div></div>
+            <div class="card"><div class="card-header"><h2>Most Profitable</h2></div><div class="card-body" id="profitList"></div></div>
+        </div>
+        <div class="analytics-grid">
+            <div class="card"><div class="card-header"><h2>Sales This Week</h2></div><div class="card-body"><div class="bar-chart" id="wChart"></div></div></div>
+            <div class="card"><div class="card-header"><h2>Top Spenders</h2></div><div class="card-body" id="spList"></div></div>
+        </div>
+    </div>
+    
+    <!-- ═══════════════════════════════════════════════════ -->
+    <!--  TRANSACTIONS PAGE                                  -->
+    <!-- ═══════════════════════════════════════════════════ -->
+    <div id="page-transactions" class="snacks-page">
+        <div class="snacks-page-hero">
+            <div class="snacks-page-hero-icon">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="22" height="22"><polyline points="23 6 13.5 15.5 8.5 10.5 1 18"/><polyline points="17 6 23 6 23 12"/></svg>
+            </div>
+            <div>
+                <h1>Transactions</h1>
+                <p>Full transaction log for today and historical data</p>
+            </div>
+        </div>
+    
+        <div class="analytics-grid">
+            <div class="card"><div class="card-header"><h2>Hourly Heatmap</h2></div><div class="card-body" id="heatmap"></div></div>
+            <div class="card"><div class="card-header"><h2>Recent Transactions</h2><span class="card-count" id="txC">0</span></div>
+                <div class="table-wrapper"><table class="data-table"><thead><tr><th>Time</th><th>Camper</th><th>Detail</th><th>Kind</th><th>Amount</th></tr></thead><tbody id="txBody"></tbody></table></div>
+            </div>
+        </div>
+    </div>
+    
+    <!-- ═══════════════════════════════════════════════════ -->
+    <!--  ACCOUNTS PAGE                                      -->
+    <!-- ═══════════════════════════════════════════════════ -->
+    <div id="page-accounts" class="snacks-page">
+        <div class="snacks-page-hero">
+            <div class="snacks-page-hero-icon">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="22" height="22"><path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M23 21v-2a4 4 0 0 0-3-3.87"/><path d="M16 3.13a4 4 0 0 1 0 7.75"/></svg>
+            </div>
+            <div>
+                <h1>Camper Accounts</h1>
+                <p>Manage balances, deposits, and daily spending limits</p>
+            </div>
+        </div>
+    
+        <div class="card">
+            <div class="card-header">
+                <h2>All Accounts</h2>
+                <div style="display:flex;gap:.5rem;align-items:center">
+                    <div class="search-bar" style="width:220px">
+                        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg>
+                        <input type="text" placeholder="Search…" id="aSearch" oninput="rAccounts()">
+                    </div>
+                    <button class="btn btn-primary btn-sm" onclick="openM('dep')">+ Add Deposit</button>
+                    <button class="btn btn-secondary btn-sm" onclick="openM('cash')">Take Out Cash</button>
+                    <button class="btn btn-secondary btn-sm" onclick="openM('limit')">Set Limits</button>
+                    <button class="btn btn-secondary btn-sm" onclick="openRefundAllModal()">Refund All</button>
+                </div>
+            </div>
+            <div class="table-wrapper">
+                <table class="data-table">
+                    <thead><tr><th>Camper</th><th>Division</th><th>Bunk</th><th>Balance</th><th>Daily Limit</th><th>Spent Today</th><th>Status</th><th></th></tr></thead>
+                    <tbody id="aBody"></tbody>
+                </table>
+            </div>
+        </div>
+    </div>
+    
+    <!-- ═══════════════════════════════════════════════════ -->
+    <!--  MENU ITEMS PAGE                                    -->
+    <!-- ═══════════════════════════════════════════════════ -->
+    <div id="page-menu" class="snacks-page">
+        <div class="snacks-page-hero">
+            <div class="snacks-page-hero-icon">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="22" height="22"><path d="M6 2L3 6v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2V6l-3-4z"/><line x1="3" y1="6" x2="21" y2="6"/><path d="M16 10a4 4 0 0 1-8 0"/></svg>
+            </div>
+            <div>
+                <h1>Menu Items</h1>
+                <p>Canteen inventory — items, pricing, and stock levels</p>
+            </div>
+        </div>
+    
+        <div class="card">
+            <div class="card-header">
+                <h2>Canteen Items</h2>
+                <div style="display:flex;gap:.5rem;align-items:center">
+                    <span class="card-count" id="iCount">0</span>
+                    <button class="btn btn-primary btn-sm" onclick="openAddItem()">+ Add Item</button>
+                    <button class="btn btn-secondary btn-sm" onclick="openUploadModal()">Upload Items</button>
+                    <button class="btn btn-secondary btn-sm" onclick="openM('restock')">Restock</button>
+                </div>
+            </div>
+            <div class="table-wrapper">
+                <table class="data-table">
+                    <thead><tr><th>Item</th><th>Category</th><th>Price</th><th>Margin</th><th>Stock</th><th>Sold Today</th><th>All-Time</th><th>Status</th><th></th></tr></thead>
+                    <tbody id="iBody"></tbody>
+                </table>
+            </div>
+        </div>
+    </div>
+    
+    <!-- ═══════════════════════════════════════════════════ -->
+    <!--  SETTINGS PAGE                                      -->
+    <!-- ═══════════════════════════════════════════════════ -->
+    <div id="page-settings" class="snacks-page">
+        <div class="snacks-page-hero">
+            <div class="snacks-page-hero-icon">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="22" height="22"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83-2.83l.06-.06A1.65 1.65 0 0 0 4.68 15a1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 2.83-2.83l.06.06A1.65 1.65 0 0 0 9 4.68a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 2.83l-.06.06A1.65 1.65 0 0 0 19.4 9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg>
+            </div>
+            <div>
+                <h1>Settings</h1>
+                <p>Canteen configuration and preferences</p>
+            </div>
+        </div>
+    
+        <div class="card">
+            <div class="card-header"><h2>Deposits &amp; Cash</h2></div>
+            <div class="card-body">
+                <div class="form-grid" style="grid-template-columns:repeat(auto-fit,minmax(200px,1fr))">
+                    <div class="form-group">
+                        <label class="form-label">Default daily spending limit ($)</label>
+                        <input type="number" class="form-input" id="setDefaultLimit" min="0" step="1">
+                        <span class="form-hint">Applied to every new camper account.</span>
+                    </div>
+                    <div class="form-group">
+                        <label class="form-label">Max cash out per camper, per day ($)</label>
+                        <input type="number" class="form-input" id="setCashDailyMax" min="0" step="1">
+                        <span class="form-hint">0 = no cap.</span>
+                    </div>
+                    <div class="form-group">
+                        <label class="form-label">Cash out needs a reason</label>
+                        <select class="form-select" id="setCashReasonRequired">
+                            <option value="yes">Yes — require a note</option>
+                            <option value="no">No — note optional</option>
+                        </select>
+                    </div>
+                    <div class="form-group">
+                        <label class="form-label">Allow cash out below zero</label>
+                        <select class="form-select" id="setCashAllowNegative">
+                            <option value="no">No — balance only</option>
+                            <option value="yes">Yes — camper may go negative</option>
+                        </select>
+                        <span class="form-hint">Off means a camper can never take out more cash than they hold.</span>
+                    </div>
+                    <div class="form-group">
+                        <label class="form-label">Parents' auto-reload</label>
+                        <select class="form-select" id="setAutoReloadOff">
+                            <option value="no">On — parents' cards are topped up automatically</option>
+                            <option value="yes">Off — charge nobody automatically</option>
+                        </select>
+                        <span class="form-hint">Parents are only charged on days camp is in session (the session dates under Dashboard → Dates &amp; Pricing). Switch it off here to stop it at once — for example at the end of the season, before Refund All.</span>
+                    </div>
+                </div>
+            </div>
+        </div>
+    
+        <div class="card">
+            <div class="card-header"><h2>Register Login (PIN)</h2></div>
+            <div class="card-body">
+                <p style="font-size:.82rem;color:var(--text-muted);margin:0 0 .9rem;line-height:1.6">
+                    Give the canteen runner a login that only opens the register —
+                    not your full Campistry account. Set a shared PIN below, then
+                    tell them to go to <strong>snacks.campistry.org</strong> and
+                    sign in with <strong>your Campistry email</strong> plus the
+                    PIN (standing in for a password). The PIN is a completely
+                    separate secret from your real password — it can never open
+                    your actual Campistry account, only the register. 5 wrong
+                    attempts in a row locks the register — it stays locked until
+                    you unlock it here, no time-based auto-unlock.
+                </p>
+                <div id="posPinStatus" style="font-size:.85rem;color:var(--text-muted);margin-bottom:.9rem"></div>
+                <div class="form-grid" style="grid-template-columns:repeat(auto-fit,minmax(200px,1fr))">
+                    <div class="form-group">
+                        <label class="form-label">Register PIN</label>
+                        <input type="text" inputmode="numeric" class="form-input" id="posPinInput" maxlength="8" placeholder="4–8 digits, e.g. 4821">
+                    </div>
+                </div>
+                <div style="display:flex;gap:.5rem;margin-top:.9rem;flex-wrap:wrap">
+                    <button class="btn btn-primary" onclick="savePosPin()" id="posPinSaveBtn">Save PIN</button>
+                    <button class="btn" onclick="unlockPosPin()" id="posPinUnlockBtn" style="display:none;color:var(--red-600)">Unlock Register</button>
+                </div>
+            </div>
+        </div>
+    
+        <div class="card">
+            <div class="card-header"><h2>Accepted Payment Methods</h2></div>
+            <div class="card-body">
+                <p style="font-size:.82rem;color:var(--text-muted);margin:0 0 .9rem;line-height:1.6">
+                    Which methods the office can record against a deposit.
+                    <strong>Debit cards are deliberately not offered</strong> — a canteen
+                    deposit is a prepaid balance a camper can later draw back out as cash,
+                    and card networks treat funding a cash-withdrawable balance from a
+                    debit card as a cash-equivalent transaction. Credit cards are fine.
+                </p>
+                <div id="setPayMethods" style="display:flex;flex-direction:column;gap:.55rem"></div>
+            </div>
+        </div>
+    
+        <div class="card">
+            <div class="card-header"><h2>Cash Drawer — Today</h2></div>
+            <div class="card-body" id="cashDrawerBox"></div>
+        </div>
+    
+        <div class="card">
+            <div class="card-header"><h2>Transaction History Size</h2></div>
+            <div class="card-body" id="ledgerCompactBox"></div>
+        </div>
+    
+        <div style="display:flex;justify-content:flex-end;gap:.5rem;margin-bottom:2rem">
+            <button class="btn btn-primary" onclick="saveSettingsForm()">Save Settings</button>
+        </div>
+    </div>
+    
+    <!-- ═══════════════════════════════════════════════════ -->
+    <!--  CAMP SHOP — swag, tees and camp gear.                -->
+    <!--  Rendered by campistry_snacks_shop.js; the Shop lives -->
+    <!--  here because Snacks already IS the camp's store —    -->
+    <!--  inventory, camper accounts, POS and a ledger.        -->
+    <!-- ═══════════════════════════════════════════════════ -->
+    <div id="page-shop" class="snacks-page"></div>
+    
+    <!-- ═══════════════════════════════════════════════════ -->
+    <!--  OFFLINE POS — download, export data, import txns  -->
+    <!-- ═══════════════════════════════════════════════════ -->
+    <div id="page-offline-pos" class="snacks-page">
+        <div class="snacks-page-hero">
+            <div class="snacks-page-hero-icon">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="22" height="22"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>
+            </div>
+            <div>
+                <h1>Offline POS</h1>
+                <p>Download a register that works without internet</p>
+            </div>
+        </div>
+    
+        <div class="card">
+            <div class="card-header"><h2>Download</h2></div>
+            <div class="card-body">
+                <p style="font-size:.85rem;color:var(--text-dim);margin:0 0 1rem;line-height:1.6">
+                    Download a single file with your camper accounts and inventory
+                    already baked in. Transfer it to any device — open in a browser,
+                    no install or internet needed. License: 180 days.
+                </p>
+                <button class="btn btn-primary" onclick="downloadOfflinePOS()"
+                   style="display:inline-flex;align-items:center;gap:.4rem">
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="16" height="16"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>
+                    Download Offline POS
+                </button>
+                <div id="offlinePosStatus" style="font-size:.82rem;color:var(--text-muted);margin-top:.75rem"></div>
+            </div>
+        </div>
+    
+        <div class="card">
+            <div class="card-header"><h2>Sync Back</h2></div>
+            <div class="card-body">
+                <p style="font-size:.85rem;color:var(--text-dim);margin:0 0 1rem;line-height:1.6">
+                    Import transactions that were recorded on an offline register
+                    back into the main system.
+                </p>
+                <button class="btn" onclick="importOfflinePOSTransactions()">Import Offline Transactions</button>
+                <input type="file" id="offlineTxImportInput" accept=".json,application/json" hidden>
+            </div>
+        </div>
+    </div>
+    
+    </div><!-- /app-content -->
+    
+    <!-- BOTTOM NAV (mobile) -->
+    <div class="snacks-bnav">
+        <div class="snacks-bnav-inner">
+            <button class="snacks-bnav-item active" data-page="dashboard" onclick="snacksNav('dashboard',this)">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="20" height="20"><rect x="3" y="3" width="7" height="7"/><rect x="14" y="3" width="7" height="7"/><rect x="14" y="14" width="7" height="7"/><rect x="3" y="14" width="7" height="7"/></svg>
+                Dashboard
+            </button>
+            <button class="snacks-bnav-item" data-page="transactions" onclick="snacksNav('transactions',this)">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="20" height="20"><polyline points="23 6 13.5 15.5 8.5 10.5 1 18"/><polyline points="17 6 23 6 23 12"/></svg>
+                Txns
+            </button>
+            <button class="snacks-bnav-item" data-page="accounts" onclick="snacksNav('accounts',this)">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="20" height="20"><path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/></svg>
+                Accounts
+            </button>
+            <button class="snacks-bnav-item" data-page="menu" onclick="snacksNav('menu',this)">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="20" height="20"><path d="M6 2L3 6v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2V6l-3-4z"/><line x1="3" y1="6" x2="21" y2="6"/></svg>
+                Menu
+            </button>
+            <button class="snacks-bnav-item" data-page="shop" onclick="snacksNav('shop',this)">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="20" height="20"><path d="M6 2L3 6v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2V6l-3-4z"/><line x1="3" y1="6" x2="21" y2="6"/><path d="M16 10a4 4 0 0 1-8 0"/></svg>
+                Shop
+            </button>
+            <a href="campistry_snacks_pos.html" class="snacks-bnav-item">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="20" height="20"><rect x="2" y="3" width="20" height="14" rx="2"/><line x1="8" y1="21" x2="16" y2="21"/><line x1="12" y1="17" x2="12" y2="21"/></svg>
+                POS
+            </a>
+        </div>
+    </div>
+    
+    <!-- MODALS -->
+    <div class="modal-overlay" id="m-dep"><div class="modal"><div class="modal-header"><h2>Add Deposit</h2><button class="modal-close" onclick="closeM('dep')"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg></button></div><div class="modal-body"><div class="form-grid" style="grid-template-columns:1fr"><div class="form-group"><label class="form-label">Camper</label><select class="form-select" id="depCamper"></select></div><div class="form-group"><label class="form-label">Amount ($)</label><input type="number" class="form-input" id="depAmt" min="1" step="0.01" placeholder="25.00"></div><div class="form-group"><label class="form-label">Paid by</label><select class="form-select" id="depMethod"></select></div><div class="form-group"><label class="form-label">Note</label><input type="text" class="form-input" id="depNote" placeholder="e.g. Week 3 deposit"></div></div></div><div class="modal-footer"><button class="btn btn-secondary" onclick="closeM('dep')">Cancel</button><button class="btn btn-primary" onclick="addDep()">Add Deposit</button></div></div></div>
+    
+    <!-- CASH OUT — a camper draws part of their canteen balance back as physical cash -->
+    <div class="modal-overlay" id="m-cash"><div class="modal"><div class="modal-header"><h2>Take Out Cash</h2><button class="modal-close" onclick="closeM('cash')"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg></button></div><div class="modal-body">
+        <div class="form-grid" style="grid-template-columns:1fr">
+            <div class="form-group"><label class="form-label">Camper</label><select class="form-select" id="cashCamper" onchange="cashPickCamper()"></select></div>
+            <div id="cashBalBox" style="display:none;background:var(--bg-tertiary);border-radius:8px;padding:.7rem .85rem;font-size:.82rem;line-height:1.6"></div>
+            <div class="form-group"><label class="form-label">Amount ($)</label><input type="number" class="form-input" id="cashAmt" min="0.01" step="0.01" placeholder="20.00" oninput="cashPickCamper()">
+                <div style="display:flex;gap:.4rem;margin-top:.45rem;flex-wrap:wrap" id="cashQuick"></div>
+            </div>
+            <div class="form-group"><label class="form-label">Reason / note <span id="cashReasonReq" style="color:var(--red-600)"></span></label><input type="text" class="form-input" id="cashNote" placeholder="e.g. Spending money for the trip"></div>
+            <div class="form-group"><label class="form-label">Handed out by</label><input type="text" class="form-input" id="cashBy" placeholder="Staff name"></div>
+        </div>
+        <div id="cashWarn" style="display:none;font-size:.8rem;color:var(--red-600);margin-top:.6rem"></div>
+    </div><div class="modal-footer"><button class="btn btn-secondary" onclick="closeM('cash')">Cancel</button><button class="btn btn-primary" id="cashBtn" onclick="cashOut()">Pay Out Cash</button></div></div></div>
+    <div class="modal-overlay" id="m-refund"><div class="modal"><div class="modal-header"><h2>Refund a Deposit</h2><button class="modal-close" onclick="closeM('refund')"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg></button></div><div class="modal-body">
+        <div class="form-grid" style="grid-template-columns:1fr">
+            <div class="form-group"><label class="form-label">Camper</label><select class="form-select" id="refundCamper" onchange="refundPickCamper()"></select></div>
+            <div id="refundBox" style="display:none;background:var(--bg-tertiary);border-radius:8px;padding:.7rem .85rem;font-size:.82rem;line-height:1.6"></div>
+            <div id="refundHolds" style="display:none;border:1px solid var(--amber-300,#fcd34d);background:var(--amber-50,#fffbeb);border-radius:8px;padding:.7rem .85rem;font-size:.82rem;line-height:1.6"></div>
+            <div class="form-group"><label class="form-label">Amount to refund ($)</label>
+                <div style="display:flex;gap:.5rem;align-items:center;">
+                    <input type="number" class="form-input" id="refundAmt" min="0.01" step="0.01" placeholder="0.00" oninput="refundAmtChanged()" style="flex:1">
+                    <button type="button" class="btn btn-sm btn-secondary" onclick="refundSetMax()" style="white-space:nowrap;">Refund all</button>
+                </div>
+            </div>
+        </div>
+        <div id="refundWarn" style="display:none;font-size:.8rem;color:var(--red-600);margin-top:.6rem"></div>
+    </div><div class="modal-footer"><button class="btn btn-secondary" onclick="closeM('refund')">Cancel</button><button class="btn btn-primary" id="refundBtn" onclick="refundCanteenDeposit()" disabled>Refund</button></div></div></div>
+    <div class="modal-overlay" id="m-refundall"><div class="modal"><div class="modal-header"><h2>Refund All Balances</h2><button class="modal-close" onclick="closeM('refundall')"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg></button></div><div class="modal-body">
+        <div id="refundAllBody" style="font-size:.86rem;line-height:1.6;color:var(--text-primary)"></div>
+        <div id="refundAllHolds" style="display:none;margin-top:.7rem;border:1px solid var(--amber-300,#fcd34d);background:var(--amber-50,#fffbeb);border-radius:8px;padding:.7rem .85rem;font-size:.82rem;line-height:1.6"></div>
+        <div id="refundAllResult" style="display:none;margin-top:.7rem;font-size:.85rem;font-weight:600;"></div>
+    </div><div class="modal-footer"><button class="btn btn-secondary" onclick="closeM('refundall')">Cancel</button><button class="btn btn-primary" id="refundAllBtn" onclick="refundAllCanteenDeposits()">Refund All</button></div></div></div>
+    <div class="modal-overlay" id="m-item"><div class="modal"><div class="modal-header"><h2 id="itemModalTitle">Add Item</h2><button class="modal-close" onclick="closeM('item')"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg></button></div><div class="modal-body"><div class="form-grid" style="grid-template-columns:1fr 1fr"><div class="form-group" style="grid-column:1/-1"><label class="form-label">Name</label><input type="text" class="form-input" id="niName" placeholder="e.g. Gatorade"></div><div class="form-group" style="grid-column:1/-1"><label class="form-label">Barcode (optional)</label><input type="text" class="form-input" id="niBarcode" placeholder="Click here, then scan — or type it manually"></div><div class="form-group"><label class="form-label">Category</label><input type="text" class="form-input" id="niCat" list="niCatList" placeholder="e.g. Snack"><datalist id="niCatList"></datalist></div><div class="form-group"><label class="form-label">Price ($)</label><input type="number" class="form-input" id="niPrice" min=".25" step=".25" placeholder="2.00"></div><div class="form-group"><label class="form-label">Cost ($, optional)</label><input type="number" class="form-input" id="niCost" min="0" step=".01" placeholder="What you paid per unit"></div><div class="form-group" style="grid-column:1/-1"><label class="form-label">Stock (optional)</label><input type="number" class="form-input" id="niStock" min="0" placeholder="Leave blank for unlimited / untracked"></div></div></div><div class="modal-footer"><button class="btn btn-secondary" onclick="closeM('item')">Cancel</button><button class="btn btn-primary" id="itemSaveBtn" onclick="saveItem()">Add Item</button></div></div></div>
+    
+    <div class="modal-overlay" id="m-upload"><div class="modal" style="max-width:640px"><div class="modal-header"><h2>Upload Items</h2><button class="modal-close" onclick="closeM('upload')"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg></button></div><div class="modal-body">
+    <p style="font-size:.85rem;color:var(--text-secondary);margin-bottom:.75rem">Upload an Excel (.xlsx) or CSV file with columns <b>Name</b>, <b>Category</b>, <b>Price</b>, <b>Stock</b> (optional — leave blank for unlimited). Category can be anything you want — it doesn't have to match an existing one. An item whose name matches an existing item updates it instead of creating a duplicate.</p>
+    <button class="btn btn-secondary btn-sm" onclick="downloadItemTemplate()" style="margin-bottom:1rem">Download Template</button>
+    <input type="file" id="uploadFile" accept=".xlsx,.xls,.csv" onchange="handleUploadFile(this)" class="form-input" style="margin-bottom:1rem">
+    <div id="uploadPreview"></div>
+    </div><div class="modal-footer"><button class="btn btn-secondary" onclick="closeM('upload')">Cancel</button><button class="btn btn-primary" id="uploadConfirmBtn" disabled onclick="confirmUploadImport()">Confirm Import</button></div></div></div>
+    <div class="modal-overlay" id="m-limit"><div class="modal"><div class="modal-header"><h2>Set Daily Limits</h2><button class="modal-close" onclick="closeM('limit')"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg></button></div><div class="modal-body"><div class="form-grid" style="grid-template-columns:1fr"><div class="form-group"><label class="form-label">Camper</label><select class="form-select" id="limCamper"></select></div><div class="form-group"><label class="form-label">New Daily Limit ($)</label><input type="number" class="form-input" id="limAmt" min="1" step="1" placeholder="10"></div></div></div><div class="modal-footer"><button class="btn btn-secondary" onclick="closeM('limit')">Cancel</button><button class="btn btn-primary" onclick="setLimit()">Save</button></div></div></div>
+    <div class="modal-overlay" id="m-history"><div class="modal hist-modal"><div class="modal-header"><h2 id="histTitle">Transaction History</h2><button class="modal-close" onclick="closeM('history')"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg></button></div><div class="modal-body"><div class="hist-summary">Current balance: <strong id="histBalance">$0.00</strong></div><div class="hist-filter" id="histFilter"></div><div id="histBody" class="hist-scroll"></div></div><div class="modal-footer"><button class="btn btn-secondary" onclick="closeM('history')">Close</button></div></div></div>
+    <div class="modal-overlay" id="m-restock"><div class="modal"><div class="modal-header"><h2>Restock Item</h2><button class="modal-close" onclick="closeM('restock')"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg></button></div><div class="modal-body"><div class="form-grid" style="grid-template-columns:1fr"><div class="form-group"><label class="form-label">Item</label><select class="form-select" id="rItem"></select></div><div class="form-group"><label class="form-label">Add Quantity</label><input type="number" class="form-input" id="rQty" min="1" placeholder="50"></div><div class="form-group"><label class="form-label">Total Cost Paid ($, optional)</label><input type="number" class="form-input" id="rTotalCost" min="0" step=".01" placeholder="e.g. 500 for 500 bags = $1.00/bag"><div style="font-size:.72rem;color:var(--text-muted);margin-top:4px">Sets this item's cost-per-unit to Total ÷ Quantity. Leave blank to keep the current cost.</div></div></div></div><div class="modal-footer"><button class="btn btn-secondary" onclick="closeM('restock')">Cancel</button><button class="btn btn-primary" onclick="restock()">Restock</button></div></div></div>
+    
+    <div class="toast" id="toast"></div>
+    
+    <!-- Sidebar & page navigation -->
+    <script>
+    (function(){
+        var h=document.getElementById('hamburgerBtn'),sb=document.getElementById('sidebar'),bd=document.getElementById('sidebarBackdrop'),sy=0;
+        function open(){sy=window.scrollY;document.body.style.top=-sy+'px';document.body.classList.add('sidebar-open');}
+        function close(){document.body.classList.remove('sidebar-open');document.body.style.top='';window.scrollTo(0,sy);}
+        if(h){h.addEventListener('click',function(){document.body.classList.contains('sidebar-open')?close():open();});}
+        if(bd){bd.addEventListener('click',close);}
+        if(sb){sb.querySelectorAll('.sidebar-item[data-page]').forEach(function(b){
+            b.addEventListener('click',function(){
+                var p=b.dataset.page;
+                sb.querySelectorAll('.sidebar-item').forEach(function(x){x.classList.remove('active');});
+                b.classList.add('active');
+                document.querySelectorAll('.snacks-page').forEach(function(x){x.classList.remove('active');});
+                var t=document.getElementById('page-'+p);if(t)t.classList.add('active');
+                _snacksOnShow(p);
+                close();
+            });
+        });}
+    })();
+    
+    // Sections that render lazily get a nudge when their page is shown. The Camp
+    // Shop builds its own shell into #page-shop, so it needs to know it's visible.
+    function _snacksOnShow(page) {
+        if (page === 'shop' && window.CampistryShop) {
+            try { window.CampistryShop.show(); } catch (e) { console.warn('[Shop]', e); }
+        }
+    }
+    
+    // Deep link: dashboard.html links to campistry_snacks.html#shop, so honour a
+    // hash on load. Runs after the page scripts so CampistryShop exists.
+    window.addEventListener('load', function () {
+        var page = (location.hash || '').replace('#', '');
+        if (!page) return;
+        var target = document.getElementById('page-' + page);
+        if (!target) return;
+        snacksNav(page, document.querySelector('.snacks-bnav-item[data-page="' + page + '"]'));
+    });
+    
+    function snacksNav(page, btn) {
+        document.querySelectorAll('.snacks-page').forEach(function(x){x.classList.remove('active');});
+        var t = document.getElementById('page-' + page);
+        if (t) t.classList.add('active');
+        _snacksOnShow(page);
+        document.querySelectorAll('.snacks-bnav-item').forEach(function(x){x.classList.remove('active');});
+        if (btn) btn.classList.add('active');
+        // sync sidebar
+        var sb = document.getElementById('sidebar');
+        if (sb) {
+            sb.querySelectorAll('.sidebar-item').forEach(function(x){x.classList.remove('active');});
+            var si = sb.querySelector('.sidebar-item[data-page="'+page+'"]');
+            if (si) si.classList.add('active');
+        }
+        window.scrollTo(0,0);
+    }
+    </script>
+    
+    <script src="config.js?v=20260903-03"></script>
+    <script src="supabase-js@2.js?v=20260903-03"></script>
+    <script src="campistry_camper_id_rpc.js?v=20260923-20"></script>
+    <script src="supabase_client.js?v=20260923-08"></script>
+    <!-- Session planning. Order is load-bearing: the rule must precede the
+         bootstrap (which routes its key fetch through it), integration_hooks must
+         precede presence (which asks it which plan this browser is in), and the bar
+         mounts itself once integration_hooks has told it. -->
+    <script src="campistry_workspace.js?v=20260917-02"></script>
+    <script src="campistry_cloud_bootstrap.js?v=20260903-03"></script>
+    <script src="integration_hooks.js?v=20260923-22"></script>
+    <script src="campistry_workspace_ui.js?v=20260917-02"></script>
+    <script src="campistry_payments.js?v=20260904-01"></script>
+    <script src="campistry_snacks_cash.js?v=20260924-02"></script>
+    <script src="xlsx@0.18.5.js?v=20260903-03"></script>
+    <script src="campistry_enrollment_window.js?v=20260923-20"></script>
+    <script src="campistry_presence.js?v=20260923-21"></script>
+    <!-- The master key: which session the whole program is showing. Pure rule; the
+         runtime half (the pin, the memo) is in integration_hooks.js. -->
+    <script src="campistry_session_scope.js?v=20260918-09"></script>
+    <script src="campistry_snacks.js?v=20260924-10"></script>
+    <script src="campistry_shop_core.js?v=20260903-03"></script>
+    <script src="campistry_snacks_shop.js?v=20260923-21"></script>
+    <script>
+    // Re-render Snacks when cloud data arrives
+    window.addEventListener('campistry-cloud-hydrated', function(){
+        if (typeof init === 'function') init();
+    });
+    </script>
+    <script src="campistry_notes_quick.js?v=20260903-03"></script>
+    <script>window.__CAMPISTRY_PRODUCT__='snacks';</script>
+    <script src="parent_lockout_guard.js?v=20260903-03"></script>
+    <script src="product_access_guard.js?v=20260903-03"></script>
+    <!-- Per-SECTION access: limits which parts of THIS app the user can open.
+         Loads after the product gate, which decides whether they get in at all. -->
+    <script src="campistry_capabilities.js?v=20260924-01"></script>
+    <script src="campistry_access_sections.js?v=20260907-01"></script>
+    </body>
+    </html>
+    
+  operator: 'match'
+  stack: |-
+    TestContext.<anonymous> (/tmp/claude-0/-home-user-daily-camp-schedular/39278441-0cf3-5f6a-bf8e-a51bef67e95d/scratchpad/old18/tests/snacks_void_sale.test.js:130:12)
+    Test.runInAsyncScope (node:async_hooks:214:14)
+    Test.run (node:internal/test_runner/test:1047:25)
+    Test.processPendingSubtests (node:internal/test_runner/test:744:18)
+    Test.postRun (node:internal/test_runner/test:1173:19)
+    Test.run (node:internal/test_runner/test:1101:12)
+    async Test.processPendingSubtests (node:internal/test_runner/test:744:7)
+  ...
+1..5
+# tests 5
+# suites 0
+# pass 0
+# fail 5
+# cancelled 0
+# skipped 0
+# todo 0
+# duration_ms 111.792369

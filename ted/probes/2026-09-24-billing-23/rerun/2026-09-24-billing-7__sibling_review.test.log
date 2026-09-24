@@ -1,0 +1,34 @@
+TAP version 13
+# \# case 1: one hand-typed $250; office says same for A, same for B (dialog shows the hand payment)
+# \#   questions after Billing load: ["pi_A->pay_h1"]
+# \#   dialogs shown: 1; last: Avi’s registration deposit of $250 was paid by card on 2026-05-01. A payment of $250 on 2026-05-02 (Card) was recorded by hand.  If they are the same money, it is linked to the card charge (so it can be refunded to the card) and counted once.
+# \#   payment rows: [{"id":"pay_h1","amt":250,"depRef":"pi_A","pi":"pi_A"},{"id":"dep_pi_B","amt":250,"depRef":"pi_B","pi":"pi_B"}]
+# \#   family balance: 1500  (2000 tuition - 500 actually paid by card = 1500)
+# \#   open questions left: []
+# \# case 1b: one hand-typed $250; office says same for A, different for B
+# \#   questions after Billing load: ["pi_A->pay_h1"]
+# \#   dialogs shown: 1; last: Avi’s registration deposit of $250 was paid by card on 2026-05-01. A payment of $250 on 2026-05-02 (Card) was recorded by hand.  If they are the same money, it is linked to the card charge (so it can be refunded to the card) and counted once.
+# \#   payment rows: [{"id":"pay_h1","amt":250,"depRef":"pi_A","pi":"pi_A"},{"id":"dep_pi_B","amt":250,"depRef":"pi_B","pi":"pi_B"}]
+# \#   family balance: 1500  (2000 tuition - 500 actually paid by card = 1500)
+# \#   open questions left: []
+# \# case 2: both typed by hand; office says same for both
+# \#   questions after Billing load: ["pi_A->pay_h1","pi_B->pay_h2"]
+# \#   dialogs shown: 2; last: Dina’s registration deposit of $250 was paid by card on 2026-05-01. A payment of $250 on 2026-05-02 (Card) was recorded by hand.  If they are the same money, it is linked to the card charge (so it can be refunded to the card) and counted once.
+# \#   payment rows: [{"id":"pay_h1","amt":250,"depRef":"pi_A","pi":"pi_A"},{"id":"pay_h2","amt":250,"depRef":"pi_B","pi":"pi_B"}]
+# \#   family balance: 1500  (2000 tuition - 500 actually paid by card = 1500)
+# \#   open questions left: []
+# Subtest: probe
+ok 1 - probe
+  ---
+  duration_ms: 11.966204
+  type: 'test'
+  ...
+1..1
+# tests 1
+# suites 0
+# pass 1
+# fail 0
+# cancelled 0
+# skipped 0
+# todo 0
+# duration_ms 114.495854

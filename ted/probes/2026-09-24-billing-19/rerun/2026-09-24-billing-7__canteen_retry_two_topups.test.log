@@ -1,0 +1,23 @@
+TAP version 13
+# \# Stripe  one   top-ups [50]: answers ["200 $20","200 $20"] | distinct Stripe refunds made: 1 ["re_1"] | refund calls ["canteen_refund_cref_1_pi_top1 $20","canteen_refund_cref_1_pi_top1 $20"]
+# \# Cardknox one   top-ups [50]: answers ["200 $20","200 $20"] | refunds sent to Cardknox: 1 ["X1 $20.00"]
+# \# Stripe  two   top-ups [50,50]: answers ["200 $20","200 $20"] | distinct Stripe refunds made: 1 ["re_1"] | refund calls ["canteen_refund_cref_1_pi_top1 $20","canteen_refund_cref_1_pi_top1 $20"]
+# \# Cardknox two   top-ups [50,50]: answers ["200 $20","200 $20"] | refunds sent to Cardknox: 1 ["X1 $20.00"]
+# \# Stripe  small top-ups [10,50]: answers ["200 $20","200 $20"] | distinct Stripe refunds made: 2 ["re_1","re_2"] | refund calls ["canteen_refund_cref_1_pi_top1 $10","canteen_refund_cref_1_pi_top2 $10","canteen_refund_cref_1_pi_top1 $10","canteen_refund_cref_1_pi_top2 $10"]
+# \# Cardknox small top-ups [10,50]: answers ["200 $20","200 $20"] | refunds sent to Cardknox: 2 ["X1 $10.00","X2 $10.00"]
+# \# the office meant ONE $20 refund in every case
+# Subtest: probe
+ok 1 - probe
+  ---
+  duration_ms: 1053.194591
+  type: 'test'
+  ...
+1..1
+# tests 1
+# suites 0
+# pass 1
+# fail 0
+# cancelled 0
+# skipped 0
+# todo 0
+# duration_ms 1137.680197

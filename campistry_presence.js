@@ -95,7 +95,7 @@
                             var key = String(sp.s || ('span' + i));
                             ses[key] = { name: key, startDate: sp.f || '', endDate: sp.t || '' };
                             out.enrollments['px_' + (++n)] =
-                                { camperName: name, session: key, status: 'enrolled' };
+                                { camperName: name, camperId: sp.i != null ? sp.i : null, session: key, status: 'enrolled' };
                         });
                     });
                     out.sessions = Object.keys(ses).map(function (k) { return ses[k]; });
@@ -226,6 +226,35 @@
         var w = W();
         if (!w) { out.reason = 'rule_not_loaded'; return out; }
 
+        // ── THE MASTER KEY COMES FIRST ────────────────────────────────────
+        //
+        // campistry_session_scope.js is now the single answer to "which session is
+        // the program showing", and a planning sandbox is only one of the ways that
+        // question gets answered — the others are a camp-wide pin, one person
+        // peeking, and the ordinary case of the calendar. Every one of them has to
+        // move this date, or "show me 2nd Half" would change the roster on the one
+        // page that has a picker and nowhere else.
+        //
+        // The sandbox path below is kept as the fallback for a page that loads
+        // presence without the scope, which is exactly what it did before.
+        try {
+            if (typeof root.campistrySessionScope === 'function') {
+                var sc = root.campistrySessionScope();
+                if (sc && !sc.ruleMissing) {
+                    out.on = sc.on || out.on;
+                    out.session = sc.session || '';
+                    out.sandbox = (sc.source === 'workspace') ? (root.campistryWorkspace
+                        ? (root.campistryWorkspace() || '') : '') : '';
+                    // The source IS the reason — a caller logging this wants to know
+                    // whether the date moved because of a plan, a pin, a peek or the
+                    // calendar, and those are four different conversations.
+                    out.reason = 'scope_' + (sc.source || 'none');
+                    out.scope = sc;
+                    return out;
+                }
+            }
+        } catch (_) {}
+
         var ws = '';
         try {
             if (typeof root.campistryWorkspace === 'function') ws = root.campistryWorkspace() || '';
@@ -273,8 +302,9 @@
         if (!w) return { state: 'active', reason: 'rule_not_loaded', session: '', from: null, to: null };
         var s = state();
         if (!s.ok) return { state: 'active', reason: 'no_camp_state', session: '', from: null, to: null };
+        var r = s.roster && s.roster[name];
         return w.presenceOf({
-            camperName: name, enrollments: s.enrollments, sessions: s.sessions,
+            camperName: name, camperId: r ? r.camperId : null, enrollments: s.enrollments, sessions: s.sessions,
             roster: s.roster, on: on || P.asOf()
         });
     };

@@ -94,7 +94,7 @@ const corsHeaders = {
   "Access-Control-Allow-Headers": "authorization, x-client-info, apikey, content-type, x-cron-secret",
 };
 
-async function stripeCharge(customerId: string, pmId: string | null, amount: number, description: string, metadata: Record<string, string>, destinationAccountId?: string | null) {
+async function stripeCharge(customerId: string, pmId: string | null, amount: number, description: string, metadata: Record<string, string>, destinationAccountId?: string | null, idempotencyKey?: string) {
   const params: Record<string, string> = {
     amount: String(Math.round(amount * 100)),
     currency: "usd",
@@ -122,12 +122,53 @@ async function stripeCharge(customerId: string, pmId: string | null, amount: num
     params["transfer_data[destination]"] = destinationAccountId;
     params["on_behalf_of"] = destinationAccountId;
   }
-  const resp = await fetch(`${STRIPE_API}/payment_intents`, {
-    method: "POST",
-    headers: { "Authorization": `Bearer ${STRIPE_SECRET}`, "Content-Type": "application/x-www-form-urlencoded" },
-    body: new URLSearchParams(params).toString(),
-  });
-  return resp.json();
+  // One key per plan, instalment and night (TED-064): a second run on the same
+  // night — a retried cron, two schedules — is answered with the first charge
+  // instead of making another.
+  const headers: Record<string, string> = { "Authorization": `Bearer ${STRIPE_SECRET}`, "Content-Type": "application/x-www-form-urlencoded" };
+  if (idempotencyKey) headers["Idempotency-Key"] = idempotencyKey;
+  // No final answer (cut off, Stripe's own 5xx, the same key still running, a
+  // rate limit) is asked again with the SAME key a moment later — Stripe then
+  // answers with the charge it made, or makes it once. Still nothing: the
+  // caller holds it for the office (TED-113), never books it as declined.
+  let why = "";
+  for (let attempt = 0; attempt < 3; attempt++) {
+    if (attempt) await new Promise((r) => setTimeout(r, 1500 * attempt));
+    try {
+      const resp = await fetch(`${STRIPE_API}/payment_intents`, {
+        method: "POST",
+        headers,
+        body: new URLSearchParams(params).toString(),
+      });
+      const out = await resp.json();
+      const undecided = out && out.error && (resp.status >= 500 || resp.status === 409 || resp.status === 429);
+      if (!undecided) return out;
+      why = out.error.message || ("HTTP " + resp.status);
+    } catch (e) {
+      why = (e as Error).message || "no answer";
+    }
+    if (!idempotencyKey) break;           // without a key, asking again could charge twice
+  }
+  return { uncertain: true, error: { message: why || "no answer" } };
+}
+
+// How is a debit we already started doing? (TED-064)
+async function stripePaymentIntent(id: string) {
+  try {
+    const resp = await fetch(`${STRIPE_API}/payment_intents/${encodeURIComponent(id)}`, {
+      headers: { "Authorization": `Bearer ${STRIPE_SECRET}` },
+    });
+    return await resp.json();
+  } catch (_) { return null; }
+}
+// Does this instalment carry an amount the office set (migration 264)?
+function fixedAmountAt(plan: Record<string, any>, index: number): boolean {
+  return Array.isArray(plan?.amounts) && typeof plan.amounts[index] === "number" && plan.amounts[index] > 0;
+}
+
+// Stripe's words for "this one is not going to be paid".
+function piFailed(pi: any): boolean {
+  return !!pi && !pi.error && (pi.status === "canceled" || pi.status === "requires_payment_method");
 }
 
 // Cardknox/Sola charge against a vaulted card token, inlined rather than
@@ -142,8 +183,10 @@ async function stripeCharge(customerId: string, pmId: string | null, amount: num
 // Key+Card+Amount+Invoice match another within 10 minutes, which is exactly
 // what two same-amount installments charged back to back would look like.
 const CARDKNOX_GATEWAY = "https://x1.cardknox.com/gateway";
-async function cardknoxCharge(apiKey: string, amountCents: number, cardToken: string) {
-  const resp = await fetch(CARDKNOX_GATEWAY, {
+async function cardknoxCharge(apiKey: string, amountCents: number, cardToken: string): Promise<Record<string, any>> {
+  let resp: Response;
+  try {
+  resp = await fetch(CARDKNOX_GATEWAY, {
     method: "POST",
     headers: { "Content-Type": "application/x-www-form-urlencoded" },
     body: new URLSearchParams({
@@ -157,8 +200,13 @@ async function cardknoxCharge(apiKey: string, amountCents: number, cardToken: st
       xInvoice: "CI-" + Date.now().toString(36) + Math.random().toString(36).slice(2, 6),
     }).toString(),
   });
+  } catch (e) {
+    // Cut off: the gateway may have charged (TED-113). Never a decline.
+    return { success: false, uncertain: true, error: (e as Error).message || "no answer" };
+  }
   const parsed: Record<string, string> = {};
-  new URLSearchParams(await resp.text()).forEach((v, k) => { parsed[k] = v; });
+  try { new URLSearchParams(await resp.text()).forEach((v, k) => { parsed[k] = v; }); } catch (_) { /* no body */ }
+  if (!parsed.xResult) return { success: false, uncertain: true, error: "No answer from the card company (HTTP " + resp.status + ")", raw: parsed };
   if (parsed.xResult !== "A") {
     return { success: false, error: parsed.xError || "Declined", status: parsed.xStatus, raw: parsed };
   }
@@ -183,8 +231,10 @@ function bqBase(c: Record<string, string>): string {
   if (!/\/(api\/)?v\d+$/i.test(b)) b += "/api/v2";
   return b;
 }
-async function banquestCharge(creds: Record<string, string>, amountCents: number, cardRef: string) {
-  const resp = await fetch(`${bqBase(creds)}/transactions/charge`, {
+async function banquestCharge(creds: Record<string, string>, amountCents: number, cardRef: string): Promise<Record<string, any>> {
+  let resp: Response;
+  try {
+  resp = await fetch(`${bqBase(creds)}/transactions/charge`, {
     method: "POST",
     headers: { "Content-Type": "application/json", "Authorization": "Basic " + btoa(`${creds.sourceKey}:${creds.pin}`) },
     // A saved card is either a verify card_ref (charged "tkn-<ref>") or a
@@ -192,11 +242,18 @@ async function banquestCharge(creds: Record<string, string>, amountCents: number
     // "pm-<id>" prefix). Pass an already-prefixed ref through untouched.
     body: JSON.stringify({ amount: Number((amountCents / 100).toFixed(2)), source: /^(tkn-|pm-|ref-|nonce-)/.test(cardRef) ? cardRef : "tkn-" + cardRef }),
   });
+  } catch (e) {
+    return { success: false, uncertain: true, error: (e as Error).message || "no answer" };   // cut off: may have charged
+  }
   let data: Record<string, any> = {};
   try { data = await resp.json(); } catch { /* non-JSON error body */ }
   const approved = String(data?.status_code || "").toUpperCase() === "A"
                 || String(data?.status || "").toLowerCase() === "approved";
   const ref = data?.reference_number != null ? String(data.reference_number) : "";
+  // A gateway timeout (5xx) with no reference is not a decline (TED-113).
+  if (resp.status >= 500 && !ref) {
+    return { success: false, uncertain: true, error: `No answer from the card company (HTTP ${resp.status})`, raw: data };
+  }
   if (resp.status < 200 || resp.status >= 300 || !approved || !ref) {
     const errMsg = data?.error_message || (Array.isArray(data?.error_messages) && data.error_messages[0]) || data?.error_details || data?.error || data?.message || data?.status || `Declined (HTTP ${resp.status})`;
     return { success: false, error: errMsg, status: data?.status, raw: data };
@@ -219,6 +276,16 @@ function todayISO() { return new Date().toISOString().split("T")[0]; }
 //     this below the sum of what's left, so a later installment gets capped
 //     at whatever's actually still owed instead of blindly charging its
 //     original scheduled amount and overcollecting.
+// A processor payment still processing, started in the last fortnight (TED-144).
+// A bank debit settles or is returned within days; an older row stuck at
+// "pending" is a record nobody finished, not money on its way.
+function onItsWay(p: Record<string, any>): boolean {
+  if (!(Number(p.amount) > 0)) return false;
+  if (!p.stripePaymentIntentId && !p.byopTransactionId) return false;
+  const at = Number(p.timestamp) || (p.date ? Date.parse(String(p.date)) : NaN);
+  return Number.isFinite(at) && Date.now() - at < 14 * 86400000;
+}
+
 function computeFamilyBalance(
   me: Record<string, any>,
   f: Record<string, any>,
@@ -300,6 +367,25 @@ serve(async (req) => {
   const today = todayISO();
   let charged = 0, failed = 0;
   const details: Record<string, unknown>[] = [];
+
+  // A TIME BUDGET (TED-123). The platform stops a function at its wall-clock
+  // limit, wherever it is — possibly between a card being charged and the
+  // charge being recorded. So the run stops ITSELF, cleanly, between two
+  // families, well inside the limit, and starts a new run for the rest the
+  // same night. The new run carries a bookmark (the last family this one
+  // started), so nobody is charged, flagged or notified twice. Families are
+  // taken in a fixed order (camp, then family) for the bookmark to mean
+  // anything.
+  const START = Date.now();
+  const BUDGET_MS = Number(Deno.env.get("AUTOPAY_TIME_BUDGET_MS")) || 110000;
+  let reqBody: Record<string, any> = {};
+  try { reqBody = (await req.json()) || {}; } catch (_) { reqBody = {}; }
+  const resumeAfter = (reqBody.resumeAfter && typeof reqBody.resumeAfter.camp === "string" && typeof reqBody.resumeAfter.family === "string")
+    ? { camp: String(reqBody.resumeAfter.camp), family: String(reqBody.resumeAfter.family) } : null;
+  const hop = Math.max(0, Number(reqBody.hop) || 0);
+  let startedHere = 0;
+  let lastStarted: { camp: string; family: string } | null = null;
+  let stoppedAt: { camp: string; family: string } | null = null;
 
   const { data: rows, error } = await supabase.from("camp_state_kv")
     .select("camp_id, value").eq("key", "campistryMe");
@@ -407,6 +493,96 @@ serve(async (req) => {
     }
   }
 
+  // A bank debit still clearing is held ON THE PLAN (migration 262, TED-064),
+  // so the next night asks Stripe about that debit instead of starting another.
+  // Returns whether the hold (or its clearing) was actually saved (TED-084): a
+  // debit reported as held when it was not is debited again tomorrow.
+  async function holdCharge(campId: string, famKey: string, planId: string, hold: Record<string, unknown> | null): Promise<boolean> {
+    if (!planId) {
+      console.error(`[autopay] camp ${campId} family ${famKey}: a plan with no way to name it — the debit cannot be held`);
+      return false;
+    }
+    const { data, error } = await supabase.rpc("hold_autopay_charge", {
+      p_camp_id: campId, p_family_key: famKey, p_plan_id: planId, p_hold: hold,
+    });
+    if (error || !data?.success) {
+      console.error(`[autopay] camp ${campId} family ${famKey}: could not ${hold ? "hold" : "clear"} the debit on plan ${planId} (${error?.message || data?.error || "no answer"})${hold ? " — IT MAY BE DEBITED AGAIN; is migration 269 applied?" : ""}`);
+      return false;
+    }
+    return true;
+  }
+  // A debit that is in flight but could NOT be held: said loudly, on the plan
+  // (the office is notified) and in the run's results — never "processing_held".
+  async function holdFailed(campId: string, famKey: string, f: Record<string, any>, ref: string,
+                            amount: number, piId: string) {
+    await flagPlan(campId, famKey, ref, "bank_debit_unheld",
+      `a ${amount.toFixed(2)} bank debit (${piId}) is clearing but could not be recorded on the plan — check it before the next run`);
+    return { camp: campId, family: f.name, amount, result: "processing_hold_failed", paymentIntentId: piId };
+  }
+
+  // A held debit Stripe has not finished (or cannot be asked about). Normal for
+  // a few days; not for weeks, and not when nobody can ask — both are put in
+  // front of the office rather than waiting silently for ever (TED-084).
+  async function heldStill(campId: string, famKey: string, f: Record<string, any>, ref: string,
+                           held: Record<string, any>, hpi: Record<string, any> | null) {
+    const amount = Number(held.amount) || 0;
+    if (!hpi || hpi.error) {
+      console.warn(`[autopay] camp ${campId} family ${famKey}: held debit ${held.paymentIntentId} cannot be checked (${STRIPE_SECRET ? (hpi?.error?.message || "no answer") : "no Stripe key"})`);
+      await flagPlan(campId, famKey, ref, "bank_debit_unverified",
+        `the bank debit ${held.paymentIntentId} from ${held.since || "an earlier run"} cannot be checked with Stripe — confirm it in the Stripe dashboard`);
+      return { camp: campId, family: f.name, amount, result: "hold_unverifiable" };
+    }
+    const days = held.since ? (Date.parse(today) - Date.parse(String(held.since))) / 86400000 : 0;
+    if (days > 10) {
+      await flagPlan(campId, famKey, ref, "bank_debit_stuck",
+        `the bank debit ${held.paymentIntentId} from ${held.since} is still "${hpi.status}" after ${Math.floor(days)} days`);
+      return { camp: campId, family: f.name, amount, result: "waiting_for_bank_debit", stuckDays: Math.floor(days) };
+    }
+    return { camp: campId, family: f.name, amount, result: "waiting_for_bank_debit" };
+  }
+
+  // A charge the card company never answered (TED-113): it may have gone
+  // through. Held ON THE PLAN, so no later night charges it again, and put in
+  // front of the office (a Billing notice) — never booked as declined, never
+  // retried by itself. The office answers it on the family in Billing.
+  async function holdUnconfirmed(campId: string, famKey: string, f: Record<string, any>,
+                                 plan: Record<string, any>, ref: string,
+                                 h: { amount: number; dueDate: string; index?: number | null; planIndex?: number | null; processor: string; why: string }) {
+    const held = await holdCharge(campId, famKey, ref, {
+      unconfirmed: true, processor: h.processor, amount: h.amount, dueDate: h.dueDate,
+      index: h.index ?? null, planIndex: h.planIndex ?? null, planId: plan && plan.id ? String(plan.id) : "",
+      since: today, why: h.why,
+    });
+    console.error(`[autopay] camp ${campId} family ${famKey}: ${h.processor} never answered a $${h.amount.toFixed(2)} charge (${h.why}) — ${held ? "held for the office" : "COULD NOT BE HELD, it may be charged again"}`);
+    try {
+      await supabase.from("notifications").insert({
+        camp_id: campId, source: "charge_unconfirmed", source_id: `autopay:${famKey}:${ref}:${h.dueDate}`,
+        title: "An autopay charge needs checking",
+        body: `${f.name || famKey}: an autopay charge of $${h.amount.toFixed(2)} (instalment due ${h.dueDate}) was sent to ${h.processor} and it never answered, so it may have gone through. `
+            + (held
+              ? `Check the processor's dashboard, then answer it on this family in Billing. Autopay will not charge this plan again until you do.`
+              : `It could not be marked on the plan, so it MAY BE CHARGED AGAIN on the next run — check the processor's dashboard now.`),
+        link_target: "campistry_me.html",
+      });
+    } catch (_) { /* already told */ }
+    return { camp: campId, family: f.name, amount: h.amount, result: held ? "unconfirmed_held" : "unconfirmed_hold_failed", reason: h.why };
+  }
+
+  // A declined LEGACY instalment (TED-055). It used to be written
+  // status:'failed', and the loop only charges 'pending' — so one decline lost
+  // that month for good, with no alert. Now it stays 'pending' with the reason
+  // and the attempt count on it, and the plan is flagged exactly as a ledger
+  // plan's decline is (migration 179): the office is notified, and the next
+  // attempt waits for the plan's retry date, escalating after repeated failures.
+  async function legacyDeclined(campId: string, famKey: string, plan: Record<string, any>,
+                                planIndex: number, inst: Record<string, any>, why: string) {
+    await recordInstallment(campId, famKey, plan, planIndex, inst, {
+      failReason: why, lastFailedAt: new Date().toISOString(),
+      attempts: (Number(inst.attempts) || 0) + 1,
+    });
+    await flagPlan(campId, famKey, (plan.id ? String(plan.id) : "#" + planIndex), "declined", why);
+  }
+
   // Persist ONE installment outcome — the patch, and when a card was actually
   // charged the payment alongside it — through migration 169's locking RPC.
   //
@@ -452,9 +628,43 @@ serve(async (req) => {
     return true;
   }
 
-  for (const row of (rows || [])) {
+  const orderedRows = (rows || []).slice().sort((a: any, b: any) => String(a.camp_id) < String(b.camp_id) ? -1 : String(a.camp_id) > String(b.camp_id) ? 1 : 0);
+  campLoop:
+  for (const row of orderedRows) {
+    // camps the run this one continues has already done
+    if (resumeAfter && String(row.camp_id) < resumeAfter.camp) continue;
+    const resuming = !!resumeAfter && String(row.camp_id) === resumeAfter.camp;
     const me = (row.value && typeof row.value === "object") ? row.value as Record<string, any> : null;
-    if (!me || !me.families) continue;
+    if (!me) continue;
+
+    // Families and payments come from their ROWS, never the document.
+    //
+    // Since 212/214 every server-side writer — record_autopay_installment below,
+    // a parent saving a card or choosing a plan, a webhook recording a payment —
+    // writes camp_families / camp_payments. The document's copies catch up only
+    // when somebody saves the Me page. Reading them here meant an installment this
+    // run marked PAID was still PENDING in the document tomorrow, so its card was
+    // charged again every night (and the write refused, so the second charge was
+    // not recorded either). And the payments were read from me.finance.payments,
+    // a branch that has not existed since migration 158 — so what a family had
+    // paid counted as nothing, and a family who paid in full early was charged
+    // their remaining installments anyway.
+    //
+    // A camp whose rows cannot be read is SKIPPED, never charged from the stale copy.
+    {
+      const famRes = await supabase.rpc("camp_families_object", { p_camp_id: row.camp_id });
+      const payRes = await supabase.rpc("camp_payments_array", { p_camp_id: row.camp_id });
+      if (famRes.error || payRes.error || !famRes.data || typeof famRes.data !== "object") {
+        console.error(`[autopay] camp ${row.camp_id}: could not read family/payment rows `
+          + `(${famRes.error?.message || payRes.error?.message || "no data"}) — skipping this camp tonight`);
+        details.push({ camp: row.camp_id, result: "skipped_rows_unreadable" });
+        continue;
+      }
+      me.families = famRes.data as Record<string, any>;
+      me.finance = { ...(me.finance && typeof me.finance === "object" ? me.finance : {}),
+                     payments: Array.isArray(payRes.data) ? payRes.data : [] };
+    }
+    if (!me.families || !Object.keys(me.families).length) continue;
 
     // Look AHEAD at the cards, before charging anything with them. A card
     // expires on a date known the day it was saved, so autopay starting to
@@ -467,7 +677,7 @@ serve(async (req) => {
     // stripe-webhook stores them; the BYOP adapters return a brand and last four
     // and no expiry, so those cards come back 'unknown' and are deliberately not
     // warned about. Best-effort: never fail a run over it.
-    try {
+    if (!resuming) try {
       const { data: exp, error: expErr } = await supabase.rpc("flag_expiring_cards", {
         p_camp_id: row.camp_id, p_as_of: today, p_days: 30,
       });
@@ -488,20 +698,104 @@ serve(async (req) => {
     // Stripe customers — same plan/installment data, different rail.
     const processorKey = campProcessors.get(String(row.camp_id)) || null;
 
-    for (const [famKey, fRaw] of Object.entries(me.families)) {
+    for (const [famKey, fRaw] of Object.entries(me.families).sort((a, b) => a[0] < b[0] ? -1 : a[0] > b[0] ? 1 : 0)) {
+      if (resuming && famKey <= resumeAfter!.family) continue;          // done by the earlier run
+      // Out of time: stop BETWEEN families, never inside one (TED-123). At
+      // least one family per run, so a continuation always gets further.
+      if (startedHere > 0 && Date.now() - START > BUDGET_MS) { stoppedAt = lastStarted; break campLoop; }
+      startedHere++;
+      lastStarted = { camp: String(row.camp_id), family: famKey };
       const f = fRaw as Record<string, any>;
+      // One family's trouble — a dropped connection, an error nobody foresaw —
+      // is that family's, never the whole night's (TED-113): every family
+      // after it, at every camp, is still charged tonight.
+      try {
       // A family can have MULTIPLE plans (migration 116) — normalize the
       // legacy singular f.plan into a one-item list so a pre-116 family
       // charges exactly as it always did.
       const plans: Record<string, any>[] = Array.isArray(f.plans)
         ? f.plans
         : (f.plan && Array.isArray(f.plan.installments) ? [f.plan] : []);
-      if (!plans.some((p) => p && p.autopay && Array.isArray(p.installments))) continue;
+      // How a plan is named to hold_autopay_charge / flag_plan_collection
+      // (migration 269): its id, or — for a plan from before plans had ids, and
+      // the old single f.plan ('#0') — its position in this same list (TED-084).
+      const refOf = (p: Record<string, any>) => p && p.id ? String(p.id) : "#" + plans.indexOf(p);
+      // Either plan model (TED-051): a plan built by a parent, or converted, has
+      // dueDates and no installments[]. Checking only for installments[] here
+      // skipped every such family before its plans were ever looked at, so a
+      // parent's autopay plan was never charged and nobody was told.
+      if (!plans.some((p) => p && p.autopay && (Array.isArray(p.installments) || Array.isArray(p.dueDates)))) continue;
       // This family WANTS autopay — so if it has nothing chargeable behind it,
       // that's a real misconfiguration (a plan was set up but the card/token
       // never got saved), worth a log line instead of the two silent `continue`s
       // that used to sit above the plan check and made "my autopay didn't run"
       // impossible to diagnose from the logs.
+      // A card deposit Billing is still asking the office about (TED-103): it is
+      // not on the ledger yet, so the balance reads high by that deposit. Charge
+      // nothing for this family until the office answers — and tell them, on
+      // the plan (a Billing notice), which is what gets it answered.
+      //
+      // NOT through flag_plan_collection (TED-106): that is the card-failure
+      // path — attempts, retry dates, "this card is not going to start working".
+      // Nothing is wrong with the card. One plain Billing notice per question,
+      // and nothing left behind once the office answers.
+      if (Array.isArray(f.depositReview) && f.depositReview.length) {
+        const q = f.depositReview[0] || {};
+        try {
+          await supabase.from("notifications").insert({
+            camp_id: row.camp_id, source: "autopay_blocked",
+            source_id: `${famKey}:deposit_review:${String(q.ref || "")}`,
+            title: "Autopay is waiting for an answer",
+            body: `${f.name || famKey} — a card deposit of $${Number(q.amount || 0).toFixed(2)} may already have been recorded by hand. `
+                + `Answer the question on this family in Billing; autopay resumes the same night.`,
+            link_target: "campistry_me.html",
+          });
+        } catch (_) { /* already told (one notice per question) */ }
+        details.push({ camp: row.camp_id, family: f.name, result: "waiting_for_deposit_review" });
+        continue;
+      }
+      // A bank debit for this family still on its way that autopay did NOT
+      // start (TED-144) — the office's Charge Card, a pay link. Until the bank
+      // settles it the balance reads in full, so charging tonight would take
+      // the same bill twice; marking instalments "covered" by it would lose
+      // them if the bank returns it. So nothing is decided for this family
+      // until it has an answer: settled, it counts as paid; returned, the
+      // next run charges as usual. Autopay's own debits are held by
+      // pendingCharge below, per plan.
+      {
+        const ownHeld = new Set(plans.map((p) => p && p.pendingCharge && p.pendingCharge.paymentIntentId)
+          .filter(Boolean).map(String));
+        const camperIdsF: string[] = Array.isArray(f.camperIds) ? f.camperIds : [];
+        const inFlight = (Array.isArray(me.finance?.payments) ? me.finance.payments : []).find((p: any) =>
+          p && p.status === "pending" && onItsWay(p)
+          && (p.familyKey === famKey || (!p.familyKey && camperIdsF.includes(p.family)))
+          && !ownHeld.has(String(p.stripePaymentIntentId || "")));
+        if (inFlight) {
+          details.push({ camp: row.camp_id, family: f.name, amount: Number(inFlight.amount) || 0,
+                         result: "waiting_for_office_bank_debit", paymentIntentId: inFlight.stripePaymentIntentId || inFlight.byopTransactionId,
+                         reason: "a bank debit started " + String(inFlight.date || "recently") + " is still on its way" });
+          continue;
+        }
+      }
+      // An earlier version held these families through the card-failure flag;
+      // once the question is answered that flag must not keep autopay waiting.
+      for (const p of plans) {
+        if (p && p.collectionBlocked && p.collectionBlocked.reason === "deposit_review") {
+          await flagPlan(String(row.camp_id), famKey, refOf(p), null);
+          delete p.collectionBlocked;
+        }
+      }
+      // A payment of this family's is disputed with the bank (TED-186/194,
+      // migration 288): nothing is charged, and — before the card check — the
+      // pause is not touched by a "no card" mark while the card is replaced.
+      // The family's own pause (TED-200) covers a plan added or switched to
+      // autopay during the dispute.
+      if ((f.disputeHold && Array.isArray(f.disputeHold.disputeIds) && f.disputeHold.disputeIds.length > 0)
+          || plans.some((p: any) => p && p.collectionBlocked && p.collectionBlocked.reason === "chargeback")) {
+        details.push({ camp: row.camp_id, family: f.name, result: "held_for_dispute",
+                       reason: "a payment is disputed with the bank" });
+        continue;
+      }
       if (!f.cardOnFile || (processorKey ? !f.byopCustomerRef : !f.stripeCustomerId)) {
         const why = !f.cardOnFile ? "no card on file"
           : (processorKey ? "no vaulted card token (byopCustomerRef) — the card was never saved to the processor" : "no Stripe customer");
@@ -509,9 +803,9 @@ serve(async (req) => {
         // Say so ON THE PLAN. Skipping here happens before the plan loop, so
         // nothing else in this run will ever mention this family again — which is
         // exactly how a removed card silently stopped collection.
-        for (const p of (Array.isArray(f.plans) ? f.plans : [])) {
-          if (p && Array.isArray(p.dueDates) && p.autopay && !p.paused) {
-            await flagPlan(String(row.camp_id), famKey, String(p.id || ""), "no_card", why);
+        for (const p of plans) {
+          if (p && (Array.isArray(p.dueDates) || Array.isArray(p.installments)) && p.autopay && !p.paused) {
+            await flagPlan(String(row.camp_id), famKey, refOf(p), "no_card", why);
           }
         }
         details.push({ camp: row.camp_id, family: f.name, result: "skipped_no_chargeable_card", reason: why, processor: processorKey || "stripe" });
@@ -543,10 +837,68 @@ serve(async (req) => {
         // through the whole plan in a week of due dates and leaves it reading
         // finished with the balance untouched.
         const blocked = plan.collectionBlocked;
+        // A payment of this family's is charged back and their bank is still
+        // deciding (TED-186, migration 288): nothing is charged again on its own.
+        if (blocked && blocked.reason === "chargeback") {
+          details.push({ camp: row.camp_id, family: f.name, result: "held_for_dispute",
+                         reason: "a payment is disputed with the bank" + (blocked.disputeId ? " (" + blocked.disputeId + ")" : "") });
+          continue;
+        }
         if (blocked && blocked.nextRetryAt && String(blocked.nextRetryAt) > today) {
           details.push({ camp: row.camp_id, family: f.name, result: "waiting_to_retry",
                          reason: blocked.reason, attempts: blocked.attempts,
                          nextRetryAt: blocked.nextRetryAt });
+          continue;
+        }
+
+        // A bank debit from an earlier night still clearing (TED-064): ask
+        // Stripe about THAT debit; never start another for the plan meanwhile.
+        const heldP = plan.pendingCharge;
+        // A charge the card company never answered (TED-113): the office says
+        // whether it went through; until then nothing more is charged.
+        if (heldP && heldP.unconfirmed) {
+          details.push({ camp: row.camp_id, family: f.name, amount: Number(heldP.amount) || 0, result: "waiting_for_office",
+                         reason: "an autopay charge from " + (heldP.since || "an earlier night") + " was never answered by the card company" });
+          continue;
+        }
+        if (heldP && heldP.paymentIntentId) {
+          const hpi = STRIPE_SECRET ? await stripePaymentIntent(String(heldP.paymentIntentId)) : null;
+          if (hpi && !hpi.error && hpi.status === "succeeded") {
+            const recH = await supabase.rpc("record_autopay_charge", {
+              p_camp_id: row.camp_id, p_family_key: famKey,
+              p_plan_id: String(plan.id || ""), p_index: heldP.index,
+              p_due_date: heldP.dueDate, p_amount: Number(heldP.amount),
+              p_payment: {
+                id: "auto_" + hpi.id, familyKey: famKey,
+                amount: Number(heldP.amount), date: today, method: "Autopay (bank)",
+                reference: hpi.id, stripePaymentIntentId: hpi.id,
+                notes: "Autopay instalment " + (Number(heldP.index) + 1) + " of " + plan.dueDates.length,
+                status: "succeeded", timestamp: Date.now(),
+              },
+              p_dedupe_key: String(hpi.id),
+              p_entry_note: "Autopay instalment " + (Number(heldP.index) + 1) + " of " + plan.dueDates.length,
+            });
+            await holdCharge(String(row.camp_id), famKey, refOf(plan), null);
+            await flagPlan(String(row.camp_id), famKey, refOf(plan), null);
+            charged++;
+            details.push({ camp: row.camp_id, family: f.name, amount: Number(heldP.amount),
+                           result: (recH.error || !recH.data?.success) ? "charged_not_recorded" : "cleared" });
+          } else if (piFailed(hpi)) {
+            const why = hpi.last_payment_error?.message || "bank debit failed";
+            if (!fixedAmountAt(plan, Number(heldP.index))) {        // TED-079, as below
+              await supabase.rpc("record_autopay_charge", {
+                p_camp_id: row.camp_id, p_family_key: famKey,
+                p_plan_id: String(plan.id || ""), p_index: heldP.index,
+                p_due_date: heldP.dueDate, p_amount: 0, p_reason: "declined: " + why,
+              });
+            }
+            await holdCharge(String(row.camp_id), famKey, refOf(plan), null);
+            await flagPlan(String(row.camp_id), famKey, refOf(plan), "declined", why);
+            failed++;
+            details.push({ camp: row.camp_id, family: f.name, amount: Number(heldP.amount), result: "failed", reason: why });
+          } else {
+            details.push(await heldStill(String(row.camp_id), famKey, f, refOf(plan), heldP, hpi));
+          }
           continue;
         }
 
@@ -589,7 +941,7 @@ serve(async (req) => {
             // Not a decline and not the family's fault. Record NOTHING so the
             // counter does not advance — the instalment retries next run once
             // the camp's processor is connected.
-            await flagPlan(String(row.camp_id), famKey, String(plan.id || ""),
+            await flagPlan(String(row.camp_id), famKey, refOf(plan),
                            "no_processor", `processor ${processorKey} is not connected`);
             details.push({ camp: row.camp_id, family: f.name, amount, result: "skipped_no_processor", processor: processorKey });
             continue;
@@ -597,6 +949,11 @@ serve(async (req) => {
           const res = processorKey === "cardknox"
             ? await cardknoxCharge(String(creds.apiKey), Math.round(amount * 100), String(f.byopCustomerRef))
             : await banquestCharge(creds, Math.round(amount * 100), String(f.byopCustomerRef));
+          if (!res.success && res.uncertain) {
+            details.push(await holdUnconfirmed(String(row.camp_id), famKey, f, plan, refOf(plan),
+              { amount, dueDate: String(due.dueDate), index: due.index, processor: processorKey, why: String(res.error || "no answer") }));
+            continue;
+          }
           ok = !!(res.success && res.externalTransactionId);
           txnId = String(res.externalTransactionId || "");
           failWhy = res.error || "Declined";
@@ -621,15 +978,27 @@ serve(async (req) => {
             { campId: String(row.camp_id), familyKey: famKey, familyName: camperName2,
               planId: String(plan.id || ""), source: "autopay" },
             campDestinations.get(String(row.camp_id)) || null,
+            `autopay:${row.camp_id}:${famKey}:${plan.id || ""}:${due.index}:${today}`,
           );
+          if (pi.uncertain) {
+            details.push(await holdUnconfirmed(String(row.camp_id), famKey, f, plan, refOf(plan),
+              { amount, dueDate: String(due.dueDate), index: due.index, processor: "stripe", why: String(pi.error?.message || "no answer") }));
+            continue;
+          }
           if (pi.error || pi.status === "requires_action") {
             failWhy = pi.error?.message || "requires_authentication";
           } else if (pi.status === "succeeded") {
             ok = true; txnId = String(pi.id);
           } else {
-            // Still processing. Record nothing: the counter must not advance on
-            // a charge that has not landed.
-            details.push({ camp: row.camp_id, family: f.name, amount, result: pi.status });
+            // Still processing (a bank debit). The counter must not advance on a
+            // charge that has not landed — but the debit IS in flight, so it is
+            // held on the plan and not started again tomorrow (TED-064).
+            const heldOk = await holdCharge(String(row.camp_id), famKey, refOf(plan), {
+              paymentIntentId: String(pi.id), index: due.index, dueDate: due.dueDate,
+              amount, since: today,
+            });
+            details.push(heldOk ? { camp: row.camp_id, family: f.name, amount, result: "processing_held" }
+              : await holdFailed(String(row.camp_id), famKey, f, refOf(plan), amount, String(pi.id)));
             continue;
           }
         }
@@ -637,13 +1006,21 @@ serve(async (req) => {
         if (!ok) {
           // A decline advances the counter with charged:0 and the reason, so the
           // office can see it happened and the plan does not stall for ever on
-          // one bad card. Nothing is recorded as paid.
-          await supabase.rpc("record_autopay_charge", {
-            p_camp_id: row.camp_id, p_family_key: famKey,
-            p_plan_id: String(plan.id || ""), p_index: due.index,
-            p_due_date: due.dueDate, p_amount: 0, p_reason: "declined: " + failWhy,
-          });
-          await flagPlan(String(row.camp_id), famKey, String(plan.id || ""), "declined", failWhy);
+          // one bad card. Nothing is recorded as paid. On an even-split plan the
+          // later instalments absorb what this one missed.
+          //
+          // A plan with the office's own amounts (264) has no such catch-up —
+          // July is $200 whatever June's $1,000 did — so there the counter must
+          // NOT move (TED-079): the same instalment is retried on the decline
+          // schedule the flag below sets, and the later ones wait for it.
+          if (!fixedAmountAt(plan, due.index)) {
+            await supabase.rpc("record_autopay_charge", {
+              p_camp_id: row.camp_id, p_family_key: famKey,
+              p_plan_id: String(plan.id || ""), p_index: due.index,
+              p_due_date: due.dueDate, p_amount: 0, p_reason: "declined: " + failWhy,
+            });
+          }
+          await flagPlan(String(row.camp_id), famKey, refOf(plan), "declined", failWhy);
           failed++;
           details.push({ camp: row.camp_id, family: f.name, amount, result: "failed", reason: failWhy });
           continue;
@@ -676,7 +1053,7 @@ serve(async (req) => {
         // Collected: whatever was blocking is over. Clearing uses the same call,
         // so a newly saved card or a card that now works closes the flag without
         // anyone having to dismiss anything.
-        await flagPlan(String(row.camp_id), famKey, String(plan.id || ""), null);
+        await flagPlan(String(row.camp_id), famKey, refOf(plan), null);
         // An instalment is the charge a parent is LEAST expecting: nobody was
         // present, it happened overnight, and until now the first they knew of
         // it was the line on their statement. On the Stripe path the webhook
@@ -715,6 +1092,61 @@ serve(async (req) => {
         // dueDates and no installments, but guard anyway so a half-converted
         // plan can never be charged twice in one night.
         if (Array.isArray(plan.dueDates)) continue;
+
+        // A declined instalment is retried on the same schedule as a ledger
+        // plan's (migration 179), not dropped (TED-055): until the plan's
+        // next retry date, leave it alone.
+        const blockedL = plan.collectionBlocked;
+        // A payment of this family's is charged back and their bank is still
+        // deciding (TED-186, migration 288): nothing is charged again on its own.
+        if (blockedL && blockedL.reason === "chargeback") {
+          details.push({ camp: row.camp_id, family: f.name, result: "held_for_dispute",
+                         reason: "a payment is disputed with the bank" + (blockedL.disputeId ? " (" + blockedL.disputeId + ")" : "") });
+          continue;
+        }
+        if (blockedL && blockedL.nextRetryAt && String(blockedL.nextRetryAt) > today) {
+          details.push({ camp: row.camp_id, family: f.name, result: "waiting_to_retry",
+                         reason: blockedL.reason, attempts: blockedL.attempts,
+                         nextRetryAt: blockedL.nextRetryAt });
+          continue;
+        }
+
+        // The same for an installments[] plan: a debit still clearing is asked
+        // about, never started again (TED-064).
+        const heldL = plan.pendingCharge;
+        if (heldL && heldL.unconfirmed) {                        // TED-113, as above
+          details.push({ camp: row.camp_id, family: f.name, amount: Number(heldL.amount) || 0, result: "waiting_for_office",
+                         reason: "an autopay charge from " + (heldL.since || "an earlier night") + " was never answered by the card company" });
+          continue;
+        }
+        if (heldL && heldL.paymentIntentId) {
+          const hpi = STRIPE_SECRET ? await stripePaymentIntent(String(heldL.paymentIntentId)) : null;
+          const hinst = plan.installments.find((x: any) => x && x.dueDate === heldL.dueDate && x.status === "pending");
+          if (hpi && !hpi.error && hpi.status === "succeeded") {
+            if (hinst) {
+              await recordInstallment(String(row.camp_id), famKey, plan, planIndex, hinst,
+                { status: "paid", paidDate: today, stripePaymentIntentId: hpi.id },
+                { id: "auto_" + hpi.id, familyKey: famKey, amount: Number(heldL.amount), date: today,
+                  method: "Autopay (bank)", reference: hpi.id, notes: "Monthly autopay installment",
+                  stripePaymentIntentId: hpi.id, status: "succeeded", timestamp: Date.now() },
+                String(hpi.id));
+              remainingBalance -= Number(heldL.amount) || 0;
+            }
+            await holdCharge(String(row.camp_id), famKey, refOf(plan), null);
+            await flagPlan(String(row.camp_id), famKey, refOf(plan), null);
+            charged++;
+            details.push({ camp: row.camp_id, family: f.name, amount: Number(heldL.amount), result: "cleared" });
+          } else if (piFailed(hpi)) {
+            const why = hpi.last_payment_error?.message || "bank debit failed";
+            if (hinst) await legacyDeclined(String(row.camp_id), famKey, plan, planIndex, hinst, why);
+            await holdCharge(String(row.camp_id), famKey, refOf(plan), null);
+            failed++;
+            details.push({ camp: row.camp_id, family: f.name, amount: Number(heldL.amount), result: "failed", reason: why });
+          } else {
+            details.push(await heldStill(String(row.camp_id), famKey, f, refOf(plan), heldL, hpi));
+          }
+          continue;
+        }
 
         for (const inst of plan.installments) {
           if (inst.status !== "pending") continue;
@@ -779,12 +1211,16 @@ serve(async (req) => {
             const res = processorKey === "cardknox"
               ? await cardknoxCharge(String(creds.apiKey), Math.round(amount * 100), String(f.byopCustomerRef))
               : await banquestCharge(creds, Math.round(amount * 100), String(f.byopCustomerRef));
+            if (!res.success && res.uncertain) {
+              details.push(await holdUnconfirmed(String(row.camp_id), famKey, f, plan, refOf(plan),
+                { amount, dueDate: String(inst.dueDate), planIndex, processor: processorKey, why: String(res.error || "no answer") }));
+              break;   // the rest of this plan waits for the office
+            }
             if (!res.success || !res.externalTransactionId) {
-              await recordInstallment(String(row.camp_id), famKey, plan, planIndex, inst, {
-                status: "failed", failReason: res.error || "Declined",
-              });
+              await legacyDeclined(String(row.camp_id), famKey, plan, planIndex, inst, res.error || "Declined");
               failed++;
               details.push({ camp: row.camp_id, family: f.name, amount, result: "failed", reason: inst.failReason });
+              break;   // the rest of this plan waits for the retry too
             } else {
               const patch: Record<string, unknown> = {
                 status: "paid", paidDate: today, byopTransactionId: res.externalTransactionId,
@@ -800,7 +1236,7 @@ serve(async (req) => {
               // It goes in with the patch, in one transaction: see
               // recordInstallment's header for why they cannot be two writes.
               const recorded = await recordInstallment(String(row.camp_id), famKey, plan, planIndex, inst, patch, {
-                id: "auto_byop_" + res.externalTransactionId, family: camperName, familyKey: famKey,
+                id: "auto_byop_" + res.externalTransactionId, family: camperName, familyKey: famKey,   // name-ok: family payment label; familyKey identifies the family
                 amount: amount, date: today, method: "Autopay (card)",
                 reference: res.externalTransactionId,
                 notes: capped ? "Autopay installment — " + cappedNote : "Autopay installment",
@@ -818,6 +1254,7 @@ serve(async (req) => {
               });
               charged++;
               remainingBalance -= amount;
+              await flagPlan(String(row.camp_id), famKey, refOf(plan), null);
               details.push({ camp: row.camp_id, family: f.name, amount,
                 result: recorded ? "charged" : "charged_not_recorded" });
             }
@@ -835,16 +1272,21 @@ serve(async (req) => {
           const pi = await stripeCharge(
             f.stripeCustomerId, f.stripePaymentMethodId || null, amount,
             `Autopay installment — ${f.name || famKey}`,
-            { campId: String(row.camp_id), familyKey: famKey, familyName: camperName, planId: plan.id || "", source: "autopay" },
+            { campId: String(row.camp_id), familyKey: famKey, familyName: camperName, planId: plan.id || "", source: "autopay" },   // name-ok: label in metadata; familyKey identifies the family
             campDestinations.get(String(row.camp_id)) || null,
+            `autopay:${row.camp_id}:${famKey}:${plan.id || planIndex}:${inst.dueDate}:${today}`,
           );
 
+          if (pi.uncertain) {
+            details.push(await holdUnconfirmed(String(row.camp_id), famKey, f, plan, refOf(plan),
+              { amount, dueDate: String(inst.dueDate), planIndex, processor: "stripe", why: String(pi.error?.message || "no answer") }));
+            break;   // the rest of this plan waits for the office
+          }
           if (pi.error || pi.status === "requires_action") {
-            await recordInstallment(String(row.camp_id), famKey, plan, planIndex, inst, {
-              status: "failed", failReason: pi.error?.message || "requires_authentication",
-            });
+            await legacyDeclined(String(row.camp_id), famKey, plan, planIndex, inst, pi.error?.message || "requires_authentication");
             failed++;
             details.push({ camp: row.camp_id, family: f.name, amount, result: "failed", reason: inst.failReason });
+            break;   // the rest of this plan waits for the retry too
           } else if (pi.status === "succeeded") {
             const patch: Record<string, unknown> = {
               status: "paid", paidDate: today, stripePaymentIntentId: pi.id,
@@ -855,7 +1297,7 @@ serve(async (req) => {
               patch.note = cappedNote;
             }
             const recorded = await recordInstallment(String(row.camp_id), famKey, plan, planIndex, inst, patch, {
-              id: "auto_" + pi.id, family: camperName, familyKey: famKey,
+              id: "auto_" + pi.id, family: camperName, familyKey: famKey,   // name-ok: family payment label; familyKey identifies the family
               amount: amount, date: today, method: "Autopay (card)",
               reference: pi.id,
               notes: capped ? "Monthly autopay installment — " + cappedNote : "Monthly autopay installment",
@@ -863,15 +1305,26 @@ serve(async (req) => {
             }, String(pi.id));
             charged++;
             remainingBalance -= amount;
+            await flagPlan(String(row.camp_id), famKey, refOf(plan), null);
             details.push({ camp: row.camp_id, family: f.name, amount,
               result: recorded ? "charged" : "charged_not_recorded" });
           } else {
-            // Processing (e.g. a slower method). Nothing to persist: the
-            // installment stays 'pending' on purpose, so the next run picks it
-            // up if the intent never lands.
-            details.push({ camp: row.camp_id, family: f.name, amount, result: pi.status });
+            // Processing (a bank debit). The instalment stays 'pending' — it has
+            // not landed — but the debit is held on the plan so the next run asks
+            // Stripe about it instead of debiting again (TED-064).
+            const heldOk = await holdCharge(String(row.camp_id), famKey, refOf(plan), {
+              paymentIntentId: String(pi.id), dueDate: inst.dueDate, amount, since: today,
+            });
+            details.push(heldOk ? { camp: row.camp_id, family: f.name, amount, result: "processing_held" }
+              : await holdFailed(String(row.camp_id), famKey, f, refOf(plan), amount, String(pi.id)));
+            break;   // the rest of this plan waits for it
           }
         }
+      }
+      } catch (famErr) {
+        failed++;
+        console.error(`[autopay] camp ${row.camp_id} family ${famKey}: stopped on an error (${(famErr as Error).message}) — the rest of the run goes on`);
+        details.push({ camp: row.camp_id, family: f && f.name, result: "error", reason: (famErr as Error).message });
       }
     }
   }
@@ -887,37 +1340,131 @@ serve(async (req) => {
   // does: this function is already nightly and already has the Stripe key, and
   // a second cron is a second thing to deploy and a second thing to notice has
   // stopped. Best-effort — a tip retry must never fail a tuition run.
+  if (stoppedAt) {
+    // The rest of the night, in a new run that starts after the bookmark. It
+    // is this same function, called the way the schedule calls it.
+    const HOPS = 30;
+    console.warn(`[autopay] stopped for time after ${startedHere} families (${Math.round((Date.now() - START) / 1000)}s) — ` +
+      (hop + 1 < HOPS ? `continuing in a new run after camp ${stoppedAt.camp} family ${stoppedAt.family}` : `NOT continuing: ${HOPS} runs in a row — look at the logs`));
+    if (hop + 1 < HOPS) {
+      const next = fetch(`${SUPABASE_URL}/functions/v1/charge-due-installments`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json", "x-cron-secret": String(CRON_SECRET), "Authorization": `Bearer ${SUPABASE_SERVICE_KEY}` },
+        body: JSON.stringify({ resumeAfter: stoppedAt, hop: hop + 1 }),
+      }).then(() => {}, (e) => console.error(`[autopay] could not start the continuing run (${(e as Error).message}) — the rest waits for the next scheduled run`));
+      const ER = (globalThis as any).EdgeRuntime;
+      if (ER && typeof ER.waitUntil === "function") ER.waitUntil(next);
+      else await Promise.race([next, new Promise((r) => setTimeout(r, 3000))]);
+    }
+    console.log(`[autopay] done (part ${hop + 1}) — charged ${charged}, failed ${failed}; details=${JSON.stringify(details)}`);
+    return new Response(
+      JSON.stringify({ ok: true, done: false, resumeAfter: stoppedAt, charged, failed, details }),
+      { status: 200, headers: { ...corsHeaders, "Content-Type": "application/json" } }
+    );
+  }
+
   let tipsRetried = 0, tipsStillFailing = 0;
   try {
     const { data: pending } = await supabase.rpc("retry_failed_tip_transfers", { p_limit: 50 });
     for (const t of (pending || [])) {
       if (!STRIPE_SECRET) break;
       try {
-        const amountCents = Math.max(0, Number(t.tipCents) - Number(t.feeCents || 0));
-        if (!(amountCents > 0)) continue;
-        const resp = await fetch(`${STRIPE_API}/transfers`, {
-          method: "POST",
-          headers: {
-            Authorization: `Bearer ${STRIPE_SECRET}`,
-            "Content-Type": "application/x-www-form-urlencoded",
-            // Same key every night for the same item, so a retry that actually
-            // went through on a previous run cannot pay the tip twice.
-            "Idempotency-Key": `tip_retry_${t.id}`,
-          },
-          body: new URLSearchParams({
-            amount: String(amountCents),
-            currency: "usd",
-            destination: String(t.staffAccountId),
-            description: `Campistry tip — ${t.staffName || ""} (retry)`,
-          }).toString(),
-        });
-        const tr = await resp.json();
-        if (tr.error) throw new Error(tr.error.message);
+        // The row itself: the retry must do exactly what the first attempt did
+        // (TED-073). It used to send Campistry's internal staff record id as
+        // the Stripe destination ("No such destination", every night) and the
+        // tip minus the 2% fee, which was already taken on the whole cart.
+        const { data: item } = await supabase.from("link_tip_cart_items")
+          .select("*").eq("id", t.id).maybeSingle();
+        if (!item || item.processed_at || !item.stripe_account_id || !(Number(item.tip_cents) > 0)) continue;
+        const auth = { Authorization: `Bearer ${STRIPE_SECRET}` };
+
+        // Did the first attempt actually go through? A transfer carries its
+        // cart item id; if one exists, only the bookkeeping is caught up — a
+        // second transfer would pay the counselor twice.
+        let transfer: any = null;
+        try {
+          const lr = await fetch(`${STRIPE_API}/transfers?limit=100&transfer_group=${encodeURIComponent("cart_" + item.cart_id)}`, { headers: auth });
+          const list = await lr.json();
+          transfer = (Array.isArray(list?.data) ? list.data : []).find((x: any) => x?.metadata?.cartItemId === String(item.id)) || null;
+        } catch (_) { /* could not look: fall through to the keyed create */ }
+
+        // The parent got the money back before this tip ever reached the
+        // staff member (TED-176): refunded, or disputed with their bank. Then
+        // it is not sent — the platform would pay a tip it no longer has —
+        // and it leaves the queue with the reason, for the office to settle
+        // by hand. Stripe not answering: try again tomorrow.
+        if (!transfer && item.stripe_payment_intent_id) {
+          const cr = await fetch(`${STRIPE_API}/charges?payment_intent=${encodeURIComponent(String(item.stripe_payment_intent_id))}&limit=1`, { headers: auth });
+          const cl = await cr.json();
+          if (!cr.ok || cl?.error || !Array.isArray(cl?.data)) throw new Error(`could not check the parent's payment ${item.stripe_payment_intent_id} with Stripe`);
+          const ch = cl.data[0];
+          if (ch && ((Number(ch.amount_refunded) || 0) > 0 || ch.disputed)) {
+            const why = `Not sent: the parent's payment was ${ch.disputed ? "disputed" : `refunded ($${((Number(ch.amount_refunded) || 0) / 100).toFixed(2)} of $${((Number(ch.amount) || 0) / 100).toFixed(2)})`} before this tip reached ${item.staff_name || "the staff member"} — settle it by hand`;
+            await supabase.from("link_tip_cart_items")
+              .update({ processed_at: new Date().toISOString(), transfer_error: why }).eq("id", item.id);
+            console.warn(`[autopay] tip ${item.id}: ${why}`);
+            continue;
+          }
+        }
+
+        if (!transfer) {
+          const resp = await fetch(`${STRIPE_API}/transfers`, {
+            method: "POST",
+            headers: {
+              ...auth,
+              "Content-Type": "application/x-www-form-urlencoded",
+              // Same key every night for the same item, so a retry that went
+              // through on a previous run cannot pay the tip twice.
+              "Idempotency-Key": `tip_retry_${item.id}`,
+            },
+            body: new URLSearchParams({
+              amount: String(item.tip_cents),                 // the whole tip, as the first attempt sends
+              currency: "usd",
+              destination: String(item.stripe_account_id),    // the counselor's Stripe account
+              transfer_group: "cart_" + item.cart_id,
+              "metadata[cartId]": String(item.cart_id),
+              "metadata[cartItemId]": String(item.id),
+              description: `Campistry tip — ${item.staff_name || ""} (retry)`,
+            }).toString(),
+          });
+          transfer = await resp.json();
+          if (transfer.error) throw new Error(transfer.error.message);
+        }
+
+        // The same bookkeeping the webhook does on a first-time success, once.
+        // Recorded already — by this transfer, or by the webhook under the
+        // parent's payment (the same pair its own duplicate check uses).
+        const piId = item.stripe_payment_intent_id || null;
+        let { data: known } = await supabase.from("link_tips").select("id")
+          .eq("stripe_transfer_id", transfer.id).maybeSingle();
+        if (!known && piId) {
+          ({ data: known } = await supabase.from("link_tips").select("id")
+            .eq("stripe_payment_intent_id", piId).eq("staff_account_id", item.staff_account_id).maybeSingle());
+        }
+        if (!known) {
+          await supabase.from("link_tips").insert({
+            camp_id: item.camp_id, user_id: item.parent_user_id,
+            person_id: item.person_id ?? null, camper_name: item.camper_name,
+            parent_name: item.parent_name, parent_email: item.parent_email,
+            recipient_name: item.staff_name, recipient_role: item.staff_role,
+            staff_account_id: item.staff_account_id,
+            amount: Number(item.tip_cents) / 100,
+            payment_method: "stripe_connect",
+            stripe_transfer_id: transfer.id,
+            // The parent's payment, so a dispute or refund looked up by payment
+            // finds this tip (TED-087).
+            stripe_payment_intent_id: piId,
+            fee_amount: Number(item.fee_cents || 0) / 100,
+          });
+          await supabase.rpc("increment_staff_total_earned", {
+            p_account_id: item.staff_account_id, p_amount: Number(item.tip_cents) / 100,
+          });
+        }
         await supabase.from("link_tip_cart_items")
-          .update({ processed_at: new Date().toISOString(), stripe_transfer_id: tr.id, transfer_error: null })
-          .eq("id", t.id);
+          .update({ processed_at: new Date().toISOString(), stripe_transfer_id: transfer.id, transfer_error: null })
+          .eq("id", item.id);
         tipsRetried++;
-        console.log(`[autopay] retried tip ${t.id} -> ${t.staffName}: $${amountCents / 100} (${tr.id})`);
+        console.log(`[autopay] retried tip ${item.id} -> ${item.staff_name}: $${Number(item.tip_cents) / 100} (${transfer.id})`);
       } catch (e) {
         tipsStillFailing++;
         console.warn(`[autopay] tip ${t.id} for ${t.staffName} still failing: ${(e as Error).message}`);
@@ -932,7 +1479,7 @@ serve(async (req) => {
 
   console.log(`[autopay] done — charged ${charged}, failed ${failed}` + (details.length ? `; details=${JSON.stringify(details)}` : "; nothing due"));
   return new Response(
-    JSON.stringify({ ok: true, charged, failed, details }),
+    JSON.stringify({ ok: true, done: true, charged, failed, details }),
     { status: 200, headers: { ...corsHeaders, "Content-Type": "application/json" } }
   );
 });

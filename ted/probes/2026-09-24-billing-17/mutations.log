@@ -1,0 +1,57 @@
+== M1: 283 charges a repeated key again instead of replaying
+  FAIL   283_a_register_sale_is_charged_once
+           psql:scripts/pgtests/283_a_register_sale_is_charged_once.sql:73: ERROR:  the repeat: {"camper": "Avi", "balance": 5.00, "success": true, "spentToday": 5.00, "needsReloadCheck": false}
+           CONTEXT:  PL/pgSQL function inline_code_block line 13 at RAISE
+
+0 passed, 1 failed — against 130 migrations, one database copy per test
+failed: 283_a_register_sale_is_charged_once
+exit 1
+== M2: 283 without the same-child/same-amount check
+  FAIL   283_a_register_sale_is_charged_once
+           psql:scripts/pgtests/283_a_register_sale_is_charged_once.sql:73: ERROR:  key reused for another child: {"camper": "Avi", "balance": 7.50, "success": true, "replayed": true, "spentToday": 2.50, "needsReloadCheck": false}
+           CONTEXT:  PL/pgSQL function inline_code_block line 26 at RAISE
+
+0 passed, 1 failed — against 130 migrations, one database copy per test
+failed: 283_a_register_sale_is_charged_once
+exit 1
+== M3: 283 remembers a refused sale
+  FAIL   283_a_register_sale_is_charged_once
+           psql:scripts/pgtests/283_a_register_sale_is_charged_once.sql:73: ERROR:  a refused sale was remembered
+           CONTEXT:  PL/pgSQL function inline_code_block line 38 at RAISE
+
+0 passed, 1 failed — against 130 migrations, one database copy per test
+failed: 283_a_register_sale_is_charged_once
+exit 1
+== M4: register without 'one charge in flight'
+not ok 1 - TED-159: two taps while the charge is on its way — one request, one charge
+ok 2 - TED-159: the answer is lost after the server charged — "could not confirm", and a second tap charges nothing more
+ok 3 - TED-159: after a sale is answered, the next sale is a new one (a new key) and is charged
+ok 4 - TED-159: a refusal is final for that sale — nothing charged, the next tap is a new try
+ok 5 - TED-159: before migration 283 is pasted the register still charges (once per tap, as before)
+# pass 4
+# fail 1
+== M5: register makes a new key after a lost answer
+ok 1 - TED-159: two taps while the charge is on its way — one request, one charge
+not ok 2 - TED-159: the answer is lost after the server charged — "could not confirm", and a second tap charges nothing more
+ok 3 - TED-159: after a sale is answered, the next sale is a new one (a new key) and is charged
+ok 4 - TED-159: a refusal is final for that sale — nothing charged, the next tap is a new try
+ok 5 - TED-159: before migration 283 is pasted the register still charges (once per tap, as before)
+# pass 4
+# fail 1
+== M6: removing a payment leaves its discount on the ledger
+ok 1 - TED-157: Finance's "+ Record Payment" puts the cheque on the family's bill
+not ok 2 - TED-158: Finance's ✕ takes the payment — and its cheque discount — off the bill
+ok 3 - TED-158: money that went through the card processor is not "removed" — that is a refund
+ok 4 - TED-160: the online-bank discount is for a payment the office picks, once
+ok 5 - TED-160: refunding a discounted payment takes its share of the discount back — exactly, over partial refunds
+# pass 4
+# fail 1
+== M7: Link auto-save always switches auto-reload on
+ok 1 - TED-156: paused by the camp — the note, and a "Switch it back on" button that saves the settings shown
+ok 2 - TED-156: on — no "Switch it back on"; off by the parent — no camp note
+ok 3 - TED-143: Link tells the parent it only charges while camp is in session
+ok 4 - TED-161: turned off by the parent — "Switch it back on" is there when it was set up before
+not ok 5 - TED-161: editing the amount while auto-reload is OFF saves it without switching it on
+ok 6 - TED-161: ticking a trigger is still how a parent switches it on; edits while on keep it on
+# pass 5
+# fail 1

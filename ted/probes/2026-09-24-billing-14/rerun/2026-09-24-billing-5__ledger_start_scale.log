@@ -1,0 +1,3 @@
+600 families' ledgers started in one save: 604 ms  -> done
+families with the $100 posted exactly once: 600 of 600 | sum of balances: 540000.00 (should be 540000 )
+same save without the 271 trigger: 143 ms

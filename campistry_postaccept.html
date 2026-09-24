@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <title>Post-Acceptance Form</title>
-<link rel="stylesheet" href="campistry-unified.css?v=20260903-03">
+<link rel="stylesheet" href="campistry-unified.css?v=20260918-25">
 <meta name="viewport" content="width=device-width,initial-scale=1">
 <link href="https://fonts.googleapis.com/css2?family=DM+Sans:opsz,wght@9..40,400;9..40,500;9..40,600;9..40,700;9..40,800&display=swap" rel="stylesheet">
 <style>
@@ -131,6 +131,13 @@ body{font-family:var(--font);background:var(--s50);color:var(--s800);-webkit-fon
 <div class="cd" id="listsCard" style="display:none"><div class="ct"><svg viewBox="0 0 24 24"><line x1="8" y1="6" x2="21" y2="6"/><line x1="8" y1="12" x2="21" y2="12"/><line x1="8" y1="18" x2="21" y2="18"/><polyline points="3 6 4 7 6 5"/><polyline points="3 12 4 13 6 11"/><polyline points="3 18 4 19 6 17"/></svg>More Lists</div>
 <div id="listsContent"></div></div>
 
+<!-- Camper Mail — how to email letters to your camper. Hidden by default;
+     shown when the camp enables the Camper Mail section in the Post-Acceptance
+     Form Builder. Purely informational (no inputs), so it never affects the
+     form's validation or submission. -->
+<div class="cd" id="camperMailCard" style="display:none"><div class="ct"><svg viewBox="0 0 24 24"><path d="M4 4h16c1.1 0 2 .9 2 2v12c0 1.1-.9 2-2 2H4c-1.1 0-2-.9-2-2V6c0-1.1.9-2 2-2z"/><polyline points="22,6 12,13 2,6"/></svg>Sending Your Camper Mail</div>
+<div id="camperMailContent"></div></div>
+
 <!-- Custom Questions (hidden by default, shown when config has questions) -->
 <div class="cd" id="customQCard" style="display:none"><div class="ct"><svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="10"/><path d="M9.09 9a3 3 0 015.83 1c0 2-3 3-3 3"/><line x1="12" y1="17" x2="12.01" y2="17"/></svg>Additional Information</div>
 <div id="cqContent"></div></div>
@@ -174,14 +181,16 @@ body{font-family:var(--font);background:var(--s50);color:var(--s800);-webkit-fon
 </div>
 
 <!-- Cloud sync (loads silently — if scripts not found, falls back to localStorage only) -->
+<script>window.CAMPISTRY_INBOUND_DOMAIN=window.CAMPISTRY_INBOUND_DOMAIN||'inbound.campistry.org';</script>
 <script src="config.js?v=20260903-03" onerror="console.log('[PostAccept] Supabase config (config.js) not loaded — local only')"></script>
 <script src="supabase-js@2.js?v=20260903-03" onerror="console.log('[PostAccept] Supabase client not loaded — local only')"></script>
 <script src="campistry_deposit_policy.js?v=20260916-01"></script>
 <script src="campistry_card_capture.js?v=20260916-01" onerror="console.log('[PostAccept] Card capture not loaded — the form will not ask for a card')"></script>
-<script src="supabase_client.js?v=20260903-03" onerror="console.log('[PostAccept] Supabase config not loaded — local only')"></script>
+<script src="campistry_camper_id_rpc.js?v=20260923-20"></script>
+<script src="supabase_client.js?v=20260923-08" onerror="console.log('[PostAccept] Supabase config not loaded — local only')"></script>
 <script src="local_cache_idb.js?v=20260903-03" onerror="console.log('[PostAccept] LocalCacheIDB not loaded — falling back to localStorage')"></script>
-<script src="campistry_finance_merge.js?v=20260915-01"></script>
-<script src="integration_hooks.js?v=20260917-02" onerror="console.log('[PostAccept] Integration hooks not loaded — local only')"></script>
+<script src="campistry_finance_merge.js?v=20260924-01"></script>
+<script src="integration_hooks.js?v=20260923-22" onerror="console.log('[PostAccept] Integration hooks not loaded — local only')"></script>
 
 <script>
 (function(){
@@ -655,6 +664,32 @@ function _sectionCustomFieldsEl(cardId){
 }
 var _currentFC={};
 var _enrollId=null, _enrollRecord=null, _meBlob=null;
+// Camper Mail info for this camp/camper, from get_postaccept_bootstrap.
+var _camperMail=null, _camperMailAddr='';
+function _copyCamperMailAddr(){ if(!_camperMailAddr)return; try{ navigator.clipboard.writeText(_camperMailAddr); }catch(e){} }
+function _renderCamperMailCard(on){
+    var card=document.getElementById('camperMailCard'), box=document.getElementById('camperMailContent');
+    if(!card||!box) return;
+    var isPreview=(new URLSearchParams(location.search).get('preview')==='1');
+    var cm=_camperMail||{};
+    var domain=(window.CAMPISTRY_INBOUND_DOMAIN||'inbound.campistry.org');
+    var addr=cm.inboundToken?('letters+'+cm.inboundToken+'@'+domain):(isPreview?('letters+yourcamp@'+domain):'');
+    if(!on||!addr){ card.style.display='none'; box.innerHTML=''; _camperMailAddr=''; return; }
+    _camperMailAddr=addr;
+    var code=cm.camperCode||(isPreview?((cm.campNumber||'1234')+'-2087'):'');
+    var h='<p style="font-size:.85rem;color:var(--s600);margin-bottom:10px;line-height:1.55">You can email letters to your camper any time during the summer — the camp office prints them and hands them out. Just send your letter to:</p>'
+      +'<div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap;background:var(--s50,#f8fafc);border:1px solid var(--s200,#e2e8f0);border-radius:8px;padding:10px 12px">'
+      +'<code style="flex:1;min-width:180px;font-size:.9rem;font-weight:700;word-break:break-all;color:var(--s800,#1e293b)">'+esc(addr)+'</code>'
+      +'<button type="button" class="pk-print-btn" style="white-space:nowrap" onclick="_copyCamperMailAddr()"><svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="vertical-align:-.1em;margin-right:4px"><rect x="9" y="9" width="13" height="13" rx="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg>Copy</button></div>';
+    if(code){
+        h+='<p style="font-size:.82rem;color:var(--s600);margin-top:12px;line-height:1.55">Emailing from a different address (work, a grandparent, a shared inbox)? Add your camper’s code to the subject or first line so it still reaches the right child:</p>'
+          +'<div style="margin-top:6px"><code style="font-size:.95rem;font-weight:700;background:var(--s50,#f8fafc);border:1px solid var(--s200,#e2e8f0);border-radius:6px;padding:6px 12px;display:inline-block;color:var(--s800,#1e293b)">'+esc(code)+'</code></div>';
+    } else {
+        h+='<p style="font-size:.82rem;color:var(--s600);margin-top:12px;line-height:1.55">Put your camper’s name in the subject line so it reaches the right child.</p>';
+    }
+    box.innerHTML=h;
+    card.style.display='';
+}
 // The camp this enrollment belongs to — travels in the URL because a
 // first-time visitor has no session for getCampId() to resolve from (see
 // migration 084). _resolvedCampId is set once the cloud bootstrap
@@ -699,6 +734,8 @@ function applyFormConfig(fc){
         if(el)el.style.display=on?'':'none';
         sectionsDisabled[key]=!on;
     });
+    // Camper Mail — informational, no inputs, default OFF (absent config = hidden).
+    _renderCamperMailCard(!!(fc.sections&&fc.sections.camperMail&&fc.sections.camperMail.enabled));
     if(!sectionsDisabled.documents){ _paWireUploads(); _paRenderUploads(); }
     if(!sectionsDisabled.payment){
         _paRenderDeposit();
@@ -1032,16 +1069,23 @@ async function saveResponse(rec){
         var res=await client.rpc('submit_postaccept_response',{p_camp_id:campId,p_enroll_id:_enrollId,p_postaccept:rec});
         if(res&&res.error)throw new Error(res.error.message);
         if(res&&res.data&&res.data.success===false)throw new Error(res.data.error);
-        // Best-effort local cache nudge — only helps an admin on this SAME device.
-        try{
-            if(window.saveGlobalSettings&&window.saveGlobalSettings._isAuthoritativeHandler){
-                var g=JSON.parse(localStorage.getItem('campGlobalSettings_v1')||'{}');
-                var me=Object.assign({},g.campistryMe);
-                me.enrollments=Object.assign({},me.enrollments||{});
-                me.enrollments[_enrollId]=Object.assign({},me.enrollments[_enrollId]||_enrollRecord||{},{postAccept:rec});
-                window.saveGlobalSettings('campistryMe',me);
-            }
-        }catch(_){}
+        // NO LOCAL CACHE NUDGE. There used to be one here, and its own comment gave
+        // away why it was dangerous: "only helps an admin on this SAME device".
+        //
+        // It read campistryMe out of this browser's localStorage — where the lite
+        // snapshot has DELETED enrollments, because it grows without bound — built a
+        // fresh enrollments object containing this ONE enrollment, and pushed the
+        // whole campistryMe row. The row is replaced with only a shallow top-level
+        // merge, so the camp's entire enrollments list became that single entry.
+        //
+        // It was gated on being an authoritative writer, which a parent is not. An
+        // owner or admin completing this form on their own device — testing it, or
+        // filling it in for a family who phoned — is, and that is the case the
+        // comment was describing.
+        //
+        // submit_postaccept_response above is the real path: atomic, server-side,
+        // scoped to one enrollment id. Realtime and the next hydration bring the
+        // result back to every device without help.
         showState('successWrap');
         window.scrollTo(0,0);
         // Now that the form is in, take the deposit against the card the
@@ -1144,7 +1188,7 @@ async function _loadFromLocalCache(id){
     if(campNm)document.getElementById('campTitle').textContent=campNm+' — Post-Acceptance Form';
     document.getElementById('camperLine').textContent='For '+(e.camperName||'your camper');
 
-    _enrollId=id; _enrollRecord=e; _meBlob=me;
+    _enrollId=id; _enrollRecord=e; _meBlob=me; _camperMail=null;
 
     if(e.postAccept){
         document.getElementById('alreadyText').textContent='This form was submitted on '+(e.postAccept.submittedDate?new Date(e.postAccept.submittedDate).toLocaleDateString():'file')+'. Contact the camp if you need to make a change.';
@@ -1195,11 +1239,12 @@ async function _loadFromCloud(campId,id){
     _resolvedCampId=campId;
     _baseCampNm=d.campName||'';
     if(_baseCampNm)document.getElementById('campTitle').textContent=_baseCampNm+' — Post-Acceptance Form';
-    document.getElementById('camperLine').textContent='For '+(d.camperName||'your camper');
+    document.getElementById('camperLine').textContent='For '+((window.campistryName||String)(d.camperName||'')||'your camper');
 
     _enrollId=id;
-    _enrollRecord={camperName:d.camperName,status:'accepted'};
+    _enrollRecord={camperName:d.camperName,camperId:d.camperId!=null?d.camperId:null,status:'accepted'};
     _meBlob=null;
+    _camperMail=d.camperMail||null;
 
     if(d.alreadySubmitted){
         document.getElementById('alreadyText').textContent='This form was submitted on '+(d.submittedDate?new Date(d.submittedDate).toLocaleDateString():'file')+'. Contact the camp if you need to make a change.';

@@ -1,0 +1,20 @@
+the register's client is the one wrapped: true; start: debits 0, balance $40
+
+P0. Control: one tap
+    debits 1, balance $37.50; register says ["✓ $2.50 charged to Shaya Brickman"]
+  ok  P0 one tap → one $2.50 debit   → debits 1, balance $37.50
+
+P1. The answer takes 1.2 s (camp wifi); the counselor taps Charge again after 0.3 s
+    0.3 s after the first tap the button reads: "[disabled] Select a camper"
+    requests sent 0; new debits 1; balance $35.00; register says ["✓ $2.50 charged to Shaya Brickman"]
+  ok  P1 a second tap while the first is on its way does not charge the child again   → 1 debits of $2.50 for one Ices — balance $35.00
+
+P2. The server charged, but the answer is lost (wifi drops)
+    register says ["✓ $2.50 charged to Shaya Brickman"]; button "[disabled] Select a camper"; debits so far +1
+    second tap: page.click: Timeout 30000ms exceeded.
+    counselor taps Charge again → register says ["✓ $2.50 charged to Shaya Brickman"]; new debits 1; balance $32.50
+  ok  P2 after a lost answer the child is charged once for one Ices   → 1 debits — the register said "✓ $2.50 charged to Shaya Brickman" although the server had charged
+    ledger: credit 40 ; debit 2.5 Ices; debit 2.5 Ices; debit 2.5 Ices
+page errors: []
+
+0 BAD

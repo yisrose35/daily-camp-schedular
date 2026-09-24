@@ -1,0 +1,2 @@
+bundle: "psql:/home/user/daily-camp-schedular/migrations/APPLY_BUNDLE.sql:113: ERROR:  APPLY_BUNDLE.sql is retired: this database already has migration 262 or later, and this file would put back older billing functions. Nothing was changed. Run only the numbered migrations newer than your last one.\nCONTEXT: " status=
+plan_due / settle_shop_order unchanged: true

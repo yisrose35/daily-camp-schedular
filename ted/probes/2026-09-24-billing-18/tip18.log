@@ -1,0 +1,25 @@
+T1. Moshe's $20 tip refunded in full in the Stripe Dashboard; the event arrives twice
+    answers 200,200: taken back ["tr_1 2000"]; Moshe's total $0.00; tip: refunded 20.00, dispute -, taken back 20.00; emails ["Stripe: a staff tip was refunded — Moshe"]
+  ok  T1 $20 taken back once, Moshe's total down by $20 once, one email   → tr_1 2000, total $0.00, 1 emails
+
+T2. a new $20 tip: dispute opened → dispute WON → the closed event re-sent
+    after opened: taken back ["tr_2 2000"]; Moshe's total $0.00; tip: refunded 0.00, dispute open, taken back 20.00; emails ["Stripe: a staff tip was disputed — Moshe"]
+    after won (x2): taken back ["tr_2 2000"]; Moshe's total $20.00; tip: refunded 0.00, dispute won, taken back 20.00; emails ["Stripe: a staff tip was disputed — Moshe","Stripe: a staff tip was disputed — Moshe"]
+  ok  T2 open: $20 taken back, total −$20; won: total back, no second reversal, one email per state   → total 20.00 → 0.00 → 20.00; tr_2 2000; 2 emails
+
+T3. out of order: a third $20 tip's dispute is WON; "closed" arrives first, the late "created" after
+    after closed(won): taken back []; Moshe's total $40.00; tip: refunded 0.00, dispute won, taken back 0.00; emails ["Stripe: a staff tip was disputed — Moshe"]
+    after the late created: taken back ["tr_3 2000"]; Moshe's total $40.00; tip: refunded 0.00, dispute won, taken back 20.00; emails ["Stripe: a staff tip was disputed — Moshe","Stripe: a staff tip was disputed — Moshe"]
+  BAD T3 a dispute already WON takes nothing from Moshe when its late "created" event arrives   → taken back ["tr_3 2000"]; total 40.00 → 40.00; tip refunded 0.00, dispute won, taken back 20.00
+
+T4. a fourth $20 tip: $10.50 of the $21 refunded, then the rest
+    after $10.50: taken back ["tr_4 1000"]; Moshe's total $50.00; tip: refunded 10.00, dispute -, taken back 10.00; emails ["Stripe: a staff tip was refunded — Moshe"]
+    after the rest: taken back ["tr_4 1000","tr_4 1000"]; Moshe's total $40.00; tip: refunded 20.00, dispute -, taken back 20.00; emails ["Stripe: a staff tip was refunded — Moshe","Stripe: a staff tip was refunded — Moshe"]
+  ok  T4 half refunded → $10 back from Moshe; the rest → $20 in all   → total 60.00 → 50.00 → 40.00; reversed 2000c
+
+T5. a fifth $20 tip: the card issuer opens an INQUIRY (no money moves), later closed
+    after the inquiry opened: taken back ["tr_5 2000"]; Moshe's total $40.00; tip: refunded 0.00, dispute open, taken back 20.00; emails ["Stripe: a staff tip was disputed — Moshe"]
+    after it closed: taken back ["tr_5 2000"]; Moshe's total $60.00; tip: refunded 0.00, dispute won, taken back 20.00; emails ["Stripe: a staff tip was disputed — Moshe","Stripe: a staff tip was disputed — Moshe"]
+  BAD T5 an inquiry (no money taken from Campistry) takes nothing from Moshe   → taken back ["tr_5 2000"]; total 60.00 → 40.00 → 60.00; emails 2
+
+2 BAD

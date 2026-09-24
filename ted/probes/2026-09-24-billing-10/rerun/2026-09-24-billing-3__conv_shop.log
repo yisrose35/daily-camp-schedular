@@ -1,0 +1,10 @@
+convert: {"detail": [{"name": "Gold", "famKey": "gold", "balance": 40.00, "entries": 3}], "dryRun": false, "success": true, "families": 1}
+balance after conversion (tuition 1000 - paid 1000 + shop 40):  40.00
+re-price the order to $55: {"amount": 55.00, "method": "bill", "balance": null, "success": true, "camperId": 1, "familyKey": "gold", "previousAmount": 40.00, "previousMethod": "bill"}
+  charges[]: ["shop_o1 $55"]
+  ledger charges: le_conv_gold_1 $1000, le_conv_gold_2 $40, le_chgadj_shop_o1_1 $15
+  balance (should be 55): 55.00
+cancel the order: {"amount": 0, "method": "none", "balance": null, "success": true, "camperId": 1, "familyKey": "gold", "previousAmount": 55.00, "previousMethod": "bill"}
+  charges[]: []
+  ledger: le_conv_gold_1:charge $1000, le_conv_gold_2:charge $40, le_conv_gold_3:payment $1000, le_chgadj_shop_o1_1:charge $15, le_chgadj_shop_o1_2:credit $55
+  balance (should be 0): 0.00

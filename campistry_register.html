@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <title>Camp Registration</title>
-    <link rel="stylesheet" href="campistry-unified.css?v=20260903-03">
+    <link rel="stylesheet" href="campistry-unified.css?v=20260918-25">
 <meta name="viewport" content="width=device-width,initial-scale=1">
 <link href="https://fonts.googleapis.com/css2?family=DM+Sans:opsz,wght@9..40,400;9..40,500;9..40,600;9..40,700;9..40,800&display=swap" rel="stylesheet">
 <style>
@@ -88,7 +88,37 @@ body{font-family:var(--font);background:var(--s50);color:var(--s800);-webkit-fon
 </head>
 <body>
 <div class="wrap" id="formWrap">
-<div class="hdr"><img id="campLogo" src="" alt="" style="display:none;max-height:64px;max-width:220px;margin:0 auto 10px;border-radius:8px"><h1 id="campTitle">Camp Registration</h1><div class="cn" id="campNm"></div><p>Complete the form below to apply for enrollment</p></div>
+<div style="max-width:520px;margin:0 auto 6px;text-align:right">
+  <select id="regLangPick" style="font-size:.78rem;padding:4px 8px;border-radius:6px;border:1px solid #e2e8f0" onchange="window._regSetLang(this.value)">
+    <option value="en-US">English</option>
+    <option value="he-IL">עברית</option>
+    <option value="yi">ייִדיש</option>
+    <option value="ru-RU">Русский</option>
+    <option value="es-ES">Español</option>
+  </select>
+</div>
+<div class="hdr"><img id="campLogo" src="" alt="" style="display:none;max-height:64px;max-width:220px;margin:0 auto 10px;border-radius:8px"><h1 id="campTitle" data-i18n="reg.title">Camp Registration</h1><div class="cn" id="campNm"></div><p>Complete the form below to apply for enrollment</p></div>
+<script>
+// A parent picks their OWN language here — this is independent of the
+// camp's staff-facing locale setting in Dashboard (Language & Regional),
+// which only affects date formatting/RTL for the office's own pages.
+// Remembered per-browser so a returning parent doesn't have to re-pick it.
+// Coverage note: only the elements actually tagged data-i18n/data-i18n-ph
+// translate right now (the page title today) — everything else on this
+// long form still renders in English until it's tagged the same way. RTL
+// layout mirroring (for Hebrew/Yiddish) already applies to the WHOLE page
+// immediately, independent of how much text is translated yet.
+window._regSetLang = function(loc) {
+    try { localStorage.setItem('campistry_reg_lang', loc); } catch (e) {}
+    if (window.CampistryI18n) window.CampistryI18n.applyCampLocale(loc);
+};
+(function() {
+    var saved = 'en-US';
+    try { saved = localStorage.getItem('campistry_reg_lang') || 'en-US'; } catch (e) {}
+    var pick = document.getElementById('regLangPick');
+    if (pick) pick.value = saved;
+})();
+</script>
 
 <!-- Session -->
 <div class="cd"><div class="ct"><svg viewBox="0 0 24 24"><rect x="3" y="4" width="18" height="18" rx="2"/><line x1="16" y1="2" x2="16" y2="6"/><line x1="8" y1="2" x2="8" y2="6"/><line x1="3" y1="10" x2="21" y2="10"/></svg>Select Session</div>
@@ -292,16 +322,25 @@ body{font-family:var(--font);background:var(--s50);color:var(--s800);-webkit-fon
 <!-- config.js injects window.__CAMPISTRY_SUPABASE__ (url + anon key). Without it
      supabase_client.js can't initialize a client, so the register page had NO
      cloud access at all and applications never left the device. -->
+<script src="campistry_i18n.js?v=20260923-01"></script>
+<script>
+(function() {
+    var saved = 'en-US';
+    try { saved = localStorage.getItem('campistry_reg_lang') || 'en-US'; } catch (e) {}
+    if (window.CampistryI18n) window.CampistryI18n.applyCampLocale(saved);
+})();
+</script>
 <script src="config.js?v=20260903-03" onerror="console.log('[Register] Supabase config (config.js) not loaded — local only')"></script>
 <script src="supabase-js@2.js?v=20260903-03" onerror="console.log('[Register] Supabase client not loaded — local only')"></script>
-<script src="supabase_client.js?v=20260903-03" onerror="console.log('[Register] Supabase config not loaded — local only')"></script>
+<script src="campistry_camper_id_rpc.js?v=20260923-20"></script>
+<script src="supabase_client.js?v=20260923-08" onerror="console.log('[Register] Supabase config not loaded — local only')"></script>
 <script src="local_cache_idb.js?v=20260903-03" onerror="console.log('[Register] LocalCacheIDB not loaded — falling back to localStorage')"></script>
-<script src="integration_hooks.js?v=20260917-02" onerror="console.log('[Register] Integration hooks not loaded — local only')"></script>
+<script src="integration_hooks.js?v=20260923-22" onerror="console.log('[Register] Integration hooks not loaded — local only')"></script>
 <script src="campistry_payments.js?v=20260904-01" onerror="console.log('[Register] Payment policy not loaded — showing the built-in options')"></script>
 <script src="campistry_deposit_policy.js?v=20260916-01" onerror="console.log('[Register] Deposit policy not loaded — the form simply will not mention a deposit')"></script>
 <script src="campistry_card_fees.js?v=20260916-01" onerror="console.log('[Register] Card fee policy not loaded — the form simply will not mention a card fee')"></script>
 <script src="campistry_card_capture.js?v=20260916-01" onerror="console.log('[Register] Card capture not loaded — the form will fall back to paying after submit')"></script>
-<script src="campistry_sibling_discount.js?v=20260916-01" onerror="console.log('[Register] Sibling discount not loaded — the form will not apply one')"></script>
+<script src="campistry_sibling_discount.js?v=20260923-20" onerror="console.log('[Register] Sibling discount not loaded — the form will not apply one')"></script>
 <script>
 // Keep the payment options on this form in step with the camp's policy. The
 // markup above is the default (credit yes, debit no); this only has to do
@@ -1276,7 +1315,7 @@ function updatePrice(){
             });
             var _enr={},_names=[];
             rows.forEach(function(r,i){
-                _enr['r'+i]={camperName:r.label,session:r.session,
+                _enr['r'+i]={camperName:r.label,session:r.session, // name-ok: a price quote for children not registered yet
                              status:'enrolled',sessionTuition:r.price};
                 _names.push(r.label);
             });
@@ -1737,6 +1776,14 @@ window._regPayDeposit=async function(campId,enrollId){
         if(d&&d.success&&d.paid){
             if(btn)btn.style.display='none';
             if(msg){msg.textContent='Paid '+fm(d.amount||0)+(d.last4?' · card ending '+d.last4:'')+' — thank you.';msg.style.color='var(--ok)';}
+            return;
+        }
+        // Someone is already paying this deposit, or a charge was cut off and
+        // the office is checking it (TED-083). Not paid, and not a failure of
+        // this card: keep it, say what is happening, and do not offer to pay.
+        if(d&&(d.inProgress||d.reason==='needs_check')){
+            if(btn)btn.style.display='none';
+            if(msg){msg.textContent=d.error||'A payment for this deposit is already in progress.';msg.style.color='';}
             return;
         }
         if(!d||!d.success||!d.url){
@@ -2313,7 +2360,7 @@ window.submitApp=async function(){
             });
 
             g.campistryMe.enrollments[id]={
-                camperName:cam.first+' '+cam.last,camperFirst:cam.first,camperLast:cam.last,
+                camperName:cam.first+' '+cam.last,camperFirst:cam.first,camperLast:cam.last, // name-ok: an applicant — enrolling gives them their number
                 dob:cam.dob,gender:cam.gender,school:cam.school,schoolGrade:cam.schoolGrade,teacher:cam.teacher,camperPhoto:cam.photo||'',
                 parentName:parentName,parentRelation:v('rRel'),parentPhone:ph,homePhone:v('rHomePh'),parentEmail:em,
                 parent2Name:parent2Name,parent2Relation:v('rP2Rel'),parent2Phone:v('rP2Ph'),parent2Email:v('rP2Em'),
@@ -2391,8 +2438,36 @@ window.submitApp=async function(){
         // login at all and camp_state_kv's own RLS only allows owner/admin.
         // AWAITED (not fire-and-forget) — the success screen below only shows
         // once the camp has actually received this, not just this browser.
-        // Belt-and-suspenders: also nudge integration_hooks if it's authoritative.
-        try{ if(window.saveGlobalSettings&&window.saveGlobalSettings._isAuthoritativeHandler) window.saveGlobalSettings('campistryMe',g.campistryMe); }catch(_){}
+        // NO WHOLE-BLOB NUDGE HERE. There used to be a "belt-and-suspenders" push of
+        // the entire campistryMe row on this line, beside the real RPC. It was a
+        // loaded gun:
+        //
+        //   * `g` is read from this browser's localStorage, and the lite snapshot
+        //     DELETES campistryMe.enrollments (integration_hooks, "delete
+        //     lite.campistryMe.enrollments") because it grows without bound.
+        //   * the code above then does `if(!g.campistryMe.enrollments)
+        //     g.campistryMe.enrollments={}` and puts this one application in it.
+        //   * the whole-row writer replaces campistryMe wholesale, with only a
+        //     shallow top-level merge against cloud.
+        //
+        // So the pushed `enrollments` was ONE entry, replacing every real one. It
+        // never fired for a parent only because _canWriteCampState() checks
+        // localStorage.campistry_role and a visitor has none — but a camp OWNER
+        // opening their own registration link to see what parents see has
+        // role=owner in that same browser. Testing the form wiped the camp's
+        // applications.
+        //
+        // submit_public_application below is the real path: atomic, server-side,
+        // scoped to one entry id. There is nothing for a second writer to add.
+        //
+        // And this is why the write-time finance/submission merge module is
+        // deliberately NOT loaded on this page (130fac6 took it off; a test keeps it
+        // off, and also keeps its filename out of this file, hence no name here).
+        // That rollback's reasoning was that the merge "has no job on a page that
+        // writes only a localStorage draft and submits through an RPC" — which was
+        // not quite true while the nudge above existed, since the nudge was exactly
+        // what that merge defends against. With it gone the reasoning holds, so the
+        // merge stays off and this page pushes no shared state at all.
 
         var cloudRes=await _flushEnrollmentsToCloud(g.campistryMe);
         if(!cloudRes||!cloudRes.ok){

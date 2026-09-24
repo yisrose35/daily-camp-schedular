@@ -566,6 +566,9 @@
     }
 
     function setLocalSettings(data) {
+        // A page reloading after an erase elsewhere must not refill the cache
+        // it has just cleared with its out-of-date copy (supabase_client.js).
+        if (window.__campistryStalePage) return;
         try {
             _localCache = data;
 
@@ -635,7 +638,8 @@
                         if (e.status !== 'enrolled' && e.status !== 'accepted') return;
                         const w = _win[e.session] || { f: '', t: '' };
                         if (!_idx[e.camperName]) _idx[e.camperName] = [];
-                        _idx[e.camperName].push({ s: e.session || '', f: w.f, t: w.t });
+                        _idx[e.camperName].push({ s: e.session || '', f: w.f, t: w.t,
+                                                  i: e.camperId != null ? e.camperId : null });   // the camper number
                     });
                     if (Object.keys(_idx).length) lite.campistryMe.presenceIndex = _idx;
                 } catch (e) {
@@ -754,6 +758,7 @@
     }
 
     async function executeBatchSync() {
+        if (window.__campistryStalePage) { _pendingChanges = {}; return; }
         if (_isSyncing) {
             log('Sync already in progress, rescheduling...');
             scheduleBatchSync();
@@ -916,10 +921,12 @@
                                         changesToSync[mergeKey], cur.value);
                                     const rep = changesToSync[mergeKey]._financeMergeReport;
                                     delete changesToSync[mergeKey]._financeMergeReport;
-                                    if (rep && (rep.payments || rep.installments || rep.cards)) {
-                                        log('campistryMe: kept server-written money out of the clobber —',
+                                    if (rep && (rep.payments || rep.installments || rep.cards
+                                                || rep.restored)) {
+                                        log('campistryMe: kept server-written data out of the clobber —',
                                             rep.payments, 'payment(s),', rep.installments,
-                                            'paid installment(s),', rep.cards, 'card field(s)');
+                                            'paid installment(s),', rep.cards, 'card field(s),',
+                                            rep.restored, 'public submission(s)');
                                     }
                                 } catch (finErr) {
                                     // Never block the save: a failed merge loses
@@ -1918,6 +1925,98 @@
     /** The session the current sandbox plans for, or '' in live / when unset. */
     window.campistryWorkspaceSession = function () {
         return (_wsCurrent === 'live') ? '' : _wsSession;
+    };
+
+    // ── THE MASTER KEY: WHICH SESSION IS THE PROGRAM SHOWING ─────────────────
+    //
+    // One answer, read by every page. campistry_session_scope.js owns the rules
+    // (precedence, the pin expiring, which date the roster is read at); this is only
+    // the part that knows where the three inputs live:
+    //
+    //   the pin   camp-wide, set on the dashboard, stored under `campSession`
+    //   the plan  campistryWorkspaceSession(), already resolved above
+    //
+    // MEMOIZED for the same reason _wsSession rides along rather than being looked
+    // up: presence asks this once per camper inside page loops, and resolving walks
+    // the session list. Cleared by campistrySessionScopeRefresh after a settings write.
+    var _scopeCache = null, _scopeAt = 0, _SCOPE_MS = 2000;
+
+    function _scopeRule() {
+        return (typeof window !== 'undefined' && window.CampistrySessionScope) || null;
+    }
+
+    /**
+     * The camp-wide pin. Read from the same settings blob everything else uses, so
+     * it arrives with the rest of the state and needs no extra round trip.
+     *
+     * Deliberately NOT stored inside `campDates`: the camp's calendar and "what are
+     * we looking at" are different facts, and merging them would mean every edit to
+     * one rewrote the other.
+     */
+    function _pinnedSession() {
+        try {
+            var st = getLocalSettings() || {};
+            var cs = st.campSession;
+            if (cs && typeof cs === 'object') return String(cs.session || '');
+            return String(cs || '');
+        } catch (_) { return ''; }
+    }
+
+    function _scopeSessions() {
+        try {
+            var st = getLocalSettings() || {};
+            var me = st.campistryMe;
+            return (me && Array.isArray(me.sessions)) ? me.sessions : [];
+        } catch (_) { return []; }
+    }
+
+    /**
+     * The resolved scope: { session, on, source, shared, ... }. See
+     * campistry_session_scope.js for the full shape.
+     *
+     * With the rule module absent this answers "no session, as of today", which is
+     * exactly how every page behaved before the master key existed. A page that does
+     * not load the rule therefore loses the feature and nothing else.
+     */
+    window.campistrySessionScope = function (opts) {
+        var R = _scopeRule();
+        if (!R) {
+            var today = new Date();
+            return {
+                session: '', on: new Date(today.getTime() - today.getTimezoneOffset() * 60000)
+                    .toISOString().slice(0, 10),
+                source: 'none', shared: true, sessionObj: null, from: null, to: null,
+                coversToday: true, pin: '', pinDropped: false, droppedPin: '',
+                label: '', detail: '', ruleMissing: true
+            };
+        }
+        if (!opts) {
+            var now = Date.now();
+            if (_scopeCache && (now - _scopeAt) < _SCOPE_MS) return _scopeCache;
+        }
+        var r = R.resolve({
+            sessions: _scopeSessions(),
+            pin: _pinnedSession(),
+            workspaceSession: window.campistryWorkspaceSession
+                ? window.campistryWorkspaceSession() : '',
+            today: opts && opts.today
+        });
+        if (!opts) { _scopeCache = r; _scopeAt = Date.now(); }
+        return r;
+    };
+
+    /** Just the session name, for the many callers that want only that. */
+    window.campistrySession = function () {
+        return window.campistrySessionScope().session;
+    };
+    /** Just the date the live roster should be read at. */
+    window.campistrySessionAsOf = function () {
+        return window.campistrySessionScope().on;
+    };
+    /** Throw the memo away — after a settings write. */
+    window.campistrySessionScopeRefresh = function () {
+        _scopeCache = null; _scopeAt = 0;
+        return window.campistrySessionScope();
     };
 
     window.loadGlobalSettings = function(key) {
@@ -3479,6 +3578,10 @@
 
     function hookBeforeUnload() {
         window.addEventListener('beforeunload', (e) => {
+            // A page reloading because a camper was erased on another computer
+            // holds only out-of-date data: none of it is saved, locally or to
+            // the cloud (supabase_client.js; the owner's rule after an erase).
+            if (window.__campistryStalePage) { try { _pendingChanges = {}; } catch (_) {} return; }
             const dateKey = window.currentScheduleDate;
             const bunkCount = Object.keys(window.scheduleAssignments || {}).length;
 
@@ -3551,6 +3654,9 @@
             // with the tab on slow networks. We send the request manually
             // to the Supabase REST endpoint with the cached access token.
             try {
+                // A page reloading because a camper was erased elsewhere holds
+                // only out-of-date data: nothing of it is sent (supabase_client.js).
+                if (window.__campistryStalePage) { _pendingChanges = {}; return; }
                 const pending = (typeof _pendingChanges === 'object' && _pendingChanges) ? _pendingChanges : {};
                 const pendingKeys = Object.keys(pending).filter(k => k !== 'updated_at');
                 const cfg = window.CampistryDB?.config;

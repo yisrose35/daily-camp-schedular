@@ -58,6 +58,30 @@ const STRIPE_SECRET = Deno.env.get("STRIPE_SECRET_KEY");
 const STRIPE_API = "https://api.stripe.com/v1";
 const SUPABASE_URL = Deno.env.get("SUPABASE_URL") || "";
 const SUPABASE_SERVICE_KEY = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY") || "";
+const SUPABASE_ANON_KEY = Deno.env.get("SUPABASE_ANON_KEY") || "";
+
+// WHOSE PAYMENT (TED-063). A parent paying from Link is signed in, so their
+// family is worked out HERE from their own login (get_my_balance, run as
+// them) — never taken from the request. Link used to send no family at all,
+// so the payment was credited to nobody (the parent still saw the full
+// balance) and, with no family to check, settled in the platform's account
+// instead of the camp's. The office's emailed pay link has no parent login
+// and carries the family key the office chose, checked against the camp.
+async function callerFamilyKey(req: Request, campId: string | undefined): Promise<string | null> {
+  const jwt = (req.headers.get("Authorization") || "").replace(/^Bearer\s+/i, "");
+  if (!jwt || !campId || jwt === SUPABASE_ANON_KEY || !SUPABASE_URL || !SUPABASE_ANON_KEY) return null;
+  try {
+    const asUser = createClient(SUPABASE_URL, SUPABASE_ANON_KEY, {
+      global: { headers: { Authorization: `Bearer ${jwt}` } },
+      auth: { persistSession: false, autoRefreshToken: false },
+    });
+    const { data: u } = await asUser.auth.getUser();
+    if (!u?.user?.id) return null;
+    const { data } = await asUser.rpc("get_my_balance", { p_camp_id: campId });
+    const fk = data && typeof data === "object" ? String((data as any).familyKey || "") : "";
+    return fk || null;
+  } catch (_) { return null; }
+}
 
 const VALID_SOURCES = new Set(["campistry-checkout", "campistry-canteen-deposit"]);
 
@@ -75,14 +99,9 @@ const corsHeaders = {
 async function campOwnsFamily(campId: string | undefined, familyKey: string | undefined): Promise<boolean> {
   if (!campId || !familyKey || !SUPABASE_URL || !SUPABASE_SERVICE_KEY) return false;
   const supabase = createClient(SUPABASE_URL, SUPABASE_SERVICE_KEY);
-  const { data } = await supabase
-    .from("camp_state_kv")
-    .select("value")
-    .eq("camp_id", campId)
-    .eq("key", "campistryMe")
-    .maybeSingle();
-  const families = data?.value && typeof data.value === "object" ? (data.value as Record<string, any>).families : null;
-  return !!(families && typeof families === "object" && Object.prototype.hasOwnProperty.call(families, familyKey));
+  // The family ROW (camp_family), not the campistryMe document's copy of it.
+  const { data, error } = await supabase.rpc("camp_family", { p_camp_id: campId, p_family_key: familyKey });
+  return !error && !!data && typeof data === "object";
 }
 
 async function lookupCampDestination(campId: string | undefined, familyKey: string | undefined): Promise<string | null> {
@@ -105,9 +124,20 @@ async function lookupCampDestination(campId: string | undefined, familyKey: stri
 // JSON balance to a possibly-fabricated camper name — a ledger-integrity
 // problem, not just a routing one (tuition's fallback only risks a wrong
 // *destination*, money still lands somewhere real either way).
-async function campOwnsCamper(campId: string | undefined, camperName: string | undefined): Promise<boolean> {
-  if (!campId || !camperName || !SUPABASE_URL || !SUPABASE_SERVICE_KEY) return false;
+//
+// Returns the camper's roster key, or null when they are not on this camp's
+// roster. The camper NUMBER decides when the page sends one (resolved to that
+// person's current roster key by camp_person_label); the name is only the
+// fallback for a caller that sends no number.
+async function resolveCamper(campId: string | undefined, camperName: unknown, camperId: number | null): Promise<string | null> {
+  if (!campId || !SUPABASE_URL || !SUPABASE_SERVICE_KEY) return null;
   const supabase = createClient(SUPABASE_URL, SUPABASE_SERVICE_KEY);
+  let key: string | null = camperId == null && typeof camperName === "string" && camperName ? camperName : null;
+  if (camperId != null) {
+    const { data: label, error } = await supabase.rpc("camp_person_label", { p_camp_id: campId, p_person_id: camperId });
+    key = !error && typeof label === "string" && label ? label : null;
+  }
+  if (!key) return null;
   const { data } = await supabase
     .from("camp_state_kv")
     .select("value")
@@ -115,7 +145,7 @@ async function campOwnsCamper(campId: string | undefined, camperName: string | u
     .eq("key", "app1")
     .maybeSingle();
   const roster = data?.value && typeof data.value === "object" ? (data.value as Record<string, any>).camperRoster : null;
-  return !!(roster && typeof roster === "object" && Object.prototype.hasOwnProperty.call(roster, camperName));
+  return roster && typeof roster === "object" && Object.prototype.hasOwnProperty.call(roster, key) ? key : null;
 }
 
 // Camp-wide "does this camp even run a canteen" gate (migration 106) — no
@@ -132,7 +162,7 @@ async function canteenProgramEnabled(campId: string | undefined): Promise<boolea
   return !data || data.canteen_enabled !== false;
 }
 
-async function lookupCampDestinationForCamper(campId: string | undefined, camperName: string | undefined): Promise<string | null> {
+async function lookupCampDestinationForCanteen(campId: string | undefined): Promise<string | null> {
   if (!campId || !SUPABASE_URL || !SUPABASE_SERVICE_KEY) return null;
   const supabase = createClient(SUPABASE_URL, SUPABASE_SERVICE_KEY);
   const { data: camp } = await supabase
@@ -155,6 +185,20 @@ async function stripePost(endpoint: string, body: Record<string, string>) {
   return resp.json();
 }
 
+
+/** A camper id sent by the page (campistry_camper_id_rpc.js adds it), or null. */
+function camperIdIn(v: unknown): number | null {
+  return v != null && /^\d+$/.test(String(v)) && Number(v) > 0 ? Number(v) : null;
+}
+
+
+/** A camper's name as a person reads it: without the roster's internal
+ *  " #<number>" that tells two campers with one name apart. For what a parent
+ *  sees; never for identifying the camper. */
+function displayName(s: unknown): string {
+  return String(s ?? "").replace(/\s#\d+(?:-\d+)?$/, "");
+}
+
 serve(async (req) => {
   if (req.method === "OPTIONS") {
     return new Response("ok", { headers: corsHeaders });
@@ -170,8 +214,9 @@ serve(async (req) => {
 
     const {
       campId, familyKey, familyName, email, amount, description,
-      enrollmentId, successUrl, cancelUrl, source, camperName,
+      enrollmentId, successUrl, cancelUrl, source, camperName, camperId: bodyCamperId,
     } = await req.json();
+    const camperId = camperIdIn(bodyCamperId);
 
     if (!amount || Number(amount) <= 0) {
       return new Response(JSON.stringify({ error: "A positive amount is required" }), {
@@ -188,6 +233,8 @@ serve(async (req) => {
       });
     }
     const isCanteenDeposit = checkoutSource === "campistry-canteen-deposit";
+    // A canteen deposit's camper, as their roster key: the number decides.
+    let camperKey: string | null = null;
 
     if (isCanteenDeposit) {
       if (!(await canteenProgramEnabled(campId))) {
@@ -196,8 +243,25 @@ serve(async (req) => {
           headers: { ...corsHeaders, "Content-Type": "application/json" },
         });
       }
-      if (!camperName || !(await campOwnsCamper(campId, camperName))) {
+      camperKey = await resolveCamper(campId, camperName, camperId);
+      if (!camperKey) {
         return new Response(JSON.stringify({ error: "Camper not found for this camp" }), {
+          status: 400,
+          headers: { ...corsHeaders, "Content-Type": "application/json" },
+        });
+      }
+    }
+
+    // A tuition payment must land on a family's ledger. The signed-in parent's
+    // own family wins; otherwise the key sent must be one of this camp's
+    // families. Neither: refuse, rather than take money nobody is credited with.
+    let famKey: string = "";
+    if (!isCanteenDeposit) {
+      const mine = await callerFamilyKey(req, campId);
+      if (mine) famKey = mine;
+      else if (familyKey && await campOwnsFamily(campId, String(familyKey))) famKey = String(familyKey);
+      if (!famKey) {
+        return new Response(JSON.stringify({ error: "We couldn't find your family's account at this camp — please contact the camp office." }), {
           status: 400,
           headers: { ...corsHeaders, "Content-Type": "application/json" },
         });
@@ -219,7 +283,7 @@ serve(async (req) => {
     } catch (_) { /* a missing name must never stop a payment */ }
     const who = campLabel || "Camp";
     const label = description || (isCanteenDeposit
-      ? `${who} — canteen funds for ${camperName}`
+      ? `${who} — canteen funds for ${displayName(camperKey)}`
       : `${who} — payment${familyName ? " (" + familyName + ")" : ""}`);
     const origin = req.headers.get("origin") || "";
     const success = successUrl || `${origin}/campistry_pay_thanks.html?status=success`;
@@ -229,12 +293,14 @@ serve(async (req) => {
     // webhook has it regardless of which event we key off.
     const meta: Record<string, string> = {
       campId: String(campId || ""),
-      familyKey: String(familyKey || ""),
+      familyKey: famKey,
       familyName: String(familyName || ""),
       enrollmentId: String(enrollmentId || ""),
       source: checkoutSource,
     };
-    if (isCanteenDeposit) meta.camperName = String(camperName);
+    // The camper's ID travels to stripe-webhook beside the name, and decides
+    // who is credited when the payment lands.
+    if (isCanteenDeposit) Object.assign(meta, camperId != null ? { camperId: String(camperId), camperName: String(camperKey) } : { camperName: String(camperKey) });
 
     const params: Record<string, string> = {
       "mode": "payment",
@@ -255,8 +321,8 @@ serve(async (req) => {
     });
 
     const destinationAccountId = isCanteenDeposit
-      ? await lookupCampDestinationForCamper(campId, camperName)
-      : await lookupCampDestination(campId, familyKey);
+      ? await lookupCampDestinationForCanteen(campId)
+      : await lookupCampDestination(campId, famKey);
 
     // Tuition's Pay Link works fine with no destination (money still lands
     // somewhere real — the platform account). Canteen is different: the

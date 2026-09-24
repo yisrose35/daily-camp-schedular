@@ -1,0 +1,7 @@
+tab loaded; balance 1000.00
+shop bills $40: {"amount": 40.00, "method": "bill", "balance": null, "success": true, "camperId": 1, "familyKey": "gold", "previousAmount": 0, "previousMethod": "none"}
+  row charges: ["shop_o1"] balance 1040.00
+stale tab save: {"success": true, "familiesDeleted": 0, "paymentsDeleted": 0, "familiesUpserted": 1, "paymentsUpserted": 0}
+  row charges: ["c10","shop_o1"] | entries: le_t, le_chg_c10, le_chg_shop_o1 | balance 1050.00
+catch-up posted 0 : [["le_t","charge",1000,null],["le_chg_c10","charge",10,"Photo"],["le_chg_shop_o1","charge",40,"Camp Shop order — Avi Gold"]]
+balance now 1050.00 (should be 1050: tuition 1000 + shop 40 + photo 10)

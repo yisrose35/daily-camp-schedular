@@ -86,7 +86,7 @@ test('an admin can reach the forms and the messages', () => {
     const C = global.window.CampistryCapabilities;
     assert.ok(C, 'the capability registry must load');
 
-    const MUST_HAVE = ['me.enrollment', 'link.messages', 'live.messages', 'me.campers', 'me.billing'];
+    const MUST_HAVE = ['me.enrollment', 'link.messages', 'live.activity', 'me.campers', 'me.billing'];
     for (const key of MUST_HAVE) {
         assert.strictEqual(C.resolve(key, { role: 'admin', entitlements: {} }), 'edit',
             'an admin must keep full access to ' + key);

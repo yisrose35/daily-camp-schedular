@@ -1,0 +1,22 @@
+set up: {"bal":20,"sales":0,"unexported":0,"stock":30}; charge button "Select a camper"
+
+O0. one tap
+    {"bal":17.5,"sales":1,"unexported":1,"stock":29}
+  ok  O0 one tap → one $2.50 sale   → {"bal":17.5,"sales":1,"unexported":1,"stock":29}
+
+O1. a double tap registered in the same instant
+    before {"bal":17.5,"sales":1,"unexported":1,"stock":29} → after {"bal":15,"sales":2,"unexported":2,"stock":28}
+  ok  O1 one Ices, one sale   → 1 sales, balance 17.5 → 15, stock 29 → 28
+
+O2. two taps 40 ms apart
+    before {"bal":15,"sales":2,"unexported":2,"stock":28} → after {"bal":12.5,"sales":3,"unexported":3,"stock":27}
+  ok  O2 one Ices, one sale   → 1 sales, balance 15 → 12.5
+
+O3. "Export sales" → the file; then the file is lost, export again
+    first file: 3 sales; register now {"bal":12.5,"sales":3,"unexported":0,"stock":27}
+    second file: 0 sales
+    settings screen: "Settings ✕ CampCamp NameSecurityChange PINLicenseExpiry Date2027-03-23Sync StatusLast Import9/24/2026, 2:11:24 PMTotal Transactions3Un-synced0Exported3Register version20260924-02DataImport Fresh DataExport TransactionsExport all sales againClear All Data"
+  ok  O3 sales from a lost export file can be exported again   → second export holds 0 sales; no "export again" in settings
+page errors: []
+
+0 BAD

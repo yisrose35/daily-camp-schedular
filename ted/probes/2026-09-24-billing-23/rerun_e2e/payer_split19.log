@@ -1,0 +1,41 @@
+S1  A: Add Charge $1,000 for Pine, Scholarship Fund $800
+  Pine owes $200; plan_due_for → {"index": 0, "amount": 200.00, "dueDate": "2026-09-24", "remaining": 1}
+  Pine's row payerLedger: [{"id": "prc_chg_1790270803569_org_scholarship_fund", "date": "2026-09-24", "kind": "charge", "amount": 800, "payerId": "org_scholarship_fund", "chargeId": "chg_1790270803569", "timestamp": 1790270803569, "description": "Tuition 2027 — share for Pine"}]
+  campistryMe.payers in the cloud: {"org_scholarship_fund": {"id": "org_scholarship_fund", "kind": "organization", "name": "Scholarship Fund", "note": "", "email": "", "phone": "", "ledger": [], "contact": "", "archived": false, "familyKey": ""}}
+  ok  S1 Pine owes $200, the fund's $800 share is on Pine's family row   → Pine $200, fund {"charged":800,"paid":0,"owes":800,"lines":1}
+S2  A: Manage payers → Record payment $300
+  "Owes $800 (shares $800, paid $0)"; Record payment inside the fund's row: false; Save inside the window box: false
+  BAD S2 TED-179 buttons in the fund's row   → {"owes":"Owes $800 (shares $800, paid $0)","btnInRow":false,"saveInBox":false}
+  method preselected: check; fund now {"charged":800,"paid":300,"owes":500,"lines":2}; toast "✓ $300 from Scholarship Fund recorded — Owes $500"
+  ok  S2 method starts on Check; $300 in the cloud   → check, {"charged":800,"paid":300,"owes":500,"lines":2}
+S3  A: Finance → Revenue
+  Collected $500, Outstanding $700; fund rows: ["2026-09-24Scholarship Fund (fund)$300CheckAccount"]
+  ok  S3 Collected $500 and Outstanding $700 include the fund; its cheque is in the log   → $500 / $700
+  ok  S3 Outstanding includes the fund's $500   → $700
+S4  B (stale since before S1): $50 on Oak, then $50 on Pine itself
+  after Oak: fund {"charged":800,"paid":300,"owes":500,"lines":2}
+  after Pine: Pine owes $250; fund {"charged":800,"paid":300,"owes":500,"lines":2}; Pine payerLedger [{"id": "prc_chg_1790270803569_org_scholarship_fund", "date": "2026-09-24", "kind": "charge", "amount": 800, "payerId": "org_scholarship_fund", "chargeId": "chg_1790270803569", "timestamp": 1790270803569, "description": "Tuition 2027 — share for Pine"}, {"id": "prp_1790270808197_ge5bm", "date": "2026-09-24", "kind": "payment", "amount": 300, "method": "check", "payerId": "org_scholarship_fund", "paymentId": "prp_1790270808197_ge5bm", "reference": "chk 551", "timestamp": 1790270808197}]
+  ok  S4 the fund's $800 share and $300 cheque survive a stale computer saving Pine itself   → Pine $250, fund {"charged":800,"paid":300,"owes":500,"lines":2}
+S5  fresh computer C: Manage payers
+  "Owes $500 (shares $800, paid $300)"
+  ok  S5 a fresh computer shows the fund owes $500   → Owes $500 (shares $800, paid $300)
+S6  C: Account → Remove the $300 payment
+  account rows: ["2026-09-24Tuition 2027 — share for Pine$800Cancel shareMove back to family","2026-09-24Payment (Check) #chk 551$300Remove"]
+  confirm said: "Remove payment?Remove this $300 payment from Scholarship Fund? Use this for a payment entered by mistake, or one you gave back. Scholarship Fund will owe it again.CancelRemove"
+  fund {"charged":800,"paid":0,"owes":800,"lines":3}; toast "✓ $300 payment removed — Scholarship Fund: Owes $800"
+  ok  S6 payment removed, fund owes $800 again   → {"charged":800,"paid":0,"owes":800,"lines":3}
+  Finance: Collected $200, Outstanding $1,100; fund rows []
+  ok  S6 Finance no longer counts the removed cheque   → $200; 0 fund rows
+S7  C: Account → Move the $800 share back to Pine
+  confirm said: "Move share back?Move this $800 share back to the Pine family’s own bill? Scholarship Fund will no longer owe it.CancelMove back"
+  Pine owes $1050; fund {"charged":0,"paid":0,"owes":0,"lines":4}; plan_due_for → {"index": 0, "amount": 1050.00, "dueDate": "2026-09-24", "remaining": 1}
+  ok  S7 Pine owes $1,050, the fund $0   → Pine $1050, fund {"charged":0,"paid":0,"owes":0,"lines":4}
+S8  B (still stale) adds another $10 to Pine
+  Pine owes $1060; fund {"charged":0,"paid":0,"owes":0,"lines":4}
+  ok  S8 void lines + moved-back charge survive the stale save   → Pine $1060, fund {"charged":0,"paid":0,"owes":0,"lines":4}
+S9  D and E (both fresh): new split $500 fund share, then each records a $100 fund cheque without reloading
+  fund {"charged":500,"paid":200,"owes":300,"lines":7}; Oak payerLedger [{"id": "prc_chg_1790270846217_org_scholarship_fund", "date": "2026-09-24", "kind": "charge", "amount": 500, "payerId": "org_scholarship_fund", "chargeId": "chg_1790270846217", "timestamp": 1790270846217, "description": "Tuition Oak — share for Oak"}, {"id": "prp_1790270862183_4kw8f", "date": "2026-09-24", "kind": "payment", "amount": 100, "method": "check", "payerId": "org_scholarship_fund", "paymentId": "prp_1790270862183_4kw8f", "reference": "chk E", "timestamp": 1790270862183}, {"id": "prp_1790270858498_nmhp3", "date": "2026-09-24", "kind": "payment", "amount": 100, "method": "check", "payerId": "org_scholarship_fund", "paymentId": "prp_1790270858498_nmhp3", "reference": "chk D", "timestamp": 1790270858498}]
+  ok  S9 both cheques kept   → {"charged":500,"paid":200,"owes":300,"lines":7}
+page errors: []
+
+1 BAD

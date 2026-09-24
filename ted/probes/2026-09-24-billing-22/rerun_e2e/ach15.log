@@ -1,0 +1,45 @@
+A1. Computer A: Iron owes $1000 and pays by bank (default method). Billing → Iron → Charge Card $1,000
+    the window: "Charge Card×Charge the card on file for IronBalance due: $1,000 · Card on file ✓Amount to Charge ($)DescriptionCancelSave"
+    toast: ["✓ A $1,000 bank debit has started for Iron — it is on its way. Bank debits take a few business days; Billing shows it as paid once the bank settles it."]
+    debits started: pi_1 cus_iron $1000.00 processing; payment rows: pi_pi_1 $1000 pending; Iron owes $1000
+    Iron's row on A: "IronAri IronPending—$1,000View"
+  ok  A1 the office is told the bank debit is on its way (not a red failure)   → ["✓ A $1,000 bank debit has started for Iron — it is on its way. Bank debits take a few business days; Billing shows it as paid once the bank settles it."]
+
+A2. Stripe: payment_intent.processing for pi_1 → the real webhook
+    webhook HTTP 200; payment rows: pi_pi_1 $1000 pending; Iron owes $1000
+
+A3. Computer B (another staff member, or A tomorrow): Billing
+    Iron's row: "IronAri IronPending—$1,000View"
+    Iron's family page: "Balance$1,000$1,000 on its way — bank debits take a few business daysRecord PaymentCharge CardChase ···· 6789More ⋯Send Pay Lin"
+    Charge Card → the window: "Charge Card×Iron: A $1,000 bank debit started 2026-09-24 is still on its way — bank debits take a few business days.Nothing more is charged to this family until the bank settles it (it then shows as paid) or returns it (Billing then says it failed, and you can charge again).CancelSave"
+    toast: []; debits: pi_1 cus_iron $1000.00 processing
+  ok  A3 a second debit is not started from computer B   → pi_1 cus_iron $1000.00 processing
+
+A3s. The server's own guard: computer C, whose page has NO row for the debit (as if neither A's save nor the webhook had arrived)
+    Iron's row on C: "IronAri IronPending—$1,000View"
+    Charge Card → the window: "Charge Card×Charge the card on file for IronBalance due: $1,000 · Card on file ✓Amount to Charge ($)DescriptionCancelSave"
+    toast: ["✕ A $1000.00 bank debit for this family, started 2026-09-24, is still on its way — bank debits take a few business days. Nothing more was charged; charge again only if that one fails."]; debits: pi_1 cus_iron $1000.00 processing; payment rows now: pi_pi_1 $1000 pending
+  ok  A3s stripe-charge asks Stripe and refuses a second debit   → pi_1 cus_iron $1000.00 processing
+
+A4. Computer B: Batch charge (Iron owes $1,000 with a debit on its way; Gold owes $200 by card; Steel owes $700 by bank)
+    the batch window: "Batch Charge — 2 Families×This will charge 2 families for a total of $900 using their saved cards.Gold$200Steel$700Not charged: Iron — a bank debit is still on its way (bank debits take a few business days).⚠ This action will charge real credit cards. Proceed with caution.CancelSave"
+    toast: ["✓ Batch complete: 1 charged, 1 bank debit on the way (a few business days), 0 failed"]; debits: pi_1 cus_iron $1000.00 processing, pi_2 cus_gold $200.00 succeeded, pi_3 cus_steel $700.00 processing
+  ok  A4 Batch charge leaves Iron out and names it   → pi_1 cus_iron $1000.00 processing, pi_2 cus_gold $200.00 succeeded, pi_3 cus_steel $700.00 processing
+
+A5. The bank settles Iron's debit (payment_intent.succeeded), then Stripe re-delivers the old "processing" event late
+    succeeded → HTTP 200; rows: pi_pi_1 $1000 succeeded, pi_pi_2 $200 , pi_pi_3 $700 pending; Iron owes $0
+    late processing → HTTP 200; rows: pi_pi_1 $1000 succeeded, pi_pi_2 $200 , pi_pi_3 $700 pending; Iron owes $0
+  ok  A5 a late "processing" does not turn the paid row back to pending   → pi_pi_1 $1000 succeeded, pi_pi_2 $200 , pi_pi_3 $700 pending
+
+A6. Steel (bank default) owes $700. Steel's debit was started by the batch: pi_3
+    webhook processing → HTTP 200; rows: pi_pi_1 $1000 succeeded, pi_pi_2 $200 , pi_pi_3 $700 pending
+    the bank returns it (R01): payment_intent.payment_failed → HTTP 200; rows: pi_pi_1 $1000 succeeded, pi_pi_2 $200 , pi_pi_3 $700 failed; Steel owes $700
+    Stripe re-delivers the old "processing" event late → HTTP 200; rows: pi_pi_1 $1000 succeeded, pi_pi_2 $200 , pi_pi_3 $700 failed; Steel owes $700
+    Computer D → Steel's row: "SteelEli SteelPending—$700View"
+    Steel's family page: "Balance$700Record PaymentCharge CardChase ···· 6789More ⋯Send Pay LinkSet up Payment PlanReplace payment methodAdd ChargeAdd ca"
+    Charge Card → the window: "Charge Card×Charge the card on file for SteelBalance due: $700 · Card on file ✓Amount to Charge ($)DescriptionCancelSave"
+    toast: ["✓ A $700 bank debit has started for Steel — it is on its way. Bank debits take a few business days; Billing shows it as paid once the bank settles it."]; Steel's debits: pi_3 requires_payment_method, pi_4 processing
+  ok  A6 a returned debit stays "failed" after a late "processing", so the office can charge Steel again   → row status "failed", Steel's debits 2
+page errors: []
+
+0 BAD

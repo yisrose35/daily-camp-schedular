@@ -1,0 +1,38 @@
+fresh chain (today's copies):
+255  a parent's family and bill are found by camper number => ok
+256  faces, photo tags and forms go by camper number => ok
+257  every camper's number reaches that camper => ok
+258  a parent's documents, photos and faces go by camper number => ok
+259  a roster key belongs to one child; a rename keeps the number => ok
+260  numbers stay with their child (invites, renumbers, split renames) => ok
+261  only the camp office writes parent invitations => ok
+262  autopay waits for a bank debit => ok
+263  a cancelled charge leaves the ledger => ok
+264  a plan charges the amounts the office set => ok
+265  a bank deposit reaches the ledger => ok
+266  an old tab cannot undo the server => ok
+267  a converted charge knows its charge => ok
+268  a cut-off charge can be tried again => ok
+269  every plan can hold a bank debit => ok
+270  money notices for Billing only => ok
+271  parents see what the server records => ok
+272  an old tab keeps the shop's charges => ok
+273  a refund is released only when it is old => ok
+
+old 268 (4a59637) pasted over it: applied
+old 272 (4a08579) pasted over it: applied
+268  a cut-off charge can be tried again => apply 268 BEFORE redeploying registration-deposit-checkout — a deposit charge that is cut off tells the parent "already paid" for ever
+269  every plan can hold a bank debit => ok
+270  money notices for Billing only => ok
+271  parents see what the server records => ok
+272  an old tab keeps the shop's charges => apply 272 — an office tab left open cancels shop orders billed after it opened
+273  a refund is released only when it is old => ok
+
+today's 268 re-pasted: applied
+today's 272 re-pasted: applied
+268  a cut-off charge can be tried again => ok
+269  every plan can hold a bank debit => ok
+270  money notices for Billing only => ok
+271  parents see what the server records => ok
+272  an old tab keeps the shop's charges => ok
+273  a refund is released only when it is old => ok

@@ -1,0 +1,24 @@
+TAP version 13
+# A: status 200 "ok" | deposit recorded: false
+# B: status 200 | deposit recorded for undefined ref undefined
+# Subtest: two families with a $250 deposit pending; one pays
+ok 1 - two families with a $250 deposit pending; one pays
+  ---
+  duration_ms: 171.915694
+  type: 'test'
+  ...
+# Subtest: an office/autopay cc:sale (xInvoice CI-...) posts back while one $250 deposit is pending
+ok 2 - an office/autopay cc:sale (xInvoice CI-...) posts back while one $250 deposit is pending
+  ---
+  duration_ms: 171.198501
+  type: 'test'
+  ...
+1..2
+# tests 2
+# suites 0
+# pass 2
+# fail 0
+# cancelled 0
+# skipped 0
+# todo 0
+# duration_ms 462.854605

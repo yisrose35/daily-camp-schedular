@@ -1,0 +1,30 @@
+TAP version 13
+# Subtest: probe
+not ok 1 - probe
+  ---
+  duration_ms: 3.837897
+  type: 'test'
+  location: '/home/user/daily-camp-schedular/ted/probes/2026-09-24-billing-6/ref_link_refundable.test.js:20:1'
+  failureType: 'testCodeFailure'
+  error: '_markCardPayment is not defined'
+  code: 'ERR_TEST_FAILURE'
+  name: 'ReferenceError'
+  stack: |-
+    evalmachine.<anonymous>:85:46
+    Array.forEach (<anonymous>)
+    Object._postCardDepositsFor (evalmachine.<anonymous>:72:10)
+    TestContext.<anonymous> (/home/user/daily-camp-schedular/ted/probes/2026-09-24-billing-6/ref_link_refundable.test.js:33:13)
+    Test.runInAsyncScope (node:async_hooks:214:14)
+    Test.run (node:internal/test_runner/test:1047:25)
+    Test.start (node:internal/test_runner/test:944:17)
+    startSubtestAfterBootstrap (node:internal/test_runner/harness:296:17)
+  ...
+1..1
+# tests 1
+# suites 0
+# pass 0
+# fail 1
+# cancelled 0
+# skipped 0
+# todo 0
+# duration_ms 103.806973

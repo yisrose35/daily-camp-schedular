@@ -1,0 +1,8 @@
+Add Charge $1,000 for Pine, split: Scholarship Fund $800. The window says: "Scholarship Fund 800.00 · Pine 200.00"
+Pine's ledger: charge 100; payment 100; charge 200; owes $200; Billing's family page Balance $200; the fund's share shown on that page: true
+tonight's autopay asks plan_due_for → {"index": 0, "amount": 200.00, "dueDate": "2026-09-24", "remaining": 1}
+  ok  the household owes its $200 share, not the fund's $800   → Pine's bill says $200
+  ok  autopay charges Pine's card only the household share   → plan_due_for would charge $200
+page errors: []
+
+0 BAD

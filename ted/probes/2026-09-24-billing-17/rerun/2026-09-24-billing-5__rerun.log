@@ -1,0 +1,21 @@
+files: 265_a_bank_deposit_reaches_the_ledger.sql, 266_an_old_tab_cannot_undo_the_server.sql, 267_a_converted_charge_knows_its_charge.sql, 268_a_cut_off_charge_can_be_tried_again.sql, 269_every_plan_can_hold_a_bank_debit.sql, 270_money_notices_for_billing_only.sql, 271_parents_see_what_the_server_records.sql, 272_an_old_tab_keeps_the_shops_charges.sql
+after 265-272 twice each, in order:
+265  a bank deposit reaches the ledger => ok
+266  an old tab cannot undo the server => ok
+267  a converted charge knows its charge => ok
+268  a cut-off charge can be tried again => ok
+269  every plan can hold a bank debit => ok
+270  money notices for Billing only => ok
+271  parents see what the server records => ok
+272  an old tab keeps the shop's charges => ok
+merge has shop/fingerprint/links: true/true/true
+after 266 alone: merge true/true/true
+after 269 alone: merge true/true/true
+266  an old tab cannot undo the server => ok
+269  every plan can hold a bank debit => ok
+272  an old tab keeps the shop's charges => ok
+
+row: {"name": "G", "entries": [{"id": "le_t", "kind": "charge", "amount": 1000, "reason": "tuition", "source": {"enrollmentId": "e1"}}]}
+family whose ledger started short (before 271): balance 1000.00
+after pasting 271: balance 700.00
+after pasting 271 twice more: balance 700.00 (should stay 700)

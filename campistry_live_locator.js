@@ -282,7 +282,7 @@
             }
         }
 
-        var base = { ok: true, camperName: camperName, camper: camper, bunk: bunk, division: division, targetTimeMin: targetTimeMin, slotTimeLabel: slotTimeLabel };
+        var base = { ok: true, camperName: camperName, camperId: camper && camper.camperId != null ? camper.camperId : null, camper: camper, bunk: bunk, division: division, targetTimeMin: targetTimeMin, slotTimeLabel: slotTimeLabel };
 
         if (!assignment) {
             if (divSlots.length > 0) {

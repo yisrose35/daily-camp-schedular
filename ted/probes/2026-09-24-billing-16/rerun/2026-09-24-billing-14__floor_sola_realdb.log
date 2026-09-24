@@ -1,0 +1,7 @@
+S1 Refund All (Sola): {"totalRefunded":50,"refundedCount":1,"skippedCount":0,"failedCount":0,"details":[{"camperId":7,"camperName":"Avi","refunded":50}]}
+   sent to Sola: ["X1 $50.00"]; wallet $0
+S2 the child's Refund, $50: {"totalRefunded":50,"requested":50,"capped":false,"cappedReason":null,"refunds":[{"refundId":"RF1","externalTransactionId":"X2","amount":50}]}
+   sent to Sola: ["X2 $50.00"]; wallet $0
+S3 the Refund window is told: {"Avi":{"camperId":7,"wallet":50,"card":50,"now":50}}
+
+0 BAD

@@ -55,14 +55,9 @@ const corsHeaders = {
 async function campOwnsFamily(campId: string | undefined, familyKey: string | undefined): Promise<boolean> {
   if (!campId || !familyKey || !SUPABASE_URL || !SUPABASE_SERVICE_KEY) return false;
   const supabase = createClient(SUPABASE_URL, SUPABASE_SERVICE_KEY);
-  const { data } = await supabase
-    .from("camp_state_kv")
-    .select("value")
-    .eq("camp_id", campId)
-    .eq("key", "campistryMe")
-    .maybeSingle();
-  const families = data?.value && typeof data.value === "object" ? (data.value as Record<string, any>).families : null;
-  return !!(families && typeof families === "object" && Object.prototype.hasOwnProperty.call(families, familyKey));
+  // The family ROW (camp_family), not the campistryMe document's copy of it.
+  const { data, error } = await supabase.rpc("camp_family", { p_camp_id: campId, p_family_key: familyKey });
+  return !error && !!data && typeof data === "object";
 }
 
 async function stripePost(endpoint: string, body: Record<string, string>) {

@@ -1,0 +1,16 @@
+M1. Two households with a parent named David Cohen; A owes $1,000, B owes $500. Zelle "from DAVID COHEN" $1,000
+    auto → cohenA (conf 98) candidates [["cohenA",98,"Matches parent David Cohen + Matches David Cohen + Pays the balance exactly"],["cohenB",86,"Matches parent David Cohen + Matches David Cohen"]]
+  BAD M1 a payer name shared by two households is not posted without a person   → auto → cohenA (conf 98) candidates [["cohenA",98,"Matches parent David Cohen + Matches David Cohen + Pays the balance exactly"],["cohenB",86,"Matches parent David Cohen + Matches David Cohen"]]
+
+M1b. Same, but the money is $500 (B's balance)
+    auto → cohenB (conf 98) candidates [["cohenB",98,"Matches parent David Cohen + Matches David Cohen + Pays the balance exactly"],["cohenA",86,"Matches parent David Cohen + Matches David Cohen"]]
+  BAD M1b not posted to whichever Cohen owes that amount   → auto → cohenB (conf 98) candidates [["cohenB",98,"Matches parent David Cohen + Matches David Cohen + Pays the balance exactly"],["cohenA",86,"Matches parent David Cohen + Matches David Cohen"]]
+
+M3. Control: the Zelle carries Cohen A's payment reference
+    reference for cohenA: null
+
+M4. Two households named "Katz" each owing $750; Zelle "from KATZ" $750
+    review (conf 100; Two families match about equally (Katz / Katz)) candidates [["katz1",100,"Matches household name + Pays the balance exactly"],["katz2",100,"Matches household name + Pays the balance exactly"]]
+  ok  M4 not auto-posted   → review (conf 100; Two families match about equally (Katz / Katz)) candidates [["katz1",100,"Matches household name + Pays the balance exactly"],["katz2",100,"Matches household name + Pays the balance exactly"]]
+
+2 BAD

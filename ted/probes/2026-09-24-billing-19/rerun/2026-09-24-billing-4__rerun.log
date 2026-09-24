@@ -1,0 +1,47 @@
+files: 265_a_bank_deposit_reaches_the_ledger.sql, 266_an_old_tab_cannot_undo_the_server.sql, 267_a_converted_charge_knows_its_charge.sql, 268_a_cut_off_charge_can_be_tried_again.sql, 269_every_plan_can_hold_a_bank_debit.sql, 270_money_notices_for_billing_only.sql
+fresh chain:
+262  autopay waits for a bank debit => ok
+263  a cancelled charge leaves the ledger => ok
+264  a plan charges the amounts the office set => ok
+265  a bank deposit reaches the ledger => ok
+266  an old tab cannot undo the server => ok
+267  a converted charge knows its charge => ok
+268  a cut-off charge can be tried again => ok
+269  every plan can hold a bank debit => ok
+270  money notices for Billing only => ok
+
+after re-running 265-270 twice each, in order:
+262  autopay waits for a bank debit => ok
+263  a cancelled charge leaves the ledger => ok
+264  a plan charges the amounts the office set => ok
+265  a bank deposit reaches the ledger => ok
+266  an old tab cannot undo the server => ok
+267  a converted charge knows its charge => ok
+268  a cut-off charge can be tried again => ok
+269  every plan can hold a bank debit => ok
+270  money notices for Billing only => ok
+
+after re-running ONLY 266 once more:
+262  autopay waits for a bank debit => ok
+263  a cancelled charge leaves the ledger => ok
+264  a plan charges the amounts the office set => ok
+265  a bank deposit reaches the ledger => ok
+266  an old tab cannot undo the server => ok
+267  a converted charge knows its charge => ok
+268  a cut-off charge can be tried again => ok
+269  every plan can hold a bank debit => ok
+270  money notices for Billing only => ok
+  _merge_family_from_page still has 269 / 267 parts: t|t
+
+after re-applying 267-270:
+262  autopay waits for a bank debit => ok
+263  a cancelled charge leaves the ledger => ok
+264  a plan charges the amounts the office set => ok
+265  a bank deposit reaches the ledger => ok
+266  an old tab cannot undo the server => ok
+267  a converted charge knows its charge => ok
+268  a cut-off charge can be tried again => ok
+269  every plan can hold a bank debit => ok
+270  money notices for Billing only => ok
+
+APPLY_BUNDLE.sql (first 400 lines) on this database: ERROR: ERROR:  unterminated dollar-quoted string at or near "$$ |         RETURN jsonb_build_object('success', false, 'error', 'not_authenticated'); |         RETURN jsonb_build_object('success', false, 'error', 'missing_camper');

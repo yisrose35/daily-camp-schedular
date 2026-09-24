@@ -61,6 +61,12 @@ import { Resend } from "npm:resend@2.0.0";
 // so a receipt that fails must never fail — or retry — the charge. send-payment-
 // receipt is idempotent on the payment reference, so several callers racing for
 // the same payment produce exactly one email.
+
+/** A camper id carried in Stripe metadata (always a string there), or null. */
+function camperIdIn(v: unknown): number | null {
+  return v != null && /^\d+$/.test(String(v)) ? Number(v) : null;
+}
+
 async function sendReceipt(o: Record<string, unknown>) {
   try {
     if (!SUPABASE_URL || !SUPABASE_SERVICE_KEY) return;
@@ -113,6 +119,10 @@ function methodLabel(type: string): string {
   }
 }
 
+// A signature older than this is refused, so a captured message cannot be
+// replayed later (TED-057). Stripe's own libraries use the same 5 minutes.
+const WEBHOOK_TOLERANCE_SECONDS = 300;
+
 async function verifySignature(payload: string, signature: string, secret: string): Promise<boolean> {
   if (!secret || !signature) return false;
   try {
@@ -124,6 +134,10 @@ async function verifySignature(payload: string, signature: string, secret: strin
     const timestamp = parts["t"];
     const sig = parts["v1"];
     if (!timestamp || !sig) return false;
+    const tsSeconds = Number(timestamp);
+    if (!Number.isFinite(tsSeconds) || Math.abs(Date.now() / 1000 - tsSeconds) > WEBHOOK_TOLERANCE_SECONDS) {
+      return false;
+    }
     const signedPayload = `${timestamp}.${payload}`;
     const key = await crypto.subtle.importKey(
       "raw", new TextEncoder().encode(secret),
@@ -139,6 +153,23 @@ async function verifySignature(payload: string, signature: string, secret: strin
 
 // Read-modify-write the campistryMe blob, upserting one payment. Retries a few
 // times to shrink the (small) race window between two concurrent webhooks.
+// ── A payment Campistry can never record (TED-183) ─────────────────────────
+// Most refusals pass (a busy database): the delivery is answered 500 and
+// Stripe sends it again. Some never will — the child's number is no longer
+// anyone, the application was deleted, the camp is gone. Retrying those for
+// Stripe's three days ends in silence: the parent paid and nobody knows. So a
+// refusal of that kind is told to the platform once (with what to do) and the
+// delivery answered 200.
+const NEVER_RECORDED = new Set([
+  "unknown_camper", "missing_camper", "no_canteen_account", "camp_not_found", "family_not_found",
+  "application_not_found", "enrollment_not_found", "not_found", "invalid_amount", "missing_argument",
+]);
+class NeverRecorded extends Error { code: string; constructor(m: string, c: string) { super(m); this.code = c; } }
+function notRecorded(message: string, code: unknown): Error {
+  const c = String(code || "");
+  return NEVER_RECORDED.has(c) ? new NeverRecorded(message, c) : new Error(message);
+}
+
 async function upsertPayment(
   supabase: ReturnType<typeof createClient>,
   campId: string,
@@ -166,6 +197,31 @@ async function upsertPayment(
   // payment for the same charge. Both the match and the write happen under one
   // row lock, which also makes Stripe's routine webhook retries safe — the
   // duplicate delivery sees the first one's row. See migration 168.
+  // Stripe does not promise the order of its events. A "processing" event that
+  // lands AFTER "succeeded" (a retried delivery, a slow queue) used to patch
+  // the paid row back to pending — the family owed the money again, and
+  // Charge Card offered to debit them a second time (TED-144); one landing
+  // after "payment_failed" turned a returned debit back into "on its way" for
+  // two weeks, blocking Charge Card and autopay (TED-154). So a processing
+  // event is checked against the payment as it stands NOW, and recorded only
+  // while Stripe still says processing. If Stripe cannot be asked, the
+  // delivery is answered 500 and Stripe sends it again.
+  if (status === "pending" && STRIPE_SECRET && pi.id) {
+    let now: any = null;
+    try {
+      const resp = await fetch(`${STRIPE_API}/payment_intents/${encodeURIComponent(String(pi.id))}`, {
+        headers: { "Authorization": `Bearer ${STRIPE_SECRET}` },
+      });
+      now = resp.ok ? await resp.json() : null;
+    } catch (_) { now = null; }
+    if (!now || typeof now.status !== "string") {
+      throw new Error(`${pi.id}: Stripe could not be asked how the payment stands — the 'processing' event will come again`);
+    }
+    if (now.status !== "processing") {
+      console.log(`[stripe-webhook] ${pi.id} is ${now.status} now — the late 'processing' event changes nothing`);
+      return true;
+    }
+  }
   const patch: Record<string, any> = {
     status: status,
     amount: amount,
@@ -197,8 +253,10 @@ async function upsertPayment(
     p_update_on_match: patch,
   });
   if (res.error || res.data?.success !== true) {
-    console.warn(`[stripe-webhook] could not record ${pi.id}: ${res.error?.message || res.data?.error || "unknown"}`);
-    return false;
+    // Not recorded (TED-164): the delivery is answered 500 so Stripe sends it
+    // again (the write is keyed on the payment, so a retry cannot book it
+    // twice) — and no receipt goes out for a payment Campistry has no record of.
+    throw notRecorded(`could not record ${pi.id}: ${res.error?.message || res.data?.error || "unknown"}`, !res.error && res.data?.error);
   }
   return true;
 }
@@ -218,18 +276,25 @@ async function handleCanteenDeposit(
     return;
   }
   const meta = pi.metadata || {};
-  const camperName = meta.camperName;
-  if (!camperName) {
-    console.error(`[stripe-webhook] canteen deposit ${pi.id} has no camperName in metadata — skipping`);
+  // The camper's ID, when the page that started the checkout sent one (it is
+  // stamped into the metadata beside the name) — it decides who is credited.
+  // The name is the fallback for a checkout started before numbers.
+  const camperId = camperIdIn(meta.camperId), camperName = String(meta.camperName || "");
+  if (camperId == null && !camperName) {
+    console.error(`[stripe-webhook] canteen deposit ${pi.id} has no camperId/camperName in metadata — skipping`);
     return;
   }
   const { data, error } = await supabase.rpc("credit_canteen_balance_from_stripe", {
     p_camp_id: campId,
-    p_camper_name: camperName,
+    p_camper_id: camperId, p_camper_name: camperName,
     p_amount: (pi.amount || 0) / 100,
     p_payment_intent_id: pi.id,
   });
   console.log(`[stripe-webhook] canteen deposit $${(pi.amount || 0) / 100} for ${camperName} (camp ${campId}): ${error ? "FAILED " + error.message : JSON.stringify(data)}`);
+  // Not credited (TED-164): 500, so Stripe sends it again (keyed on the payment).
+  if (error || !(data as any)?.success) {
+    throw notRecorded(`canteen deposit ${pi.id} not credited: ${error?.message || (data as any)?.error || "unknown"}`, !error && (data as any)?.error);
+  }
 }
 
 // Same "only 'succeeded' counts" rule as canteen deposits above — a parent
@@ -272,7 +337,8 @@ async function handleRegistrationDeposit(
     // The money moved. Anything other than a loud log here loses a paid
     // family into a list of unpaid ones.
     console.error(`[stripe-webhook] could not mark registration deposit for camp ${campId} enrollment ${enrollmentId}: ${error?.message || (data as any)?.error}`);
-    return;
+    // TED-164: 500, so Stripe sends it again.
+    throw notRecorded(`registration deposit ${pi.id} not recorded: ${error?.message || (data as any)?.error || "unknown"}`, !error && (data as any)?.error);
   }
   console.log(`[stripe-webhook] registration deposit $${(pi.amount || 0) / 100} marked on ${enrollmentId}${(data as any)?.duplicate ? " (already recorded)" : ""}`);
 
@@ -315,23 +381,31 @@ async function handleLinkPhotoPurchase(
   }
 
   if (meta.kind === "facial_recognition") {
-    let names: string[] = [];
-    try { names = JSON.parse(meta.camperNames || "[]"); } catch { names = []; }
-    if (!Array.isArray(names) || !names.length) {
+    const parseList = (s: unknown): unknown[] => {
+      try { const v = JSON.parse(String(s || "[]")); return Array.isArray(v) ? v : []; } catch { return []; }
+    };
+    // Position for position: each camper's number (which decides who the
+    // purchase is for) and their name (the fallback for a slot with no number).
+    const ids = parseList(meta.camperIds), names = parseList(meta.camperNames).map((n) => String(n ?? ""));
+    if (!names.length) {
       console.error(`[stripe-webhook] link photo purchase ${pi.id} missing camperNames in metadata — skipping`);
       return;
     }
-    for (const name of names) {
+    for (let ni = 0; ni < names.length; ni++) {
+      const name = names[ni];
       const { data, error } = await supabase.rpc("record_link_photo_purchase", {
         p_camp_id: campId,
         p_parent_user_id: meta.parentUserId,
         p_kind: "facial_recognition",
-        p_camper_name: name,
+        p_camper_id: camperIdIn(ids[ni]), p_camper_name: name,
         p_photo_id: null,
         p_amount_cents: FACIAL_RECOGNITION_FEE_CENTS, // per-camper share, NOT pi.amount (that's the whole batch)
         p_payment_intent_id: pi.id,
       });
       console.log(`[stripe-webhook] link photo purchase (facial_recognition) for ${name}, camp ${campId}: ${error ? "FAILED " + error.message : JSON.stringify(data)}`);
+      if (error || !(data as any)?.success) {
+        throw notRecorded(`photo purchase ${pi.id} for ${name} not recorded: ${error?.message || (data as any)?.error || "unknown"}`, !error && (data as any)?.error);
+      }
     }
     return;
   }
@@ -340,12 +414,16 @@ async function handleLinkPhotoPurchase(
     p_camp_id: campId,
     p_parent_user_id: meta.parentUserId,
     p_kind: meta.kind,
-    p_camper_name: null,
+    p_camper_id: null, p_camper_name: null,   // an HD photo is bought for a photo, not a camper
     p_photo_id: meta.photoId || null,
     p_amount_cents: pi.amount || 0,
     p_payment_intent_id: pi.id,
   });
   console.log(`[stripe-webhook] link photo purchase (${meta.kind}) $${(pi.amount || 0) / 100} camp ${campId}: ${error ? "FAILED " + error.message : JSON.stringify(data)}`);
+  // Not recorded (TED-164): 500, so Stripe sends it again (once per payment).
+  if (error || !(data as any)?.success) {
+    throw notRecorded(`photo purchase ${pi.id} not recorded: ${error?.message || (data as any)?.error || "unknown"}`, !error && (data as any)?.error);
+  }
 }
 
 // A card checked on a public registration form (migration 189). The parent is
@@ -554,9 +632,11 @@ async function handleCanteenAutoReloadSetup(
 ) {
   const meta = si.metadata || {};
   const campId = meta.campId;
-  const camperName = meta.camperName;
-  if (!campId || !camperName) {
-    console.error(`[stripe-webhook] canteen auto-reload setup ${si.id} missing campId/camperName in metadata — skipping`);
+  // The number decides whose account the card is saved on; the name is the
+  // fallback for a setup started before numbers.
+  const camperId = camperIdIn(meta.camperId), camperName = String(meta.camperName || "");
+  if (!campId || (camperId == null && !camperName)) {
+    console.error(`[stripe-webhook] canteen auto-reload setup ${si.id} missing campId/camperId in metadata — skipping`);
     return;
   }
   const customerId = si.customer;
@@ -591,7 +671,7 @@ async function handleCanteenAutoReloadSetup(
   // did not just lose a card field, it erased a sale and the money with it.
   const { data: merged, error: mergeErr } = await supabase.rpc("merge_canteen_autoreload_card", {
     p_camp_id: campId,
-    p_camper: camperName,
+    p_camper_id: camperId, p_camper: camperName,
     // Only the card/attempt bookkeeping fields. The parent's trigger config
     // (enabled, threshold*, schedule*), set via set_canteen_auto_reload
     // (migration 109), is left untouched by merging rather than overwriting.
@@ -616,10 +696,13 @@ async function handleCanteenAutoReloadSetup(
 // Best-effort — a failed alert email must never fail the webhook response
 // (Stripe retries on non-2xx, and we don't want risk-event handling to
 // become a source of duplicate/stuck webhook deliveries).
-async function sendRiskAlertEmail(subject: string, html: string) {
+// Says whether it went (TED-150): "sent", "failed" (the email service did not
+// take it — worth trying again), or "not_configured" (no key: trying again
+// cannot help, and the camp's own Billing notice still stands).
+async function sendRiskAlertEmail(subject: string, html: string): Promise<"sent" | "failed" | "not_configured"> {
   if (!RESEND_API_KEY) {
     console.error(`[stripe-webhook] RESEND_API_KEY not configured — cannot send risk alert: ${subject}`);
-    return;
+    return "not_configured";
   }
   try {
     const { error } = await resend.emails.send({
@@ -628,10 +711,12 @@ async function sendRiskAlertEmail(subject: string, html: string) {
       subject,
       html,
     });
-    if (error) console.error(`[stripe-webhook] risk alert email failed: ${JSON.stringify(error)}`);
-    else console.log(`[stripe-webhook] risk alert email sent: ${subject}`);
+    if (error) { console.error(`[stripe-webhook] risk alert email failed: ${JSON.stringify(error)}`); return "failed"; }
+    console.log(`[stripe-webhook] risk alert email sent: ${subject}`);
+    return "sent";
   } catch (e) {
     console.error(`[stripe-webhook] risk alert email threw: ${(e as Error).message}`);
+    return "failed";
   }
 }
 
@@ -663,19 +748,111 @@ const RISK_EVENT_TYPES = new Set([
 // Best-effort and never throws: a failure here must not make the webhook return
 // non-2xx, because Stripe would retry the whole event and the platform email
 // would go out again.
+// A GET against the platform's Stripe account. Stripe not answering (cut off,
+// its own 5xx, a rate limit) THROWS (TED-121): the event is then answered 500,
+// so Stripe sends it again — answering "OK" would lose the chargeback or the
+// refund for good. A plain "no such object" is an answer: null.
+async function stripeGetJson(path: string): Promise<Record<string, any> | null> {
+  if (!STRIPE_SECRET) return null;
+  let resp: Response, out: any;
+  try {
+    resp = await fetch(`${STRIPE_API}${path}`, { headers: { "Authorization": `Bearer ${STRIPE_SECRET}` } });
+    out = await resp.json();
+  } catch (e) {
+    throw new Error(`Stripe did not answer ${path} (${(e as Error).message}) — asking Stripe to send this event again`);
+  }
+  if (resp.status >= 500 || resp.status === 429) {
+    throw new Error(`Stripe answered ${resp.status} for ${path} — asking Stripe to send this event again`);
+  }
+  return out && !out.error ? out : null;
+}
+
+// Which camp a charge, refund or dispute belongs to. Campistry stamps campId on
+// the PaymentIntent (and so the charge made from it). A DISPUTE is its own
+// object and Stripe does not copy that metadata onto it (TED-114): read it
+// from the payment the dispute is about.
+async function campIdFor(obj: Record<string, any>): Promise<string | null> {
+  if (obj?.metadata?.campId) return String(obj.metadata.campId);
+  const piId = typeof obj?.payment_intent === "string" ? obj.payment_intent : obj?.payment_intent?.id;
+  if (piId) {
+    const pi = await stripeGetJson(`/payment_intents/${encodeURIComponent(piId)}`);
+    if (pi?.metadata?.campId) return String(pi.metadata.campId);
+  }
+  const chId = typeof obj?.charge === "string" ? obj.charge : obj?.charge?.id;
+  if (chId) {
+    const ch = await stripeGetJson(`/charges/${encodeURIComponent(chId)}`);
+    if (ch?.metadata?.campId) return String(ch.metadata.campId);
+  }
+  return null;
+}
+
+// ── A canteen top-up refunded or disputed outside Campistry (TED-181) ──────
+// The payment's metadata says it was a canteen top-up; then the money comes
+// off that child's wallet (migration 287), once, and the camp is told. The
+// payment is asked of Stripe when the event itself does not carry it.
+async function canteenPaymentOf(obj: Record<string, any>): Promise<{ campId: string; pi: string } | null> {
+  let meta = obj?.metadata || {};
+  let piId = typeof obj?.payment_intent === "string" ? obj.payment_intent : obj?.payment_intent?.id;
+  if (!piId) {
+    const chId = typeof obj?.charge === "string" ? obj.charge : obj?.charge?.id;
+    if (chId) { const ch = await stripeGetJson(`/charges/${encodeURIComponent(chId)}`); piId = ch?.payment_intent || null; }
+  }
+  if (!piId) return null;
+  if (meta.source !== "campistry-canteen-deposit") {
+    const pi = await stripeGetJson(`/payment_intents/${encodeURIComponent(String(piId))}`);
+    meta = pi?.metadata || {};
+  }
+  if (meta.source !== "campistry-canteen-deposit" || !meta.campId) return null;
+  return { campId: String(meta.campId), pi: String(piId) };
+}
+async function canteenReversal(supabase: ReturnType<typeof createClient>, campId: string, pi: string,
+                               ref: string, amount: number, kind: "refund" | "dispute" | "dispute_won", note: string | null) {
+  const { data, error } = await supabase.rpc("record_canteen_stripe_reversal", {
+    p_camp_id: campId, p_payment_intent_id: pi, p_ref_id: ref, p_amount: amount, p_kind: kind, p_note: note });
+  // Not recorded: 500, so Stripe sends it again (the write is keyed on the
+  // refund or dispute id). A top-up Campistry never credited has nothing to
+  // take back — said, not retried.
+  if (error || (!data?.success && data?.error !== "deposit_not_found")) {
+    throw new Error(`canteen ${kind} ${ref} on ${pi} not recorded: ${error?.message || data?.error || "unknown"} — is migration 287 applied?`);
+  }
+  console.log(`[stripe-webhook] canteen ${kind} ${ref} on ${pi}: ${JSON.stringify(data)}`);
+}
+
 async function handleChargeRefunded(
   supabase: ReturnType<typeof createClient>,
   event: Record<string, any>,
 ) {
   const charge = event.data.object || {};
-  const campId = charge.metadata?.campId || null;
+  const campId = await campIdFor({ metadata: charge.metadata, payment_intent: charge.payment_intent });
 
   // Stripe sends the whole charge with its refunds list, and re-sends it on
   // every subsequent partial refund. So post each refund individually, keyed on
   // its own id — otherwise a second partial refund would either be missed or
-  // would re-post the first.
-  const refunds: Record<string, any>[] = charge.refunds?.data || [];
+  // would re-post the first. Newer API versions leave the list off the charge,
+  // so it is then asked for.
+  let refunds: Record<string, any>[] = Array.isArray(charge.refunds?.data) ? charge.refunds.data : [];
+  if (!refunds.length && charge.id) {
+    const list = await stripeGetJson(`/refunds?charge=${encodeURIComponent(String(charge.id))}&limit=100`);
+    refunds = Array.isArray(list?.data) ? list.data : [];
+  }
   if (!refunds.length) return;
+
+  // A canteen top-up (TED-181): off the child's wallet, not the family's bill.
+  const canteen = await canteenPaymentOf({ metadata: charge.metadata, payment_intent: charge.payment_intent, charge: charge.id });
+  if (canteen) {
+    for (const r of refunds) {
+      const refundId = String(r.id || "");
+      const amount = Number((((r.amount || 0) / 100)).toFixed(2));
+      if (!refundId || !(amount > 0)) continue;
+      // Campistry's own canteen refund (Snacks) is already on the wallet.
+      if (r.metadata && r.metadata.campistryHold) continue;
+      const now = await stripeGetJson(`/refunds/${encodeURIComponent(refundId)}`);
+      const status = String((now && now.status) || r.status || "");
+      if (status === "failed" || status === "canceled") continue;
+      await canteenReversal(supabase, canteen.campId, canteen.pi, refundId, amount, "refund", r.reason ? `Refunded in Stripe — ${r.reason}` : null);
+    }
+    return;
+  }
 
   if (!campId) {
     console.error(`[stripe-webhook] charge.refunded ${charge.id} has no campId in metadata — ` +
@@ -692,21 +869,114 @@ async function handleChargeRefunded(
     const refundId = String(r.id || "");
     const amount = Number((((r.amount || 0) / 100)).toFixed(2));
     if (!refundId || !(amount > 0)) continue;
-    try {
+    // A refund that failed (or was canceled) sent nothing back (TED-126): it is
+    // not booked here, and one booked before it failed is put back by
+    // handleRefundFailed. The list in the event is how the refund stood when
+    // the event was MADE — on an older API version this event can arrive after
+    // the refund failed and still say "succeeded" (TED-133) — so its status is
+    // asked of Stripe now. Stripe not answering throws: the event is sent again.
+    const now = await stripeGetJson(`/refunds/${encodeURIComponent(refundId)}`);
+    const status = String((now && now.status) || r.status || "");
+    if (status === "failed" || status === "canceled") continue;
+    {
       const { data, error } = await supabase.rpc("record_external_refund", {
         p_camp_id: campId, p_refund_id: refundId, p_refs: refs,
         p_amount: amount,
         p_note: r.reason ? `Refund — ${r.reason}` : "Refund issued at the processor",
       });
-      if (error || !data?.success) {
+      // A database error: 500, so Stripe sends the refund again (TED-187; the
+      // entry is keyed on the refund id). An answer is only logged.
+      if (error) throw new Error(`refund ${refundId} not booked yet: ${error.message}`);
+      if (!data?.success) {
         console.error(`[stripe-webhook] refund ${refundId} NOT posted ` +
           `(${error?.message || data?.error || "unknown"}) — the family still shows a ` +
           `credit they no longer have. refs=${refs.join(",")}`);
       }
-    } catch (e) {
-      console.error(`[stripe-webhook] refund ${refundId} threw: ${(e as Error).message}`);
     }
   }
+}
+
+// ── A refund Stripe accepted and then FAILED (TED-126) ─────────────────────
+// Stripe can fail a refund days after accepting it (the card account was
+// closed, say). The money comes back to the PLATFORM's balance — a canteen
+// top-up and a camp payment are destination charges, and the transfer reversal
+// is not undone — and the family's bill or the child's wallet still said
+// "refunded" with the parent paid nothing. Stripe says so with refund.failed
+// (and, on older API versions or some payment methods, a refund.updated or
+// charge.refund.updated whose status is failed); each is handled once:
+// reverse_failed_stripe_refund (278) puts the money back where it was booked
+// and raises a Billing notice, and the platform is emailed to pass the money
+// back to the camp's own account.
+const REFUND_FAILED_TYPES = new Set(["refund.failed", "refund.updated", "charge.refund.updated"]);
+
+async function handleRefundFailed(
+  supabase: ReturnType<typeof createClient>,
+  event: Record<string, any>,
+) {
+  const r = event.data.object || {};
+  const status = String(r.status || "");
+  if (status !== "failed" && status !== "canceled") return;     // an update that is not a failure
+  const refundId = String(r.id || "");
+  if (!refundId) return;
+  const campId = await campIdFor({ metadata: r.metadata, payment_intent: r.payment_intent, charge: r.charge });
+  const amount = Number(((Number(r.amount) || 0) / 100).toFixed(2));
+  const why = r.failure_reason ? String(r.failure_reason).replace(/_/g, " ") : (status === "canceled" ? "canceled" : null);
+  const payment = typeof r.payment_intent === "string" ? r.payment_intent : (r.payment_intent?.id || (typeof r.charge === "string" ? r.charge : r.charge?.id) || "");
+  // The platform is alerted for EVERY failed refund (TED-131) — the money is
+  // back in the platform's balance whether or not Campistry had booked the
+  // refund — once per refund where the camp is known (the database's notice
+  // is the once-only claim).
+  const alert = (what: string) => sendRiskAlertEmail(`Stripe alert: a $${amount.toFixed(2)} refund failed — pass it back to the camp`, `
+    <div style="font-family:sans-serif;max-width:600px;">
+      <h2 style="color:#B91C1C;">A refund failed after Stripe accepted it</h2>
+      <p><strong>Refund:</strong> ${refundId} (${status}${why ? ", " + why : ""})</p>
+      <p><strong>Amount:</strong> $${amount.toFixed(2)}</p>
+      <p><strong>Payment:</strong> ${payment || "—"}</p>
+      <p><strong>Camp:</strong> ${campId || "not found — look the payment up in Stripe"}</p>
+      <p>The money is back in the PLATFORM's Stripe balance; the camp's own account was debited when
+      the refund was made. ${what} Transfer $${amount.toFixed(2)} back to the camp's connected account.</p>
+      <p style="margin-top:20px;color:#64748B;font-size:13px;">Event: ${event.type} (${event.id})</p>
+    </div>`);
+  // Once per refund (TED-137): Stripe sends the same failure several times.
+  // The claim is given back when the email did not go (TED-150), and the
+  // delivery answered 500, so Stripe's next delivery sends it.
+  const alertOnce = async (what: string) => {
+    const { data: first, error: claimErr } = await supabase.rpc("claim_refund_failure_alert", { p_refund_id: refundId });
+    if (claimErr) throw new Error(`refund ${refundId} failed and the platform alert could not be claimed: ${claimErr.message}`);
+    if (first === false) return;
+    if ((await alert(what)) === "failed") {
+      await supabase.rpc("release_refund_failure_alert", { p_refund_id: refundId });
+      throw new Error(`refund ${refundId} failed and the platform alert email did not send — Stripe will send the failure again`);
+    }
+  };
+  if (!campId) {
+    console.error(`[stripe-webhook] refund ${refundId} ${status} but has no camp — nothing put back; reconcile by hand`);
+    await alertOnce("No camp could be found for it, so nothing was changed in Campistry.");
+    return;
+  }
+  const { data, error } = await supabase.rpc("reverse_failed_stripe_refund", {
+    p_camp_id: campId, p_refund_id: refundId, p_reason: why, p_amount: amount || null, p_payment_ref: payment || null,
+    // Campistry's own canteen refund carries its reservation's key (TED-138)
+    p_hold_key: (r.metadata && r.metadata.campistryHold) ? String(r.metadata.campistryHold) : null });
+  // The database not answering is not an answer: 500, so Stripe sends it again.
+  if (error) throw new Error(`refund ${refundId} failed at Stripe and could not be put back yet: ${error.message}`);
+  if (!data?.success) {
+    console.error(`[stripe-webhook] refund ${refundId} ${status} (camp ${campId}) — not on Campistry's books ` +
+      `(${data?.error || "unknown"}); nothing put back`);
+    await alertOnce("It was not on Campistry's books (made in the Stripe dashboard, or its answer was lost), so nothing was changed there; the camp has been told.");
+    return;
+  }
+  // The card surcharge's share Billing took off the bill with this refund
+  // goes back on it (281, TED-148): the family kept the payment. Once per
+  // refund, so a repeated delivery (or one after a crash here) changes nothing.
+  if (data.familyKey) {
+    const undo = await supabase.rpc("undo_card_fee_return", {
+      p_camp_id: campId, p_family_key: String(data.familyKey), p_refund_id: refundId });
+    if (undo.error) throw new Error(`refund ${refundId}: its card-surcharge credit could not be taken back yet: ${undo.error.message}`);
+    if (undo.data?.undone) console.warn(`[stripe-webhook] refund ${refundId}: $${undo.data.amount} of card surcharge back on ${data.familyKey}'s bill`);
+  }
+  if (!data.alreadyRecorded) console.warn(`[stripe-webhook] refund ${refundId} ${status}: $${amount} put back for camp ${campId}`);
+  await alertOnce("Campistry has put it back on the family's account (or the child's canteen wallet) and told the camp.");
 }
 
 async function handleDisputeLedger(
@@ -724,40 +994,99 @@ async function handleDisputeLedger(
   const refs = [obj.payment_intent, obj.charge, obj.id]
     .filter(Boolean).map(String);
 
-  // Which camp? The charge's metadata carries campId on every path that takes
-  // money. Without it there is nothing to post against and guessing would put a
+  // An INQUIRY (warning_needs_response, warning_under_review, warning_closed)
+  // is the bank asking a question: no money has moved, so nothing is posted —
+  // not on a family's bill (TED-186), not on a child's wallet (TED-181). If it
+  // escalates, Stripe says so with the same dispute in a money-moving status
+  // (charge.dispute.updated / charge.dispute.funds_withdrawn), handled below.
+  const status = String(obj.status || "");
+  if (status.startsWith("warning_")) {
+    console.log(`[stripe-webhook] ${event.type} ${disputeId}: an inquiry (${status}) — nothing posted`);
+    return;
+  }
+  // Money taken: the first of created / updated / funds_withdrawn in a real
+  // dispute status posts it (each writer is keyed on the dispute, so the
+  // others change nothing). Closed: won puts it back; lost leaves it.
+  // A decided dispute (won / lost) takes nothing more (TED-196): a late
+  // "updated" carrying the outcome must not pause autopay again.
+  const taking = (event.type === "charge.dispute.created" || event.type === "charge.dispute.updated"
+              || event.type === "charge.dispute.funds_withdrawn") && status !== "won" && status !== "lost";
+  const closed = event.type === "charge.dispute.closed";
+  if (!taking && !closed) return;
+
+  // A canteen top-up (TED-181, TED-188): off the child's wallet while the
+  // bank decides; back on if the camp wins.
+  const canteen = await canteenPaymentOf(obj);
+  if (canteen) {
+    const amount = Number(((obj.amount || 0) / 100).toFixed(2));
+    if (taking) {
+      await canteenReversal(supabase, canteen.campId, canteen.pi, disputeId, amount, "dispute", obj.reason ? `Disputed — ${String(obj.reason).replace(/_/g, " ")}` : null);
+      // ...and that child's auto-reload stops charging the disputed card
+      // (290, TED-205) until the parent switches it back on.
+      const pause = await supabase.rpc("pause_canteen_autoreload_for_dispute", {
+        p_camp_id: canteen.campId, p_payment_intent_id: canteen.pi, p_dispute_id: disputeId });
+      if (pause.error) throw new Error(`canteen dispute ${disputeId}: auto-reload not paused yet: ${pause.error.message} — is migration 290 applied?`);
+    } else if (status === "won") {
+      await canteenReversal(supabase, canteen.campId, canteen.pi, disputeId, amount, "dispute_won", null);
+    }
+    return;
+  }
+
+  // Which camp? The PAYMENT's metadata carries campId on every path that takes
+  // money; the dispute's own metadata is empty (TED-114), so the payment is
+  // asked. Without it there is nothing to post against and guessing would put a
   // chargeback on the wrong camp's books.
-  const campId = obj.metadata?.campId || event.data.object?.metadata?.campId || null;
+  const campId = await campIdFor(obj);
   if (!campId) {
     console.error(`[stripe-webhook] dispute ${disputeId} has no campId in metadata — ` +
       `cannot post it to a ledger; reconcile by hand (refs: ${refs.join(", ")})`);
     return;
   }
 
-  try {
-    if (event.type === "charge.dispute.created") {
-      const { data, error } = await supabase.rpc("record_chargeback", {
-        p_camp_id: campId, p_dispute_id: disputeId, p_refs: refs,
-        p_amount: Number(((obj.amount || 0) / 100).toFixed(2)),
-        p_reason: obj.reason || null, p_status: obj.status || null,
-      });
-      if (error || !data?.success) {
-        console.error(`[stripe-webhook] chargeback ${disputeId} NOT posted to the ledger ` +
-          `(${error?.message || data?.error || "unknown"}) — the camp's books now ` +
-          `overstate collected cash until this is reconciled by hand`);
-      }
-    } else if (event.type === "charge.dispute.closed") {
-      // `won` means the camp kept the money. Anything else leaves the refund
-      // standing, which is already correct.
-      const won = String(obj.status || "") === "won";
-      const { error } = await supabase.rpc("resolve_chargeback", {
-        p_camp_id: campId, p_dispute_id: disputeId, p_won: won,
-        p_status: obj.status || null,
-      });
-      if (error) console.warn(`[stripe-webhook] dispute ${disputeId} close not recorded: ${error.message}`);
+  // A database error is thrown (TED-187): 500, so Stripe sends the event again
+  // (every writer here is keyed on the dispute). An ANSWER — no such payment —
+  // is logged: sending it again would not change it.
+  if (taking) {
+    const { data, error } = await supabase.rpc("record_chargeback", {
+      p_camp_id: campId, p_dispute_id: disputeId, p_refs: refs,
+      p_amount: Number(((obj.amount || 0) / 100).toFixed(2)),
+      p_reason: obj.reason || null, p_status: obj.status || null,
+    });
+    if (error) throw new Error(`chargeback ${disputeId} not posted yet: ${error.message}`);
+    if (!data?.success) {
+      console.error(`[stripe-webhook] chargeback ${disputeId} NOT posted to the ledger ` +
+        `(${data?.error || "unknown"}) — the camp's books now ` +
+        `overstate collected cash until this is reconciled by hand`);
+      return;
     }
-  } catch (e) {
-    console.error(`[stripe-webhook] dispute ${disputeId} ledger write threw: ${(e as Error).message}`);
+    // Autopay does not charge the family again while their bank is deciding
+    // (288). Won: it starts again; lost: the office decides, in Billing.
+    if (data.familyKey) {
+      const hold = await supabase.rpc("hold_autopay_for_dispute", {
+        p_camp_id: campId, p_family_key: String(data.familyKey), p_dispute_id: disputeId, p_hold: true,
+        p_detail: obj.reason ? String(obj.reason).replace(/_/g, " ") : null });
+      if (hold.error) throw new Error(`chargeback ${disputeId}: autopay could not be paused yet: ${hold.error.message} — is migration 288 applied?`);
+    }
+  } else {
+    // `won` means the camp kept the money. Anything else leaves the refund
+    // standing, which is already correct.
+    const won = status === "won";
+    const { data, error } = await supabase.rpc("resolve_chargeback", {
+      p_camp_id: campId, p_dispute_id: disputeId, p_won: won,
+      p_status: obj.status || null,
+    });
+    if (error) throw new Error(`dispute ${disputeId} close not recorded yet: ${error.message}`);
+    if (won && data?.familyKey) {
+      const rel = await supabase.rpc("hold_autopay_for_dispute", {
+        p_camp_id: campId, p_family_key: String(data.familyKey), p_dispute_id: disputeId, p_hold: false });
+      if (rel.error) throw new Error(`dispute ${disputeId} won: autopay could not be resumed yet: ${rel.error.message}`);
+    } else if (!won && data?.familyKey) {
+      // Lost (TED-202): the pause stays, marked lost — the office may resume
+      // once no other dispute of the family's is still open.
+      const lost = await supabase.rpc("note_dispute_lost", {
+        p_camp_id: campId, p_family_key: String(data.familyKey), p_dispute_id: disputeId });
+      if (lost.error) throw new Error(`dispute ${disputeId} lost: not marked yet: ${lost.error.message} — is migration 288 applied?`);
+    }
   }
 }
 
@@ -833,14 +1162,22 @@ serve(async (req) => {
   try {
     const body = await req.text();
     const signature = req.headers.get("stripe-signature") || "";
-    if (STRIPE_WEBHOOK_SECRET) {
-      const valid = await verifySignature(body, signature, STRIPE_WEBHOOK_SECRET);
-      if (!valid) {
-        console.error("[stripe-webhook] Invalid signature");
-        return new Response(JSON.stringify({ error: "Invalid signature" }), {
-          status: 400, headers: { ...corsHeaders, "Content-Type": "application/json" },
-        });
-      }
+    // FAIL CLOSED (TED-057). With no secret this used to skip the check, so
+    // anyone could post a fake "payment succeeded" and mark a family paid.
+    // Refusing with a 500 makes Stripe retry (for up to three days), so no real
+    // event is lost while the secret is being set.
+    if (!STRIPE_WEBHOOK_SECRET) {
+      console.error("[stripe-webhook] STRIPE_WEBHOOK_SECRET is not set — refusing every event until it is");
+      return new Response(JSON.stringify({ error: "Webhook not configured" }), {
+        status: 500, headers: { ...corsHeaders, "Content-Type": "application/json" },
+      });
+    }
+    const valid = await verifySignature(body, signature, STRIPE_WEBHOOK_SECRET);
+    if (!valid) {
+      console.error("[stripe-webhook] Invalid or expired signature");
+      return new Response(JSON.stringify({ error: "Invalid signature" }), {
+        status: 400, headers: { ...corsHeaders, "Content-Type": "application/json" },
+      });
     }
 
     const event = JSON.parse(body);
@@ -856,6 +1193,8 @@ serve(async (req) => {
     if (statusFor[event.type]) {
       const pi = event.data.object;
       const campId = pi.metadata?.campId;
+      let neverRecorded: NeverRecorded | null = null;
+      try {
       if (!campId) {
         console.log("[stripe-webhook] No campId in metadata — skipping ledger write");
       } else if (pi.metadata?.source === "campistry-canteen-deposit") {
@@ -871,10 +1210,47 @@ serve(async (req) => {
         // ordinary payment when the office accepts and enrolls.
         await handleRegistrationDeposit(supabase, campId, pi, statusFor[event.type]);
       } else {
-        const ok = await upsertPayment(supabase, campId, pi, statusFor[event.type]);
-        console.log(`[stripe-webhook] ledger ${statusFor[event.type]} $${(pi.amount || 0) / 100} camp ${campId}: ${ok ? "ok" : "FAILED"}`);
+        await upsertPayment(supabase, campId, pi, statusFor[event.type]);   // throws when not recorded
+        console.log(`[stripe-webhook] ledger ${statusFor[event.type]} $${(pi.amount || 0) / 100} camp ${campId}: ok`);
+      }
+      } catch (e) {
+        if (!(e instanceof NeverRecorded)) throw e;
+        neverRecorded = e;
+      }
+      if (neverRecorded) {
+        // Told once (the claim is keyed on the payment, and given back when the
+        // email did not go, so Stripe's next delivery sends it), then 200.
+        const key = `unrecorded:${pi.id}:${statusFor[event.type]}`;
+        const { data: first, error: claimErr } = await supabase.rpc("claim_refund_failure_alert", { p_refund_id: key });
+        if (claimErr) throw new Error(`${neverRecorded.message} — and the platform could not be told (${claimErr.message})`);
+        if (first !== false) {
+          const amt = ((Number(pi.amount_received ?? pi.amount) || 0) / 100).toFixed(2);
+          const sent = await sendRiskAlertEmail(`Stripe: a $${amt} payment could not be recorded in Campistry`, `
+            <div style="font-family:sans-serif;max-width:600px;">
+              <h2 style="color:#B91C1C;">A payment Campistry cannot record</h2>
+              <p><strong>Payment:</strong> ${pi.id} (${statusFor[event.type]}) · <strong>Amount:</strong> $${amt}</p>
+              <p><strong>Camp:</strong> ${campId || "—"} · <strong>What it was for:</strong> ${pi.metadata?.source || "a family payment"}
+                 ${pi.metadata?.camperName ? " · child " + pi.metadata.camperName : ""}${pi.metadata?.camperId ? " (#" + pi.metadata.camperId + ")" : ""}
+                 ${pi.metadata?.enrollmentId ? " · application " + pi.metadata.enrollmentId : ""}</p>
+              <p><strong>Why:</strong> ${neverRecorded.code.replace(/_/g, " ")} — this will not change by trying again.</p>
+              <p>The money was taken. Tell the camp: they record it by hand (the child's new number, or the family it belongs to),
+                 or refund it in Stripe.</p>
+              <p style="margin-top:20px;color:#64748B;font-size:13px;">Event: ${event.type} (${event.id})</p>
+            </div>`);
+          if (sent === "failed") {
+            await supabase.rpc("release_refund_failure_alert", { p_refund_id: key });
+            throw new Error(`${neverRecorded.message} — and the platform alert did not send; Stripe will send it again`);
+          }
+        }
+        console.error(`[stripe-webhook] ${neverRecorded.message} — it never will be; the platform has been told`);
+        return new Response(JSON.stringify({ received: true, recorded: false, reason: neverRecorded.code }), {
+          status: 200, headers: { ...corsHeaders, "Content-Type": "application/json" },
+        });
       }
 
+      // Only reached once the payment is recorded (every writer above throws
+      // when it is not, TED-164), so a receipt never describes a payment
+      // Campistry has no record of.
       // The receipt goes out from HERE for every Stripe charge in the product —
       // a pay link, a registration deposit, a canteen top-up, an autopay
       // instalment, a card the office charged. All of them end up as a
@@ -896,7 +1272,7 @@ serve(async (req) => {
           what,
           method: "Card",
           familyKey: pi.metadata?.familyKey || null,
-          camperName: pi.metadata?.camperName || null,
+          camperId: camperIdIn(pi.metadata?.camperId), camperName: pi.metadata?.camperName || null,
           enrollmentId: pi.metadata?.enrollmentId || null,
         });
       }
@@ -912,6 +1288,8 @@ serve(async (req) => {
       // Billing's refund action writes, so whichever arrives second does
       // nothing rather than crediting the refund twice.
       await handleChargeRefunded(supabase, event);
+    } else if (REFUND_FAILED_TYPES.has(event.type)) {
+      await handleRefundFailed(supabase, event);
     } else if (event.type === "setup_intent.succeeded") {
       // Not a payment at all — a saved card/bank account for future autopay
       // (tuition) or auto-reload (canteen). Either/or, routed by source.
@@ -926,6 +1304,10 @@ serve(async (req) => {
       } else {
         await handleAutopaySetup(supabase, si);
       }
+    } else if (event.type === "charge.dispute.updated" || event.type === "charge.dispute.funds_withdrawn") {
+      // An inquiry that escalated, or the money actually leaving (TED-186/188):
+      // posted once, keyed on the dispute; no second platform email.
+      await handleDisputeLedger(supabase, event);
     } else if (RISK_EVENT_TYPES.has(event.type)) {
       // A dispute also moves real money out of the CAMP's account, so it needs a
       // ledger entry as well as the platform alert. Ledger first: if the email

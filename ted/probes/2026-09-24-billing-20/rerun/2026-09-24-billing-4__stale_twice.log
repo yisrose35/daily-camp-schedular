@@ -1,0 +1,5 @@
+parent try 1 : {"state": "new", "attempt": 0, "claimed": true}
+parent try 2 : {"since": "2026-09-24T14:27:19.625666+00:00", "state": "stale", "attempt": 0, "claimed": false}
+office confirm (click 1): {"state": "retaken", "attempt": 0, "claimed": true, "wasCalled": true}
+office confirm (click 2, before click 1 reached the processor): {"state": "in_progress", "attempt": 0, "claimed": false}
+parent try 3 meanwhile: {"state": "in_progress", "attempt": 0, "claimed": false}

@@ -1,0 +1,10 @@
+P1 Refund All (Sola): $50; sent ["refund X1 $50.00"]; wallet $0
+   auto-reload: enabled false; reason "switched off when the camp refunded the canteen balance — switch it back on if you still want it"; card still on file true (tok_avi); trigger "$20 below $5"
+P2 the child's Refund, all $50: $50; wallet $0
+   auto-reload: enabled false; reason "switched off when the camp refunded the canteen balance — switch it back on if you still want it"; card still on file true (tok_avi); trigger "$20 below $5"
+P3 the child's Refund, $20 of $50: $20; wallet $30
+   auto-reload: enabled true; reason ""; card still on file true (tok_avi); trigger "$20 below $5"
+P4 the auto-reload run after P1: {"ok":true,"charged":0,"failed":0,"details":[]}; money moved []
+P5 control: a Sola wallet at $0 with auto-reload still on → run: {"ok":true,"charged":1,"failed":0,"details":[{"camp":"0ed15000-0000-0000-0000-000000000204","camper":"Avi","camperId":7,"amount":20,"kind":"threshold","result":; money moved ["SALE $20.00 on tok_avi"]
+
+0 BAD

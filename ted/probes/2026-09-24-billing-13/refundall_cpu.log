@@ -1,0 +1,3 @@
+  600 children ×  8 top-ups (6000 ledger rows):   536 ms CPU for Refund All's sums (4800 top-ups found)
+ 1000 children × 10 top-ups (12000 ledger rows):  1441 ms CPU for Refund All's sums (10000 top-ups found)
+ 1000 children × 15 top-ups (18000 ledger rows):  3213 ms CPU for Refund All's sums (15000 top-ups found)

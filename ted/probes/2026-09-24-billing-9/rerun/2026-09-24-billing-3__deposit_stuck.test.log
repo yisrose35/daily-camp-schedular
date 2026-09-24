@@ -1,0 +1,20 @@
+TAP version 13
+# try 1: 200 {"success":false,"inProgress":true,"reason":"in_progress","error":"A payment for this deposit is already in progress — please wait a minute before trying again."}
+# try 2: 200 {"success":false,"inProgress":true,"reason":"in_progress","error":"A payment for this deposit is already in progress — please wait a minute before trying again."}
+# try 3: 200 {"success":false,"inProgress":true,"reason":"in_progress","error":"A payment for this deposit is already in progress — please wait a minute before trying again."}
+# card charges that went through: -1
+# Subtest: probe
+ok 1 - probe
+  ---
+  duration_ms: 173.855109
+  type: 'test'
+  ...
+1..1
+# tests 1
+# suites 0
+# pass 1
+# fail 0
+# cancelled 0
+# skipped 0
+# todo 0
+# duration_ms 257.716554

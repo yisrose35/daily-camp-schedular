@@ -1,0 +1,4 @@
+today's 275: reserve $50 of a $50 wallet with a $10 floor → {"balance": 0.00, "success": true}
+    check script: ok
+the EARLIER 275 (fef6edb) pasted: reserve $50 → {"error": "insufficient", "success": false, "available": 40.00}
+    check script: apply 275 again — an earlier copy is in place, and it keeps the balance floor back from refunds

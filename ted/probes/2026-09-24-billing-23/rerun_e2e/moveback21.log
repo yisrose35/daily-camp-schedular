@@ -1,0 +1,8 @@
+B1  Billing: Teal's autopay is paused for a dispute
+  Billing list shows the pause: false; after opening Teal: false
+  BAD B1 Billing names the dispute pause   → Billing & Payments2 accounts · 1 card on file · 0 paymentsRecord PaymentBatch ChargeBank Deposits⋯Add HouseholdAdd ChargeRun an installment…Credit several accounts…Charge several accounts…Settle invoices from credit…Send statements…Charge late fees…Late-fee policy…Issue Credit/RefundAccepted payment
+B2  click it → confirm → Resume
+  BAD the run finished   → locator.click: Timeout 30000ms exceeded. | Call log: | [2m  - waiting for locator('span').filter({ hasText: 'Autopay paused — a payment is disputed with the bank' }).first()[22m
+page errors: []
+
+2 BAD

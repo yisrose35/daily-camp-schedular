@@ -1,0 +1,46 @@
+TAP version 13
+# Subtest: TED-067: rolling a child's canteen money forward leaves both the canteen and the tuition balance alone
+ok 1 - TED-067: rolling a child's canteen money forward leaves both the canteen and the tuition balance alone
+  ---
+  duration_ms: 23.768842
+  type: 'test'
+  ...
+# Subtest: TED-067: cashing out a child's canteen money takes it off the CANTEEN account, not the family's
+not ok 2 - TED-067: cashing out a child's canteen money takes it off the CANTEEN account, not the family's
+  ---
+  duration_ms: 22.20056
+  type: 'test'
+  location: '/tmp/claude-0/-home-user-daily-camp-schedular/39278441-0cf3-5f6a-bf8e-a51bef67e95d/scratchpad/old114/tests/closeout_canteen_and_rollforward.test.js:61:1'
+  failureType: 'testCodeFailure'
+  error: "the close-out went through the till's limits"
+  code: 'ERR_ASSERTION'
+  name: 'AssertionError'
+  expected: true
+  actual: false
+  operator: '=='
+  stack: |-
+    TestContext.<anonymous> (/tmp/claude-0/-home-user-daily-camp-schedular/39278441-0cf3-5f6a-bf8e-a51bef67e95d/scratchpad/old114/tests/closeout_canteen_and_rollforward.test.js:68:12)
+    async Test.run (node:internal/test_runner/test:1054:7)
+    async Test.processPendingSubtests (node:internal/test_runner/test:744:7)
+  ...
+# Subtest: TED-067: rolling the family's own credit forward keeps the credit
+ok 3 - TED-067: rolling the family's own credit forward keeps the credit
+  ---
+  duration_ms: 21.883523
+  type: 'test'
+  ...
+# Subtest: the family's credit donated or paid out is used up (a charge against the account)
+ok 4 - the family's credit donated or paid out is used up (a charge against the account)
+  ---
+  duration_ms: 23.257628
+  type: 'test'
+  ...
+1..4
+# tests 4
+# suites 0
+# pass 3
+# fail 1
+# cancelled 0
+# skipped 0
+# todo 0
+# duration_ms 178.631829

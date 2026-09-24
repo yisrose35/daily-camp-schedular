@@ -8,8 +8,8 @@
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
     <link href="https://fonts.googleapis.com/css2?family=Roboto:wght@400;500;700;900&family=Roboto+Flex:opsz,wght@8..144,400;8..144,500;8..144,700;8..144,900&display=swap" rel="stylesheet">
-    <link rel="stylesheet" href="campistry-unified.css?v=20260903-03">
-    <link rel="stylesheet" href="campistry_link.css?v=20260903-04">
+    <link rel="stylesheet" href="campistry-unified.css?v=20260918-25">
+    <link rel="stylesheet" href="campistry_link.css?v=20260918-24">
     <!-- Splash screen — inline so it appears before any external CSS -->
     <style>
         #link-splash {
@@ -219,10 +219,6 @@
 <header class="lk-header">
     <div class="lk-header-left">
         <button class="lk-hamburger" id="hamburgerBtn" aria-label="Menu"><span></span><span></span><span></span></button>
-        <a href="dashboard.html" class="lk-back-btn">
-            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><polyline points="15 18 9 12 15 6"/></svg>
-            Dashboard
-        </a>
         <a href="dashboard.html" class="lk-logo">
             <img src="Link_clean.png" alt="Campistry Link" style="height:32px;width:auto;display:block;">
         </a>
@@ -234,7 +230,7 @@
         <div class="lk-avatar" id="adminAvatar">CA</div>
     </div>
 </header>
-<script src="campistry_app_switcher.js?v=20260903-03"></script>
+<script src="campistry_app_switcher.js?v=20260918-25"></script>
 
 <!-- SIDEBAR BACKDROP (mobile) -->
 <div class="lk-sidebar-backdrop" id="sidebarBackdrop"></div>
@@ -277,6 +273,11 @@
             <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><path d="M16 8h-6a2 2 0 1 0 0 4h4a2 2 0 1 1 0 4H8"/><line x1="12" y1="6" x2="12" y2="8"/><line x1="12" y1="16" x2="12" y2="18"/></svg>
             Tips Setup
         </button>
+        <div class="lk-nav-divider"></div>
+        <button class="lk-nav-item" data-page="settings" onclick="nav('settings')">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg>
+            Settings
+        </button>
     </div>
 </nav>
 
@@ -305,6 +306,10 @@
     <button class="lk-bnav-item" data-page="tips" onclick="nav('tips')">
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><path d="M16 8h-6a2 2 0 1 0 0 4h4a2 2 0 1 1 0 4H8"/><line x1="12" y1="6" x2="12" y2="8"/><line x1="12" y1="16" x2="12" y2="18"/></svg>
         Tips
+    </button>
+    <button class="lk-bnav-item" data-page="settings" onclick="nav('settings')">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg>
+        Settings
     </button>
 </div></div>
 
@@ -954,6 +959,35 @@
     </div>
 </div>
 
+<!-- ═══════════════════════════════════════════════════ -->
+<!--  LINK PROGRAM SETTINGS                              -->
+<!--  Moved here from Dashboard → Camp Settings — this is -->
+<!--  Link's own settings, so it's configured from inside -->
+<!--  Link rather than from Me/Dashboard. Same             -->
+<!--  camp_link_program_settings table / RPCs as before   -->
+<!--  (get_link_program_settings / set_link_program_       -->
+<!--  settings, migration 106) — only the UI moved.       -->
+<!-- ═══════════════════════════════════════════════════ -->
+<div class="lk-page" id="page-settings">
+    <div class="lk-page-hero">
+        <div class="lk-page-hero-icon">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg>
+        </div>
+        <div>
+            <h1>Link Settings</h1>
+            <p>Configure what Campistry Link offers your parents this year</p>
+        </div>
+    </div>
+
+    <div class="lk-card" style="max-width:700px;">
+        <div class="lk-card-head">
+            <h2>Link Programs</h2>
+        </div>
+        <p style="font-size:.82rem;color:var(--text-muted);">Turn off anything your camp doesn't actually run this year — parents in Link will never see it, and no one can sign up or pay for a program that isn't happening.</p>
+        <div id="linkProgramsBox" style="font-size:0.85rem;color:var(--text-muted);margin-top:10px;">Loading…</div>
+    </div>
+</div>
+
 <!-- List editor modal -->
 <div id="listEditorBackdrop" style="display:none;position:fixed;inset:0;background:rgba(0,0,0,.32);z-index:950;" onclick="closeListEditor()"></div>
 <div id="listEditorModal" style="display:none;position:fixed;top:50%;left:50%;transform:translate(-50%,-50%);background:#fff;border-radius:var(--radius-lg);box-shadow:0 16px 48px rgba(0,0,0,.18);z-index:951;width:480px;max-width:calc(100vw - 32px);max-height:88vh;overflow-y:auto;padding:28px;">
@@ -1106,20 +1140,21 @@
 <script src="demo_mode.js?v=20260903-03"></script>
 <script src="config.js?v=20260903-03"></script>
 <script src="supabase-js@2.js?v=20260903-03"></script>
-<script src="supabase_client.js?v=20260903-03"></script>
+<script src="campistry_camper_id_rpc.js?v=20260923-20"></script>
+<script src="supabase_client.js?v=20260923-08"></script>
 <script src="campistry_security.js?v=20260903-03"></script>
-<script src="campistry_finance_merge.js?v=20260915-01"></script>
-<script src="integration_hooks.js?v=20260917-02"></script>
+<script src="campistry_finance_merge.js?v=20260924-01"></script>
+<script src="integration_hooks.js?v=20260923-22"></script>
 <script src="campistry_cloud_bootstrap.js?v=20260903-03"></script>
 <script src="campistry_broadcast_core.js?v=20260903-03"></script>
 <!-- Branding/watermark renderer — must load BEFORE link_data, which seeds and
      normalizes settings.branding through it on store load. -->
 <script src="campistry_link_branding.js?v=20260903-03"></script>
-<script src="campistry_link_data.js?v=20260903-03"></script>
-<script src="face_match_core.js?v=20260903-03"></script>
+<script src="campistry_link_data.js?v=20260923-22"></script>
+<script src="face_match_core.js?v=20260923-20"></script>
 <script src="campistry_face_shared.js?v=20260903-03"></script>
 <script src="campistry_face_engine_v2.js?v=20260903-03"></script>
-<script src="campistry_link_photos.js?v=20260903-03"></script>
+<script src="campistry_link_photos.js?v=20260923-21"></script>
 <script src="campistry_link_export.js?v=20260903-03"></script>
 <script>
 'use strict';
@@ -1246,6 +1281,7 @@ function nav(p) {
     }
     if (p === 'lists') renderAdminLists();
     if (p === 'tips') renderTipsAdmin();
+    if (p === 'settings') { var _sdb = _dbc2(); if (_sdb) loadLinkProgramSettings(_sdb.campId); }
 }
 
 function switchMsgTab(tab, btn) {
@@ -1275,6 +1311,77 @@ function _updateSchedCount() {
 
 // ─── STAFF INBOX: messages a parent routed to this specific user (migration 027) ─
 function _dbc2(){ var d=window.CampistryDB; if(!d)return null; var c=d.getClient&&d.getClient(), id=d.getCampId&&d.getCampId(); return (c&&id&&c.rpc)?{client:c,campId:id}:null; }
+
+// ========================================
+// LINK PROGRAMS — per-camp on/off switches for parent-facing Link
+// features (migration 106). Moved here from Dashboard → Camp Settings so
+// Link's own settings are configured from inside Link. Any authenticated
+// user can read them (get_link_program_settings), but only owner/admin
+// can flip one (set_link_program_settings enforces that server-side
+// regardless of what this UI shows) — so a non-owner/admin viewer just
+// sees the current state as disabled checkboxes rather than this card
+// being hidden outright.
+// ========================================
+var LINK_PROGRAMS = [
+    { key: 'photos', label: 'Photos', desc: 'Facial-recognition folders + HD downloads' },
+    { key: 'canteen', label: 'Canteen', desc: 'Add Funds / prepaid camper wallet' },
+    { key: 'shop', label: 'Camp Shop', desc: 'Swag & merch store' },
+    { key: 'tips', label: 'Tips', desc: 'Parents tipping staff' },
+    { key: 'camperMail', label: 'Camper Mail', desc: 'Parents sending mail to their camper' },
+    { key: 'pickup', label: 'Pickup & Arrival', desc: 'Bus/dismissal tracking and requests' }
+];
+var _linkProgramsCampId = null;
+
+function loadLinkProgramSettings(campId) {
+    _linkProgramsCampId = campId;
+    var box = document.getElementById('linkProgramsBox');
+    if (!box) return;
+    var db = _dbc2();
+    if (!db) { box.textContent = 'Could not load Link program settings.'; return; }
+    var role = null;
+    try { role = localStorage.getItem('campistry_role'); } catch (e) {}
+    var canWrite = role ? (['owner', 'admin'].indexOf(role) !== -1) : true; // unknown role: let the RPC be the real gate, don't hide the control
+    db.client.rpc('get_link_program_settings', { p_camp_id: campId }).then(function(res) {
+        var data = res && res.data;
+        if (res.error || !data || !data.success) {
+            var reason = (res.error && res.error.message) || (data && data.error) || '';
+            box.textContent = 'Could not load Link program settings.' + (reason ? ' (' + reason + ')' : '');
+            return;
+        }
+        box.innerHTML = LINK_PROGRAMS.map(function(p) {
+            var on = data[p.key] !== false;
+            return '<label style="display:flex;align-items:center;justify-content:space-between;gap:12px;padding:9px 0;border-bottom:1px solid var(--border-color,#E2E8F0);cursor:' + (canWrite ? 'pointer' : 'default') + ';">' +
+                '<span><strong style="font-size:0.86rem;">' + p.label + '</strong><br><span style="font-size:0.76rem;color:var(--text-muted);">' + p.desc + '</span></span>' +
+                '<input type="checkbox" ' + (on ? 'checked' : '') + (canWrite ? '' : ' disabled') + ' style="width:18px;height:18px;flex-shrink:0;" onchange="toggleLinkProgram(\'' + p.key + '\', this.checked, this)">' +
+                '</label>';
+        }).join('') + '<div id="linkProgramsStatus" style="font-size:0.78rem;color:var(--text-muted);margin-top:8px;"></div>';
+    }).catch(function() {
+        box.textContent = 'Could not load Link program settings.';
+    });
+}
+
+function toggleLinkProgram(key, enabled, checkboxEl) {
+    var statusEl = document.getElementById('linkProgramsStatus');
+    var db = _dbc2();
+    if (checkboxEl) checkboxEl.disabled = true;
+    if (statusEl) statusEl.textContent = 'Saving…';
+    if (!db) { if (statusEl) statusEl.textContent = 'Could not save — try again.'; if (checkboxEl) { checkboxEl.checked = !enabled; checkboxEl.disabled = false; } return; }
+    var settings = {}; settings[key] = enabled;
+    db.client.rpc('set_link_program_settings', { p_camp_id: _linkProgramsCampId, p_settings: settings }).then(function(res) {
+        var data = res && res.data;
+        if (res.error || !data || !data.success) {
+            if (statusEl) statusEl.textContent = 'Could not save — ' + ((data && data.error) || (res.error && res.error.message) || 'try again.');
+            if (checkboxEl) { checkboxEl.checked = !enabled; checkboxEl.disabled = false; }
+            return;
+        }
+        if (statusEl) statusEl.textContent = 'Saved.';
+        setTimeout(function() { if (statusEl) statusEl.textContent = ''; }, 2000);
+        if (checkboxEl) checkboxEl.disabled = false;
+    }).catch(function() {
+        if (statusEl) statusEl.textContent = 'Could not save — try again.';
+        if (checkboxEl) { checkboxEl.checked = !enabled; checkboxEl.disabled = false; }
+    });
+}
 window._staffInbox = [];
 function _loadStaffInbox(cb){
     var db=_dbc2(); if(!db){ if(cb)cb(); return; }
@@ -1425,7 +1532,7 @@ function renderSentList() {
     }
     el.innerHTML = all.map(function(m) {
         var toLabel = m.to || (m.recipients ? m.recipients.length + ' recipients' : 'All');
-        var camper = (m.metadata && m.metadata.camperName) ? ' · ' + m.metadata.camperName : '';
+        var camper = (m.metadata && m.metadata.camperName) ? ' · ' + (window.campistryName || String)(m.metadata.camperName) : '';
         var preview = (m.body || '').slice(0, 100);
         var isMsg = m.direction === 'out'; // broadcasts live in link_broadcasts, not link_messages — no archive/important/delete there
         var actions = isMsg ?
@@ -1536,7 +1643,7 @@ function _getFsTargets() {
             (scope === 'division' && values.indexOf(c.division) >= 0) ||
             (scope === 'grade'    && values.indexOf(c.grade)    >= 0) ||
             (scope === 'bunk'     && values.indexOf(c.bunk)     >= 0);
-        if (match) out.push({ camperName: name, parentName: c.parentName, parentEmail: c.parentEmail || '', bunk: c.bunk || '', division: c.division || '', grade: c.grade || '', familyName: c.familyName || '' });
+        if (match) out.push({ camperName: name, camperId: c.camperId != null ? c.camperId : null, parentName: c.parentName, parentEmail: c.parentEmail || '', bunk: c.bunk || '', division: c.division || '', grade: c.grade || '', familyName: c.familyName || '' });
     });
     return out;
 }
@@ -1944,11 +2051,34 @@ async function _sendNonAdopterFallback(nonAdopters, subj, body, channels, campNa
     });
     var method = fallbackChannels.length === 2 ? 'all' : fallbackChannels[0];
     try {
-        var res = await db.client.functions.invoke('send-broadcast', {
-            body: { campId: db.campId, to: to, subject: subj, body: body, method: method, campName: campName, eventKey: eventKey }
-        });
-        if (res.error) throw new Error(res.error.message || 'send-broadcast failed');
-        return res.data;
+        // send-broadcast stops before the platform's wall-clock limit and answers
+        // `done:false` with however many it did not get to, rather than being
+        // killed mid-send and leaving the office with no idea how far it got.
+        // Calling again with the SAME eventKey and the SAME list resumes exactly
+        // where it stopped: the function claims each recipient in the
+        // notifications table before sending and releases every claim it could
+        // not honour, so an already-messaged family is skipped and an unsent one
+        // is picked up. Bounded, so a permanently stuck send cannot spin.
+        var totals = null, pass = 0;
+        for (;;) {
+            var res = await db.client.functions.invoke('send-broadcast', {
+                body: { campId: db.campId, to: to, subject: subj, body: body, method: method, campName: campName, eventKey: eventKey }
+            });
+            if (res.error) throw new Error(res.error.message || 'send-broadcast failed');
+            var d = res.data || {};
+            if (!totals) totals = d;
+            else {
+                ['emailSent','emailFailed','emailSkipped','smsSent','smsFailed','smsSkipped']
+                    .forEach(function(k){ totals[k] = (totals[k]||0) + (d[k]||0); });
+                totals.done = d.done; totals.remaining = d.remaining;
+            }
+            // `done` means it worked through the whole list. `remaining` can
+            // still be non-zero then — those are outright failures, which
+            // another identical pass would only repeat.
+            if (d.done !== false) break;
+            if (++pass >= 20) { totals.truncated = true; break; }
+        }
+        return totals;
     } catch (e) {
         console.error('[Link Admin] non-adopter fallback failed', e);
         toast('In-app message sent, but the SMS/email fallback failed: ' + (e.message || 'unknown error'));
@@ -2467,7 +2597,7 @@ function _getComposeTargets() {
             entry.children.forEach(function(child) {
                 if (inactive[child.name]) return; // withdrawn/declined — no message
                 targets.push({
-                    camperName:  child.name,
+                    camperName:  child.name, camperId: child.camperId != null ? child.camperId : null,
                     parentName:  entry.parentName,
                     parentEmail: entry.parentEmail || '',
                     parentPhone: entry.parentPhone || '',
@@ -2495,7 +2625,7 @@ function _getComposeTargets() {
             (scope === 'bunk'     && values.indexOf(c.bunk)     >= 0);
         if (!match) return;
         targets.push({
-            camperName:  name,
+            camperName:  name, camperId: c.camperId != null ? c.camperId : null,
             parentName:  c.parentName,
             parentEmail: c.parentEmail || '',
             parentPhone: c.parentPhone || '',
@@ -2529,7 +2659,7 @@ function _buildBusRouteMap() {
 function _applyMergeTags(template, d, busMap) {
     busMap = busMap || {};
     return template
-        .replace(/\{\{child_name\}\}/gi,   d.camperName  || '')
+        .replace(/\{\{child_name\}\}/gi,   ((typeof window !== 'undefined' && window.campistryName) || String)(d.camperName || ''))
         .replace(/\{\{parent_name\}\}/gi,  d.parentName  || '')
         .replace(/\{\{bunk\}\}/gi,         d.bunk        || '(unassigned)')
         .replace(/\{\{division\}\}/gi,     d.division    || '')
@@ -2762,14 +2892,16 @@ async function sendCompose() {
         // parses into "Open & fill" / "View list" buttons (get_my_messages
         // returns the body, so no schema change is needed).
         var refs = '';
-        if (attachFormId) refs += '\n\n[[form:' + attachFormId + ':' + (t.camperName || '') + ']]';
+        // [[form:<form>:<camper key>:<camper number>]] — the parent's portal
+        // fills the form for the child with that number.
+        if (attachFormId) refs += '\n\n[[form:' + attachFormId + ':' + (t.camperName || '') + ':' + (t.camperId != null ? t.camperId : '') + ']]';
         if (attachListId) refs += '\n\n[[list:' + attachListId + ']]';
         cl.msg.send({
             to: t.parentName, toType: 'individual',
             subject: _applyMergeTags(subj, t, busMap),
             body:    _applyMergeTags(body, t, busMap) + refs,
             channels: compChannels,
-            metadata: { parentEmail: t.parentEmail, camperName: t.camperName, massSend: isGroup, formId: attachFormId || undefined, listId: attachListId || undefined, isFormRequest: attachFormId ? true : undefined }
+            metadata: { parentEmail: t.parentEmail, camperName: t.camperName, camperId: t.camperId != null ? t.camperId : null, massSend: isGroup, formId: attachFormId || undefined, listId: attachListId || undefined, isFormRequest: attachFormId ? true : undefined }
         });
     });
     toast(targets.length + ' message' + (targets.length === 1 ? '' : 's') + ' sent!');
@@ -2838,7 +2970,7 @@ function _resolveTargetsFor(scope, values, individualNames, audience, session) {
             entry.children.forEach(function(child) {
                 if (inactive[child.name]) return;
                 targets.push({
-                    camperName: child.name, parentName: entry.parentName,
+                    camperName: child.name, camperId: child.camperId != null ? child.camperId : null, parentName: entry.parentName,
                     parentEmail: entry.parentEmail || '', parentPhone: entry.parentPhone || '',
                     smsEmailConsent: !!child.smsEmailConsent,
                     bunk: child.bunk || '', division: child.division || '', grade: child.grade || '',
@@ -2860,7 +2992,7 @@ function _resolveTargetsFor(scope, values, individualNames, audience, session) {
             (scope === 'bunk'     && values.indexOf(c.bunk)     >= 0);
         if (!match) return;
         targets.push({
-            camperName: name, parentName: c.parentName,
+            camperName: name, camperId: c.camperId != null ? c.camperId : null, parentName: c.parentName,
             parentEmail: c.parentEmail || '', parentPhone: c.parentPhone || '',
             smsEmailConsent: !!c.smsEmailConsent,
             bunk: c.bunk || '', division: c.division || '', grade: c.grade || '',
@@ -2897,7 +3029,7 @@ function _deliverScheduledBroadcast(rec) {
             subject: _applyMergeTags(rec.subject, t, busMap),
             body:    _applyMergeTags(rec.body, t, busMap),
             channels: rec.channels || ['app'],
-            metadata: { parentEmail: t.parentEmail, camperName: t.camperName, massSend: isGroup, scheduledBroadcast: rec.id }
+            metadata: { parentEmail: t.parentEmail, camperName: t.camperName, camperId: t.camperId != null ? t.camperId : null, massSend: isGroup, scheduledBroadcast: rec.id }
         });
     });
     return targets.length;
@@ -3000,7 +3132,7 @@ function sendTestToMe() {
     var snap = _getComposeScopeSnapshot();
     var targets = _resolveTargetsFor(snap.scope, snap.values, snap.individualNames);
     var sample = targets[0] || {
-        camperName: 'Sample Camper', parentName: 'Sample Parent', bunk: 'B3',
+        camperName: 'Sample Camper', parentName: 'Sample Parent', bunk: 'B3', // name-ok: a sample for a test message
         division: 'Seniors', grade: '8', familyName: 'Sample Family'
     };
     var busMap = _buildBusRouteMap();
@@ -3188,7 +3320,7 @@ function renderAdminMsgs(filter) {
     c.innerHTML = '';
     list.forEach(function(m) {
         var from   = m.from || 'Parent';
-        var camper = (m.metadata && m.metadata.camperName) ? ' · ' + m.metadata.camperName : '';
+        var camper = (m.metadata && m.metadata.camperName) ? ' · ' + (window.campistryName || String)(m.metadata.camperName) : '';
         var preview = (m.body || '').slice(0, 80);
         var id = esc(m.id);
         c.innerHTML += '<div class="msg-swipe" style="--msg-actions-w:210px;">' +
@@ -3927,7 +4059,7 @@ function _loadCloudSubmissions(cb) {
     if (!db) { if (cb) cb(); return; }
     db.client
         .from('link_form_responses')
-        .select('id, form_id, form_name, mode, camper_name, camper_id, parent_name, parent_email, division, grade, bunk, answers, signature_data, file_name, filled_pdf_path, created_at')
+        .select('id, form_id, form_name, mode, camper_name, camper_id, person_id, parent_name, parent_email, division, grade, bunk, answers, signature_data, file_name, filled_pdf_path, created_at')
         .eq('camp_id', db.campId)
         .order('created_at', { ascending: false })
         .limit(2000)
@@ -3949,7 +4081,7 @@ function _loadFormSubmissions() {
         seen[(r.form_id || '') + '|' + (r.camper_name || '')] = 1;
         return {
             id: r.id, name: r.form_name, formId: r.form_id, docType: r.mode,
-            camper: r.camper_name, grade: r.grade || '', division: r.division || '', bunk: r.bunk || '',
+            camper: r.camper_name, camperId: r.person_id != null ? r.person_id : null, grade: r.grade || '', division: r.division || '', bunk: r.bunk || '',
             parentName: r.parent_name || '', parentEmail: r.parent_email || '',
             date: _fmtSubDate(r.created_at), submittedAt: r.created_at,
             filename: r.mode === 'digital' ? null : (r.file_name || 'upload'),
@@ -3963,7 +4095,7 @@ function _loadFormSubmissions() {
         if (seen[(s.formId || '') + '|' + (s.camper || '')]) return;
         docSubmissions.push({
             id: s.id, name: s.formName, formId: s.formId || '', docType: s.docType,
-            camper: s.camper, grade: s.grade, division: s.division, bunk: s.bunk,
+            camper: s.camper, camperId: s.camperId != null ? s.camperId : null, grade: s.grade, division: s.division, bunk: s.bunk,
             parentName: s.parentName || '', parentEmail: '',
             date: s.date, submittedAt: s.submittedAt,
             filename: s.mode === 'digital' ? null : (s.filename || 'upload'),
@@ -4073,13 +4205,24 @@ function _pgCamperData(children){
     return out;
 }
 
+// Plain words for the reasons the database gives when it refuses an
+// invitation or a join request, instead of its internal codes.
+function _pgReason(res){
+    var code = (res && res.data && res.data.error) || (res && res.error && res.error.message) || '';
+    if (code === 'not_camp_office') return 'only the camp office (owner, admin or manager) can do this';
+    if (code === 'not_authenticated') return 'you are signed out — sign in again';
+    if (/network|fetch|timeout/i.test(code)) return 'no connection — try again';
+    if (/reloading/i.test(code)) return 'this page is reloading — try again after it loads';
+    return code || 'unknown problem';
+}
+
 async function bulkInviteAll(){
     var db = _dbc2(); if (!db) { toast('Not signed in'); return; }
     var fams = _pgFamilies();
     if (!fams.length) { toast('No families with parent emails on the roster'); return; }
     var prog = document.getElementById('bulkInviteProg');
     prog.style.display = 'block';
-    var ok = 0, fail = 0;
+    var ok = 0, fail = 0, reasons = {};
     var expires = new Date(); expires.setFullYear(expires.getFullYear() + 1);
     // Each family may invite up to two DISTINCT parent emails — each gets its
     // own link_parent_invites row (own token/access code), so both parents can
@@ -4104,10 +4247,10 @@ async function bulkInviteAll(){
                 p_camper_data: _pgCamperData(j.children),
                 p_expires_at: expires.toISOString()
             });
-            if (res.error || !res.data || !res.data.success) fail++; else ok++;
-        } catch(e) { fail++; }
+            if (res.error || !res.data || !res.data.success) { fail++; var why = _pgReason(res); reasons[why] = (reasons[why] || 0) + 1; } else ok++;
+        } catch(e) { fail++; var why2 = _pgReason({ error: e }); reasons[why2] = (reasons[why2] || 0) + 1; }
     }
-    prog.innerHTML = '<div style="color:var(--green-600);font-size:.82rem;">' + ok + ' parent logins invited' + (fail ? ' · <span style="color:var(--red-500);">' + fail + ' failed</span>' : '') + '</div>';
+    prog.innerHTML = '<div style="color:var(--green-600);font-size:.82rem;">' + ok + ' parent logins invited' + (fail ? ' · <span style="color:var(--red-500);">' + fail + ' failed: ' + esc(Object.keys(reasons).map(function(r){ return r + (reasons[r] > 1 ? ' (' + reasons[r] + ')' : ''); }).join('; ')) + '</span>' : '') + '</div>';
     refreshParentsPage();
 }
 
@@ -4118,6 +4261,18 @@ function refreshParentsPage(){
 
     db.client.rpc('get_camp_parent_invites', { p_camp_id: db.campId }).then(function(res){
         _parentInvitesByEmail = {};
+        _pgOfficeOnly = !!(res && res.data && res.data.error === 'not_camp_office');
+        // Only the camp office sees families' invitations and codes (migration 261).
+        if (res && res.data && res.data.error === 'not_camp_office') {
+            var host = document.getElementById('portalShareUrl');
+            if (host && host.parentNode && !document.getElementById('pgOfficeOnlyNote')) {
+                var note = document.createElement('div');
+                note.id = 'pgOfficeOnlyNote';
+                note.style.cssText = 'margin:8px 0;color:#b45309;font-size:.85rem';
+                note.textContent = 'Only the camp office (owner, admin or manager) can see families\' invitations and access codes.';
+                host.parentNode.appendChild(note);
+            }
+        }
         if (!res.error && res.data && res.data.success) {
             (res.data.invites || []).forEach(function(inv){
                 _parentInvitesByEmail[(inv.parent_email || '').toLowerCase()] = inv;
@@ -4135,7 +4290,11 @@ function refreshParentsPage(){
 // Renders a status badge for one parent's invite and counts it into the
 // invited/claimed page-level stats — called once per parent (up to 2 per
 // family row), so the stats reflect LOGINS, not just families.
+var _pgOfficeOnly = false;
 function _pgStatusBadge(inv, counters){
+    // Staff outside the office cannot see invitations at all (261): show
+    // nothing rather than a "No invite" that may not be true.
+    if (_pgOfficeOnly) return '<span class="badge badge-neutral" title="Only the camp office can see invitations">—</span>';
     if (inv) counters.invited++;
     if (inv && inv.claimed) counters.claimed++;
     return !inv ? '<span class="badge badge-neutral">No invite</span>'
@@ -4188,8 +4347,8 @@ function _renderParentFamilies(){
         var mailSvg = '<svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M4 4h16c1.1 0 2 .9 2 2v12c0 1.1-.9 2-2 2H4c-1.1 0-2-.9-2-2V6c0-1.1.9-2 2-2z"/><polyline points="22,6 12,13 2,6"/></svg>';
         var checkSvg = '<svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="20 6 9 17 4 12"/></svg>';
         stats.innerHTML = stat('blue', famSvg, fams.length, 'Families')
-                        + stat('amber', mailSvg, counters.invited, 'Invited')
-                        + stat('green', checkSvg, counters.claimed, 'Signed up');
+                        + stat('amber', mailSvg, _pgOfficeOnly ? '—' : counters.invited, 'Invited')
+                        + stat('green', checkSvg, _pgOfficeOnly ? '—' : counters.claimed, 'Signed up');
     }
 }
 
@@ -4257,7 +4416,7 @@ async function resolveJoinReq(reqId, action){
     }
     var res = await db.client.rpc('resolve_join_request', { p_request_id: reqId, p_action: action, p_parent_email: email });
     if (res.error || !res.data || !res.data.success) {
-        toast('Could not resolve: ' + ((res.data && res.data.error) || (res.error && res.error.message) || 'unknown'));
+        toast('Could not resolve the request: ' + _pgReason(res));
         return;
     }
     toast(action === 'approve' ? 'Approved — parent now has access' : 'Request declined');
@@ -4310,7 +4469,7 @@ function downloadParentMailMerge(){
                 csv(name || ''), csv(email), csv(phone || ''), csv(kids),
                 csv(inv ? _pgPortalUrl(inv.token) : ''),
                 csv(inv ? (inv.access_code || '') : ''),
-                csv(!inv ? 'no invite' : (inv.claimed ? 'signed up' : 'invited'))
+                csv(_pgOfficeOnly ? 'office only' : !inv ? 'no invite' : (inv.claimed ? 'signed up' : 'invited'))
             ].join(','));
         }
         addRow(f.parentName, f.parentEmail, f.parentPhone);
@@ -4324,7 +4483,8 @@ function downloadParentMailMerge(){
     a.download = 'campistry_parent_invites.csv';
     a.click();
     URL.revokeObjectURL(a.href);
-    if (missing) toast(missing + ' parent login' + (missing === 1 ? '' : 's') + ' with no invite yet — run Generate first');
+    if (_pgOfficeOnly) toast('Links and access codes are left out: only the camp office (owner, admin or manager) can see them');
+    else if (missing) toast(missing + ' parent login' + (missing === 1 ? '' : 's') + ' with no invite yet — run Generate first');
 }
 
 // ─── PHOTOS ───────────────────────────────────────────────────────────────────
@@ -4739,7 +4899,8 @@ function _loadCloudTips(cb) {
     if (!db) { if (cb) cb(); return; }
     db.client
         .from('link_tips')
-        .select('id, camper_name, parent_name, recipient_name, recipient_role, amount, status, created_at')
+        // '*': the refund/dispute columns (migration 285) when they are there
+        .select('*')
         .eq('camp_id', db.campId)
         .order('created_at', { ascending: false })
         .limit(3000)
@@ -4752,7 +4913,16 @@ function _loadCloudTips(cb) {
 
 function _mergedTipLog() {
     var log = _cloudTipRows.map(function(t) {
-        return { id: t.id, from: t.parent_name || '', childName: t.camper_name || '', recipientName: t.recipient_name, role: t.recipient_role || '', amount: parseFloat(t.amount) || 0, date: t.created_at, _cloud: true };
+        // A tip the parent got back (TED-176): refunded, or disputed while the
+        // bank decides or after it ruled for the parent — the staff member no
+        // longer has that part, so it does not count toward their total.
+        var amt = parseFloat(t.amount) || 0;
+        var lost = Math.min(amt, Math.max(parseFloat(t.refunded_amount) || 0,
+            (t.dispute_status === 'open' || t.dispute_status === 'lost') ? amt : 0));
+        var note = t.dispute_status === 'open' ? 'Disputed' : t.dispute_status === 'lost' ? 'Dispute lost'
+                 : lost >= amt && amt > 0 ? 'Refunded' : lost > 0 ? 'Part refunded' : '';
+        return { id: t.id, from: t.parent_name || '', childName: t.camper_name || '', recipientName: t.recipient_name, role: t.recipient_role || '',
+                 amount: Math.round((amt - lost) * 100) / 100, originalAmount: amt, reversal: note, date: t.created_at, _cloud: true };
     });
     var seen = {}; log.forEach(function(t) { seen[t.id] = 1; });
     _loadTipsLog().forEach(function(t) { if (!seen[t.id]) log.push(t); });
@@ -4823,7 +4993,8 @@ function _renderTipHistory() {
                 '<td style="padding:8px 10px;font-weight:600;">' + esc(t.recipientName||'—') + '</td>' +
                 '<td style="padding:8px 10px;">' + esc(t.role||'—') + '</td>' +
                 '<td style="padding:8px 10px;color:var(--text-muted);">' + esc(t.childName||'—') + '</td>' +
-                '<td style="padding:8px 10px;text-align:right;color:var(--green-600);font-weight:700;">$' + (t.amount||0).toFixed(2) + '</td>' +
+                '<td style="padding:8px 10px;text-align:right;color:var(--green-600);font-weight:700;">$' + (t.amount||0).toFixed(2) +
+                    (t.reversal ? '<div style="font-size:.7rem;font-weight:600;color:var(--amber-600,#b45309);">' + esc(t.reversal) + ' · was $' + (t.originalAmount||0).toFixed(2) + '</div>' : '') + '</td>' +
                 '<td style="padding:8px 10px;text-align:right;color:var(--text-muted);">' + d + '</td>' +
             '</tr>';
         }).join('') + '</tbody></table>';
@@ -4834,6 +5005,7 @@ function boot() {
     renderDash();
     renderAdminMsgs('all');
     _loadFormSubmissions();
+    (function _bootLinkPrograms(){ var d = _dbc2(); if (d) loadLinkProgramSettings(d.campId); })();
 
     // Scheduled broadcasts: tell the data layer how to resolve+send a due
     // broadcast, and keep the list fresh when one fires or lands from cloud.
@@ -4939,7 +5111,7 @@ if (document.readyState === 'loading') document.addEventListener('DOMContentLoad
 <script src="product_access_guard.js?v=20260903-03"></script>
 <!-- Per-SECTION access: limits which parts of THIS app the user can open.
      Loads after the product gate, which decides whether they get in at all. -->
-<script src="campistry_capabilities.js?v=20260907-01"></script>
+<script src="campistry_capabilities.js?v=20260924-01"></script>
 <script src="campistry_access_sections.js?v=20260907-01"></script>
 </body>
 </html>

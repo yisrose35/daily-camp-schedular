@@ -1,0 +1,19 @@
+TAP version 13
+# \# office refund 1 ($20): HTTP 200 {"totalRefunded":20,"requested":20,"capped":false,"cappedReason":null,"refunds":[{"refundId":"re_1","paymentIntentId":"pi_top","amount":20}]}
+# \# office refund 2 ($20): HTTP 200 {"totalRefunded":20,"requested":20,"capped":false,"cappedReason":null,"refunds":[{"refundId":"re_1","paymentIntentId":"pi_top","amount":20}]}
+# \# Idempotency-Keys sent: canteen_refund_pi_top_5000_2000 , canteen_refund_pi_top_5000_2000
+# Subtest: probe
+ok 1 - probe
+  ---
+  duration_ms: 183.337807
+  type: 'test'
+  ...
+1..1
+# tests 1
+# suites 0
+# pass 1
+# fail 0
+# cancelled 0
+# skipped 0
+# todo 0
+# duration_ms 270.73365

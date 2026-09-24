@@ -180,7 +180,9 @@ test('integration_hooks builds the index, and builds it BEFORE the strip', () =>
     // Only live places, and only spans — no family data, no money, no addresses.
     const block = src.slice(src.indexOf('const _enr ='), stripAt);
     assert.match(block, /e\.status !== 'enrolled' && e\.status !== 'accepted'/);
-    assert.match(block, /\{ s: e\.session \|\| '', f: w\.f, t: w\.t \}/);
+    // Each span carries the camper's number too (i), so the synthesized
+    // enrollment goes by it.
+    assert.match(block, /\{ s: e\.session \|\| '', f: w\.f, t: w\.t,\s*i: e\.camperId != null \? e\.camperId : null \}/);
     assert.match(block, /catch \(e\)/, 'this must never fail a state write');
 });
 
@@ -500,10 +502,9 @@ test('Go filters its Me-derived roster, and only that one', () => {
     // enrollments behind it, so there is nothing to be absent from.
     assert.match(GO, /if \(Object\.keys\(_goStandaloneRoster\)\.length > 0\) return _goStandaloneRoster;/,
         'the standalone roster must NOT be presence-filtered');
-    // The camperId backfill runs over everyone, filtered or not.
-    const fn = GO.slice(GO.indexOf('function getRoster()'));
-    const backfill = fn.indexOf('c.camperId = nextId');
-    const ret = fn.indexOf('return _presentOnly(meRoster)');
-    assert.ok(backfill > 0 && ret > backfill,
-        'ids must be backfilled before the roster is narrowed');
+    // Go does not issue camper numbers: the server does (253), and Go used to
+    // mint its own here — a second issuer.
+    const fn = GO.slice(GO.indexOf('function getRoster()'), GO.indexOf('return _presentOnly(meRoster)'));
+    assert.ok(fn.length > 0, 're-anchor this test');
+    assert.ok(!/c\.camperId\s*=\s*nextId/.test(fn), 'Go mints camper numbers again');
 });

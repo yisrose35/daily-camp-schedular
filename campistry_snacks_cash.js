@@ -8,8 +8,9 @@
 // The rules, in one place:
 //   • Cash out draws physical money, so a camper's CREDIT LIMIT does not apply
 //     — credit exists to let someone finish a purchase, not to hand out cash.
-//   • A balanceFloor (a reserve the camp wants left on the account) is
-//     respected.
+//   • A balanceFloor (a reserve left on the account, set by the parent) is
+//     respected: cash goes to the child. A REFUND goes to the parent and
+//     returns it (TED-142) — which the message says.
 //   • cashDailyMax caps how much one camper can take out per day. It is
 //     separate from dailyLimit, which caps canteen SPENDING.
 //   • cashAllowNegative lets a camp override the balance check entirely.
@@ -32,10 +33,14 @@
     SnacksCash.money = money;
 
     /** Sum of cash already taken out by one camper on `date`. */
-    SnacksCash.takenOn = function (transactions, camper, date) {
+    SnacksCash.takenOn = function (transactions, camper, date, camperId) {
+        var id = (camperId != null && camperId !== '') ? String(camperId) : null;
         return money((transactions || []).reduce(function (s, t) {
             if (!t || t.kind !== 'cash_out') return s;
-            if (t.camper !== camper) return s;
+            // this camper's: by number when both carry one, by name only for
+            // a row from before numbers
+            if (id != null && t.camperId != null && t.camperId !== '') { if (String(t.camperId) !== id) return s; }
+            else if (t.camper !== camper) return s;
             if (date && t.date !== date) return s;
             return s + Math.abs(parseFloat(t.amount) || 0);
         }, 0));
@@ -64,10 +69,16 @@
         var a = o.account || {};
         var balance = money(a.balance);
         var floor = money(a.balanceFloor);
-        var takenToday = SnacksCash.takenOn(o.transactions, o.camper, o.date);
+        var takenToday = SnacksCash.takenOn(o.transactions, o.camper, o.date, o.camperId);
 
         var max = cfg.cashAllowNegative ? Infinity : Math.max(0, money(balance - floor));
-        var reason = (max === 0) ? 'No available balance' : '';
+        // Said plainly when it is the floor that holds money back (TED-142): a
+        // refund to the card returns it — cash to the child does not.
+        var floorHolds = !cfg.cashAllowNegative && floor > 0 && balance > 0;
+        var reason = (max === 0)
+            ? (floorHolds ? 'The $' + Math.min(balance, floor).toFixed(2) + ' left is under the balance floor — it cannot be taken out as cash here; refund it to the card (Refund), or, if it was paid in cash, at the end of the season use Me → Billing → the family → Close out…, which takes the whole balance'
+                          : 'No available balance')
+            : '';
 
         var dailyMax = money(cfg.cashDailyMax);
         if (dailyMax > 0) {
@@ -79,7 +90,9 @@
                     : '';
             }
         }
-        return { balance: balance, max: max, reason: reason, takenToday: takenToday };
+        // the floor, when it — not the daily limit — is what holds money back
+        var floorCaps = floorHolds && max !== Infinity && Math.abs(max - Math.max(0, money(balance - floor))) < 0.005;
+        return { balance: balance, max: max, reason: reason, takenToday: takenToday, floor: floorCaps ? floor : 0 };
     };
 
     /**
@@ -102,7 +115,9 @@
         }
         if (lim.reason) return { ok: false, error: lim.reason, amount: amount, limit: lim };
         if (lim.max !== Infinity && amount > lim.max + 1e-9) {
-            return { ok: false, error: 'Only $' + lim.max.toFixed(2) + ' available to take out', amount: amount, limit: lim };
+            return { ok: false, error: 'Only $' + lim.max.toFixed(2) + ' available to take out'
+                + (lim.floor > 0 ? ' — the other $' + Math.min(lim.balance - lim.max, lim.floor).toFixed(2) + ' is under the balance floor; refund it to the card (Refund), or, if it was paid in cash, at the end of the season use Me → Billing → the family → Close out…, which takes the whole balance' : ''),
+                amount: amount, limit: lim };
         }
         return { ok: true, error: '', amount: amount, limit: lim };
     };
@@ -120,7 +135,7 @@
         var note = String(o.note || '').trim();
         return {
             time: o.time || '',
-            camper: o.camper || '',
+            camper: o.camper || '', camperId: (o.camperId != null && o.camperId !== '') ? o.camperId : null,
             items: 'Cash out' + (note ? ' — ' + note : ''),
             amount: amount,
             type: 'debit',

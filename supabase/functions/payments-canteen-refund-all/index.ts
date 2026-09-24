@@ -60,13 +60,77 @@ function round2(n: number): number {
   return Math.round(n * 100) / 100;
 }
 
+// A child whose canteen money has just been refunded has their auto-reload
+// switched off (TED-143): otherwise the next run tops the emptied wallet back
+// up from the parent's card — the day after the end-of-season Refund All, and
+// every week after. The parent's Link page shows why and can switch it back on.
+async function pauseAutoReload(supabase: ReturnType<typeof createClient>, campId: string,
+                               camperId: number | null, camperName: string, acct: Record<string, any> | undefined) {
+  const ar = acct && acct.autoReload;
+  if (!ar || ar.enabled !== true) return;
+  const next = Object.assign({}, ar, {
+    enabled: false,
+    disabledAt: new Date().toISOString(),
+    disabledReason: "switched off when the camp refunded the canteen balance — switch it back on if you still want it",
+  });
+  const { error } = await supabase.rpc("update_canteen_autoreload_state", {
+    p_camp_id: campId, p_camper_name: camperName, p_camper_id: camperId, p_autoreload: next });
+  if (error) console.warn(`[canteen-refund] could not switch off auto-reload for ${camperName}: ${error.message}`);
+}
+
+// The ledger, indexed ONCE per run (TED-139): each top-up used to re-scan the
+// whole ledger for its refunds, and the holds for what is on its way — at 1,000
+// children × 15 top-ups that was ~3 s of CPU, over Supabase's limit for a
+// function, and the Snacks page then fell back to its week-only figure. The
+// same rules as before, by camper number (a row with no number: by name).
+type LedgerIndex = {
+  byId: Map<string, Record<string, any>[]>;
+  byName: Map<string, Record<string, any>[]>;
+  byNameNoId: Map<string, Record<string, any>[]>;
+  refunded: Map<string, number>;   // refunds from each payment, less ones failed and put back (278)
+  held: Map<string, number>;       // refunds of each payment on their way (275)
+};
+const __ledgerIndexes = new WeakMap<object, WeakMap<object, Map<string, LedgerIndex>>>();
+function ledgerIndex(transactions: Record<string, any>[], holds: Record<string, any>[], method: string, idField: string): LedgerIndex {
+  let byHolds = __ledgerIndexes.get(transactions);
+  if (!byHolds) { byHolds = new WeakMap(); __ledgerIndexes.set(transactions, byHolds); }
+  let cached = byHolds.get(holds);
+  if (!cached) { cached = new Map(); byHolds.set(holds, cached); }
+  const hit = cached.get(method + "|" + idField);
+  if (hit) return hit;
+  const idx: LedgerIndex = { byId: new Map(), byName: new Map(), byNameNoId: new Map(), refunded: new Map(), held: new Map() };
+  const add = (m: Map<string, Record<string, any>[]>, k: string, v: Record<string, any>) => { const a = m.get(k); if (a) a.push(v); else m.set(k, [v]); };
+  const bump = (m: Map<string, number>, k: string, n: number) => m.set(k, (m.get(k) || 0) + n);
+  for (const t of transactions) {
+    if (!t) continue;
+    if (t.kind === "deposit" && t.method === method && t[idField]) {
+      if (t.camperId != null) add(idx.byId, String(t.camperId), t); else add(idx.byNameNoId, String(t.camper), t);
+      add(idx.byName, String(t.camper), t);
+    } else if (t.kind === "refund" && t[idField]) {
+      bump(idx.refunded, String(t[idField]), Number(t.amount) || 0);
+    } else if (t.kind === "refund_failed" && t[idField]) {
+      bump(idx.refunded, String(t[idField]), -(Number(t.amount) || 0));
+    }
+  }
+  for (const h of holds) {
+    if (h && h.method === method && h.paymentRef) bump(idx.held, String(h.paymentRef), Number(h.amount) || 0);
+  }
+  cached.set(method + "|" + idField, idx);
+  return idx;
+}
+// A child's top-ups: by number when both carry one, by name when either has none.
+function depositsOf(idx: LedgerIndex, camperId: number | null, name: string): Record<string, any>[] {
+  if (camperId != null) return (idx.byId.get(String(camperId)) || []).concat(idx.byNameNoId.get(String(name)) || []);
+  return idx.byName.get(String(name)) || [];
+}
+
 // ── gateway calls, inlined from payments-canteen-refund ─────────────────────
 const CARDKNOX_GATEWAY = "https://x1.cardknox.com/gateway";
 async function cardknoxRefund(
   credentials: Record<string, string>,
   externalTransactionId: string,
   amountCents: number,
-): Promise<{ success: boolean; externalTransactionId?: string; status?: string; error?: string; raw?: unknown }> {
+): Promise<{ success: boolean; uncertain?: boolean; externalTransactionId?: string; status?: string; error?: string; raw?: unknown }> {
   const apiKey = credentials.apiKey;
   if (!apiKey) return { success: false, error: "Missing apiKey" };
   try {
@@ -81,10 +145,12 @@ async function cardknoxRefund(
     const text = await resp.text();
     const r: Record<string, string> = {};
     new URLSearchParams(text).forEach((v, k) => { r[k] = v; });
+    // No result at all is not a "no" (TED-093): the gateway may have refunded.
+    if (!r.xResult) return { success: false, uncertain: true, error: "No answer from the card company (HTTP " + resp.status + ")", raw: r };
     if (r.xResult !== "A") return { success: false, status: r.xStatus, error: r.xError || "Refund failed", raw: r };
     return { success: true, externalTransactionId: r.xRefNum, status: r.xStatus, raw: r };
   } catch (err) {
-    return { success: false, error: (err as Error).message };
+    return { success: false, uncertain: true, error: (err as Error).message };   // cut off: may have moved money (TED-093)
   }
 }
 
@@ -98,7 +164,7 @@ async function banquestRefund(
   credentials: Record<string, string>,
   externalTransactionId: string,
   amountCents: number,
-): Promise<{ success: boolean; externalTransactionId?: string; status?: string; error?: string; raw?: unknown }> {
+): Promise<{ success: boolean; uncertain?: boolean; externalTransactionId?: string; status?: string; error?: string; raw?: unknown }> {
   if (!credentials.sourceKey || !credentials.pin) return { success: false, error: "Missing sourceKey/pin" };
   const refNum = Number(externalTransactionId);
   if (!Number.isFinite(refNum)) return { success: false, error: "Original transaction reference is not a valid Banquest reference_number." };
@@ -114,13 +180,16 @@ async function banquestRefund(
     const st = String(data?.status || "").toLowerCase();
     const ok = code === "A" || /approv|void|refund/.test(st);
     const newRef = data?.reference_number != null ? String(data.reference_number) : (data?.transaction?.id ? String(data.transaction.id) : "");
+    if (resp.status >= 500 && !newRef) {
+      return { success: false, uncertain: true, error: `No answer from the card company (HTTP ${resp.status})`, raw: data };
+    }
     if (resp.status < 200 || resp.status >= 300 || !ok || !newRef) {
       const errMsg = data?.error_message || (Array.isArray(data?.error_messages) && data.error_messages[0]) || data?.error_details || data?.error || data?.message || data?.status || `Refund failed (HTTP ${resp.status})`;
       return { success: false, status: data?.status, error: errMsg, raw: data };
     }
     return { success: true, externalTransactionId: newRef, status: data?.status, raw: data };
   } catch (err) {
-    return { success: false, error: (err as Error).message };
+    return { success: false, uncertain: true, error: (err as Error).message };   // cut off: may have moved money (TED-093)
   }
 }
 
@@ -164,19 +233,23 @@ type DepositRemainder = { externalTransactionId: string; remaining: number; time
 // switched) are deliberately excluded: that transaction id means nothing to the
 // gateway we would be calling.
 function depositsFor(
-  camperName: string,
+  who: { camperId: number | null; camperName: string },
   transactions: Record<string, any>[],
   processorKey: string,
+  holds: Record<string, any>[] = [],
 ): DepositRemainder[] {
-  return transactions
-    .filter((t) => t && t.camper === camperName && t.kind === "deposit" && t.method === processorKey && t.byopTransactionId)
+  // By camper ID when the account has one (250): the account's key is the
+  // spelling at the time, and a renamed or same-named child shares spellings.
+  // The name is compared only when the account or the ledger row has no number.
+  // What is already refunded from each, and what another refund has on its way
+  // from it (275) — from one index of the ledger per run (TED-139).
+  const idx = ledgerIndex(transactions, holds, processorKey, "byopTransactionId");
+  return depositsOf(idx, who.camperId, who.camperName)
     .map((dep) => {
-      const refundedSoFar = transactions
-        .filter((t) => t && t.kind === "refund" && t.byopTransactionId === dep.byopTransactionId)
-        .reduce((sum, t) => sum + (Number(t.amount) || 0), 0);
+      const ref = String(dep.byopTransactionId);
       return {
-        externalTransactionId: dep.byopTransactionId as string,
-        remaining: round2((Number(dep.amount) || 0) - refundedSoFar),
+        externalTransactionId: ref,
+        remaining: round2((Number(dep.amount) || 0) - (idx.refunded.get(ref) || 0) - (idx.held.get(ref) || 0)),
         timestamp: Number(dep.timestamp) || 0,
       };
     })
@@ -189,18 +262,31 @@ async function refundOneCamper(
   campId: string,
   processorKey: string,
   credentials: Record<string, string>,
-  camperName: string,
+  who: { camperId: number | null; camperName: string },
   walletAvailable: number,
   transactions: Record<string, any>[],
   batchKey: string | null,
-): Promise<{ camperName: string; refunded: number; skipped?: string; error?: string }> {
-  const deposits = depositsFor(camperName, transactions, processorKey);
+  holds: Record<string, any>[] = [],
+): Promise<{ camperId: number | null; camperName: string; refunded: number; skipped?: string; error?: string }> {
+  const { camperId, camperName } = who;
+  const deposits = depositsFor(who, transactions, processorKey, holds);
   const processorCapacity = round2(deposits.reduce((sum, d) => sum + d.remaining, 0));
   const targetAmount = round2(Math.min(walletAvailable, processorCapacity));
 
+  // An earlier refund of this child's money that the card company never
+  // confirmed (275): its money stays off the wallet — it may be with the
+  // parent — and the office is told, every run, until someone has looked.
+  const mineHold = (h: Record<string, any>) => (camperId != null && h.camperId != null) ? String(h.camperId) === String(camperId) : h.accountKey === camperName;
+  const stale = holds.filter((h) => mineHold(h) && Number(h.ageSeconds) >= 180);
+  const staleAmt = round2(stale.reduce((t, h) => t + (Number(h.amount) || 0), 0));
+  const staleNote = stale.length
+    ? `An earlier refund of $${staleAmt.toFixed(2)} for this child was never confirmed by the card company — check the processor's dashboard, then settle it under "waiting for an answer" (in Refund All or this child's Refund).`
+    : null;
+
   if (targetAmount <= 0) {
+    if (staleNote) return { camperId, camperName, refunded: 0, error: staleNote };
     return {
-      camperName,
+      camperId, camperName,
       refunded: 0,
       skipped: processorCapacity <= 0
         ? "no online deposits on this processor (cash/manual, or a processor the camp has since left)"
@@ -212,35 +298,82 @@ async function refundOneCamper(
   let refunded = 0;
   for (const dep of deposits) {
     if (remainingToRefund <= 0) break;
-    const chunk = round2(Math.min(dep.remaining, remainingToRefund));
+    let chunk = round2(Math.min(dep.remaining, remainingToRefund));
     if (chunk <= 0) continue;
 
     try {
+      const keyFor = (amt: number) => `canteen:${dep.externalTransactionId}:${Math.round(dep.remaining * 100)}:${Math.round(amt * 100)}`;
+      // TAKE THE MONEY OFF THE WALLET FIRST (275, TED-110), at this child's
+      // turn and in one locked step — not from the balances read when the run
+      // started. A refund of this child from another computer, or a sale, since
+      // then is seen here; whichever reserves first has the money.
+      const reserve = (amt: number) => service.rpc("reserve_canteen_refund", {
+        p_camp_id: campId, p_camper_id: camperId, p_camper_name: camperName,
+        p_hold_key: keyFor(amt), p_amount: amt, p_method: processorKey, p_payment_ref: String(dep.externalTransactionId) });
+      let { data: held, error: holdErr } = await reserve(chunk);
+      if (!holdErr && held && held.success === false && held.error === "insufficient") {
+        const avail = round2(Number(held.available) || 0);
+        if (avail <= 0) {
+          if (refunded > 0 || staleNote) break;
+          return { camperId, camperName, refunded, skipped: "the balance changed during the run (another refund or a sale took it)" };
+        }
+        chunk = round2(Math.min(chunk, avail));
+        ({ data: held, error: holdErr } = await reserve(chunk));
+      }
+      if (holdErr || !held || held.success !== true) {
+        throw new Error("Could not set this child's refund money aside, so nothing was sent: " + (holdErr?.message || held?.error || "no answer"));
+      }
+      if (held.existing && held.state === "posted") {
+        console.log(`[canteen-refund-all] already refunded, skipping: ${keyFor(chunk)}`);
+        continue;
+      }
+      if (held.existing) chunk = round2(Number(held.amount) || chunk);   // its reservation decides the amount
+      const holdKey = keyFor(chunk);
       const chunkCents = Math.round(chunk * 100);
       // CLAIM BEFORE THE PROCESSOR. This function refunds a whole camp's wallets
       // in one invocation, so a timeout partway through is the likeliest way it
       // gets run twice — and without a claim the campers it already reached would
       // be refunded again. Keyed per camper AND per deposit chunk so a resumed run
       // skips exactly what it finished.
-      const chunkKey = batchKey
-        ? `${batchKey}:${camperName}:${dep.externalTransactionId}:${chunkCents}` : null;
+      // Keyed on the deposit and what is left on it, never on a request key:
+      // Snacks sends none, so nothing was ever claimed and a re-run after a
+      // lost answer refunded the child again (TED-093). A single refund of the
+      // same child uses its own page key; what keeps the two from both
+      // spending the same money is the wallet reservation above (275, TED-110),
+      // not a shared key.
+      void batchKey;
+      const chunkKey = holdKey;
       if (chunkKey) {
         const { data: claim } = await service.rpc("claim_refund_intent", {
           p_camp_id: campId, p_key: chunkKey, p_amount: chunk,
           p_payment_ref: String(dep.externalTransactionId),
         });
         if (claim && claim.claimed === false) {
+          if (!(claim.previous && claim.previous.externalTransactionId)) {
+            // Asked on an earlier run and never confirmed (TED-093): leave this
+            // camper for the office to check, never refund them twice.
+            return { camperId, camperName, refunded, error: "An earlier refund for this camper was never confirmed by the card company — check the processor's dashboard." };
+          }
           console.log(`[canteen-refund-all] already settled, skipping: ${chunkKey}`);
+          await service.rpc("settle_canteen_refund_hold", { p_camp_id: campId, p_hold_key: holdKey,
+            p_refund_id: String(claim.previous.externalTransactionId) });
           continue;
         }
       }
       const refundResult = processorKey === "cardknox"
         ? await cardknoxRefund(credentials, dep.externalTransactionId, chunkCents)
         : await banquestRefund(credentials, dep.externalTransactionId, chunkCents);
+      if (!refundResult.success && refundResult.uncertain) {
+        // Maybe it moved money: keep the claim, so a re-run leaves this camper
+        // for the office to check instead of refunding them again (TED-093).
+        throw new Error("The card company did not answer, so this camper's refund may or may not have gone through — check the processor's dashboard.");
+      }
       if (!refundResult.success) {
+        // A definite "no": nothing moved. The claim and the money go back.
         if (chunkKey) {
           await service.rpc("release_refund_intent", { p_camp_id: campId, p_key: chunkKey });
         }
+        await service.rpc("release_canteen_refund_hold", { p_camp_id: campId, p_hold_key: holdKey });
         throw new Error(refundResult.error || "Refund failed");
       }
       if (chunkKey) {
@@ -261,17 +394,14 @@ async function refundOneCamper(
         p_raw_response: refundResult.raw ? JSON.parse(JSON.stringify(refundResult.raw)) : null,
       });
 
-      const { error: creditErr } = await service.rpc("refund_canteen_deposit_from_processor", {
-        p_camp_id: campId,
-        p_camper_name: camperName,
-        p_amount: chunk,
-        p_processor_key: processorKey,
-        p_external_transaction_id: dep.externalTransactionId,
-        p_refund_external_id: refundResult.externalTransactionId,
-      });
+      // The refund line goes on the wallet's ledger; the money came off when
+      // it was reserved, so the balance does not move again (275).
+      const { data: posted, error: postErr } = await service.rpc("settle_canteen_refund_hold", {
+        p_camp_id: campId, p_hold_key: holdKey, p_refund_id: String(refundResult.externalTransactionId) });
+      const creditErr = postErr || (posted && posted.success === true ? null : { message: String(posted?.error || "no answer") });
       if (creditErr) {
         console.error(`[payments-canteen-refund-all] refund ${refundResult.externalTransactionId} succeeded ` +
-          `but the canteen ledger was not updated for ${camperName}: ${creditErr.message}`);
+          `but the canteen ledger was not updated for camper ${camperId ?? "(no number)"} ${camperName}: ${creditErr.message}`);
       }
 
       refunded = round2(refunded + chunk);
@@ -280,11 +410,11 @@ async function refundOneCamper(
       // Keep whatever succeeded for this camper before the error — real money
       // already moved for those chunks — and report the rest as a partial
       // failure rather than losing track of it.
-      return { camperName, refunded, error: (chunkErr as Error).message };
+      return { camperId, camperName, refunded, error: (chunkErr as Error).message };
     }
   }
 
-  return { camperName, refunded };
+  return staleNote ? { camperId, camperName, refunded, error: staleNote } : { camperId, camperName, refunded };
 }
 
 async function mapWithConcurrency<T, R>(items: T[], limit: number, fn: (item: T) => Promise<R>): Promise<R[]> {
@@ -329,19 +459,33 @@ serve(async (req) => {
       return json({ error: credResult?.error || "This camp's processor isn't connected/verified yet." }, 400);
     }
 
-    const { data: accountsData, error: acctErr } = await service.rpc("get_canteen_accounts", { p_camp_id: authedCampId });
+    // canteen_refund_view (migration 250), not get_canteen_accounts: that one
+    // decides what to show from the signed-in caller, which the service role is
+    // not — it answered not_authorized, so every refund stopped here — and its
+    // ledger is a 7-day window. This has every deposit, and each account's id.
+    const { data: accountsData, error: acctErr } = await service.rpc("canteen_refund_view", { p_camp_id: authedCampId });
     if (acctErr || !accountsData?.success) return json({ error: "Could not read canteen balances." }, 500);
 
     const accounts: Record<string, any> = accountsData.accounts || {};
     const transactions: Record<string, any>[] = accountsData.transactions || [];
+    const holds: Record<string, any>[] = Array.isArray(accountsData.holds) ? accountsData.holds : [];
 
-    const candidates = Object.keys(accounts)
-      .map((camperName) => {
-        const a = accounts[camperName] || {};
-        const walletAvailable = Math.max(0, round2((Number(a.balance) || 0) - (Number(a.balanceFloor) || 0)));
-        return { camperName, walletAvailable };
+    // Each account with its camper number (250); the account key rides along
+    // as the name, for the fallback of an account with no number. A child
+    // whose earlier refund was never confirmed is listed too, so the office
+    // hears about it (275).
+    const candidates = Object.entries(accounts)
+      .map(([accountKey, acct]) => {
+        const a = acct || {};
+        // All of it: a balance floor keeps a child from SPENDING below it; a
+        // refund goes to the parent, so the floor is not held back (TED-142).
+        const walletAvailable = Math.max(0, round2(Number(a.balance) || 0));
+        const who = { camperId: a.camperId != null ? Number(a.camperId) : null, camperName: accountKey };
+        const staleHold = holds.some((h) => Number(h.ageSeconds) >= 180 &&
+          ((who.camperId != null && h.camperId != null) ? String(h.camperId) === String(who.camperId) : h.accountKey === accountKey));
+        return { who, walletAvailable, staleHold };
       })
-      .filter((c) => c.walletAvailable > 0);
+      .filter((c) => c.walletAvailable > 0 || c.staleHold);
 
     if (!candidates.length) {
       return json({ totalRefunded: 0, refundedCount: 0, skippedCount: 0, failedCount: 0, details: [] });
@@ -355,7 +499,7 @@ serve(async (req) => {
 
     const results = await mapWithConcurrency(candidates, CONCURRENCY, (c) =>
       refundOneCamper(service, authedCampId, processorKey, credResult.credentials,
-                      c.camperName, c.walletAvailable, transactions, batchKey)
+                      c.who, c.walletAvailable, transactions, batchKey, holds)
     );
 
     let totalRefunded = 0, refundedCount = 0, skippedCount = 0, failedCount = 0;
@@ -363,6 +507,13 @@ serve(async (req) => {
       if (r.refunded > 0) { totalRefunded = round2(totalRefunded + r.refunded); refundedCount++; }
       if (r.error) failedCount++;
       else if (r.skipped) skippedCount++;
+    }
+    // The children refunded here have their auto-reload switched off (TED-143).
+    for (let i = 0; i < results.length; i++) {
+      if (results[i].refunded > 0) {
+        const who = candidates[i].who;
+        await pauseAutoReload(service, authedCampId, who.camperId, who.camperName, accounts[who.camperName]);
+      }
     }
 
     console.log(`[payments-canteen-refund-all] camp ${authedCampId} (${processorKey}): refunded $${totalRefunded} ` +

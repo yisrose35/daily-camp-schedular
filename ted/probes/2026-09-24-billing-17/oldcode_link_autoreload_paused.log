@@ -1,0 +1,86 @@
+TAP version 13
+# Subtest: TED-156: paused by the camp — the note, and a "Switch it back on" button that saves the settings shown
+ok 1 - TED-156: paused by the camp — the note, and a "Switch it back on" button that saves the settings shown
+  ---
+  duration_ms: 3.535461
+  type: 'test'
+  ...
+# Subtest: TED-156: on — no "Switch it back on"; off by the parent — no camp note
+ok 2 - TED-156: on — no "Switch it back on"; off by the parent — no camp note
+  ---
+  duration_ms: 3.455781
+  type: 'test'
+  ...
+# Subtest: TED-143: Link tells the parent it only charges while camp is in session
+ok 3 - TED-143: Link tells the parent it only charges while camp is in session
+  ---
+  duration_ms: 0.615522
+  type: 'test'
+  ...
+# Subtest: TED-161: turned off by the parent — "Switch it back on" is there when it was set up before
+not ok 4 - TED-161: turned off by the parent — "Switch it back on" is there when it was set up before
+  ---
+  duration_ms: 1.853003
+  type: 'test'
+  location: '/tmp/claude-0/-home-user-daily-camp-schedular/39278441-0cf3-5f6a-bf8e-a51bef67e95d/scratchpad/old_aa72c69/tests/link_autoreload_paused.test.js:58:1'
+  failureType: 'testCodeFailure'
+  error: |-
+    no way back on after the parent's own Turn off
+    
+    'none' !== ''
+    
+  code: 'ERR_ASSERTION'
+  name: 'AssertionError'
+  expected: ''
+  actual: 'none'
+  operator: 'strictEqual'
+  stack: |-
+    TestContext.<anonymous> (/tmp/claude-0/-home-user-daily-camp-schedular/39278441-0cf3-5f6a-bf8e-a51bef67e95d/scratchpad/old_aa72c69/tests/link_autoreload_paused.test.js:61:12)
+    Test.runInAsyncScope (node:async_hooks:214:14)
+    Test.run (node:internal/test_runner/test:1047:25)
+    Test.processPendingSubtests (node:internal/test_runner/test:744:18)
+    Test.postRun (node:internal/test_runner/test:1173:19)
+    Test.run (node:internal/test_runner/test:1101:12)
+    async Test.processPendingSubtests (node:internal/test_runner/test:744:7)
+  ...
+# Subtest: TED-161: editing the amount while auto-reload is OFF saves it without switching it on
+not ok 5 - TED-161: editing the amount while auto-reload is OFF saves it without switching it on
+  ---
+  duration_ms: 1.352934
+  type: 'test'
+  location: '/tmp/claude-0/-home-user-daily-camp-schedular/39278441-0cf3-5f6a-bf8e-a51bef67e95d/scratchpad/old_aa72c69/tests/link_autoreload_paused.test.js:81:1'
+  failureType: 'testCodeFailure'
+  error: |-
+    an amount edit switched auto-reload back on
+    
+    true !== false
+    
+  code: 'ERR_ASSERTION'
+  name: 'AssertionError'
+  expected: false
+  actual: true
+  operator: 'strictEqual'
+  stack: |-
+    TestContext.<anonymous> (/tmp/claude-0/-home-user-daily-camp-schedular/39278441-0cf3-5f6a-bf8e-a51bef67e95d/scratchpad/old_aa72c69/tests/link_autoreload_paused.test.js:84:12)
+    Test.runInAsyncScope (node:async_hooks:214:14)
+    Test.run (node:internal/test_runner/test:1047:25)
+    Test.processPendingSubtests (node:internal/test_runner/test:744:18)
+    Test.postRun (node:internal/test_runner/test:1173:19)
+    Test.run (node:internal/test_runner/test:1101:12)
+    async Test.processPendingSubtests (node:internal/test_runner/test:744:7)
+  ...
+# Subtest: TED-161: ticking a trigger is still how a parent switches it on; edits while on keep it on
+ok 6 - TED-161: ticking a trigger is still how a parent switches it on; edits while on keep it on
+  ---
+  duration_ms: 1.514563
+  type: 'test'
+  ...
+1..6
+# tests 6
+# suites 0
+# pass 4
+# fail 2
+# cancelled 0
+# skipped 0
+# todo 0
+# duration_ms 119.820369

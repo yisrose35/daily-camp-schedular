@@ -1,0 +1,20 @@
+V1. Avi is charged $5 for "Ices ×2" by mistake; two office computers press Void at the same moment
+    A: {"amount": 5.00, "camper": "Avi", "balance": 40.00, "success": true, "camperId": "1", "restocked": 2, "dailyLimit": null, "spentToday": 0}
+    B (1526 ms): {"error": "already_voided", "message": "That sale was already voided — the money is back on the balance.", "success": false}
+    wallet $35.00 → $40.00; stock Ices 8 left/2 sold, Chips 10 left/0 sold → Ices 10 left/0 sold, Chips 10 left/0 sold; void lines 1
+  ok  V1 voided once: $5 back once, 2 Ices back once, the second press told "already voided"   → wallet +5.00, 1 void lines, Ices 10 left/0 sold, Chips 10 left/0 sold
+
+V2. lines that are not register sales
+    a card refund of a top-up: {"error": "not_a_sale", "message": "Only a register sale can be voided.", "success": false}
+  ok  V2 a card refund of a top-up is not voidable   → {"error": "not_a_sale", "message": "Only a register sale can be voided.", "success": false}
+    cash handed out at the desk: {"error": "not_a_sale", "message": "Only a register sale can be voided.", "success": false}
+  ok  V2 cash handed out at the desk is not voidable   → {"error": "not_a_sale", "message": "Only a register sale can be voided.", "success": false}
+    the season close-out: {"error": "not_a_sale", "message": "Only a register sale can be voided.", "success": false}
+  ok  V2 the season close-out is not voidable   → {"error": "not_a_sale", "message": "Only a register sale can be voided.", "success": false}
+
+V3. a $2.50 Ices sale, voided with the restock list "100 Chips" (Chips were never sold)
+    {"amount": 2.50, "camper": "Avi", "balance": 40.00, "success": true, "camperId": "1", "restocked": 200, "dailyLimit": null, "spentToday": 0}
+    stock Ices 10 left/0 sold, Chips 10 left/0 sold → Ices 10 left/0 sold, Chips 210 left/0 sold
+    (observation only: the server restocks whatever the page lists — the page offers only the sale's own items)
+
+0 BAD

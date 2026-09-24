@@ -1,0 +1,6 @@
+pg 0
+keys 0
+lite 0
+smoke 0
+scale 0
+npm 1

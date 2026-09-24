@@ -2649,12 +2649,36 @@
     /**
      * Get camp dates config (if set by owner on the dashboard).
      * Returns { startDate, half1End, half2Start, endDate } or null.
+     *
+     * ★ Sessions are the source of truth for the HALF boundaries. Dashboard's
+     * Camp Dates card still owns the overall startDate/endDate, but a "1st Half"
+     * / "2nd Half" Session's own start/end dates (Dashboard -> Sessions) now
+     * override half1End/half2Start whenever such a session exists — that's the
+     * single place an owner sets those dates. If no matching session exists
+     * (older camps, or a camp that hasn't named a session "1st Half"/"2nd Half"
+     * yet), this falls back to whatever half1End/half2Start Camp Dates still has
+     * on file, so existing camps don't silently lose their half boundaries.
      */
     Utils.getCampDates = function() {
         const gs = window.loadGlobalSettings ? window.loadGlobalSettings() : {};
         const cd = gs.campDates || (window.loadGlobalSettings ? window.loadGlobalSettings('campDates') : null);
-        if (cd && cd.startDate) return cd;
-        return null;
+        if (!cd || !cd.startDate) return null;
+        try {
+            const sessions = (gs.campistryMe && gs.campistryMe.sessions) || [];
+            const findHalf = function(key, label) {
+                return sessions.find(function(s) { return s && s.autoKey === key; })
+                    || sessions.find(function(s) { return s && !s.autoKey && (s.name || '').trim().toLowerCase() === label; });
+            };
+            const half1 = findHalf('half1', '1st half');
+            const half2 = findHalf('half2', '2nd half');
+            if ((half1 && half1.endDate) || (half2 && half2.startDate)) {
+                const resolved = Object.assign({}, cd);
+                if (half1 && half1.endDate) resolved.half1End = half1.endDate;
+                if (half2 && half2.startDate) resolved.half2Start = half2.startDate;
+                return resolved;
+            }
+        } catch (e) { /* fall through to raw campDates below */ }
+        return cd;
     };
 
     /**

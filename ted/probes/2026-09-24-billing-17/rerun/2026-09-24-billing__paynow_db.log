@@ -1,0 +1,4 @@
+parent balance before: 1000.00 ledger=true
+webhook record: {"count": 1, "success": true, "updated": false, "ledgerPosted": false, "alreadyRecorded": false}
+parent balance after paying $500: 1000.00 ledger=true
+ledger balance: 1000.00

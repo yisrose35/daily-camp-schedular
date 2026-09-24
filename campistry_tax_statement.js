@@ -126,9 +126,27 @@
             if (amt <= 0) return;
             var who = resolve(e) || {};
             var cls = T.classifyCharge(e, { overnight: who.overnight, rules: rules });
+            // The year the care is GIVEN (Pub 503): the session's own start when
+            // the caller knows it, else the charge's date. A tuition charge is
+            // dated at enrolment — October for next July — so its date alone
+            // would put next summer's care in this year (TED-101).
+            var careYear = String(who.careYear || '').slice(0, 4), guessed = false;
+            if (!/^\d{4}$/.test(careYear)) {
+                careYear = ymd(e.date).slice(0, 4);
+                // A session with no dates. A year in its name ("Summer 2027")
+                // says it outright. Otherwise tuition charged in the autumn is
+                // for NEXT summer (camps enrol September to December for the
+                // coming season). Either way, for EVERY undated session it is
+                // said on the statement — never silently assumed (TED-101).
+                var named = String(who.session || '').match(/\b(19|20)\d{2}\b/);
+                var mo = Number(ymd(e.date).slice(5, 7));
+                if (named) careYear = named[0];
+                else if (who.session && mo >= 9 && /^\d{4}$/.test(careYear)) careYear = String(Number(careYear) + 1);
+                if (who.session) guessed = true;
+            }
             lots.push({
-                date: ymd(e.date), seq: idx, open: amt, amount: amt,
-                camperName: who.camperName || '', session: who.session || '',
+                date: ymd(e.date), seq: idx, open: amt, amount: amt, careYear: careYear, careYearGuessed: guessed,
+                camperName: who.camperName || '', camperId: who.camperId != null ? who.camperId : null, session: who.session || '',
                 qualifies: cls.verdict, why: cls.reason,
                 label: e.desc || e.category || 'Charge', ref: e.ref || ''
             });
@@ -160,7 +178,7 @@
      * o = {
      *   year: 2026,
      *   entries: [ledger entries],                  // charge/credit/payment
-     *   resolveCharge: fn(entry) -> {camperName, session, overnight}
+     *   resolveCharge: fn(entry) -> {camperName, camperId, session, overnight}
      *   campers: { 'Eli Klein': {dob:'2014-06-01'} },
      *   rules: T.DEFAULT_RULES
      * }
@@ -215,9 +233,11 @@
         });
 
         var perCamper = {}, reviewLines = {}, excludedLines = {};
-        function bucket(name) {
+        // One bucket per camper, by their roster key (unique; two campers who
+        // share a name have different keys), carrying their number.
+        function bucket(name, id) {
             var k = name || '(unassigned)';
-            if (!perCamper[k]) perCamper[k] = { camperName: k, qualifying: 0, notQualifying: 0, needsReview: 0, total: 0, notes: [] };
+            if (!perCamper[k]) perCamper[k] = { camperName: k, camperId: id != null ? id : null, qualifying: 0, notQualifying: 0, needsReview: 0, total: 0, notes: [] };
             return perCamper[k];
         }
         function note(map, key, amount) {
@@ -226,6 +246,8 @@
         }
 
         var inYearRefunds = 0;
+        var carried = [];
+        var prepaidFor = {}, unbilled = 0;         // paid ahead: by the later year it is for; and on nothing billed
         reducers.forEach(function (r) {
             var e = r.e, amt = num(e.amount);
             var isPayment = e.type === 'payment';
@@ -249,11 +271,37 @@
             }
 
             var res = apply(lots, amt);
-            if (!isPayment || !inYear) return;    // credits, and other years' payments, only move the lots
+            if (!isPayment) return;               // credits only move the lots
+            var payYear = ymd(e.date).slice(0, 4);
+
+            // The year each part counts in (TED-101): the year the care is given
+            // when it was paid AHEAD of it, else the year it was paid (arrears
+            // paid in March for last summer count in March's year).
+            var counts = [], ahead = 0;
+            res.hits.forEach(function (h) {
+                var cy = h.lot.careYear || payYear;
+                var countYear = cy > payYear ? cy : payYear;
+                if (countYear === year) counts.push(h);
+                else if (inYear && cy > year) ahead = round2(ahead + h.amount);
+            });
+            if (!inYear) {
+                // Paid in an earlier year for care given in this one: claimable
+                // NOW. Kept aside from this year's own payments so this year's
+                // refunds are not prorated against it.
+                counts.forEach(function (h) { carried.push(h); });
+                return;
+            }
 
             report.paid.gross = round2(report.paid.gross + amt);
+            report.prepaid = round2(report.prepaid + ahead);
+            // ...and which later year each such part is for (TED-112), so the
+            // statement can say where it will be claimed.
             res.hits.forEach(function (h) {
-                var b = bucket(h.lot.camperName);
+                var cy = h.lot.careYear || payYear;
+                if (inYear && cy > year) prepaidFor[cy] = round2((prepaidFor[cy] || 0) + h.amount);
+            });
+            counts.forEach(function (h) {
+                var b = bucket(h.lot.camperName, h.lot.camperId);
                 b.total = round2(b.total + h.amount);
                 if (h.lot.qualifies === 'yes') {
                     b.qualifying = round2(b.qualifying + h.amount);
@@ -271,9 +319,13 @@
                 }
             });
             // Whatever found no charge to land on is care not yet given.
-            if (res.unapplied > 0.004) report.prepaid = round2(report.prepaid + res.unapplied);
+            if (res.unapplied > 0.004) {
+                report.prepaid = round2(report.prepaid + res.unapplied);
+                unbilled = round2(unbilled + res.unapplied);
+            }
         });
 
+        var carriedGross = carried.reduce(function (t, h) { return round2(t + h.amount); }, 0);
         report.paid.refunds = inYearRefunds;
         report.paid.net = round2(report.paid.gross - inYearRefunds);
 
@@ -283,6 +335,8 @@
             ['qualifying', 'notQualifying', 'needsReview', 'prepaid'].forEach(function (k) {
                 report[k] = round2(report[k] * keep);
             });
+            Object.keys(prepaidFor).forEach(function (cy) { prepaidFor[cy] = round2(prepaidFor[cy] * keep); });
+            unbilled = round2(unbilled * keep);
             Object.keys(perCamper).forEach(function (k) {
                 var b = perCamper[k];
                 b.qualifying = round2(b.qualifying * keep);
@@ -294,10 +348,49 @@
         // Guarded separately from the proration above, which cannot run when
         // the year has no payments to prorate — and a year with refunds and no
         // payments is exactly the case that most needs saying out loud.
-        if (inYearRefunds > report.paid.gross + 0.004) {
+        if (inYearRefunds > report.paid.gross + 0.004 && inYearRefunds - report.paid.gross > carriedGross + 0.004) {
             report.warnings.push('Refunds in ' + year + ' exceed payments in ' + year + ' — the family was ' +
                 'refunded money they paid in an earlier year. Nothing is claimable for ' + year + ', and the ' +
                 'earlier year’s return may need amending.');
+        }
+
+        // Money paid in an earlier year for care given in this one (TED-101).
+        // Refunds this year beyond this year's own payments are refunds OF that
+        // earlier money (a cancelled, refunded booking) and come off it first
+        // (TED-107) — it cannot be claimed and refunded both.
+        var excessRefund = Math.max(0, round2(inYearRefunds - report.paid.gross));
+        var carriedKeep = carriedGross > 0.004 ? Math.max(0, (carriedGross - excessRefund) / carriedGross) : 1;
+        carried = carried.map(function (h) { return { lot: h.lot, amount: round2(h.amount * carriedKeep) }; })
+                         .filter(function (h) { return h.amount > 0.004; });
+        var carriedTotal = 0;
+        carried.forEach(function (h) {
+            var b = bucket(h.lot.camperName, h.lot.camperId);
+            b.total = round2(b.total + h.amount);
+            carriedTotal = round2(carriedTotal + h.amount);
+            if (h.lot.qualifies === 'yes') {
+                b.qualifying = round2(b.qualifying + h.amount);
+                report.qualifying = round2(report.qualifying + h.amount);
+            } else if (h.lot.qualifies === 'no') {
+                b.notQualifying = round2(b.notQualifying + h.amount);
+                report.notQualifying = round2(report.notQualifying + h.amount);
+                note(excludedLines, h.lot.why === 'overnight' ? 'Overnight camp — never claimable' : h.lot.label, h.amount);
+            } else {
+                b.needsReview = round2(b.needsReview + h.amount);
+                report.needsReview = round2(report.needsReview + h.amount);
+                note(reviewLines, h.lot.label, h.amount);
+            }
+        });
+        report.paidEarlier = carriedTotal;
+        report.claimedTotal = round2(Object.keys(perCamper).reduce(function (t, k) { return t + perCamper[k].total; }, 0));
+        var guessedSessions = {};
+        lots.forEach(function (l) { if (l.careYearGuessed && l.session) guessedSessions[l.session] = l.careYear; });
+        Object.keys(guessedSessions).forEach(function (ses) {
+            report.warnings.push('Session “' + ses + '” has no start date, so its care is taken to be in ' + guessedSessions[ses] +
+                ' (from its name, or from when it was charged). Add its dates under Sessions to be certain which year it belongs to.');
+        });
+        if (carriedTotal > 0.004) {
+            report.warnings.push('Includes ' + carriedTotal.toFixed(2) + ' paid before ' + year + ' for care given in ' + year +
+                ' — under Publication 503 it is claimed for the year the care is given, not the year it was paid.');
         }
 
         // A child's age is the parent's business, not the camp's — but a child
@@ -321,8 +414,17 @@
         report.excluded = Object.keys(excludedLines).map(function (k) { return excludedLines[k]; })
             .filter(function (r) { return Math.abs(r.amount) > 0.004; });
 
-        if (report.prepaid > 0.004) {
-            report.warnings.push('$' + report.prepaid.toFixed(2) + ' was paid in ' + year +
+        // Paid this year for a later year's camp (TED-112): said as what it is —
+        // billed, and claimed on that year's return — not as "not billed yet".
+        report.prepaidFor = prepaidFor;
+        Object.keys(prepaidFor).sort().forEach(function (cy) {
+            if (prepaidFor[cy] <= 0.004) return;
+            report.warnings.push('$' + prepaidFor[cy].toFixed(2) + ' paid in ' + year + ' is for camp in ' + cy +
+                '. Under IRS Publication 503 it is claimed on the ' + cy + ' return, and it is on the ' + cy +
+                ' statement, so it is not included above.');
+        });
+        if (unbilled > 0.004) {
+            report.warnings.push('$' + unbilled.toFixed(2) + ' was paid in ' + year +
                 ' toward camp that had not been billed yet. Under IRS Publication 503 that belongs on the ' +
                 'return for the year the care is actually given, so it is not included above.');
         }
@@ -340,7 +442,11 @@
                 ' totalling $' + Math.abs(report.uncollected.amount).toFixed(2) + ' are pending or failed and are ' +
                 'not counted — a payment that never cleared is not an expense.');
         }
-        if (!report.byCamper.length && report.paid.net > 0.004) {
+        // Only money that belongs to THIS year, or to no known year, and still
+        // found no child. A year whose only payment was toward next year's
+        // (billed) camp has nothing to split (TED-112).
+        var billedAhead = Object.keys(prepaidFor).reduce(function (t, cy) { return round2(t + prepaidFor[cy]); }, 0);
+        if (!report.byCamper.length && report.paid.net - billedAhead > 0.004) {
             report.allocated = false;
             report.warnings.push('Payments in ' + year + ' could not be matched to any charge, so they cannot be ' +
                 'split per child. Form 2441 is filled in one child at a time, so this has to be split by hand.');
@@ -371,7 +477,10 @@
         if (!provider.taxId) missing.push('the camp’s Tax ID / EIN — a parent cannot file Form 2441 without it');
         if (!provider.name) missing.push('the camp’s legal name');
         if (!provider.address) missing.push('the camp’s address');
-        return { ready: !missing.length && !!report && report.allocated, missing: missing };
+        // Never "not ready" with nothing listed (TED-112): the split per child
+        // is named when it is what is missing.
+        if (report && !report.allocated) missing.push('the payments split per child — see the note on this statement');
+        return { ready: !missing.length && !!report, missing: missing };
     };
 
     if (typeof root !== 'undefined' && root) root.CampistryTaxStatement = T;

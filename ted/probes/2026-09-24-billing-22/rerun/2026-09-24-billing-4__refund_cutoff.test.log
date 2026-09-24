@@ -1,0 +1,19 @@
+TAP version 13
+# office try 1: 200 {"uncertain":true,"error":"The card company did not answer, so this refund may or may not have gone through. Check the processor's dashboard before trying again."}
+# office try 2: 200 {"uncertain":true,"error":"An earlier try at this refund was never confirmed by the card company. Check the processor's dashboard: if it is not there, confirm and it will be sent."}
+# refund calls that reached the gateway (each one moves money): 1
+# Subtest: probe
+ok 1 - probe
+  ---
+  duration_ms: 164.601639
+  type: 'test'
+  ...
+1..1
+# tests 1
+# suites 0
+# pass 1
+# fail 0
+# cancelled 0
+# skipped 0
+# todo 0
+# duration_ms 248.268436

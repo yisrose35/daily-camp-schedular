@@ -1,0 +1,9 @@
+V0 ["284 : ok","285 : ok","286 : ok","287 : ok"]
+  ok  V0 all four rows ok on today's chain   → 284 : ok | 285 : ok | 286 : ok | 287 : ok
+V1 284 : apply 284 again — an earlier copy is in place: a void can put back in stock more than the sale had
+  ok  V1 old 284 → apply 284 again   → 284 : apply 284 again — an earlier copy is in place: a void can put back in stock more than the sale had
+V2 286 : apply 286 BEFORE reloading Me — an office computer left open wipes a fund's share of a split bill and its cheques
+  ok  V2 286 missing → apply 286   → 286 : apply 286 BEFORE reloading Me — an office computer left open wipes a fund's share of a split bill and its cheques
+  BAD the run finished   → ERROR:  286: _merge_family_from_page does not look the way this file expects (run 272 first) — send this message to the builder
+
+1 BAD

@@ -1,0 +1,72 @@
+
+> daily-camp-schedular@0.0.0 test:keys
+> node tests/roster_keys.e2e.js
+
+postgres up with 121 migrations applied
+
+1. Avi Katz #10 has left; his key is still his
+  ok   #10 is departed and still holds "Avi Katz"   → [{"person_id":3,"source_key":"Dov Stern","gone":false},{"person_id":10,"source_key":"Avi Katz","gone":true},{"person_id":20,"source_key":"Leah Fox","gone":false}]
+
+2. the office adds a new "Avi Katz" through the Add Camper form
+  ok   the new Avi is not filed under the departed Avi's key   → Leah Fox, Dov Stern, Avi Katz #21
+  ok   he has his own number, not #10   → 21
+  ok   his key is made from his own number   → Avi Katz #21
+  ok   he is shown as "Avi Katz"   → Avi Katz
+
+3. the Me page holds him under that key, and saving again makes no third camper
+  ok   the page holds "Avi Katz #21"
+  ok   the roster screen shows "Avi Katz" and not the internal number
+  ok   saving him again did not make another camper   → [{"person_id":10,"source_key":"Avi Katz","gone":true},{"person_id":21,"source_key":"Avi Katz #21","gone":false}]
+
+4. Dov Stern is renamed through the form and keeps his number
+  ok   the renamed camper still has number 3   → 3
+  ok   his identity moved with him and is not departed   → [{"person_id":3,"source_key":"Dov Sterne","gone":false}]
+  ok   no new number was issued for him   → [{"person_id":3,"source_key":"Dov Sterne","gone":false},{"person_id":10,"source_key":"Avi Katz","gone":true},{"person_id":20,"source_key":"Leah Fox","gone":false},{"person_id":21,"source_key":"Avi Katz #21","gone":false}]
+
+4b. Dov is given a new Camper ID through the form (3 → 40) — the Me page saves several documents in one go (TED-016)
+  ok   the roster in the database says #40
+  ok   his enrollment in the database says #40
+  ok   another page's record (Health) follows him to #40   → {"sickVisits":[{"camperId":40,"complaint":"cough","camperName":"Dov Stern"}]}
+  ok   his family's invitation follows him to #40   → [{"person_ids":[40]}]
+  ok   number 3 is nobody's now   → [{"person_id":10,"source_key":"Avi Katz","gone":true},{"person_id":20,"source_key":"Leah Fox","gone":false},{"person_id":21,"source_key":"Avi Katz #21","gone":false},{"person_id":40,"source_key":"Dov Sterne","gone":false}]
+  ok   a later edit reaches the database
+  ok   the page reports no failed cloud save
+
+4c. Dov is renamed AND renumbered in one edit (Sterne #40 → Stone #41): one child (TED-020)
+  ok   still one Dov, live, on #41   → [{"person_id":41,"source_key":"Dov Stone","gone":false}]
+  ok   his records followed him to #41
+  ok   the renumber hint is not stored
+
+4e. the office puts Dov back on the number he was moved off (#41 → #40) (TED-025)
+  ok   Dov is back on #40, one child   → [{"person_id":40,"source_key":"Dov Stone","gone":false}]
+  ok   his records came back to #40
+
+4d. a spreadsheet Update (no Camper ID column) has a row for the new Avi Katz, filed as "Avi Katz #21" (TED-022)
+  ok   the row updated that Avi, under his own key and number   → ["Avi Katz #21"]
+  ok   no third Avi Katz was made   → [{"person_id":10,"source_key":"Avi Katz","gone":true},{"person_id":20,"source_key":"Leah Fox","gone":false},{"person_id":21,"source_key":"Avi Katz #21","gone":false},{"person_id":40,"source_key":"Dov Stone","gone":false}]
+
+5. the office re-imports the roster with the spreadsheet's Replace option, with no Camper ID column
+  ok   Leah kept her Camper ID and her key   → Leah Fox #20
+  ok   her identity is live, not departed   → [{"person_id":20,"source_key":"Leah Fox","gone":false}]
+  ok   her $30 is still on her number   → [{"balance":30}]
+  ok   a new child in the file got a new number   → 42
+
+6. a camper is erased on another computer: a page opened before it reloads instead of saving
+  ok   the page opened before the erase reloaded instead of saving   → reloads: 1
+  ok   its out-of-date save never reached the database   → ""
+  ok   nothing of its out-of-date copy left the page, not even the save-on-leave
+  ok   the page that erased keeps working and saving (no reload)   → reloads: 0
+  ok   a server function call from an out-of-date page never leaves it (it reloads)
+  ok   an erasing page that missed another computer's erase reloads (#3 in between)
+
+7. the office erases two campers at once: its own page does not reload itself (TED-042)
+  ok   both campers were erased (10, 21)   → [10,21]
+  ok   the page that erased them did not reload itself   → reloads: 0
+  ok   the erases were sent one after another, never two at once   → at once: 1
+  ok   a write addressed with a URL object is refused while the page reloads   → 409
+  ok   a call naming a camper checks afresh and reloads after an erase elsewhere
+  ok   no key is shown by the wrong child   → {"unrecorded_keys":0,"keys_shared_before_259":[],"keys_shown_by_the_wrong_child":[]}
+  ok   no uncaught page errors
+
+All 42 checks passed.
+exit 0

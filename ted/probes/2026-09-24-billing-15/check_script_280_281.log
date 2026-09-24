@@ -1,0 +1,20 @@
+A. everything pasted:
+      275  a canteen refund takes its money first → ok
+      280  the season close-out takes the whole wallet → ok
+      281  a failed refund takes its surcharge share back → ok
+B. 280 not pasted:
+      275  a canteen refund takes its money first → ok
+      280  the season close-out takes the whole wallet → apply 280 BEFORE reloading Me — the close-out cannot take a child's canteen money off
+      281  a failed refund takes its surcharge share back → ok
+C. 281 not pasted:
+      275  a canteen refund takes its money first → ok
+      280  the season close-out takes the whole wallet → ok
+      281  a failed refund takes its surcharge share back → apply 281 BEFORE deploying stripe-webhook — a failed refund leaves its surcharge credit on the bill, and the webhook answers 500 to the failure
+D. 281 pasted, but a signed-in browser can call undo_card_fee_return:
+      275  a canteen refund takes its money first → ok
+      280  the season close-out takes the whole wallet → ok
+      281  a failed refund takes its surcharge share back → apply 281 again — a signed-in browser can call the webhook's own functions
+E. 280 pasted, but anyone (not signed in) can call the close-out:
+      275  a canteen refund takes its money first → ok
+      280  the season close-out takes the whole wallet → apply 280 BEFORE reloading Me — the close-out cannot take a child's canteen money off
+      281  a failed refund takes its surcharge share back → ok

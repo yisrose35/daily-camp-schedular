@@ -1,0 +1,42 @@
+postgres up with 126 migrations applied
+SETUP: Gold paid $500 tuition by card (pi_GOLD1) on 2026-08-25.
+    start: Stripe sent back $0 [none] | books: Gold owes $0; payment rows [pi_pi_GOLD1 $500]
+
+B1. The office refunds $500: Billing → Issue Credit/Refund → Direct Refund — back to card/bank
+    window: "$500 refundable to card/bank across 1 online payment. Enter any amount up to that — it draws from the most recent charge" | amount "500.00"
+    toast: ["✓ Refunded $500 to card/bank for Gold"]
+    after B1: Stripe sent back $500 [re_1 $500 succeeded] | books: Gold owes $500; payment rows [pi_pi_GOLD1 $500, ref_1790238782594_0 $-500 [re_1]]
+  ok  B1 the first refund goes to Stripe once ($500 back)
+
+B2. Three days later Stripe FAILS that refund (the card account was closed) and sends refund.failed
+    webhook → HTTP 200; the office's notice: "Stripe could not send the $500.00 refund to Gold (re_1) — expired or canceled card. The parent did not get it. It is back on the family's account as a credit: refund it again from Billing, or ask the family for other bank details. Stripe returned it to Campist"
+    after the put-back: Stripe sent back $0 [re_1 $500 failed] | books: Gold owes $0; payment rows [pi_pi_GOLD1 $500, ref_1790238782594_0 $-500 [re_1], refail_re_1 $500.00]
+  ok  B2 the failed $500 is put back once
+
+B3. The office does what the notice says: reload Me → Billing → Issue Credit/Refund → Direct Refund → Save
+    Billing's row for Gold before pressing: "GoldDov GoldPaid—$0View"
+    window: "$500 refundable to card/bank across 1 online payment. Enter any amount up to that — it draws from the most recent charges first, so the refu" | amount "500.00"
+  ok  B3a the window offers the put-back $500 again (TED-132)
+    toast: ["✓ Refunded $500 to card/bank for Gold"]
+    after B3: Stripe sent back $500 [re_1 $500 failed, re_2 $500 succeeded] | books: Gold owes $500; payment rows [pi_pi_GOLD1 $500, ref_1790238782594_0 $-500 [re_1], refail_re_1 $500, ref_1790238789897_0 $-500 [re_2]]
+    Billing's row for Gold now: "GoldDov GoldPending—$500View"
+    refund claims: rfnd_gold:pi_pi_GOLD1:50000:50000 → {"amount": 500, "status": "succeeded", "refundId": "re_1"} ; rfnd_gold:pi_pi_GOLD1:50000:50000:after:re_1 → {"amount": 500, "status": "succeeded", "refundId": "re_2"}
+  ok  B3b pressing Refund for the offered $500 really refunds the parent $500 (Stripe sends $500 back), or says it did not   → Stripe sent back $500 in total; the office was told ["✓ Refunded $500 to card/bank for Gold"]; payment rows [pi_pi_GOLD1 $500, ref_1790238782594_0 $-500 [re_1], refail_re_1 $500, ref_1790238789897_0 $-500 [re_2]]
+
+B4. The window still offers it; the office presses again
+    window: "No online charges on record for this family. Use Offline Refund to record a check/cash refund." | amount ""
+    toast: ["✕ Enter an amount to refund"]
+    after B4: Stripe sent back $500 [re_1 $500 failed, re_2 $500 succeeded] | books: Gold owes $500; payment rows [pi_pi_GOLD1 $500, ref_1790238782594_0 $-500 [re_1], refail_re_1 $500, ref_1790238789897_0 $-500 [re_2]]
+  ok  B4 a second press does not add another refund that sent nothing   → refund rows in the books 2, Stripe sent back $500
+
+B5. Control: the office refunds $300 instead of $500
+    toast: ["✕ No online charges on record for this family — use Offline Refund instead"]
+    after B5: Stripe sent back $500 [re_1 $500 failed, re_2 $500 succeeded] | books: Gold owes $500; payment rows [pi_pi_GOLD1 $500, ref_1790238782594_0 $-500 [re_1], refail_re_1 $500, ref_1790238789897_0 $-500 [re_2]]
+  BAD B5 (control) a different amount reaches Stripe: $300 back
+
+edge calls: stripe-refund→200 {"refundId":"re_1","status":"succeeded","amount":500}
+   stripe-webhook→200 {"received":true} email:Stripe alert: a $500.00 refund failed — pass it back to the 
+   stripe-refund→200 {"refundId":"re_2","status":"succeeded","amount":500}
+page errors: []
+
+1 BAD

@@ -1,0 +1,104 @@
+postgres up with 137 migrations applied
+SETUP: 9 families owe $1,000 each (3% off for not paying by card). Hawk/Lark/Slate each paid $970 online by bank (owe $30); Heron's $970 bank debit is still on its way; Owl has an old Finance-page cheque row (owes $1000)
+
+F1. Moss pays $970 by cheque; the office uses Finance → Revenue → "+ Record Payment"
+    the window: family picker true, typed-name box false; families offered ["— Select Family —","Finch","Fox ($1,000 due)","Hawk ($30 due)","Heron ($1,000 due)","Lark ($30 due)","Moss ($1,000 due)","Owl ($1,000 due)","Robin ($1,000 due)","Slate ($30 due)","Wolf ($1,000 due)"]
+    preview "Discount for not paying by card: $30 — also taken off their bill with this payment."; toast "Payment of $970 recorded for Moss — with $30 off for not paying by card"
+    still on Finance: true; its Payment Log now: ["2026-09-24Moss$970Check✕","2026-09-19Owl$970Check✕"]
+    Moss's ledger: charge 1000 tuition [le_t_moss]; payment 970 check [le_pay_pay_1790270643322_fqb58]; credit 30 discount [le_cdisc_pay_1790270643322_fqb58]; owes $0
+    tonight's autopay asks plan_due_for → {"index": 0, "amount": 0, "reason": "nothing_owed", "dueDate": "2026-09-24", "remaining": 1}
+  ok  F1 Finance's button is Billing's form (family picker, no typed name)   → {"picker":true,"oldTyped":false,"options":["— Select Family —","Finch","Fox ($1,000 due)","Hawk ($30 due)","Heron ($1,000 due)","Lark ($30 due)","Moss ($1,000 due)","Owl ($1,000 due)","Robin ($1,000 due)","Slate ($30 due)","Wolf ($1,000 due)"]}
+  ok  F1 the cheque is on Moss's bill with its $30 discount (owes $0)   → owes $0
+  ok  F1 Finance re-rendered with the new row, without leaving the page   → ["2026-09-24Moss$970Check✕","2026-09-19Owl$970Check✕"]
+  ok  F1 autopay finds nothing to charge Moss tonight   → {"index": 0, "amount": 0, "reason": "nothing_owed", "dueDate": "2026-09-24", "remaining": 1}
+
+F2. Wolf: $970 cheque recorded in Billing (with its $30 discount), then removed on Finance → Payment Log → ✕
+    before: owes $0; ledger charge 1000 tuition [le_t_wolf]; payment 970 check [le_pay_pay_1790270646336_m485m]; credit 30 discount [le_cdisc_pay_1790270646336_m485m]; credits cdisc_pay_1790270646336_m485m $30
+    pressed ✕ on "2026-09-24Wolf$970Check✕"
+    the confirmation: "Remove this payment?The $970 payment (Check) comes off Wolf’s account — they will owe it again, and the $30 discount that came with it goes too.CancelRemove payment"
+    toast: "Payment removed — Wolf’s balance is back up by $1,000"
+    after: owes $1000; ledger charge 1000 tuition [le_t_wolf]; payment 970 check [le_pay_pay_1790270646336_m485m]; credit 30 discount [le_cdisc_pay_1790270646336_m485m]; refund 970 reversal rev:le_pay_pay_1790270646336_m485m [le_mufsx6wt_1]; charge 30 reversal rev:le_cdisc_pay_1790270646336_m485m [le_mufsx6wt_2]; credits none; payment rows: none
+  ok  F2 the words say what happens (Wolf owes it again, the $30 discount goes too)   → Remove this payment?The $970 payment (Check) comes off Wolf’s account — they will owe it again, and the $30 discount that came with it goes too.CancelRemove payment
+  ok  F2 Wolf owes $1,000 again, the discount credit is gone, and the history keeps both entries (reversed, not deleted)   → owes $1000, entries 3→5, credits none, rows none
+
+F3. Fox: $970 cheque in Billing, ✕ in Finance, then Cancel
+    toast "Payment of $970 recorded for Fox — with $30 off for not paying by card"; before 0 / charge 1000 tuition [le_t_fox]; payment 970 check [le_pay_pay_1790270653775_28fpd]; credit 30 discount [le_cdisc_pay_1790270653775_28fpd] / pay_1790270653775_28fpd 970 check
+    after  0 / charge 1000 tuition [le_t_fox]; payment 970 check [le_pay_pay_1790270653775_28fpd]; credit 30 discount [le_cdisc_pay_1790270653775_28fpd] / pay_1790270653775_28fpd 970 check
+  ok  F3 Cancel changes nothing   → 0 / charge 1000 tuition [le_t_fox]; payment 970 check [le_pay_pay_1790270653775_28fpd]; credit 30 discount [le_cdisc_pay_1790270653775_28fpd] / pay_1790270653775_28fpd 970 check
+
+F4. Owl: the OLD Finance-page cheque row (typed name, never on the bill). ✕
+    pressed ✕ on "2026-09-19Owl$970Check✕"
+    the confirmation: "Remove this payment?The $970 payment (Check) is removed from the list. It was never on Owl’s bill, so no balance changes.CancelRemove payment"
+    toast: "Payment removed"
+    Owl owes: before $1000, after $1000; ledger charge 1000 tuition [le_t_owl]; rows none
+  ok  F4 removing a row that never reached the bill leaves the bill alone   → owes 1000 → 1000
+  ok  F4b and the words do not claim the family will owe it again / the balance went up   → confirmation "Remove this payment?The $970 payment (Check) is removed from the list. It was never on Owl’s bill, so no balance changes.CancelRemove payment"; toast "Payment removed"
+
+F5. Hawk paid $970 online by bank (owes $30)
+    family page: "1 bank payment made online without the not-paying-by-card discount — give it"
+    window: "(closed)"; payments offered ["2026-09-21 — $970 (ACH)"]
+    toast "$30 off Hawk for the $970 bank payment"; Hawk owes $0; credits cdisc_pi_pi_hawk $30
+    pressed again: window "(closed)"; offered null; Hawk owes $0
+    family page now: "(no note)"
+  ok  F5 the family page says one online bank payment lacks the discount   → 1 bank payment made online without the not-paying-by-card discount — give it
+  ok  F5 the discount is given for the picked payment: Hawk owes $0, one credit cdisc_pi_pi_hawk   → owes $0, credits cdisc_pi_pi_hawk $30
+  ok  F5b a second press gives nothing more and the note is gone   → owes $0; (closed)
+
+F6. Hawk: ✕ on the online bank payment itself
+    confirmation "(no confirmation shown)"; toast "$30 off Hawk for the $970 bank payment"; Hawk owes $0
+  BAD F6 a processor payment is refused (that is a refund)   → $30 off Hawk for the $970 bank payment
+
+F7. Hawk withdraws: Issue Credit/Refund → back to the bank, $970
+    preview: "Balance owed after this refund: $1,000 (currently $0) — the $30 not-paying-by-card discount that payment earned goes back on their bill"
+    toast "Refunded $970 to card/bank for Hawk — the $30 discount that payment earned is back on their bill"
+    Stripe: re_1 $970.0000000000000000 succeeded; ledger charge 1000 tuition [le_t_hawk]; payment 970 ach [le_pay_pi_hawk]; credit 30 discount [le_cdisc_pi_pi_hawk]; refund 970 refund [le_pay_re_1]; charge 30 other [le_chg_cdback_1790270678308_0]; owes $1000
+  ok  F7 the refund goes back once and the $30 discount comes back on the bill: Hawk owes $1,000 (tuition, nothing kept)   → re_1 $970.0000000000000000 succeeded
+  ok  F7b Hawk owes $1,000; the preview said so first   → owes $1000; preview "Balance owed after this refund: $1,000 (currently $0) — the $30 not-paying-by-card discount that payment earned goes back on their bill"
+
+F8. Hawk: ✕ on that REFUND row in Finance's Payment Log (the $970 really went back to the bank through Stripe)
+    pressed ✕ on "null"
+    confirmation "(no confirmation shown)"
+    toast "Refunded $970 to card/bank for Hawk — the $30 discount that payment earned is back on their bill"
+    Hawk owes: before $1000, after $1000; ledger charge 1000 tuition [le_t_hawk]; payment 970 ach [le_pay_pi_hawk]; credit 30 discount [le_cdisc_pi_pi_hawk]; refund 970 refund [le_pay_re_1]; charge 30 other [le_chg_cdback_1790270678308_0]; rows pi_pi_hawk 970 ACH | ref_1790270678308_0 -970 Refund
+    the refund window now says: "No online charges on record for this family. Use Offline Refund to record a check/cash refund."
+  ok  F8 a refund that went through Stripe is not "undone" by ✕ (refused, like the payment)   → Hawk now owes $1000 instead of $1000 — the bill says the camp still holds $970 that went back to the bank
+
+F9. Lark: online bank $970, discount, then two refunds: $500, then $470
+    after the discount: owes $0; credits cdisc_pi_pi_lark $30
+    $500: preview "Balance owed after this refund: $515.46 (currently $0) — the $15.46 not-paying-by-card discount that payment earned goes back on their bill"
+         toast "Refunded $500 to card/bank for Lark — the $15.46 discount that payment earned is back on their bill"; owes $515.46
+    $470: preview "Balance owed after this refund: $1,000 (currently $515.46) — the $14.54 not-paying-by-card discount that payment earned goes back on their bill"
+         toast "Refunded $470 to card/bank for Lark — the $14.54 discount that payment earned is back on their bill"; owes $1000
+    discount charged back: $15.46 + $14.54; Stripe re_2 $500.0000000000000000 succeeded, re_3 $470.0000000000000000 succeeded
+  ok  F9 two partial refunds take back exactly the $30 (Lark owes $1,000)   → owes $1000; back $15.46 + $14.54
+
+F10. Slate: online bank $970, discount, refund $970 — then Stripe FAILS that refund
+    toast "Refunded $970 to card/bank for Slate — the $30 discount that payment earned is back on their bill"; owes $1000
+    refund.failed → the real webhook → HTTP 200 {"received":true}
+    Slate: owes $0; ledger charge 1000 tuition [le_t_slate]; payment 970 ach [le_pay_pi_slate]; credit 30 discount [le_cdisc_pi_pi_slate]; refund 970 refund [le_pay_re_4]; charge 30 other [le_chg_cdback_1790270709617_0]; payment 970.00 refund_failed [le_pay_refail_re_4]; credit 30.00 reversal [le_cdback_undo_cdback_1790270709617_0]
+  ok  F10 after the failure Slate is back where it was before the refund (owes $0: payment and discount both stand)   → owes $0
+    re-delivered → HTTP 200; Slate owes $0
+  ok  F10b a re-delivered failure changes nothing   → owes $0
+
+F11. Slate: ✕ on the "Refund failed" put-back row
+    pressed ✕ on "null"
+    confirmation "(no confirmation shown)"
+    toast "Done"; Slate owes: before $0, after $0
+  ok  F11 the put-back of a failed Stripe refund is not removable as if it were a cheque   → Slate now owes $0 — as if the failed refund had reached the parent
+
+F12. Robin: $970 cheque (with the discount); Issue Credit/Refund → a refund by cheque (offline) of $970
+    the window: "Balance owed after this refund: $970 (currently $0)This family was given $30 off for not paying by card. If this refund gives back a payment that earned it, add that discount back with Add Charge."
+  ok  F12 the offline refund window tells the office about the $30 discount   → Balance owed after this refund: $970 (currently $0)This family was given $30 off for not paying by card. If this refund gives back a payment that earned it, add that discount back with Add Charge.
+
+F13. Heron: a $970 bank debit still on its way (pending)
+    window "(closed)"; offered null; Heron owes $1000
+  ok  F13 a bank debit still on its way is not offered   → null
+
+F14. Finch enrolled on the Me page ($1,000 tuition → the family's old "balance" field says 1000, as enrolCamper sets it) and paid $1,000 by CARD online (webhook). Office refunds $400 to the card
+    before: Finch owes $0 on the ledger (Billing's figure: "$0")
+    preview "Balance owed after this refund: $400 (currently $0)"
+    toast "Refunded $400 to card/bank for Finch"; Finch now owes $400 (Stripe re_5 $400.0000000000000000 succeeded)
+  ok  F14 the refund window's "Balance owed after this refund" is what the family owes afterwards   → preview said $400, the family owes $400
+page errors: []
+
+1 BAD

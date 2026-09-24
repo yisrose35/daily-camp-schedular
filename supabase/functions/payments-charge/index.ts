@@ -13,13 +13,104 @@
 // clear error rather than trying to do anything Stripe-specific — 'stripe'
 // is deliberately not one of the adapters this function knows how to load.
 //
-// Request:  { customerRef, amount, description?, metadata? }
+// SELF-CONTAINED (TED-054). This used to import a shared adapter file that
+// does not exist next to it, so it could never start and the office's "Charge
+// card" failed on every Banquest/Cardknox camp. The two gateway calls are
+// inlined, copied from charge-due-installments (keep them in sync), because
+// this project deploys a function by pasting one file into the Dashboard.
+//
+// WHOSE CARD. The saved card must belong to one of the caller's own camp's
+// families (the same rule stripe-charge follows), and a charge sent with an
+// idempotencyKey is claimed before the gateway is called, so a retried click
+// replays the first answer instead of charging twice.
+//
+// Request:  { customerRef, amount, description?, familyKey?, idempotencyKey? }
 //           header: Authorization: Bearer <caller's Supabase access token>
 // Response: { externalTransactionId, status, amount } or { error }
 // =============================================================================
 import { serve } from "https://deno.land/std@0.168.0/http/server.ts";
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
-import { getAdapter } from "./_shared/processor_adapter.ts";
+
+const CARDKNOX_GATEWAY = "https://x1.cardknox.com/gateway";
+async function cardknoxCharge(apiKey: string, amountCents: number, cardToken: string): Promise<Record<string, any>> {
+  let resp: Response;
+  try {
+  resp = await fetch(CARDKNOX_GATEWAY, {
+    method: "POST",
+    headers: { "Content-Type": "application/x-www-form-urlencoded" },
+    body: new URLSearchParams({
+      xKey: apiKey,
+      xVersion: "4.5.9",
+      xSoftwareName: "Campistry",
+      xSoftwareVersion: "1.0",
+      xCommand: "cc:sale",
+      xAmount: (amountCents / 100).toFixed(2),
+      xToken: cardToken,
+      xInvoice: "CI-" + Date.now().toString(36) + Math.random().toString(36).slice(2, 6),
+    }).toString(),
+  });
+  } catch (e) {
+    // Cut off: the gateway may have charged (TED-111).
+    return { success: false, uncertain: true, error: (e as Error).message || "no answer" };
+  }
+  const parsed: Record<string, string> = {};
+  try { new URLSearchParams(await resp.text()).forEach((v, k) => { parsed[k] = v; }); } catch (_) { /* no body */ }
+  // No result at all is not a "no": the gateway may have charged.
+  if (!parsed.xResult) return { success: false, uncertain: true, error: "No answer from the card company (HTTP " + resp.status + ")", raw: parsed };
+  if (parsed.xResult !== "A") {
+    return { success: false, error: parsed.xError || "Declined", status: parsed.xStatus, raw: parsed };
+  }
+  return { success: true, externalTransactionId: parsed.xRefNum, status: parsed.xStatus, raw: parsed };
+}
+
+// Banquest (AffiniPay/8am) sale against a saved card_ref — inlined for the same
+// Dashboard-deploy reason as the Cardknox call above; keep in sync with
+// _shared/adapters/banquest_adapter.ts. Auth is HTTP Basic base64(sourceKey:
+// pin); API base is per-camp and lives under /api/v2; amounts are DOLLARS; a
+// saved card is charged as source "tkn-<card_ref>". Approval is reported by
+// status_code "A" (status "Approved"); the transaction's integer
+// `reference_number` is what we store to later refund/reverse it.
+const BANQUEST_DEFAULT_BASE = "https://api.banquestgateway.com/api/v2";
+function bqBase(c: Record<string, string>): string {
+  // A stored gatewayUrl that already ends in /v2 or /api/v2 is used verbatim;
+  // a bare host gets /api/v2 appended. Both spellings are honoured on purpose:
+  // the API reference documents the base as /api/v2, while the Hosted
+  // Tokenization guide's own backend example posts to /v2 — so whichever path
+  // the camp actually stores is the one we call.
+  let b = (c.gatewayUrl || BANQUEST_DEFAULT_BASE).replace(/\/+$/, "");
+  if (!/\/(api\/)?v\d+$/i.test(b)) b += "/api/v2";
+  return b;
+}
+async function banquestCharge(creds: Record<string, string>, amountCents: number, cardRef: string): Promise<Record<string, any>> {
+  let resp: Response;
+  try {
+  resp = await fetch(`${bqBase(creds)}/transactions/charge`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json", "Authorization": "Basic " + btoa(`${creds.sourceKey}:${creds.pin}`) },
+    // A saved card is either a verify card_ref (charged "tkn-<ref>") or a
+    // Customer payment-method saved on the hosted page (already stored WITH its
+    // "pm-<id>" prefix). Pass an already-prefixed ref through untouched.
+    body: JSON.stringify({ amount: Number((amountCents / 100).toFixed(2)), source: /^(tkn-|pm-|ref-|nonce-)/.test(cardRef) ? cardRef : "tkn-" + cardRef }),
+  });
+  } catch (e) {
+    return { success: false, uncertain: true, error: (e as Error).message || "no answer" };   // cut off: may have charged
+  }
+  let data: Record<string, any> = {};
+  try { data = await resp.json(); } catch { /* non-JSON error body */ }
+  const approved = String(data?.status_code || "").toUpperCase() === "A"
+                || String(data?.status || "").toLowerCase() === "approved";
+  const ref = data?.reference_number != null ? String(data.reference_number) : "";
+  // A gateway timeout (5xx) with no reference is not a decline (TED-111): the
+  // sale may have gone through.
+  if (resp.status >= 500 && !ref) {
+    return { success: false, uncertain: true, error: `No answer from the card company (HTTP ${resp.status})`, raw: data };
+  }
+  if (resp.status < 200 || resp.status >= 300 || !approved || !ref) {
+    const errMsg = data?.error_message || (Array.isArray(data?.error_messages) && data.error_messages[0]) || data?.error_details || data?.error || data?.message || data?.status || `Declined (HTTP ${resp.status})`;
+    return { success: false, error: errMsg, status: data?.status, raw: data };
+  }
+  return { success: true, externalTransactionId: ref, status: data?.status, raw: data };
+}
 
 const SUPABASE_URL = Deno.env.get("SUPABASE_URL") || "";
 const SUPABASE_ANON_KEY = Deno.env.get("SUPABASE_ANON_KEY") || "";
@@ -35,10 +126,8 @@ function json(body: unknown, status = 200) {
   return new Response(JSON.stringify(body), { status, headers: { ...corsHeaders, "Content-Type": "application/json" } });
 }
 
-// Identical shape to stripe-charge's own callerCampId — kept as its own
-// copy rather than imported, matching this repo's established convention
-// for per-function auth helpers (only the processor-plugin CONTRACT itself,
-// in _shared/processor_adapter.ts, is a deliberate exception to that).
+// Identical shape to stripe-charge's own callerCampId — kept as its own copy
+// rather than imported, because each function is deployed as one pasted file.
 async function callerCampId(req: Request): Promise<string | null> {
   const jwt = (req.headers.get("Authorization") || "").replace(/^Bearer\s+/i, "");
   if (!jwt || !SUPABASE_URL || !SUPABASE_ANON_KEY) return null;
@@ -68,6 +157,23 @@ async function callerCampId(req: Request): Promise<string | null> {
   return null;
 }
 
+// A family whose payment is disputed with their bank (288, TED-200) is not
+// charged again from the office while the bank decides — the server's check,
+// so an office computer that loaded Billing before the dispute cannot either.
+function disputedFamily(families: unknown, match: (f: any) => boolean): any | null {
+  if (!families || typeof families !== "object") return null;
+  for (const f of Object.values(families as Record<string, any>)) {
+    if (!f || !match(f)) continue;
+    const held = (f.disputeHold && Array.isArray(f.disputeHold.disputeIds) && f.disputeHold.disputeIds.length > 0)
+      || [...(Array.isArray(f.plans) ? f.plans : []), f.plan].some((p: any) => p && p.collectionBlocked && p.collectionBlocked.reason === "chargeback");
+    if (held) return f;
+  }
+  return null;
+}
+const DISPUTED_MSG = (name: string) =>
+  `${name || "This family"} disputed a payment with their bank, so their card is not charged again until the dispute is over ` +
+  `(or someone who can edit Billing resumes it, from the family's "Payment disputed" label). Nothing was charged.`;
+
 serve(async (req) => {
   if (req.method === "OPTIONS") return new Response("ok", { headers: corsHeaders });
 
@@ -75,8 +181,8 @@ serve(async (req) => {
     const campId = await callerCampId(req);
     if (!campId) return json({ error: "Only camp owners/admins can charge a stored payment method." }, 403);
 
-    const { customerRef, amount, description } = await req.json();
-    if (!customerRef || !amount) return json({ error: "customerRef and amount required" }, 400);
+    const { customerRef, amount, idempotencyKey, confirmNotCharged } = await req.json();
+    if (!customerRef || !(Number(amount) > 0)) return json({ error: "customerRef and a positive amount required" }, 400);
 
     const service = createClient(SUPABASE_URL, SUPABASE_SERVICE_KEY);
     const { data: camp } = await service.from("camps").select("payment_processor_key").eq("id", campId).maybeSingle();
@@ -85,17 +191,68 @@ serve(async (req) => {
       return json({ error: "This camp is on Stripe — use stripe-charge instead." }, 400);
     }
 
-    const adapter = getAdapter(processorKey);
-    if (!adapter) return json({ error: `No adapter implemented for processor '${processorKey}'` }, 500);
+    if (processorKey !== "cardknox" && processorKey !== "banquest") {
+      return json({ error: `Charging a saved card isn't supported yet for processor '${processorKey}'.` }, 400);
+    }
+
+    // Only a card saved for one of THIS camp's families.
+    const { data: families } = await service.rpc("camp_families_object", { p_camp_id: campId });
+    const owns = !!families && typeof families === "object" &&
+      Object.values(families as Record<string, any>).some((f: any) => f && String(f.byopCustomerRef || "") === String(customerRef));
+    if (!owns) return json({ error: "That card is not on file for a family at your camp." }, 403);
+    const disputed = disputedFamily(families, (f: any) => String(f.byopCustomerRef || "") === String(customerRef));
+    if (disputed) return json({ error: DISPUTED_MSG(disputed.name), disputed: true }, 409);
 
     const { data: credResult } = await service.rpc("_admin_get_processor_credential", { p_camp_id: campId });
     if (!credResult?.success) return json({ error: credResult?.error || "This camp's processor isn't connected/verified yet." }, 400);
 
+    const creds = credResult.credentials || {};
     const amountCents = Math.round(Number(amount) * 100);
-    const result = await adapter.charge(credResult.credentials, amountCents, String(customerRef), description || "Campistry payment");
 
+    // Claim before the gateway (the same claim table refunds use, migration 198).
+    const claimKey = typeof idempotencyKey === "string" && idempotencyKey.trim() ? "charge:" + idempotencyKey.trim() : null;
+    const notConfirmed = "An earlier try at this charge was never confirmed by the card company, so it may have gone through. Check the processor's dashboard: if it is not there, confirm and it will be charged.";
+    if (claimKey) {
+      const claimIt = () => service.rpc("claim_refund_intent", {
+        p_camp_id: campId, p_key: claimKey, p_amount: amountCents / 100, p_payment_ref: String(customerRef),
+      });
+      let { data: claim } = await claimIt();
+      if (claim && claim.claimed === false) {
+        // Done before: the same answer again.
+        if (claim.previous && claim.previous.externalTransactionId) {
+          return json(Object.assign({ replayed: true }, claim.previous), 200);
+        }
+        // Sent before and never answered (TED-111). Never "paid", never charged
+        // again unless the office has checked and says nothing went through —
+        // and then only once the first try has had time to finish (273).
+        if (confirmNotCharged !== true) return json({ uncertain: true, canConfirm: true, error: notConfirmed }, 200);
+        const { data: freed } = await service.rpc("release_stale_refund_intent", { p_camp_id: campId, p_key: claimKey });
+        if (freed !== true) {
+          return json({ uncertain: true, error: "This charge was sent a moment ago and may still be going through. Wait a few minutes, check the processor's dashboard, and try again only if it is not there." }, 200);
+        }
+        ({ data: claim } = await claimIt());
+        if (claim && claim.claimed === false) return json({ uncertain: true, error: "This charge is being sent right now by someone else." }, 200);
+      }
+    }
+
+    const result = processorKey === "cardknox"
+      ? await cardknoxCharge(String(creds.apiKey || ""), amountCents, String(customerRef))
+      : await banquestCharge(creds, amountCents, String(customerRef));
+
+    if (!result.success && result.uncertain) {
+      // Maybe it charged: the claim is kept, so pressing again cannot charge
+      // twice; the office checks the processor first (TED-111).
+      return json({ uncertain: true, canConfirm: !!claimKey, error: `The card company did not answer (${result.error}), so this charge may have gone through. Check the processor's dashboard before charging again.` }, 200);
+    }
     if (!result.success) {
-      return json({ error: result.error || "Charge declined", status: result.status }, 200);
+      if (claimKey) await service.rpc("release_refund_intent", { p_camp_id: campId, p_key: claimKey });
+      return json({ declined: true, error: result.error || "Charge declined", status: result.status }, 200);
+    }
+    if (claimKey) {
+      await service.rpc("settle_refund_intent", {
+        p_camp_id: campId, p_key: claimKey,
+        p_result: { externalTransactionId: result.externalTransactionId, status: result.status, amount: amountCents / 100 },
+      });
     }
 
     await service.rpc("record_processor_transaction", {

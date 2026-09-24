@@ -1,0 +1,20 @@
+Files that read the card-fee policy at all: ./campistry_card_fees.js, ./campistry_me.js, ./campistry_register.html
+Places that read a quote's discount: none
+
+C1. A parent opens the registration form (campistry_register.html?camp=51000000-0000-0000-0000-0000000000c1)
+    the card-fee note on the form: "Prices shown include card processing. Paying by cheque or bank transfer takes 3% off."
+
+C2. Wolf owes $1000 and pays by cheque, taking the promised 3% off: $970. Me → Billing → Wolf → Record Payment $970 (cheque)
+    Record Payment entry points on the page: ["finAddPayment","openPaymentForFamily"]
+    the Record Payment window: "Record Payment×FamilyWolfAmount ($)DateMethodCredit cardDebit cardCashCheckACH / bank transferZelleWire transferPayPalPayment planOtherReference #Notes (optional)CancelSave"
+    its fields: ["payFamKey:SELECT[wolf]","payAmount:INPUT","payDate:INPUT","payMethod:SELECT[credit|debit|cash|check|ach|zelle|wire|paypal|plan|other]","payRef:INPUT","payNotes:INPUT"]
+    after typing $970 by cheque: "Record Payment×FamilyWolfAmount ($)DateMethodCredit cardDebit cardCashCheckACH / bank transferZelleWire transferPayPalPayment planOtherReference #Notes (optional)CancelSave"
+    Wolf now owes $30
+  BAD C2 a family that pays by cheque with the promised 3% off owes nothing   → Wolf still owes $30 — the 3% the form promised was never taken off
+
+C3. The office looks for a way to give the discount: Billing → Wolf → "Add card surcharge…" in this mode
+    window: "Add card surcharge×Amount being paid by card ($)Card on file: none on file whose type we know. If the family ends up paying another way, remove this fee from their bill.Prices shown include card processing. Paying by cheque or bank transfer takes 3% off.CancelSave"
+    toast: "That works out to no fee"; Wolf owes $30
+page errors: []
+
+1 BAD

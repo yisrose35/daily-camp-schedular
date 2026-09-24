@@ -1,0 +1,6 @@
+A  no camp found (TED-137 path): the first alert email fails (Resend 503), then 3 more deliveries
+    HTTP 200/200/200/200; send attempts that failed: 1; alert emails that went out: 0
+B  known camp, booked refund (TED-131 path): the first alert email fails, then 3 more deliveries
+    HTTP 200/200/200/200; send attempts that failed: 1; alert emails that went out: 0
+
+result: NEITHER alert is ever sent once the first email fails (the claim is taken before the email)

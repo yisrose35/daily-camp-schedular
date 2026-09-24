@@ -1,0 +1,20 @@
+W1 Gold went through (pi_GOLD booked); office pastes Silver's pi_SILVER for Gold
+  office → {"error": "reference_is_another_payment", "success": false}
+  after gold  : ledger payments [le_pay_pi_GOLD $500] | balance owed 500.00 | hold STILL THERE | next night due {"index": 0, "amount": 250.00, "dueDate": "2026-06-01", "remaining": 2}
+  after silver: ledger payments [le_pay_pi_SILVER $500] | balance owed 500.00 | hold none | next night due {"index": 0, "amount": 250.00, "dueDate": "2026-06-01", "remaining": 2}
+  after payment rows: pi_pi_GOLD→gold $500, pi_pi_SILVER→silver $500
+W2 Gold did NOT go through; office pastes pi_SILVER for Gold
+  office → {"error": "reference_is_another_payment", "success": false}
+  after gold  : ledger payments [] | balance owed 1000.00 | hold STILL THERE | next night due {"index": 0, "amount": 500.00, "dueDate": "2026-06-01", "remaining": 2}
+  after silver: ledger payments [le_pay_pi_SILVER $500] | balance owed 500.00 | hold none | next night due {"index": 0, "amount": 250.00, "dueDate": "2026-06-01", "remaining": 2}
+  after payment rows: pi_pi_SILVER→silver $500
+W3 control: Gold went through, office pastes pi_GOLD
+  office → {"error": "stripe_check_needed", "success": false}
+  after gold  : ledger payments [le_pay_pi_GOLD $500] | balance owed 500.00 | hold STILL THERE | next night due {"index": 0, "amount": 250.00, "dueDate": "2026-06-01", "remaining": 2}
+  after silver: ledger payments [le_pay_pi_SILVER $500] | balance owed 500.00 | hold none | next night due {"index": 0, "amount": 250.00, "dueDate": "2026-06-01", "remaining": 2}
+  after payment rows: pi_pi_GOLD→gold $500, pi_pi_SILVER→silver $500
+W4 a typo pi_GOLDX, Gold's webhook (pi_GOLD) arrives after
+  office → {"error": "stripe_check_needed", "success": false}
+  after gold  : ledger payments [le_pay_pi_GOLD $500] | balance owed 500.00 | hold STILL THERE | next night due {"index": 0, "amount": 250.00, "dueDate": "2026-06-01", "remaining": 2}
+  after silver: ledger payments [le_pay_pi_SILVER $500] | balance owed 500.00 | hold none | next night due {"index": 0, "amount": 250.00, "dueDate": "2026-06-01", "remaining": 2}
+  after payment rows: pi_pi_GOLD→gold $500, pi_pi_SILVER→silver $500

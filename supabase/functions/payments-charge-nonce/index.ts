@@ -173,25 +173,47 @@ async function banquestChargeNonce(
 
 // ── Subject existence checks (campId is client-supplied) ────────────────────
 async function getFamily(service: ReturnType<typeof createClient>, campId: string, familyKey: string) {
-  const { data } = await service.from("camp_state_kv").select("value")
-    .eq("camp_id", campId).eq("key", "campistryMe").maybeSingle();
-  const me = (data?.value && typeof data.value === "object") ? data.value as Record<string, any> : null;
-  const fams = me?.families;
-  if (!fams || typeof fams !== "object" || !Object.prototype.hasOwnProperty.call(fams, familyKey)) return null;
-  return fams[familyKey];
+  // The family ROW (camp_family), not the campistryMe document's copy, which
+  // lags every server-side write until somebody saves the Me page.
+  const { data, error } = await service.rpc("camp_family", { p_camp_id: campId, p_family_key: familyKey });
+  if (error || !data || typeof data !== "object") return null;
+  return data as Record<string, any>;
 }
-async function campHasCamper(service: ReturnType<typeof createClient>, campId: string, camperName: string) {
-  const { data } = await service.from("camp_state_kv").select("value")
-    .eq("camp_id", campId).eq("key", "campistrySnacks").maybeSingle();
-  const accts = (data?.value && typeof data.value === "object") ? (data.value as Record<string, any>).accounts : null;
-  return !!(accts && typeof accts === "object" && Object.prototype.hasOwnProperty.call(accts, camperName));
+async function campHasCamper(service: ReturnType<typeof createClient>, campId: string, camperName: string, camperId: number | null = null) {
+  // The canteen accounts are ROWS since 219, and the page strips `accounts`
+  // out of every campistrySnacks document save — so reading the document said
+  // "no such camper" for everyone, and every canteen card deposit was refused.
+  // canteen_camper_known (migration 243) asks the roster and the account rows.
+  const { data, error } = await service.rpc("canteen_camper_known", {
+    p_camp_id: campId, p_camper_name: camperName, p_camper_id: camperId,
+  });
+  if (error) {
+    console.error("[campHasCamper] canteen_camper_known failed:", error.message);
+    return false;   // fail closed: money is never taken for a camper we cannot confirm
+  }
+  return data === true;
+}
+
+
+/** A camper id sent by the page (campistry_camper_id_rpc.js adds it), or null. */
+function camperIdIn(v: unknown): number | null {
+  return v != null && /^\d+$/.test(String(v)) ? Number(v) : null;
+}
+
+
+/** A camper's name as a person reads it: without the roster's internal
+ *  " #<number>" that tells two campers with one name apart. For what a parent
+ *  sees; never for identifying the camper. */
+function displayName(s: unknown): string {
+  return String(s ?? "").replace(/\s#\d+(?:-\d+)?$/, "");
 }
 
 serve(async (req) => {
   if (req.method === "OPTIONS") return new Response("ok", { headers: corsHeaders });
 
   try {
-    const { campId, kind, token, amount, familyKey, familyName, camperName, description, billing, card } = await req.json();
+    const { campId, kind, token, amount, familyKey, familyName, camperName, camperId: bodyCamperId, description, billing, card } = await req.json();
+    const camperId = camperIdIn(bodyCamperId);
     if (!campId || !kind || !token || !(Number(amount) > 0)) {
       return json({ success: false, error: "campId, kind, token, and a positive amount are required" }, 400);
     }
@@ -212,7 +234,8 @@ serve(async (req) => {
     // Confirm the subject exists under this camp before charging in its name.
     let fam: Record<string, any> | null = null;
     if (kind === "canteen_deposit") {
-      if (!camperName || !(await campHasCamper(service, campId, String(camperName)))) {
+      // The number decides (canteen_camper_known resolves it); name only without one.
+      if ((camperId == null && !camperName) || !(await campHasCamper(service, campId, String(camperName ?? ""), camperId))) {
         return json({ success: false, error: "Camper not found for this camp" }, 400);
       }
     } else {
@@ -230,7 +253,7 @@ serve(async (req) => {
       return json({ success: false, error: "This camp's Banquest credential is incomplete." }, 400);
     }
 
-    const desc = String(description || (kind === "canteen_deposit" ? `Canteen funds — ${camperName}` : `Camp payment — ${familyName || familyKey}`));
+    const desc = String(description || (kind === "canteen_deposit" ? `Canteen funds — ${displayName(camperName)}` : `Camp payment — ${familyName || familyKey}`));
     const res = await banquestChargeNonce(creds, amountCents, String(token), desc, billing, card);
     if (!res.success || !res.externalTransactionId) {
       return json({ success: false, error: res.error || "Card declined." }, 200);
@@ -258,7 +281,7 @@ serve(async (req) => {
     if (kind === "canteen_deposit") {
       const creditRes = await service.rpc("credit_canteen_balance_from_processor", {
         p_camp_id: campId,
-        p_camper_name: camperName,
+        p_camper_id: camperId, p_camper_name: String(camperName ?? ""),
         p_amount: charged,
         p_processor_key: "banquest",
         p_external_transaction_id: txnId,

@@ -85,10 +85,21 @@ nothing changes unless a camp is explicitly walked through the setup below.
   the same way it already recognized `stripePaymentIntentId` — "Direct
   Refund" on a BYOP-charged payment calls `payments-refund` (authenticated,
   owner/admin session) instead of `stripe-refund`.
-- **Cardknox/Sola's own client-side tokenizer (iFields)**, alongside
-  Banquest's Collect.js — `campistry_card_setup.html` now renders a real
-  form for either processor (`renderCardknoxForm`/`renderBanquestForm`,
-  picked by `get_camp_public_tokenization_key`'s `processorKey`).
+- **⚠️ SUPERSEDED, kept for history only — do not follow this bullet.**
+  Cardknox/Sola card entry does NOT use the embedded iFields widget
+  described below any more. `campistry_card_setup.html`'s own comment says
+  so directly: *"Nothing routes a Sola camp here"* — `renderCardknoxForm`
+  was removed from the file entirely. Every Cardknox/Sola camp collects
+  cards on Sola's own hosted checkout page instead (see the "Cardknox/Sola's
+  real hosted checkout page" bullet further down, and `cardknox-checkout-start`).
+  `ifieldsKey` is consequently DEAD — nothing reads it anywhere in the live
+  code — and is not a required credential. Do not add it when connecting a
+  camp; the admin tool (`admin_connect_processor.html`) no longer asks for it.
+- **Cardknox/Sola's own client-side tokenizer (iFields)** — historical, see
+  the superseded notice just above — alongside Banquest's Collect.js —
+  `campistry_card_setup.html` used to render a real form for either
+  processor (`renderCardknoxForm`/`renderBanquestForm`, picked by
+  `get_camp_public_tokenization_key`'s `processorKey`).
   **⚠️ TOKENIZE→SAVE ROUND-TRIP NOT YET VERIFIED AGAINST A LIVE SANDBOX** —
   written from Cardknox's own published sample
   (`github.com/Cardknox/cardknox-ifields-sample`; each sensitive field is
@@ -353,20 +364,30 @@ curl -X POST "https://<your-project>.supabase.co/functions/v1/admin-connect-proc
   -d '{
     "campId": "<the camp'"'"'s id>",
     "processorKey": "banquest",
-    "credentials": { "securityKey": "<the camp'"'"'s Banquest security key>" },
+    "credentials": { "sourceKey": "<the camp'"'"'s Banquest source key>", "pin": "<the camp'"'"'s Banquest pin>", "tokenizationKey": "<the camp'"'"'s Banquest tokenization key, for the Collect.js card widget>" },
     "notes": "Confirmed via call with <name>, <date>"
   }'
 ```
 
+(Banquest runs on the AffiniPay/8am gateway, not NMI — an earlier version of
+this doc and of `banquest_adapter.ts` wrongly assumed NMI's "security key"
+model; corrected against a live sandbox. The real credential shape, matching
+`admin-connect-processor`'s and `banquest_adapter.ts`'s own code, is
+`sourceKey` + `pin` for HTTP Basic auth on server-side charge/refund calls,
+plus `tokenizationKey` for the client-side Collect.js widget. A stored
+`gatewayUrl`/`tokenizationUrl` is optional, only needed if Banquest gave the
+camp environment-specific hostnames instead of the shared default.)
+
 (For Cardknox/Sola instead: `"processorKey": "cardknox"`,
-`"credentials": { "apiKey": "<the camp's private xKey>", "ifieldsKey":
-"<the camp's public iFields key>", "checkoutSlug": "<the camp's
-secure.cardknox.com/ URL slug>", "webhookPin": "<a fresh 15+ character
-alphanumeric PIN you generate>" }` — `apiKey` for server-side charge/refund
-calls, `ifieldsKey` for the embedded card-entry widget (migration 133),
-`checkoutSlug` + `webhookPin` for the hosted-checkout flow (migration 134,
-see the **per-camp webhook setup** section below — `webhookPin` must be the
-EXACT same value you also paste into that camp's own Sola dashboard). If
+`"credentials": { "apiKey": "<the camp's private xKey>", "checkoutSlug":
+"<the camp's secure.cardknox.com/ URL slug>", "webhookPin": "<a fresh 15+
+character alphanumeric PIN you generate>" }` — `apiKey` for server-side
+charge/refund calls, `checkoutSlug` + `webhookPin` for the hosted-checkout
+flow (migration 134, see the **per-camp webhook setup** section below —
+`webhookPin` must be the EXACT same value you also paste into that camp's
+own Sola dashboard). `ifieldsKey` is NOT needed — see the superseded notice
+above; card entry happens on Sola's own hosted page, not an embedded
+widget, so there is no client-side tokenizer key to store. If
 Banquest gave the camp their own branded gateway hostname rather than the
 shared NMI one, add it as `"gatewayUrl": "https://secure.example.com"`
 inside `credentials`.)
@@ -441,10 +462,22 @@ https://<your-project>.supabase.co/functions/v1/byop-dispute-webhook?processor=b
   With one camp the function resolves it from `camp_processor_credentials`;
   with several it refuses to guess and logs exactly that, because putting a
   chargeback on the wrong camp's books is worse than not recording it.
-* Optionally set a `BYOP_DISPUTE_SECRET` function secret and have the
-  processor send it as the `x-webhook-secret` header. If the processor can't
-  send custom headers, leave it unset — every write the endpoint makes is
-  idempotent and reversible.
+* **`BYOP_DISPUTE_SECRET` is required.** Without it the endpoint refuses
+  every notification (and says so in its logs: "REFUSING ALL REQUESTS"), so
+  no chargeback is ever recorded and the family's card is never paused.
+  Set it once for the whole project:
+  1. Make up a long random value (40+ letters and numbers, no symbols).
+  2. Supabase Dashboard → **Edge Functions** → **Secrets** → **Add new
+     secret** → Name `BYOP_DISPUTE_SECRET`, Value: that string → **Save**.
+  3. Give it to the processor, one of two ways:
+     - **As a header** (if the processor's dispute notification screen has
+       "custom headers"): name `x-webhook-secret`, value the secret.
+     - **On the URL** (if it has no header option): add `&key=<the secret>`
+       to the end of the webhook URL above, e.g.
+       `…/byop-dispute-webhook?processor=banquest&key=<the secret>`.
+  4. `byop-dispute-webhook` → **Settings** → **Enforce JWT Verification**
+     **OFF** (the processor calls it without a Supabase login; the secret is
+     what keeps strangers out).
 
 **Send one real test dispute from the processor's dashboard after wiring it
 up.** The function logs the entire body when it can't find a reference; read

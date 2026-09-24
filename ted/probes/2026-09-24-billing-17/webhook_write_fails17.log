@@ -1,0 +1,20 @@
+
+W1. Link Pay Now $500 (the family's tuition) — Stripe says it succeeded; the database write (append_camp_payment) fails once
+    webhook answers Stripe HTTP 200 {"received":true}; receipts sent 1; Gold owes $1000.00
+  BAD W1 a payment that could not be recorded is not answered "received" (Stripe would re-send it)   → HTTP 200 — Stripe marks it delivered and never re-sends; the parent was charged and sent a receipt; Gold owes $1000.00
+    the same event again, database healthy (only happens if Stripe re-sends): HTTP 200; Gold owes $500.00
+  ok  W1 once re-sent, it is recorded   → Gold owes $500.00
+
+W2. canteen top-up $20 for Avi — Stripe says it succeeded; the database write (credit_canteen_balance_from_stripe) fails once
+    webhook answers Stripe HTTP 200 {"received":true}; receipts sent 1; Avi's wallet $0
+  BAD W2 a payment that could not be recorded is not answered "received" (Stripe would re-send it)   → HTTP 200 — Stripe marks it delivered and never re-sends; the parent was charged and sent a receipt; Avi's wallet $0
+    the same event again, database healthy (only happens if Stripe re-sends): HTTP 200; Avi's wallet $20.00
+  ok  W2 once re-sent, it is recorded   → Avi's wallet $20.00
+
+W3. photo recognition $8.95 for Avi — Stripe says it succeeded; the database write (record_link_photo_purchase) fails once
+    webhook answers Stripe HTTP 200 {"received":true}; receipts sent 1; photo purchases on file 0
+  BAD W3 a payment that could not be recorded is not answered "received" (Stripe would re-send it)   → HTTP 200 — Stripe marks it delivered and never re-sends; the parent was charged and sent a receipt; photo purchases on file 0
+    the same event again, database healthy (only happens if Stripe re-sends): HTTP 200; photo purchases on file 1
+  ok  W3 once re-sent, it is recorded   → photo purchases on file 1
+
+3 BAD

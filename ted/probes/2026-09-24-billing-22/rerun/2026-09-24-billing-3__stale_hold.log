@@ -1,0 +1,6 @@
+runner holds the debit: {"success": true}
+  plan.pendingCharge on the row: {"index":0,"since":"2026-06-01","amount":500,"dueDate":"2026-06-01","paymentIntentId":"pi_ach_1"}
+office save (sync_camp_billing): {"success": true, "familiesDeleted": 0, "paymentsDeleted": 0, "familiesUpserted": 1, "paymentsUpserted": 0}
+  plan.pendingCharge on the row now: {"index":0,"since":"2026-06-01","amount":500,"dueDate":"2026-06-01","paymentIntentId":"pi_ach_1"}
+  what the runner sees tonight: plan_due_for = {"index": 0, "amount": 500.00, "dueDate": "2026-06-01", "remaining": 2}
+after the blob save (projection trigger), pendingCharge: {"index":0,"since":"2026-06-01","amount":500,"dueDate":"2026-06-01","paymentIntentId":"pi_ach_1"}

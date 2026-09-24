@@ -1,0 +1,30 @@
+S1  computer A: Add Charge $1,000 for Pine, Scholarship Fund $800
+  toast "✓ Charge of $1,000 added — Pine owes $200; Scholarship Fund owes $800 (on their own account, in Manage payers)"; Pine owes $200; plan_due_for → {"index": 0, "amount": 200.00, "dueDate": "2026-09-24", "remaining": 1}
+  fund's ledger in the cloud: []
+  ok  Pine owes only its $200 share   → $200
+  ok  autopay would charge Pine $200   → {"index": 0, "amount": 200.00, "dueDate": "2026-09-24", "remaining": 1}
+  BAD the fund's $800 share is on its account in the cloud   → []
+  Pine's page: "Also paying part of this bill: Scholarship Fund $800 (still owes $800)"
+  ok  Pine's page names the fund's share   → Also paying part of this bill: Scholarship Fund $800 (still owes $800) 
+S2  computer A: Manage payers → Record payment $300 from the fund
+  Manage payers says "Owes $800 (shares $800, paid $0)"; Record payment button inside the fund's row: false
+  ok  Manage payers shows the fund owes $800   → Owes $800 (shares $800, paid $0)
+  BAD S6 the Record payment / Archive buttons sit in the fund's row   → buttons outside the row box (extra </div>, campistry_me.js:1868)
+  fund's ledger in the cloud: []
+  BAD the fund's $300 cheque is in the cloud
+S3  Finance → Revenue on computer A
+  Finance: Total Invoiced $0, Collected $500, Outstanding $700; fund named anywhere: true; the $300 cheque listed: false
+  BAD Finance counts the fund's $300 cheque as collected   → not in the Payment Log / Collected
+S4  computer B (opened before S1, never refreshed): Add Charge $50 to Oak
+  computer B's copy of the fund: {"org_scholarship_fund":{"id":"org_scholarship_fund","kind":"organization","name":"Scholarship Fund"}}
+  Oak owes $50; Pine owes $200
+  fund's ledger in the cloud now: []
+  BAD the fund still owes its $800 share after computer B saved   → []
+  BAD the fund's $300 cheque survives computer B's save   → []
+  a freshly opened computer C: Manage payers says "Owes $500 (shares $800, paid $300)"
+S5  computer C: Add Charge $400 for Pine, fund $400 (100%)
+  toast "✓ Charge of $400 added — Pine owes $0; Scholarship Fund owes $400 (on their own account, in Manage payers)"; Pine owes $200 → $200; fund ledger []
+  ok  Pine's bill unchanged by a charge the fund pays in full   → $200
+page errors: []
+
+6 BAD

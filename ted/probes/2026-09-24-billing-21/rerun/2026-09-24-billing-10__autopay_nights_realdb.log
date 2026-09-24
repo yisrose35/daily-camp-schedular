@@ -1,0 +1,30 @@
+K. Cardknox, Gold's answer lost on night 1
+  night 1: HTTP 200 | results ["Gold:unconfirmed_held (connection reset by peer)","Silver:charged"] | notices ["charge_unconfirmed autopay:gold:plan_g:2026-09-24"]
+     processor sales so far: Gold $500.00 (9001), Silver $500.00 (9002)
+     books: Gold: paid entries [] history [] HOLD {"unconfirmed":true,"amount":500} | Silver: paid entries [$500] history ["0:500"]
+  night 2: HTTP 200 | results ["Gold:waiting_for_office (an autopay charge from 2026-09-24 was never answered by the )"] | notices []
+     processor sales so far: Gold $500.00 (9001), Silver $500.00 (9002)
+     books: Gold: paid entries [] history [] HOLD {"unconfirmed":true,"amount":500} | Silver: paid entries [$500] history ["0:500"]
+  office answers "went through" (9001) → {"success": true, "recorded": true}
+  night 3: HTTP 200 | results [] | notices []
+     processor sales so far: Gold $500.00 (9001), Silver $500.00 (9002)
+     books: Gold: paid entries [$500] history ["0:500"] | Silver: paid entries [$500] history ["0:500"]
+B. Banquest, Gold's charge answers 504 with no body
+  night 1: HTTP 200 | results ["Gold:unconfirmed_held (No answer from the card company (HTTP 504))","Silver:charged"] | notices ["charge_unconfirmed autopay:gold:plan_g:2026-09-24"]
+     processor sales so far: Gold $500.00 (7003), Silver $500.00 (7004)
+     books: Gold: paid entries [] history [] HOLD {"unconfirmed":true,"amount":500} | Silver: paid entries [$500] history ["0:500"]
+S1. Stripe, Gold's first request cut off after Stripe charged
+  night 1: HTTP 200 | results ["Gold:charged","Silver:charged"] | notices []
+     processor sales so far: Gold $500.00 (pi_Gold_5), Silver $500.00 (pi_Silver_6)
+     books: Gold: paid entries [$500] history ["0:500"] | Silver: paid entries [$500] history ["0:500"]
+S2. Stripe answers 500 every time for Gold
+  night 1: HTTP 200 | results ["Gold:unconfirmed_held (An unknown error occurred)","Silver:charged"] | notices ["charge_unconfirmed autopay:gold:plan_g:2026-09-24"]
+     processor sales so far: Silver $500.00 (pi_Silver_7)
+     books: Gold: paid entries [] history [] HOLD {"unconfirmed":true,"amount":500} | Silver: paid entries [$500] history ["0:500"]
+  night 2: HTTP 200 | results ["Gold:waiting_for_office (an autopay charge from 2026-09-24 was never answered by the )"] | notices []
+     processor sales so far: Silver $500.00 (pi_Silver_7)
+     books: Gold: paid entries [] history [] HOLD {"unconfirmed":true,"amount":500} | Silver: paid entries [$500] history ["0:500"]
+X. Cardknox, Gold's plan record is malformed (dueDates is a string)
+  night 1: HTTP 200 | results ["Silver:charged"] | notices []
+     processor sales so far: Silver $500.00 (9008)
+     books: Gold: paid entries [] history [] | Silver: paid entries [$500] history ["0:500"]

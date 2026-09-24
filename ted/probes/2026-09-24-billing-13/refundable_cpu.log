@@ -1,0 +1,7 @@
+machine: Intel(R) Xeon(R) Processor @ 2.10GHz, node v22.22.2
+  300 children ×  8 top-ups, 2 refunds each (3000 ledger rows):   138 ms CPU   (child 1: {"camperId":1,"wallet":50,"card":190,"now":50})
+  600 children ×  8 top-ups, 2 refunds each (6000 ledger rows):   366 ms CPU   (child 1: {"camperId":1,"wallet":50,"card":190,"now":50})
+  600 children × 12 top-ups, 3 refunds each (9000 ledger rows):   742 ms CPU   (child 1: {"camperId":1,"wallet":50,"card":285,"now":50})
+  800 children × 12 top-ups, 3 refunds each (12000 ledger rows):  1342 ms CPU   (child 1: {"camperId":1,"wallet":50,"card":285,"now":50})
+ 1000 children × 10 top-ups, 2 refunds each (12000 ledger rows):  1501 ms CPU   (child 1: {"camperId":1,"wallet":50,"card":240,"now":50})
+ 1000 children × 15 top-ups, 3 refunds each (18000 ledger rows):  2943 ms CPU  ← over 2 s   (child 1: {"camperId":1,"wallet":50,"card":360,"now":50})

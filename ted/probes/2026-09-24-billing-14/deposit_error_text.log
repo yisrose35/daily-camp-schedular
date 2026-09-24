@@ -1,0 +1,14 @@
+D1 mgr presses "Charge $250.00 now"
+    the server answered: 403 {"success":false,"error":"Only the camp's owner or an admin can charge a deposit."}
+    the office reads:    ["Charging…","The card was declined"]
+  BAD the office is told the server's reason
+D2 owner presses "Charge $250.00 now"
+    the server answered: 404 {"success":false,"error":"We could not find that application.","reason":"not_found"}
+    the office reads:    ["Charging…","The card was declined"]
+  BAD the office is told the server's reason
+D3 owner presses "Charge $250.00 now"
+    the server answered: 200 {"success":false,"inProgress":true,"reason":"in_progress","error":"A payment for this deposit is already in progress — please wait a minute before trying again."}
+    the office reads:    ["Charging…","A payment for this deposit is already in progress — please wait a minute before trying again."]
+  ok  the office is told the server's reason
+
+2 BAD

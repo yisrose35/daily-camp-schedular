@@ -1,0 +1,9 @@
+1 owed before paying        : {"owed": 250, "paid": 0, "success": true, "required": 250, "camperName": "New Kid"}
+2 Cardknox deposit 9001     : {"paid": 250, "success": true}
+3 owed after                : {"owed": 0, "paid": 250, "success": true, "required": 250, "camperName": "New Kid"}
+4 same ref again (webhook)  : {"success": true, "duplicate": true}
+  camp_applications copy    : {"depositPaid": 250, "depositStatus": "paid", "depositCharges": [{"ref": "9001", "date": "2026-09-24", "amount": 250.00, "processor": "cardknox"}], "depositPaidDate": "2026-09-24", "depositRequired": 250, "depositProcessor": "cardknox", "depositReference": "9001"}
+5 after the old tab saved the document:
+  owed                      : {"owed": 0, "paid": 250, "success": true, "required": 250, "camperName": "New Kid"}
+  record a DIFFERENT charge 9002 (a second payment of the same deposit): {"paid": 500, "success": true}
+  camp_applications copy now: [{"ref": "9001", "date": "2026-09-24", "amount": 250.00, "processor": "cardknox"}, {"ref": "9002", "date": "2026-09-24", "amount": 250.00, "processor": "cardknox"}]

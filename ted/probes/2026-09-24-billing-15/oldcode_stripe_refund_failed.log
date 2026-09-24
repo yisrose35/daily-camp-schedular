@@ -1,0 +1,345 @@
+TAP version 13
+# Subtest: TED-126: Refund All — a stuck $20 that Stripe later FAILED goes back, and is refunded again for real
+ok 1 - TED-126: Refund All — a stuck $20 that Stripe later FAILED goes back, and is refunded again for real
+  ---
+  duration_ms: 183.825178
+  type: 'test'
+  ...
+# Subtest: TED-126: the single refund — pressed again after its refund failed, it refunds for real
+ok 2 - TED-126: the single refund — pressed again after its refund failed, it refunds for real
+  ---
+  duration_ms: 174.519496
+  type: 'test'
+  ...
+# Subtest: TED-126: a lost answer repeated from Stripe's memory that DID go through is still booked once
+ok 3 - TED-126: a lost answer repeated from Stripe's memory that DID go through is still booked once
+  ---
+  duration_ms: 202.846136
+  type: 'test'
+  ...
+# Subtest: TED-126: the tuition refund — a repeated key whose refund failed moves on to a new one
+ok 4 - TED-126: the tuition refund — a repeated key whose refund failed moves on to a new one
+  ---
+  duration_ms: 164.058047
+  type: 'test'
+  ...
+# Subtest: TED-127: after a stuck Refund All refund is found, a new top-up is refunded on the FIRST press
+ok 5 - TED-127: after a stuck Refund All refund is found, a new top-up is refunded on the FIRST press
+  ---
+  duration_ms: 179.02583
+  type: 'test'
+  ...
+# Subtest: TED-126: a refund that failed and was put back can be refunded from its top-up again
+ok 6 - TED-126: a refund that failed and was put back can be refunded from its top-up again
+  ---
+  duration_ms: 336.786542
+  type: 'test'
+  ...
+# Subtest: TED-126: refund.failed (failed) puts the money back on the right camp, once per event
+ok 7 - TED-126: refund.failed (failed) puts the money back on the right camp, once per event
+  ---
+  duration_ms: 177.971304
+  type: 'test'
+  ...
+# Subtest: TED-126: refund.updated (failed) puts the money back on the right camp, once per event
+ok 8 - TED-126: refund.updated (failed) puts the money back on the right camp, once per event
+  ---
+  duration_ms: 167.476916
+  type: 'test'
+  ...
+# Subtest: TED-126: charge.refund.updated (failed) puts the money back on the right camp, once per event
+ok 9 - TED-126: charge.refund.updated (failed) puts the money back on the right camp, once per event
+  ---
+  duration_ms: 164.366032
+  type: 'test'
+  ...
+# Subtest: TED-126: a refund update that is not a failure changes nothing
+ok 10 - TED-126: a refund update that is not a failure changes nothing
+  ---
+  duration_ms: 168.039166
+  type: 'test'
+  ...
+# Subtest: TED-126: the database cannot be reached — 500, so Stripe sends the failure again
+ok 11 - TED-126: the database cannot be reached — 500, so Stripe sends the failure again
+  ---
+  duration_ms: 166.14001
+  type: 'test'
+  ...
+# Subtest: TED-126: a failed refund in a charge.refunded list is not booked as a refund
+ok 12 - TED-126: a failed refund in a charge.refunded list is not booked as a refund
+  ---
+  duration_ms: 166.96689
+  type: 'test'
+  ...
+# Subtest: TED-126: Snacks counts a failed-and-put-back refund as refundable again
+ok 13 - TED-126: Snacks counts a failed-and-put-back refund as refundable again
+  ---
+  duration_ms: 3.623861
+  type: 'test'
+  ...
+# Subtest: TED-131: a failed refund not on Campistry's books still alerts the platform (and the office is told)
+ok 14 - TED-131: a failed refund not on Campistry's books still alerts the platform (and the office is told)
+  ---
+  duration_ms: 172.160642
+  type: 'test'
+  ...
+# Subtest: TED-131: the same unbooked failure again (refund.updated after refund.failed) does not alert twice
+ok 15 - TED-131: the same unbooked failure again (refund.updated after refund.failed) does not alert twice
+  ---
+  duration_ms: 173.25682
+  type: 'test'
+  ...
+# Subtest: TED-131: a booked failure alerts once; a repeat does not
+ok 16 - TED-131: a booked failure alerts once; a repeat does not
+  ---
+  duration_ms: 358.115614
+  type: 'test'
+  ...
+# Subtest: TED-150: the email service fails on the first delivery — 500, and the next delivery sends the alert
+not ok 17 - TED-150: the email service fails on the first delivery — 500, and the next delivery sends the alert
+  ---
+  duration_ms: 168.182859
+  type: 'test'
+  location: '/tmp/claude-0/-home-user-daily-camp-schedular/39278441-0cf3-5f6a-bf8e-a51bef67e95d/scratchpad/old114/tests/stripe_refund_failed.test.js:300:1'
+  failureType: 'testCodeFailure'
+  error: |-
+    [{"received":true},{"received":true},{"received":true}]
+    + actual - expected
+    
+      [
+    -   500,
+        200,
+        200,
+    +   200
+      ]
+    
+  code: 'ERR_ASSERTION'
+  name: 'AssertionError'
+  expected:
+    0: 500
+    1: 200
+    2: 200
+  actual:
+    0: 200
+    1: 200
+    2: 200
+  operator: 'deepStrictEqual'
+  stack: |-
+    TestContext.<anonymous> (/tmp/claude-0/-home-user-daily-camp-schedular/39278441-0cf3-5f6a-bf8e-a51bef67e95d/scratchpad/old114/tests/stripe_refund_failed.test.js:302:12)
+    Test.runInAsyncScope (node:async_hooks:214:14)
+    Test.run (node:internal/test_runner/test:1047:25)
+    Test.processPendingSubtests (node:internal/test_runner/test:744:18)
+    Test.postRun (node:internal/test_runner/test:1173:19)
+    Test.run (node:internal/test_runner/test:1101:12)
+    async Test.processPendingSubtests (node:internal/test_runner/test:744:7)
+  ...
+# Subtest: TED-150: a sent alert is still sent once, however often Stripe repeats the failure
+not ok 18 - TED-150: a sent alert is still sent once, however often Stripe repeats the failure
+  ---
+  duration_ms: 171.956564
+  type: 'test'
+  location: '/tmp/claude-0/-home-user-daily-camp-schedular/39278441-0cf3-5f6a-bf8e-a51bef67e95d/scratchpad/old114/tests/stripe_refund_failed.test.js:308:1'
+  failureType: 'testCodeFailure'
+  error: |-
+    Expected values to be strictly equal:
+    
+    4 !== 1
+    
+  code: 'ERR_ASSERTION'
+  name: 'AssertionError'
+  expected: 1
+  actual: 4
+  operator: 'strictEqual'
+  stack: |-
+    TestContext.<anonymous> (/tmp/claude-0/-home-user-daily-camp-schedular/39278441-0cf3-5f6a-bf8e-a51bef67e95d/scratchpad/old114/tests/stripe_refund_failed.test.js:311:12)
+    Test.runInAsyncScope (node:async_hooks:214:14)
+    Test.run (node:internal/test_runner/test:1047:25)
+    Test.processPendingSubtests (node:internal/test_runner/test:744:18)
+    Test.postRun (node:internal/test_runner/test:1173:19)
+    Test.run (node:internal/test_runner/test:1101:12)
+    async Test.processPendingSubtests (node:internal/test_runner/test:744:7)
+  ...
+# Subtest: TED-150: with no email key there is nothing to retry — the delivery is answered, the camp's notice stands
+ok 19 - TED-150: with no email key there is nothing to retry — the delivery is answered, the camp's notice stands
+  ---
+  duration_ms: 167.803003
+  type: 'test'
+  ...
+# Subtest: TED-150: with no camp either, a failed email is tried again on the next delivery
+not ok 20 - TED-150: with no camp either, a failed email is tried again on the next delivery
+  ---
+  duration_ms: 162.394821
+  type: 'test'
+  location: '/tmp/claude-0/-home-user-daily-camp-schedular/39278441-0cf3-5f6a-bf8e-a51bef67e95d/scratchpad/old114/tests/stripe_refund_failed.test.js:322:1'
+  failureType: 'testCodeFailure'
+  error: |-
+    Expected values to be strictly deep-equal:
+    + actual - expected
+    
+      [
+    -   500,
+        200,
+    +   200
+      ]
+    
+  code: 'ERR_ASSERTION'
+  name: 'AssertionError'
+  expected:
+    0: 500
+    1: 200
+  actual:
+    0: 200
+    1: 200
+  operator: 'deepStrictEqual'
+  stack: |-
+    TestContext.<anonymous> (/tmp/claude-0/-home-user-daily-camp-schedular/39278441-0cf3-5f6a-bf8e-a51bef67e95d/scratchpad/old114/tests/stripe_refund_failed.test.js:324:12)
+    Test.runInAsyncScope (node:async_hooks:214:14)
+    Test.run (node:internal/test_runner/test:1047:25)
+    Test.processPendingSubtests (node:internal/test_runner/test:744:18)
+    Test.postRun (node:internal/test_runner/test:1173:19)
+    Test.run (node:internal/test_runner/test:1101:12)
+    async Test.processPendingSubtests (node:internal/test_runner/test:744:7)
+  ...
+# Subtest: TED-148: a family refund put back — its card-surcharge credit is taken back (the database keeps it to once)
+not ok 21 - TED-148: a family refund put back — its card-surcharge credit is taken back (the database keeps it to once)
+  ---
+  duration_ms: 168.451865
+  type: 'test'
+  location: '/tmp/claude-0/-home-user-daily-camp-schedular/39278441-0cf3-5f6a-bf8e-a51bef67e95d/scratchpad/old114/tests/stripe_refund_failed.test.js:330:1'
+  failureType: 'testCodeFailure'
+  error: 'the surcharge credit was left on the bill'
+  code: 'ERR_ASSERTION'
+  name: 'AssertionError'
+  expected: true
+  actual: false
+  operator: '=='
+  stack: |-
+    TestContext.<anonymous> (/tmp/claude-0/-home-user-daily-camp-schedular/39278441-0cf3-5f6a-bf8e-a51bef67e95d/scratchpad/old114/tests/stripe_refund_failed.test.js:334:12)
+    Test.runInAsyncScope (node:async_hooks:214:14)
+    Test.run (node:internal/test_runner/test:1047:25)
+    Test.processPendingSubtests (node:internal/test_runner/test:744:18)
+    Test.postRun (node:internal/test_runner/test:1173:19)
+    Test.run (node:internal/test_runner/test:1101:12)
+    async Test.processPendingSubtests (node:internal/test_runner/test:744:7)
+  ...
+# Subtest: TED-148: the database cannot take the credit back yet — 500, so Stripe sends it again
+not ok 22 - TED-148: the database cannot take the credit back yet — 500, so Stripe sends it again
+  ---
+  duration_ms: 171.390662
+  type: 'test'
+  location: '/tmp/claude-0/-home-user-daily-camp-schedular/39278441-0cf3-5f6a-bf8e-a51bef67e95d/scratchpad/old114/tests/stripe_refund_failed.test.js:338:1'
+  failureType: 'testCodeFailure'
+  error: |-
+    Expected values to be strictly equal:
+    
+    200 !== 500
+    
+  code: 'ERR_ASSERTION'
+  name: 'AssertionError'
+  expected: 500
+  actual: 200
+  operator: 'strictEqual'
+  stack: |-
+    TestContext.<anonymous> (/tmp/claude-0/-home-user-daily-camp-schedular/39278441-0cf3-5f6a-bf8e-a51bef67e95d/scratchpad/old114/tests/stripe_refund_failed.test.js:342:12)
+    Test.runInAsyncScope (node:async_hooks:214:14)
+    Test.run (node:internal/test_runner/test:1047:25)
+    Test.processPendingSubtests (node:internal/test_runner/test:744:18)
+    Test.postRun (node:internal/test_runner/test:1173:19)
+    Test.run (node:internal/test_runner/test:1101:12)
+    async Test.processPendingSubtests (node:internal/test_runner/test:744:7)
+  ...
+# Subtest: TED-131/137: a failed refund with no camp anywhere alerts the platform — once, however often Stripe sends it
+ok 23 - TED-131/137: a failed refund with no camp anywhere alerts the platform — once, however often Stripe sends it
+  ---
+  duration_ms: 172.494011
+  type: 'test'
+  ...
+# Subtest: TED-133: a refund the event still calls succeeded, but Stripe now says failed, is not booked
+ok 24 - TED-133: a refund the event still calls succeeded, but Stripe now says failed, is not booked
+  ---
+  duration_ms: 168.174503
+  type: 'test'
+  ...
+# Subtest: TED-133: Stripe not answering about a refund — 500, so the event comes again
+ok 25 - TED-133: Stripe not answering about a refund — 500, so the event comes again
+  ---
+  duration_ms: 172.574756
+  type: 'test'
+  ...
+# Subtest: TED-130: stripe-canteen-refund tells the page what each child can get back to the card, from the full ledger
+ok 26 - TED-130: stripe-canteen-refund tells the page what each child can get back to the card, from the full ledger
+  ---
+  duration_ms: 163.664658
+  type: 'test'
+  ...
+# Subtest: TED-130: payments-canteen-refund does the same on a Sola camp
+ok 27 - TED-130: payments-canteen-refund does the same on a Sola camp
+  ---
+  duration_ms: 158.620862
+  type: 'test'
+  ...
+# Subtest: TED-135: Refund All says what the look-up of waiting refunds found
+ok 28 - TED-135: Refund All says what the look-up of waiting refunds found
+  ---
+  duration_ms: 333.946649
+  type: 'test'
+  ...
+# Subtest: TED-132: a tuition refund that failed and was put back can be refunded to the card again
+ok 29 - TED-132: a tuition refund that failed and was put back can be refunded to the card again
+  ---
+  duration_ms: 22.964751
+  type: 'test'
+  ...
+# Subtest: TED-136: pressing Refund again after the first refund failed makes a real second refund — once
+ok 30 - TED-136: pressing Refund again after the first refund failed makes a real second refund — once
+  ---
+  duration_ms: 158.117509
+  type: 'test'
+  ...
+# Subtest: TED-136: Stripe cannot be asked about the earlier refund — nothing is sent, and it is not booked
+ok 31 - TED-136: Stripe cannot be asked about the earlier refund — nothing is sent, and it is not booked
+  ---
+  duration_ms: 155.527467
+  type: 'test'
+  ...
+# Subtest: TED-142: Refund All returns the whole balance, floor and all
+ok 32 - TED-142: Refund All returns the whole balance, floor and all
+  ---
+  duration_ms: 383.975324
+  type: 'test'
+  ...
+# Subtest: TED-142: Take Out Cash still keeps the floor, and says so — and where the rest can go
+not ok 33 - TED-142: Take Out Cash still keeps the floor, and says so — and where the rest can go
+  ---
+  duration_ms: 1.411539
+  type: 'test'
+  location: '/tmp/claude-0/-home-user-daily-camp-schedular/39278441-0cf3-5f6a-bf8e-a51bef67e95d/scratchpad/old114/tests/stripe_refund_failed.test.js:539:1'
+  failureType: 'testCodeFailure'
+  error: |-
+    The input did not match the regular expression /Only \$40\.00 available to take out — the other \$10\.00 is under the balance floor; refund it to the card \(Refund\), or, if it was paid in cash, at the end of the season use Me → Billing → the family → Close out…, which takes the whole balance/. Input:
+    
+    'Only $40.00 available to take out — the other $10.00 is under the balance floor; refund it to the card (Refund) instead'
+    
+  code: 'ERR_ASSERTION'
+  name: 'AssertionError'
+  expected:
+  actual: 'Only $40.00 available to take out — the other $10.00 is under the balance floor; refund it to the card (Refund) instead'
+  operator: 'match'
+  stack: |-
+    TestContext.<anonymous> (/tmp/claude-0/-home-user-daily-camp-schedular/39278441-0cf3-5f6a-bf8e-a51bef67e95d/scratchpad/old114/tests/stripe_refund_failed.test.js:544:12)
+    Test.runInAsyncScope (node:async_hooks:214:14)
+    Test.run (node:internal/test_runner/test:1047:25)
+    Test.processPendingSubtests (node:internal/test_runner/test:744:18)
+    Test.postRun (node:internal/test_runner/test:1173:19)
+    Test.run (node:internal/test_runner/test:1101:12)
+    async Test.processPendingSubtests (node:internal/test_runner/test:744:7)
+  ...
+1..33
+# tests 33
+# suites 0
+# pass 27
+# fail 6
+# cancelled 0
+# skipped 0
+# todo 0
+# duration_ms 5984.663311

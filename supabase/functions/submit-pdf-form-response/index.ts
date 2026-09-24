@@ -45,6 +45,19 @@ function decodeBase64(b64: string): Uint8Array {
   return bytes;
 }
 
+
+/** A camper id (from the page, or from metadata), or null. */
+function camperIdIn(v: unknown): number | null {
+  return v != null && /^\d+$/.test(String(v)) && Number(v) > 0 ? Number(v) : null;
+}
+
+/** A camper's name as a person reads it: without the roster's internal
+ *  " #<number>" that tells two campers with one name apart. For what a parent
+ *  sees; never for identifying the camper. */
+function displayName(s: unknown): string {
+  return String(s ?? "").replace(/\s#\d+(?:-\d+)?$/, "");
+}
+
 serve(async (req) => {
   if (req.method === "OPTIONS") return new Response("ok", { headers: corsHeaders });
 
@@ -52,9 +65,12 @@ serve(async (req) => {
     const jwt = (req.headers.get("Authorization") || "").replace(/^Bearer\s+/i, "");
     if (!jwt) return json({ error: "unauthorized" }, 401);
 
-    const { campId, formId, formName, camperName, camperId, division, grade, bunk, pdfBase64 } = await req.json();
-    if (!campId || !formId || !camperName || !pdfBase64) {
-      return json({ error: "campId, formId, camperName and pdfBase64 are required" }, 400);
+    const { campId, formId, formName, camperName, camperId: bodyCamperId, division, grade, bunk, pdfBase64 } = await req.json();
+    // The camper's number decides who this form is for; the name is the
+    // fallback for a caller that sends no number.
+    const camperId = camperIdIn(bodyCamperId);
+    if (!campId || !formId || (camperId == null && !camperName) || !pdfBase64) {
+      return json({ error: "campId, formId, camperId (or camperName) and pdfBase64 are required" }, 400);
     }
 
     const asUser = createClient(SUPABASE_URL, SUPABASE_ANON_KEY, {
@@ -65,9 +81,9 @@ serve(async (req) => {
     if (!userData?.user?.id) return json({ error: "unauthorized" }, 401);
 
     // Never trust the client's claim that this camper is theirs.
-    const { data: owns, error: ownErr } = await asUser.rpc("verify_my_camper", { p_camp_id: campId, p_camper_name: camperName });
+    const { data: owns, error: ownErr } = await asUser.rpc("verify_my_camper", { p_camp_id: campId, p_camper_name: String(camperName ?? ""), p_camper_id: camperId });
     if (ownErr) throw new Error(ownErr.message);
-    if (!owns) return json({ error: `"${camperName}" isn't linked to your account for this camp.` }, 403);
+    if (!owns) return json({ error: `"${displayName(camperName)}" isn't linked to your account for this camp.` }, 403);
 
     let bytes: Uint8Array;
     try {
@@ -97,8 +113,7 @@ serve(async (req) => {
       p_form_id: String(formId),
       p_form_name: String(formName || ""),
       p_mode: "digital",
-      p_camper_name: String(camperName),
-      p_camper_id: camperId != null ? String(camperId) : null,
+      p_camper_id: camperId != null ? String(camperId) : null, p_camper_name: String(camperName ?? ""),
       p_answers: {},
       p_signature: null,
       p_file_name: null,

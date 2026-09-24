@@ -1,0 +1,61 @@
+A. Refund All refunds Avi, answer lost (Stripe made it); Refund All again 25 hours later (Stripe forgot the key)
+  ok  A1 $100 top-up, $50 left
+        answers: Refund All: $0, refunded 0, failed 1, skipped 0 [Stripe did not answer, so this child's refund may have gone through — check the Stripe das] | Refund All: $0, refunded 0, failed 0, skipped 0
+        → money back $50 [re_1 $50], wallet $0, holds [posted $50.00], history [re_1 $50.00]   (want money $50 once, wallet $0, on the history)
+  ok  A2 $20 top-up, all left
+        answers: Refund All: $0, refunded 0, failed 1, skipped 0 [Stripe did not answer, so this child's refund may have gone through — check the Stripe das] | Refund All: $0, refunded 0, failed 0, skipped 0
+        → money back $20 [re_2 $20], wallet $0, holds [posted $20.00], history [re_2 $20.00]   (want money $20 once, wallet $0, on the history)
+B. Refund All's request never reached Stripe (cut off on the way)
+  ok  B1 next Refund All 25 h later
+        answers: Refund All: $0, refunded 0, failed 1, skipped 0 [Stripe did not answer, so this child's refund may have gone through — check the Stripe das] | Refund All: $20, refunded 1, failed 0, skipped 0
+        → money back $20 [re_3 $20], wallet $0, holds [posted $20.00], history [re_3 $20.00]   (want money $20 once, wallet $0)
+  ok  B2 next Refund All 5 min later
+        answers: Refund All: $0, refunded 0, failed 1, skipped 0 [Stripe did not answer, so this child's refund may have gone through — check the Stripe das] | Refund All: $20, refunded 1, failed 0, skipped 0
+        → money back $20 [re_4 $20], wallet $0, holds [posted $20.00], history [re_4 $20.00]   (want money $20 once, wallet $0)
+C. Refund All refunds Avi's $50 (answer lost, made). An hour later the parent tops up $30 and the office refunds $30
+  ok  C1 Stripe answers the lookup
+        answers: Refund All: $0, refunded 0, failed 1, skipped 0 [Stripe did not answer, so this child's refund may have gone through — check the Stripe das] | $30
+        → money back $80 [re_5 $50, re_6 $30], wallet $0, holds [posted $50.00, posted $30.00], history [re_5 $50.00, re_6 $30.00]   (want money $80 once each, wallet $0)
+  ok  C1 Stripe answers the lookup → the office presses Refund again
+        answers: $30 (replayed)
+        → money back $80 [re_5 $50, re_6 $30], wallet $0, holds [posted $50.00, posted $30.00], history [re_5 $50.00, re_6 $30.00]   (want money $80, wallet $0)
+  ok  C2 the lookup is rate-limited (429)
+        answers: Refund All: $0, refunded 0, failed 1, skipped 0 [Stripe did not answer, so this child's refund may have gone through — check the Stripe das] | $30
+        → money back $80 [re_7 $50, re_8 $30], wallet $0, holds [open $50.00, posted $30.00], history [re_8 $30.00]   (want money $80 once each, wallet $0)
+D. A single refund of $20 (of $50), the office presses Refund again with the page's same key
+  ok  D1 answer lost (made); again 10 s later
+        answers: UNCERTAIN: Stripe did not answer, so this refund may have gone through. Check the child's wallet befo | $20 (replayed)
+        → money back $20 [re_9 $20], wallet $30, holds [posted $20.00], history [re_9 $20.00]   (want money $20 once, wallet $30)
+  ok  D2 never reached Stripe; again 10 s later
+        answers: UNCERTAIN: Stripe did not answer, so this refund may have gone through. Check the child's wallet befo | $20 (replayed)
+        → money back $20 [re_10 $20], wallet $30, holds [posted $20.00], history [re_10 $20.00]   (want money $20 once, wallet $30)
+  ok  D3 never reached; again 10 s later, payment lookup 429 → pressed a 3rd time 3 min later
+        answers: UNCERTAIN: Stripe did not answer, so this refund may have gone through. Check the child's wallet befo | UNCERTAIN: An earlier try at this refund has not been confirmed by Stripe yet, so it may have gone th | $20
+        → money back $20 [re_11 $20], wallet $30, holds [posted $20.00], history [re_11 $20.00]   (want first answers uncertain, then $20 once, wallet $30)
+  ok  D4 answer lost (made); again 25 h later (key forgotten)
+        answers: UNCERTAIN: Stripe did not answer, so this refund may have gone through. Check the child's wallet befo | $20 (replayed)
+        → money back $20 [re_12 $20], wallet $30, holds [posted $20.00], history [re_12 $20.00]   (want money $20 once, wallet $30)
+  ok  D5 never reached; again 25 h later
+        answers: UNCERTAIN: Stripe did not answer, so this refund may have gone through. Check the child's wallet befo | $20
+        → money back $20 [re_13 $20], wallet $30, holds [posted $20.00], history [re_13 $20.00]   (want money $20 once, wallet $30)
+  ok  D6 answer lost (made); again 10 s later with another reason
+        answers: UNCERTAIN: Stripe did not answer, so this refund may have gone through. Check the child's wallet befo | $20 (replayed)
+        → money back $20 [re_14 $20], wallet $30, holds [posted $20.00], history [re_14 $20.00]   (want money $20 once, wallet $30)
+E. Avi has $10 + $50 top-ups; a $20 refund draws $10 + $10, the second part's answer lost; pressed again 10 s later
+  ok  E1
+        answers: $10 — Refunded $10.00 before hitting an error on the rest: Stripe did not answer, so this refund | $20 (replayed)
+        → money back $20 [re_15 $10, re_16 $10], wallet $40, holds [posted $10.00, posted $10.00], history [re_15 $10.00, re_16 $10.00]   (want money $20 once, wallet $40)
+F. Refund made, answer lost; then Stripe FAILS it (card closed) and the money comes back; asked again
+  BAD F1 Refund All again 1 hour later
+        answers: Refund All: $0, refunded 0, failed 1, skipped 0 [Stripe did not answer, so this child's refund may have gone through — check the Stripe das] | Refund All: $20, refunded 1, failed 0, skipped 0
+        → money back $0 [re_17 $20 (FAILED)], wallet $0, holds [posted $20.00], history [re_17 $20.00]   (want either the parent really gets $20 (money $20, wallet $0) or the $20 is back on the wallet (money $0, wallet $20))
+  ok  F2 Refund All again 25 h later
+        answers: Refund All: $0, refunded 0, failed 1, skipped 0 [Stripe did not answer, so this child's refund may have gone through — check the Stripe das] | Refund All: $20, refunded 1, failed 0, skipped 0
+        → money back $20 [re_18 $20 (FAILED), re_19 $20], wallet $0, holds [posted $20.00], history [re_19 $20.00]   (want either the parent really gets $20 (money $20, wallet $0) or the $20 is back on the wallet (money $0, wallet $20))
+  BAD F3 single refund, same page key, 1 hour later
+        answers: UNCERTAIN: Stripe did not answer, so this refund may have gone through. Check the child's wallet befo | $20
+        → money back $0 [re_20 $20 (FAILED)], wallet $0, holds [posted $20.00], history [re_20 $20.00]   (want either the parent really gets $20 (money $20, wallet $0) or the $20 is back on the wallet (money $0, wallet $20))
+G. two deliberate $20 refunds, one after the other
+  ok  G1
+        answers: $20 | $20
+        → money back $40 [re_21 $20, re_22 $20], wallet $10, holds [posted $20.00, posted $20.00], history [re_21 $20.00, re_22 $20.00]   (want money $40, wallet $10)

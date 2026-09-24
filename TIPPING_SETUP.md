@@ -142,6 +142,11 @@ Run, in order, in the Supabase SQL editor:
   `ensure_my_tip_account()` (see the callout above) and adds
   `increment_staff_total_earned()`, an atomic ledger-credit RPC used by the
   webhook fixes below.
+- `migrations/285_a_refunded_or_disputed_tip.sql` — **required before
+  deploying `stripe-connect-webhook`.** Marks a tip the parent got back
+  (refunded, or disputed with their bank), takes it off the staff member's
+  total once, and remembers what the platform was emailed. See "When a tip
+  is refunded or disputed" below.
 
 ### 2. Enable Stripe Connect
 Stripe Dashboard → Connect → get started, choose **Express** as the account
@@ -181,7 +186,13 @@ one endpoint is not enough — you must create **both**:
 - URL: `https://<your-project>.supabase.co/functions/v1/stripe-connect-webhook`
 - **Listen to events on: Your account** (the default — leave "Connected
   accounts" OFF here)
-- Events: `payment_intent.succeeded`, `payment_intent.payment_failed`
+- Events: `payment_intent.succeeded`, `payment_intent.payment_failed`,
+  `charge.refunded`, `charge.dispute.created`, `charge.dispute.updated`,
+  `charge.dispute.funds_withdrawn`, `charge.dispute.closed`
+- The five `charge.*` events are how Campistry learns a tip was refunded or
+  disputed (see "When a tip is refunded or disputed" below). The billing
+  `stripe-webhook` receives the same events for camp payments; each function
+  ignores the payments that are not its own.
 - Why: `stripe-connect-tip` creates the Checkout Session (and thus the
   PaymentIntent) on the **platform** account and routes the money via
   `transfer_data.destination` — a destination charge. The PaymentIntent
@@ -203,6 +214,49 @@ Both secrets are a **separate** pair from the existing billing
 `stripe-webhook`'s secret, so this feature's event handling can evolve
 independently. The function accepts either secret on incoming requests, so
 one shared function correctly serves both endpoints.
+
+## When a tip is refunded or disputed
+
+A tip is charged on **Campistry's** Stripe account, and the tip part is sent
+on to the staff member's own Stripe account (a destination charge; for a
+cart of tips, one transfer per staff member). So when a parent gets the money
+back — a refund made in the Stripe Dashboard, or a dispute (chargeback) with
+their bank — **Stripe takes it from Campistry's balance**, not the staff
+member's, plus a dispute fee for a chargeback.
+
+What happens automatically (`stripe-connect-webhook`, migration 285):
+- **Refund:** the tip's share of the refund is taken back from the staff
+  member's Stripe account (a *transfer reversal*), the tip is marked
+  "Refunded" (or "Part refunded") and comes off the staff member's total in
+  Link Admin → Tips.
+- **Dispute opened:** the whole tip is taken back while the bank decides —
+  Stripe has already taken the disputed amount from Campistry — and the tip
+  shows "Disputed".
+- **Dispute won:** the tip counts again. The money taken back is **not** sent
+  back automatically (see below).
+- **Dispute lost:** nothing more — the tip stays taken back.
+- Each time the state changes, **campistryoffice@gmail.com** is emailed once
+  with what, if anything, is left to do. (This needs `RESEND_API_KEY` set in
+  the Edge Function secrets — the same key the other alert emails use. If the
+  email fails, the webhook answers 500 and Stripe sends the event again; only
+  the email is tried again.)
+
+What you may need to do by hand (the email says which):
+1. **The reversal was refused** — usually because the staff member already
+   paid the money out to their bank, so their Stripe balance is too low.
+   Stripe Dashboard → Payments → the tip payment → the transfer →
+   **Reverse transfer** (Stripe will take it from their next incoming money),
+   or ask the staff member to repay it.
+2. **A dispute was won** — Campistry got the money back, but the staff
+   member's tip was taken back while the dispute was open. Send it to them
+   again: Stripe Dashboard → Connect → the staff member's account →
+   **Send funds** (a transfer of the amount the email names).
+3. **Answer the dispute** — as for any chargeback, in Stripe Dashboard →
+   Disputes, before the deadline Stripe shows. The dispute fee is Campistry's
+   either way.
+
+Campistry never refunds a tip itself; a refund is always made in the Stripe
+Dashboard, and the webhook above does the rest.
 
 ## Testing end-to-end (test mode)
 
@@ -252,7 +306,7 @@ against the deployed test-mode functions. `stripe listen` conveniently
 forwards both platform and connected-account events through one CLI session
 with a single temporary `whsec_...` (unlike the two separate Dashboard
 endpoints/secrets required in step 5) — forward with:
-`stripe listen --events account.updated,payment_intent.succeeded,payment_intent.payment_failed --forward-to https://<project-ref>.supabase.co/functions/v1/stripe-connect-webhook`
+`stripe listen --events account.updated,payment_intent.succeeded,payment_intent.payment_failed,charge.refunded,charge.dispute.created,charge.dispute.updated,charge.dispute.funds_withdrawn,charge.dispute.closed --forward-to https://<project-ref>.supabase.co/functions/v1/stripe-connect-webhook`
 and set BOTH `STRIPE_CONNECT_WEBHOOK_SECRET` and
 `STRIPE_CONNECT_ACCOUNT_WEBHOOK_SECRET` to that one printed secret while
 testing this way. Or just register the two permanent Dashboard endpoints

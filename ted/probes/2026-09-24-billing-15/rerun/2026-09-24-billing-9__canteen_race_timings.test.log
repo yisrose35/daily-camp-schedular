@@ -1,0 +1,220 @@
+TAP version 13
+# \# Stripe   prior    [50]    | money moved $20 ["pi_top1 $20"] | 1st: $20 | 2nd: $20 | claims ["scanteen:pi_top1 settled 20"]
+# \# Cardknox prior    [50]    | money moved $20 ["X1 $20.00"] | 1st: $20 | 2nd: $20 | claims ["canteen:X1 settled 20"]
+# \# Stripe   prior    [50,50] | money moved $20 ["pi_top1 $20"] | 1st: $20 | 2nd: $20 | claims ["scanteen:pi_top1 settled 20"]
+# \# Cardknox prior    [50,50] | money moved $20 ["X1 $20.00"] | 1st: $20 | 2nd: $20 | claims ["canteen:X1 settled 20"]
+# \# Stripe   prior    [10,50] | money moved $20 ["pi_top1 $10","pi_top2 $10"] | 1st: $20 | 2nd: $20 | claims ["scanteen:pi_top1 settled 10","scanteen:pi_top2 settled 10"]
+# \# Cardknox prior    [10,50] | money moved $20 ["X1 $10.00","X2 $10.00"] | 1st: $20 | 2nd: $20 | claims ["canteen:X1 settled 10","canteen:X2 settled 10"]
+# \# Stripe   claim1   [50]    | money moved $20 ["pi_top1 $20"] | 1st: $20 | 2nd: UNCERTAIN: An earlier try at this refund has not been confirmed by Stri | claims ["scanteen:pi_top1 settled 20"]
+# \# Cardknox claim1   [50]    | money moved $20 ["X1 $20.00"] | 1st: $20 | 2nd: UNCERTAIN: An earlier try at this refund was never confirmed by the car | claims ["canteen:X1 settled 20"]
+# \# Stripe   claim1   [50,50] | money moved $20 ["pi_top1 $20"] | 1st: $20 | 2nd: UNCERTAIN: An earlier try at this refund has not been confirmed by Stri | claims ["scanteen:pi_top1 settled 20"]
+# \# Cardknox claim1   [50,50] | money moved $20 ["X1 $20.00"] | 1st: $20 | 2nd: UNCERTAIN: An earlier try at this refund was never confirmed by the car | claims ["canteen:X1 settled 20"]
+# \# Stripe   claim1   [10,50] | money moved $20 ["pi_top1 $10","pi_top2 $10"] | 1st: $20 | 2nd: UNCERTAIN: An earlier try at this refund has not been confirmed by Stri | claims ["scanteen:pi_top1 settled 10","scanteen:pi_top2 settled 10"]
+# \# Cardknox claim1   [10,50] | money moved $20 ["X1 $10.00","X2 $10.00"] | 1st: $20 | 2nd: UNCERTAIN: An earlier try at this refund was never confirmed by the car | claims ["canteen:X1 settled 10","canteen:X2 settled 10"]
+# \# Stripe   postIn   [50]    | money moved $20 ["pi_top1 $20"] | 1st: $20 | 2nd: UNCERTAIN: An earlier try at this refund has not been confirmed by Stri | claims ["scanteen:pi_top1 settled 20"]
+# \# Cardknox postIn   [50]    | money moved $20 ["X1 $20.00"] | 1st: $20 | 2nd: UNCERTAIN: An earlier try at this refund was never confirmed by the car | claims ["canteen:X1 settled 20"]
+# \# Stripe   postIn   [50,50] | money moved $20 ["pi_top1 $20"] | 1st: $20 | 2nd: UNCERTAIN: An earlier try at this refund has not been confirmed by Stri | claims ["scanteen:pi_top1 settled 20"]
+# \# Cardknox postIn   [50,50] | money moved $20 ["X1 $20.00"] | 1st: $20 | 2nd: UNCERTAIN: An earlier try at this refund was never confirmed by the car | claims ["canteen:X1 settled 20"]
+# \# Stripe   postIn   [10,50] | money moved $20 ["pi_top1 $10","pi_top2 $10"] | 1st: $20 | 2nd: UNCERTAIN: An earlier try at this refund has not been confirmed by Stri | claims ["scanteen:pi_top1 settled 10","scanteen:pi_top2 settled 10"]
+# \# Cardknox postIn   [10,50] | money moved $20 ["X1 $10.00","X2 $10.00"] | 1st: $20 | 2nd: UNCERTAIN: An earlier try at this refund was never confirmed by the car | claims ["canteen:X1 settled 10","canteen:X2 settled 10"]
+# \# Stripe   postMade [50]    | money moved $20 ["pi_top1 $20"] | 1st: $20 | 2nd: UNCERTAIN: An earlier try at this refund has not been confirmed by Stri | claims ["scanteen:pi_top1 settled 20"]
+# \# Cardknox postMade [50]    | money moved $20 ["X1 $20.00"] | 1st: $20 | 2nd: UNCERTAIN: An earlier try at this refund was never confirmed by the car | claims ["canteen:X1 settled 20"]
+# \# Stripe   postMade [50,50] | money moved $20 ["pi_top1 $20"] | 1st: $20 | 2nd: UNCERTAIN: An earlier try at this refund has not been confirmed by Stri | claims ["scanteen:pi_top1 settled 20"]
+# \# Cardknox postMade [50,50] | money moved $20 ["X1 $20.00"] | 1st: $20 | 2nd: UNCERTAIN: An earlier try at this refund was never confirmed by the car | claims ["canteen:X1 settled 20"]
+# \# Stripe   postMade [10,50] | money moved $20 ["pi_top1 $10","pi_top2 $10"] | 1st: $20 | 2nd: UNCERTAIN: An earlier try at this refund has not been confirmed by Stri | claims ["scanteen:pi_top1 settled 10","scanteen:pi_top2 settled 10"]
+# \# Cardknox postMade [10,50] | money moved $20 ["X1 $10.00","X2 $10.00"] | 1st: $20 | 2nd: UNCERTAIN: An earlier try at this refund was never confirmed by the car | claims ["canteen:X1 settled 10","canteen:X2 settled 10"]
+# \# Stripe   settle1  [50]    | money moved $20 ["pi_top1 $20"] | 1st: $20 | 2nd: $undefined | claims ["scanteen:pi_top1 settled 20"]
+# \# Cardknox settle1  [50]    | money moved $20 ["X1 $20.00"] | 1st: $20 | 2nd: $undefined | claims ["canteen:X1 settled 20"]
+# \# Stripe   settle1  [50,50] | money moved $20 ["pi_top1 $20"] | 1st: $20 | 2nd: $undefined | claims ["scanteen:pi_top1 settled 20"]
+# \# Cardknox settle1  [50,50] | money moved $20 ["X1 $20.00"] | 1st: $20 | 2nd: $undefined | claims ["canteen:X1 settled 20"]
+# \# Stripe   settle1  [10,50] | money moved $20 ["pi_top1 $10","pi_top2 $10"] | 1st: $20 | 2nd: $undefined | claims ["scanteen:pi_top1 settled 10","scanteen:pi_top2 settled 10"]
+# \# Cardknox settle1  [10,50] | money moved $20 ["X1 $10.00","X2 $10.00"] | 1st: $20 | 2nd: $undefined | claims ["canteen:X1 settled 10","canteen:X2 settled 10"]
+# Subtest: Stripe   prior [50]
+ok 1 - Stripe   prior [50]
+  ---
+  duration_ms: 182.002756
+  type: 'test'
+  ...
+# Subtest: Cardknox prior [50]
+ok 2 - Cardknox prior [50]
+  ---
+  duration_ms: 165.746605
+  type: 'test'
+  ...
+# Subtest: Stripe   prior [50,50]
+ok 3 - Stripe   prior [50,50]
+  ---
+  duration_ms: 166.330971
+  type: 'test'
+  ...
+# Subtest: Cardknox prior [50,50]
+ok 4 - Cardknox prior [50,50]
+  ---
+  duration_ms: 172.469687
+  type: 'test'
+  ...
+# Subtest: Stripe   prior [10,50]
+ok 5 - Stripe   prior [10,50]
+  ---
+  duration_ms: 184.768583
+  type: 'test'
+  ...
+# Subtest: Cardknox prior [10,50]
+ok 6 - Cardknox prior [10,50]
+  ---
+  duration_ms: 182.272766
+  type: 'test'
+  ...
+# Subtest: Stripe   claim1 [50]
+ok 7 - Stripe   claim1 [50]
+  ---
+  duration_ms: 182.065393
+  type: 'test'
+  ...
+# Subtest: Cardknox claim1 [50]
+ok 8 - Cardknox claim1 [50]
+  ---
+  duration_ms: 175.637249
+  type: 'test'
+  ...
+# Subtest: Stripe   claim1 [50,50]
+ok 9 - Stripe   claim1 [50,50]
+  ---
+  duration_ms: 170.610426
+  type: 'test'
+  ...
+# Subtest: Cardknox claim1 [50,50]
+ok 10 - Cardknox claim1 [50,50]
+  ---
+  duration_ms: 177.361399
+  type: 'test'
+  ...
+# Subtest: Stripe   claim1 [10,50]
+ok 11 - Stripe   claim1 [10,50]
+  ---
+  duration_ms: 194.32488
+  type: 'test'
+  ...
+# Subtest: Cardknox claim1 [10,50]
+ok 12 - Cardknox claim1 [10,50]
+  ---
+  duration_ms: 174.068876
+  type: 'test'
+  ...
+# Subtest: Stripe   postIn [50]
+ok 13 - Stripe   postIn [50]
+  ---
+  duration_ms: 179.659622
+  type: 'test'
+  ...
+# Subtest: Cardknox postIn [50]
+ok 14 - Cardknox postIn [50]
+  ---
+  duration_ms: 178.852895
+  type: 'test'
+  ...
+# Subtest: Stripe   postIn [50,50]
+ok 15 - Stripe   postIn [50,50]
+  ---
+  duration_ms: 178.445378
+  type: 'test'
+  ...
+# Subtest: Cardknox postIn [50,50]
+ok 16 - Cardknox postIn [50,50]
+  ---
+  duration_ms: 168.22807
+  type: 'test'
+  ...
+# Subtest: Stripe   postIn [10,50]
+ok 17 - Stripe   postIn [10,50]
+  ---
+  duration_ms: 197.306467
+  type: 'test'
+  ...
+# Subtest: Cardknox postIn [10,50]
+ok 18 - Cardknox postIn [10,50]
+  ---
+  duration_ms: 174.764738
+  type: 'test'
+  ...
+# Subtest: Stripe   postMade [50]
+ok 19 - Stripe   postMade [50]
+  ---
+  duration_ms: 176.185429
+  type: 'test'
+  ...
+# Subtest: Cardknox postMade [50]
+ok 20 - Cardknox postMade [50]
+  ---
+  duration_ms: 168.407387
+  type: 'test'
+  ...
+# Subtest: Stripe   postMade [50,50]
+ok 21 - Stripe   postMade [50,50]
+  ---
+  duration_ms: 170.644647
+  type: 'test'
+  ...
+# Subtest: Cardknox postMade [50,50]
+ok 22 - Cardknox postMade [50,50]
+  ---
+  duration_ms: 172.360255
+  type: 'test'
+  ...
+# Subtest: Stripe   postMade [10,50]
+ok 23 - Stripe   postMade [10,50]
+  ---
+  duration_ms: 183.464186
+  type: 'test'
+  ...
+# Subtest: Cardknox postMade [10,50]
+ok 24 - Cardknox postMade [10,50]
+  ---
+  duration_ms: 174.156166
+  type: 'test'
+  ...
+# Subtest: Stripe   settle1 [50]
+ok 25 - Stripe   settle1 [50]
+  ---
+  duration_ms: 203.523812
+  type: 'test'
+  ...
+# Subtest: Cardknox settle1 [50]
+ok 26 - Cardknox settle1 [50]
+  ---
+  duration_ms: 187.59867
+  type: 'test'
+  ...
+# Subtest: Stripe   settle1 [50,50]
+ok 27 - Stripe   settle1 [50,50]
+  ---
+  duration_ms: 168.329131
+  type: 'test'
+  ...
+# Subtest: Cardknox settle1 [50,50]
+ok 28 - Cardknox settle1 [50,50]
+  ---
+  duration_ms: 186.058025
+  type: 'test'
+  ...
+# Subtest: Stripe   settle1 [10,50]
+ok 29 - Stripe   settle1 [10,50]
+  ---
+  duration_ms: 195.205003
+  type: 'test'
+  ...
+# Subtest: Cardknox settle1 [10,50]
+ok 30 - Cardknox settle1 [10,50]
+  ---
+  duration_ms: 198.055574
+  type: 'test'
+  ...
+1..30
+# tests 30
+# suites 0
+# pass 30
+# fail 0
+# cancelled 0
+# skipped 0
+# todo 0
+# duration_ms 5498.795965

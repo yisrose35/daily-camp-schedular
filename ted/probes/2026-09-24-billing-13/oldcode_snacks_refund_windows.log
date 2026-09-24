@@ -1,0 +1,49 @@
+postgres up with 126 migrations applied
+
+0. A camper with $40 in cash and $25 paid through Sola
+  ok   the Sola deposit was credited   → {"balance":65,"success":true,"rosterVerified":false}
+
+1. Snacks → Accounts → Refund All, on a Sola camp with one unanswered refund
+  ok   no page error from the click   → []
+  ok   the Refund All window opens
+  ok   it counts the Sola-paid money only: 1 camper, $25.00, through Sola   → "This will refund 1 camper, totaling approximately $25.00 through Sola — sent back to whatever each parent originally paid with.Only deposits paid through Sola are included. A balance that came from a "
+  ok   the button offers exactly that   → "Refund All ($25.00)"
+  ok   the unanswered refund is listed, by name without the number   → "A refund is waiting for an answer from the card companyIts money is held off the wallet until it is settled — it may already be with the parent.Avi Katz: $20.00, sent 10 min ago — check your processor"
+  ok   with both answers   → ["It went through","Nothing went through"]
+
+2. The Refund button on the child's row, with the same unanswered refund
+  ok   the row has a Refund button   → "openMFor('refund','refundCamper','Avi Katz')"
+  ok   no page error drawing the window   → []
+  ok   the Refund window is open
+  ok   "waiting for an answer" is shown for this child   → "A refund is waiting for an answer from the card companyIts money is held off the wallet until it is settled — it may already be with the parent.Avi Katz: $20.00, sent 10 min ago — check your processor"
+  ok   with "It went through" and "Nothing went through"   → ["It went through","Nothing went through"]
+  ok   the box offers the Sola-paid $25.00   → "Available to refund via Sola: $25.00$40.00 of this balance came from a cash/manual deposit (or a different processor) — refund that portion separately, it can't go through Sola."
+  ok   the answer goes to payments-canteen-refund for that hold   → [{"fn":"payments-canteen-refund","body":{"action":"resolveHold","holdKey":"canteen:cref_x:RN1","wentThrough":false}}]
+  ok   "It went through" sends the reference the office typed   → [{"fn":"payments-canteen-refund","body":{"action":"resolveHold","holdKey":"canteen:cref_x:RN1","wentThrough":true,"reference":"SOLA-REF-9"}}]
+  ok   no page error from either answer   → []
+
+3. Take Out Cash: $5 to the child
+  ok   one $5 cash-out row in the database   → [{"amount":5}]
+  ok   no page error from the payout   → []
+  ok   the office is told "Paid out $5.00 cash to Avi Katz"   → ["Paid out $5.00 cash to Avi Katz"]
+  ok   the amount box is cleared
+
+3b. A Sola top-up 30 days old, and a $20 refund of the new one still waiting
+  ok   the old Sola top-up was credited   → {"balance":90,"success":true,"rosterVerified":false}
+  ok   the waiting refund took its $20 off the wallet   → {"balance":70,"success":true}
+  ok   the page itself does not hold the 30-day-old top-up (the week it loads)
+  ok   no page error   → []
+  FAIL TED-130: the Refund window counts the 30-day-old top-up and the wait — $35.00 to the card   → "Available to refund via Sola: $25.00$45.00 of this balance came from a cash/manual deposit (or a different processor) — refund that portion separately, it can't go through Sola."
+  FAIL and the Refund button is on, for $35.00   → {"box":"Available to refund via Sola: $25.00$45.00 of this balance came from a cash/manual deposit (or a different processor) — refund that portion separately, it can't go through Sola.","disabled":false,"amt":"25.00","holds":"A refund is waiting for an answer from the card companyIts money is held off the wallet until it is settled — it may already be with the parent.Avi Katz: $20.00, sent just now — check your processor's dashboard:It went through Nothing went through"}
+  ok   the waiting $20 refund is listed   → "A refund is waiting for an answer from the card companyIts money is held off the wallet until it is settled — it may already be with the parent.Avi Katz: $20.00"
+  FAIL TED-130/135: Refund All offers $35.00 — the old top-up counted, the waiting refund taken off   → {"body":"This will refund 1 camper, totaling approximately $25.00 through Sola — sent back to whatever each parent originally paid with.Only deposits paid through Sola are included. A balance that came from a cash/manual deposit (or a different processor) is skipped — refund that by hand.This cannot be undone.","btn":"Refund All ($25.00)"}
+
+4. Stripe camp, nobody with Stripe money left, one Stripe refund waiting
+  ok   no page error   → []
+  ok   it asks the Stripe function for the waiting refunds   → ["stripe-canteen-refund"]
+  ok   it says nobody has Stripe money to refund   → "No campers currently have a Stripe-paid balance to refund."
+  ok   the waiting Stripe refund is listed   → "A refund is waiting for an answer from the card companyIts money is held off the wallet until it is settled — it may already be with the parent.Avi Katz: $20.00, sent 15 min ago — looked up in Stripe "
+  ok   and there is still a button to look it up   → "Look up the waiting refunds in Stripe"
+  ok   pressing it runs Refund All, which looks the refund up in Stripe
+
+31/34 checks passed

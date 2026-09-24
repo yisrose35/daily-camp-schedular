@@ -1,0 +1,44 @@
+TAP version 13
+# node:internal/assert/utils:77
+#     throw err;
+#     ^
+# AssertionError [ERR_ASSERTION]: not found: /function _familyOnItsWay\\(famKey\\)\\{[\\s\\S]*?\\n\\}\\n/
+#     at cut (/tmp/claude-0/-home-user-daily-camp-schedular/39278441-0cf3-5f6a-bf8e-a51bef67e95d/scratchpad/old114/tests/office_charge_retry.test.js:20:51)
+#     at Object.<anonymous> (/tmp/claude-0/-home-user-daily-camp-schedular/39278441-0cf3-5f6a-bf8e-a51bef67e95d/scratchpad/old114/tests/office_charge_retry.test.js:28:5)
+#     at Module._compile (node:internal/modules/cjs/loader:1705:14)
+#     at Object..js (node:internal/modules/cjs/loader:1838:10)
+#     at Module.load (node:internal/modules/cjs/loader:1441:32)
+#     at Function._load (node:internal/modules/cjs/loader:1263:12)
+#     at TracingChannel.traceSync (node:diagnostics_channel:328:14)
+#     at wrapModuleLoad (node:internal/modules/cjs/loader:237:24)
+#     at Function.executeUserEntryPoint [as runMain] (node:internal/modules/run_main:171:5)
+#     at node:internal/main/run_main_module:36:49 {
+#   generatedMessage: false,
+#   code: 'ERR_ASSERTION',
+#   actual: null,
+#   expected: true,
+#   operator: '==',
+#   diff: 'simple'
+# }
+# Node.js v22.22.2
+# Subtest: tests/office_charge_retry.test.js
+not ok 1 - tests/office_charge_retry.test.js
+  ---
+  duration_ms: 76.348406
+  type: 'test'
+  location: '/tmp/claude-0/-home-user-daily-camp-schedular/39278441-0cf3-5f6a-bf8e-a51bef67e95d/scratchpad/old114/tests/office_charge_retry.test.js:1:1'
+  failureType: 'testCodeFailure'
+  exitCode: 1
+  signal: ~
+  error: 'test failed'
+  code: 'ERR_TEST_FAILURE'
+  ...
+1..1
+# tests 1
+# suites 0
+# pass 0
+# fail 1
+# cancelled 0
+# skipped 0
+# todo 0
+# duration_ms 86.240041

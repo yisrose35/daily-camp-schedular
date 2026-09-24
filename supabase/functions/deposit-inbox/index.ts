@@ -1248,11 +1248,15 @@ import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
         return camp + '-' + kid;
     };
 
+    // A camper's name as a parent reads it: never the roster's internal
+    // " #<number>". The reference number is what identifies the camper.
+    function displayName(s) { return String(s == null ? '' : s).replace(/\s#\d+(?:-\d+)?$/, ''); }
+
     M.referenceInstruction = function (campNumber, camperId, camperName) {
         var ref = M.reference(campNumber, camperId);
         if (!ref) return '';
         return 'Put ' + ref + ' in the Zelle or bank memo' +
-               (camperName ? ' for ' + camperName : '') + ' so the payment is credited automatically.';
+               (camperName ? ' for ' + displayName(camperName) : '') + ' so the payment is credited automatically.';
     };
 
     /**
@@ -1482,6 +1486,10 @@ import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
             }
         });
 
+        // What says WHO paid, before the amount is looked at: decide() needs it
+        // to tell two households with the same parent name apart (TED-174).
+        Object.keys(scores).forEach(function (fk) { scores[fk].identity = scores[fk].score; });
+
         // Amount corroboration. Never enough on its own -- lots of families owe
         // the same round number -- but it separates a real match from a
         // coincidental surname when the office is choosing between two.
@@ -1551,6 +1559,16 @@ import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
 
         if (runnerUp && (top.score - runnerUp.score) < s.ambiguousGap) {
             return out('review', 'Two families match about equally (' + top.familyName + ' / ' + runnerUp.familyName + ')');
+        }
+
+        // A name never posts money by itself (TED-174). Two households with a
+        // parent of the same name -- common enough -- match the payer equally,
+        // and "this one owes exactly that amount" does not say which of them
+        // sent it: the other may have paid ahead, or paid for a sibling.
+        if (runnerUp && top.identity < M.SCORE.PARENT_HANDLE
+            && (top.identity - (Number(runnerUp.identity) || 0)) < s.ambiguousGap) {
+            return out('review', 'Two families match the payer\u2019s name (' + top.familyName + ' / ' + runnerUp.familyName
+                + ') \u2014 the amount alone does not say which one sent it');
         }
 
         // Overpayment guard. A deposit meaningfully larger than the balance is
@@ -2695,9 +2713,13 @@ async function fetchBody(emailId: string): Promise<{ text: string; html: string 
 // from the snapshot the browser publishes, because buildFamilyLedgers() cannot
 // run here. A missing snapshot just means the overpay guardrail sits out.
 async function loadContext(service: ReturnType<typeof createClient>, campId: string) {
-  const [kv, aliasRes, balRes] = await Promise.all([
+  const [kv, famRes, aliasRes, balRes] = await Promise.all([
     service.from("camp_state_kv").select("value")
       .eq("camp_id", campId).eq("key", "campistryMe").maybeSingle(),
+    // Families from their ROWS — the document's copy lags every server-side
+    // write, so a family added or edited since the office last saved the Me
+    // page could not be matched to the money they sent.
+    service.rpc("camp_families_object", { p_camp_id: campId }),
     service.from("payer_aliases")
       .select("family_key, normalized, handle, display_name, kind").eq("camp_id", campId),
     service.from("family_balance_snapshots")
@@ -2705,7 +2727,9 @@ async function loadContext(service: ReturnType<typeof createClient>, campId: str
   ]);
 
   const blob = (kv.data?.value as Record<string, unknown>) ?? {};
-  const families = blob.families ?? {};
+  const families = (!famRes.error && famRes.data && typeof famRes.data === "object")
+    ? famRes.data as Record<string, unknown>
+    : (blob.families ?? {});
   // The roster carries each camper's number; families carry camper NAMES.
   // Neither alone can answer "whose payment is 1234-5678", so both are loaded
   // and joined into an index once.

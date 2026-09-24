@@ -1,0 +1,315 @@
+TAP version 13
+# Subtest: TED-120: Gold's own payment — succeeded, Gold's card, $500, after autopay tried — is recorded
+not ok 1 - TED-120: Gold's own payment — succeeded, Gold's card, $500, after autopay tried — is recorded
+  ---
+  duration_ms: 176.301755
+  type: 'test'
+  location: '/tmp/claude-0/-home-user-daily-camp-schedular/39278441-0cf3-5f6a-bf8e-a51bef67e95d/scratchpad/old92/tests/autopay_confirm_stripe.test.js:50:1'
+  failureType: 'testCodeFailure'
+  error: |-
+    Expected values to be strictly deep-equal:
+    + actual - expected
+    
+      {
+    +   error: 'customerId and a positive amount required'
+    -   recorded: true,
+    -   success: true
+      }
+    
+  code: 'ERR_ASSERTION'
+  name: 'AssertionError'
+  expected:
+    success: true
+    recorded: true
+  actual:
+    error: 'customerId and a positive amount required'
+  operator: 'deepStrictEqual'
+  stack: |-
+    TestContext.<anonymous> (/tmp/claude-0/-home-user-daily-camp-schedular/39278441-0cf3-5f6a-bf8e-a51bef67e95d/scratchpad/old92/tests/autopay_confirm_stripe.test.js:52:12)
+    Test.runInAsyncScope (node:async_hooks:214:14)
+    Test.run (node:internal/test_runner/test:1047:25)
+    Test.start (node:internal/test_runner/test:944:17)
+    startSubtestAfterBootstrap (node:internal/test_runner/harness:296:17)
+  ...
+# Subtest: TED-120: Silver's $500 pasted for Gold is refused, and nothing is recorded
+not ok 2 - TED-120: Silver's $500 pasted for Gold is refused, and nothing is recorded
+  ---
+  duration_ms: 172.139414
+  type: 'test'
+  location: '/tmp/claude-0/-home-user-daily-camp-schedular/39278441-0cf3-5f6a-bf8e-a51bef67e95d/scratchpad/old92/tests/autopay_confirm_stripe.test.js:66:5'
+  failureType: 'testCodeFailure'
+  error: |-
+    {"error":"customerId and a positive amount required"}
+    + actual - expected
+    
+    + undefined
+    - false
+    
+  code: 'ERR_ASSERTION'
+  name: 'AssertionError'
+  expected: false
+  operator: 'strictEqual'
+  stack: |-
+    TestContext.<anonymous> (/tmp/claude-0/-home-user-daily-camp-schedular/39278441-0cf3-5f6a-bf8e-a51bef67e95d/scratchpad/old92/tests/autopay_confirm_stripe.test.js:68:16)
+    Test.runInAsyncScope (node:async_hooks:214:14)
+    Test.run (node:internal/test_runner/test:1047:25)
+    Test.processPendingSubtests (node:internal/test_runner/test:744:18)
+    Test.postRun (node:internal/test_runner/test:1173:19)
+    Test.run (node:internal/test_runner/test:1101:12)
+    async startSubtestAfterBootstrap (node:internal/test_runner/harness:296:3)
+  ...
+# Subtest: TED-120: a payment stamped for another family is refused, and nothing is recorded
+not ok 3 - TED-120: a payment stamped for another family is refused, and nothing is recorded
+  ---
+  duration_ms: 164.797439
+  type: 'test'
+  location: '/tmp/claude-0/-home-user-daily-camp-schedular/39278441-0cf3-5f6a-bf8e-a51bef67e95d/scratchpad/old92/tests/autopay_confirm_stripe.test.js:66:5'
+  failureType: 'testCodeFailure'
+  error: |-
+    {"error":"customerId and a positive amount required"}
+    + actual - expected
+    
+    + undefined
+    - false
+    
+  code: 'ERR_ASSERTION'
+  name: 'AssertionError'
+  expected: false
+  operator: 'strictEqual'
+  stack: |-
+    TestContext.<anonymous> (/tmp/claude-0/-home-user-daily-camp-schedular/39278441-0cf3-5f6a-bf8e-a51bef67e95d/scratchpad/old92/tests/autopay_confirm_stripe.test.js:68:16)
+    Test.runInAsyncScope (node:async_hooks:214:14)
+    Test.run (node:internal/test_runner/test:1047:25)
+    Test.processPendingSubtests (node:internal/test_runner/test:744:18)
+    Test.postRun (node:internal/test_runner/test:1173:19)
+    Test.run (node:internal/test_runner/test:1101:12)
+    async Test.processPendingSubtests (node:internal/test_runner/test:744:7)
+  ...
+# Subtest: TED-120: a typo is refused, and nothing is recorded
+not ok 4 - TED-120: a typo is refused, and nothing is recorded
+  ---
+  duration_ms: 157.96803
+  type: 'test'
+  location: '/tmp/claude-0/-home-user-daily-camp-schedular/39278441-0cf3-5f6a-bf8e-a51bef67e95d/scratchpad/old92/tests/autopay_confirm_stripe.test.js:66:5'
+  failureType: 'testCodeFailure'
+  error: |-
+    {"error":"customerId and a positive amount required"}
+    + actual - expected
+    
+    + undefined
+    - false
+    
+  code: 'ERR_ASSERTION'
+  name: 'AssertionError'
+  expected: false
+  operator: 'strictEqual'
+  stack: |-
+    TestContext.<anonymous> (/tmp/claude-0/-home-user-daily-camp-schedular/39278441-0cf3-5f6a-bf8e-a51bef67e95d/scratchpad/old92/tests/autopay_confirm_stripe.test.js:68:16)
+    Test.runInAsyncScope (node:async_hooks:214:14)
+    Test.run (node:internal/test_runner/test:1047:25)
+    Test.processPendingSubtests (node:internal/test_runner/test:744:18)
+    Test.postRun (node:internal/test_runner/test:1173:19)
+    Test.run (node:internal/test_runner/test:1101:12)
+    async Test.processPendingSubtests (node:internal/test_runner/test:744:7)
+  ...
+# Subtest: TED-120: a payment for another amount is refused, and nothing is recorded
+not ok 5 - TED-120: a payment for another amount is refused, and nothing is recorded
+  ---
+  duration_ms: 169.965071
+  type: 'test'
+  location: '/tmp/claude-0/-home-user-daily-camp-schedular/39278441-0cf3-5f6a-bf8e-a51bef67e95d/scratchpad/old92/tests/autopay_confirm_stripe.test.js:66:5'
+  failureType: 'testCodeFailure'
+  error: |-
+    {"error":"customerId and a positive amount required"}
+    + actual - expected
+    
+    + undefined
+    - false
+    
+  code: 'ERR_ASSERTION'
+  name: 'AssertionError'
+  expected: false
+  operator: 'strictEqual'
+  stack: |-
+    TestContext.<anonymous> (/tmp/claude-0/-home-user-daily-camp-schedular/39278441-0cf3-5f6a-bf8e-a51bef67e95d/scratchpad/old92/tests/autopay_confirm_stripe.test.js:68:16)
+    Test.runInAsyncScope (node:async_hooks:214:14)
+    Test.run (node:internal/test_runner/test:1047:25)
+    Test.processPendingSubtests (node:internal/test_runner/test:744:18)
+    Test.postRun (node:internal/test_runner/test:1173:19)
+    Test.run (node:internal/test_runner/test:1101:12)
+    async Test.processPendingSubtests (node:internal/test_runner/test:744:7)
+  ...
+# Subtest: TED-120: a payment still processing is refused, and nothing is recorded
+not ok 6 - TED-120: a payment still processing is refused, and nothing is recorded
+  ---
+  duration_ms: 164.913974
+  type: 'test'
+  location: '/tmp/claude-0/-home-user-daily-camp-schedular/39278441-0cf3-5f6a-bf8e-a51bef67e95d/scratchpad/old92/tests/autopay_confirm_stripe.test.js:66:5'
+  failureType: 'testCodeFailure'
+  error: |-
+    {"error":"customerId and a positive amount required"}
+    + actual - expected
+    
+    + undefined
+    - false
+    
+  code: 'ERR_ASSERTION'
+  name: 'AssertionError'
+  expected: false
+  operator: 'strictEqual'
+  stack: |-
+    TestContext.<anonymous> (/tmp/claude-0/-home-user-daily-camp-schedular/39278441-0cf3-5f6a-bf8e-a51bef67e95d/scratchpad/old92/tests/autopay_confirm_stripe.test.js:68:16)
+    Test.runInAsyncScope (node:async_hooks:214:14)
+    Test.run (node:internal/test_runner/test:1047:25)
+    Test.processPendingSubtests (node:internal/test_runner/test:744:18)
+    Test.postRun (node:internal/test_runner/test:1173:19)
+    Test.run (node:internal/test_runner/test:1101:12)
+    async Test.processPendingSubtests (node:internal/test_runner/test:744:7)
+  ...
+# Subtest: TED-120: an earlier payment is refused, and nothing is recorded
+not ok 7 - TED-120: an earlier payment is refused, and nothing is recorded
+  ---
+  duration_ms: 167.59983
+  type: 'test'
+  location: '/tmp/claude-0/-home-user-daily-camp-schedular/39278441-0cf3-5f6a-bf8e-a51bef67e95d/scratchpad/old92/tests/autopay_confirm_stripe.test.js:66:5'
+  failureType: 'testCodeFailure'
+  error: |-
+    {"error":"customerId and a positive amount required"}
+    + actual - expected
+    
+    + undefined
+    - false
+    
+  code: 'ERR_ASSERTION'
+  name: 'AssertionError'
+  expected: false
+  operator: 'strictEqual'
+  stack: |-
+    TestContext.<anonymous> (/tmp/claude-0/-home-user-daily-camp-schedular/39278441-0cf3-5f6a-bf8e-a51bef67e95d/scratchpad/old92/tests/autopay_confirm_stripe.test.js:68:16)
+    Test.runInAsyncScope (node:async_hooks:214:14)
+    Test.run (node:internal/test_runner/test:1047:25)
+    Test.processPendingSubtests (node:internal/test_runner/test:744:18)
+    Test.postRun (node:internal/test_runner/test:1173:19)
+    Test.run (node:internal/test_runner/test:1101:12)
+    async Test.processPendingSubtests (node:internal/test_runner/test:744:7)
+  ...
+# Subtest: TED-120: a charge id is refused, and nothing is recorded
+not ok 8 - TED-120: a charge id is refused, and nothing is recorded
+  ---
+  duration_ms: 158.759934
+  type: 'test'
+  location: '/tmp/claude-0/-home-user-daily-camp-schedular/39278441-0cf3-5f6a-bf8e-a51bef67e95d/scratchpad/old92/tests/autopay_confirm_stripe.test.js:66:5'
+  failureType: 'testCodeFailure'
+  error: |-
+    {"error":"customerId and a positive amount required"}
+    + actual - expected
+    
+    + undefined
+    - false
+    
+  code: 'ERR_ASSERTION'
+  name: 'AssertionError'
+  expected: false
+  operator: 'strictEqual'
+  stack: |-
+    TestContext.<anonymous> (/tmp/claude-0/-home-user-daily-camp-schedular/39278441-0cf3-5f6a-bf8e-a51bef67e95d/scratchpad/old92/tests/autopay_confirm_stripe.test.js:68:16)
+    Test.runInAsyncScope (node:async_hooks:214:14)
+    Test.run (node:internal/test_runner/test:1047:25)
+    Test.processPendingSubtests (node:internal/test_runner/test:744:18)
+    Test.postRun (node:internal/test_runner/test:1173:19)
+    Test.run (node:internal/test_runner/test:1101:12)
+    async Test.processPendingSubtests (node:internal/test_runner/test:744:7)
+  ...
+# Subtest: TED-120: Stripe not answering records nothing
+not ok 9 - TED-120: Stripe not answering records nothing
+  ---
+  duration_ms: 165.21277
+  type: 'test'
+  location: '/tmp/claude-0/-home-user-daily-camp-schedular/39278441-0cf3-5f6a-bf8e-a51bef67e95d/scratchpad/old92/tests/autopay_confirm_stripe.test.js:74:1'
+  failureType: 'testCodeFailure'
+  error: |-
+    The input did not match the regular expression /did not answer/. Input:
+    
+    'customerId and a positive amount required'
+    
+  code: 'ERR_ASSERTION'
+  name: 'AssertionError'
+  expected:
+  actual: 'customerId and a positive amount required'
+  operator: 'match'
+  stack: |-
+    TestContext.<anonymous> (/tmp/claude-0/-home-user-daily-camp-schedular/39278441-0cf3-5f6a-bf8e-a51bef67e95d/scratchpad/old92/tests/autopay_confirm_stripe.test.js:76:12)
+    Test.runInAsyncScope (node:async_hooks:214:14)
+    Test.run (node:internal/test_runner/test:1047:25)
+    Test.processPendingSubtests (node:internal/test_runner/test:744:18)
+    Test.postRun (node:internal/test_runner/test:1173:19)
+    Test.run (node:internal/test_runner/test:1101:12)
+    async Test.processPendingSubtests (node:internal/test_runner/test:744:7)
+  ...
+# Subtest: TED-120: the database refusing (booked for someone else) is passed on in words
+not ok 10 - TED-120: the database refusing (booked for someone else) is passed on in words
+  ---
+  duration_ms: 159.119307
+  type: 'test'
+  location: '/tmp/claude-0/-home-user-daily-camp-schedular/39278441-0cf3-5f6a-bf8e-a51bef67e95d/scratchpad/old92/tests/autopay_confirm_stripe.test.js:80:1'
+  failureType: 'testCodeFailure'
+  error: |-
+    The input did not match the regular expression /already booked for another family/. Input:
+    
+    'customerId and a positive amount required'
+    
+  code: 'ERR_ASSERTION'
+  name: 'AssertionError'
+  expected:
+  actual: 'customerId and a positive amount required'
+  operator: 'match'
+  stack: |-
+    TestContext.<anonymous> (/tmp/claude-0/-home-user-daily-camp-schedular/39278441-0cf3-5f6a-bf8e-a51bef67e95d/scratchpad/old92/tests/autopay_confirm_stripe.test.js:82:12)
+    Test.runInAsyncScope (node:async_hooks:214:14)
+    Test.run (node:internal/test_runner/test:1047:25)
+    Test.processPendingSubtests (node:internal/test_runner/test:744:18)
+    Test.postRun (node:internal/test_runner/test:1173:19)
+    Test.run (node:internal/test_runner/test:1101:12)
+    async Test.processPendingSubtests (node:internal/test_runner/test:744:7)
+  ...
+# Subtest: TED-120: a charge already answered is not answered again
+not ok 11 - TED-120: a charge already answered is not answered again
+  ---
+  duration_ms: 161.370768
+  type: 'test'
+  location: '/tmp/claude-0/-home-user-daily-camp-schedular/39278441-0cf3-5f6a-bf8e-a51bef67e95d/scratchpad/old92/tests/autopay_confirm_stripe.test.js:85:1'
+  failureType: 'testCodeFailure'
+  error: |-
+    The input did not match the regular expression /already answered/. Input:
+    
+    'customerId and a positive amount required'
+    
+  code: 'ERR_ASSERTION'
+  name: 'AssertionError'
+  expected:
+  actual: 'customerId and a positive amount required'
+  operator: 'match'
+  stack: |-
+    TestContext.<anonymous> (/tmp/claude-0/-home-user-daily-camp-schedular/39278441-0cf3-5f6a-bf8e-a51bef67e95d/scratchpad/old92/tests/autopay_confirm_stripe.test.js:87:12)
+    Test.runInAsyncScope (node:async_hooks:214:14)
+    Test.run (node:internal/test_runner/test:1047:25)
+    Test.processPendingSubtests (node:internal/test_runner/test:744:18)
+    Test.postRun (node:internal/test_runner/test:1173:19)
+    Test.run (node:internal/test_runner/test:1101:12)
+    async Test.processPendingSubtests (node:internal/test_runner/test:744:7)
+  ...
+# Subtest: TED-120: someone who is not the camp's owner or an admin is refused before Stripe is asked
+ok 12 - TED-120: someone who is not the camp's owner or an admin is refused before Stripe is asked
+  ---
+  duration_ms: 163.819417
+  type: 'test'
+  ...
+1..12
+# tests 12
+# suites 0
+# pass 1
+# fail 11
+# cancelled 0
+# skipped 0
+# todo 0
+# duration_ms 2071.181122

@@ -410,6 +410,11 @@
                 ? app1.divisionOrder
                 : (Array.isArray(app1.manualColumnOrder) ? app1.manualColumnOrder : []);
             camp.roster = app1.camperRoster || {};
+            // Every call Lite makes that names a camper carries their number too
+            // (campistry_camper_id_rpc.js). Lite does not use the staff pages'
+            // local settings, so it hands the lookup the roster it just read —
+            // the full one, not the "here today" filter below.
+            window.__camperIdRoster = camp.roster;
             // WHO IS ACTUALLY HERE. A counsellor's bunk list, the medication
             // list and every head count on this page were showing campers who
             // have not arrived yet, because `unenrolled` is a hand-set flag and
@@ -606,8 +611,11 @@
         const fresh = await loadHealth(true);
         const hd = Object.assign({ dispensingLog: [], sickVisits: [], doctorVisits: [], bedwettingLog: [], medicalForms: {} }, fresh);
         if (!Array.isArray(hd.dispensingLog)) hd.dispensingLog = [];
+        const rc = (camp.rosterAll || camp.roster || {})[camperName] || {};
         hd.dispensingLog.push({
             camperName, medication, status: 'Given',
+            // The number identifies the child; the name is for reading.
+            camperId: /^\d+$/.test(String(rc.camperId || '')) ? Number(rc.camperId) : null,
             nurse: userName || 'Staff',
             timestamp: new Date().toISOString(),
             date: healthTodayISO(), time: healthNowTime()
@@ -636,7 +644,7 @@
             try {
                 const { data, error } = await window.supabase
                     .from('link_messages')
-                    .select('id,thread_id,direction,parent_name,parent_email,camper_name,subject,body,read,archived,important,hidden_for_admin,created_at')
+                    .select('id,thread_id,direction,parent_name,parent_email,camper_name,person_id,subject,body,read,archived,important,hidden_for_admin,created_at')
                     .eq('camp_id', campId).order('created_at', { ascending: true }).limit(500);
                 if (error) throw error;
                 // Exclude anything hidden from the admin/staff inbox (soft delete).
@@ -672,6 +680,7 @@
             id, camp_id: campId, thread_id: opts.threadId || id, direction: 'out',
             parent_name: opts.parentName || '', parent_email: opts.parentEmail || '',
             camper_name: opts.camperName || null, subject: opts.subject || '',
+            ...(/^\d+$/.test(String(opts.camperId == null ? '' : opts.camperId)) ? { person_id: Number(opts.camperId) } : {}),
             body: opts.body || '', channels: ['app'], read: false
         };
         const { error } = await window.supabase.from('link_messages').insert(row);
@@ -4441,7 +4450,7 @@
                 btn.disabled = true; btn.textContent = 'Saving…';
                 try {
                     await logMedGiven(btn.dataset.giveName, btn.dataset.giveMed);
-                    toast(btn.dataset.giveMed + ' given to ' + btn.dataset.giveName);
+                    toast(btn.dataset.giveMed + ' given to ' + _lbl(btn.dataset.giveName));
                     rerender();
                 } catch (e) {
                     btn.disabled = false; btn.textContent = 'Give';
@@ -4478,7 +4487,7 @@
         if (!chips.includes(healthDivision)) healthDivision = 'All';
 
         const withMeds = Object.entries(camp.roster || {})
-            .map(([n, c]) => ({ name: n, ...c }))
+            .map(([n, c]) => ({ ...c, name: n }))   // the roster KEY identifies; c.name is only the display name
             .filter(c => camperMeds(c).length);
         const totalDoses = withMeds.reduce((s, c) => s + camperMeds(c).length, 0);
         const givenToday = gmap.size;
@@ -4560,7 +4569,7 @@
 
         if (q) {
             const hits = Object.entries(camp.roster || {})
-                .map(([n, c]) => ({ name: n, ...c }))
+                .map(([n, c]) => ({ ...c, name: n }))   // the roster KEY identifies; c.name is only the display name
                 .filter(c => meCamperMatches(c, q))
                 .sort((a, b) => a.name.localeCompare(b.name)).slice(0, 60);
             body.innerHTML = (hits.length ? `<div class="lite-section-label">${hits.length} match${hits.length === 1 ? '' : 'es'}</div>`
@@ -4637,7 +4646,7 @@
         const map = new Map();
         (linkMsgs || []).forEach(m => {
             const key = m.thread_id || ((m.parent_name || '') + '|' + (m.camper_name || ''));
-            if (!map.has(key)) map.set(key, { key, parentName: m.parent_name || '', parentEmail: m.parent_email || '', camperName: m.camper_name || '', msgs: [] });
+            if (!map.has(key)) map.set(key, { key, parentName: m.parent_name || '', parentEmail: m.parent_email || '', camperName: m.camper_name || '', camperId: m.person_id != null ? m.person_id : null, msgs: [] });
             const t = map.get(key);
             t.msgs.push(m);
             if (m.parent_name && !t.parentName) t.parentName = m.parent_name;
@@ -4834,7 +4843,7 @@
             if (!text) return;
             sendBtn.disabled = true; sendBtn.textContent = 'Sending…';
             try {
-                await sendLinkMessage({ threadId: t.key.includes('|') ? undefined : t.key, parentName: t.parentName, parentEmail: t.parentEmail, camperName: t.camperName, subject: t.last.subject ? ('Re: ' + t.last.subject.replace(/^Re:\s*/i, '')) : 'Message', body: text });
+                await sendLinkMessage({ threadId: t.key.includes('|') ? undefined : t.key, parentName: t.parentName, parentEmail: t.parentEmail, camperName: t.camperName, camperId: t.camperId, subject: t.last.subject ? ('Re: ' + t.last.subject.replace(/^Re:\s*/i, '')) : 'Message', body: text });
                 toast('Reply sent');
                 closeSheet();
                 paintLinkThreads();
@@ -4872,7 +4881,7 @@
             const c = camp.roster[name]; if (!c) return;
             if (!(c.parent1Name || c.parent1Email)) return;
             seen.add(name);
-            out.push({ camperName: name, parentName: c.parent1Name || '', parentEmail: c.parent1Email || '' });
+            out.push({ camperName: name, camperId: c.camperId != null ? c.camperId : null, parentName: c.parent1Name || '', parentEmail: c.parent1Email || '' });
         }));
         return out;
     }
@@ -4992,9 +5001,9 @@
             // One message per parent; the form token carries that camper's name.
             for (const t of targets) {
                 let body = baseBody;
-                if (attach.form) body += `\n\n[[form:${attach.form.id}:${t.camperName || ''}]]`;
+                if (attach.form) body += `\n\n[[form:${attach.form.id}:${t.camperName || ''}:${t.camperId != null ? t.camperId : ''}]]`;
                 if (attach.list) body += `\n\n[[list:${attach.list.id}]]`;
-                await sendLinkMessage({ parentName: t.parentName, parentEmail: t.parentEmail, camperName: t.camperName, subject: subj, body });
+                await sendLinkMessage({ parentName: t.parentName, parentEmail: t.parentEmail, camperName: t.camperName, camperId: t.camperId, subject: subj, body });
             }
             toast(targets.length === 1 ? ('Message sent to ' + (targets[0].parentName || targets[0].camperName))
                 : ('Sent to ' + targets.length + ' parents'));

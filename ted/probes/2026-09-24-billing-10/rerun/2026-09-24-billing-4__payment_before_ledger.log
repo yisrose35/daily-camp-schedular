@@ -1,0 +1,4 @@
+record $300 check: {"success": true, "familiesDeleted": 0, "paymentsDeleted": 0, "familiesUpserted": 0, "paymentsUpserted": 1}
+after first render: ledger balance 700.00 (should be 700)
+  autopay due 1 Jun: {"index": 0, "amount": 350.00, "dueDate": "2026-06-01", "remaining": 2}
+  all payments posted? (parent-side completeness): t

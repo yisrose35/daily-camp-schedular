@@ -100,8 +100,19 @@ serve(async (req) => {
       return json({ success: false, error: `Could not verify the payment (HTTP ${listResp.status}).` }, 200);
     }
     const txns: Record<string, any>[] = Array.isArray(list) ? list : (Array.isArray(list?.transactions) ? list.transactions : []);
-    // Prefer a transaction whose recorded key matches; fall back to the newest.
-    const tx = txns.find((t) => String(t?.transaction_details?.key || "") === String(key)) || txns[0];
+    // Only THIS link's transaction (TED-072). It used to fall back to the
+    // newest transaction on the camp's whole account, so a family could be
+    // credited with another family's payment. A transaction that names a
+    // different key is never taken. One that names no key at all is taken only
+    // when it is the single answer to this key's own lookup AND is for exactly
+    // this link's amount; anything less certain waits as "pending".
+    const keyOf = (t: Record<string, any>) => String(t?.transaction_details?.key || t?.key || "");
+    let tx = txns.find((t) => keyOf(t) === String(key));
+    if (!tx && txns.length === 1 && !keyOf(txns[0])) {
+      const only = txns[0];
+      const amt = Number(only?.amount_details?.amount ?? only?.amount ?? NaN);
+      if (pending.amount != null && Math.abs(amt - Number(pending.amount)) < 0.005) tx = only;
+    }
 
     if (!tx) {
       // No transaction yet — the parent may have abandoned the page, or Banquest
@@ -147,7 +158,7 @@ serve(async (req) => {
       // holds the transaction ledger the balance is recomputed from, so losing
       // that write could erase a POS sale. Locked RPCs now, one call each.
       let saveFail: string | null = null;
-      if (pending.camper_name) {
+      if (pending.person_id != null || pending.camper_name) {
         // Canteen auto-reload card-save: the token lives on the camper's
         // autoReload block (campistrySnacks.accounts[camper].autoReload),
         // mirroring the Cardknox canteen_autoreload_setup path. A SHALLOW merge,
@@ -155,7 +166,7 @@ serve(async (req) => {
         // survives.
         const { data: merged, error: mergeErr } = await service.rpc("merge_canteen_autoreload_card", {
           p_camp_id: campId,
-          p_camper: String(pending.camper_name),
+          p_camper_id: pending.person_id ?? null, p_camper: String(pending.camper_name ?? ""),
           p_fields: {
             byopProcessor: "banquest",
             byopCustomerRef: token,
@@ -249,7 +260,7 @@ serve(async (req) => {
     if (pending.purpose === "canteen") {
       const creditRes = await service.rpc("credit_canteen_balance_from_processor", {
         p_camp_id: campId,
-        p_camper_name: pending.camper_name,
+        p_camper_id: pending.person_id ?? null, p_camper_name: String(pending.camper_name ?? ""),
         p_amount: amount,
         p_processor_key: "banquest",
         p_external_transaction_id: referenceNumber,

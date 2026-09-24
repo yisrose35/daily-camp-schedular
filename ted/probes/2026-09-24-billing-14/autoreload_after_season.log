@@ -1,0 +1,23 @@
+SETUP: Avi (#7): $30 topped up by card; Auto-Reload on (below $5 → add $20), saved card cus_avi, no Active dates. Camp is over.
+
+A1. The office runs Refund All (Snacks) to return every child's money
+    Refund All: $30, refunded 1, failed 0, skipped 0 [{"camperId":7,"camperName":"Avi","refunded":30}]; money back $30; Avi's wallet $0
+
+A2. The auto-reload job's next run (the cron, every 30 minutes)
+    runner: Avi threshold $20 → charged
+    charges to parents' cards so far: $20 from cus_avi
+A3. Stripe confirms it → the real webhook: Avi's wallet $20
+  BAD A2 after the season's Refund All, the parent's card is not charged again   → 1 charge(s): $20 from cus_avi
+
+A4. The office notices $20 on Avi's wallet and runs Refund All again; the job runs the next day
+    Refund All: $20, refunded 1, failed 0, skipped 0 [{"camperId":7,"camperName":"Avi","refunded":20}]; money back $50; Avi's wallet $0
+    runner (next day): Avi threshold $20 → charged
+    charges to the parent's card: $20 from cus_avi, $20 from cus_avi; Avi's wallet $20
+
+A5. Bea (#8): WEEKLY reload on today's weekday, $25, no dates; wallet $0 after Refund All
+    week 1 (2026-09-24): Bea schedule $25 → charged
+    week 2 (2026-10-01): Bea schedule $25 → charged
+    week 3 (2026-10-08): Bea schedule $25 → charged
+  BAD A5 after camp, a weekly reload does not keep charging   → Bea's parent charged 3 time(s): $25, $25, $25
+
+2 BAD

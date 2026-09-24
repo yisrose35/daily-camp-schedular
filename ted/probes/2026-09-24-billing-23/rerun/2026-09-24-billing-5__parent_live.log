@@ -1,0 +1,9 @@
+start                              office 1000.00 | parent ledger=true balance=1000
+shop bills $40                     office 1040.00 | parent ledger=true balance=1040
+shop order cancelled               office 1000.00 | parent ledger=true balance=1000
+Zelle $400                         office 600.00 | parent ledger=true balance=600
+autopay $300 (pi_1)                office 300.00 | parent ledger=true balance=300
+  webhook payment row for pi_1: {"count": 1, "success": true, "updated": false, "alreadyRecorded": true}
+after the payment row              office 300.00 | parent ledger=true balance=300
+  webhook refund $50 of pi_1: {"amount": 50.00, "balance": 350.00, "entryId": "le_pay_re_1", "success": true, "familyKey": "gold"}
+after the refund                   office 350.00 | parent ledger=true balance=350

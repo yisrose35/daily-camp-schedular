@@ -1,0 +1,10 @@
+  dispute | Stripe answers 500               → webhook answers HTTP 200 (Stripe re-sends only on non-2xx) | chargebacks posted: 0 | log: [stripe-webhook] Event: charge.dispute.created (evt_1)
+  refund  | Stripe answers 500               → webhook answers HTTP 200 | refunds posted: 0 | logs: []
+  dispute | Stripe answers 429 (rate limit)  → webhook answers HTTP 200 (Stripe re-sends only on non-2xx) | chargebacks posted: 0 | log: [stripe-webhook] Event: charge.dispute.created (evt_1)
+  refund  | Stripe answers 429 (rate limit)  → webhook answers HTTP 200 | refunds posted: 0 | logs: []
+  dispute | the connection drops             → webhook answers HTTP 200 (Stripe re-sends only on non-2xx) | chargebacks posted: 0 | log: [stripe-webhook] Event: charge.dispute.created (evt_1)
+  refund  | the connection drops             → webhook answers HTTP 200 | refunds posted: 0 | logs: []
+  dispute | (control) Stripe answers         → webhook answers HTTP 200 (Stripe re-sends only on non-2xx) | chargebacks posted: 1 | log: [stripe-webhook] Event: charge.dispute.created (evt_1)
+  refund  | (control) Stripe answers         → webhook answers HTTP 200 | refunds posted: 1 | logs: []
+pass 8
+fail 0

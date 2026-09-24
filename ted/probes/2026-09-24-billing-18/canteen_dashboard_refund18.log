@@ -1,0 +1,11 @@
+SETUP: $20 top-ups by card → Avi $20.00, Bina $20.00
+
+C1. the $20 top-up for Avi is refunded in the Stripe Dashboard
+    webhook HTTP 200; Avi's wallet $20.00; camp notices 0; platform emails 0
+  BAD C1 the refunded $20 comes off Avi's wallet (or someone is told)   → the parent has the $20 back on their card, Avi can still spend $20.00, nobody told
+
+C2. Bina's $20 top-up is disputed with the bank
+    webhook HTTP 200; Bina's wallet $20.00; camp notices 0; platform emails 0 (the generic "a parent disputed a charge" risk email)
+  BAD C2 the disputed $20 comes off Bina's wallet, or the camp is told   → Bina can still spend $20.00; camp notices 0
+
+2 BAD

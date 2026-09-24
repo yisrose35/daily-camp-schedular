@@ -73,8 +73,8 @@
                     id: 'access',
                     title: 'Set per-section access',
                     detail: 'A separate screen from inviting: which apps and sections a role or person can actually open, not just their job title — a bookkeeper who sees Billing but not Payroll, say. Skip it and everyone keeps full edit access to every app they were given.',
-                    where: 'Dashboard → Camp Setup → Team & Access → What each job can open',
-                    href: 'campistry_team_access.html'
+                    where: 'Dashboard → Camp Setup → Team & Access Setup → Roles',
+                    href: 'team_access_setup.html'
                 }
             ]
         },

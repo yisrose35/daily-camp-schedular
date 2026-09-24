@@ -1,0 +1,57 @@
+postgres up with 129 migrations applied
+
+The rule (campistry_card_fees.refundShare): a refund of $1,000 of a $1,030 payment returns $29.13; of all $3,090 of a $3,090 payment: $90
+
+S1. Silver paid $1,030 by card ($1,000 + $30 surcharge). Office: Direct Refund $1,000
+    before: Silver owes $0
+    window: "…This family paid a card surcharge ($30 still kept). The card brands require its share to go back with any refund: refund…"
+    preview before pressing: "Balance owed after this refund: $970.87 (currently $0) — $29.13 of the refund is card surcharge, which comes off their bill too"
+    toast: ["✓ Refunded $1,000 to card/bank for Silver — $29.13 of it was the card surcharge, taken off their bill"]
+    Stripe: re_1 $1000.0000000000000000 succeeded; credits on Silver's bill: $29.13; Silver now owes $970.87
+  ok  S1 $1,000 goes back to the card once; $29.13 of the fee comes off the bill; Silver owes $970.87   → owes 970.87
+  ok  S1b the preview before pressing said what Silver would owe afterwards   → preview "Balance owed after this refund: $970.87 (currently $0) — $29.13 of the refund is card surcharge, which comes off their bill too", afterwards $970.87
+
+S2. Bronze: $500 card deposit (no surcharge) 60 days ago; $3,090 by credit card 10 days ago ($3,000 + $90 surcharge). Withdraws; the deposit is kept; office refunds the whole $3,090 payment
+    before: Bronze owes $0
+    toast: ["✓ Refunded $3,090 to card/bank for Bronze — $90 of it was the card surcharge, taken off their bill"]
+    Stripe: deposit none; balance payment re_2 $3090.0000000000000000 succeeded; credits on Bronze's bill: $90; Bronze now owes $3000
+  ok  S2 the surcharged $3,090 payment is refunded in full, so its whole $90 surcharge comes off the bill (Bronze keeps none of it)   → the card got $3090 back from the surcharged payment, but $0.00 of its surcharge is still on Bronze's bill
+
+S3. Copper: $1,030 by credit card 20 days ago ($1,000 + $30 surcharge), then $2,000 by bank 5 days ago. Office refunds $500
+    before: Copper owes $0
+    toast: ["✓ Refunded $500 to card/bank for Copper"]
+    Stripe: card payment none; bank payment re_3 $500.0000000000000000 succeeded; credits on Copper's bill: none; Copper now owes $500
+  ok  S3 the $500 came from the bank payment (newest first), so none of the card surcharge is returned   → card payment refunds: none; fee credits: none
+
+S4. Slate paid $1,030 by card ($1,000 + $30 surcharge). Office refunds $1,000; three days later Stripe FAILS that refund
+    toast: ["✓ Refunded $1,000 to card/bank for Slate — $29.13 of it was the card surcharge, taken off their bill"]; Slate owes $970.87; credits $29.13
+    refund.failed → the real webhook → HTTP 200; Stripe: re_4 $1000.0000000000000000 failed
+    Slate's account after the put-back: owes $0 (before the refund: $0 — nothing reached the card); credits $29.13
+  ok  S4 after the failed refund is put back, Slate is where it was before the refund (owes $0, the whole $30 surcharge still on the bill)   → Slate shows a credit of $0.00 — the surcharge share of a refund that never happened
+    the office refunds $1,000 again: ["✓ Refunded $1,000 to card/bank for Slate — $29.13 of it was the card surcharge, taken off their bill"]; Stripe: re_4 $1000.0000000000000000 failed, re_5 $1000.0000000000000000 succeeded; credits $29.13 + $29.13; Slate owes $970.87
+  ok  S4b after the second (successful) $1,000 refund, Slate owes what one refund of $1,000 leaves ($970.87)   → fee credits $29.13 + $29.13; charges back on the bill: le_chg_cfr_undo_cfr_1790246678554_0 $29.13; owes $970.87
+    Stripe re-delivers the first failure → HTTP 200; Slate owes $970.87
+  ok  S4c a re-delivered failure changes nothing   → owes $970.87
+
+S5. Pewter: $30 surcharge on $1,000 (30 days ago), paid $1,030 by card that day, then $500 more by card 3 days ago. Office refunds $800 (Billing takes it newest-first: $500 from the second payment, $300 from the first)
+    before: Pewter owes $0
+    preview before pressing: "Balance owed after this refund: $791.26 (currently $0) — $8.74 of the refund is card surcharge, which comes off their bill too"
+    toast: ["✓ Refunded $800 to card/bank for Pewter — $8.74 of it was the card surcharge, taken off their bill"]
+    Stripe: first re_7 $300.0000000000000000 succeeded; second re_6 $500.0000000000000000 succeeded; credits: $8.74; Pewter owes $791.26
+  ok  S5 the preview matches the result   → preview $791.26, result $791.26
+  ok  S5b only the $300 from the surcharged payment returns fee ($8.74 by the card-fee rule)   → credits $8.74
+
+S6. Tin paid $1,030 by card ($1,000 + $30). Three partial refunds: $300, $300, then the last $430
+    $300: ["✓ Refunded $300 to card/bank for Tin — $8.74 of it was the card surcharge, taken off their bill"]; credits $8.74; owes $291.26
+    $300: ["✓ Refunded $300 to card/bank for Tin — $8.74 of it was the card surcharge, taken off their bill"]; credits $8.74 + $8.74; owes $582.52
+    $430: ["✓ Refunded $430 to card/bank for Tin — $12.52 of it was the card surcharge, taken off their bill"]; credits $8.74 + $8.74 + $12.52; owes $1000
+  ok  S6 the three refunds return exactly the $30 fee between them; Tin owes $1,000 (the tuition, nothing paid)   → fee credits total $30.00; owes $1000; Stripe re_8 $300.0000000000000000 succeeded, re_9 $300.0000000000000000 succeeded, re_10 $430.0000000000000000 succeeded
+
+S7. The camp switches Card Fees to a flat $5 "Online payment fee" (a convenience fee — the rules allow it on bank payments too)
+    zinc: window "Add card surcharge×Amount being paid by card ($)Fee $5 — total with fee $1,005Card on file: none that will be charged — the family's default payment method is a bank account, so Charge Card and autopay would take the fee by bank debit. If the family ends up pa"
+        toast ["✓ Card fee of $5 added to Zinc"]; zinc's fee charges: fee $5
+    nickel: window "Add card surcharge×Amount being paid by card ($)Fee $5 — total with fee $1,005Card on file: Visa ···· 4444 (credit). If the family ends up paying another way, remove this fee from their bill.Paying online adds a $5 fee per payment.CancelSave"
+        toast ["✓ Card fee of $5 added to Nickel"]; nickel's fee charges: fee $5
+page errors: []
+
+0 BAD

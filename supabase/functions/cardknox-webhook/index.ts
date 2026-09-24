@@ -157,8 +157,11 @@ serve(async (req) => {
     }
     const webhookPin = credResult.credentials?.webhookPin;
     if (!webhookPin) {
-      console.error(`[cardknox-webhook] Camp ${campId} has no webhookPin on file — cannot verify`);
-      return text("Not configured", 200);
+      // NOT 2xx (TED-087): a 200 tells Sola the notice was delivered, and the
+      // payment would never be recorded. An error keeps Sola retrying until
+      // the camp's PIN is on file.
+      console.error(`[cardknox-webhook] Camp ${campId} has no webhookPin on file — cannot verify; asking Sola to retry`);
+      return text("Not configured", 503);
     }
     if (!verifySignature(rawBody, webhookPin, signature)) {
       console.error(`[cardknox-webhook] Signature mismatch for camp ${campId}`);
@@ -169,21 +172,45 @@ serve(async (req) => {
     // Mutable: the amount-fallback branch below fills this in from the
     // matched intent's own reference when Sola's payload doesn't carry one.
     let xInvoice = fields.get("xInvoice") || fields.get("xinvoice") || "";
+    // Whether Sola named a reference at all. Only a payload WITHOUT one may be
+    // matched by amount (TED-071): one that names a reference we do not have
+    // is somebody else's transaction, not a guess to be made.
+    const sentReference = !!xInvoice;
     const xRefNum = fields.get("xRefNum") || fields.get("xrefnum") || "";
     const xResult = fields.get("xResponseResult") || fields.get("xresponseresult") || "";
     const xAmount = fields.get("xAmount") || fields.get("xamount") || "";
     const xToken = fields.get("xToken") || fields.get("xtoken") || "";
     const xMaskedCardNumber = fields.get("xMaskedCardNumber") || fields.get("xmaskedcardnumber") || "";
 
-    type IntentMatch = { success: boolean; campId?: string; kind?: string; familyKey?: string; familyName?: string; camperName?: string; enrollmentId?: string; amountCents?: number; status?: string };
+    type IntentMatch = { success: boolean; campId?: string; kind?: string; familyKey?: string; familyName?: string; camperName?: string; camperId?: number | null; enrollmentId?: string; amountCents?: number; status?: string };
     let intent: IntentMatch | null = null;
 
     if (xInvoice) {
       const { data } = await service.rpc("get_cardknox_checkout_intent", { p_reference: xInvoice });
-      if (data?.success) intent = data;
+      if (data?.success) {
+        intent = data as IntentMatch;
+        // get_cardknox_checkout_intent does not return the camper's number, so
+        // it is read from the intent row itself (person_id, stamped when the
+        // intent was created). The number decides who is credited below; the
+        // name is the fallback for an intent written before numbers.
+        const { data: pidRow } = await service.from("cardknox_checkout_intents")
+          .select("person_id").eq("reference", xInvoice).maybeSingle();
+        const pid = pidRow?.person_id;
+        intent.camperId = pid != null && /^\d+$/.test(String(pid)) ? Number(pid) : null;
+      }
     }
 
-    if (!intent) {
+    // A transaction Campistry itself already recorded — the office's "Charge
+    // card", autopay, a deposit — is never a checkout to be matched (TED-071):
+    // matching it by amount would credit a pending checkout of the same size.
+    let alreadyOurs = false;
+    if (!intent && xRefNum) {
+      const { data: known } = await service.from("processor_transactions")
+        .select("id").eq("processor_key", "cardknox").eq("external_transaction_id", xRefNum).limit(1);
+      alreadyOurs = Array.isArray(known) && known.length > 0;
+    }
+
+    if (!intent && !sentReference && !alreadyOurs) {
       // Sola's hosted-checkout webhook (confirmed via live testing,
       // 2026-09-08) never echoes xInvoice back at all — its payload is a
       // fixed small set of fields (xAmount/xEnteredDate/xMaskedCardNumber/
@@ -227,7 +254,7 @@ serve(async (req) => {
         xInvoice = row.reference;
         intent = {
           success: true, campId: row.camp_id, kind: row.kind, familyKey: row.family_key,
-          familyName: row.family_name, camperName: row.camper_name,
+          familyName: row.family_name, camperName: row.camper_name, camperId: row.person_id ?? null,
           // Sola does not echo xInvoice back, so this amount-matched path is
           // the NORMAL one for a hosted-checkout payment. Leaving this out
           // would resolve a registration deposit to an intent with no
@@ -238,6 +265,20 @@ serve(async (req) => {
         };
       } else if (candidates && candidates.length > 1) {
         console.error(`[cardknox-webhook] Ambiguous match for camp ${campId}: ${candidates.length} pending intents at $${xAmount}, xRefNum=${xRefNum} — refusing to guess, needs manual reconciliation`);
+        // Still refuse to guess — but put it in front of the office, not only
+        // in a log nobody reads (TED-071): a family paid and is not credited.
+        try {
+          await service.from("notifications").upsert({
+            camp_id: campId, source: "payment_unmatched", source_id: "sola:" + (xRefNum || xAmount),
+            title: "A card payment needs matching to a family",
+            body: `Sola reported an approved payment of $${xAmount}` + (xMaskedCardNumber ? ` (card ${xMaskedCardNumber})` : "")
+              + ` (transaction ${xRefNum || "unknown"}), but ${candidates.length} families have a checkout open for that amount,`
+              + " so it was not credited automatically. Look it up in Sola and record it on the right family in Billing.",
+            link_target: "campistry_me.html",
+          }, { onConflict: "camp_id,source,source_id", ignoreDuplicates: true });
+        } catch (e) {
+          console.error(`[cardknox-webhook] could not raise the unmatched-payment notice: ${(e as Error).message}`);
+        }
         return text("ok", 200);
       }
     }
@@ -464,7 +505,7 @@ serve(async (req) => {
       const arLast4 = (xMaskedCardNumber || "").replace(/[^0-9]/g, "").slice(-4);
       const { data: merged, error: mergeErr } = await service.rpc("merge_canteen_autoreload_card", {
         p_camp_id: campId,
-        p_camper: String(intent.camperName || ""),
+        p_camper_id: intent.camperId ?? null, p_camper: String(intent.camperName || ""),
         p_fields: {
           byopProcessor: "cardknox",
           byopCustomerRef: vaulted,
@@ -502,7 +543,7 @@ serve(async (req) => {
     if (intent.kind === "canteen_deposit") {
       const { data: creditResult, error: creditErr } = await service.rpc("credit_canteen_balance_from_processor", {
         p_camp_id: campId,
-        p_camper_name: intent.camperName,
+        p_camper_id: intent.camperId ?? null, p_camper_name: intent.camperName,
         p_amount: intent.amountCents / 100,
         p_processor_key: "cardknox",
         p_external_transaction_id: xRefNum,
@@ -529,10 +570,12 @@ serve(async (req) => {
       // token or label the office saved deliberately). The writes are two
       // locked calls — see migration 168.
       let saved = false;
-      const cur = await service.from("camp_state_kv").select("value")
-        .eq("camp_id", campId).eq("key", "campistryMe").maybeSingle();
-      const meNow: Record<string, any> = (cur.data && cur.data.value && typeof cur.data.value === "object") ? cur.data.value : {};
-      const f = intent.familyKey ? ((meNow.families || {})[intent.familyKey] || null) : null;
+      // The family ROW: whether a card token is already vaulted is decided from
+      // what the writers wrote, not the document's lagging copy of it.
+      const famRes = intent.familyKey
+        ? await service.rpc("camp_family", { p_camp_id: campId, p_family_key: intent.familyKey })
+        : { data: null, error: null };
+      const f = (famRes.data && typeof famRes.data === "object") ? famRes.data as Record<string, any> : null;
       if (!f) {
         console.error(`[cardknox-webhook] Family ${intent.familyKey} gone for camp ${campId} — payment ${xRefNum} not recorded`);
       } else {
@@ -603,7 +646,7 @@ serve(async (req) => {
     await sendReceipt({
       campId, ref: String(xRefNum || ""), amount: intent.amountCents / 100,
       familyKey: intent.familyKey || null,
-      camperName: intent.kind === "canteen_deposit" ? intent.camperName : null,
+      camperId: intent.kind === "canteen_deposit" ? (intent.camperId ?? null) : null, camperName: intent.kind === "canteen_deposit" ? intent.camperName : null,
       what: intent.kind === "canteen_deposit" ? "Canteen funds" : "Camp payment",
       method: "Card",
     });

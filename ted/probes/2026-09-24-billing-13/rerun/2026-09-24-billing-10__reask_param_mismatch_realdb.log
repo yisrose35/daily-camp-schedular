@@ -1,0 +1,9 @@
+1. Refund All: Stripe refunds Avi's $20, the answer is lost → "Stripe did not answer, so this child's refund may have gone through — check the Stripe dashboard; it is asked
+   money back to the parent $20.0000000000000000 | wallet $0.00 | holds [open $20.00]
+2. ten minutes later, Refund All again; Stripe rate-limits the PaymentIntent lookup once (429) → {"totalRefunded":0,"refundedCount":0,"skippedCount":0,"failedCount":1,"details":[{"camperId":7,"camperName":"Avi","refunded":0,"error":"An earlier refund of $20.00 for this child has not been confirme
+   money back to the parent $20.0000000000000000 | wallet $0.00 | holds [open $20.00]
+   Refund lines on Avi's canteen ledger: 0
+V1. Refund All refunds Avi's $50 (his whole $50 top-up); the answer is lost → money back to the parent $50.0000000000000000 (pi_top $50.00) | wallet $0.00 | holds [open $50.00]
+V2. Avi is topped up $30 more (a second payment); wallet now shows $30 → money back to the parent $50.0000000000000000 (pi_top $50.00) | wallet $30.00 | holds [open $50.00]
+V3. the office refunds Avi's $30; Stripe rate-limits the lookup once (429) → HTTP 500 {"error":"Too many requests"}
+    money back to the parent $50.0000000000000000 (pi_top $50.00) | wallet $30.00 | holds [open $50.00]

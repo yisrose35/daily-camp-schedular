@@ -1,0 +1,6 @@
+F1 Refund All → refunded $40 ([{"camperId":7,"camperName":"Avi Katz","refunded":40}])
+   what the Refund window is told: {"Avi Katz":{"camperId":7,"wallet":40,"card":50,"now":40}}
+F2 the child's own Refund, $50 asked → refunded $40 — "Capped to what was left available."
+F3 then Take Out Cash for the $10 left → max $0 ("No available balance")
+
+NOTE of Avi's $50, $40 can go back by card and $0 in cash; $10 stays on the wallet

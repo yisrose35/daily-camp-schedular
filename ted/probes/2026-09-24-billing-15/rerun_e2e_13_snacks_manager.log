@@ -1,0 +1,15 @@
+postgres up with 128 migrations applied
+SETUP: Avi Katz and Avi Stern added on Me; $40 cash for Avi Katz at the Snacks desk
+  camper numbers: Avi Katz #1, Avi Stern #2
+
+R5. A camp MANAGER (manager@smoke.test, role manager) signs in to Snacks
+    what the manager sees: {"role":"manager","campers":["Avi Katz","Avi Stern"],"hamburger":"flex/[object HTMLElement]","accountsItem":"flex","banner":[]}
+    role on the page: "manager" | Refund window: "Only the camp owner or an admin can refund canteen money to a card." | button off: true
+  ok  R5a the Refund window says only the owner or an admin can refund to a card
+    Refund All window: "Only the camp owner or an admin can refund canteen money to a card." | button null
+  ok  R5b Refund All says the same, with no "no card processor connected… Take Out Cash"
+
+edge calls: 
+page errors: []
+
+0 BAD

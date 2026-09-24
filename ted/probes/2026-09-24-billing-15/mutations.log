@@ -1,0 +1,33 @@
+== control: today's 275/280/281 unchanged
+  ok     275_a_canteen_refund_takes_its_money_first
+  ok     280_the_season_closeout_takes_the_whole_wallet
+  ok     281_a_failed_refund_takes_its_surcharge_share_back
+3 passed, 0 failed — against 128 migrations, one database copy per test
+== M1: 280 without switching auto-reload off
+  FAIL   280_the_season_closeout_takes_the_whole_wallet
+           psql:scripts/pgtests/280_the_season_closeout_takes_the_whole_wallet.sql:60: ERROR:  TED-143: auto-reload after the close-out: {"enabled": true, "cardOnFile": true, "thresholdAmount": 5, "stripeCustomerId": "cus_P", "thresholdEnabled": true, "thresholdReloadAmount": 20}
+0 passed, 1 failed — against 128 migrations, one database copy per test
+failed: 280_the_season_closeout_takes_the_whole_wallet
+== M2: 280 without the never-more-than-the-balance check
+  FAIL   280_the_season_closeout_takes_the_whole_wallet
+           psql:scripts/pgtests/280_the_season_closeout_takes_the_whole_wallet.sql:60: ERROR:  more than the balance: {"amount": 60.00, "camper": "Avi", "balance": -10.00, "success": true}
+0 passed, 1 failed — against 128 migrations, one database copy per test
+failed: 280_the_season_closeout_takes_the_whole_wallet
+== M3: 281 without once-per-credit
+  FAIL   281_a_failed_refund_takes_its_surcharge_share_back
+           psql:scripts/pgtests/281_a_failed_refund_takes_its_surcharge_share_back.sql:91: ERROR:  the surcharge went back on the bill twice: {"amount": 29.13, "undone": 1, "success": true}
+0 passed, 1 failed — against 128 migrations, one database copy per test
+failed: 281_a_failed_refund_takes_its_surcharge_share_back
+== M4: 281's release gives nothing back
+  FAIL   281_a_failed_refund_takes_its_surcharge_share_back
+           psql:scripts/pgtests/281_a_failed_refund_takes_its_surcharge_share_back.sql:91: ERROR:  TED-150: after giving it back, the next delivery cannot send the alert
+0 passed, 1 failed — against 128 migrations, one database copy per test
+failed: 281_a_failed_refund_takes_its_surcharge_share_back
+== M5: 281 undoes every surcharge credit, not just this refund's
+  ok     281_a_failed_refund_takes_its_surcharge_share_back
+1 passed, 0 failed — against 128 migrations, one database copy per test
+== M6: check script without the TED-151 row
+  FAIL   275_a_canteen_refund_takes_its_money_first
+           psql:scripts/pgtests/275_a_canteen_refund_takes_its_money_first.sql:170: ERROR:  TED-151: an earlier 275 passed the checking script: ok
+0 passed, 1 failed — against 128 migrations, one database copy per test
+failed: 275_a_canteen_refund_takes_its_money_first

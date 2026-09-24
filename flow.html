@@ -10,10 +10,10 @@
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
     <link href="https://fonts.googleapis.com/css2?family=DM+Sans:wght@300;400;500;600;700;800&family=Fraunces:wght@600;700&display=swap" rel="stylesheet">
     <link rel="stylesheet" href="design-system.css?v=20260903-03" />
-    <link rel="stylesheet" href="styles.css?v=20260903-03" />
+    <link rel="stylesheet" href="styles.css?v=20260918-25" />
     <link rel="stylesheet" href="mobile-responsive.css?v=20260903-03" />
-    <link rel="stylesheet" href="auto_schedule_styles.css?v=20260903-03">
-    <link rel="stylesheet" href="campistry-unified.css?v=20260903-03">
+    <link rel="stylesheet" href="auto_schedule_styles.css?v=20260918-25">
+    <link rel="stylesheet" href="campistry-unified.css?v=20260918-25">
     
     
     <!-- FIX: Hide app container initially to prevent flash -->
@@ -153,6 +153,7 @@
             );
         }
     </style>
+<script src="campistry_camper_id_rpc.js?v=20260923-20"></script>
 </head>
 <body>
 
@@ -198,7 +199,6 @@
         <header class="app-header">
             <div class="header-left">
                 <!-- DASHBOARD LINK -->
-                <a href="dashboard.html" class="nav-back">&larr; Dashboard</a>
 
                 <!-- Hamburger -->
                 <button id="hamburgerBtn" class="hamburger-btn" aria-label="Toggle Navigation">
@@ -208,7 +208,7 @@
             <div class="app-header-center">
                 <!-- Quick-Switch Bar (shared component — see campistry_app_switcher.js) -->
                 <div data-quick-switch-mount="flow"></div>
-                <script src="campistry_app_switcher.js?v=20260903-03"></script>
+                <script src="campistry_app_switcher.js?v=20260918-25"></script>
             </div>
             <div class="header-right">
                 <label class="header-date-label" for="calendar-date-picker">
@@ -483,7 +483,7 @@
     s.onload = function() {
         // Load supabase_client.js after Supabase SDK is ready
         var c = document.createElement('script');
-        c.src = 'supabase_client.js';
+        c.src = 'supabase_client.js?v=20260923-08';
         document.head.appendChild(c);
     };
     s.onerror = function() {
@@ -498,9 +498,9 @@
 <script src="supabase_schedules.js?v=20260903-03"></script>
 <script src="supabase_sync.js?v=20260903-03"></script>
 <script src="local_cache_idb.js?v=20260903-03"></script>
-<script src="campistry_finance_merge.js?v=20260915-01"></script>
+<script src="campistry_finance_merge.js?v=20260924-01"></script>
 <script src="campistry_workspace.js?v=20260917-01"></script>
-<script src="integration_hooks.js?v=20260917-02"></script>
+<script src="integration_hooks.js?v=20260923-22"></script>
 <script src="campistry_workspace_ui.js?v=20260917-02"></script>
 
 
@@ -655,7 +655,7 @@
 <!-- CORE APP -->
 <script src="welcome.js?v=20260903-03"></script>
 <script src="calendar.js?v=20260903-03"></script>
-<script src="app1.js?v=20260903-03"></script>
+<script src="app1.js?v=20260918-25"></script>
 <script src="skeleton_sandbox.js?v=20260903-03"></script>
 <script src="daily_adjustments.js?v=20260903-03"></script>
     <script src="rotation_events.js?v=20260903-03"></script>
@@ -703,7 +703,7 @@
 <script src="permissions_guard.js?v=20260903-03"></script>
 
 <!-- RBAC & MULTI-SCHEDULER SYSTEM (LOAD BEFORE SCHEDULER CORE) -->
-<script src="access_control.js?v=20260903-03"></script>
+<script src="access_control.js?v=20260924-03"></script>
 <script src="subdivision_schedule_manager.js?v=20260903-03"></script>
 <script src="rbac_init.js?v=20260903-03"></script>
 
@@ -730,7 +730,7 @@
 <script src="schedule_orchestrator.js?v=20260903-03"></script>
 
 <!-- UNIFIED SCHEDULE SYSTEM -->
-    <script src="auto_schedule_grid.js?v=20260903-03"></script>
+    <script src="auto_schedule_grid.js?v=20260918-23"></script>
 <script src="unified_schedule_system.js?v=20260903-03"></script>
     <script src="schedule_calendar_views.js?v=20260903-03"></script>
 <script src="post_edit_field_change.js?v=20260903-03"></script>
@@ -752,8 +752,11 @@
     <script src="rbac_diagnostics.js?v=20260903-03"></script>
 <script src="campistry_diagnostics.js?v=20260903-03"></script>
 <script src="mobile_touch_drag.js?v=20260903-03"></script>
-<script src="campistry_enrollment_window.js?v=20260917-02"></script>
-<script src="campistry_presence.js?v=20260917-02"></script>
+<script src="campistry_enrollment_window.js?v=20260923-20"></script>
+<script src="campistry_presence.js?v=20260923-21"></script>
+<!-- The master key: which session the whole program is showing. Pure rule; the
+     runtime half (the pin, the memo) is in integration_hooks.js. -->
+<script src="campistry_session_scope.js?v=20260918-09"></script>
 <script src="badges.js?v=20260903-03"></script>
 <script src="easter_egg.js?v=20260903-03"></script>
     
@@ -871,7 +874,7 @@ function showTab(id) {
 <script src="product_access_guard.js?v=20260903-03"></script>
 <!-- Per-SECTION access: limits which parts of THIS app the user can open.
      Loads after the product gate, which decides whether they get in at all. -->
-<script src="campistry_capabilities.js?v=20260907-01"></script>
+<script src="campistry_capabilities.js?v=20260924-01"></script>
 <script src="campistry_access_sections.js?v=20260907-01"></script>
 </body>
 </html>

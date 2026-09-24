@@ -1997,14 +1997,23 @@
         }
     }
 
+    // "Team & Access" is the roster of people who log into the Campistry
+    // website directly (owner/admin/manager/scheduler/viewer). 'counselor' is
+    // never that — it's the role Campistry Lite invites hard-code (see
+    // ROLES.COUNSELOR above and the "Invite to Lite" actions in
+    // campistry_me.js), a read-only bunk-level mobile account, not a website
+    // team member. Excluded here at the source so every page that calls this
+    // (Team & Access's member list, the "by person" access picker) doesn't
+    // have to remember to filter it out itself.
     async function getTeamMembers() {
         const campId = getCampId();
-        
+
         try {
             const { data, error } = await window.supabase
                 .from('camp_users')
                 .select('*')
                 .eq('camp_id', campId)
+                .neq('role', 'counselor')
                 .order('role');
 
             if (error) throw error;
@@ -2017,7 +2026,35 @@
         }
     }
 
-    async function inviteTeamMember(email, role, subdivisionIds = [], name = '') {
+    // A data_scope's flat division-name list, for every consumer that only
+    // ever learned to read camp_users.assigned_divisions (getUserAssignedDivisions()
+    // in permissions_guard.js and everything downstream of it) — so a
+    // grade/bunk scope still gets at least its parent division(s) right for
+    // any of those, without them needing to know about the finer grain.
+    function _dataScopeToAssignedDivisions(scope) {
+        if (!scope || scope.type === 'all') return [];
+        if (scope.type === 'divisions') return (scope.divisions || []).slice();
+        if (scope.type === 'grades') return [...new Set((scope.grades || []).map(g => g.division))];
+        if (scope.type === 'bunks') return [...new Set((scope.bunks || []).map(b => b.division))];
+        return [];
+    }
+
+    // True when a Supabase error is PostgREST refusing a column it doesn't
+    // know about — the shape this takes differs by failure mode (a raw
+    // Postgres "undefined_column" is 42703; PostgREST's OWN schema-cache
+    // rejection, which is what actually fires for a genuinely-missing
+    // column, is PGRST204 with no fixed message wording) — so this is
+    // deliberately loose rather than pinned to one exact code, since a
+    // column-add migration not having been run yet is a real, expected
+    // state to degrade from cleanly, not an edge case to get half-right.
+    function _isUnknownColumnError(error) {
+        if (!error) return false;
+        if (error.code === '42703' || error.code === 'PGRST204') return true;
+        const msg = ((error.message || '') + ' ' + (error.details || '') + ' ' + (error.hint || '')).toLowerCase();
+        return msg.indexOf('column') >= 0 && (msg.indexOf('schema cache') >= 0 || msg.indexOf('does not exist') >= 0 || msg.indexOf('could not find') >= 0);
+    }
+
+    async function inviteTeamMember(email, role, subdivisionIds = [], name = '', dataScope = null) {
         if (!canInviteUsers()) {
             return { error: "Not authorized to invite users" };
         }
@@ -2042,8 +2079,11 @@
                 return { error: `${email} has already been invited to this camp.` };
             }
 
-            let assignedDivisions = [];
-            if (subdivisionIds.length > 0) {
+            let assignedDivisions = _dataScopeToAssignedDivisions(dataScope);
+            if (!assignedDivisions.length && subdivisionIds.length > 0) {
+                // Legacy path: a named subdivision group, not the inline
+                // Divisions/Grades/Bunks picker. Kept for any caller still
+                // passing subdivisionIds directly.
                 const { data: subRows } = await window.supabase
                     .from('subdivisions')
                     .select('divisions')
@@ -2055,20 +2095,27 @@
                 }
             }
 
-            const { data, error } = await window.supabase
-                .from('camp_users')
-                .insert([{
-                    camp_id: campId,
-                    email: email.toLowerCase().trim(),
-                    name: name || null,
-                    role: role,
-                    subdivision_ids: subdivisionIds,
-                    assigned_divisions: assignedDivisions,
-                    invited_by: _currentUser.id,
-                    invite_token: inviteToken
-                }])
-                .select()
-                .single();
+            const insertRow = {
+                camp_id: campId,
+                email: email.toLowerCase().trim(),
+                name: name || null,
+                role: role,
+                subdivision_ids: subdivisionIds,
+                assigned_divisions: assignedDivisions,
+                data_scope: dataScope || null,
+                invited_by: _currentUser.id,
+                invite_token: inviteToken
+            };
+            let { data, error } = await window.supabase.from('camp_users').insert([insertRow]).select().single();
+            // migration 274 (camp_users.data_scope) not applied to this camp's
+            // database yet — degrade instead of failing the whole invite: drop
+            // the one column Postgres doesn't recognize and retry once. Scope
+            // just won't be saved until the migration runs; everything else
+            // about the invite still works.
+            if (_isUnknownColumnError(error)) {
+                delete insertRow.data_scope;
+                ({ data, error } = await window.supabase.from('camp_users').insert([insertRow]).select().single());
+            }
 
             if (error) throw error;
 
@@ -2092,7 +2139,12 @@
         }
 
         try {
-            if (updates.subdivision_ids && Array.isArray(updates.subdivision_ids)) {
+            // A caller that already computed assigned_divisions itself (the
+            // edit-member form does this from the new data_scope picker) wins —
+            // this legacy subdivision_ids -> assigned_divisions resolution is
+            // only for a caller that passed subdivision_ids WITHOUT also
+            // working out assigned_divisions on its own.
+            if (updates.subdivision_ids && Array.isArray(updates.subdivision_ids) && !('assigned_divisions' in updates)) {
                 if (updates.subdivision_ids.length > 0) {
                     const { data: subRows } = await window.supabase
                         .from('subdivisions')
@@ -2108,12 +2160,16 @@
                 }
             }
 
-            const { data, error } = await window.supabase
-                .from('camp_users')
-                .update(updates)
-                .eq('id', id)
-                .select()
-                .single();
+            let { data, error } = await window.supabase.from('camp_users').update(updates).eq('id', id).select().single();
+            // migration 274 (camp_users.data_scope) not applied yet — same
+            // degrade-and-retry as inviteTeamMember above, so an edit to
+            // role/name/department/etc. isn't blocked by a column this
+            // camp's database doesn't have yet.
+            if (_isUnknownColumnError(error) && 'data_scope' in updates) {
+                const retryUpdates = Object.assign({}, updates);
+                delete retryUpdates.data_scope;
+                ({ data, error } = await window.supabase.from('camp_users').update(retryUpdates).eq('id', id).select().single());
+            }
 
             if (error) throw error;
 

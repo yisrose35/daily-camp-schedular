@@ -1,0 +1,117 @@
+TAP version 13
+#     of those, 38 already accept a camper id: _camper_mail_record, _invite_covers_camper, _latest_pickup_alert, _parent_invite_for, _parent_owns_camper, add_pickup_alert_league_recipients, canteen_camper_known, canteen_office_cash_out, canteen_office_credit, canteen_office_set_limit, create_cardknox_checkout_intent, credit_canteen_balance_from_processor, credit_canteen_balance_from_stripe, get_canteen_history, mark_pickup_alert_league_checked, merge_canteen_autoreload_card, promote_confirmed_face, receipt_recipient, record_link_photo_purchase, refund_canteen_deposit_from_processor, refund_canteen_deposit_from_stripe, reserve_canteen_refund, resolve_photo_tag, set_camper_face_consent, set_canteen_auto_reload, set_canteen_limits, submit_camper_headshot, submit_camper_mail, submit_canteen_deposit, submit_canteen_purchase, submit_health_document, submit_link_form_response, submit_link_tip, submit_pickup_request, submit_shop_order, update_canteen_autoreload_state, use_family_card_for_canteen_auto_reload, verify_my_camper
+#     camper-identity ledger: 0 tables and 38 functions still on names
+#     of those, 0 still lose data on a rename — none
+# Subtest: no NEW table identifies a camper by name alone
+ok 1 - no NEW table identifies a camper by name alone
+  ---
+  duration_ms: 28.477326
+  type: 'test'
+  ...
+# Subtest: no NEW function takes a camper name
+ok 2 - no NEW function takes a camper name
+  ---
+  duration_ms: 20.434709
+  type: 'test'
+  ...
+# Subtest: the ledger has no stale entries — struck off as each is converted
+not ok 3 - the ledger has no stale entries — struck off as each is converted
+  ---
+  duration_ms: 34.499988
+  type: 'test'
+  location: '/tmp/claude-0/-home-user-daily-camp-schedular/39278441-0cf3-5f6a-bf8e-a51bef67e95d/scratchpad/old114/tests/camper_identity_ledger.test.js:228:1'
+  failureType: 'testCodeFailure'
+  error: |-
+    Converted — strike these functions off FUNCTIONS_ON_NAMES.
+    + actual - expected
+    
+    + [
+    +   'canteen_season_closeout'
+    + ]
+    - []
+    
+  code: 'ERR_ASSERTION'
+  name: 'AssertionError'
+  expected:
+  actual:
+    0: 'canteen_season_closeout'
+  operator: 'deepStrictEqual'
+  stack: |-
+    TestContext.<anonymous> (/tmp/claude-0/-home-user-daily-camp-schedular/39278441-0cf3-5f6a-bf8e-a51bef67e95d/scratchpad/old114/tests/camper_identity_ledger.test.js:239:12)
+    Test.runInAsyncScope (node:async_hooks:214:14)
+    Test.run (node:internal/test_runner/test:1047:25)
+    Test.processPendingSubtests (node:internal/test_runner/test:744:18)
+    Test.postRun (node:internal/test_runner/test:1173:19)
+    Test.run (node:internal/test_runner/test:1101:12)
+    async Test.processPendingSubtests (node:internal/test_runner/test:744:7)
+  ...
+# Subtest: every function that still takes a name says why that is safe
+not ok 4 - every function that still takes a name says why that is safe
+  ---
+  duration_ms: 590.644802
+  type: 'test'
+  location: '/tmp/claude-0/-home-user-daily-camp-schedular/39278441-0cf3-5f6a-bf8e-a51bef67e95d/scratchpad/old114/tests/camper_identity_ledger.test.js:354:1'
+  failureType: 'testCodeFailure'
+  error: |-
+    No longer takes a name — strike these from WHY_THE_NAME_IS_SAFE.
+    + actual - expected
+    
+    + [
+    +   'canteen_season_closeout'
+    + ]
+    - []
+    
+  code: 'ERR_ASSERTION'
+  name: 'AssertionError'
+  expected:
+  actual:
+    0: 'canteen_season_closeout'
+  operator: 'deepStrictEqual'
+  stack: |-
+    TestContext.<anonymous> (/tmp/claude-0/-home-user-daily-camp-schedular/39278441-0cf3-5f6a-bf8e-a51bef67e95d/scratchpad/old114/tests/camper_identity_ledger.test.js:365:12)
+    Test.runInAsyncScope (node:async_hooks:214:14)
+    Test.run (node:internal/test_runner/test:1047:25)
+    Test.processPendingSubtests (node:internal/test_runner/test:744:18)
+    Test.postRun (node:internal/test_runner/test:1173:19)
+    Test.run (node:internal/test_runner/test:1101:12)
+    async Test.processPendingSubtests (node:internal/test_runner/test:744:7)
+  ...
+# Subtest: the classifications are true, not asserted
+ok 5 - the classifications are true, not asserted
+  ---
+  duration_ms: 185.001465
+  type: 'test'
+  ...
+# Subtest: and the canteen lock really does translate, or seven of those are wrong
+ok 6 - and the canteen lock really does translate, or seven of those are wrong
+  ---
+  duration_ms: 17.182322
+  type: 'test'
+  ...
+# Subtest: the identity itself is defined exactly once, and spans campers AND staff
+ok 7 - the identity itself is defined exactly once, and spans campers AND staff
+  ---
+  duration_ms: 0.475511
+  type: 'test'
+  ...
+# Subtest: progress is reported, so the direction is visible
+ok 8 - progress is reported, so the direction is visible
+  ---
+  duration_ms: 224.983214
+  type: 'test'
+  ...
+# Subtest: every function that names a camper also takes the camper's id
+ok 9 - every function that names a camper also takes the camper's id
+  ---
+  duration_ms: 16.819161
+  type: 'test'
+  ...
+1..9
+# tests 9
+# suites 0
+# pass 7
+# fail 2
+# cancelled 0
+# skipped 0
+# todo 0
+# duration_ms 1210.254796

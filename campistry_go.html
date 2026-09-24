@@ -44,11 +44,12 @@
         html:not(.css-ready) body { opacity: 0; }
         html.css-ready body { transition: opacity 0.15s ease; }
     </style>
-    <link rel="stylesheet" href="campistry-unified.css?v=20260903-04">
-    <link rel="stylesheet" href="campistry_go.css?v=20260903-04" onload="document.documentElement.classList.add('css-ready')">
-    <link rel="stylesheet" href="campistry_ops.css?v=20260903-04">
+    <link rel="stylesheet" href="campistry-unified.css?v=20260918-25">
+    <link rel="stylesheet" href="campistry_go.css?v=20260918-24" onload="document.documentElement.classList.add('css-ready')">
+    <link rel="stylesheet" href="campistry_ops.css?v=20260918-24">
     <link rel="stylesheet" href="mobile-responsive.css?v=20260903-04">
     <noscript><style>html body { opacity: 1 !important; }</style></noscript>
+<script src="campistry_camper_id_rpc.js?v=20260923-20"></script>
 </head>
 <body>
 
@@ -130,11 +131,10 @@
     <nav class="nav">
         <div class="nav-inner">
             <div class="nav-left">
-                <a href="dashboard.html" class="nav-back">&larr; Dashboard</a>
             </div>
             <div class="nav-center">
                 <div data-quick-switch-mount="go"></div>
-                <script src="campistry_app_switcher.js?v=20260903-04"></script>
+                <script src="campistry_app_switcher.js?v=20260918-25"></script>
             </div>
             <div class="sync-badge">
                 <div class="sync-dot" id="syncDot"></div>
@@ -476,7 +476,7 @@
     s.src = src;
     s.onload = function() {
         var c = document.createElement('script');
-        c.src = 'supabase_client.js';
+        c.src = 'supabase_client.js?v=20260923-08';
         document.head.appendChild(c);
     };
     s.onerror = function() {
@@ -487,16 +487,19 @@
 </script>
 <script src="campistry_utils.js?v=20260903-04"></script>
 <script src="campistry_security.js?v=20260903-04"></script>
-<script src="access_control.js?v=20260903-04"></script>
+<script src="access_control.js?v=20260924-03"></script>
 <script src="local_cache_idb.js?v=20260903-04"></script>
-<script src="campistry_finance_merge.js?v=20260915-01"></script>
+<script src="campistry_finance_merge.js?v=20260924-01"></script>
 <script src="campistry_workspace.js?v=20260917-01"></script>
-<script src="integration_hooks.js?v=20260917-02"></script>
+<script src="integration_hooks.js?v=20260923-22"></script>
 <script src="campistry_workspace_ui.js?v=20260917-02"></script>
 <!-- Presence: which campers are at camp on the date being planned. Loaded AFTER
      integration_hooks, because it asks that file which plan this browser is in. -->
-<script src="campistry_enrollment_window.js?v=20260917-02"></script>
-<script src="campistry_presence.js?v=20260917-02"></script>
+<script src="campistry_enrollment_window.js?v=20260923-20"></script>
+<script src="campistry_presence.js?v=20260923-21"></script>
+<!-- The master key: which session the whole program is showing. Pure rule; the
+     runtime half (the pin, the memo) is in integration_hooks.js. -->
+<script src="campistry_session_scope.js?v=20260918-09"></script>
 
 <script src="cloud_sync_helpers.js?v=20260903-04"></script>
 
@@ -575,15 +578,15 @@
 <script src="campistry_go_google.js?v=20260907-01"></script>
 <script src="campistry_go_geoapify.js?v=20260907-01"></script>
 <script src="campistry_go_ors_optimizer.js?v=20260903-04"></script>
-<script src="campistry_go_neighborhoods.js?v=20260907-01"></script>
+<script src="campistry_go_neighborhoods.js?v=20260923-20"></script>
 <script src="campistry_go_persistence.js?v=20260903-04"></script>
 <script src="campistry_go_stop_master.js?v=20260903-04"></script>
-<script src="campistry_go.js?v=20260917-02"></script>
+<script src="campistry_go.js?v=20260923-21"></script>
 <!-- The one camp-wide payment catalogue. Luggage records HOW a booking was paid
      and must offer only what the camp accepts, so this loads before it. -->
 <script src="campistry_payments.js?v=20260918-01"></script>
-<script src="campistry_luggage_core.js?v=20260903-04"></script>
-<script src="campistry_go_luggage.js?v=20260903-04"></script>
+<script src="campistry_luggage_core.js?v=20260923-20"></script>
+<script src="campistry_go_luggage.js?v=20260923-21"></script>
     <script src="campistry_go_map_editor.js?v=20260903-04"></script>
 <script>
 // Show ORS key card only if no platform key is configured
@@ -610,7 +613,7 @@
 <script src="product_access_guard.js?v=20260903-04"></script>
 <!-- Per-SECTION access: limits which parts of THIS app the user can open.
      Loads after the product gate, which decides whether they get in at all. -->
-<script src="campistry_capabilities.js?v=20260907-01"></script>
+<script src="campistry_capabilities.js?v=20260924-01"></script>
 <script src="campistry_access_sections.js?v=20260907-01"></script>
 </body>
 </html>

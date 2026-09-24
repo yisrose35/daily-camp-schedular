@@ -1,0 +1,26 @@
+R1. same key k1: A charges and holds its transaction 2 s; B arrives 0.5 s later
+    A (2025 ms): {"camper": "Avi", "balance": 17.50, "success": true, "spentToday": 2.50, "needsReloadCheck": false}
+    B (1522 ms): {"camper": "Avi", "balance": 17.50, "success": true, "replayed": true, "spentToday": 2.50, "needsReloadCheck": false}
+  ok  R1 one debit; B waited for A and got its answer, marked replayed   → debits +1, B waited 1522 ms, balance $17.50
+R2. same key k2: A charges, then its transaction is ROLLED BACK (it fails after charging); B 0.5 s later
+    A (2024 ms, rolled back): {"camper": "Avi", "balance": 15.00, "success": true, "spentToday": 5.00, "needsReloadCheck": false}
+    B (1530 ms): {"camper": "Avi", "balance": 15.00, "success": true, "spentToday": 5.00, "needsReloadCheck": false}
+  ok  R2 A left nothing; B charged, once   → debits +1
+R3. two registers, two sales (keys k3 and k4) at the same moment
+    A (2027 ms): {"camper": "Avi", "balance": 12.50, "success": true, "spentToday": 7.50, "needsReloadCheck": false}
+    B (24 ms): {"camper": "Bina", "balance": 17.50, "success": true, "spentToday": 2.50, "needsReloadCheck": false}
+  ok  R3 both sales charged   → Avi +1, Bina +1; B waited 24 ms (the camp-wide lock of 247)
+R4. Dov has $1; same key k5 twice at once for $2.50
+    A: {"error": "insufficient_balance", "balance": 1.00, "success": false, "spendable": 1.00}
+    B (1526 ms): {"error": "insufficient_balance", "balance": 1.00, "success": false, "spendable": 1.00}
+  ok  R4 both refused, nothing charged, no key kept   → debits +0, key rows 0
+R5. a key older than 3 days
+    the same key again: {"camper": "Avi", "balance": 10.00, "success": true, "spentToday": 10.00, "needsReloadCheck": false}
+  ok  R5 an expired key is forgotten (a new charge under it goes through)   → debits +1
+R6. who may call it: a parent account (not camp staff)
+    {"error": "not_authorized", "success": false}
+  ok  R6 a non-staff account is refused   → {"error": "not_authorized", "success": false}
+
+Avi's ledger: credit 20.00; debit 2.5; debit 2.5; debit 2.5; debit 2.5
+
+0 BAD

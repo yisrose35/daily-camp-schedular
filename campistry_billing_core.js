@@ -355,7 +355,9 @@
         var res = B.post(account, {
             kind: 'charge', amount: gross, reason: 'tuition',
             date: enr.date, by: enr.by || 'system',
-            note: enr.note || ('Tuition — ' + (enr.camperName || '') +
+            // The name as people read it: without the roster's internal
+            // " #<number>" that tells two same-named campers apart.
+            note: enr.note || ('Tuition — ' + String(enr.camperName || '').replace(/\s#\d+(?:-\d+)?$/, '') +
                   (enr.session ? ', ' + enr.session : '')).trim(),
             source: {
                 enrollmentId: eid, camperId: enr.camperId != null ? enr.camperId : null,
@@ -445,7 +447,7 @@
         return B.post(account, {
             kind: 'credit', amount: amount, reason: 'withdrawal',
             date: o.date, by: o.by || 'office',
-            note: o.note || ('Withdrawn — ' + (o.camperName || 'camper') +
+            note: o.note || ('Withdrawn — ' + (String(o.camperName || '').replace(/\s#\d+(?:-\d+)?$/, '') || 'camper') +
                              (amount < net ? ' (partial)' : '')),
             source: {
                 enrollmentId: eid,
@@ -504,7 +506,11 @@
                      reason: 'nothing_owed' };
         }
         var remaining = dates.length - i;
-        var amount = (remaining <= 1) ? outstanding : money(outstanding / remaining);
+        // The amount the office set for this instalment, when it set one
+        // (TED-068, migration 264's plan_due) — never more than is owed.
+        var fixed = Array.isArray(plan.amounts) && typeof plan.amounts[i] === 'number' ? plan.amounts[i] : null;
+        var amount = (fixed != null && fixed > 0) ? Math.min(money(fixed), outstanding)
+                   : (remaining <= 1) ? outstanding : money(outstanding / remaining);
         if (amount > outstanding) amount = outstanding;
         return { index: i, dueDate: due, amount: amount, remaining: remaining };
     };

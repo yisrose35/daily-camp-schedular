@@ -1,0 +1,18 @@
+V0 ["286: ok","288: ok"]
+  ok  V0 today's chain → ok   → 286: ok | 288: ok
+V1 ["286: ok","288: apply 288 again — an earlier copy is in place: a family that pays by hand can be charged on a card it is disputing, and Resume clears a dispute still open"]; resume functions: resume_autopay_after_dispute(uuid,text) | resume_autopay_after_dispute(uuid,text,boolean)
+  ok  V1 last pass's 288 pasted over today's → apply 288 again   → 286: ok | 288: apply 288 again — an earlier copy is in place: a family that pays by hand can be charged on a card it is disputing, and Resume clears a dispute still open
+V2 ["286: ok","288: ok"]; merge: _keep_dispute_hold ×1, _keep_payer_ledger ×1; resume functions: resume_autopay_after_dispute(uuid,text,boolean)
+  ok  V2 today's 288 again → ok, wrapped once, one Resume (3 arguments)   → resume_autopay_after_dispute(uuid,text,boolean)
+  ok  V3 288 twice more → merge wrapped once   → 1
+  ok  V4 286 pasted again after 288 → no error, merge unchanged   → 286: ok | 288: ok
+V5 266_ pasted again: no error; rows ["286: ok","288: ok"]; merge keeps pause: 1
+  ok  V5 266_ re-pasted after 288 → still ok   → 286: ok | 288: ok
+V5 269_ pasted again: no error; rows ["286: ok","288: ok"]; merge keeps pause: 1
+  ok  V5 269_ re-pasted after 288 → still ok   → 286: ok | 288: ok
+V5 272_ pasted again: no error; rows ["286: apply 286 BEFORE reloading Me — an office computer left open wipes a fund's share of a split bill and its cheques","288: apply 288 again — an earlier copy is in place: a family that pays by hand can be charged on a card it is disputing, and Resume clears a dispute still open"]; merge keeps pause: 0
+  ok  V5 272 re-pasted after 288 → the checking script names 286 and 288   → 286: apply 286 BEFORE reloading Me — an office computer left open wipes a fund's share of a split bill and its cheques | 288: apply 288 again — an earlier copy is in place: a family that pays by hand can be charged on a card it is disputing, and Resume clears a dispute still open
+V6 then 286 and 288 as the rows say: no error; rows ["286: ok","288: ok"]; merge _keep_dispute_hold ×1, _keep_payer_ledger ×1
+  ok  V6 following the rows (286, then 288) puts both back   → 286: ok | 288: ok
+
+0 BAD

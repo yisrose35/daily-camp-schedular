@@ -1,0 +1,11 @@
+Y1 set up as the guides say (no secret, no header): HTTP 503 {"error":"webhook_not_configured"}; posted 0, paused 0
+   log: [byop-dispute] REFUSING ALL REQUESTS: BYOP_DISPUTE_SECRET is not set. Set it in the Edge Function secrets and have the processor send it as the x-webhook-secret header (or, for a processor that cannot send headers, as &key=<secret> on the webhook URL).
+  BAD Y1 a dispute on a camp set up by the guides is recorded and the card paused   → HTTP 503
+Y2 record_chargeback fails: HTTP 500 {"received":true,"paused":false}; paused 0
+  ok  Y2 a database failure while posting is sent again (5xx) or the card is still paused   → HTTP 500, paused 0
+Y3 the pause write fails: HTTP 500
+  ok  Y3 a failed pause answers 500   → 500
+Y4 all good: HTTP 200; posted 1, paused 1
+  ok  Y4 control: posted and paused   → 200
+
+1 BAD

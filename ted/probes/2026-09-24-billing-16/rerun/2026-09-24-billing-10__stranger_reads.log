@@ -1,0 +1,61 @@
+=== as stranger
+  camp_families rows                           → ERROR: permission denied for table camp_families
+  camp_payments rows                           → ERROR: permission denied for table camp_payments
+  canteen_refund_holds rows                    → ERROR: permission denied for table canteen_refund_holds
+  refund_intents rows                          → ERROR: permission denied for table refund_intents
+  projected_family_ledger                      → ERROR: permission denied for table camp_families
+  projected_family_payments                    → ERROR: permission denied for table camp_payments
+  get_camp_families                            → {"error": "not_authorized", "success": false}
+  get_camp_payments                            → {"error": "not_authorized", "success": false}
+  resolve_unconfirmed_autopay (went through)   → {"error": "not_authorized", "success": false}
+  release_canteen_refund_hold                  → ERROR: permission denied for function release_canteen_refund_hold
+  reserve_canteen_refund                       → ERROR: permission denied for function reserve_canteen_refund
+  release_stale_refund_intent                  → ERROR: permission denied for function release_stale_refund_intent
+  append_camp_payment                          → ERROR: permission denied for function append_camp_payment
+  canteen_refund_view                          → ERROR: permission denied for function canteen_refund_view
+=== as parent
+  camp_families rows                           → ERROR: permission denied for table camp_families
+  camp_payments rows                           → ERROR: permission denied for table camp_payments
+  canteen_refund_holds rows                    → ERROR: permission denied for table canteen_refund_holds
+  refund_intents rows                          → ERROR: permission denied for table refund_intents
+  projected_family_ledger                      → ERROR: permission denied for table camp_families
+  projected_family_payments                    → ERROR: permission denied for table camp_payments
+  get_camp_families                            → {"error": "not_authorized", "success": false}
+  get_camp_payments                            → {"error": "not_authorized", "success": false}
+  resolve_unconfirmed_autopay (went through)   → {"error": "not_authorized", "success": false}
+  release_canteen_refund_hold                  → ERROR: permission denied for function release_canteen_refund_hold
+  reserve_canteen_refund                       → ERROR: permission denied for function reserve_canteen_refund
+  release_stale_refund_intent                  → ERROR: permission denied for function release_stale_refund_intent
+  append_camp_payment                          → ERROR: permission denied for function append_camp_payment
+  canteen_refund_view                          → ERROR: permission denied for function canteen_refund_view
+=== as scheduler
+  camp_families rows                           → ERROR: permission denied for table camp_families
+  camp_payments rows                           → ERROR: permission denied for table camp_payments
+  canteen_refund_holds rows                    → ERROR: permission denied for table canteen_refund_holds
+  refund_intents rows                          → ERROR: permission denied for table refund_intents
+  projected_family_ledger                      → ERROR: permission denied for table camp_families
+  projected_family_payments                    → ERROR: permission denied for table camp_payments
+  get_camp_families                            → {"count": 1, "success": true, "families": {"gold": {"name": "Gold", "plans": [{"id": "plan
+  get_camp_payments                            → {"count": 1, "success": true, "payments": [{"id": "pay_1", "date": "2026-06-01", "amount":
+  resolve_unconfirmed_autopay (went through)   → {"success": true, "recorded": true}
+  release_canteen_refund_hold                  → ERROR: permission denied for function release_canteen_refund_hold
+  reserve_canteen_refund                       → ERROR: permission denied for function reserve_canteen_refund
+  release_stale_refund_intent                  → ERROR: permission denied for function release_stale_refund_intent
+  append_camp_payment                          → ERROR: permission denied for function append_camp_payment
+  canteen_refund_view                          → ERROR: permission denied for function canteen_refund_view
+=== as owner
+  camp_families rows                           → ERROR: permission denied for table camp_families
+  camp_payments rows                           → ERROR: permission denied for table camp_payments
+  canteen_refund_holds rows                    → ERROR: permission denied for table canteen_refund_holds
+  refund_intents rows                          → ERROR: permission denied for table refund_intents
+  projected_family_ledger                      → ERROR: permission denied for table camp_families
+  projected_family_payments                    → ERROR: permission denied for table camp_payments
+  get_camp_families                            → {"count": 1, "success": true, "families": {"gold": {"name": "Gold", "plans": [{"id": "plan
+  get_camp_payments                            → {"count": 2, "success": true, "payments": [{"id": "pay_1", "date": "2026-06-01", "amount":
+  resolve_unconfirmed_autopay (went through)   → {"error": "nothing_to_answer", "success": false}
+  release_canteen_refund_hold                  → ERROR: permission denied for function release_canteen_refund_hold
+  reserve_canteen_refund                       → ERROR: permission denied for function reserve_canteen_refund
+  release_stale_refund_intent                  → ERROR: permission denied for function release_stale_refund_intent
+  append_camp_payment                          → ERROR: permission denied for function append_camp_payment
+  canteen_refund_view                          → ERROR: permission denied for function canteen_refund_view
+=== after all of that (superuser): hold state open | plan pendingCharge f | payments auto_byop_REF999,pay_1

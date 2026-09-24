@@ -1,0 +1,27 @@
+F1. Avi: $50 top-up by card, parent set a $10 balance floor, spent nothing. The office runs Refund All
+  ok  F1 Refund All returns all $50 (floor and all)
+        answers: Refund All: $50, refunded 1, failed 0, skipped 0 [{"camperId":7,"camperName":"Avi","refunded":50}]
+        → money back $50 [re_1 $50], wallet $0, holds [posted $50.00], history [refund re_1 $50.00], notices 0
+        (want $50 back, wallet $0)
+
+F2. Fresh: the same, the child's own Refund for $50
+  ok  F2 the child's Refund returns all $50
+        answers: $50
+        → money back $50 [re_2 $50], wallet $0, holds [posted $50.00], history [refund re_2 $50.00], notices 0
+        (want $50 back, wallet $0)
+
+F3. Fresh: what the Refund window is told
+    refundable: {"Avi":{"camperId":7,"wallet":50,"card":50,"now":50}}
+  ok  F3 the window offers $50
+
+F4. Take Out Cash for Avi ($50, floor $10) — the real SnacksCash rule
+    $50 asked → {"ok":false,"error":"Only $40.00 available to take out — the other $10.00 is under the balance floor; refund it to the card (Refund) instead"}
+
+F5. Bea: $50 put on at the office IN CASH, floor $10. Take Out Cash for all of it, then what the message says to do
+    Take Out Cash: max $40; $50 asked → "Only $40.00 available to take out — the other $10.00 is under the balance floor; refund it to the card (Refund) instead"
+    after $40 cash: the last $10 → max $0 ("The $10.00 left is under the balance floor — it cannot be taken out as cash; refund it to the card (Refund) instead")
+    what the Refund window is told for Bea: {"camperId":8,"wallet":50,"card":0,"now":0}
+    the office does as told — Refund $10 to the card → {"error":"This balance has no Stripe-paid deposits left to refund online — it came from cash/manual deposits and must be refunded that way instead."}
+  NOTE F5 Bea's last $10 (cash-funded, under the floor): Take Out Cash refuses it and says "refund it to the card", but there is no card payment to refund it to
+
+0 BAD

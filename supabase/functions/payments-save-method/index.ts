@@ -190,36 +190,51 @@ function json(body: unknown, status = 200) {
 // or money-moving action never proceeds off campId alone; this only
 // confirms the family actually exists under that camp before writing
 // anything onto its record.
-async function campHasCamper(service: ReturnType<typeof createClient>, campId: string, camperName: string): Promise<boolean> {
-  const { data } = await service.from("camp_state_kv").select("value")
-    .eq("camp_id", campId).eq("key", "campistrySnacks").maybeSingle();
-  const accts = data?.value && typeof data.value === "object" ? (data.value as Record<string, any>).accounts : null;
-  return !!(accts && typeof accts === "object" && Object.prototype.hasOwnProperty.call(accts, camperName));
+async function campHasCamper(service: ReturnType<typeof createClient>, campId: string, camperName: string, camperId: number | null = null): Promise<boolean> {
+  // The canteen accounts are ROWS since 219, and the page strips `accounts`
+  // out of every campistrySnacks document save — so reading the document said
+  // "no such camper" for everyone, and every canteen card deposit was refused.
+  // canteen_camper_known (migration 243) asks the roster and the account rows.
+  const { data, error } = await service.rpc("canteen_camper_known", {
+    p_camp_id: campId, p_camper_name: camperName, p_camper_id: camperId,
+  });
+  if (error) {
+    console.error("[campHasCamper] canteen_camper_known failed:", error.message);
+    return false;   // fail closed: money is never taken for a camper we cannot confirm
+  }
+  return data === true;
 }
 
 async function campOwnsFamily(service: ReturnType<typeof createClient>, campId: string, familyKey: string): Promise<boolean> {
-  const { data } = await service.from("camp_state_kv").select("value")
-    .eq("camp_id", campId).eq("key", "campistryMe").maybeSingle();
-  const families = data?.value && typeof data.value === "object" ? (data.value as Record<string, any>).families : null;
-  return !!(families && typeof families === "object" && Object.prototype.hasOwnProperty.call(families, familyKey));
+  // The family ROW (camp_family), not the campistryMe document's copy of it.
+  const { data, error } = await service.rpc("camp_family", { p_camp_id: campId, p_family_key: familyKey });
+  return !error && !!data && typeof data === "object";
+}
+
+
+/** A camper id sent by the page (campistry_camper_id_rpc.js adds it), or null. */
+function camperIdIn(v: unknown): number | null {
+  return v != null && /^\d+$/.test(String(v)) ? Number(v) : null;
 }
 
 serve(async (req) => {
   if (req.method === "OPTIONS") return new Response("ok", { headers: corsHeaders });
 
   try {
-    const { campId, familyKey, camperName, token, billing, card } = await req.json();
-    if (!campId || !token || !(familyKey || camperName)) {
-      return json({ success: false, error: "campId, token, and one of familyKey / camperName are required" }, 400);
+    const { campId, familyKey, camperName, camperId: bodyCamperId, token, billing, card } = await req.json();
+    const camperId = camperIdIn(bodyCamperId);
+    if (!campId || !token || !(familyKey || camperId != null || camperName)) {
+      return json({ success: false, error: "campId, token, and one of familyKey / camperId (or camperName) are required" }, 400);
     }
-    // camperName (without familyKey) is the canteen AUTO-RELOAD card save: the
+    // A camper (without familyKey) is the canteen AUTO-RELOAD card save: the
     // token belongs to that camper's autoReload block, not to a family record.
-    const isCamperScoped = !familyKey && !!camperName;
+    // Their number decides who that is; the name is the fallback without one.
+    const isCamperScoped = !familyKey && (camperId != null || !!camperName);
 
     const service = createClient(SUPABASE_URL, SUPABASE_SERVICE_KEY);
 
     if (isCamperScoped) {
-      if (!(await campHasCamper(service, campId, String(camperName)))) {
+      if (!(await campHasCamper(service, campId, String(camperName ?? ""), camperId))) {
         return json({ success: false, error: "Camper not found for this camp" }, 400);
       }
     } else if (!(await campOwnsFamily(service, campId, familyKey))) {
@@ -275,7 +290,7 @@ serve(async (req) => {
       // the old whole-blob upsert could do right over a POS sale.
       const { data: merged, error: mergeErr } = await service.rpc("merge_canteen_autoreload_card", {
         p_camp_id: campId,
-        p_camper: String(camperName),
+        p_camper_id: camperId, p_camper: String(camperName ?? ""),
         p_fields: {
           byopProcessor: processorKey,
           byopCustomerRef: saveResult.customerRef,

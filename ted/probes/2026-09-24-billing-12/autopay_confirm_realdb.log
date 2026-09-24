@@ -1,0 +1,72 @@
+A1 Silver's pi_SILVER (booked for Silver) pasted for Gold
+   office → 200 {"success":false,"error":"That payment is not Gold's — it was made on another customer's card."}
+  ok  A1 refused
+        gold: ledger payments [] | owes 1000 | hold KEPT | next due {"index": 0, "amount": 500.00, "dueDate": "2026-06-01", "remaining": 2}
+        payment rows: pi_pi_SILVER→silver $500
+A2 Silver's pi_SILVER, Silver's webhook not in yet
+   office → 200 {"success":false,"error":"That payment is not Gold's — it was made on another customer's card."}
+  ok  A2 refused
+        gold: ledger payments [] | owes 1000 | hold KEPT | next due {"index": 0, "amount": 500.00, "dueDate": "2026-06-01", "remaining": 2}
+        payment rows: {"sub":"0ed12a00-0000-0000-0000-0000000000a1"}
+A3 a typo pi_GOLDX (Stripe has no such payment)
+   office → 200 {"success":false,"error":"Stripe has no payment pi_GOLDX — check the id (it is on the payment's page in the Stripe dashboard)."}
+  ok  A3 refused
+        gold: ledger payments [] | owes 1000 | hold KEPT | next due {"index": 0, "amount": 500.00, "dueDate": "2026-06-01", "remaining": 2}
+        payment rows: {"sub":"0ed12a00-0000-0000-0000-0000000000a1"}
+A4 the right one pi_GOLD, its webhook already booked it
+   office → 200 {"success":true,"recorded":true}
+  ok  A4 recorded once (owes 500, hold cleared)
+        gold: ledger payments [le_pay_pi_GOLD $500] | owes 500 | hold cleared | next due {"index": 1, "amount": 500.00, "dueDate": "2026-07-01", "remaining": 1}
+        payment rows: pi_pi_GOLD→gold $500
+A5 the right one pi_GOLD before its webhook; then the webhook books it
+   office → 200 {"success":true,"recorded":true}
+  ok  A5 recorded once (owes 500, hold cleared)
+        gold: ledger payments [le_ap_plan_gold_0 $500] | owes 500 | hold cleared | next due {"index": 1, "amount": 500.00, "dueDate": "2026-07-01", "remaining": 1}
+        payment rows: auto_pi_GOLD→gold $500
+A5b the office presses "it went through" again with pi_GOLD
+   office → 200 {"success":false,"error":"That charge was already answered."}
+  ok  A5b still once
+        gold: ledger payments [le_ap_plan_gold_0 $500] | owes 500 | hold cleared | next due {"index": 1, "amount": 500.00, "dueDate": "2026-07-01", "remaining": 1}
+        payment rows: auto_pi_GOLD→gold $500
+A6 Gold's charge that did NOT go through (requires_payment_method)
+   office → 200 {"success":false,"error":"That payment has not gone through (Stripe says \"requires_payment_method\")."}
+  ok  A6 refused
+        gold: ledger payments [] | owes 1000 | hold KEPT | next due {"index": 0, "amount": 500.00, "dueDate": "2026-06-01", "remaining": 2}
+        payment rows: {"sub":"0ed12a00-0000-0000-0000-0000000000a1"}
+A7 Gold's May payment (same card, same $500, a month earlier)
+   office → 200 {"success":false,"error":"That payment was made before autopay tried this instalment (2026-06-01) — it is an earlier payment."}
+  ok  A7 refused
+        gold: ledger payments [le_pay_pi_GOLDMAY $500] | owes 500 | hold KEPT | next due {"index": 0, "amount": 250.00, "dueDate": "2026-06-01", "remaining": 2}
+        payment rows: pi_pi_GOLDMAY→gold $500
+A8 Gold's payment for ANOTHER plan
+   office → 200 {"success":false,"error":"That payment was made for another payment plan."}
+  ok  A8 refused
+        gold: ledger payments [] | owes 1000 | hold KEPT | next due {"index": 0, "amount": 500.00, "dueDate": "2026-06-01", "remaining": 2}
+        payment rows: {"sub":"0ed12a00-0000-0000-0000-0000000000a1"}
+A9 Gold's $300 payment
+   office → 200 {"success":false,"error":"That payment is for $300.00, not this instalment's $500.00."}
+  ok  A9 refused
+        gold: ledger payments [] | owes 1000 | hold KEPT | next due {"index": 0, "amount": 500.00, "dueDate": "2026-06-01", "remaining": 2}
+        payment rows: {"sub":"0ed12a00-0000-0000-0000-0000000000a1"}
+A10 a payment stamped for another camp
+   office → 200 {"success":false,"error":"That payment was made for another family."}
+  ok  A10 refused
+        gold: ledger payments [] | owes 1000 | hold KEPT | next due {"index": 0, "amount": 500.00, "dueDate": "2026-06-01", "remaining": 2}
+        payment rows: {"sub":"0ed12a00-0000-0000-0000-0000000000a1"}
+A11 Stripe answers 500
+   office → 200 {"success":false,"error":"Stripe did not answer — try again in a minute."}
+  ok  A11 nothing recorded, hold kept
+        gold: ledger payments [] | owes 1000 | hold KEPT | next due {"index": 0, "amount": 500.00, "dueDate": "2026-06-01", "remaining": 2}
+        payment rows: {"sub":"0ed12a00-0000-0000-0000-0000000000a1"}
+A12 a camp manager (Billing edit) presses it
+   office → 403 {"error":"Only camp owners/admins can charge a stored card."}
+  ok  A12 (manager) — not recorded
+        gold: ledger payments [] | owes 1000 | hold KEPT | next due {"index": 0, "amount": 500.00, "dueDate": "2026-06-01", "remaining": 2}
+        payment rows: {"sub":"0ed12a00-0000-0000-0000-0000000000a1"}
+A13 the parent paid $500 by Link Pay Now the next day (booked by webhook); the office records THAT as the autopay charge
+   office → 200 {"success":true,"recorded":true}
+  ok  A13 no money counted twice (owes 500)
+        gold: ledger payments [le_pay_pi_GOLDLINK $500] | owes 500 | hold cleared | next due {"index": 1, "amount": 500.00, "dueDate": "2026-07-01", "remaining": 1}
+        payment rows: pi_pi_GOLDLINK→gold $500
+
+0 BAD

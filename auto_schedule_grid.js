@@ -504,7 +504,7 @@
     overflow: hidden;
     width: 100%;
     box-sizing: border-box;
-    box-shadow: 0 2px 12px rgba(0,0,0,0.08);
+    border: 1px solid #eef0f3;
     margin-bottom: 24px;
     background: #fff;
     font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
@@ -741,7 +741,7 @@
     align-items: center;
     background: #fff;
     border-radius: 6px;
-    box-shadow: 0 1px 2px rgba(0,0,0,0.05);
+    border: 1px solid #eef0f3;
     overflow: hidden;
     padding: 3px 8px;
     flex-shrink: 0;

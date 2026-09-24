@@ -1,0 +1,7 @@
+1. old flag after 3 old-runner nights: {"since":"2026-09-24T13:52:38Z","detail":"old runner night 3","reason":"deposit_review","attempts":3,"escalated":true,"nextRetryAt":"2026-10-01","lastAttemptAt":"2026-09-24T13:52:38Z"}
+   new runner clears it -> {"blocked": false, "changed": true, "success": true, "attempts": 0, "escalated": false, "nextRetryAt": null}
+   plan.collectionBlocked now: null
+2. night 1 insert: ok
+2. night 2 insert: REFUSED: duplicate key value violates unique constraint "notifications_camp_id_source_source_id_key"
+2. night 3 insert: REFUSED: duplicate key value violates unique constraint "notifications_camp_id_source_source_id_key"
+   notices the office has: gold:deposit_review:pi_dep , gold:plan_a:deposit_review , gold:plan_a:deposit_review:escalated | money notice? true

@@ -1,0 +1,21 @@
+default canteen disposition: roll_forward
+steps: [{"kind":"canteen","do":"roll_forward","amount":6}]
+family ledger balance before: 0
+toast: 1 close-out step applied
+evalmachine.<anonymous>:8
+console.log('family charges[]:', JSON.stringify(families.gold.charges.map(function(c){return c.category+' $'+c.amount+' '+c.description})));
+                                                                      ^
+
+TypeError: Cannot read properties of undefined (reading 'map')
+    at evalmachine.<anonymous>:8:71
+    at Script.runInContext (node:vm:149:12)
+    at Object.runInContext (node:vm:301:6)
+    at Object.<anonymous> (/home/user/daily-camp-schedular/ted/probes/2026-09-24-billing/closeout.js:22:4)
+    at Module._compile (node:internal/modules/cjs/loader:1705:14)
+    at Object..js (node:internal/modules/cjs/loader:1838:10)
+    at Module.load (node:internal/modules/cjs/loader:1441:32)
+    at Function._load (node:internal/modules/cjs/loader:1263:12)
+    at TracingChannel.traceSync (node:diagnostics_channel:328:14)
+    at wrapModuleLoad (node:internal/modules/cjs/loader:237:24)
+
+Node.js v22.22.2

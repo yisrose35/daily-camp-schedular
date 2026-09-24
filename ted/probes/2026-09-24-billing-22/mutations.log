@@ -1,0 +1,39 @@
+CAUGHT  P1 TED-200 new pause only on autopay plans again  (exit 1; bash scripts/run_pgtests.sh 288)
+      FAIL   288_autopay_waits_while_a_payment_is_disputed
+CAUGHT  P2 TED-200 family disputeHold never written  (exit 1; bash scripts/run_pgtests.sh 288)
+      FAIL   288_autopay_waits_while_a_payment_is_disputed
+CAUGHT  P3 TED-201 legacy single plan skipped  (exit 1; bash scripts/run_pgtests.sh 288)
+      FAIL   288_autopay_waits_while_a_payment_is_disputed
+CAUGHT  P4 TED-200 merge not patched (_keep_dispute_hold never applied)  (exit 1; bash scripts/run_pgtests.sh 288)
+      FAIL   288_autopay_waits_while_a_payment_is_disputed
+MISSED  P5 TED-200 _keep_dispute_hold lets a page write its own pause  (exit 0; bash scripts/run_pgtests.sh 288)
+CAUGHT  P6 TED-202 Resume ignores open disputes  (exit 1; bash scripts/run_pgtests.sh 288)
+      FAIL   288_autopay_waits_while_a_payment_is_disputed
+CAUGHT  P7 TED-202 note_dispute_lost a no-op  (exit 1; bash scripts/run_pgtests.sh 288)
+      FAIL   288_autopay_waits_while_a_payment_is_disputed
+CAUGHT  P8 TED-200 runner: family-level disputeHold check removed  (exit 1; node --test tests/dispute_pause_everywhere.test.js tests/autopay_runner.test.js tests/tuition_dispute_inquiry.test.js)
+      not ok 24 - TED-200/201: autopay does not charge a family paused on the FAMILY — a plan added or switched on mid-dispute — while a control family is charged
+CAUGHT  P9 TED-200 stripe-charge: dispute check removed  (exit 1; node --test tests/dispute_pause_everywhere.test.js tests/stripe_refund_and_charge.test.js)
+      not ok 5 - TED-200: stripe-charge refuses the card of a family in dispute — hand-paying, on the server, before Stripe is asked
+      not ok 6 - TED-200: a paused plan (an older pause, on the plan only) is refused too; a family read error charges nothing
+MISSED  P10 TED-200 stripe-charge: family read error charges anyway  (exit 0; node --test tests/dispute_pause_everywhere.test.js tests/stripe_refund_and_charge.test.js)
+CAUGHT  P11 TED-200 payments-charge: dispute check removed  (exit 1; node --test tests/dispute_pause_everywhere.test.js tests/byop_charge.test.js)
+      not ok 14 - TED-200: payments-charge (Cardknox/Banquest) refuses a family in dispute; the control is charged
+CAUGHT  P12 TED-200 byop: no pause on a new dispute  (exit 1; node --test tests/dispute_pause_everywhere.test.js)
+      not ok 3 - TED-200: a Banquest/Cardknox dispute pauses the family's card too; won lifts it; lost marks it lost
+CAUGHT  P13 TED-202 byop: a lost dispute lifts the pause  (exit 1; node --test tests/dispute_pause_everywhere.test.js)
+      not ok 3 - TED-200: a Banquest/Cardknox dispute pauses the family's card too; won lifts it; lost marks it lost
+CAUGHT  P14 TED-202 stripe-webhook: lost not marked  (exit 1; node --test tests/dispute_pause_everywhere.test.js tests/tuition_dispute_inquiry.test.js)
+      not ok 1 - TED-202: a lost dispute is marked lost (Resume may then lift it); a won one is not
+CAUGHT  P15 TED-200 page: _famDisputeHeld ignores disputeHold  (exit 1; node --test tests/ach_on_its_way.test.js tests/autopay_lost_answer.test.js tests/batch_charge_counts_failures.test.js tests/office_charge_retry.test.js tests/payer_split_billed.test.js)
+      not ok 12 - TED-200: a family paying by hand, or with no plan, whose payment is disputed is not charged by Batch Charge or Charge Card
+      not ok 32 - TED-200: Billing names a disputed family whose card is paused — no plan, or a plan not on autopay — once
+CAUGHT  P16 TED-200 page: Billing label removed  (exit 1; node --test tests/ach_on_its_way.test.js tests/autopay_lost_answer.test.js tests/batch_charge_counts_failures.test.js tests/office_charge_retry.test.js tests/payer_split_billed.test.js)
+      not ok 32 - TED-200: Billing names a disputed family whose card is paused — no plan, or a plan not on autopay — once
+MISSED  P17 TED-202 page: Resume always sends p_even_open true  (exit 0; node --test tests/ach_on_its_way.test.js tests/autopay_lost_answer.test.js tests/batch_charge_counts_failures.test.js tests/office_charge_retry.test.js tests/payer_split_billed.test.js)
+MISSED  P18 TED-202 page: server refusal not re-asked  (exit 0; node --test tests/ach_on_its_way.test.js tests/autopay_lost_answer.test.js tests/batch_charge_counts_failures.test.js tests/office_charge_retry.test.js tests/payer_split_billed.test.js)
+CAUGHT  P19 TED-203 Move back keeps nothing  (exit 1; node --test tests/ach_on_its_way.test.js tests/autopay_lost_answer.test.js tests/batch_charge_counts_failures.test.js tests/office_charge_retry.test.js tests/payer_split_billed.test.js)
+      not ok 63 - TED-203: Move back after the fund paid $300 of its $800 share — only the unpaid $500 goes to the family, and the window says so
+CAUGHT  P20 TED-203 Move back window no longer names the paid part  (exit 1; node --test tests/ach_on_its_way.test.js tests/autopay_lost_answer.test.js tests/batch_charge_counts_failures.test.js tests/office_charge_retry.test.js tests/payer_split_billed.test.js)
+      not ok 63 - TED-203: Move back after the fund paid $300 of its $800 share — only the unpaid $500 goes to the family, and the window says so
+MISSED  P21 check script: the new 288 row removed  (exit 0; bash scripts/run_pgtests.sh 288)

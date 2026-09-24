@@ -1,0 +1,121 @@
+TAP version 13
+# Subtest: TED-153: $970 by cheque against $1,000 settles it — the $30 discount is its own line
+ok 1 - TED-153: $970 by cheque against $1,000 settles it — the $30 discount is its own line
+  ---
+  duration_ms: 11.144154
+  type: 'test'
+  ...
+# Subtest: TED-153: the full posted price by cheque earns the same $30 back as credit
+ok 2 - TED-153: the full posted price by cheque earns the same $30 back as credit
+  ---
+  duration_ms: 6.389083
+  type: 'test'
+  ...
+# Subtest: TED-153: two part payments add up to exactly the discount on the bill
+ok 3 - TED-153: two part payments add up to exactly the discount on the bill
+  ---
+  duration_ms: 4.766363
+  type: 'test'
+  ...
+# Subtest: TED-153: a card, PayPal or "other" payment pays the posted price; other card-fee modes give nothing
+ok 4 - TED-153: a card, PayPal or "other" payment pays the posted price; other card-fee modes give nothing
+  ---
+  duration_ms: 22.340442
+  type: 'test'
+  ...
+# Subtest: TED-153: a flat discount comes off per payment
+ok 5 - TED-153: a flat discount comes off per payment
+  ---
+  duration_ms: 4.823299
+  type: 'test'
+  ...
+# Subtest: TED-153: Record Payment shows the discount before it is saved
+ok 6 - TED-153: Record Payment shows the discount before it is saved
+  ---
+  duration_ms: 4.414207
+  type: 'test'
+  ...
+# Subtest: TED-153: the family tool is for bank payments made online (which payment: tests/finance_payments_reach_the_bill.test.js)
+not ok 7 - TED-153: the family tool is for bank payments made online (which payment: tests/finance_payments_reach_the_bill.test.js)
+  ---
+  duration_ms: 1.199303
+  type: 'test'
+  location: '/tmp/claude-0/-home-user-daily-camp-schedular/39278441-0cf3-5f6a-bf8e-a51bef67e95d/scratchpad/old_aa72c69/tests/cash_discount_applied.test.js:113:1'
+  failureType: 'testCodeFailure'
+  error: |-
+    The input did not match the regular expression /_onlineBankPaymentsWithoutDiscount\(famKey\)/. Input:
+    
+    'function _giveCashDiscount(famKey){\n' +
+      '    var f=families[famKey];\n' +
+      "    if(!f){toast('Family not found','error');return}\n" +
+      '    var owed=Math.max(0,(buildFamilyLedgers()[famKey]||{}).balance||0);\n' +
+      `    var h='<div class="me-modal-form">';\n` +
+      `    h+='<p style="font-size:.84rem;color:var(--s600);margin:0 0 10px;line-height:1.6">Cheques, cash and bank transfers you record with <strong>Record Payment</strong> get the discount automatically. '\n` +
+      "      +'Use this for a bank payment the family made <strong>online</strong> (a pay link or a bank debit) \\u2014 enter what they paid, before the discount.</p>';\n" +
+      `    h+='<div class="me-field"><label>Paid by bank ($)</label><input type="number" id="cdAmt" class="me-input" step="0.01" min="0"></div>';\n` +
+      `    h+='<p style="font-size:.78rem;color:var(--s500);margin:6px 0 0">They owe '+fm(owed)+' now.</p>';\n` +
+      "    h+='</div>';\n" +
+      "    showModal('Discount for not paying by card',h,function(){\n" +
+      "        var amt=parseFloat((document.getElementById('cdAmt')||{}).value)||0;\n" +
+      "        if(!(amt>0)){toast('Enter what they paid by bank','error');return}\n" +
+      '        // What they owed before that payment is what it settled against.\n' +
+      "        var cd=_cashDiscountFor(owed+amt,amt,'ach');\n" +
+      "        if(!(cd.discount>0)){toast('That works out to no discount','error');return}\n" +
+      "        var n=_postCashDiscount(f,{id:'manual_'+Date.now(),date:today()},cd);\n" +
+      "        save();closeModal('dynModal');\n" +
+      "        if(curPage==='familydetail')renderFamilyDetailPage();else renderBilling();\n" +
+      "        toast(fm(n)+' off '+(f.name||'the account')+' for not paying by card');\n" +
+      "    },'Give discount');\n" +
+      '}'
+    
+  code: 'ERR_ASSERTION'
+  name: 'AssertionError'
+  expected:
+  actual: |-
+    function _giveCashDiscount(famKey){
+        var f=families[famKey];
+        if(!f){toast('Family not found','error');return}
+        var owed=Math.max(0,(buildFamilyLedgers()[famKey]||{}).balance||0);
+        var h='<div class="me-modal-form">';
+        h+='<p style="font-size:.84rem;color:var(--s600);margin:0 0 10px;line-height:1.6">Cheques, cash and bank transfers you record with <strong>Record Payment</strong> get the discount automatically. '
+          +'Use this for a bank payment the family made <strong>online</strong> (a pay link or a bank debit) \u2014 enter what they paid, before the discount.</p>';
+        h+='<div class="me-field"><label>Paid by bank ($)</label><input type="number" id="cdAmt" class="me-input" step="0.01" min="0"></div>';
+        h+='<p style="font-size:.78rem;color:var(--s500);margin:6px 0 0">They owe '+fm(owed)+' now.</p>';
+        h+='</div>';
+        showModal('Discount for not paying by card',h,function(){
+            var amt=parseFloat((document.getElementById('cdAmt')||{}).value)||0;
+            if(!(amt>0)){toast('Enter what they paid by bank','error');return}
+            // What they owed before that payment is what it settled against.
+            var cd=_cashDiscountFor(owed+amt,amt,'ach');
+            if(!(cd.discount>0)){toast('That works out to no discount','error');return}
+            var n=_postCashDiscount(f,{id:'manual_'+Date.now(),date:today()},cd);
+            save();closeModal('dynModal');
+            if(curPage==='familydetail')renderFamilyDetailPage();else renderBilling();
+            toast(fm(n)+' off '+(f.name||'the account')+' for not paying by card');
+        },'Give discount');
+    }
+  operator: 'match'
+  stack: |-
+    TestContext.<anonymous> (/tmp/claude-0/-home-user-daily-camp-schedular/39278441-0cf3-5f6a-bf8e-a51bef67e95d/scratchpad/old_aa72c69/tests/cash_discount_applied.test.js:114:12)
+    Test.runInAsyncScope (node:async_hooks:214:14)
+    Test.run (node:internal/test_runner/test:1047:25)
+    Test.processPendingSubtests (node:internal/test_runner/test:744:18)
+    Test.postRun (node:internal/test_runner/test:1173:19)
+    Test.run (node:internal/test_runner/test:1101:12)
+    async Test.processPendingSubtests (node:internal/test_runner/test:744:7)
+  ...
+# Subtest: TED-153: the Card Fees setting says where the discount is given
+ok 8 - TED-153: the Card Fees setting says where the discount is given
+  ---
+  duration_ms: 0.507416
+  type: 'test'
+  ...
+1..8
+# tests 8
+# suites 0
+# pass 7
+# fail 1
+# cancelled 0
+# skipped 0
+# todo 0
+# duration_ms 157.039705

@@ -1,0 +1,15 @@
+1. GET /camp_state_kv?select=camp_id,key,sessions:value->sessions&camp_id=in.(0ed16100-0000-0000-0000-000000000001,0ed16100-0000-0000-0000-000000000002)&key=eq.campistryMe
+   HTTP 200: [{"camp_id":"0ed16100-0000-0000-0000-000000000001","key":"campistryMe","sessions":[{"id": "s1", "name": "Summer", "endDate": "2027-08-20", "startDate": "2027-06-28"}]}, 
+ {"camp_id":"0ed16100-0000-0000-0000-000000000002","key":"campistryMe","sessions":null}]
+  ok  the alias comes back as `sessions` (an array) — the job's first branch   → {"camp_id":"0ed16100-0000-0000-0000-000000000001","key":"campistryMe","sessions":[{"id":"s1","name":"Summer","endDate":"2027-08-20","startDate":"2027-06-28"}]}
+  ok  the rest of the Me document is NOT sent (only the sessions)   → camp_id,key,sessions
+  ok  a camp whose Me document has no sessions → sessions null (the job treats it as no dated sessions)   → {"camp_id":"0ed16100-0000-0000-0000-000000000002","key":"campistryMe","sessions":null}
+2. supabase-js (the vendored supabase-js@2.js, 2.95.3) .select("camp_id, key, sessions:value->sessions") → error null, data [{"camp_id":"0ed16100-0000-0000-0000-000000000001","key":"campistryMe","sessions":[{"id":"s1","name":"Summer","endDate":"2027-08-20","startDate":"2027-06-28"}]},{"camp_id":"0ed16100-0000-0000-0000-000000000002","key":"campistryMe","sessions":null}]
+  ok  supabase-js + PostgREST return the sessions under `sessions`   → [{"camp_id":"0ed16100-0000-0000-0000-000000000001","key":"campistryMe","sessions":[{"id":"s1","name":"Summer","endDate":"2027-08-20","startDate":"2027-06-28"}]},{"camp_id":"0ed16100-0000-0000-0000-000000000002","key":"campistryMe","sessions":null}]
+postgrest log: 24/Sep/2026:17:19:02 +0000: Starting PostgREST 12.2.3...
+24/Sep/2026:17:19:02 +0000: Listening on port 3993
+24/Sep/2026:17:19:02 +0000: Successfully connected to PostgreSQL 16.13 (Ubuntu 16.13-0ubuntu0.24.04.1) on x86_64-pc-linux-gnu, compiled by gcc (Ubuntu 13.3.0-6ubuntu2~24.04.1) 13.3.0, 64-bit
+24/Sep/2026:17:19:02 +0000: Listening for notifications on the "pgrst" channel
+24/Sep/2026:17:19:02 +
+
+0 BAD

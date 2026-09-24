@@ -1,0 +1,14 @@
+A  no camp found, Resend fails on the first try
+    HTTP 500/200/200/200; email attempts that failed: 1; alert emails that went out: 1
+  ok  A the alert goes out once, on the next delivery
+B  known camp, booked refund, Resend fails on the first try
+    HTTP 500/200/200/200; email attempts that failed: 1; alert emails that went out: 1; Gold owes $0 (put back 1×), office notices 1
+  ok  B the alert goes out once; the $500 is put back once; one office notice
+C  known camp, no RESEND_API_KEY
+    HTTP 200/200/200/200; email attempts that failed: 0; alert emails that went out: 0; Gold owes $0 (put back 1×), office notices 1
+  ok  C nothing to send with: answered 200 (no retry loop), put back once
+D  known camp, Resend down for all four deliveries
+    HTTP 500/500/500/500; email attempts that failed: 4; alert emails that went out: 0; Gold owes $0 (put back 1×), office notices 1
+  NOTE D every delivery is answered 500/500/500/500 — Stripe keeps re-sending while the email service is down; money put back 1×, owes $0
+
+0 BAD

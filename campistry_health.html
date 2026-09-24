@@ -44,8 +44,8 @@
             100% { transform: scale(1.0); opacity: 1; }
         }
     </style>
-    <link rel="stylesheet" href="campistry-unified.css?v=20260903-03">
-    <link rel="stylesheet" href="campistry_health.css?v=20260903-03">
+    <link rel="stylesheet" href="campistry-unified.css?v=20260918-25">
+    <link rel="stylesheet" href="campistry_health.css?v=20260918-24">
     <noscript><style>html body{opacity:1!important}</style></noscript>
 </head>
 <body>
@@ -73,14 +73,13 @@
 <header class="app-header">
     <div class="header-left">
         <!-- Dashboard back link -->
-        <a href="dashboard.html" class="nav-back">&larr; Dashboard</a>
         <!-- Hamburger -->
         <button class="hamburger-btn" id="hamburgerBtn" aria-label="Toggle Navigation"><span></span><span></span><span></span></button>
     </div>
     <div class="app-header-center">
         <!-- Quick-Switch Bar (shared component — see campistry_app_switcher.js) -->
         <div data-quick-switch-mount="health"></div>
-        <script src="campistry_app_switcher.js?v=20260903-03"></script>
+        <script src="campistry_app_switcher.js?v=20260918-25"></script>
     </div>
     <div class="header-right">
         <div class="sync-badge"><span class="sync-dot"></span> Synced</div>
@@ -293,18 +292,22 @@ function triggerPage(p, btn) {
 </script>
 <script src="config.js?v=20260903-03"></script>
 <script src="supabase-js@2.js?v=20260903-03"></script>
-<script src="supabase_client.js?v=20260903-03"></script>
+<script src="campistry_camper_id_rpc.js?v=20260923-20"></script>
+<script src="supabase_client.js?v=20260923-08"></script>
 <!-- Session planning. Order is load-bearing: the rule must precede the
      bootstrap (which routes its key fetch through it), integration_hooks must
      precede presence (which asks it which plan this browser is in), and the bar
      mounts itself once integration_hooks has told it. -->
 <script src="campistry_workspace.js?v=20260917-02"></script>
 <script src="campistry_cloud_bootstrap.js?v=20260903-03"></script>
-<script src="integration_hooks.js?v=20260917-02"></script>
+<script src="integration_hooks.js?v=20260923-22"></script>
 <script src="campistry_workspace_ui.js?v=20260917-02"></script>
-<script src="campistry_enrollment_window.js?v=20260917-02"></script>
-<script src="campistry_presence.js?v=20260917-02"></script>
-<script src="campistry_health.js?v=20260903-04"></script>
+<script src="campistry_enrollment_window.js?v=20260923-20"></script>
+<script src="campistry_presence.js?v=20260923-21"></script>
+<!-- The master key: which session the whole program is showing. Pure rule; the
+     runtime half (the pin, the memo) is in integration_hooks.js. -->
+<script src="campistry_session_scope.js?v=20260918-09"></script>
+<script src="campistry_health.js?v=20260923-22"></script>
 <script>
 // Switches which .health-page is visible without touching the sidebar's
 // active state — used by the sidebar click handler below AND by
@@ -413,7 +416,7 @@ window.addEventListener('campistry-cloud-hydrated', function(){
 <script src="product_access_guard.js?v=20260903-03"></script>
 <!-- Per-SECTION access: limits which parts of THIS app the user can open.
      Loads after the product gate, which decides whether they get in at all. -->
-<script src="campistry_capabilities.js?v=20260907-01"></script>
+<script src="campistry_capabilities.js?v=20260924-01"></script>
 <script src="campistry_access_sections.js?v=20260907-01"></script>
 </body>
 </html>

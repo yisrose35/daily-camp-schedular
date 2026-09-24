@@ -1,0 +1,18 @@
+F full cancel  | 2025: claimable 0 | prepaid 500 | paidEarlier 0 | paid.net 500 | rows 0 | claimedTotal 0
+      warn: $500.00 paid in 2025 is for camp in 2026. Under IRS Publication 503 it is claimed on the 2026 return, and it is on the 2026 statement, so it is not in
+F full cancel  | 2026: claimable 0 | prepaid 0 | paidEarlier 0 | paid.net -500 | rows 0 | claimedTotal 0
+G part refund  | 2026: claimable 2200 | prepaid 0 | paidEarlier 500 | paid.net 1700 | rows 2200 | claimedTotal 2200
+      warn: Includes 500.00 paid before 2026 for care given in 2026 — under Publication 503 it is claimed for the year the care is given, not the year it was paid
+J undated Aug  | 2026: claimable 0 | prepaid 500 | paidEarlier 0 | paid.net 500 | rows 0 | claimedTotal 0
+      warn: Session “Summer 2027” has no start date, so its care is taken to be in 2027 (from its name, or from when it was charged). Add its dates under Sessions
+      warn: $500.00 paid in 2026 is for camp in 2027. Under IRS Publication 503 it is claimed on the 2027 return, and it is on the 2027 statement, so it is not in
+J undated Aug  | 2027: claimable 3000 | prepaid 0 | paidEarlier 500 | paid.net 2500 | rows 3000 | claimedTotal 3000
+      warn: Session “Summer 2027” has no start date, so its care is taken to be in 2027 (from its name, or from when it was charged). Add its dates under Sessions
+      warn: Includes 500.00 paid before 2027 for care given in 2027 — under Publication 503 it is claimed for the year the care is given, not the year it was paid
+K undated fall | 2026: claimable 0 | prepaid 400 | paidEarlier 0 | paid.net 400 | rows 0 | claimedTotal 0
+      warn: Session “Fall Sundays” has no start date, so its care is taken to be in 2027 (from its name, or from when it was charged). Add its dates under Session
+      warn: $400.00 paid in 2026 is for camp in 2027. Under IRS Publication 503 it is claimed on the 2027 return, and it is on the 2027 statement, so it is not in
+K undated fall | 2027: claimable 400 | prepaid 0 | paidEarlier 400 | paid.net 0 | rows 400 | claimedTotal 400
+      warn: Session “Fall Sundays” has no start date, so its care is taken to be in 2027 (from its name, or from when it was charged). Add its dates under Session
+      warn: Includes 400.00 paid before 2027 for care given in 2027 — under Publication 503 it is claimed for the year the care is given, not the year it was paid
+Expected: F 2026 → 0. G 2026 → 2200 (3000 care − 800 refunded). J → 2026 0 (prepaid 500), 2027 3000 — or at least a warning. K → 2026 400 (care given in 2026) — or at least a warning.

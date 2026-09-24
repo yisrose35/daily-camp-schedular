@@ -1,0 +1,49 @@
+TAP version 13
+# Subtest: 10:00 a $500 charge whose answer is lost (it went through); 15:00 another $500 press
+not ok 1 - 10:00 a $500 charge whose answer is lost (it went through); 15:00 another $500 press
+  ---
+  duration_ms: 2.406585
+  type: 'test'
+  location: '/home/user/daily-camp-schedular/ted/probes/2026-09-24-billing-11/charge_card_same_or_new.test.js:112:1'
+  failureType: 'testCodeFailure'
+  error: '_familyDisputed is not defined'
+  code: 'ERR_TEST_FAILURE'
+  name: 'ReferenceError'
+  stack: |-
+    Object.chargeStoredCard [as charge] (eval at page (/home/user/daily-camp-schedular/ted/probes/2026-09-24-billing-11/charge_card_same_or_new.test.js:88:18), <anonymous>:9:5)
+    day (/home/user/daily-camp-schedular/ted/probes/2026-09-24-billing-11/charge_card_same_or_new.test.js:97:22)
+    TestContext.<anonymous> (/home/user/daily-camp-schedular/ted/probes/2026-09-24-billing-11/charge_card_same_or_new.test.js:114:21)
+    Test.runInAsyncScope (node:async_hooks:214:14)
+    Test.run (node:internal/test_runner/test:1047:25)
+    Test.start (node:internal/test_runner/test:944:17)
+    startSubtestAfterBootstrap (node:internal/test_runner/harness:296:17)
+  ...
+# Subtest: TED-119: the real page row + the webhook row on a real database, both orders
+not ok 2 - TED-119: the real page row + the webhook row on a real database, both orders
+  ---
+  duration_ms: 3829.633593
+  type: 'test'
+  location: '/home/user/daily-camp-schedular/ted/probes/2026-09-24-billing-11/charge_card_same_or_new.test.js:120:1'
+  failureType: 'testCodeFailure'
+  error: '_familyDisputed is not defined'
+  code: 'ERR_TEST_FAILURE'
+  name: 'ReferenceError'
+  stack: |-
+    Object.chargeStoredCard [as charge] (eval at page (/home/user/daily-camp-schedular/ted/probes/2026-09-24-billing-11/charge_card_same_or_new.test.js:88:18), <anonymous>:9:5)
+    TestContext.<anonymous> (/home/user/daily-camp-schedular/ted/probes/2026-09-24-billing-11/charge_card_same_or_new.test.js:150:13)
+    Test.runInAsyncScope (node:async_hooks:214:14)
+    Test.run (node:internal/test_runner/test:1047:25)
+    Test.processPendingSubtests (node:internal/test_runner/test:744:18)
+    Test.postRun (node:internal/test_runner/test:1173:19)
+    Test.run (node:internal/test_runner/test:1101:12)
+    async startSubtestAfterBootstrap (node:internal/test_runner/harness:296:3)
+  ...
+1..2
+# tests 2
+# suites 0
+# pass 0
+# fail 2
+# cancelled 0
+# skipped 0
+# todo 0
+# duration_ms 3938.041922

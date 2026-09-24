@@ -32,6 +32,10 @@
 // the plain name, so stripping it needs no roster lookup. Identity — lookups,
 // accounts, ledgers, selection — keeps using the KEY; only humans see this.
 function _lbl(key) { return String(key == null ? '' : key).replace(/\s#\d+$/, ''); }
+function _camperIdOf(key) {
+    var g = readGlobal(), r = (g.app1 && g.app1.camperRoster) || {}, c = r[key];
+    return c && c.camperId != null && c.camperId !== '' ? c.camperId : null;
+}
 'use strict';
 
 var STORE_KEY = 'campGlobalSettings_v1';
@@ -45,10 +49,30 @@ var tagFilter = 'all';       // which status the Tags tab prints
 // ── storage ─────────────────────────────────────────────────────────────────
 function readGlobal() {
     var keys = [STORE_KEY, 'CAMPISTRY_LOCAL_CACHE', 'CAMPISTRY_UNIFIED_STATE'];
+    var g = {};
     for (var i = 0; i < keys.length; i++) {
-        try { var raw = localStorage.getItem(keys[i]); if (raw) return JSON.parse(raw) || {}; } catch (e) {}
+        try { var raw = localStorage.getItem(keys[i]); if (raw) { g = JSON.parse(raw) || {}; break; } } catch (e) {}
     }
-    return {};
+    return _withFullRoster(g);
+}
+
+// ★ The roster is NOT in localStorage — setLocalSettings strips
+// app1.camperRoster from the lite snapshot to stay under the 5MB quota, and the
+// full state lives in IndexedDB behind loadGlobalSettings(). Without this the
+// luggage booking form has no camper to pick, on every load after the first
+// hydration. See campistry_snacks.js for the long version and
+// tests/full_state_readers.test.js for the check.
+function _withFullRoster(lite) {
+    try {
+        if ((lite.app1 && lite.app1.camperRoster) ||
+            typeof window.loadGlobalSettings !== 'function') return lite;
+        var full = window.loadGlobalSettings();
+        var r = full && full.app1 && full.app1.camperRoster;
+        if (!r || !Object.keys(r).length) return lite;
+        var out = Object.assign({}, lite);
+        out.app1 = Object.assign({}, lite.app1, { camperRoster: r });
+        return out;
+    } catch (e) { return lite; }
 }
 function load() {
     var g = readGlobal();
@@ -123,7 +147,7 @@ function camperList() {
     return Object.keys(r).map(function (name) {
         var c = r[name] || {};
         return {
-            name: name, bunk: c.bunk || '', division: c.division || '',
+            name: name, camperId: c.camperId != null ? c.camperId : null, bunk: c.bunk || '', division: c.division || '',
             // Bags follow the family home in the off-season and the summer
             // address during it, so both are worth having to hand.
             street: c.street || '', city: c.city || '', state: c.state || '', zip: c.zip || ''
@@ -322,7 +346,7 @@ function renderBookings() {
             var svc = LC.SERVICE_TYPES.filter(function (s) { return s.id === b.serviceType; })[0];
             h += '<tr class="click' + (b.status === 'cancelled' ? '" style="opacity:.5' : '') + '" onclick="lugEditBooking(\'' + esc(b.id) + '\')">' +
                 '<td style="font-family:ui-monospace,monospace;font-size:.78rem">' + esc(b.ref || '—') + '</td>' +
-                '<td class="bold">' + esc(b.camperName || '—') + '</td>' +
+                '<td class="bold">' + esc(_lbl(b.camperName) || '—') + '</td>' +
                 '<td>' + esc(b.bunk || '—') + '</td>' +
                 '<td style="font-size:.8rem">' + esc(svc ? svc.label : b.serviceType || '—') +
                     (b.pickupMode === 'private' ? ' <span class="ops-badge ops-badge--info">Home</span>' : '') + '</td>' +
@@ -386,7 +410,7 @@ function renderTags() {
         h += '<div class="ops-tag">' +
             '<div class="ops-tag-camp">' + esc(lug.settings.campName || 'Camp') +
                 '<span class="ops-tag-of">' + esc(type ? type.label : b.type) + '</span></div>' +
-            '<div class="ops-tag-name">' + esc(b.camperName || '—') + '</div>' +
+            '<div class="ops-tag-name">' + esc(_lbl(b.camperName) || '—') + '</div>' +
             '<div class="ops-tag-bunk">' + esc([b.division, b.bunk].filter(Boolean).join(' · ') || 'Bunk TBD') + '</div>' +
             '<div class="ops-tag-code">' + esc(b.tag) + '</div>' +
             '</div>';
@@ -437,7 +461,7 @@ function renderManifest() {
             var st = LC.statusMeta(b.status) || { label: b.status };
             var type = LC.BAG_TYPES.filter(function (t) { return t.id === b.type; })[0];
             h += '<tr><td style="font-family:ui-monospace,monospace;font-size:.78rem">' + esc(b.tag) + '</td>' +
-                '<td class="bold">' + esc(b.camperName) + '</td>' +
+                '<td class="bold">' + esc(_lbl(b.camperName)) + '</td>' +
                 '<td>' + esc(b.bunk || '—') + '</td>' +
                 '<td style="font-size:.8rem">' + esc(type ? type.label : b.type) + '</td>' +
                 '<td><span class="ops-badge ' + (st.problem ? 'ops-badge--err' : st.terminal ? 'ops-badge--ok' : 'ops-badge--info') + '">' + esc(st.label) + '</span></td>' +
@@ -529,7 +553,7 @@ function renderDelivery() {
         g.bags.forEach(function (b) {
             var st = LC.statusMeta(b.status) || { label: b.status };
             var type = LC.BAG_TYPES.filter(function (t) { return t.id === b.type; })[0];
-            h += '<tr><td class="bold">' + esc(b.camperName) + '</td>' +
+            h += '<tr><td class="bold">' + esc(_lbl(b.camperName)) + '</td>' +
                 '<td style="font-family:ui-monospace,monospace;font-size:.78rem">' + esc(b.tag) + '</td>' +
                 '<td style="font-size:.8rem">' + esc(type ? type.label : b.type) + '</td>' +
                 '<td><span class="ops-badge ' + (st.problem ? 'ops-badge--err' : st.terminal ? 'ops-badge--ok' : '') + '">' + esc(st.label) + '</span></td>' +
@@ -555,7 +579,7 @@ window.lugEditBooking = function (id) {
         '<div class="ops-row"><div class="ops-field"><label>Camper</label>' +
         '<select class="ops-select" id="bkCamper" onchange="lugCamperPicked()"><option value="">— Select —</option>' +
         campers.map(function (c) {
-            return '<option value="' + esc(c.name) + '"' + (b.camperName === c.name ? ' selected' : '') + '>' +
+            return '<option value="' + esc(c.name) + '"' + (((b.camperId != null && c.camperId != null) ? String(b.camperId) === String(c.camperId) : b.camperName === c.name) ? ' selected' : '') + '>' +
                 esc(_lbl(c.name)) + (c.bunk ? ' (' + esc(c.bunk) + ')' : '') + '</option>';
         }).join('') + '</select></div>' +
         '<div class="ops-field"><label>Bunk</label><input class="ops-input" id="bkBunk" value="' + esc(b.bunk || '') + '"></div>' +
@@ -645,7 +669,7 @@ function draftBooking() {
         if (isFinite(n) && n > 0) counts[t.id] = n;
     });
     return {
-        camperName: val('bkCamper'), bunk: val('bkBunk'), division: val('bkDiv'),
+        camperName: val('bkCamper'), camperId: _camperIdOf(val('bkCamper')), bunk: val('bkBunk'), division: val('bkDiv'),
         serviceType: val('bkService') || 'round',
         pickupMode: val('bkMode') || 'communal',
         locationId: val('bkMode') === 'private' ? '' : val('bkLocation'),
@@ -704,7 +728,7 @@ window.lugSaveBooking = function () {
 
 window.lugDeleteBooking = function (id) {
     var b = bookingById(id); if (!b) return;
-    if (!confirm('Delete the booking for ' + (b.camperName || 'this camper') + '? Its bags and their history go too.')) return;
+    if (!confirm('Delete the booking for ' + (_lbl(b.camperName) || 'this camper') + '? Its bags and their history go too.')) return;
     lug.bookings = lug.bookings.filter(function (x) { return x.id !== id; });
     save(); render();
     lugToast('Booking deleted');
@@ -806,7 +830,7 @@ window.lugExportCSV = function () {
         (b.bags || []).forEach(function (bag) {
             var t = LC.BAG_TYPES.filter(function (x) { return x.id === bag.type; })[0];
             var st = LC.statusMeta(bag.status);
-            rows.push([b.ref || '', b.camperName || '', b.bunk || '', b.division || '',
+            rows.push([b.ref || '', _lbl(b.camperName) || '', b.bunk || '', b.division || '',
                        svc ? svc.label : b.serviceType, b.pickupMode === 'private' ? 'Private pick-up' : 'Communal',
                        locationName(b.locationId), bag.tag, t ? t.label : bag.type,
                        st ? st.label : bag.status, b.quotedTotal || 0, b.paid ? 'Yes' : 'No']);
