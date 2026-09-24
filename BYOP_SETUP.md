@@ -462,10 +462,22 @@ https://<your-project>.supabase.co/functions/v1/byop-dispute-webhook?processor=b
   With one camp the function resolves it from `camp_processor_credentials`;
   with several it refuses to guess and logs exactly that, because putting a
   chargeback on the wrong camp's books is worse than not recording it.
-* Optionally set a `BYOP_DISPUTE_SECRET` function secret and have the
-  processor send it as the `x-webhook-secret` header. If the processor can't
-  send custom headers, leave it unset — every write the endpoint makes is
-  idempotent and reversible.
+* **`BYOP_DISPUTE_SECRET` is required.** Without it the endpoint refuses
+  every notification (and says so in its logs: "REFUSING ALL REQUESTS"), so
+  no chargeback is ever recorded and the family's card is never paused.
+  Set it once for the whole project:
+  1. Make up a long random value (40+ letters and numbers, no symbols).
+  2. Supabase Dashboard → **Edge Functions** → **Secrets** → **Add new
+     secret** → Name `BYOP_DISPUTE_SECRET`, Value: that string → **Save**.
+  3. Give it to the processor, one of two ways:
+     - **As a header** (if the processor's dispute notification screen has
+       "custom headers"): name `x-webhook-secret`, value the secret.
+     - **On the URL** (if it has no header option): add `&key=<the secret>`
+       to the end of the webhook URL above, e.g.
+       `…/byop-dispute-webhook?processor=banquest&key=<the secret>`.
+  4. `byop-dispute-webhook` → **Settings** → **Enforce JWT Verification**
+     **OFF** (the processor calls it without a Supabase login; the secret is
+     what keeps strangers out).
 
 **Send one real test dispute from the processor's dashboard after wiring it
 up.** The function logs the entire body when it can't find a reference; read

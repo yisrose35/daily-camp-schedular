@@ -176,3 +176,142 @@ test('TED-200: payments-charge (Cardknox/Banquest) refuses a family in dispute; 
     assert.strictEqual(ok.status, 200, JSON.stringify(ok.body));
     assert.strictEqual(ok.fetches.filter(f => /cardknox/.test(f.url)).length, 1);
 });
+
+// ── canteen auto-reload (TED-205) ───────────────────────────────────────────
+function reloadNight(families) {
+    return runEdge('canteen-auto-reload', `
+T.env = { STRIPE_SECRET_KEY: 'sk_test', SUPABASE_URL: 'http://db', SUPABASE_ANON_KEY: 'anon', SUPABASE_SERVICE_ROLE_KEY: 'svc', CANTEEN_AUTORELOAD_CRON_SECRET: 'c' };
+T.tables.camps = [{ id: 'camp1', owner: 'u-owner', payment_processor_key: null }];
+T.tables.camp_state_kv = [{ camp_id: 'camp1', key: 'campistryMe', value: { sessions: [{ name: 'Summer', startDate: '2000-01-01', endDate: '2999-12-31' }] } }];
+const ar = (cus: string) => ({ enabled: true, cardOnFile: true, stripeCustomerId: cus, thresholdEnabled: true, thresholdAmount: 5, thresholdReloadAmount: 25 });
+T.rpc.canteen_autoreload_accounts = () => [
+  { camp_id: 'camp1', resolvable: true, person_id: 1, camper_name: 'Bea Gold', account: { balance: 0, autoReload: ar('cus_gold') } },
+  { camp_id: 'camp1', resolvable: true, person_id: 2, camper_name: 'Dan Gold #2', account: { balance: 0, autoReload: ar('cus_grandma') } },
+  { camp_id: 'camp1', resolvable: true, person_id: 3, camper_name: 'Cy', account: { balance: 0, autoReload: ar('cus_cy') } },
+  { camp_id: 'camp1', resolvable: true, person_id: 4, camper_name: 'Eli Cousin', account: { balance: 0, autoReload: ar('cus_gold') } }];
+T.rpc.camp_families_object = ${families};
+T.rpc.claim_refund_intent = () => ({ claimed: true });
+T.tables.__charged = [];
+T.fetch = (url: string, init: any) => { if (init.method === 'POST' && url.endsWith('/payment_intents')) { T.tables.__charged.push(new URLSearchParams(init.body).get('customer')); return { id: 'pi_r', status: 'succeeded' }; } return {}; };
+T.request = { headers: { 'x-cron-secret': 'c' }, body: {} };`);
+}
+
+test('TED-205: auto-reload does not charge the card of a family whose payment is disputed, nor its children\'s other cards; a control child is charged', () => {
+    const r = reloadNight(`() => ({ gold: { name: 'Gold', stripeCustomerId: 'cus_gold', camperIds: ['Bea Gold', 'Dan Gold'],
+        disputeHold: { disputeIds: ['dp_gold'], lostIds: [] } }, cy: { name: 'Cy', stripeCustomerId: 'cus_cy', camperIds: ['Cy'] } })`);
+    assert.deepStrictEqual(r.tables.__charged, ['cus_cy'], 'charged: ' + JSON.stringify(r.tables.__charged));
+    // Bea and Dan (the family's children, whichever card) and Eli (another family, the disputed card)
+    assert.strictEqual((JSON.stringify(r.body).match(/held_for_dispute/g) || []).length, 3, JSON.stringify(r.body).slice(0, 500));
+    // with no dispute, all three are charged
+    const none = reloadNight(`() => ({ gold: { name: 'Gold', stripeCustomerId: 'cus_gold', camperIds: ['Bea Gold', 'Dan Gold'] } })`);
+    assert.deepStrictEqual(none.tables.__charged.sort(), ['cus_cy', 'cus_gold', 'cus_gold', 'cus_grandma']);
+});
+
+test('TED-205: when the families cannot be read, nothing is reloaded this run', () => {
+    const r = reloadNight(`() => { throw new Error('statement timeout'); }`);
+    assert.deepStrictEqual(r.tables.__charged, []);
+    assert.match(JSON.stringify(r.body), /skipped_family_read_failed/);
+});
+
+test('TED-205: a disputed canteen top-up switches that child\'s auto-reload off (500 if it cannot, so Stripe sends it again)', () => {
+    const ev = { id: 'evt_cd', type: 'charge.dispute.created', data: { object: { id: 'dp_avi', charge: 'ch_avi', payment_intent: 'pi_avi', amount: 2000, status: 'needs_response', reason: 'fraudulent' } } };
+    const canteen = `
+T.fetch = (url: string) => {
+  if (url.includes('/payment_intents/pi_avi')) return { id: 'pi_avi', metadata: { campId: 'camp1', camperName: 'Avi', source: 'campistry-canteen-deposit' } };
+  if (url.includes('/charges/ch_avi')) return { id: 'ch_avi', payment_intent: 'pi_avi', metadata: {} };
+  return {};
+};
+T.rpc.record_canteen_stripe_reversal = () => ({ success: true, amount: 20 });`;
+    const ok = deliver([ev], canteen);
+    assert.strictEqual(ok.status, 200, JSON.stringify(ok.body));
+    assert.deepStrictEqual(calls(ok, 'pause_canteen_autoreload_for_dispute'), [{ p_camp_id: 'camp1', p_payment_intent_id: 'pi_avi', p_dispute_id: 'dp_avi' }]);
+    const bad = deliver([ev], canteen + `\nT.rpc.pause_canteen_autoreload_for_dispute = () => { throw new Error('statement timeout'); };`);
+    assert.strictEqual(bad.status, 500);
+});
+
+test('TED-206: a database error while posting a Cardknox/Banquest chargeback (or its close) answers 500, so it is sent again; an answer does not', () => {
+    const post = byop({ chargeback_id: 'cb_1', reference_number: 'ref_1', status: 'open' }, `T.rpc.record_chargeback = () => { throw new Error('statement timeout'); };`);
+    assert.strictEqual(post.status, 500);
+    assert.strictEqual(calls(post, 'hold_autopay_for_dispute').length, 0);
+    const close = byop({ chargeback_id: 'cb_1', reference_number: 'ref_1', status: 'won' }, `T.rpc.resolve_chargeback = () => { throw new Error('statement timeout'); };`);
+    assert.strictEqual(close.status, 500);
+    const answer = byop({ chargeback_id: 'cb_1', reference_number: 'ref_1', status: 'open' }, `T.rpc.record_chargeback = () => ({ success: false, error: 'payment_not_found' });`);
+    assert.strictEqual(answer.status, 200);
+    // no secret configured: refused, and says what to set
+    const unset = runEdge('byop-dispute-webhook', `
+T.env = { SUPABASE_URL: 'http://db', SUPABASE_SERVICE_ROLE_KEY: 'svc' };
+T.request = { url: 'http://edge.test/byop-dispute-webhook?processor=banquest', headers: { 'content-type': 'application/json' }, rawBody: '{}' };`);
+    assert.strictEqual(unset.status, 503);
+});
+
+test('TED-206: a processor that cannot send a header passes the secret as &key= on the URL; a wrong key is refused', () => {
+    const run = (q, hdr) => runEdge('byop-dispute-webhook', `
+T.env = { SUPABASE_URL: 'http://db', SUPABASE_SERVICE_ROLE_KEY: 'svc', BYOP_DISPUTE_SECRET: 'sek' };
+T.rpc.record_chargeback = () => ({ success: true, familyKey: 'hazel' });
+T.request = { url: 'http://edge.test/byop-dispute-webhook?processor=banquest&camp=camp1${q}', headers: ${JSON.stringify(Object.assign({ 'content-type': 'application/json' }, hdr || {}))},
+  rawBody: ${JSON.stringify(JSON.stringify({ chargeback_id: 'cb_k', reference_number: 'ref_1', status: 'open' }))} };`);
+    const ok = run('&key=sek');
+    assert.strictEqual(ok.status, 200, JSON.stringify(ok.body));
+    assert.strictEqual(calls(ok, 'record_chargeback').length, 1);
+    for (const bad of [run('&key=nope'), run(''), run('&key=sek', { 'x-webhook-secret': 'wrong' })]) {
+        assert.strictEqual(bad.status, 401);
+        assert.strictEqual(calls(bad, 'record_chargeback').length, 0);
+    }
+});
+
+test('TED-208 (P10): stripe-charge charges nothing when it cannot read the families the second time', () => {
+    const r = stripeCharge('cus_F', `let n = 0; T.rpc.camp_families_object = () => { n++; if (n > 1) throw new Error('statement timeout'); return ${FAMS}; };`);
+    assert.strictEqual(r.status, 503, JSON.stringify(r.body));
+    assert.strictEqual(piPosts(r).length, 0);
+});
+
+// ── the Me page's Resume window (TED-202/208) ───────────────────────────────
+const fsx = require('node:fs');
+const ME = fsx.readFileSync(require('node:path').join(__dirname, '..', 'campistry_me.js'), 'utf8');
+function cutFn(name) {
+    const m = ME.match(new RegExp('(?:async )?function ' + name + '\\([^)]*\\)\\{[\\s\\S]*?\\n\\}\\n'));
+    if (!m) throw new Error('not found: ' + name);
+    return m[0];
+}
+function resumePage(fam, answers, yes) {
+    const sent = [], dialogs = [], toasts = [];
+    const client = { rpc: async (name, args) => { sent.push(args); return { data: answers.shift(), error: null }; } };
+    const ctx = {
+        families: { wren: fam }, _secEdit: () => true, toast: (t) => toasts.push(t),
+        confirmDialog: async (o) => { dialogs.push(o); return yes.shift(); },
+        window: { CampistryDB: { getClient: () => client, getCampId: () => 'camp1' } },
+        _loadFamiliesFromRows: async () => {}, curPage: 'billing', renderBilling() {}, renderFamilyDetailPage() {},
+    };
+    const fn = new Function(...Object.keys(ctx), cutFn('_disputeCounts') + cutFn('resumeAutopayAfterDispute') + 'return resumeAutopayAfterDispute;')(...Object.values(ctx));
+    return { fn, sent, dialogs, toasts };
+}
+
+test('TED-208 (P17): Resume sends "resume anyway" only when a dispute is open and the office chose it', async () => {
+    const lostOnly = resumePage({ name: 'Wren', disputeHold: { disputeIds: ['dp_w'], lostIds: ['dp_w'] } }, [{ success: true, changed: true }], [true]);
+    await lostOnly.fn('wren');
+    assert.deepStrictEqual(lostOnly.sent.map(a => a.p_even_open), [false]);
+    assert.match(lostOnly.dialogs[0].message, /the camp lost it/);
+    const open = resumePage({ name: 'Wren', disputeHold: { disputeIds: ['dp_a', 'dp_b'], lostIds: ['dp_a'] } }, [{ success: true, changed: true }], [true]);
+    await open.fn('wren');
+    assert.match(open.dialogs[0].message, /1 dispute is still open with the bank \(the camp lost 1\)/);
+    assert.strictEqual(open.dialogs[0].confirmLabel, 'Resume anyway');
+    assert.deepStrictEqual(open.sent.map(a => a.p_even_open), [true]);
+    const no = resumePage({ name: 'Wren', disputeHold: { disputeIds: ['dp_a'], lostIds: [] } }, [], [false]);
+    await no.fn('wren');
+    assert.strictEqual(no.sent.length, 0, 'cancelled, but the page asked the server anyway');
+});
+
+test('TED-208 (P18): a page that loaded before the dispute is asked again with the server\'s count, and Cancel changes nothing', async () => {
+    const stale = () => resumePage({ name: 'Wren', disputeHold: { disputeIds: ['dp_a'], lostIds: ['dp_a'] } },
+        [{ success: false, error: 'dispute_open', open: 1, message: 'A dispute is still open with the bank.' }, { success: true, changed: true }], [true, true]);
+    const yes = stale();
+    await yes.fn('wren');
+    assert.deepStrictEqual(yes.sent.map(a => a.p_even_open), [false, true]);
+    assert.match(yes.dialogs[1].message, /A dispute is still open with the bank\. Resume charging Wren.s card anyway\?/);
+    assert.match(yes.toasts[0], /resumed for Wren/);
+    const cancel = resumePage({ name: 'Wren', disputeHold: { disputeIds: ['dp_a'], lostIds: ['dp_a'] } },
+        [{ success: false, error: 'dispute_open', open: 1, message: 'A dispute is still open with the bank.' }], [true, false]);
+    await cancel.fn('wren');
+    assert.strictEqual(cancel.sent.length, 1);
+    assert.strictEqual(cancel.toasts.length, 0);
+});

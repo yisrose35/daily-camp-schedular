@@ -38,13 +38,13 @@ function billing(shares) {
     const reg = P.normalize({ org_fund: { name: 'Scholarship Fund', kind: 'organization' } });
     const els = {}, toasts = [], ctx_payOpts = [];
     let onOk = null;
-    const dialogs = [];
+    const dialogs = [], htmls = [];
     const val = (id, v) => (els[id] = { value: v });
     const ctx = {
         families: { pine: fam }, payers: reg, _payersAPI: () => P, _billingCore: () => B, _secEdit: () => true,
         esc: (s) => String(s), fm: (n) => '$' + Number(n).toFixed(2), je: (s) => s, today: () => '2026-08-20',
         save() {}, closeModal() {}, renderBilling() {}, renderFamilyDetailPage() {}, curPage: 'billing',
-        toast: (t) => toasts.push(t), showModal: (t, h, ok) => { onOk = ok; }, _payOptions: (ctx, sel) => { ctx_payOpts.push(sel); return ''; },
+        toast: (t) => toasts.push(t), showModal: (t, h, ok) => { onOk = ok; htmls.push(h); }, _payOptions: (ctx, sel) => { ctx_payOpts.push(sel); return ''; },
         confirmDialog: (o) => { dialogs.push(o); return Promise.resolve(true); }, _payLabel: (m) => m,
         _payerSharesFromForm: () => shares,
         document: { getElementById: (id) => els[id] || null, querySelectorAll: () => [] },
@@ -52,7 +52,7 @@ function billing(shares) {
     const names = ['addChargeForFamily', '_splitToPayers', '_familyOtherPayers', 'recordPayerPayment', '_postLedgerCharge',
         '_payerLedgerOf', '_migratePayerLedgers', '_payerLines', '_payerStanding', '_payerAccount', '_payerTotals', '_placePayerPayment', 'payerLines', 'voidPayerLine'];
     const fns = new Function(...Object.keys(ctx), names.map(cut).join('\n') + '\nreturn { ' + names.join(', ') + ' };')(...Object.values(ctx));
-    return { fam, reg, fns, els, toasts, dialogs, val, payOpts: ctx_payOpts, families: ctx.families, press: () => onOk && onOk() };
+    return { fam, reg, fns, els, toasts, dialogs, htmls, val, payOpts: ctx_payOpts, families: ctx.families, press: () => onOk && onOk() };
 }
 
 test('TED-165: $1,000 with $800 from the Scholarship Fund — Pine is billed $200; the fund owes $800 on its own account', () => {
@@ -279,4 +279,38 @@ test('TED-203: Move back after the fund paid $300 of its $800 share — only the
     await tick();
     assert.strictEqual(B.balance(c.fam), 1000);
     assert.match(c.dialogs[0].message, /Scholarship Fund will no longer owe it/);
+});
+
+test('TED-209: a share the fund has paid in full offers no Move back, and pressing it anyway writes nothing', async () => {
+    const b = billing([{ payerId: 'org_fund', amount: 800 }]);
+    split(b, 1000);
+    b.fns.recordPayerPayment('org_fund');
+    b.val('ppAmt', '300'); b.val('ppDate', '2026-08-25'); b.val('ppMethod', 'check'); b.val('ppRef', '');
+    b.press();
+    const share = b.fam.payerLedger.find(e => e.kind === 'charge');
+    b.fns.voidPayerLine('org_fund', share.id);
+    await tick();
+    const kept = b.fam.payerLedger.find(e => /^prkeep_/.test(e.id));
+    assert.ok(kept && kept.amount === 300);
+    const before = b.fam.payerLedger.length;
+    b.fns.voidPayerLine('org_fund', kept.id);
+    await tick();
+    assert.strictEqual(b.fam.payerLedger.length, before, 'lines were added for a share with nothing to move');
+    assert.match(b.toasts[b.toasts.length - 1], /Nothing to move back — Scholarship Fund has paid this share in full/);
+    assert.strictEqual(B.balance(b.fam), 700);
+    // the account window shows "paid" for it, not a Move back button
+    b.fns.payerLines('org_fund');
+    const html = b.htmls[b.htmls.length - 1];
+    const row = html.split('<tr>').find(r => r.includes(kept.id));
+    assert.ok(row, html);
+    assert.match(row, />paid<\/span>/);
+    assert.doesNotMatch(row, /Move back to family/);
+    // the description never doubles
+    b.fns.recordPayerPayment('org_fund');
+    const pay = b.fam.payerLedger.find(e => e.kind === 'payment');
+    b.fns.voidPayerLine('org_fund', pay.paymentId);       // the cheque removed: the kept part is owed again
+    await tick();
+    b.fns.voidPayerLine('org_fund', kept.id);
+    await tick();
+    assert.ok(!b.fam.payerLedger.some(e => /the part Scholarship Fund paid — the part/.test(e.description || '')));
 });

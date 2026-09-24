@@ -113,6 +113,28 @@ BEGIN
     r := public.resume_autopay_after_dispute(c, 'teal', true);
     f := public.camp_family(c, 'teal');
     IF (r->>'changed')::boolean IS NOT TRUE OR f ? 'disputeHold' OR f->'plans'->0 ? 'collectionBlocked' THEN RAISE EXCEPTION 'resume anyway: % / %', r, f; END IF;
+    -- TED-207 (D6/D8): a late or routine message about a dispute the office
+    -- resumed never pauses the family again
+    r := public.hold_autopay_for_dispute(c, 'teal', 'dp_O', true, NULL);
+    f := public.camp_family(c, 'teal');
+    IF (r->>'alreadyResumed')::boolean IS NOT TRUE OR f ? 'disputeHold' OR f->'plans'->0 ? 'collectionBlocked' THEN
+        RAISE EXCEPTION 'TED-207: a late message re-paused a family the office resumed: % / %', r, f;
+    END IF;
+    -- TED-207 (D7): "lost" arrives before the dispute itself — Resume may lift it
+    r := public.note_dispute_lost(c, 'teal', 'dp_E');
+    r := public.hold_autopay_for_dispute(c, 'teal', 'dp_E', true, NULL);
+    f := public.camp_family(c, 'teal');
+    IF NOT COALESCE((f->'disputeHold'->'lostIds') ? 'dp_E', false) THEN RAISE EXCEPTION 'TED-207: a loss that came first was forgotten: %', f->'disputeHold'; END IF;
+    r := public.resume_autopay_after_dispute(c, 'teal');
+    IF (r->>'success')::boolean IS NOT TRUE THEN RAISE EXCEPTION 'TED-207: Resume called a lost dispute open: %', r; END IF;
+    -- TED-208 (P5): with no pause on the server, a page cannot write one (nor
+    -- drop the lasting log)
+    r := public.sync_camp_billing(c, jsonb_build_object('teal', (public.camp_family(c, 'teal') - 'disputeLog')
+            || '{"disputeHold":{"disputeIds":["dp_page"]}}'::jsonb), '[]'::jsonb, '[]'::jsonb, '[]'::jsonb);
+    f := public.camp_family(c, 'teal');
+    IF f ? 'disputeHold' OR NOT COALESCE((f->'disputeLog'->'resumed') ? 'dp_O', false) THEN
+        RAISE EXCEPTION 'TED-208: a page wrote the pause or dropped the log: %', f;
+    END IF;
 
     -- TED-193: two disputes — winning one keeps the pause until the other closes
     r := public.hold_autopay_for_dispute(c, 'teal', 'dp_A', true, NULL);
@@ -211,15 +233,65 @@ BEGIN
 END $$;
 ROLLBACK;
 
--- TED-204 (N14): an earlier copy of 288 is named by the checking script
+-- TED-204/208 (N14, P21): each piece of an earlier or broken 288 is named by the checking script
 BEGIN;
 CREATE OR REPLACE FUNCTION public._mark_plans_for_dispute(p_fam jsonb, p_dispute_id text, p_hold boolean, p_detail text)
 RETURNS jsonb LANGUAGE sql STABLE AS $fn$ SELECT p_fam /* disputeIds, pass-20 copy */ $fn$;
-CREATE TEMP TABLE v288b AS :verify_q
+CREATE TEMP TABLE v288_0 AS :verify_q
 DO $$
 DECLARE r text;
 BEGIN
-    SELECT result INTO r FROM v288b WHERE item LIKE '288%';
-    IF r NOT LIKE 'apply 288 again%' THEN RAISE EXCEPTION 'TED-204: the checking script missed an earlier 288: %', r; END IF;
+    SELECT result INTO r FROM v288_0 WHERE item LIKE '288%';
+    IF r NOT LIKE 'apply 288 again%' THEN RAISE EXCEPTION 'TED-208: the checking script missed pass-20 _mark_plans_for_dispute: %', r; END IF;
+END $$;
+ROLLBACK;
+BEGIN;
+DO $x$ BEGIN EXECUTE replace(pg_get_functiondef('public.flag_plan_collection(uuid,text,text,text,text)'::regprocedure), 'v_cb', 'v_zz'); END $x$;
+CREATE TEMP TABLE v288_1 AS :verify_q
+DO $$
+DECLARE r text;
+BEGIN
+    SELECT result INTO r FROM v288_1 WHERE item LIKE '288%';
+    IF r NOT LIKE 'apply 288 again%' THEN RAISE EXCEPTION 'TED-208: the checking script missed flag_plan_collection without the pause (N14): %', r; END IF;
+END $$;
+ROLLBACK;
+BEGIN;
+DO $x$ BEGIN EXECUTE replace(pg_get_functiondef('public.hold_autopay_for_dispute(uuid,text,text,boolean,text)'::regprocedure), 'le_cbwon_', 'le_cbwin_'); END $x$;
+CREATE TEMP TABLE v288_2 AS :verify_q
+DO $$
+DECLARE r text;
+BEGIN
+    SELECT result INTO r FROM v288_2 WHERE item LIKE '288%';
+    IF r NOT LIKE 'apply 288 again%' THEN RAISE EXCEPTION 'TED-208: the checking script missed hold without the won check: %', r; END IF;
+END $$;
+ROLLBACK;
+BEGIN;
+DROP FUNCTION public.note_dispute_lost(uuid,text,text);
+CREATE TEMP TABLE v288_3 AS :verify_q
+DO $$
+DECLARE r text;
+BEGIN
+    SELECT result INTO r FROM v288_3 WHERE item LIKE '288%';
+    IF r NOT LIKE 'apply 288 again%' THEN RAISE EXCEPTION 'TED-208: the checking script missed no note_dispute_lost: %', r; END IF;
+END $$;
+ROLLBACK;
+BEGIN;
+DO $x$ BEGIN EXECUTE replace(pg_get_functiondef('public._merge_family_from_page(jsonb,jsonb)'::regprocedure), 'public._keep_dispute_hold(p_server, ', '('); END $x$;
+CREATE TEMP TABLE v288_4 AS :verify_q
+DO $$
+DECLARE r text;
+BEGIN
+    SELECT result INTO r FROM v288_4 WHERE item LIKE '288%';
+    IF r NOT LIKE 'apply 288 again%' THEN RAISE EXCEPTION 'TED-208: the checking script missed merge without the pause: %', r; END IF;
+END $$;
+ROLLBACK;
+BEGIN;
+DO $x$ BEGIN EXECUTE replace(pg_get_functiondef('public.hold_autopay_for_dispute(uuid,text,text,boolean,text)'::regprocedure), 'disputeLog', 'dispute_log'); END $x$;
+CREATE TEMP TABLE v288_5 AS :verify_q
+DO $$
+DECLARE r text;
+BEGIN
+    SELECT result INTO r FROM v288_5 WHERE item LIKE '288%';
+    IF r NOT LIKE 'apply 288 again%' THEN RAISE EXCEPTION 'TED-208: the checking script missed hold without the log (pass-21 copy): %', r; END IF;
 END $$;
 ROLLBACK;

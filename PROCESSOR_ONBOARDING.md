@@ -39,12 +39,24 @@ Open `admin_connect_processor.html` → fill in project ref, service role key, c
 
 ### 3. Post-connect setup (every camp, no exceptions)
 
+First, once for the whole project (skip if already done for any camp):
+- Supabase Dashboard → **Edge Functions** → **Secrets** → **Add new secret** →
+  Name `BYOP_DISPUTE_SECRET`, Value: a long random string of letters and
+  numbers you make up → **Save**. Keep it; each processor's dashboard needs it.
+  Without it, disputes are refused and never recorded, and a disputed card
+  keeps being charged.
+- **Edge Functions** → `byop-dispute-webhook` → **Settings** → **Enforce JWT
+  Verification** OFF.
+
 In the camp's own Banquest dashboard:
 - Point the chargeback/dispute notification at:
   `https://bzqmhcumuarrbueqttfh.supabase.co/functions/v1/byop-dispute-webhook?processor=banquest`
+  - The secret: if the notification screen lets you add a header, add
+    `x-webhook-secret` = the secret. If it doesn't, add `&key=<the secret>` to
+    the end of the URL instead.
   - Add `&camp=<camp id>` **only if** this is the 2nd+ camp on Banquest.
   - ⚠️ If it IS the 2nd+ camp: go back and add `&camp=<that other camp's id>` to every earlier Banquest camp's URL too — otherwise their disputes silently stop recording.
-- Send one real test dispute, then check Supabase → Edge Functions → `byop-dispute-webhook` → Logs to confirm it landed.
+- Send one real test dispute, then check Supabase → Edge Functions → `byop-dispute-webhook` → Logs to confirm it landed. "REFUSING ALL REQUESTS" means the secret is not set; "rejected: bad or missing x-webhook-secret / key" means the processor is not sending it (or sends a different value).
 
 ---
 
@@ -70,6 +82,9 @@ In the camp's own Sola dashboard:
 - **Dispute webhook**: point chargeback notifications at
   `https://bzqmhcumuarrbueqttfh.supabase.co/functions/v1/byop-dispute-webhook?processor=cardknox`
   (same `&camp=` rule as Banquest above — only needed once a 2nd camp shares Cardknox)
+  - The secret (set up once, see Banquest step 3 above): header
+    `x-webhook-secret` = the secret if the screen allows custom headers,
+    otherwise `&key=<the secret>` at the end of the URL.
 - **Webhook Settings** → Postback URL:
   `https://bzqmhcumuarrbueqttfh.supabase.co/functions/v1/cardknox-webhook?campId=<camp id>`
   → PIN: the exact `webhookPin` you just stored

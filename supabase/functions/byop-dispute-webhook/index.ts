@@ -194,13 +194,18 @@ serve(async (req) => {
   if (!WEBHOOK_SECRET) {
     console.error("[byop-dispute] REFUSING ALL REQUESTS: BYOP_DISPUTE_SECRET is not " +
                   "set. Set it in the Edge Function secrets and have the processor " +
-                  "send it as the x-webhook-secret header.");
+                  "send it as the x-webhook-secret header (or, for a processor that " +
+                  "cannot send headers, as &key=<secret> on the webhook URL).");
     return new Response(JSON.stringify({ error: "webhook_not_configured" }), {
       status: 503, headers: { ...corsHeaders, "Content-Type": "application/json" },
     });
   }
-  if (req.headers.get("x-webhook-secret") !== WEBHOOK_SECRET) {
-    console.warn(`[byop-dispute] rejected: bad or missing x-webhook-secret (${processor})`);
+  // The secret as the x-webhook-secret header — or, for a processor whose
+  // dashboard cannot add a header (TED-206), as &key= on the URL (HTTPS; the
+  // URL is typed into the processor's dashboard and nowhere else).
+  const sent = req.headers.get("x-webhook-secret") || url.searchParams.get("key") || "";
+  if (sent !== WEBHOOK_SECRET) {
+    console.warn(`[byop-dispute] rejected: bad or missing x-webhook-secret / key (${processor})`);
     return new Response(JSON.stringify({ error: "unauthorized" }), {
       status: 401, headers: { ...corsHeaders, "Content-Type": "application/json" },
     });
@@ -261,14 +266,14 @@ serve(async (req) => {
     });
   }
 
-  let pauseFailed = "";
+  let writeFailed = "";
   try {
     if (d.closed) {
       const { data, error } = await supabase.rpc("resolve_chargeback", {
         p_camp_id: camp, p_dispute_id: d.disputeId,
         p_won: d.won, p_status: d.status,
       });
-      if (error) console.warn(`[byop-dispute] ${processor} close not recorded: ${error.message}`);
+      if (error) writeFailed = `dispute ${d.disputeId} close not recorded yet: ${error.message}`;
       // The family's card pause (288, TED-200): won lifts this dispute from
       // it; lost marks it lost, so the office may resume from Billing.
       if (!error && data?.familyKey) {
@@ -277,7 +282,7 @@ serve(async (req) => {
               p_camp_id: camp, p_family_key: String(data.familyKey), p_dispute_id: d.disputeId, p_hold: false })
           : await supabase.rpc("note_dispute_lost", {
               p_camp_id: camp, p_family_key: String(data.familyKey), p_dispute_id: d.disputeId });
-        if (r.error) pauseFailed = `dispute ${d.disputeId} closed, but the family's card pause was not updated: ${r.error.message} — is migration 288 applied?`;
+        if (r.error) writeFailed = `dispute ${d.disputeId} closed, but the family's card pause was not updated: ${r.error.message} — is migration 288 applied?`;
       }
     } else {
       // A missing amount is NOT a reason to refuse. Cardknox's postback has no
@@ -292,7 +297,10 @@ serve(async (req) => {
         p_amount: d.amount > 0 ? d.amount : null,
         p_reason: d.reason, p_status: d.status,
       });
-      if (error || !data?.success) {
+      // A database error is sent again (TED-206): every writer here is keyed
+      // on the dispute. An ANSWER (no such payment) would answer the same.
+      if (error) writeFailed = `chargeback ${d.disputeId} not posted yet: ${error.message}`;
+      else if (!data?.success) {
         console.error(`[byop-dispute] ${processor}: chargeback ${d.disputeId} NOT posted ` +
           `(${error?.message || data?.error || "unknown"}) — the camp's books now overstate ` +
           `collected cash until this is reconciled by hand. refs=${d.refs.join(",")}`);
@@ -303,24 +311,25 @@ serve(async (req) => {
         const hold = await supabase.rpc("hold_autopay_for_dispute", {
           p_camp_id: camp, p_family_key: String(data.familyKey), p_dispute_id: d.disputeId, p_hold: true,
           p_detail: d.reason || null });
-        if (hold.error) pauseFailed = `chargeback ${d.disputeId} posted, but the family's card was not paused: ${hold.error.message} — is migration 288 applied?`;
+        if (hold.error) writeFailed = `chargeback ${d.disputeId} posted, but the family's card was not paused: ${hold.error.message} — is migration 288 applied?`;
       }
     }
   } catch (e) {
-    console.error(`[byop-dispute] ${processor} threw: ${(e as Error).message}`);
+    writeFailed = `threw: ${(e as Error).message}`;
   }
 
-  // The pause is the one write a retry fixes (every writer here is keyed on the
-  // dispute, so sending it again posts nothing twice): 500, so the processor
-  // sends it again, instead of leaving the family's card chargeable.
-  if (pauseFailed) {
-    console.error(`[byop-dispute] ${processor}: ${pauseFailed}`);
+  // A write that failed — the chargeback, its close, or the family's card
+  // pause — is one a retry fixes (every writer here is keyed on the dispute,
+  // so sending it again posts nothing twice): 500, so the processor sends it
+  // again, instead of leaving the books wrong and the card chargeable.
+  if (writeFailed) {
+    console.error(`[byop-dispute] ${processor}: ${writeFailed}`);
     return new Response(JSON.stringify({ received: true, paused: false }), {
       status: 500, headers: { ...corsHeaders, "Content-Type": "application/json" },
     });
   }
-  // Otherwise 200. A dispute notification retried forever because our own write
-  // failed helps nobody; the log line above is the actionable signal.
+  // Otherwise 200 — including an answer ("no such payment") that sending it
+  // again would not change; the log line above is the actionable signal.
   return new Response(JSON.stringify({ received: true }), {
     status: 200, headers: { ...corsHeaders, "Content-Type": "application/json" },
   });

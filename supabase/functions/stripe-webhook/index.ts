@@ -1021,6 +1021,11 @@ async function handleDisputeLedger(
     const amount = Number(((obj.amount || 0) / 100).toFixed(2));
     if (taking) {
       await canteenReversal(supabase, canteen.campId, canteen.pi, disputeId, amount, "dispute", obj.reason ? `Disputed — ${String(obj.reason).replace(/_/g, " ")}` : null);
+      // ...and that child's auto-reload stops charging the disputed card
+      // (290, TED-205) until the parent switches it back on.
+      const pause = await supabase.rpc("pause_canteen_autoreload_for_dispute", {
+        p_camp_id: canteen.campId, p_payment_intent_id: canteen.pi, p_dispute_id: disputeId });
+      if (pause.error) throw new Error(`canteen dispute ${disputeId}: auto-reload not paused yet: ${pause.error.message} — is migration 290 applied?`);
     } else if (status === "won") {
       await canteenReversal(supabase, canteen.campId, canteen.pi, disputeId, amount, "dispute_won", null);
     }

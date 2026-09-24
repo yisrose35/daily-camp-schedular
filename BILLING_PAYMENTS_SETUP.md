@@ -81,8 +81,13 @@ Dashboard → Developers → Webhooks → Add endpoint:
     Charge, whether or not they are on autopay (the server refuses it too). It
     resumes by itself if the camp wins; if the camp loses, from Billing
     ("Payment disputed — card not charged"), which says so if another dispute
-    of theirs is still open (migration 288). Cardknox and Banquest disputes
-    (byop-dispute-webhook) pause the card the same way.
+    of theirs is still open (migration 288); a late message from the bank about
+    a dispute the office already resumed does not pause them again. Canteen
+    auto-reload does not charge that family's card either, and a disputed
+    canteen top-up switches that child's auto-reload off until the parent
+    switches it back on in Link (migration 290). Cardknox and Banquest disputes
+    (byop-dispute-webhook) pause the card the same way — that needs the
+    `BYOP_DISPUTE_SECRET` secret (see BYOP_SETUP.md).
   - `radar.early_fraud_warning.created`, `review.opened`, `payout.failed`
 - Copy the signing secret into `STRIPE_WEBHOOK_SECRET` (step 3).
 

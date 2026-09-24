@@ -501,6 +501,32 @@ serve(async (req) => {
     }
   }
 
+  // A family whose payment is disputed with their bank (288, TED-205): its
+  // card is not charged again — by auto-reload either — while the bank decides.
+  // Asked once per camp; a camp whose families cannot be read reloads nothing
+  // this run (the next run asks again).
+  const disputedOf = new Map<string, { cards: Set<string>; campers: Set<string> } | null>();
+  async function disputedAt(campId: string) {
+    if (disputedOf.has(campId)) return disputedOf.get(campId) || null;
+    const { data, error } = await supabase.rpc("camp_families_object", { p_camp_id: campId });
+    let out: { cards: Set<string>; campers: Set<string> } | null = null;
+    if (!error && data && typeof data === "object") {
+      out = { cards: new Set(), campers: new Set() };
+      for (const f of Object.values(data as Record<string, any>)) {
+        if (!f || typeof f !== "object") continue;
+        const held = (f.disputeHold && Array.isArray(f.disputeHold.disputeIds) && f.disputeHold.disputeIds.length > 0)
+          || [...(Array.isArray(f.plans) ? f.plans : []), f.plan].some((p: any) => p && p.collectionBlocked && p.collectionBlocked.reason === "chargeback");
+        if (!held) continue;
+        for (const c of [f.stripeCustomerId, f.byopCustomerRef]) if (c) out.cards.add(String(c));
+        for (const c of (Array.isArray(f.camperIds) ? f.camperIds : [])) if (c != null) out.campers.add(displayName(c));
+      }
+    } else {
+      console.warn(`[canteen-auto-reload] camp ${campId}: families could not be read (${error?.message || "no answer"}) — no auto-reload this run`);
+    }
+    disputedOf.set(campId, out);
+    return out;
+  }
+
   details.push(...unresolvable);
 
   for (const row of (rows || [])) {
@@ -518,6 +544,19 @@ serve(async (req) => {
 
       const due = dueAmount(ar, Number(acct.balance) || 0, today);
       if (!due || due.amount <= 0) continue;
+
+      const disputed = await disputedAt(String(row.camp_id));
+      if (!disputed) {
+        details.push({ camp: row.camp_id, camper: camperName, camperId, amount: due.amount, kind: due.kind, result: "skipped_family_read_failed" });
+        continue;
+      }
+      if ((ar.stripeCustomerId && disputed.cards.has(String(ar.stripeCustomerId)))
+          || (ar.byopCustomerRef && disputed.cards.has(String(ar.byopCustomerRef)))
+          || disputed.campers.has(displayName(camperName))) {
+        details.push({ camp: row.camp_id, camper: camperName, camperId, amount: due.amount, kind: due.kind, result: "held_for_dispute",
+                       reason: "a payment of this family's is disputed with the bank" });
+        continue;
+      }
 
       // ONE reload per camper per slot (TED-075). Two runs at once — the
       // 30-minute cron and a parent's purchase triggering it, say — both read

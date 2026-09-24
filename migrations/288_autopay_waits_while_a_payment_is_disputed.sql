@@ -22,7 +22,9 @@
 -- plan, autopay on or not, the old single plan too; Billing, Charge Card,
 -- Batch Charge, the runner and stripe-charge / payments-charge all refuse a
 -- paused family; a lost dispute is marked lost, and Resume is refused while
--- another is still open.)
+-- another is still open. Edited after pass 22 — TED-207: the family keeps a
+-- lasting disputeLog of lost and resumed disputes, so a late message never
+-- re-pauses a family the office resumed, and a loss that arrives first counts.)
 -- hold_autopay_for_dispute(camp, family, dispute, hold): for stripe-webhook
 -- only. When a chargeback is posted, every autopay plan of that family is
 -- marked collectionBlocked {reason 'chargeback', disputeId} — the nightly
@@ -178,7 +180,19 @@ BEGIN
              WHERE e ->> 'id' = 'le_cbwon_' || p_dispute_id) THEN
         RETURN jsonb_build_object('success', true, 'changed', false, 'alreadyWon', true);
     END IF;
+    -- ...nor one the office already resumed (TED-207): a late or routine
+    -- message about it never pauses the family again behind the office's back.
+    IF COALESCE(p_hold, false) AND COALESCE((v_fam -> 'disputeLog' -> 'resumed') ? p_dispute_id, false) THEN
+        RETURN jsonb_build_object('success', true, 'changed', false, 'alreadyResumed', true);
+    END IF;
     v_new := public._mark_plans_for_dispute(v_fam, p_dispute_id, COALESCE(p_hold, false), p_detail);
+    -- A loss that arrived before the dispute itself (TED-207): already lost.
+    IF COALESCE(p_hold, false) AND COALESCE((v_fam -> 'disputeLog' -> 'lost') ? p_dispute_id, false)
+       AND jsonb_typeof(v_new -> 'disputeHold') = 'object'
+       AND NOT COALESCE((v_new -> 'disputeHold' -> 'lostIds') ? p_dispute_id, false) THEN
+        v_new := jsonb_set(v_new, '{disputeHold,lostIds}',
+                   COALESCE(v_new -> 'disputeHold' -> 'lostIds', '[]'::jsonb) || to_jsonb(p_dispute_id), true);
+    END IF;
     IF v_new IS NOT DISTINCT FROM v_fam THEN
         RETURN jsonb_build_object('success', true, 'changed', false);
     END IF;
@@ -208,6 +222,7 @@ SET search_path = public, pg_catalog
 AS $$
 DECLARE
     v_fam jsonb;
+    v_new jsonb;
     h     jsonb;
     v_lost jsonb;
 BEGIN
@@ -219,16 +234,25 @@ BEGIN
     IF v_fam IS NULL OR jsonb_typeof(v_fam) <> 'object' THEN
         RETURN jsonb_build_object('success', false, 'error', 'family_not_found');
     END IF;
-    h := CASE WHEN jsonb_typeof(v_fam -> 'disputeHold') = 'object' THEN v_fam -> 'disputeHold' END;
-    IF h IS NULL OR jsonb_typeof(h -> 'disputeIds') IS DISTINCT FROM 'array' OR NOT (h -> 'disputeIds') ? p_dispute_id THEN
+    -- Kept on the family for good (disputeLog), so a loss that arrives before
+    -- the dispute itself, or a message after the office resumed, still knows
+    -- it was lost (TED-207).
+    v_new := v_fam;
+    IF NOT COALESCE((v_fam -> 'disputeLog' -> 'lost') ? p_dispute_id, false) THEN
+        v_new := jsonb_set(v_new, '{disputeLog}', COALESCE(v_fam -> 'disputeLog', '{}'::jsonb)
+                   || jsonb_build_object('lost', COALESCE(v_fam -> 'disputeLog' -> 'lost', '[]'::jsonb) || to_jsonb(p_dispute_id)), true);
+    END IF;
+    h := CASE WHEN jsonb_typeof(v_new -> 'disputeHold') = 'object' THEN v_new -> 'disputeHold' END;
+    IF h IS NOT NULL AND jsonb_typeof(h -> 'disputeIds') = 'array' AND (h -> 'disputeIds') ? p_dispute_id THEN
+        v_lost := CASE WHEN jsonb_typeof(h -> 'lostIds') = 'array' THEN h -> 'lostIds' ELSE '[]'::jsonb END;
+        IF NOT v_lost ? p_dispute_id THEN
+            v_new := jsonb_set(v_new, '{disputeHold,lostIds}', v_lost || to_jsonb(p_dispute_id), true);
+        END IF;
+    END IF;
+    IF v_new IS NOT DISTINCT FROM v_fam THEN
         RETURN jsonb_build_object('success', true, 'changed', false);
     END IF;
-    v_lost := CASE WHEN jsonb_typeof(h -> 'lostIds') = 'array' THEN h -> 'lostIds' ELSE '[]'::jsonb END;
-    IF v_lost ? p_dispute_id THEN
-        RETURN jsonb_build_object('success', true, 'changed', false);
-    END IF;
-    PERFORM public.camp_family_save(p_camp_id, p_family_key,
-        jsonb_set(v_fam, '{disputeHold,lostIds}', v_lost || to_jsonb(p_dispute_id), true));
+    PERFORM public.camp_family_save(p_camp_id, p_family_key, v_new);
     RETURN jsonb_build_object('success', true, 'changed', true);
 END $$;
 REVOKE ALL ON FUNCTION public.note_dispute_lost(uuid, text, text) FROM public, anon, authenticated;
@@ -271,6 +295,14 @@ BEGIN
                             ELSE v_open || ' disputes are still open with the bank.' END);
     END IF;
     v_new := public._mark_plans_for_dispute(v_fam, NULL, false, NULL);
+    -- The disputes resumed are remembered (TED-207): a late or routine message
+    -- about one of them never pauses the family again.
+    IF jsonb_typeof(h -> 'disputeIds') = 'array' AND jsonb_array_length(h -> 'disputeIds') > 0 THEN
+        v_new := jsonb_set(v_new, '{disputeLog}', COALESCE(v_fam -> 'disputeLog', '{}'::jsonb)
+                   || jsonb_build_object('resumed', COALESCE(v_fam -> 'disputeLog' -> 'resumed', '[]'::jsonb)
+                        || (SELECT COALESCE(jsonb_agg(d), '[]'::jsonb) FROM jsonb_array_elements(h -> 'disputeIds') d
+                             WHERE NOT COALESCE((v_fam -> 'disputeLog' -> 'resumed') @> jsonb_build_array(d), false))), true);
+    END IF;
     IF v_new IS DISTINCT FROM v_fam THEN
         PERFORM public.camp_family_save(p_camp_id, p_family_key, v_new);
     END IF;
@@ -294,6 +326,9 @@ BEGIN
        OR p_server IS NULL OR jsonb_typeof(p_server) IS DISTINCT FROM 'object' THEN
         RETURN p_merged;
     END IF;
+    p_merged := CASE WHEN jsonb_typeof(p_server -> 'disputeLog') = 'object'
+                     THEN jsonb_set(p_merged, '{disputeLog}', p_server -> 'disputeLog', true)
+                     ELSE p_merged - 'disputeLog' END;
     IF jsonb_typeof(p_server -> 'disputeHold') = 'object' THEN
         RETURN jsonb_set(p_merged, '{disputeHold}', p_server -> 'disputeHold', true);
     END IF;

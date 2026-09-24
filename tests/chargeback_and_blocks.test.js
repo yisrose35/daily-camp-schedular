@@ -338,7 +338,8 @@ test('the secret compare is no longer conditional on having one', () => {
     // entirely when the secret is absent.
     assert.ok(!/if \(WEBHOOK_SECRET && req\.headers\.get/.test(BYOP_CODE),
         'a conditional check is an open door with extra steps');
-    assert.match(BYOP_CODE, /if \(req\.headers\.get\("x-webhook-secret"\) !== WEBHOOK_SECRET\)/);
+    // the header, or &key= for a processor that cannot send one (TED-206)
+    assert.match(BYOP_CODE, /const sent = req\.headers\.get\("x-webhook-secret"\) \|\| url\.searchParams\.get\("key"\) \|\| "";\s*if \(sent !== WEBHOOK_SECRET\)/);
 });
 
 test('the header no longer tells an operator it is fine to leave it unset', () => {

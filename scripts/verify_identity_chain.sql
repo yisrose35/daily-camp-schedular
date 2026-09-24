@@ -1,5 +1,5 @@
 -- ============================================================================
--- Confirm migrations 222-289 are in and doing their job.
+-- Confirm migrations 222-290 are in and doing their job.
 --
 -- Paste the whole thing into the Supabase SQL Editor. It is READ ONLY — one
 -- SELECT, nothing is created, changed or deleted, and the two purge functions
@@ -773,6 +773,9 @@ UNION ALL
                OR pg_get_functiondef(to_regprocedure('public._mark_plans_for_dispute(jsonb,text,boolean,text)')) !~ 'disputeHold'
                OR pg_get_functiondef(to_regprocedure('public._merge_family_from_page(jsonb,jsonb)')) !~ '_keep_dispute_hold'
           THEN 'apply 288 again — an earlier copy is in place: a family that pays by hand can be charged on a card it is disputing, and Resume clears a dispute still open'
+          WHEN pg_get_functiondef(to_regprocedure('public.hold_autopay_for_dispute(uuid,text,text,boolean,text)')) !~ 'disputeLog'
+               OR pg_get_functiondef(to_regprocedure('public._keep_dispute_hold(jsonb,jsonb)')) !~ 'disputeLog'
+          THEN 'apply 288 again — an earlier copy is in place: a late message from the bank can pause a family the office resumed'
           ELSE 'ok' END),
     -- A register sale keeps what it sold, by item id (TED-192).
     ('289  a register sale keeps what it sold',
@@ -780,6 +783,17 @@ UNION ALL
           THEN 'apply 289 BEFORE reloading the register — a void cannot put back items whose names have a comma or end in a number'
           WHEN to_regprocedure('public.submit_canteen_purchase_once(uuid,text,text,numeric,text,date,bigint)') IS NOT NULL
           THEN 'apply 289 again — two versions of the register''s charge are in place and it cannot choose between them'
+          ELSE 'ok' END),
+    -- A disputed canteen top-up switches the child's auto-reload off (TED-205).
+    ('290  a disputed top-up pauses auto-reload',
+     CASE WHEN to_regprocedure('public.pause_canteen_autoreload_for_dispute(uuid,text,text)') IS NULL
+          THEN 'apply 290 BEFORE deploying stripe-webhook — auto-reload charges a card again while its top-up is disputed, and the webhook answers 500'
+          WHEN has_function_privilege('authenticated', 'public.pause_canteen_autoreload_for_dispute(uuid,text,text)', 'EXECUTE')
+          THEN 'apply 290 again — a signed-in browser can switch a child''s auto-reload off'
+          WHEN pg_get_functiondef(COALESCE(to_regprocedure('public._update_canteen_autoreload_state__by_name(uuid,text,jsonb)'),
+                                           to_regprocedure('public.update_canteen_autoreload_state(uuid,text,jsonb)'))) !~ 'disputePausedAt'
+               OR pg_get_functiondef(to_regprocedure('public.set_canteen_auto_reload(uuid,text,jsonb,bigint)')) !~ 'disputePausedAt'
+          THEN 'apply 290 again — the nightly run can switch a dispute pause back on, or the parent cannot'
           ELSE 'ok' END)
     ) AS x(item, result)
 

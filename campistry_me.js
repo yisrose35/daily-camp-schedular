@@ -18844,9 +18844,12 @@ function payerLines(id){
             var tot=a.lines.filter(function(x){return x.kind==='payment'&&(x.paymentId||x.id)===k}).reduce(function(t,x){return t+(Number(x.amount)||0)},0);
             return '<tr><td>'+esc(e.date||'')+'</td><td>Payment'+(e.method?' ('+esc(_payLabel(e.method)||e.method)+')':'')+(e.reference?' #'+esc(e.reference):'')+'</td><td style="text-align:right">'+fm(tot)+'</td><td style="text-align:right">'
                 +(off?'<span style="color:var(--s400)">removed</span>':'<button class="me-btn me-btn--ghost me-btn--sm" style="color:var(--err)" onclick="CampistryMe.voidPayerLine(\''+je(id)+'\',\''+je(k)+'\')">Remove</button>')+'</td></tr>'; }
+        // A share the payer's money fully covers has nothing to move back (TED-209).
+        var paidUp=!off&&Math.round((a.paid-(a.charged-(Number(e.amount)||0)))*100)>=Math.round((Number(e.amount)||0)*100);
         return '<tr><td>'+esc(e.date||'')+'</td><td>'+esc(e.description||'Share')+'</td><td style="text-align:right">'+fm(e.amount)+'</td><td style="text-align:right">'
             +(off?'<span style="color:var(--s400)">taken back</span>':'<button class="me-btn me-btn--ghost me-btn--sm" style="color:var(--err)" onclick="CampistryMe.voidPayerLine(\''+je(id)+'\',\''+je(e.id)+'\',\'cancel\')">Cancel share</button>'
-                +'<button class="me-btn me-btn--ghost me-btn--sm" onclick="CampistryMe.voidPayerLine(\''+je(id)+'\',\''+je(e.id)+'\')">Move back to family</button>')+'</td></tr>';
+                +(paidUp?'<span style="font-size:.78rem;color:var(--s500);margin-left:6px">paid</span>'
+                    :'<button class="me-btn me-btn--ghost me-btn--sm" onclick="CampistryMe.voidPayerLine(\''+je(id)+'\',\''+je(e.id)+'\')">Move back to family</button>'))+'</td></tr>';
     }).join('');
     h+=rows?'<table class="me-t"><tbody>'+rows+'</tbody></table>':'<p style="color:var(--s500)">Nothing on this account yet.</p>';
     h+='</div>';
@@ -18871,11 +18874,13 @@ function voidPayerLine(pid,lineId,mode){
         kept=Math.max(0,Math.min(tot,left));
     }
     var back=Math.round((tot-kept)*100)/100;
+    // Fully paid by the payer (TED-209): nothing to move, and nothing is written.
+    if(!isPay&&!cancel&&!(back>0)){toast('Nothing to move back \u2014 '+name+' has paid this share in full','error');return}
     var msg=isPay?'Remove this '+fm(tot)+' payment from '+name+'? Use this for a payment entered by mistake, or one you gave back. '+name+' will owe it again.'
                  :cancel?'Cancel this '+fm(tot)+' share? Nobody will owe it \u2014 not '+name+', not the '+targets[0].family+' family. Use this when the charge was a mistake or is waived.'
                     +(a.paid>0?' '+name+' has paid '+fm(a.paid)+' so far; whatever that leaves over its other shares stays on its account as a credit, to return to them or keep for a later share.':'')
                  :kept>0?'Move this '+fm(tot)+' share back to the '+targets[0].family+' family\u2019s own bill? '+name+' has already paid '+fm(kept)+' toward it, so that '+fm(kept)+' stays on this share and '
-                    +(back>0?'only the unpaid '+fm(back)+' moves to the '+targets[0].family+' family.':'nothing moves to the '+targets[0].family+' family \u2014 it is paid.')
+                    +'only the unpaid '+fm(back)+' moves to the '+targets[0].family+' family.'
                     +' (To move all '+fm(tot)+' back and return '+name+'\u2019s money, remove its payment first.)'
                  :'Move this '+fm(tot)+' share back to the '+targets[0].family+' family\u2019s own bill? '+name+' will no longer owe it.';
     confirmDialog({title:isPay?'Remove payment?':cancel?'Cancel share?':'Move share back?',message:msg,confirmLabel:isPay?'Remove':cancel?'Cancel share':'Move back',danger:isPay||cancel}).then(function(ok){
@@ -18888,8 +18893,7 @@ function voidPayerLine(pid,lineId,mode){
             if(e.kind==='charge'&&!cancel){
                 if(kept>0&&!L.some(function(x){return x&&x.id==='prkeep_'+e.id}))
                     L.push({id:'prkeep_'+e.id,payerId:pid,kind:'charge',amount:kept,chargeId:e.chargeId,
-                        description:(e.description||'Share')+' \u2014 the part '+name+' paid',date:today(),timestamp:Date.now()});
-                if(!(back>0))return;
+                        description:String(e.description||'Share').replace(/ \u2014 the part .* paid$/,'')+' \u2014 the part '+name+' paid',date:today(),timestamp:Date.now()});
                 if(!Array.isArray(f.charges))f.charges=[];
                 var chg={id:'prback_'+e.id,category:'Share moved back',description:(e.description||'Share')+' \u2014 moved back from '+name,
                     amount:back,date:today(),timestamp:Date.now()};
