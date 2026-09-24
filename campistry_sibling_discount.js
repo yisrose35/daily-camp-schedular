@@ -109,7 +109,7 @@
             var ses = sessionOf(e.session);
             var liveT = ses && ses.tuition != null ? num(ses.tuition) : 0;
             var tuition = liveT > 0 ? liveT : num(e.sessionTuition);
-            live.push({ id: eid, camperName: e.camperName, tuition: round2(tuition), session: ses });
+            live.push({ id: eid, camperName: e.camperName, camperId: e.camperId != null ? e.camperId : null, tuition: round2(tuition), session: ses });
         });
         live.forEach(function (r) { r.pct = tierPct(r.session, live.length); });
 
@@ -169,7 +169,7 @@
             if (Math.abs(was - now) < 0.005) return;
             out.push({
                 enrollmentId: eid,
-                camperName: e.camperName || '',
+                camperName: e.camperName || '', camperId: e.camperId != null ? e.camperId : null,
                 was: was, now: now,
                 delta: round2(was - now),        // + = owes more now
                 direction: now > was ? 'more_discount' : 'less_discount',

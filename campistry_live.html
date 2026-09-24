@@ -348,23 +348,23 @@
 <script>window.CAMPISTRY_INBOUND_DOMAIN=window.CAMPISTRY_INBOUND_DOMAIN||'inbound.campistry.org';</script>
 <script src="config.js?v=20260903-03"></script>
 <script src="supabase-js@2.js?v=20260903-03"></script>
-<script src="campistry_camper_id_rpc.js?v=20260923-02"></script>
-<script src="supabase_client.js?v=20260923-02"></script>
+<script src="campistry_camper_id_rpc.js?v=20260923-20"></script>
+<script src="supabase_client.js?v=20260923-08"></script>
 <script src="campistry_finance_merge.js?v=20260918-10"></script>
 <script src="campistry_workspace.js?v=20260917-01"></script>
-<script src="integration_hooks.js?v=20260918-10"></script>
+<script src="integration_hooks.js?v=20260923-22"></script>
 <script src="campistry_workspace_ui.js?v=20260917-02"></script>
 
 <script src="campistry_cloud_bootstrap.js?v=20260903-03"></script>
 <script src="jsqr@1.4.0.js?v=20260903-03"></script>
 <script src="campistry_live_schedule_reader.js?v=20260903-03"></script>
-<script src="campistry_enrollment_window.js?v=20260917-02"></script>
-<script src="campistry_presence.js?v=20260918-05"></script>
+<script src="campistry_enrollment_window.js?v=20260923-20"></script>
+<script src="campistry_presence.js?v=20260923-21"></script>
 <!-- The master key: which session the whole program is showing. Pure rule; the
      runtime half (the pin, the memo) is in integration_hooks.js. -->
 <script src="campistry_session_scope.js?v=20260918-09"></script>
-<script src="campistry_live_locator.js?v=20260903-03"></script>
-<script src="campistry_bus_routes.js?v=20260903-03"></script>
+<script src="campistry_live_locator.js?v=20260923-20"></script>
+<script src="campistry_bus_routes.js?v=20260923-20"></script>
 <script src="campistry_live.js?v=20260903-03"></script>
 <script>setTimeout(function(){document.documentElement.classList.add('css-ready')},3000)</script>
 <script>
@@ -494,7 +494,7 @@ var ParentRequests = (function(){
                     if(!captainEmails.length)return;
                     client.functions.invoke('send-push',{body:{
                         campId:campId, pref:'pickupAlert', staffEmails:captainEmails,
-                        title:camperName+' is leaving early — mid-game',
+                        title:(window.campistryName||String)(camperName)+' is leaving early — mid-game',
                         body:pickupTimeStr?('Pickup at '+_fmtTime12(pickupTimeStr)):'',
                         data:{page:'campistry_lite.html'}
                     }}).then(function(){},function(e){console.warn('[Live] league-captain push failed:',e&&e.message||e);});
@@ -591,7 +591,7 @@ var ParentRequests = (function(){
                 if(res.error){ console.warn('[Live] parent requests load:',res.error.message); if(cb)cb(); return; }
                 var mapped=(res.data||[]).map(function(m){
                     return Object.assign({}, m.details||{}, {
-                        id:m.id, type:m.type, label:m.label, childName:m.camper_name, childBunk:m.camper_bunk||'',
+                        id:m.id, type:m.type, label:m.label, childName:m.camper_name, childId:m.person_id!=null?m.person_id:null, childBunk:m.camper_bunk||'',
                         parentName:m.parent_name||'', parentEmail:m.parent_email||'',
                         submittedAt:new Date(m.created_at).getTime(), requestDate:m.request_date||'',
                         status:m.status||'Pending', officeMessage:m.office_message||'', staffNote:m.staff_notes||'',
@@ -624,7 +624,7 @@ var ParentRequests = (function(){
                 if(res.error){ console.warn('[Live] dismissal changes report query failed:',res.error.message); return []; }
                 return (res.data||[]).map(function(m){
                     return Object.assign({}, m.details||{}, {
-                        id:m.id, type:m.type, label:m.label, childName:m.camper_name, childBunk:m.camper_bunk||'',
+                        id:m.id, type:m.type, label:m.label, childName:m.camper_name, childId:m.person_id!=null?m.person_id:null, childBunk:m.camper_bunk||'',
                         status:m.status||'Pending', requestDate:m.request_date||''
                     });
                 });
@@ -731,12 +731,12 @@ var ParentRequests = (function(){
                 '<button class="btn btn-secondary btn-sm" onclick="ParentRequests.deleteRequest('+i+')">Delete</button>'+
                 '</div>';
         }
-        var initials=esc(r.childName||'').split(' ').map(function(n){return n[0]||'';}).join('').slice(0,2);
+        var initials=esc((window.campistryName||String)(r.childName||'')).split(' ').map(function(n){return n[0]||'';}).join('').slice(0,2);
         return '<div style="display:flex;align-items:flex-start;gap:12px;padding:14px 0;border-bottom:1px solid var(--slate-100);">'+
             '<div style="width:36px;height:36px;border-radius:50%;background:var(--slate-100);display:flex;align-items:center;justify-content:center;flex-shrink:0;font-size:.72rem;font-weight:700;color:var(--slate-600);">'+initials+'</div>'+
             '<div style="flex:1;min-width:0;">'+
                 '<div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;">'+
-                    '<span style="font-weight:700;">'+esc(r.childName)+'</span>'+
+                    '<span style="font-weight:700;">'+esc((window.campistryName||String)(r.childName))+'</span>'+
                     (r.childBunk?'<span style="font-size:.7rem;color:var(--slate-400);background:var(--slate-100);padding:1px 8px;border-radius:999px;">'+esc(r.childBunk)+'</span>':'')+
                     '<span style="font-size:.68rem;font-weight:700;background:'+tm.bg+';color:'+tm.fg+';padding:1px 8px;border-radius:999px;">'+esc(tm.label)+'</span>'+
                     '<span class="badge '+statusCls+'" style="font-size:.66rem;">'+esc(r.status)+'</span>'+
@@ -751,7 +751,7 @@ var ParentRequests = (function(){
                 // migration 064) — this is the one place that acknowledgment
                 // status still shows, same as before Messages/Changes/Pickup
                 // Alerts were three separate pages.
-                (r.status==='Confirmed'&&r.type==='early'&&window.PickupAlerts?window.PickupAlerts.statusStripHtml(r.childName):'')+
+                (r.status==='Confirmed'&&r.type==='early'&&window.PickupAlerts?window.PickupAlerts.statusStripHtml(r.childName,r.childId):'')+
                 '<textarea class="form-input" rows="1" placeholder="Staff note (not shared with parent)" style="margin-top:6px;font-size:.76rem;" onblur="ParentRequests.saveNote('+i+',this.value)">'+esc(r.staffNote||'')+'</textarea>'+
                 actions+
             '</div>'+
@@ -1000,7 +1000,7 @@ var ParentRequests = (function(){
         // overwrite this row back to Pending with stale server data before
         // our own update has even been sent.
         (repaint||_paintActivity)();
-        liveToast(r.childName+' — '+r.label+' '+status.toLowerCase());
+        liveToast((window.campistryName||String)(r.childName)+' — '+r.label+' '+status.toLowerCase());
     }
 
     // One tap from Messages (or Changes) — no compose step. Repaints both
@@ -1035,7 +1035,7 @@ var ParentRequests = (function(){
         if(localStorage.getItem(DONT_ASK_DELETE_KEY)==='1'){ _doDeleteRequest(r); return; }
         _pendingDeleteReqId=r.id;
         var msg=document.getElementById('deleteConfirmMsg');
-        if(msg)msg.textContent='Delete this request permanently for '+(r.childName||'this camper')+'? This can\'t be undone.';
+        if(msg)msg.textContent='Delete this request permanently for '+((window.campistryName||String)(r.childName)||'this camper')+'? This can\'t be undone.';
         var dontAsk=document.getElementById('deleteConfirmDontAsk'); if(dontAsk)dontAsk.checked=false;
         var modal=document.getElementById('deleteConfirmModal'); if(modal)modal.classList.add('open');
     }
@@ -1170,8 +1170,12 @@ var PickupAlerts = (function(){
 
     // Inline status strip shown on a Confirmed early-pickup row in
     // ParentRequests' Activity view (see _activityReqRowHtml).
-    function statusStripHtml(camperName){
-        var a=_alerts.filter(function(x){return x.camper_name===camperName;})
+    // The alert for this child: by camper number when both carry one, by
+    // name only for a row from before numbers.
+    function statusStripHtml(camperName,camperId){
+        var a=_alerts.filter(function(x){
+                return (camperId!=null&&x.person_id!=null)?String(x.person_id)===String(camperId):x.camper_name===camperName;
+            })
             .sort(function(x,y){return (y.created_at||'').localeCompare(x.created_at||'');})[0];
         if(!a||!a.recipients||!a.recipients.length)return '';
         var rows=a.recipients.map(function(r){
@@ -1210,13 +1214,13 @@ var PickupAlerts = (function(){
             var leagueTag=a.league_check_state==='checked_match'?'<span class="badge badge-info" style="margin-left:6px;">League game</span>':'';
             return '<div class="card" style="margin-bottom:10px;"><div class="card-body">'+
                 '<div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;">'+
-                    '<span style="font-weight:700;">'+esc(a.camper_name)+'</span>'+
+                    '<span style="font-weight:700;">'+esc((window.campistryName||String)(a.camper_name))+'</span>'+
                     (a.camper_bunk?'<span style="font-size:.7rem;color:var(--slate-400);background:var(--slate-100);padding:1px 8px;border-radius:999px;">'+esc(a.camper_bunk)+'</span>':'')+
                     leagueTag+
                     '<span class="badge '+(allAcked?'badge-ok':'badge-warn')+'" style="margin-left:auto;">'+(allAcked?'All acknowledged':'Awaiting acknowledgment')+'</span>'+
                 '</div>'+
                 '<div style="font-size:.78rem;color:var(--slate-500);margin-top:4px;">Pickup at '+esc(_fmtTime12(a.pickup_time))+(a.camper_division?' · '+esc(a.camper_division):'')+'</div>'+
-                statusStripHtml(a.camper_name)+
+                statusStripHtml(a.camper_name,a.person_id)+
             '</div></div>';
         }).join('');
     }
@@ -1454,11 +1458,11 @@ var CamperMail = (function(){
         var db=_db();
         if(!db){ if(cb)cb(); return; }
         db.client.from('link_camper_mail')
-            .select('id, camper_name, division, grade, bunk, parent_name, subject, body, status, created_at, source')
+            .select('id, camper_name, person_id, division, grade, bunk, parent_name, subject, body, status, created_at, source')
             .eq('camp_id',db.campId).order('created_at',{ascending:false}).limit(2000)
             .then(function(res){
                 if(res.error){ console.warn('[Live] link_camper_mail load:',res.error.message); }
-                else { _rows=(res.data||[]).map(function(r){ return { id:r.id, camper:r.camper_name, division:r.division||'', grade:r.grade||'', bunk:r.bunk||'', parentName:r.parent_name||'', subject:r.subject||'', body:r.body||'', status:r.status||'new', date:r.created_at, source:r.source||'link' }; }); }
+                else { _rows=(res.data||[]).map(function(r){ return { id:r.id, camper:r.camper_name, camperId:r.person_id!=null?r.person_id:null, division:r.division||'', grade:r.grade||'', bunk:r.bunk||'', parentName:r.parent_name||'', subject:r.subject||'', body:r.body||'', status:r.status||'new', date:r.created_at, source:r.source||'link' }; }); }
                 if(cb)cb();
             });
     }
@@ -1501,7 +1505,7 @@ var CamperMail = (function(){
             if(gkey!==_grp){ _grp=gkey; head='<div style="display:flex;align-items:center;gap:8px;padding:14px 0 6px;font-size:.72rem;font-weight:700;letter-spacing:.05em;text-transform:uppercase;color:var(--slate-500);">'+(esc(where)||'Unassigned — check placement')+'</div>'; }
             return head+'<div style="display:flex;align-items:center;gap:10px;padding:12px 0;border-bottom:1px solid var(--slate-100);">'
               +'<input type="checkbox" '+(_sel[m.id]?'checked':'')+' onchange="CamperMail.sel(\''+esc(m.id)+'\',this.checked)" style="width:16px;height:16px;flex-shrink:0;">'
-              +'<div style="flex:1;min-width:0;"><div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;"><span style="font-weight:700;">'+esc(m.camper)+'</span>'+(where?'<span style="font-size:.72rem;color:var(--slate-400);">'+esc(where)+'</span>':'')+b+'</div>'
+              +'<div style="flex:1;min-width:0;"><div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;"><span style="font-weight:700;">'+esc((window.campistryName||String)(m.camper))+'</span>'+(where?'<span style="font-size:.72rem;color:var(--slate-400);">'+esc(where)+'</span>':'')+b+'</div>'
               +'<div style="font-size:.75rem;color:var(--slate-500);margin-top:2px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">'+(m.subject?'<strong>'+esc(m.subject)+'</strong> — ':'')+esc(_cleanBody(m.body).slice(0,100))+'</div></div>'
               +'<span style="font-size:.72rem;color:var(--slate-400);white-space:nowrap;">From '+esc(m.parentName||'parent')+' · '+d+'</span>'
               +'<div style="display:flex;gap:5px;flex-shrink:0;">'+((_settings&&_isUnassigned(m))?'<button class="btn btn-secondary btn-sm" onclick="CamperMail.assign(\''+esc(m.id)+'\')">Assign</button>':'')+'<button class="btn btn-secondary btn-sm" onclick="CamperMail.view(\''+esc(m.id)+'\')">Read</button><button class="btn btn-primary btn-sm" onclick="CamperMail.print([\''+esc(m.id)+'\'])">Print</button>'+(_settings?'<button class="btn btn-secondary btn-sm" onclick="CamperMail.del(\''+esc(m.id)+'\')" title="Delete">Delete</button>':'')+'</div>'
@@ -1516,7 +1520,7 @@ var CamperMail = (function(){
         var el=document.createElement('div');
         el.style.cssText='position:fixed;inset:0;background:rgba(0,0,0,.4);z-index:9100;display:flex;align-items:center;justify-content:center;padding:20px;';
         el.innerHTML='<div style="background:#fff;border-radius:14px;max-width:560px;width:100%;max-height:82vh;overflow-y:auto;box-shadow:0 20px 60px rgba(0,0,0,.2);">'
-          +'<div style="display:flex;align-items:center;justify-content:space-between;padding:16px 20px;border-bottom:1px solid var(--slate-200);position:sticky;top:0;background:#fff;"><span style="font-size:.92rem;font-weight:700;">Letter for '+esc(m.camper)+'</span><div style="display:flex;gap:6px;"><button class="btn btn-primary btn-sm" onclick="CamperMail.print([\''+esc(m.id)+'\']);this.closest(\'[style*=fixed]\').remove()">Print</button><button class="btn btn-secondary btn-sm" onclick="this.closest(\'[style*=fixed]\').remove()">Close</button></div></div>'
+          +'<div style="display:flex;align-items:center;justify-content:space-between;padding:16px 20px;border-bottom:1px solid var(--slate-200);position:sticky;top:0;background:#fff;"><span style="font-size:.92rem;font-weight:700;">Letter for '+esc((window.campistryName||String)(m.camper))+'</span><div style="display:flex;gap:6px;"><button class="btn btn-primary btn-sm" onclick="CamperMail.print([\''+esc(m.id)+'\']);this.closest(\'[style*=fixed]\').remove()">Print</button><button class="btn btn-secondary btn-sm" onclick="this.closest(\'[style*=fixed]\').remove()">Close</button></div></div>'
           +'<div style="padding:18px 20px;"><div style="font-size:.74rem;color:var(--slate-400);margin-bottom:12px;">From '+esc(m.parentName||'parent')+' · '+esc(d)+([m.division,m.grade,m.bunk].filter(Boolean).length?' · '+esc([m.division,m.grade,m.bunk].filter(Boolean).join(' · ')):'')+'</div>'+(m.subject?'<div style="font-size:1rem;font-weight:700;margin-bottom:10px;">'+esc(m.subject)+'</div>':'')+'<div style="font-size:.9rem;line-height:1.7;color:var(--slate-800);white-space:pre-wrap;">'+esc(_cleanBody(m.body))+'</div></div></div>';
         el.addEventListener('click',function(e){ if(e.target===el) el.remove(); });
         document.body.appendChild(el);
@@ -1538,7 +1542,7 @@ var CamperMail = (function(){
             return '<div class="letter">'
               +'<div class="lt-route">'+route+'</div>'
               +'<div class="lt-head"><div class="lt-camp">'+esc(camp)+' — Camper Mail</div><div class="lt-date">'+esc(d)+'</div></div>'
-              +'<div class="lt-to">To: <strong>'+esc(m.camper)+'</strong></div>'
+              +'<div class="lt-to">To: <strong>'+esc((window.campistryName||String)(m.camper))+'</strong></div>'
               +(m.subject?'<div class="lt-subject">'+esc(m.subject)+'</div>':'')
               +'<div class="lt-body">'+esc(_cleanBody(m.body))+'</div></div>';
         }).join('');

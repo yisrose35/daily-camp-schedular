@@ -119,6 +119,10 @@ function methodLabel(type: string): string {
   }
 }
 
+// A signature older than this is refused, so a captured message cannot be
+// replayed later (TED-057). Stripe's own libraries use the same 5 minutes.
+const WEBHOOK_TOLERANCE_SECONDS = 300;
+
 async function verifySignature(payload: string, signature: string, secret: string): Promise<boolean> {
   if (!secret || !signature) return false;
   try {
@@ -130,6 +134,10 @@ async function verifySignature(payload: string, signature: string, secret: strin
     const timestamp = parts["t"];
     const sig = parts["v1"];
     if (!timestamp || !sig) return false;
+    const tsSeconds = Number(timestamp);
+    if (!Number.isFinite(tsSeconds) || Math.abs(Date.now() / 1000 - tsSeconds) > WEBHOOK_TOLERANCE_SECONDS) {
+      return false;
+    }
     const signedPayload = `${timestamp}.${payload}`;
     const key = await crypto.subtle.importKey(
       "raw", new TextEncoder().encode(secret),
@@ -224,17 +232,17 @@ async function handleCanteenDeposit(
     return;
   }
   const meta = pi.metadata || {};
-  const camperName = meta.camperName;
-  if (!camperName) {
-    console.error(`[stripe-webhook] canteen deposit ${pi.id} has no camperName in metadata — skipping`);
-    return;
-  }
   // The camper's ID, when the page that started the checkout sent one (it is
   // stamped into the metadata beside the name) — it decides who is credited.
+  // The name is the fallback for a checkout started before numbers.
+  const camperId = camperIdIn(meta.camperId), camperName = String(meta.camperName || "");
+  if (camperId == null && !camperName) {
+    console.error(`[stripe-webhook] canteen deposit ${pi.id} has no camperId/camperName in metadata — skipping`);
+    return;
+  }
   const { data, error } = await supabase.rpc("credit_canteen_balance_from_stripe", {
     p_camp_id: campId,
-    p_camper_name: camperName,
-    p_camper_id: camperIdIn(meta.camperId),
+    p_camper_id: camperId, p_camper_name: camperName,
     p_amount: (pi.amount || 0) / 100,
     p_payment_intent_id: pi.id,
   });
@@ -324,13 +332,13 @@ async function handleLinkPhotoPurchase(
   }
 
   if (meta.kind === "facial_recognition") {
-    let names: string[] = [];
-    try { names = JSON.parse(meta.camperNames || "[]"); } catch { names = []; }
-    // Position for position with camperNames, when the checkout was given them.
-    let ids: unknown[] = [];
-    try { ids = JSON.parse(meta.camperIds || "[]"); } catch { ids = []; }
-    if (!Array.isArray(ids)) ids = [];
-    if (!Array.isArray(names) || !names.length) {
+    const parseList = (s: unknown): unknown[] => {
+      try { const v = JSON.parse(String(s || "[]")); return Array.isArray(v) ? v : []; } catch { return []; }
+    };
+    // Position for position: each camper's number (which decides who the
+    // purchase is for) and their name (the fallback for a slot with no number).
+    const ids = parseList(meta.camperIds), names = parseList(meta.camperNames).map((n) => String(n ?? ""));
+    if (!names.length) {
       console.error(`[stripe-webhook] link photo purchase ${pi.id} missing camperNames in metadata — skipping`);
       return;
     }
@@ -340,8 +348,7 @@ async function handleLinkPhotoPurchase(
         p_camp_id: campId,
         p_parent_user_id: meta.parentUserId,
         p_kind: "facial_recognition",
-        p_camper_name: name,
-        p_camper_id: camperIdIn(ids[ni]),
+        p_camper_id: camperIdIn(ids[ni]), p_camper_name: name,
         p_photo_id: null,
         p_amount_cents: FACIAL_RECOGNITION_FEE_CENTS, // per-camper share, NOT pi.amount (that's the whole batch)
         p_payment_intent_id: pi.id,
@@ -355,7 +362,7 @@ async function handleLinkPhotoPurchase(
     p_camp_id: campId,
     p_parent_user_id: meta.parentUserId,
     p_kind: meta.kind,
-    p_camper_name: null,
+    p_camper_id: null, p_camper_name: null,   // an HD photo is bought for a photo, not a camper
     p_photo_id: meta.photoId || null,
     p_amount_cents: pi.amount || 0,
     p_payment_intent_id: pi.id,
@@ -569,9 +576,11 @@ async function handleCanteenAutoReloadSetup(
 ) {
   const meta = si.metadata || {};
   const campId = meta.campId;
-  const camperName = meta.camperName;
-  if (!campId || !camperName) {
-    console.error(`[stripe-webhook] canteen auto-reload setup ${si.id} missing campId/camperName in metadata — skipping`);
+  // The number decides whose account the card is saved on; the name is the
+  // fallback for a setup started before numbers.
+  const camperId = camperIdIn(meta.camperId), camperName = String(meta.camperName || "");
+  if (!campId || (camperId == null && !camperName)) {
+    console.error(`[stripe-webhook] canteen auto-reload setup ${si.id} missing campId/camperId in metadata — skipping`);
     return;
   }
   const customerId = si.customer;
@@ -606,8 +615,7 @@ async function handleCanteenAutoReloadSetup(
   // did not just lose a card field, it erased a sale and the money with it.
   const { data: merged, error: mergeErr } = await supabase.rpc("merge_canteen_autoreload_card", {
     p_camp_id: campId,
-    p_camper: camperName,
-    p_camper_id: camperIdIn(meta.camperId),
+    p_camper_id: camperId, p_camper: camperName,
     // Only the card/attempt bookkeeping fields. The parent's trigger config
     // (enabled, threshold*, schedule*), set via set_canteen_auto_reload
     // (migration 109), is left untouched by merging rather than overwriting.
@@ -849,14 +857,22 @@ serve(async (req) => {
   try {
     const body = await req.text();
     const signature = req.headers.get("stripe-signature") || "";
-    if (STRIPE_WEBHOOK_SECRET) {
-      const valid = await verifySignature(body, signature, STRIPE_WEBHOOK_SECRET);
-      if (!valid) {
-        console.error("[stripe-webhook] Invalid signature");
-        return new Response(JSON.stringify({ error: "Invalid signature" }), {
-          status: 400, headers: { ...corsHeaders, "Content-Type": "application/json" },
-        });
-      }
+    // FAIL CLOSED (TED-057). With no secret this used to skip the check, so
+    // anyone could post a fake "payment succeeded" and mark a family paid.
+    // Refusing with a 500 makes Stripe retry (for up to three days), so no real
+    // event is lost while the secret is being set.
+    if (!STRIPE_WEBHOOK_SECRET) {
+      console.error("[stripe-webhook] STRIPE_WEBHOOK_SECRET is not set — refusing every event until it is");
+      return new Response(JSON.stringify({ error: "Webhook not configured" }), {
+        status: 500, headers: { ...corsHeaders, "Content-Type": "application/json" },
+      });
+    }
+    const valid = await verifySignature(body, signature, STRIPE_WEBHOOK_SECRET);
+    if (!valid) {
+      console.error("[stripe-webhook] Invalid or expired signature");
+      return new Response(JSON.stringify({ error: "Invalid signature" }), {
+        status: 400, headers: { ...corsHeaders, "Content-Type": "application/json" },
+      });
     }
 
     const event = JSON.parse(body);
@@ -912,7 +928,7 @@ serve(async (req) => {
           what,
           method: "Card",
           familyKey: pi.metadata?.familyKey || null,
-          camperName: pi.metadata?.camperName || null,
+          camperId: camperIdIn(pi.metadata?.camperId), camperName: pi.metadata?.camperName || null,
           enrollmentId: pi.metadata?.enrollmentId || null,
         });
       }

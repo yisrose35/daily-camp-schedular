@@ -1,5 +1,5 @@
 -- ============================================================================
--- Confirm migrations 222-257 are in and doing their job.
+-- Confirm migrations 222-261 are in and doing their job.
 --
 -- Paste the whole thing into the Supabase SQL Editor. It is READ ONLY — one
 -- SELECT, nothing is created, changed or deleted, and the two purge functions
@@ -341,7 +341,7 @@ UNION ALL
      CASE WHEN b.offl IS NOT NULL
            AND b.offl ~ '''offline:'''
            AND b.offl ~ 'sig\s*=\s*v_sig'
-           AND b.offl ~ 'camp_person_label'
+           AND b.offl ~ 'camp_person_(label|name_for)'
           THEN 'ok' ELSE 'OFFLINE SALES STILL GO NOWHERE — apply 242' END),
 
     -- The nightly auto-reload found its campers in the document's accounts,
@@ -448,8 +448,114 @@ UNION ALL
     -- For every camper, enrolled or departed: does their number come back to them?
     ('257  every camper''s number reaches that camper',
      CASE WHEN to_regprocedure('public.verify_number_round_trip()') IS NULL THEN 'apply 257'
-          WHEN public.verify_number_round_trip() -> 'numbers_that_miss_their_camper' = '[]'::jsonb THEN 'ok'
-          ELSE 'NUMBERS THAT MISS THEIR CAMPER: ' || (public.verify_number_round_trip() ->> 'numbers_that_miss_their_camper') END)
+          WHEN public.verify_number_round_trip() -> 'numbers_that_miss_their_camper' = '[]'::jsonb
+           AND public.verify_number_round_trip() -> 'enrolled_names_that_miss_their_camper' = '[]'::jsonb
+           AND public.verify_number_round_trip() -> 'functions_that_do_not_pin' = '[]'::jsonb THEN 'ok'
+          ELSE 'PROBLEMS: ' || (public.verify_number_round_trip() - 'campers_checked')::text END),
+
+    -- A parent's health documents, photos and face card: by the row's camper
+    -- number; one face row, and one reference photo per pose, per child.
+    ('258  a parent''s documents, photos and faces go by camper number',
+     CASE WHEN to_regprocedure('public.verify_parent_reads_by_number()') IS NULL THEN 'apply 258'
+          WHEN EXISTS (SELECT 1 FROM pg_proc p JOIN pg_namespace n ON n.oid = p.pronamespace
+                        WHERE n.nspname = 'public'
+                          AND p.prosrc ~ '_parent_owns_camper\s*\(\s*[^,]+,\s*[a-z_]+\.camper_name'
+                          AND p.prosrc !~ '_parent_owns_person\s*\(')
+            THEN 'STILL BY NAME: ' || (SELECT string_agg(p.proname, ', ') FROM pg_proc p JOIN pg_namespace n ON n.oid = p.pronamespace
+                        WHERE n.nspname = 'public'
+                          AND p.prosrc ~ '_parent_owns_camper\s*\(\s*[^,]+,\s*[a-z_]+\.camper_name'
+                          AND p.prosrc !~ '_parent_owns_person\s*\(')
+          WHEN to_regclass('public.link_camper_faces_one_per_person') IS NULL
+            THEN 'face rows are still one per NAME — re-apply 258'
+          WHEN to_regclass('public.idx_lcfd_parent_pose') IS NOT NULL
+            THEN 'reference photos are still one per NAME — re-apply 258'
+          ELSE 'ok' END),
+
+    -- A roster key belongs to one child while anything about them exists,
+    -- and a rename keeps the camper's number.
+    ('259  a roster key belongs to one child; a rename keeps the number',
+     CASE WHEN to_regprocedure('public.verify_roster_keys()') IS NULL THEN 'apply 259'
+          WHEN public.verify_roster_keys() -> 'keys_shown_by_the_wrong_child' <> '[]'::jsonb
+            THEN 'KEY ON THE WRONG CHILD: ' || (public.verify_roster_keys() ->> 'keys_shown_by_the_wrong_child')
+          WHEN (public.verify_roster_keys() ->> 'unrecorded_keys')::int <> 0
+            THEN (public.verify_roster_keys() ->> 'unrecorded_keys') || ' keys not recorded — re-apply 259'
+          ELSE 'ok' END),
+
+    -- Invitations' numbers on the right child and never on a renumbered
+    -- camper's old number; renumbers carry saved records (after the save,
+    -- not inside it); children split by the 253 rename bug (read-only count
+    -- + the repair line; uncertain ones are left for a person).
+    ('260  numbers stay with their child (invites, renumbers, split renames)',
+     -- The checks below call 260's functions, so they are run only once 260
+     -- is in (261 may be applied first): as text, through query_to_xml.
+     CASE WHEN to_regprocedure('public.split_renames(boolean)') IS NULL
+               OR to_regprocedure('public.verify_invite_numbers()') IS NULL THEN 'apply 260'
+          -- The current 260, not an earlier copy of it (TED-039): the reload
+          -- after an erase, staff-only numbers, and "never remove a child a
+          -- page has not seen".
+          WHEN to_regprocedure('public.get_camp_cache_epoch(uuid)') IS NULL
+               OR to_regclass('public.camp_cache_epoch') IS NULL
+               OR to_regprocedure('public._merge_campers_254(uuid,bigint,bigint)') IS NULL
+               OR pg_get_functiondef('public.merge_campers(uuid,bigint,bigint)'::regprocedure) !~ '_bump_cache_epoch'
+               OR pg_get_functiondef('public.erase_camper(uuid,bigint,boolean)'::regprocedure) !~ '_bump_cache_epoch'
+               OR pg_get_functiondef('public.get_camper_numbers(uuid)'::regprocedure) !~ 'camp_staff_member'
+               OR pg_get_functiondef('public.number_camp_campers()'::regprocedure) !~ '_rosterSeen'
+            THEN 'run 260 again — this database has an earlier copy of 260'
+          ELSE (xpath('/row/r/text()', query_to_xml($v260$SELECT CASE
+          WHEN public.verify_invite_numbers() -> 'slots_on_the_wrong_child' <> '[]'::jsonb
+            THEN 'INVITE NUMBERS ON THE WRONG CHILD: ' || (public.verify_invite_numbers() ->> 'slots_on_the_wrong_child')
+          WHEN (public.verify_invite_numbers() ->> 'slots_on_a_moved_number')::int > 0
+            THEN 'INVITES STILL ON A RENUMBERED CAMPER''S OLD NUMBER: ' || (public.verify_invite_numbers() ->> 'slots_on_a_moved_number')
+          WHEN to_regclass('public.camp_person_renumbers') IS NULL
+               OR NOT EXISTS (SELECT 1 FROM pg_trigger WHERE tgname = 'trg_zz_apply_moved_numbers')
+               OR pg_get_functiondef('public.number_camp_campers()'::regprocedure) !~ '_record_renumber'
+            THEN 'renumbers do not carry saved records — re-apply 260'
+          WHEN jsonb_array_length(public.split_renames() -> 'split_children') > 0
+            THEN jsonb_array_length(public.split_renames() -> 'split_children')
+                 || ' renamed children split by the old bug — read them with SELECT public.split_renames(); then repair with SELECT public.split_renames(true);'
+                 || CASE WHEN jsonb_array_length(public.split_renames() -> 'needs_a_person') > 0
+                         THEN ' (' || jsonb_array_length(public.split_renames() -> 'needs_a_person')
+                              || ' more need a person: see needs_a_person)' ELSE '' END
+          WHEN jsonb_array_length(public.split_renames() -> 'needs_a_person') > 0
+            THEN jsonb_array_length(public.split_renames() -> 'needs_a_person')
+                 || ' possibly split children need a person to decide — SELECT public.split_renames(); and read needs_a_person'
+          ELSE 'ok' END AS r$v260$, false, true, '')))[1]::text END),
+    -- Only the camp's office can write a parent invitation (TED-023).
+    ('261  only the camp office writes parent invitations',
+     CASE WHEN to_regprocedure('public._is_camp_office(uuid,uuid)') IS NULL
+               OR pg_get_functiondef('public.upsert_parent_invite(uuid,text,text,text,jsonb,jsonb,timestamptz)'::regprocedure)
+                  !~ '_is_camp_office' THEN 'apply 261 — ANY logged-in account can make itself a parent of any child'
+          -- an earlier copy of 261: "is this family still at camp?" by
+          -- number (TED-047), and with the database's own roster (TED-049)
+          WHEN to_regprocedure('public.revoke_orphaned_parent_invites(uuid,jsonb,jsonb)') IS NULL
+               -- to_regprocedure, not ::regprocedure: a missing function must
+               -- read as this row, not stop the whole script
+               OR pg_get_functiondef(to_regprocedure('public.revoke_orphaned_parent_invites(uuid,jsonb,jsonb)')) !~ 'camp_people'
+            THEN 'run 261 again — this is an earlier copy: a family can stay switched on because a new child shares a departed child''s name, or be switched off while their child is still at camp'
+          -- every function that hands out, binds or changes a family's
+          -- invitation, and the table's own read rule, must be office-only
+          WHEN EXISTS (SELECT 1 FROM pg_proc p JOIN pg_namespace ns ON ns.oid = p.pronamespace
+                        WHERE ns.nspname = 'public'
+                          AND p.proname IN ('get_camp_parent_invites', 'resolve_join_request', 'set_parent_invite_email',
+                                            'set_parent_billing_access', 'revoke_orphaned_parent_invites')
+                          AND pg_get_functiondef(p.oid) !~ '_is_camp_office')
+               -- the table's own read rules: protection on, and no read rule
+               -- but the office's (owner/admin/manager) and a parent's own row
+               OR NOT (SELECT relrowsecurity FROM pg_class WHERE oid = 'public.link_parent_invites'::regclass)
+               OR EXISTS (SELECT 1 FROM pg_policies WHERE schemaname = 'public' AND tablename = 'link_parent_invites'
+                             AND cmd IN ('SELECT', 'ALL')
+                             AND NOT (policyname = 'link_parent_invites_select'
+                                      AND qual ~ 'owner' AND qual ~ 'admin' AND qual ~ 'manager'
+                                      AND qual !~ 'scheduler' AND qual !~ 'counselor' AND qual !~ 'viewer')
+                             AND NOT (policyname = 'link_parent_invites_parent_select'
+                                      AND regexp_replace(qual, '[\s()]', '', 'g') = 'user_id=auth.uid'))
+               OR NOT EXISTS (SELECT 1 FROM pg_policies WHERE schemaname = 'public' AND tablename = 'link_parent_invites'
+                                 AND policyname = 'link_parent_invites_select')
+            THEN 'run 261 again — staff outside the office can still read families'' access codes and claim a child (if it still says this after running 261, send the builder the result of: SELECT policyname, cmd, qual FROM pg_policies WHERE tablename = ''link_parent_invites'';)'
+          WHEN EXISTS (SELECT 1 FROM link_parent_invites WHERE user_id IS NOT NULL AND camper_names IS NULL)
+            THEN (SELECT count(*) FROM link_parent_invites WHERE user_id IS NOT NULL AND camper_names IS NULL)
+                 || ' claimed invitation(s) cover a WHOLE camp — look at them: SELECT camp_id, parent_email, created_at FROM link_parent_invites WHERE user_id IS NOT NULL AND camper_names IS NULL;'
+          ELSE 'ok' END)
     ) AS x(item, result)
 
 UNION ALL
@@ -465,6 +571,9 @@ UNION ALL
     ('parent ownership',   public.verify_camper_ownership()::text),
     ('face consent',       public.verify_face_consent()::text),
     ('canteen identity',   public.verify_canteen_identity()::text),
+    -- keys_shared_before_259: where a departed child's old records may sit under
+    -- a live child's key (from before 259). Worth a look; not an error.
+    ('roster keys',        public.verify_roster_keys()::text),
     -- slots_a_later_arrival_could_claim must be 0. slots_awaiting_a_decision is
     -- a queue for the office, not a defect — work it with
     -- parent_invites_needing_attention() and restamp_parent_invite().

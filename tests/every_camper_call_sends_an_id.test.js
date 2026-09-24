@@ -198,8 +198,8 @@ test('the staff pages and the portal both cover edge-function requests', () => {
 
 // Superseded: they import ../_shared, so they cannot be deployed from the
 // Dashboard, and nothing calls them (payments-charge-nonce / -hosted-link / the
-// card flows replaced them).
-const SUPERSEDED = new Set(['payments-canteen-checkout', 'payments-checkout', 'payments-charge']);
+// card flows replaced them). payments-charge was made self-contained (TED-054) and is checked like the rest.
+const SUPERSEDED = new Set(['payments-canteen-checkout', 'payments-checkout']);
 
 function edgeSources() {
     const root = path.join(REPO, 'supabase', 'functions');
@@ -357,4 +357,47 @@ test('every page loading the database client dynamically asks for a versioned co
     const pages = fs.readdirSync(REPO).filter(f => f.endsWith('.html'));
     const bare = pages.filter(f => /\.src = 'supabase_client\.js'/.test(fs.readFileSync(path.join(REPO, f), 'utf8')));
     assert.deepStrictEqual(bare, []);
+});
+
+// ── names are shown without numbers ─────────────────────────────────────────
+
+test('a camper\'s name is shown without the roster\'s internal number', () => {
+    const window = {};
+    vm.runInNewContext(MODULE, { window, Promise, Object, String, Number, RegExp });
+    const show = window.campistryName;
+    assert.strictEqual(show('Malky Stein #102'), 'Malky Stein');
+    assert.strictEqual(show('Malky Stein'), 'Malky Stein');
+    assert.strictEqual(show('Avi Katz #10-2'), 'Avi Katz');
+    assert.strictEqual(show('Room #4B'), 'Room #4B', 'only a trailing " #<number>" is internal');
+    assert.strictEqual(show(null), '');
+});
+
+test('the parent portal and Live show names through it, and never raw keys', () => {
+    const portal = fs.readFileSync(path.join(REPO, 'campistry_link_parent.html'), 'utf8');
+    const live = fs.readFileSync(path.join(REPO, 'campistry_live.html'), 'utf8');
+    assert.ok(!/lk-child-name">'\+c\.name\+/.test(portal), 'the portal child card shows the raw key');
+    assert.ok(!/esc\(m\.camper\)/.test(live), 'Live camper mail shows the raw key');
+    assert.ok(!/esc\(r\.childName\)/.test(live), 'Live pickup requests show the raw key');
+    assert.ok(!/esc\(a\.camper_name\)/.test(live), 'Live pickup alerts show the raw key');
+    for (const f of ['auto-notify', 'canteen-auto-reload', 'charge-saved-card', 'payments-charge-nonce', 'stripe-checkout', 'send-payment-receipt']) {
+        const src = fs.readFileSync(path.join(REPO, 'supabase/functions', f, 'index.ts'), 'utf8');
+        assert.match(src, /function displayName\(/, f + ' writes a parent-facing name without stripping the internal number');
+    }
+});
+
+test('a saved camp document: every record naming a camper gets their number', () => {
+    const M = load(), c = fakeTableClient();
+    M.wrap(c, (campId, name) => ({ 'Ayala Weiss': 880, 'Dov Lerner': 881 })[name] || null);
+    c.from('camp_state_kv').upsert([{ camp_id: 'c1', key: 'campistryHealth', value: {
+        dispensingLog: [{ camperName: 'Ayala Weiss', medication: 'x' }, { camperName: 'Dov Lerner', camperId: 5 }],
+        sickVisits: [{ camperName: 'A Lead', complaint: 'y' }],
+        nested: { deep: [{ orders: [{ camperName: 'Dov Lerner' }] }] },
+    } }], { onConflict: 'camp_id,key' });
+    const v = c.writes[0].values[0].value;
+    assert.strictEqual(v.dispensingLog[0].camperId, 880);
+    assert.strictEqual(v.dispensingLog[1].camperId, 5, 'a number already there is kept');
+    assert.ok(!('camperId' in v.sickVisits[0]), 'a name that is not a camper is left alone');
+    assert.strictEqual(v.nested.deep[0].orders[0].camperId, 881, 'records deep in the document too');
+    c.from('link_messages').insert({ value: { camperName: 'Ayala Weiss' } });
+    assert.ok(!('camperId' in c.writes[1].values.value), 'only camp documents are walked');
 });

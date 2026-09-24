@@ -656,7 +656,7 @@ window.CampistryGoNeighborhoods = (function () {
             if (!nhForEdge) { unattachedCampers.push(c); continue; }
 
             const home = {
-                camperName: c.name,
+                camperName: c.name, camperId: c.camperId != null ? c.camperId : null,
                 segmentId: bestEdge.id,
                 neighborhoodId: nhForEdge,
                 lat: c.lat, lng: c.lng,

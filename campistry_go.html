@@ -49,7 +49,7 @@
     <link rel="stylesheet" href="campistry_ops.css?v=20260918-24">
     <link rel="stylesheet" href="mobile-responsive.css?v=20260903-04">
     <noscript><style>html body { opacity: 1 !important; }</style></noscript>
-<script src="campistry_camper_id_rpc.js?v=20260923-02"></script>
+<script src="campistry_camper_id_rpc.js?v=20260923-20"></script>
 </head>
 <body>
 
@@ -476,7 +476,7 @@
     s.src = src;
     s.onload = function() {
         var c = document.createElement('script');
-        c.src = 'supabase_client.js?v=20260923-02';
+        c.src = 'supabase_client.js?v=20260923-08';
         document.head.appendChild(c);
     };
     s.onerror = function() {
@@ -491,12 +491,12 @@
 <script src="local_cache_idb.js?v=20260903-04"></script>
 <script src="campistry_finance_merge.js?v=20260918-10"></script>
 <script src="campistry_workspace.js?v=20260917-01"></script>
-<script src="integration_hooks.js?v=20260918-10"></script>
+<script src="integration_hooks.js?v=20260923-22"></script>
 <script src="campistry_workspace_ui.js?v=20260917-02"></script>
 <!-- Presence: which campers are at camp on the date being planned. Loaded AFTER
      integration_hooks, because it asks that file which plan this browser is in. -->
-<script src="campistry_enrollment_window.js?v=20260917-02"></script>
-<script src="campistry_presence.js?v=20260918-05"></script>
+<script src="campistry_enrollment_window.js?v=20260923-20"></script>
+<script src="campistry_presence.js?v=20260923-21"></script>
 <!-- The master key: which session the whole program is showing. Pure rule; the
      runtime half (the pin, the memo) is in integration_hooks.js. -->
 <script src="campistry_session_scope.js?v=20260918-09"></script>
@@ -578,15 +578,15 @@
 <script src="campistry_go_google.js?v=20260907-01"></script>
 <script src="campistry_go_geoapify.js?v=20260907-01"></script>
 <script src="campistry_go_ors_optimizer.js?v=20260903-04"></script>
-<script src="campistry_go_neighborhoods.js?v=20260907-01"></script>
+<script src="campistry_go_neighborhoods.js?v=20260923-20"></script>
 <script src="campistry_go_persistence.js?v=20260903-04"></script>
 <script src="campistry_go_stop_master.js?v=20260903-04"></script>
-<script src="campistry_go.js?v=20260917-02"></script>
+<script src="campistry_go.js?v=20260923-21"></script>
 <!-- The one camp-wide payment catalogue. Luggage records HOW a booking was paid
      and must offer only what the camp accepts, so this loads before it. -->
 <script src="campistry_payments.js?v=20260918-01"></script>
-<script src="campistry_luggage_core.js?v=20260903-04"></script>
-<script src="campistry_go_luggage.js?v=20260923-01"></script>
+<script src="campistry_luggage_core.js?v=20260923-20"></script>
+<script src="campistry_go_luggage.js?v=20260923-21"></script>
     <script src="campistry_go_map_editor.js?v=20260903-04"></script>
 <script>
 // Show ORS key card only if no platform key is configured

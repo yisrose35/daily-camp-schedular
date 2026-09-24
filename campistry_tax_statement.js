@@ -128,7 +128,7 @@
             var cls = T.classifyCharge(e, { overnight: who.overnight, rules: rules });
             lots.push({
                 date: ymd(e.date), seq: idx, open: amt, amount: amt,
-                camperName: who.camperName || '', session: who.session || '',
+                camperName: who.camperName || '', camperId: who.camperId != null ? who.camperId : null, session: who.session || '',
                 qualifies: cls.verdict, why: cls.reason,
                 label: e.desc || e.category || 'Charge', ref: e.ref || ''
             });
@@ -160,7 +160,7 @@
      * o = {
      *   year: 2026,
      *   entries: [ledger entries],                  // charge/credit/payment
-     *   resolveCharge: fn(entry) -> {camperName, session, overnight}
+     *   resolveCharge: fn(entry) -> {camperName, camperId, session, overnight}
      *   campers: { 'Eli Klein': {dob:'2014-06-01'} },
      *   rules: T.DEFAULT_RULES
      * }
@@ -215,9 +215,11 @@
         });
 
         var perCamper = {}, reviewLines = {}, excludedLines = {};
-        function bucket(name) {
+        // One bucket per camper, by their roster key (unique; two campers who
+        // share a name have different keys), carrying their number.
+        function bucket(name, id) {
             var k = name || '(unassigned)';
-            if (!perCamper[k]) perCamper[k] = { camperName: k, qualifying: 0, notQualifying: 0, needsReview: 0, total: 0, notes: [] };
+            if (!perCamper[k]) perCamper[k] = { camperName: k, camperId: id != null ? id : null, qualifying: 0, notQualifying: 0, needsReview: 0, total: 0, notes: [] };
             return perCamper[k];
         }
         function note(map, key, amount) {
@@ -253,7 +255,7 @@
 
             report.paid.gross = round2(report.paid.gross + amt);
             res.hits.forEach(function (h) {
-                var b = bucket(h.lot.camperName);
+                var b = bucket(h.lot.camperName, h.lot.camperId);
                 b.total = round2(b.total + h.amount);
                 if (h.lot.qualifies === 'yes') {
                     b.qualifying = round2(b.qualifying + h.amount);

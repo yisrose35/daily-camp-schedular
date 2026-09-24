@@ -187,7 +187,9 @@ test('the local copy is corrected to match the server', () => {
 test('the office is warned, not blocked, when it enrolls past capacity', () => {
     // A camp does squeeze one more in. It just has to be a decision.
     const fn = ME.slice(ME.indexOf('function enrollCamper(id){'));
-    const head = fn.slice(0, 900);
+    // 1500: enrollCamper now first points the application at its own camper
+    // (by number — _rosterKeyForApplication) before the capacity check.
+    const head = fn.slice(0, 1500);
     assert.match(head, /_sessionCapacityOf\(e\.session\)/);
     assert.match(head, /is full \('\+_cap\.taken\+' of '\+_cap\.capacity/);
     assert.ok(!/return;\s*\}\s*e\.status='enrolled'/.test(head.replace(/\n/g, '')) ||

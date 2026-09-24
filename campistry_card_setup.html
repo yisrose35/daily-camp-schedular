@@ -101,8 +101,8 @@
     </script>
     <script src="config.js"></script>
     <script src="supabase-js@2.js"></script>
-    <script src="campistry_camper_id_rpc.js?v=20260923-02"></script>
-    <script src="supabase_client.js?v=20260923-02"></script>
+    <script src="campistry_camper_id_rpc.js?v=20260923-20"></script>
+    <script src="supabase_client.js?v=20260923-08"></script>
 
     <script>
     (function() {
@@ -117,6 +117,9 @@
         // "save a card" (office-initiated) or, with `amount`, a one-time pay
         // link (sendPayLink() in campistry_me.js).
         var camperName = params.get('camperName') || '';
+        // The child's camper number, when the portal knows it: it decides whose
+        // canteen the money reaches. The name is only shown.
+        var camperId = /^\d+$/.test(params.get('camperId') || '') ? Number(params.get('camperId')) : null;
         var isCanteen = !!camperName && !familyKey;
         // mode=save forces "save a card for later" even in camper (canteen)
         // mode, which is how canteen AUTO-RELOAD saves a camper's card: there's
@@ -158,10 +161,10 @@
         function renderSuccess(paidAmount) {
             var closeNote = returnUrl ? 'Taking you back to your camp portal…' : 'You can close this window.';
             var msg = isCanteen
-                ? 'Your payment of $' + Number(paidAmount || amount).toFixed(2) + ' was added to ' + escapeHtml(camperName) + '\'s canteen balance. ' + closeNote
+                ? 'Your payment of $' + Number(paidAmount || amount).toFixed(2) + ' was added to ' + escapeHtml((window.campistryName || String)(camperName)) + '\'s canteen balance. ' + closeNote
                 : isPayNow
                 ? 'Your payment of $' + Number(paidAmount || amount).toFixed(2) + ' for ' + escapeHtml(familyName) + ' was received. ' + closeNote
-                : ('A payment method is now on file for ' + escapeHtml(isCanteen ? camperName : familyName) + '. ' + closeNote);
+                : ('A payment method is now on file for ' + escapeHtml(isCanteen ? (window.campistryName || String)(camperName) : familyName) + '. ' + closeNote);
             cardEl.innerHTML =
                 '<div class="icon"><svg width="26" height="26" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><polyline points="20 6 9 17 4 12"/></svg></div>' +
                 '<h1 style="text-align:center">' + (isPayNow ? 'Payment received!' : 'Saved!') + '</h1>' +
@@ -555,12 +558,12 @@
             } catch (e) { /* console unavailable */ }
             var body = isPayNow
                 ? (isCanteen
-                    ? { campId: campId, kind: 'canteen_deposit', camperName: camperName, token: token, amount: amount, description: payDesc, billing: billing, card: card }
+                    ? { campId: campId, kind: 'canteen_deposit', camperName: camperName, camperId: camperId, token: token, amount: amount, description: payDesc, billing: billing, card: card }
                     : { campId: campId, kind: 'tuition_charge', familyKey: familyKey, familyName: familyName, token: token, amount: amount, description: payDesc, billing: billing, card: card })
                 // Save mode: camperName saves onto that camper's canteen
                 // auto-reload block, familyKey onto the family record.
                 : (isCanteen
-                    ? { campId: campId, camperName: camperName, token: token, billing: billing, card: card }
+                    ? { campId: campId, camperName: camperName, camperId: camperId, token: token, billing: billing, card: card }
                     : { campId: campId, familyKey: familyKey, token: token, billing: billing, card: card });
             client.functions.invoke(fnName, { body: body }).then(function(res) {
                 setSaving(false);

@@ -64,13 +64,32 @@ const MIGRATIONS = [
     //   190  _session_taken             — 200 needs it
     //   193  list_workspaces            — the workspace banner reads it on every page
     //   200  get_camp_applications      — campistry_me.js reads it on hydration
+    // 020  link_messages — Lite and Link write parent messages there
+    //      (tests/lite_health_numbers.e2e.js)
+    // 010/032/034/070/122: the functions that hand out and bind parent
+    // invitations — 261 lets only the camp office use them (TED-023/028).
+    '010_link_access_code',
+    '020_link_messages',
+    // 028-030: the photo matcher's face index, which 258 corrects.
+    '028_facial_recognition',
+    '029_face_recognition_v2',
+    '030_face_freshness',
+    '032_bulk_parent_onboarding',
+    '034_invite_lifecycle',
     // 037  get_camp_health_documents — the Health page reads it on load
     '037_health_documents',
     '048_section_access',
     '063_camp_timezone',
+    '070_link_billing_access',
+    // 080/081: what a parent's photo gallery shows, which 258 corrects.
+    '080_photo_storage',
+    '081_link_photo_purchases',
     '100_pos_pin_login',
     '101_pos_pin_manual_unlock',
     '104_pos_roster_read',
+    // 126: the processor catalogue and credentials the billing migrations
+    // (176, 187, 198) and the processor-side functions are built on.
+    '126_byop_processor_framework',
     '142_canteen_pos_inventory_only_save',
     // The Me page's billing view reads the deposit inbox once families exist —
     // found by tests/scale_600.e2e.js, whose camp has 300 of them (the smoke
@@ -80,23 +99,50 @@ const MIGRATIONS = [
     '146_deposit_unparsed',
     '147_bank_templates',
     '148_template_self_learning',
+    // 149 (Banquest): the hosted pay/card pages 185-187 extend.
+    '149_banquest_hosted_payment_pages',
     '149_camp_number',
     '167_settle_shop_orders',
+    // TED-060: the billing migrations, so tests run the database's real money
+    // logic — autopay's writes, the plan counter, the parent's balance, card
+    // fees, chargebacks and the refund claim — not a guess at it.
+    '168_atomic_payment_writes',
+    '169_atomic_autopay_installment',
+    '170_atomic_card_on_file_writes',
     // 171 before 178, and it is not optional: 178 puts record_chargeback on the
     // posted ledger, whose family_ledger_balance() 171 defines. 178 without 171
     // is a chargeback that raises 42883 on the way out — the 233 shape again,
     // found by 215's own pgtest once 178 was in the chain.
     '171_posted_ledger',
+    '172_autopay_posts_to_ledger',
+    '173_parent_balance_from_ledger',
+    '174_ledger_must_be_complete',
+    '175_chargebacks_and_collection_blocks',
+    '176_processor_conformance',
+    '177_chargeback_amount_from_payment',
     '178_every_payment_posts_to_the_ledger',
+    '179_dunning_and_card_expiry',
+    '180_canteen_autoreload_and_payout_alerts',
+    '181_new_plans_are_ledger_plans',
+    '185_registration_deposit',
+    '186_registration_saved_card',
+    '187_cardknox_registration_deposit',
     '188_payment_receipts',
+    '189_registration_card_capture',
     '190_session_capacity',
+    '192_card_fee_policy',
     '193_session_workspaces',
+    '198_refund_intents',
     '200_applications_out_of_the_blob',
     '202_ledger_projection',
     '203_canteen_archive',
+    // 204/209: the post-acceptance form's Camper Mail code, which 258 corrects
+    // (scripts/pgtests/258).
+    '204_camper_mail_inbox',
     '205_parent_balance_off_the_blob',
     '206_canteen_archive_only_new',
     '208_payments_into_rows',
+    '209_postaccept_camper_mail',
     '210_payments_read_from_rows',
     '211_families_into_rows',
     '212_families_read_from_rows',
@@ -145,6 +191,10 @@ const MIGRATIONS = [
     '255_a_parents_family_is_found_by_camper_number',
     '256_faces_and_photos_go_by_camper_number',
     '257_a_number_reaches_its_own_camper',
+    '258_a_parent_sees_only_their_own_child',
+    '259_a_roster_key_belongs_to_one_child',
+    '260_numbers_stay_with_their_child',
+    '261_only_the_camp_office_writes_parent_invites',
 ];
 
 // The one thing the stubs deliberately get wrong for our purposes: they define

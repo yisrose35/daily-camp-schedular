@@ -445,6 +445,9 @@ DECLARE
 BEGIN
     -- Manufacture exactly what the old code left behind for Rina: biometric data
     -- under her old name, and a later withdrawal filed under her new one.
+    -- Since 258 a child can no longer HAVE two face rows, so the rule is lifted
+    -- here to write what a database from before 258 can still contain.
+    DROP INDEX IF EXISTS link_camper_faces_one_per_person;
     INSERT INTO link_camper_faces
         (camp_id, camper_name, person_id, descriptor, consent, updated_at)
     VALUES (camp, 'Rina Gold', 882, public.t226_desc(50), true, now() - interval '2 days');

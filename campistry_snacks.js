@@ -376,13 +376,26 @@ function _accountsUnderCurrentNames(accounts) {
             if (id != null && /^\d+$/.test(String(id))) keyOf[String(id)] = k;
         });
     } catch (_) { return accounts; }
-    const out = Object.assign({}, accounts);
+    const out = {};
+    const rest = [];
+    // Campers on the roster first: each account under its camper's current key.
     Object.keys(accounts).forEach(k => {
         const a = accounts[k];
         const cur = a && a.camperId != null ? keyOf[String(a.camperId)] : null;
-        if (!cur || cur === k || out[cur]) return;   // already right, or the key is taken
-        out[cur] = Object.assign({}, a, { accountKey: k });
-        delete out[k];
+        if (cur && !out[cur]) out[cur] = (cur === k) ? a : Object.assign({}, a, { accountKey: k });
+        else rest.push(k);
+    });
+    // Then everything else (a camper who has left, an account with no number)
+    // under its own key — unless an enrolled camper now has that name, so the
+    // two never share a slot. Such a key is internal only: every place this
+    // page shows a name strips anything after the name (_lbl).
+    rest.forEach(k => {
+        const a = accounts[k];
+        let slot = k;
+        if (out[slot]) slot = k + ' #' + (a && a.camperId != null ? a.camperId : 'x');
+        let i = 2;
+        while (out[slot]) slot = k + ' #' + (a && a.camperId != null ? a.camperId : 'x') + '-' + (i++);
+        out[slot] = (slot === k) ? a : Object.assign({}, a, { accountKey: k });
     });
     return out;
 }
@@ -630,7 +643,7 @@ function cashOutLimit(name) {
     const cfg = getSettings();
     const lim = window.SnacksCash.limit({
         account: getAccount(name), transactions: snacks.transactions,
-        camper: name, date: todayStr(), settings: cfg
+        camper: name, camperId: _deskCamperId(name), date: todayStr(), settings: cfg
     });
     lim.cfg = cfg;
     return lim;
@@ -1742,7 +1755,7 @@ window.cashOut = function() {
     // lands from another device, so the number the office saw may be stale.
     const check = window.SnacksCash.validate({
         account: getAccount(name), transactions: snacks.transactions,
-        camper: name, date: todayStr(), settings: cfg,
+        camper: name, camperId: _deskCamperId(name), date: todayStr(), settings: cfg,
         amount: amt, note: note
     });
     // The client check above is UX: it disables the button and explains before a
@@ -1770,7 +1783,7 @@ window.cashOut = function() {
         }
         closeM('cash');
         _deskRefresh(null, name, d);
-        toast('Paid out $' + rounded.toFixed(2) + ' cash to ' + name);
+        toast('Paid out $' + rounded.toFixed(2) + ' cash to ' + _lbl(name));
         ['cashAmt', 'cashNote'].forEach(id => { const e = document.getElementById(id); if (e) e.value = ''; });
     }, function () {
         toast('Could not pay out the cash — connection error', 1);
@@ -1814,8 +1827,13 @@ async function _getSnacksProcessorKey() {
 // has neither, so it never appears here — there's nothing for either
 // gateway to refund.
 function _onlineDeposits(name, processorKey) {
+    const id = _deskCamperId(name);
     return (snacks.transactions || []).filter(t => {
-        if (!t || t.camper !== name || t.kind !== 'deposit' || t.method !== processorKey) return false;
+        if (!t || t.kind !== 'deposit' || t.method !== processorKey) return false;
+        // this camper's deposit: by number when both carry one, by name only
+        // for a deposit from before numbers
+        if (id != null && t.camperId != null && t.camperId !== '') { if (String(t.camperId) !== String(id)) return false; }
+        else if (t.camper !== name) return false;
         return processorKey === 'stripe' ? !!t.stripePaymentIntentId : !!t.byopTransactionId;
     });
 }
@@ -1918,7 +1936,9 @@ window.refundCanteenDeposit = async function() {
     const fnName = processorKey === 'stripe' ? 'stripe-canteen-refund' : 'payments-canteen-refund';
     if (warn) warn.style.display = 'none';
     if (btn) { btn.disabled = true; btn.textContent = 'Refunding…'; }
-    client.functions.invoke(fnName, { body: { camperName: name, amount: amount } })
+    const _rc = getRoster()[name];
+    const _rcid = _rc && /^\d+$/.test(String(_rc.camperId == null ? '' : _rc.camperId)) ? Number(_rc.camperId) : undefined;
+    client.functions.invoke(fnName, { body: { camperName: name, camperId: _rcid, amount: amount } })
         .then(async function(res) {
             if (btn) { btn.disabled = false; btn.textContent = 'Refund'; }
             var data = res && res.data;

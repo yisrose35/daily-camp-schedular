@@ -96,6 +96,28 @@
         else if (op === 'update') out.person_id = null;
         return out;
     }
+    // Every record inside a saved document that names a camper (camperName)
+    // and carries no number gets camperId, looked up the same way as every
+    // call. Additive only: nothing is removed or renamed, and a name that is
+    // not a camper on the roster (a lead, a sample) is left as it is.
+    function stampDoc(node, campId, resolveNow, depth) {
+        if (!node || typeof node !== 'object' || depth > 12) return;
+        if (Array.isArray(node)) {
+            for (var i = 0; i < node.length; i++) stampDoc(node[i], campId, resolveNow, depth + 1);
+            return;
+        }
+        if (typeof node.camperName === 'string' && node.camperName.trim() && !isId(node.camperId)) {
+            var id = null;
+            try { id = resolveNow ? resolveNow(campId, node.camperName.trim()) : null; } catch (_) { id = null; }
+            if (isId(id)) node.camperId = Number(id);
+        }
+        for (var k in node) {
+            if (Object.prototype.hasOwnProperty.call(node, k) && node[k] && typeof node[k] === 'object') {
+                stampDoc(node[k], campId, resolveNow, depth + 1);
+            }
+        }
+    }
+
     function wrapFrom(client, resolve) {
         if (!client || typeof client.from !== 'function' || client.__camperIdFrom) return;
         var resolveNow = function (campId, name) {
@@ -114,6 +136,16 @@
                     var v = Array.isArray(values)
                         ? values.map(function (r) { return stampRow(r, op, resolveNow); })
                         : stampRow(values, op, resolveNow);
+                    // A camp document (health logs, luggage, shop orders,
+                    // enrollments…): every record in it that names a camper
+                    // gets their number too.
+                    if (table === 'camp_state_kv') {
+                        (Array.isArray(v) ? v : [v]).forEach(function (r) {
+                            if (r && typeof r === 'object' && r.value && typeof r.value === 'object') {
+                                stampDoc(r.value, r.camp_id || null, resolveNow, 0);
+                            }
+                        });
+                    }
                     return rawOp.apply(null, [v].concat(rest));
                 };
             });
@@ -178,7 +210,26 @@
         window.fetch = wrapped;
     }
 
-    window.CampistryCamperIdRpc = { wrap: wrap, wrapFetch: wrapFetch, wrapFrom: wrapFrom, stampRow: stampRow, camperNameIn: camperNameIn, isId: isId };
+    // A camper's name as a person reads it. Two campers may share a name; the
+    // roster tells them apart with an internal key ("Malky Stein #102") that
+    // must never be shown. Use this wherever a camper's name reaches a screen,
+    // a receipt or a message — never where it identifies the camper.
+    function displayName(s) { return String(s == null ? '' : s).replace(/\s#\d+(?:-\d+)?$/, ''); }
+    window.campistryName = displayName;
+
+    // The number of the camper a page holds by roster key, or null — for a
+    // page writing a record that should carry it. Only an answer the page
+    // already has (the staff roster); never waits, never guesses.
+    function camperIdOf(name, campId) {
+        var n = String(name == null ? '' : name).trim();
+        if (!n || typeof window.__camperIdResolve !== 'function') return null;
+        var r = null;
+        try { r = window.__camperIdResolve(campId || null, n); } catch (_) { r = null; }
+        return (r && typeof r.then !== 'function' && isId(r)) ? Number(r) : null;
+    }
+    window.campistryCamperId = camperIdOf;
+
+    window.CampistryCamperIdRpc = { wrap: wrap, wrapFetch: wrapFetch, wrapFrom: wrapFrom, stampRow: stampRow, stampDoc: stampDoc, camperNameIn: camperNameIn, isId: isId };
 
     // Loaded AFTER the staff client was created (a page that loads
     // supabase_client.js dynamically, or puts this tag later): wrap it now.

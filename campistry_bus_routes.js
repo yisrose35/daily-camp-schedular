@@ -61,7 +61,7 @@
                         var name = camperName(c);
                         if (!name) return;
                         out.push({
-                            camperName: name,
+                            camperName: name, camperId: (c && typeof c === 'object' && c.camperId != null) ? c.camperId : null,
                             mode: mode || '',
                             shift: shiftLabel,
                             busId: r.busId || '',

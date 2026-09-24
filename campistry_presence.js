@@ -95,7 +95,7 @@
                             var key = String(sp.s || ('span' + i));
                             ses[key] = { name: key, startDate: sp.f || '', endDate: sp.t || '' };
                             out.enrollments['px_' + (++n)] =
-                                { camperName: name, session: key, status: 'enrolled' };
+                                { camperName: name, camperId: sp.i != null ? sp.i : null, session: key, status: 'enrolled' };
                         });
                     });
                     out.sessions = Object.keys(ses).map(function (k) { return ses[k]; });
@@ -302,8 +302,9 @@
         if (!w) return { state: 'active', reason: 'rule_not_loaded', session: '', from: null, to: null };
         var s = state();
         if (!s.ok) return { state: 'active', reason: 'no_camp_state', session: '', from: null, to: null };
+        var r = s.roster && s.roster[name];
         return w.presenceOf({
-            camperName: name, enrollments: s.enrollments, sessions: s.sessions,
+            camperName: name, camperId: r ? r.camperId : null, enrollments: s.enrollments, sessions: s.sessions,
             roster: s.roster, on: on || P.asOf()
         });
     };

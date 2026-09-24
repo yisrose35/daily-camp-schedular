@@ -39,10 +39,21 @@ const corsHeaders = {
 // and stripe-checkout) — this endpoint doesn't move any money itself, it only
 // lets someone start a Checkout session that (once completed) attaches a
 // payment method to a real camper's own auto-reload config in THEIR OWN
-// camp's data; campOwnsCamper blocks the simple stale/wrong-campId case.
-async function campOwnsCamper(campId: string | undefined, camperName: string | undefined): Promise<boolean> {
-  if (!campId || !camperName || !SUPABASE_URL || !SUPABASE_SERVICE_KEY) return false;
+// camp's data; resolveCamper blocks the simple stale/wrong-campId case.
+//
+// Returns the camper's roster key, or null when they are not on this camp's
+// roster. The camper NUMBER decides when the page sends one (resolved to that
+// person's current roster key by camp_person_label); the name is only the
+// fallback for a caller that sends no number.
+async function resolveCamper(campId: string | undefined, camperName: unknown, camperId: number | null): Promise<string | null> {
+  if (!campId || !SUPABASE_URL || !SUPABASE_SERVICE_KEY) return null;
   const supabase = createClient(SUPABASE_URL, SUPABASE_SERVICE_KEY);
+  let key: string | null = camperId == null && typeof camperName === "string" && camperName ? camperName : null;
+  if (camperId != null) {
+    const { data: label, error } = await supabase.rpc("camp_person_label", { p_camp_id: campId, p_person_id: camperId });
+    key = !error && typeof label === "string" && label ? label : null;
+  }
+  if (!key) return null;
   const { data } = await supabase
     .from("camp_state_kv")
     .select("value")
@@ -50,7 +61,7 @@ async function campOwnsCamper(campId: string | undefined, camperName: string | u
     .eq("key", "app1")
     .maybeSingle();
   const roster = data?.value && typeof data.value === "object" ? (data.value as Record<string, any>).camperRoster : null;
-  return !!(roster && typeof roster === "object" && Object.prototype.hasOwnProperty.call(roster, camperName));
+  return roster && typeof roster === "object" && Object.prototype.hasOwnProperty.call(roster, key) ? key : null;
 }
 
 // Camp-wide "does this camp even run a canteen" gate (migration 106) — same
@@ -89,7 +100,14 @@ async function stripeGet(endpoint: string) {
 
 /** A camper id sent by the page (campistry_camper_id_rpc.js adds it), or null. */
 function camperIdIn(v: unknown): number | null {
-  return v != null && /^\d+$/.test(String(v)) ? Number(v) : null;
+  return v != null && /^\d+$/.test(String(v)) && Number(v) > 0 ? Number(v) : null;
+}
+
+/** A camper's name as a person reads it: without the roster's internal
+ *  " #<number>" that tells two campers with one name apart. For what a parent
+ *  sees; never for identifying the camper. */
+function displayName(s: unknown): string {
+  return String(s ?? "").replace(/\s#\d+(?:-\d+)?$/, "");
 }
 
 serve(async (req) => {
@@ -103,11 +121,12 @@ serve(async (req) => {
     }
 
     const {
-      campId, camperName, camperId, email, existingCustomerId, successUrl, cancelUrl,
+      campId, camperName, camperId: bodyCamperId, email, existingCustomerId, successUrl, cancelUrl,
     } = await req.json();
+    const camperId = camperIdIn(bodyCamperId);
 
-    if (!campId || !camperName) {
-      return new Response(JSON.stringify({ error: "campId and camperName are required" }), {
+    if (!campId || (camperId == null && !camperName)) {
+      return new Response(JSON.stringify({ error: "campId and camperId (or camperName) are required" }), {
         status: 400, headers: { ...corsHeaders, "Content-Type": "application/json" },
       });
     }
@@ -116,7 +135,8 @@ serve(async (req) => {
         status: 400, headers: { ...corsHeaders, "Content-Type": "application/json" },
       });
     }
-    if (!(await campOwnsCamper(campId, camperName))) {
+    const camperKey = await resolveCamper(campId, camperName, camperId);
+    if (!camperKey) {
       return new Response(JSON.stringify({ error: "Camper not found for this camp" }), {
         status: 400, headers: { ...corsHeaders, "Content-Type": "application/json" },
       });
@@ -132,7 +152,7 @@ serve(async (req) => {
     }
     if (!customerId) {
       const customer = await stripePost("/customers", {
-        name: camperName || "",
+        name: displayName(camperKey),
         ...(email ? { email: String(email) } : {}),
         "metadata[campId]": String(campId),
         "metadata[source]": "campistry",
@@ -147,10 +167,9 @@ serve(async (req) => {
 
     const meta: Record<string, string> = {
       campId: String(campId),
-      camperName: String(camperName),
-      // Beside the name, to stripe-webhook, which saves the card on this
-      // camper's account by ID.
-      camperId: camperIdIn(camperId) != null ? String(camperIdIn(camperId)) : "",
+      // To stripe-webhook, which saves the card on this camper's account by
+      // ID; the roster key beside it is only the fallback for no number.
+      camperId: camperId != null ? String(camperId) : "", camperName: String(camperKey),
       source: "campistry-canteen-autoreload-setup",
     };
 

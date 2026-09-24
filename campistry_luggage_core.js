@@ -105,7 +105,7 @@
     // Returns '' for an empty name so each caller can pick its own fallback.
     // (Baking one in here made tagCode's 'CMP' default unreachable.)
     function initials(name) {
-        return String(name || '').trim().split(/\s+/)
+        return String(name || '').trim().replace(/\s#\d+(?:-\d+)?$/, '').split(/\s+/)
             .map(function (w) { return (w[0] || '').toUpperCase(); })
             .join('').slice(0, 3);
     }
@@ -261,7 +261,7 @@
             if (!b || b.status === 'cancelled') return;
             (b.bags || []).forEach(function (bag) {
                 out.push(Object.assign({}, bag, {
-                    bookingId: b.id, camperName: b.camperName || '',
+                    bookingId: b.id, camperName: b.camperName || '', camperId: b.camperId != null ? b.camperId : null,
                     bunk: b.bunk || '', division: b.division || '',
                     locationId: b.locationId || '', routeId: b.routeId || ''
                 }));

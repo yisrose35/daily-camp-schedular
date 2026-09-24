@@ -49,7 +49,9 @@ END $$;
 DO $$
 DECLARE c uuid := 'a5700000-0000-0000-0000-000000000001'; v jsonb;
 BEGIN
-    IF (SELECT person_id FROM camp_people WHERE camp_id = c AND source_key = 'Avi Katz' AND deleted_at IS NULL)
+    -- (since 259 the new Avi is filed under "Avi Katz #11", shown as "Avi Katz")
+    IF (SELECT person_id FROM camp_people WHERE camp_id = c AND deleted_at IS NULL
+         AND regexp_replace(source_key, '\s#\d+(?:-\d+)?$', '') = 'Avi Katz')
        IS DISTINCT FROM 11 THEN
         RAISE EXCEPTION 'setup: the new Avi Katz is not #11';
     END IF;
@@ -101,9 +103,13 @@ BEGIN
     PERFORM pg_temp.expect('an office credit for #11', 0, 8);
     PERFORM public.submit_canteen_purchase(c, 'Avi Katz', 2, 'Chips', p_camper_id => 11);
     PERFORM pg_temp.expect('a purchase for #11', 0, 6);
-    -- and by name alone, the enrolled child is the one meant
+    -- and by key alone (a page from before numbers): each key reaches the
+    -- child it belongs to — since 259 the new Avi is "Avi Katz #11" and
+    -- "Avi Katz" stays the departed #10's.
+    PERFORM public.canteen_office_credit(c, 'Avi Katz #11', 1);
+    PERFORM pg_temp.expect('an office credit by the new Avi''s key', 0, 7);
     PERFORM public.canteen_office_credit(c, 'Avi Katz', 1);
-    PERFORM pg_temp.expect('an office credit by name', 0, 7);
+    PERFORM pg_temp.expect('an office credit by the departed Avi''s key', 1, 7);
 END $$;
 RESET "request.jwt.claims";
 
@@ -217,11 +223,96 @@ INSERT INTO camp_people (camp_id, person_id, kind, source_key, name, deleted_at)
     ('a5700000-0000-0000-0000-000000000003', 32, 'camper', 'dov stern', 'dov stern', now());
 DO $$
 BEGIN
-    IF public.verify_number_round_trip() -> 'numbers_that_miss_their_camper' <> '[]'::jsonb THEN
+    IF public.verify_number_round_trip() -> 'numbers_that_miss_their_camper' <> '[]'::jsonb
+       OR public.verify_number_round_trip() -> 'enrolled_names_that_miss_their_camper' <> '[]'::jsonb THEN
         RAISE EXCEPTION 'two departed look-alikes: %', public.verify_number_round_trip();
     END IF;
-    IF public.camp_person_label('a5700000-0000-0000-0000-000000000003', 31) <> 'Dov Stern #31' THEN
-        RAISE EXCEPTION 'unexpected label: %', public.camp_person_label('a5700000-0000-0000-0000-000000000003', 31);
+    -- No number is ever added to a name.
+    IF public.camp_person_label('a5700000-0000-0000-0000-000000000003', 31) <> 'Dov Stern' THEN
+        RAISE EXCEPTION 'a number was added to a name: %', public.camp_person_label('a5700000-0000-0000-0000-000000000003', 31);
+    END IF;
+END $$;
+ROLLBACK;
+
+-- ════════════════════════════════════════════════════════════════════════════
+-- Ted's TED-006 case: "Sam Cohen" is #2 and another child is stored as
+-- "Sam Cohen #2", who is #5. The name "Sam Cohen #2" means #5 — whatever
+-- number happens to follow it — and each child's money reaches them by name
+-- and by number. No number is ever added to anybody's name.
+-- ════════════════════════════════════════════════════════════════════════════
+BEGIN;
+INSERT INTO auth.users (id, email) VALUES ('a5700000-0000-0000-0000-0000000000a4', 'owner4@257.test');
+INSERT INTO camps (id, name, owner) VALUES
+    ('a5700000-0000-0000-0000-000000000004', '257 camp four', 'a5700000-0000-0000-0000-0000000000a4');
+INSERT INTO camp_state_kv (camp_id, key, value) VALUES ('a5700000-0000-0000-0000-000000000004', 'app1',
+    '{"camperRoster":{"Sam Cohen":{"name":"Sam Cohen","camperId":2},"Sam Cohen #2":{"name":"Sam Cohen","camperId":5}}}');
+SET "request.jwt.claims" = '{"sub":"a5700000-0000-0000-0000-0000000000a4"}';
+DO $$
+DECLARE c uuid := 'a5700000-0000-0000-0000-000000000004';
+BEGIN
+    IF public.camp_person_by_name(c, 'Sam Cohen #2') IS DISTINCT FROM 5 THEN
+        RAISE EXCEPTION 'the name "Sam Cohen #2" does not mean #5: %', public.camp_person_by_name(c, 'Sam Cohen #2');
+    END IF;
+    PERFORM public.canteen_office_credit(c, 'Sam Cohen #2', 9);
+    PERFORM public.canteen_office_credit(c, 'Sam Cohen', 1);
+    PERFORM public.canteen_office_credit(c, 'Sam Cohen #2', 20, p_camper_id => 5);
+    PERFORM public.canteen_office_credit(c, 'Sam Cohen', 300, p_camper_id => 2);
+    IF (SELECT balance FROM camp_canteen_accounts WHERE camp_id = c AND person_id = 5) IS DISTINCT FROM 29
+       OR (SELECT balance FROM camp_canteen_accounts WHERE camp_id = c AND person_id = 2) IS DISTINCT FROM 301 THEN
+        RAISE EXCEPTION 'money reached the wrong child: %',
+            (SELECT jsonb_agg(jsonb_build_object('p', person_id, 'key', account_key, 'b', balance)) FROM camp_canteen_accounts WHERE camp_id = c);
+    END IF;
+    IF EXISTS (SELECT 1 FROM camp_canteen_accounts WHERE camp_id = c AND (account_key ~ '#\d+ #\d+$' OR camper_name ~ '#\d+ #\d+$')) THEN
+        RAISE EXCEPTION 'a number was added to a name: %',
+            (SELECT jsonb_agg(account_key) FROM camp_canteen_accounts WHERE camp_id = c);
+    END IF;
+    IF public.verify_number_round_trip() -> 'numbers_that_miss_their_camper' <> '[]'::jsonb
+       OR public.verify_number_round_trip() -> 'enrolled_names_that_miss_their_camper' <> '[]'::jsonb
+       OR public.verify_number_round_trip() -> 'functions_that_do_not_pin' <> '[]'::jsonb THEN
+        RAISE EXCEPTION 'the check reports: %', public.verify_number_round_trip();
+    END IF;
+END $$;
+RESET "request.jwt.claims";
+ROLLBACK;
+
+-- ════════════════════════════════════════════════════════════════════════════
+-- Ted's TED-008: "is this my child?" by number. Avi Katz #10 has left; the new
+-- Avi Katz #11 is this parent's child. Asked about #10, the answer is no.
+-- ════════════════════════════════════════════════════════════════════════════
+BEGIN;
+INSERT INTO auth.users (id, email) VALUES ('a5700000-0000-0000-0000-0000000000b5', 'parent5@257.test');
+INSERT INTO camps (id, name) VALUES ('a5700000-0000-0000-0000-000000000005', '257 camp five');
+INSERT INTO camp_state_kv (camp_id, key, value) VALUES ('a5700000-0000-0000-0000-000000000005', 'app1',
+    '{"camperRoster":{"Avi Katz":{"name":"Avi Katz","camperId":10}}}');
+UPDATE camp_state_kv SET value = '{"camperRoster":{}}' WHERE camp_id = 'a5700000-0000-0000-0000-000000000005' AND key = 'app1';
+UPDATE camp_state_kv SET value = '{"camperRoster":{"Avi Katz":{"name":"Avi Katz","camperId":11}}}'
+ WHERE camp_id = 'a5700000-0000-0000-0000-000000000005' AND key = 'app1';
+INSERT INTO link_parent_invites (camp_id, user_id, parent_email, camper_names, person_ids, status) VALUES
+    ('a5700000-0000-0000-0000-000000000005', 'a5700000-0000-0000-0000-0000000000b5', 'parent5@257.test', '["Avi Katz"]', '[11]', 'active');
+SET "request.jwt.claims" = '{"sub":"a5700000-0000-0000-0000-0000000000b5"}';
+DO $$
+DECLARE c text := 'a5700000-0000-0000-0000-000000000005';
+BEGIN
+    IF public.verify_my_camper(c, 'Avi Katz', 10) THEN
+        RAISE EXCEPTION 'the new Avi''s parent is told they own the departed Avi #10';
+    END IF;
+    IF NOT public.verify_my_camper(c, 'Avi Katz', 11) THEN
+        RAISE EXCEPTION 'the parent is not told they own their own child #11';
+    END IF;
+    -- By key alone: since 259 the parent's child is "Avi Katz #11"; the key
+    -- "Avi Katz" is the departed #10's and is not theirs.
+    IF NOT public.verify_my_camper(c, 'Avi Katz #11') THEN
+        RAISE EXCEPTION 'by their own key the child is not the parent''s';
+    END IF;
+    IF public.verify_my_camper(c, 'Avi Katz') THEN
+        RAISE EXCEPTION 'the departed Avi''s key reaches the new Avi''s parent';
+    END IF;
+END $$;
+RESET "request.jwt.claims";
+DO $$
+BEGIN
+    IF public.verify_number_round_trip() -> 'functions_that_do_not_pin' <> '[]'::jsonb THEN
+        RAISE EXCEPTION 'unpinned: %', public.verify_number_round_trip() -> 'functions_that_do_not_pin';
     END IF;
 END $$;
 ROLLBACK;

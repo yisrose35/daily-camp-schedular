@@ -200,6 +200,14 @@ function camperIdIn(v: unknown): number | null {
   return v != null && /^\d+$/.test(String(v)) ? Number(v) : null;
 }
 
+
+/** A camper's name as a person reads it: without the roster's internal
+ *  " #<number>" that tells two campers with one name apart. For what a parent
+ *  sees; never for identifying the camper. */
+function displayName(s: unknown): string {
+  return String(s ?? "").replace(/\s#\d+(?:-\d+)?$/, "");
+}
+
 serve(async (req) => {
   if (req.method === "OPTIONS") return new Response("ok", { headers: corsHeaders });
 
@@ -226,7 +234,8 @@ serve(async (req) => {
     // Confirm the subject exists under this camp before charging in its name.
     let fam: Record<string, any> | null = null;
     if (kind === "canteen_deposit") {
-      if (!camperName || !(await campHasCamper(service, campId, String(camperName), camperId))) {
+      // The number decides (canteen_camper_known resolves it); name only without one.
+      if ((camperId == null && !camperName) || !(await campHasCamper(service, campId, String(camperName ?? ""), camperId))) {
         return json({ success: false, error: "Camper not found for this camp" }, 400);
       }
     } else {
@@ -244,7 +253,7 @@ serve(async (req) => {
       return json({ success: false, error: "This camp's Banquest credential is incomplete." }, 400);
     }
 
-    const desc = String(description || (kind === "canteen_deposit" ? `Canteen funds — ${camperName}` : `Camp payment — ${familyName || familyKey}`));
+    const desc = String(description || (kind === "canteen_deposit" ? `Canteen funds — ${displayName(camperName)}` : `Camp payment — ${familyName || familyKey}`));
     const res = await banquestChargeNonce(creds, amountCents, String(token), desc, billing, card);
     if (!res.success || !res.externalTransactionId) {
       return json({ success: false, error: res.error || "Card declined." }, 200);
@@ -272,8 +281,7 @@ serve(async (req) => {
     if (kind === "canteen_deposit") {
       const creditRes = await service.rpc("credit_canteen_balance_from_processor", {
         p_camp_id: campId,
-        p_camper_name: camperName,
-        p_camper_id: camperId,
+        p_camper_id: camperId, p_camper_name: String(camperName ?? ""),
         p_amount: charged,
         p_processor_key: "banquest",
         p_external_transaction_id: txnId,

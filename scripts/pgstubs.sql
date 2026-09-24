@@ -30,6 +30,10 @@ END $$;
 -- exist". Shaped the way the real thing is shaped, that fails here instead.
 CREATE SCHEMA IF NOT EXISTS extensions;
 CREATE EXTENSION IF NOT EXISTS pgcrypto SCHEMA extensions;
+-- On Supabase the extensions schema is on every role's search path, so older
+-- migrations (010) call gen_random_bytes() unqualified. Same name here.
+CREATE OR REPLACE FUNCTION public.gen_random_bytes(integer) RETURNS bytea
+    LANGUAGE sql VOLATILE AS $$ SELECT extensions.gen_random_bytes($1) $$;
 
 CREATE SCHEMA IF NOT EXISTS auth;
 CREATE TABLE IF NOT EXISTS auth.users (id uuid PRIMARY KEY, email text);
@@ -418,3 +422,41 @@ CREATE TABLE IF NOT EXISTS public.link_tips (
     stripe_payment_intent_id text, fee_amount numeric(8,2),
     staff_account_id uuid, stripe_transfer_id text,
     created_at timestamptz NOT NULL DEFAULT now());
+
+-- Supabase Storage, as far as 080 (the camp-photos bucket and its policies)
+-- touches it: a bucket row, an objects table to hang policies on, and the
+-- helper that splits an object path.
+CREATE SCHEMA IF NOT EXISTS storage;
+CREATE TABLE IF NOT EXISTS storage.buckets (
+    id text PRIMARY KEY, name text NOT NULL, public boolean DEFAULT false,
+    file_size_limit bigint, allowed_mime_types text[]);
+CREATE TABLE IF NOT EXISTS storage.objects (
+    id uuid PRIMARY KEY DEFAULT gen_random_uuid(), bucket_id text, name text,
+    owner uuid, created_at timestamptz DEFAULT now(), metadata jsonb);
+ALTER TABLE storage.objects ENABLE ROW LEVEL SECURITY;
+CREATE OR REPLACE FUNCTION storage.foldername(name text) RETURNS text[]
+LANGUAGE sql IMMUTABLE AS $$ SELECT (string_to_array(name, '/'))[1:array_length(string_to_array(name, '/'), 1) - 1] $$;
+
+-- Supabase Vault (126 and the processor migrations after it store each camp's
+-- processor keys there). The shape the migrations use — vault.secrets,
+-- vault.decrypted_secrets, vault.create_secret — WITHOUT the encryption: a test
+-- database holds no real keys. `CREATE EXTENSION IF NOT EXISTS supabase_vault`
+-- in 126 must then be a no-op, so the extension is recorded as installed.
+CREATE SCHEMA IF NOT EXISTS vault;
+CREATE TABLE IF NOT EXISTS vault.secrets (
+    id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+    name text, description text DEFAULT '', secret text NOT NULL,
+    created_at timestamptz NOT NULL DEFAULT now());
+CREATE OR REPLACE VIEW vault.decrypted_secrets AS
+    SELECT id, name, description, secret, secret AS decrypted_secret, created_at FROM vault.secrets;
+CREATE OR REPLACE FUNCTION vault.create_secret(new_secret text, new_name text DEFAULT NULL, new_description text DEFAULT '')
+    RETURNS uuid LANGUAGE sql AS $$
+    INSERT INTO vault.secrets (secret, name, description) VALUES (new_secret, new_name, new_description) RETURNING id $$;
+DO $$ BEGIN
+  IF NOT EXISTS (SELECT 1 FROM pg_extension WHERE extname = 'supabase_vault') THEN
+    INSERT INTO pg_extension (oid, extname, extowner, extnamespace, extrelocatable, extversion)
+    VALUES ((SELECT max(oid::int8) + 1000 FROM pg_extension)::oid, 'supabase_vault',
+            (SELECT oid FROM pg_roles WHERE rolname = current_user),
+            (SELECT oid FROM pg_namespace WHERE nspname = 'vault'), false, 'stub');
+  END IF;
+END $$;

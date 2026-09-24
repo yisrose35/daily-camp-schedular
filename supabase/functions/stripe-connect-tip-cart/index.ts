@@ -219,9 +219,8 @@ serve(async (req) => {
         staff_name: acct.staff_name || "",
         staff_role: acct.role || "",
         stripe_account_id: acct.stripe_account_id,
-        camper_name: it.camperName || null,
         // The camper by ID (252); the webhook carries it to link_tips.
-        person_id: camperIdIn(it.camperId),
+        person_id: camperIdIn(it.camperId), camper_name: it.camperName || null,
         parent_user_id: authUser.user.id,
         parent_name: parentName || null,
         parent_email: parentEmail || null,

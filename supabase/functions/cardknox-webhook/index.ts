@@ -175,12 +175,22 @@ serve(async (req) => {
     const xToken = fields.get("xToken") || fields.get("xtoken") || "";
     const xMaskedCardNumber = fields.get("xMaskedCardNumber") || fields.get("xmaskedcardnumber") || "";
 
-    type IntentMatch = { success: boolean; campId?: string; kind?: string; familyKey?: string; familyName?: string; camperName?: string; enrollmentId?: string; amountCents?: number; status?: string };
+    type IntentMatch = { success: boolean; campId?: string; kind?: string; familyKey?: string; familyName?: string; camperName?: string; camperId?: number | null; enrollmentId?: string; amountCents?: number; status?: string };
     let intent: IntentMatch | null = null;
 
     if (xInvoice) {
       const { data } = await service.rpc("get_cardknox_checkout_intent", { p_reference: xInvoice });
-      if (data?.success) intent = data;
+      if (data?.success) {
+        intent = data as IntentMatch;
+        // get_cardknox_checkout_intent does not return the camper's number, so
+        // it is read from the intent row itself (person_id, stamped when the
+        // intent was created). The number decides who is credited below; the
+        // name is the fallback for an intent written before numbers.
+        const { data: pidRow } = await service.from("cardknox_checkout_intents")
+          .select("person_id").eq("reference", xInvoice).maybeSingle();
+        const pid = pidRow?.person_id;
+        intent.camperId = pid != null && /^\d+$/.test(String(pid)) ? Number(pid) : null;
+      }
     }
 
     if (!intent) {
@@ -464,8 +474,7 @@ serve(async (req) => {
       const arLast4 = (xMaskedCardNumber || "").replace(/[^0-9]/g, "").slice(-4);
       const { data: merged, error: mergeErr } = await service.rpc("merge_canteen_autoreload_card", {
         p_camp_id: campId,
-        p_camper: String(intent.camperName || ""),
-        p_camper_id: intent.camperId ?? null,
+        p_camper_id: intent.camperId ?? null, p_camper: String(intent.camperName || ""),
         p_fields: {
           byopProcessor: "cardknox",
           byopCustomerRef: vaulted,
@@ -503,8 +512,7 @@ serve(async (req) => {
     if (intent.kind === "canteen_deposit") {
       const { data: creditResult, error: creditErr } = await service.rpc("credit_canteen_balance_from_processor", {
         p_camp_id: campId,
-        p_camper_name: intent.camperName,
-        p_camper_id: intent.camperId ?? null,
+        p_camper_id: intent.camperId ?? null, p_camper_name: intent.camperName,
         p_amount: intent.amountCents / 100,
         p_processor_key: "cardknox",
         p_external_transaction_id: xRefNum,
@@ -607,7 +615,7 @@ serve(async (req) => {
     await sendReceipt({
       campId, ref: String(xRefNum || ""), amount: intent.amountCents / 100,
       familyKey: intent.familyKey || null,
-      camperName: intent.kind === "canteen_deposit" ? intent.camperName : null,
+      camperId: intent.kind === "canteen_deposit" ? (intent.camperId ?? null) : null, camperName: intent.kind === "canteen_deposit" ? intent.camperName : null,
       what: intent.kind === "canteen_deposit" ? "Canteen funds" : "Camp payment",
       method: "Card",
     });

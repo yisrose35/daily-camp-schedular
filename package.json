@@ -8,7 +8,9 @@
     "test:e2e": "node tests/bunk_builder_ui.e2e.js && node tests/setup_checklist_links.e2e.js",
     "test:smoke": "node tests/money_path.e2e.js",
     "test:pg": "bash scripts/run_pgtests.sh",
-    "test:scale": "node tests/scale_600.e2e.js"
+    "test:scale": "node tests/scale_600.e2e.js",
+    "test:lite": "node tests/lite_health_numbers.e2e.js",
+    "test:keys": "node tests/roster_keys.e2e.js"
   },
   "devDependencies": {
     "playwright": "^1.63.0"

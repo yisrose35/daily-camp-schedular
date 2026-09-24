@@ -73,7 +73,6 @@ async function callerCampId(req: Request): Promise<string | null> {
 
 function template(type: string, data: Record<string, string>): { subject: string; html: string } {
   const campName = data.campName || "Camp";
-  const camperName = data.camperName || "";
   const parentName = data.parentName || "Parent";
   const amount = data.amount || "$0";
   const dueDate = data.dueDate || "";
@@ -95,12 +94,12 @@ function template(type: string, data: Record<string, string>): { subject: string
   switch (type) {
     case "enrollment_confirmation":
       return {
-        subject: `${camperName} is enrolled at ${campName}!`,
+        subject: `${displayName(data.camperName)} is enrolled at ${campName}!`,
         html: wrap("Enrollment Confirmed! 🎉", `
           <p>Dear ${parentName},</p>
-          <p>We're excited to confirm that <strong>${camperName}</strong> is officially enrolled at <strong>${campName}</strong>!</p>
+          <p>We're excited to confirm that <strong>${displayName(data.camperName)}</strong> is officially enrolled at <strong>${campName}</strong>!</p>
           <p>Please make sure to complete any outstanding forms and review your payment schedule.</p>
-          <p>We can't wait to see ${camperName} this summer!</p>
+          <p>We can't wait to see ${displayName(data.camperName)} this summer!</p>
           <p style="margin-top:24px;">Warm regards,<br><strong>The ${campName} Team</strong></p>
         `),
       };
@@ -110,7 +109,7 @@ function template(type: string, data: Record<string, string>): { subject: string
         subject: `Payment reminder: ${amount} due ${dueDate}`,
         html: wrap("Payment Reminder", `
           <p>Dear ${parentName},</p>
-          <p>This is a friendly reminder that a payment of <strong>${amount}</strong> for <strong>${camperName}</strong> is due on <strong>${dueDate}</strong>.</p>
+          <p>This is a friendly reminder that a payment of <strong>${amount}</strong> for <strong>${displayName(data.camperName)}</strong> is due on <strong>${dueDate}</strong>.</p>
           <p>If you've already made this payment, please disregard this message.</p>
           <p style="margin-top:24px;">Thank you,<br><strong>The ${campName} Team</strong></p>
         `),
@@ -118,10 +117,10 @@ function template(type: string, data: Record<string, string>): { subject: string
 
     case "payment_overdue":
       return {
-        subject: `Overdue payment: ${amount} for ${camperName}`,
+        subject: `Overdue payment: ${amount} for ${displayName(data.camperName)}`,
         html: wrap("Payment Overdue", `
           <p>Dear ${parentName},</p>
-          <p>Our records show that a payment of <strong>${amount}</strong> for <strong>${camperName}</strong> was due on <strong>${dueDate}</strong> and has not yet been received.</p>
+          <p>Our records show that a payment of <strong>${amount}</strong> for <strong>${displayName(data.camperName)}</strong> was due on <strong>${dueDate}</strong> and has not yet been received.</p>
           <p>Please arrange payment at your earliest convenience. If you have any questions or need to discuss a payment plan, please contact the camp office.</p>
           <p style="margin-top:24px;">Thank you,<br><strong>The ${campName} Team</strong></p>
         `),
@@ -129,10 +128,10 @@ function template(type: string, data: Record<string, string>): { subject: string
 
     case "form_reminder":
       return {
-        subject: `Action needed: ${formName} for ${camperName}`,
+        subject: `Action needed: ${formName} for ${displayName(data.camperName)}`,
         html: wrap("Form Reminder", `
           <p>Dear ${parentName},</p>
-          <p>We still need the <strong>${formName}</strong> for <strong>${camperName}</strong>. Please complete and submit this form as soon as possible.</p>
+          <p>We still need the <strong>${formName}</strong> for <strong>${displayName(data.camperName)}</strong>. Please complete and submit this form as soon as possible.</p>
           <p>Incomplete forms may affect your child's participation in camp activities.</p>
           <p style="margin-top:24px;">Thank you,<br><strong>The ${campName} Team</strong></p>
         `),
@@ -140,12 +139,12 @@ function template(type: string, data: Record<string, string>): { subject: string
 
     case "waitlist_promoted":
       return {
-        subject: `Great news! ${camperName} has been accepted!`,
+        subject: `Great news! ${displayName(data.camperName)} has been accepted!`,
         html: wrap("Waitlist Update 🎉", `
           <p>Dear ${parentName},</p>
-          <p>A spot has opened up and <strong>${camperName}</strong> has been moved from the waitlist to <strong>accepted</strong>!</p>
+          <p>A spot has opened up and <strong>${displayName(data.camperName)}</strong> has been moved from the waitlist to <strong>accepted</strong>!</p>
           <p>Please log in to complete enrollment and arrange payment to secure your child's spot.</p>
-          <p style="margin-top:24px;">We look forward to seeing ${camperName} at camp!<br><strong>The ${campName} Team</strong></p>
+          <p style="margin-top:24px;">We look forward to seeing ${displayName(data.camperName)} at camp!<br><strong>The ${campName} Team</strong></p>
         `),
       };
 
@@ -155,6 +154,14 @@ function template(type: string, data: Record<string, string>): { subject: string
         html: wrap("Camp Update", `<p>${data.message || "You have a new notification."}</p>`),
       };
   }
+}
+
+
+/** A camper's name as a person reads it: without the roster's internal
+ *  " #<number>" that tells two campers with one name apart. For what a parent
+ *  sees; never for identifying the camper. */
+function displayName(s: unknown): string {
+  return String(s ?? "").replace(/\s#\d+(?:-\d+)?$/, "");
 }
 
 serve(async (req) => {

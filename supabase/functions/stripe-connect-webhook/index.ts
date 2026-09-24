@@ -234,10 +234,9 @@ async function handleTipSucceeded(supabase: ReturnType<typeof createClient>, pi:
   const { error: insErr } = await supabase.from("link_tips").insert({
     camp_id: meta.campId,
     user_id: meta.parentUserId || null,
-    camper_name: meta.camperName || null,
     // The id the checkout carried decides who the tip is from; without one the
     // table's own trigger stamps it from the name (223).
-    person_id: camperIdIn(meta.camperId),
+    person_id: camperIdIn(meta.camperId), camper_name: meta.camperName || null,
     parent_name: meta.parentName || null,
     parent_email: meta.parentEmail || null,
     recipient_name: meta.staffName || "",
@@ -341,8 +340,7 @@ async function handleTipCartSucceeded(supabase: ReturnType<typeof createClient>,
       const { error: insErr } = await supabase.from("link_tips").insert({
         camp_id: item.camp_id,
         user_id: item.parent_user_id,
-        camper_name: item.camper_name,
-        person_id: item.person_id ?? null,
+        person_id: item.person_id ?? null, camper_name: item.camper_name,
         parent_name: item.parent_name,
         parent_email: item.parent_email,
         recipient_name: item.staff_name,
@@ -411,21 +409,25 @@ serve(async (req) => {
     const body = await req.text();
     const signature = req.headers.get("stripe-signature") || "";
     // Two endpoints (see header note) can deliver here, each signed with its
-    // own secret — accept either. If neither secret is configured at all,
-    // skip verification (matches this function's original permissive
-    // behavior rather than hard-failing on an incomplete deploy).
+    // own secret — accept either. With NEITHER set this used to skip the check
+    // and accept anything; it now refuses (TED-057's twin). A 500 makes Stripe
+    // retry, so nothing is lost while the secret is being set.
     const secrets = [STRIPE_CONNECT_WEBHOOK_SECRET, STRIPE_CONNECT_ACCOUNT_WEBHOOK_SECRET].filter(Boolean) as string[];
-    if (secrets.length > 0) {
-      let valid = false;
-      for (const secret of secrets) {
-        if (await verifySignature(body, signature, secret)) { valid = true; break; }
-      }
-      if (!valid) {
-        console.error("[stripe-connect-webhook] Invalid signature");
-        return new Response(JSON.stringify({ error: "Invalid signature" }), {
-          status: 400, headers: { ...corsHeaders, "Content-Type": "application/json" },
-        });
-      }
+    if (!secrets.length) {
+      console.error("[stripe-connect-webhook] no webhook secret is set — refusing every event until one is");
+      return new Response(JSON.stringify({ error: "Webhook not configured" }), {
+        status: 500, headers: { ...corsHeaders, "Content-Type": "application/json" },
+      });
+    }
+    let valid = false;
+    for (const secret of secrets) {
+      if (await verifySignature(body, signature, secret)) { valid = true; break; }
+    }
+    if (!valid) {
+      console.error("[stripe-connect-webhook] Invalid signature");
+      return new Response(JSON.stringify({ error: "Invalid signature" }), {
+        status: 400, headers: { ...corsHeaders, "Content-Type": "application/json" },
+      });
     }
 
     const event = JSON.parse(body);

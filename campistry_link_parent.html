@@ -1008,6 +1008,17 @@
 
 var parent = { name: '', email: '' };
 var children = [];
+// A child's camper number, or null. `id` on a child is its place in this list
+// ("child_0") — never a camper number; `camperId` is, from the camp's own data
+// or the numbers on this parent's invitations (get_my_camper_ids, 249).
+function _numOrNull(v){ return (v!=null && /^\d+$/.test(String(v))) ? Number(v) : null; }
+function _childIdByName(name){ var k=(children||[]).find(function(c){ return c.name===name; }); return k ? k.camperId : null; }
+// A saved row is this child's: by number when both carry one; by name only
+// for a row from before numbers.
+function _sameChild(rowId, rowName, id, name){
+    var a=_numOrNull(rowId), b=_numOrNull(id);
+    return (a!=null && b!=null) ? a===b : rowName===name;
+}
 var messages = [];
 var payments = [];
 var canteenTxByChild = {};
@@ -1205,6 +1216,7 @@ function _lkCardSetupUrl(cid,opts){
     if(opts.familyKey)  q.push('familyKey='+encodeURIComponent(opts.familyKey));
     if(opts.familyName) q.push('familyName='+encodeURIComponent(opts.familyName));
     if(opts.camperName) q.push('camperName='+encodeURIComponent(opts.camperName));
+    if(opts.camperId!=null&&/^\d+$/.test(String(opts.camperId))) q.push('camperId='+encodeURIComponent(opts.camperId));
     if(opts.amount)     q.push('amount='+encodeURIComponent(opts.amount));
     if(opts.desc)       q.push('desc='+encodeURIComponent(opts.desc));
     if(opts.save)       q.push('mode=save');
@@ -1828,7 +1840,7 @@ function _renderCampSwitch(containerId, camps, onSelect, activeId){
         chip.type = 'button';
         chip.className = 'lk-camper-chip lk-camp-chip' + (isActive ? ' active' : '');
         chip.dataset.campId = c.id;
-        chip.innerHTML = '<span class="lk-camper-chip-name">'+_escHtml(c.name)+'</span>'+(c.owed?'<span class="lk-camp-chip-dot" aria-label="Balance due"></span>':'');
+        chip.innerHTML = '<span class="lk-camper-chip-name">'+_escHtml((window.campistryName||String)(c.name))+'</span>'+(c.owed?'<span class="lk-camp-chip-dot" aria-label="Balance due"></span>':'');
         chip.onclick = function(){
             el.querySelectorAll('.lk-camper-chip').forEach(function(b){ b.classList.remove('active'); });
             chip.classList.add('active');
@@ -2190,7 +2202,7 @@ async function addFunds(){
         var addBtn=document.getElementById('canteenAddBtn');
         if(addBtn){addBtn.disabled=true;addBtn.textContent='Opening secure checkout…';}
         try{
-            var ckRes2=await _lkCallEdge('cardknox-checkout-start',{campId:c.campId,kind:'canteen_deposit',camperName:c.name,amount:amt,description:'Canteen funds — '+c.name});
+            var ckRes2=await _lkCallEdge('cardknox-checkout-start',{campId:c.campId,kind:'canteen_deposit',camperName:c.name,camperId:c.camperId,amount:amt,description:'Canteen funds — '+(window.campistryName||String)(c.name)});
             _lkGoToCheckout(ckRes2.url);
         }catch(err){ toast('Could not start checkout: '+(err&&err.message||'error')); if(addBtn){addBtn.disabled=false;addBtn.textContent='Add Funds';} }
         return;
@@ -2199,7 +2211,7 @@ async function addFunds(){
     // charges the card and credits the canteen balance.
     if(processorKey==='banquest'){
         _lkGoToCheckout(_lkCardSetupUrl(c.campId,{
-            camperName:c.name, amount:amt, desc:'Canteen funds — '+c.name,
+            camperName:c.name, camperId:c.camperId, amount:amt, desc:'Canteen funds — '+(window.campistryName||String)(c.name),
             returnUrl:_lkReturnUrl('success','canteen')
         }));
         return;
@@ -2213,8 +2225,8 @@ async function addFunds(){
     try{
         var email=(parent&&parent.email)||'';
         var res=await _lkCheckout({
-            campId:c.campId, camperName:c.name, amount:amt, email:email,
-            description:'Canteen funds — '+c.name,
+            campId:c.campId, camperName:c.name, camperId:c.camperId, amount:amt, email:email,
+            description:'Canteen funds — '+(window.campistryName||String)(c.name),
             source:'campistry-canteen-deposit',
             successUrl:_lkReturnUrl('success','canteen'),
             cancelUrl:_lkReturnUrl('cancelled','canteen'),
@@ -2327,7 +2339,7 @@ function _lkCanteenChargeSaved(){
         _lkChargeBusy=true;
         try{
             toast('Charging your card…');
-            var res=await _lkCallEdgeAuthed('charge-saved-card',{campId:c.campId,kind:'canteen_deposit',camperName:c.name,amount:amt,idempotencyKey:'can_'+c.campId+'_'+c.id+'_'+Date.now()+'_'+Math.random().toString(36).slice(2,8)});
+            var res=await _lkCallEdgeAuthed('charge-saved-card',{campId:c.campId,kind:'canteen_deposit',camperName:c.name,camperId:c.camperId,amount:amt,idempotencyKey:'can_'+c.campId+'_'+c.id+'_'+Date.now()+'_'+Math.random().toString(36).slice(2,8)});
             toast('Charged '+_lkMoney(res.amount)+' — thank you!');
             // Refreshing the on-screen balance is best-effort — the charge
             // already succeeded and was toasted above, so a failure here
@@ -2777,7 +2789,7 @@ async function _startCanteenAutoReloadCheckout(c){
     if(processorKey==='cardknox'){
         try{
             toast('Opening secure checkout…');
-            var ckRes=await _lkCallEdge('cardknox-checkout-start',{campId:c.campId,kind:'canteen_autoreload_setup',camperName:c.name,description:'Save a card for auto-reload — '+c.name});
+            var ckRes=await _lkCallEdge('cardknox-checkout-start',{campId:c.campId,kind:'canteen_autoreload_setup',camperName:c.name,camperId:c.camperId,description:'Save a card for auto-reload — '+(window.campistryName||String)(c.name)});
             _lkGoToCheckout(ckRes.url);
         }catch(err){ console.error('[Parent] canteen auto-reload cardknox setup error:',err); toast('Could not start setup: '+(err&&err.message||'error')); }
         return;
@@ -2787,7 +2799,7 @@ async function _startCanteenAutoReloadCheckout(c){
         // no amount, so it saves rather than charges); payments-save-method
         // puts the token on this camper's autoReload block.
         _lkGoToCheckout(_lkCardSetupUrl(c.campId,{
-            camperName:c.name, save:true,
+            camperName:c.name, camperId:c.camperId, save:true,
             returnUrl:_lkReturnUrl('success','canteen-autoreload')
         }));
         return;
@@ -2803,7 +2815,7 @@ async function _startCanteenAutoReloadCheckout(c){
         var s=_lkSupa(); if(!s.url) throw new Error('Payments are not set up for this camp yet.');
         var resp=await fetch(s.url+'/functions/v1/stripe-canteen-autoreload-setup',{method:'POST',headers:{'Content-Type':'application/json','Authorization':'Bearer '+(s.anonKey||''),'apikey':s.anonKey||''},body:JSON.stringify({
             campId:c.campId,
-            camperName:c.name,
+            camperName:c.name, camperId:c.camperId,
             email:(parent&&parent.email)||undefined,
             successUrl:_lkReturnUrl('success','canteen-autoreload'),
             cancelUrl:_lkReturnUrl('cancelled','canteen-autoreload')
@@ -2847,7 +2859,7 @@ function init(){
     var cl=document.getElementById('childrenList');cl.innerHTML='';
     // Multi-camp: show which camp each child is at when the family spans >1 camp.
     var _multiCamp=children.length && children.some(function(c){ return c.campId!==children[0].campId; });
-    if(children.length){children.forEach(function(c,i){var campChip=(_multiCamp&&c.campName)?('<span class="badge badge-info" style="font-size:.62rem;margin-right:6px;">'+String(c.campName).replace(/[<>&]/g,'')+'</span>'):'';cl.innerHTML+='<div class="lk-child-card" data-accent="'+childAccent(i)+'" onclick="showChild(\''+c.id+'\')"><div class="lk-child-avatar lk-avatar-accent">'+c.initials+'</div><div class="lk-child-info"><div class="lk-child-name">'+c.name+'</div><div class="lk-child-meta">'+campChip+[c.age?'Age '+c.age:'',c.division,c.bunk].filter(Boolean).join(' · ')+'</div></div><span class="badge badge-neutral">'+c.grade+'</span><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="var(--slate-300)" stroke-width="2"><polyline points="9 18 15 12 9 6"/></svg></div>';});}
+    if(children.length){children.forEach(function(c,i){var campChip=(_multiCamp&&c.campName)?('<span class="badge badge-info" style="font-size:.62rem;margin-right:6px;">'+String(c.campName).replace(/[<>&]/g,'')+'</span>'):'';cl.innerHTML+='<div class="lk-child-card" data-accent="'+childAccent(i)+'" onclick="showChild(\''+c.id+'\')"><div class="lk-child-avatar lk-avatar-accent">'+c.initials+'</div><div class="lk-child-info"><div class="lk-child-name">'+_escHtml((window.campistryName||String)(c.name))+'</div><div class="lk-child-meta">'+campChip+[c.age?'Age '+c.age:'',c.division,c.bunk].filter(Boolean).join(' · ')+'</div></div><span class="badge badge-neutral">'+c.grade+'</span><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="var(--slate-300)" stroke-width="2"><polyline points="9 18 15 12 9 6"/></svg></div>';});}
     else{cl.innerHTML='<div class="lk-empty"><h3>No campers linked yet</h3></div>';}
 
     // Payments
@@ -3003,7 +3015,7 @@ function handleFormReturn(rowId,camperName,formName,input,formId){
             formId: formId||rowId,
             formName: formName,
             docType: 'upload',
-            camper: camperName,
+            camper: camperName, camperId: child.camperId!=null?child.camperId:null,
             grade: child.grade||'', division: child.division||'', bunk: child.bunk||'',
             parentName: parent.name||'',
             date: now2.toLocaleDateString('en-US',{month:'short',day:'numeric',year:'numeric'}),
@@ -3024,7 +3036,7 @@ function handleFormReturn(rowId,camperName,formName,input,formId){
         if (window._submitFormResponseCloud) {
             window._submitFormResponseCloud({
                 formId: formId||rowId, formName: formName, mode: 'upload',
-                camperName: camperName, camperId: child.id||'',
+                camperName: camperName, camperId: child.camperId!=null?child.camperId:'',
                 answers: { 'File': file.name },
                 fileName: file.name, fileData: fileDataUrl,
                 division: child.division||'', grade: child.grade||'', bunk: child.bunk||''
@@ -3056,8 +3068,8 @@ function switchHealth(id){
     var c=children.find(function(k){return k.id===id});if(!c)return;
     var idx=children.indexOf(c);
     var camperNum='#'+String(idx+1).padStart(4,'0');
-    var hcb=document.getElementById('healthCamperBadge');if(hcb)hcb.textContent=c.name+' · '+camperNum;
-    var hdb=document.getElementById('healthDocBadge');if(hdb)hdb.textContent=c.name+' · '+camperNum;
+    var hcb=document.getElementById('healthCamperBadge');if(hcb)hcb.textContent=(window.campistryName||String)(c.name)+' · '+camperNum;
+    var hdb=document.getElementById('healthDocBadge');if(hdb)hdb.textContent=(window.campistryName||String)(c.name)+' · '+camperNum;
 }
 
 // One RPC per (pose, model): 128-D always, 512-D added when the modern engine
@@ -3178,7 +3190,7 @@ function _loadCamperFaceStatus(){
     var db=window._parentDB; if(!db||typeof parent==='undefined'||!parent||!parent.campId||typeof children==='undefined')return;
     _pRpcEachCamp('get_my_camper_face_status','campers').then(function(campers){
         (campers||[]).forEach(function(f){
-            var c=children.find(function(k){return k.name===f.camper_name;}); if(!c)return;
+            var c=children.find(function(k){return _sameChild(f.person_id,f.camper_name,k.camperId,k.name);}); if(!c)return;
             var slot=document.getElementById('refSlot_'+c.id),avatar=document.getElementById('refAvatar_'+c.id),status=document.getElementById('refStatus_'+c.id);
             // poses: [{pose, at}] since migration 030; plain strings before
             var rawPoses=Array.isArray(f.poses)?f.poses:(f.has_face?['front']:[]);
@@ -3326,11 +3338,11 @@ function _loadParentPhotos(){
         if(kidWrap){
             kidWrap.innerHTML='';
             purchasedKids.forEach(function(c){
-                var mine=myPhotos.filter(function(p){return p.camper===c.name;});
+                var mine=myPhotos.filter(function(p){return _sameChild(p.camper_id!=null?p.camper_id:p.camperId,p.camper,c.camperId,c.name);});
                 var card=document.createElement('div');
                 card.className='lk-card'; card.style.marginTop='16px';
                 var head=document.createElement('div'); head.className='lk-card-head';
-                head.innerHTML='<h2>'+_escHtml(c.name)+"'s Photos</h2><span style=\"font-size:.76rem;color:var(--text-muted);\">"+mine.length+' found</span>';
+                head.innerHTML='<h2>'+_escHtml((window.campistryName||String)(c.name))+"'s Photos</h2><span style=\"font-size:.76rem;color:var(--text-muted);\">"+mine.length+' found</span>';
                 card.appendChild(head);
                 var grid=document.createElement('div');
                 grid.style.cssText='display:grid;grid-template-columns:repeat(auto-fill,minmax(130px,1fr));gap:8px;';
@@ -3348,7 +3360,7 @@ function _loadParentPhotos(){
                 var rows=unpurchased.map(function(c){
                     return '<label style="display:flex;align-items:center;gap:8px;font-size:.85rem;padding:4px 0;">'+
                         '<input type="checkbox" class="photoFrCheck" checked value="'+_escHtml(c.name)+'" data-camp-id="'+_escHtml(String(c.campId||parent.campId))+'" onchange="_lkPhotoFrUpdateBtn()"> '+
-                        _escHtml(c.name)+'</label>';
+                        _escHtml((window.campistryName||String)(c.name))+'</label>';
                 }).join('');
                 upsell.innerHTML='<div class="lk-card" style="padding:16px;">'+
                     '<div style="font-weight:700;font-size:1.05rem;margin-bottom:6px;">Facial Recognition</div>'+
@@ -3650,7 +3662,7 @@ function _msgFormActionHtml(m){
             var idx=-1;
             for(var i=0;i<forms.length;i++){ if(String(forms[i].id)===String(fr.id)){ idx=i; break; } }
             if(idx<0) return;
-            btns.push('<button class="btn btn-primary" style="margin:4px 8px 4px 0;" onclick="_openFormFromMsg('+idx+',\''+encodeURIComponent(fr.camper||'')+'\')">'+_FILE_SVG+'Open &amp; fill '+_foEsc(forms[idx].name||'form')+'</button>');
+            btns.push('<button class="btn btn-primary" style="margin:4px 8px 4px 0;" onclick="_openFormFromMsg('+idx+',\''+encodeURIComponent(fr.camper||'')+'\','+(fr.camperId!=null?fr.camperId:'null')+')">'+_FILE_SVG+'Open &amp; fill '+_foEsc(forms[idx].name||'form')+'</button>');
         });
         (refs.lists||[]).forEach(function(lr){
             var lists=window._campLists||[];
@@ -3679,10 +3691,11 @@ function _openListFromMsg(){
     closeMsgDetail();
     if(typeof nav==='function') nav('lists');
 }
-function _openFormFromMsg(idx, encCamper){
+function _openFormFromMsg(idx, encCamper, camperId){
     var camper=''; try{ camper=decodeURIComponent(encCamper||''); }catch(e){ camper=encCamper||''; }
     closeMsgDetail();
-    if(typeof openFillOnline==='function') openFillOnline(idx, camper, '');
+    var cid=_numOrNull(camperId); if(cid==null) cid=_childIdByName(camper);
+    if(typeof openFillOnline==='function') openFillOnline(idx, camper, cid!=null?cid:'');
 }
 function _afterMsgAction(){
     document.getElementById('msgListView').style.display='';
@@ -4156,7 +4169,7 @@ function renderCamperMail(){
         } else {
             ct.innerHTML='';
             _mailChildName=children.length?children[0].name:null;
-            if(children.length===1)ct.innerHTML='<span style="font-size:.8rem;color:var(--text-muted);">To: <strong>'+_mailEsc(children[0].name)+'</strong></span>';
+            if(children.length===1)ct.innerHTML='<span style="font-size:.8rem;color:var(--text-muted);">To: <strong>'+_mailEsc((window.campistryName||String)(children[0].name))+'</strong></span>';
         }
     }
     _renderMyMail();
@@ -4192,7 +4205,7 @@ function _renderMailCodes(cid,campNumber){
     box.innerHTML='<div style="font-size:.76rem;color:var(--text-muted);margin-bottom:6px;">Emailing from a different address? Put your camper’s code in the subject or first line:</div>'
       +kids.map(function(c){
           var code=campNumber+'-'+String(c.id).replace(/\D/g,'');
-          return '<div style="display:flex;align-items:center;gap:8px;margin:4px 0;"><code style="font-size:.86rem;font-weight:700;background:var(--surface-2,#f1f5f9);padding:5px 10px;border-radius:6px;">'+code+'</code><span style="font-size:.8rem;color:var(--text-muted);">'+(c.name?String(c.name).replace(/[<>&]/g,''):'')+'</span></div>';
+          return '<div style="display:flex;align-items:center;gap:8px;margin:4px 0;"><code style="font-size:.86rem;font-weight:700;background:var(--surface-2,#f1f5f9);padding:5px 10px;border-radius:6px;">'+code+'</code><span style="font-size:.8rem;color:var(--text-muted);">'+(c.name?String((window.campistryName||String)(c.name)).replace(/[<>&]/g,''):'')+'</span></div>';
       }).join('');
 }
 function _copyMailEmail(){ var a=document.getElementById('mailEmailAddr'); if(!a||!a.textContent)return; try{ navigator.clipboard.writeText(a.textContent); toast('Address copied'); }catch(e){ toast(a.textContent); } }
@@ -4209,7 +4222,7 @@ function _renderMyMail(){
     var seen={}; cloud.forEach(function(m){seen[m.id]=1;});
     var seenContent={}; cloud.forEach(function(m){seenContent[(m.camper_name||'')+'|'+(m.subject||'')+'|'+(m.body||'')]=1;});
     var all=cloud.map(function(m){
-        return {id:m.id,camper:m.camper_name,subject:m.subject,body:m.body,status:m.status,date:m.created_at};
+        return {id:m.id,camper:m.camper_name,camperId:m.person_id!=null?m.person_id:null,subject:m.subject,body:m.body,status:m.status,date:m.created_at};
     });
     _mailLocal().forEach(function(m){
         if(seen[m.id])return;
@@ -4249,7 +4262,7 @@ function sendCamperMail(){
     var now=new Date();
     var letter={
         id:'mail_'+now.getTime()+'_'+Math.random().toString(36).slice(2,5),
-        camper:child.name, division:child.division||'', grade:child.grade||'', bunk:child.bunk||'',
+        camper:child.name, camperId:child.camperId!=null?child.camperId:null, division:child.division||'', grade:child.grade||'', bunk:child.bunk||'',
         parentName:parent.name||'', subject:subject.trim(), body:body,
         status:'new', date:now.toISOString()
     };
@@ -4541,7 +4554,9 @@ function _parseMsgRefs(rawBody){
     var refs={forms:[],lists:[]};
     var clean=String(rawBody||'');
     clean=clean.replace(/\[\[form:([^:\]]+):([^\]]*)\]\]/g,function(_,fid,camper){
-        refs.forms.push({id:fid,camper:camper||''}); return '';
+        // "<key>:<number>" since numbers ride in the token; an older token has the key only.
+        var mm=String(camper||'').match(/^(.*):(\d*)$/);
+        refs.forms.push({id:fid,camper:mm?mm[1]:(camper||''),camperId:mm&&mm[2]?Number(mm[2]):null}); return '';
     });
     clean=clean.replace(/\[\[list:([^\]]+)\]\]/g,function(_,lid){
         refs.lists.push({id:lid}); return '';
@@ -4619,7 +4634,7 @@ function _loadSnacksData(childrenList){
         if(a.creditLimit !=null)c.creditLimit=a.creditLimit;
         if(a.balanceFloor!=null)c.balanceFloor=a.balanceFloor;
         c.autoReload=a.autoReload||null;
-        var childTx=txs.filter(function(t){return t.camper===c.name;});
+        var childTx=txs.filter(function(t){return _sameChild(t.camperId,t.camper,c.camperId,c.name);});
         canteenTxByChild[c.id]=childTx.map(_mapCanteenTx);
     });
 }
@@ -4886,7 +4901,7 @@ var _PICKUP_FOR   = {early:'pickupEarlyFor',  change:'pickupChangeFor',  bus:'pi
 function _updatePickupFor(type, childId) {
     var forEl = document.getElementById(_PICKUP_FOR[type]); if (!forEl) return;
     var c = children.find(function(k){ return k.id===childId; }) || children[0];
-    forEl.textContent = c ? ('For '+c.name) : '';
+    forEl.textContent = c ? ('For '+(window.campistryName||String)(c.name)) : '';
 }
 // Init pickup child tabs
 function initPickupTabs() {
@@ -4965,12 +4980,12 @@ window.addEventListener('storage', function(e) {
 <script src="campistry_keyboard.js?v=20260909-01"></script>
 <script src="campistry_notes_quick.js?v=20260909-01"></script>
 <script src="campistry_link_capacitor.js?v=20260909-01"></script>
-<script src="face_match_core.js?v=20260909-01"></script>
+<script src="face_match_core.js?v=20260923-20"></script>
 <script src="campistry_face_shared.js?v=20260909-01"></script>
 <script src="campistry_face_engine_v2.js?v=20260909-01"></script>
 <script src="supabase-js@2.js?v=20260909-01"></script>
 <script>window.CAMPISTRY_INBOUND_DOMAIN=window.CAMPISTRY_INBOUND_DOMAIN||'inbound.campistry.org';</script>
-<script src="campistry_camper_id_rpc.js?v=20260923-02"></script>
+<script src="campistry_camper_id_rpc.js?v=20260923-20"></script>
 <script src="config.js?v=20260909-01"></script>
 <!-- pdf-lib + pdf.js (vendored) — fill-in-browser + stamp/flatten for PDF
      Forms (Forms & Documents → Complete Online → a sourceType:'pdf' form). -->
@@ -5034,6 +5049,19 @@ if (window.pdfjsLib) { window.pdfjsLib.GlobalWorkerOptions.workerSrc = 'pdfjs-di
             }, function () { mapP = null; return { byCamp: {}, byName: {} }; });
             return mapP;
         }
+        // Every child on screen learns their number as soon as it is known —
+        // called again whenever the list of children is rebuilt.
+        window._stampChildIds = function () {
+            return load().then(function (m) {
+                (children || []).forEach(function (ch) {
+                    if (!ch || ch.camperId != null) return;
+                    var k = String(ch.campId || '') + '|' + ch.name;
+                    var id = (ch.campId && k in m.byCamp) ? m.byCamp[k] : m.byName[ch.name];
+                    if (id != null) ch.camperId = _numOrNull(id);
+                });
+            });
+        };
+        window._stampChildIds();
         var resolve = function (campId, name) {
             return load().then(function (m) {
                 var k = String(campId || '') + '|' + name;
@@ -5055,7 +5083,10 @@ if (window.pdfjsLib) { window.pdfjsLib.GlobalWorkerOptions.workerSrc = 'pdfjs-di
     var _cloudSubs = []; // [{form_id, camper_name, ...}] — my submissions from the cloud
     window._submitFormResponseCloud = function(p, done) {
         // Multi-camp: scope to the camper's own camp (falls back to primary).
-        var _fc=(typeof children!=='undefined')?children.find(function(k){return k.name===(p.camperName||'')||String(k.campersId||k.id)===String(p.camperId||'');}):null;
+        var _pid=_numOrNull(p.camperId);
+        var _fc=(typeof children!=='undefined')?(_pid!=null
+            ? children.find(function(k){return k.camperId===_pid;})
+            : children.find(function(k){return k.name===(p.camperName||'');})):null;
         var _fcamp=(_fc&&_fc.campId)||((typeof parent!=='undefined'&&parent)?parent.campId:null);
         var _formArgs={
             p_form_id:     p.formId || '',
@@ -5088,8 +5119,11 @@ if (window.pdfjsLib) { window.pdfjsLib.GlobalWorkerOptions.workerSrc = 'pdfjs-di
             if (cb) cb();
         });
     }
-    window._isFormSubmittedCloud = function(formId, camperName) {
-        return _cloudSubs.some(function(s) { return s.form_id === formId && s.camper_name === camperName; });
+    // Sent for THIS child: by camper number when both sides carry one (259
+    // returns it), by name only for a response from before numbers.
+    window._isFormSubmittedCloud = function(formId, camperName, camperId) {
+        if (camperId == null) camperId = _childIdByName(camperName);
+        return _cloudSubs.some(function(s) { return s.form_id === formId && _sameChild(s.person_id, s.camper_name, camperId, camperName); });
     };
 
     // ── Camper Mail bridge (migration 015) ────────────────────────────────────
@@ -5395,7 +5429,7 @@ if (window.pdfjsLib) { window.pdfjsLib.GlobalWorkerOptions.workerSrc = 'pdfjs-di
                 // moment this sync ran on the next page load/reload, purely
                 // because this one field was never copied over.
                 c.autoReload = (a && a.autoReload) || null;
-                var childTx = txs.filter(function(t){ return t.camper === c.name; });
+                var childTx = txs.filter(function(t){ return _sameChild(t.camperId, t.camper, c.camperId, c.name); });
                 canteenTxByChild[c.id] = childTx.map(_mapCanteenTx);
             });
             // Refresh whatever's currently on screen with the live numbers.
@@ -5437,6 +5471,7 @@ if (window.pdfjsLib) { window.pdfjsLib.GlobalWorkerOptions.workerSrc = 'pdfjs-di
             if (c.parent2Name)   ec.push({name:c.parent2Name,   rel:'Parent',                    phone:c.parent2Phone||''});
             return {
                 id:'child_'+idx, name:name, initials:initials, age:age,
+                camperId:_numOrNull(c.camperId),
                 campId:d.camp_id||null, campName:'',   // multi-camp: which camp this kid is at
                 division:c.division||'', grade:c.grade||'', bunk:c.bunk||'',
                 session:c.session||'', counselor:c.counselor||'', staff:c.staff||[], teacher:c.teacher||'',
@@ -5447,6 +5482,7 @@ if (window.pdfjsLib) { window.pdfjsLib.GlobalWorkerOptions.workerSrc = 'pdfjs-di
             };
         });
         console.log('[Parent] Children built:', realChildren.length);
+        setTimeout(function(){ if (window._stampChildIds) window._stampChildIds(); }, 0);
         if (realChildren.length) {
             children = realChildren;
             var newTx = {}; realChildren.forEach(function(c){newTx[c.id]=[];}); canteenTxByChild = newTx;
@@ -5571,6 +5607,7 @@ if (window.pdfjsLib) { window.pdfjsLib.GlobalWorkerOptions.workerSrc = 'pdfjs-di
                     if (c.parent2Name)   ec.push({name:c.parent2Name,   rel:'Parent',                    phone:c.parent2Phone||''});
                     children.push({
                         id:'child_'+children.length, name:name, initials:initials, age:age,
+                        camperId:_numOrNull(c.camperId),
                         campId:cp.camp_id, campName:cp.camp_name||'', campIsCurrent:cp.isCurrent,
                         division:c.division||'', grade:c.grade||'', bunk:c.bunk||'',
                         session:c.session||'', counselor:c.counselor||'', staff:c.staff||[], teacher:c.teacher||'',
@@ -5589,6 +5626,7 @@ if (window.pdfjsLib) { window.pdfjsLib.GlobalWorkerOptions.workerSrc = 'pdfjs-di
                 var kids = children.filter(function(c){ return c.campId === cp.camp_id; });
                 if (kids.length) _syncCanteenFromCloud(kids, cp.camp_id);
             });
+            if (window._stampChildIds) window._stampChildIds();
             init(); // rebuild every child-tab list now that all camps are in
             initPickupTabs(); // init() doesn't touch the pickup forms' own tab rows
             _afterMergeReloadCloud();
@@ -5796,8 +5834,9 @@ if (window.pdfjsLib) { window.pdfjsLib.GlobalWorkerOptions.workerSrc = 'pdfjs-di
         // local (this device) merged with cloud (any device)
         var mySubs = (typeof _foGetMySubmissions === 'function') ? _foGetMySubmissions() : [];
         function isSubmitted(formId, camperName) {
-            return mySubs.some(function(s){ return s.formId === formId && s.camper === camperName; })
-                || _cloudSubs.some(function(s){ return s.form_id === formId && s.camper_name === camperName; });
+            var cid = _childIdByName(camperName);
+            return mySubs.some(function(s){ return s.formId === formId && _sameChild(s.camperId, s.camper, cid, camperName); })
+                || _cloudSubs.some(function(s){ return s.form_id === formId && _sameChild(s.person_id, s.camper_name, cid, camperName); });
         }
         // Multi-camp: a form only pairs with children at the form's own camp.
         function _kidsForForm(f) {
@@ -7053,7 +7092,7 @@ function submitFillOnlinePdf(){
         var binary = '';
         for (var bi=0; bi<finalBytes.length; bi++) binary += String.fromCharCode(finalBytes[bi]);
         var pdfBase64 = btoa(binary);
-        var child = (typeof children !== 'undefined' && children.find) ? (children.find(function(c){ return c.name === st.camperName; }) || {}) : {};
+        var child = (typeof children !== 'undefined' && children.find) ? (children.find(function(c){ return _sameChild(c.camperId, c.name, st.camperId, st.camperName); }) || {}) : {};
         var s = _lkSupa(), db = window._parentDB;
         return db.auth.getSession().then(function(sessRes){
             var token = sessRes && sessRes.data && sessRes.data.session && sessRes.data.session.access_token;
@@ -7072,7 +7111,7 @@ function submitFillOnlinePdf(){
     }).then(function(){
         try {
             var subs = JSON.parse(localStorage.getItem(FORM_SUB_KEY_P)||'[]');
-            subs.push({ id:'sub_'+Date.now(), formId: st.formDef.id||'', camper: st.camperName, mode:'digital', submittedAt: new Date().toISOString() });
+            subs.push({ id:'sub_'+Date.now(), formId: st.formDef.id||'', camper: st.camperName, camperId: _numOrNull(st.camperId), mode:'digital', submittedAt: new Date().toISOString() });
             localStorage.setItem(FORM_SUB_KEY_P, JSON.stringify(subs));
         } catch(e){}
         closeFillOnline();
@@ -7378,7 +7417,7 @@ function _copyTip(text) {
 
 function openTipSheet(name, role, suggested) {
     var child = _activeTipChild();
-    _tipTarget = { name: name, role: role, campId: child ? child.campId : null, camperName: child ? child.name : null };
+    _tipTarget = { name: name, role: role, campId: child ? child.campId : null, camperName: child ? child.name : null, camperId: child ? child.camperId : null };
     document.getElementById('tipsSheetTitle').textContent = 'Tip ' + name;
     document.getElementById('tipsSheetSub').textContent = role;
     suggested = parseInt(suggested, 10) || 0;
@@ -7487,7 +7526,7 @@ function addTipToCart() {
     window._tipCart[_tipTarget.accountId] = {
         accountId: _tipTarget.accountId, campId: _tipTarget.campId,
         name: _tipTarget.name, role: _tipTarget.role,
-        camperName: _tipTarget.camperName, amount: amt
+        camperName: _tipTarget.camperName, camperId: _tipTarget.camperId, amount: amt
     };
     toast('Added $' + amt.toFixed(2) + ' for ' + _tipTarget.name);
     closeTipSheet();
@@ -7602,7 +7641,7 @@ async function payTipCart() {
             headers: { 'Content-Type': 'application/json', 'Authorization': 'Bearer ' + token, 'apikey': s.anonKey || '' },
             body: JSON.stringify({
                 items: t.entries.map(function(e) {
-                    return { campId: e.campId, accountId: e.accountId, tipAmount: e.amount, camperName: e.camperName };
+                    return { campId: e.campId, accountId: e.accountId, tipAmount: e.amount, camperName: e.camperName, camperId: e.camperId };
                 }),
                 parentName: pName, parentEmail: pEmail
             }),
@@ -7662,7 +7701,7 @@ function confirmTip() {
             a.balance = Math.round(((a.balance || 0) - amt) * 100) / 100;
             s.transactions.unshift({
                 time: now.toLocaleTimeString([], {hour:'numeric', minute:'2-digit'}),
-                camper: child.name,
+                camper: child.name, camperId: child.camperId != null ? child.camperId : null,
                 items: 'Tip — ' + recipName + ' (' + recipRole + ')',
                 amount: amt,
                 type: 'tip',

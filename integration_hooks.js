@@ -566,6 +566,9 @@
     }
 
     function setLocalSettings(data) {
+        // A page reloading after an erase elsewhere must not refill the cache
+        // it has just cleared with its out-of-date copy (supabase_client.js).
+        if (window.__campistryStalePage) return;
         try {
             _localCache = data;
 
@@ -635,7 +638,8 @@
                         if (e.status !== 'enrolled' && e.status !== 'accepted') return;
                         const w = _win[e.session] || { f: '', t: '' };
                         if (!_idx[e.camperName]) _idx[e.camperName] = [];
-                        _idx[e.camperName].push({ s: e.session || '', f: w.f, t: w.t });
+                        _idx[e.camperName].push({ s: e.session || '', f: w.f, t: w.t,
+                                                  i: e.camperId != null ? e.camperId : null });   // the camper number
                     });
                     if (Object.keys(_idx).length) lite.campistryMe.presenceIndex = _idx;
                 } catch (e) {
@@ -754,6 +758,7 @@
     }
 
     async function executeBatchSync() {
+        if (window.__campistryStalePage) { _pendingChanges = {}; return; }
         if (_isSyncing) {
             log('Sync already in progress, rescheduling...');
             scheduleBatchSync();
@@ -3573,6 +3578,10 @@
 
     function hookBeforeUnload() {
         window.addEventListener('beforeunload', (e) => {
+            // A page reloading because a camper was erased on another computer
+            // holds only out-of-date data: none of it is saved, locally or to
+            // the cloud (supabase_client.js; the owner's rule after an erase).
+            if (window.__campistryStalePage) { try { _pendingChanges = {}; } catch (_) {} return; }
             const dateKey = window.currentScheduleDate;
             const bunkCount = Object.keys(window.scheduleAssignments || {}).length;
 
@@ -3645,6 +3654,9 @@
             // with the tab on slow networks. We send the request manually
             // to the Supabase REST endpoint with the cached access token.
             try {
+                // A page reloading because a camper was erased elsewhere holds
+                // only out-of-date data: nothing of it is sent (supabase_client.js).
+                if (window.__campistryStalePage) { _pendingChanges = {}; return; }
                 const pending = (typeof _pendingChanges === 'object' && _pendingChanges) ? _pendingChanges : {};
                 const pendingKeys = Object.keys(pending).filter(k => k !== 'updated_at');
                 const cfg = window.CampistryDB?.config;

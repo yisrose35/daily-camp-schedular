@@ -407,6 +407,21 @@ serve(async (req) => {
     }
   }
 
+  // A declined LEGACY instalment (TED-055). It used to be written
+  // status:'failed', and the loop only charges 'pending' — so one decline lost
+  // that month for good, with no alert. Now it stays 'pending' with the reason
+  // and the attempt count on it, and the plan is flagged exactly as a ledger
+  // plan's decline is (migration 179): the office is notified, and the next
+  // attempt waits for the plan's retry date, escalating after repeated failures.
+  async function legacyDeclined(campId: string, famKey: string, plan: Record<string, any>,
+                                planIndex: number, inst: Record<string, any>, why: string) {
+    await recordInstallment(campId, famKey, plan, planIndex, inst, {
+      failReason: why, lastFailedAt: new Date().toISOString(),
+      attempts: (Number(inst.attempts) || 0) + 1,
+    });
+    await flagPlan(campId, famKey, String(plan.id || ""), "declined", why);
+  }
+
   // Persist ONE installment outcome — the patch, and when a card was actually
   // charged the payment alongside it — through migration 169's locking RPC.
   //
@@ -525,7 +540,11 @@ serve(async (req) => {
       const plans: Record<string, any>[] = Array.isArray(f.plans)
         ? f.plans
         : (f.plan && Array.isArray(f.plan.installments) ? [f.plan] : []);
-      if (!plans.some((p) => p && p.autopay && Array.isArray(p.installments))) continue;
+      // Either plan model (TED-051): a plan built by a parent, or converted, has
+      // dueDates and no installments[]. Checking only for installments[] here
+      // skipped every such family before its plans were ever looked at, so a
+      // parent's autopay plan was never charged and nobody was told.
+      if (!plans.some((p) => p && p.autopay && (Array.isArray(p.installments) || Array.isArray(p.dueDates)))) continue;
       // This family WANTS autopay — so if it has nothing chargeable behind it,
       // that's a real misconfiguration (a plan was set up but the card/token
       // never got saved), worth a log line instead of the two silent `continue`s
@@ -745,6 +764,17 @@ serve(async (req) => {
         // plan can never be charged twice in one night.
         if (Array.isArray(plan.dueDates)) continue;
 
+        // A declined instalment is retried on the same schedule as a ledger
+        // plan's (migration 179), not dropped (TED-055): until the plan's
+        // next retry date, leave it alone.
+        const blockedL = plan.collectionBlocked;
+        if (blockedL && blockedL.nextRetryAt && String(blockedL.nextRetryAt) > today) {
+          details.push({ camp: row.camp_id, family: f.name, result: "waiting_to_retry",
+                         reason: blockedL.reason, attempts: blockedL.attempts,
+                         nextRetryAt: blockedL.nextRetryAt });
+          continue;
+        }
+
         for (const inst of plan.installments) {
           if (inst.status !== "pending") continue;
           if (!inst.dueDate || inst.dueDate > today) continue; // not due yet
@@ -809,11 +839,10 @@ serve(async (req) => {
               ? await cardknoxCharge(String(creds.apiKey), Math.round(amount * 100), String(f.byopCustomerRef))
               : await banquestCharge(creds, Math.round(amount * 100), String(f.byopCustomerRef));
             if (!res.success || !res.externalTransactionId) {
-              await recordInstallment(String(row.camp_id), famKey, plan, planIndex, inst, {
-                status: "failed", failReason: res.error || "Declined",
-              });
+              await legacyDeclined(String(row.camp_id), famKey, plan, planIndex, inst, res.error || "Declined");
               failed++;
               details.push({ camp: row.camp_id, family: f.name, amount, result: "failed", reason: inst.failReason });
+              break;   // the rest of this plan waits for the retry too
             } else {
               const patch: Record<string, unknown> = {
                 status: "paid", paidDate: today, byopTransactionId: res.externalTransactionId,
@@ -829,7 +858,7 @@ serve(async (req) => {
               // It goes in with the patch, in one transaction: see
               // recordInstallment's header for why they cannot be two writes.
               const recorded = await recordInstallment(String(row.camp_id), famKey, plan, planIndex, inst, patch, {
-                id: "auto_byop_" + res.externalTransactionId, family: camperName, familyKey: famKey,
+                id: "auto_byop_" + res.externalTransactionId, family: camperName, familyKey: famKey,   // name-ok: family payment label; familyKey identifies the family
                 amount: amount, date: today, method: "Autopay (card)",
                 reference: res.externalTransactionId,
                 notes: capped ? "Autopay installment — " + cappedNote : "Autopay installment",
@@ -847,6 +876,7 @@ serve(async (req) => {
               });
               charged++;
               remainingBalance -= amount;
+              await flagPlan(String(row.camp_id), famKey, String(plan.id || ""), null);
               details.push({ camp: row.camp_id, family: f.name, amount,
                 result: recorded ? "charged" : "charged_not_recorded" });
             }
@@ -864,16 +894,15 @@ serve(async (req) => {
           const pi = await stripeCharge(
             f.stripeCustomerId, f.stripePaymentMethodId || null, amount,
             `Autopay installment — ${f.name || famKey}`,
-            { campId: String(row.camp_id), familyKey: famKey, familyName: camperName, planId: plan.id || "", source: "autopay" },
+            { campId: String(row.camp_id), familyKey: famKey, familyName: camperName, planId: plan.id || "", source: "autopay" },   // name-ok: label in metadata; familyKey identifies the family
             campDestinations.get(String(row.camp_id)) || null,
           );
 
           if (pi.error || pi.status === "requires_action") {
-            await recordInstallment(String(row.camp_id), famKey, plan, planIndex, inst, {
-              status: "failed", failReason: pi.error?.message || "requires_authentication",
-            });
+            await legacyDeclined(String(row.camp_id), famKey, plan, planIndex, inst, pi.error?.message || "requires_authentication");
             failed++;
             details.push({ camp: row.camp_id, family: f.name, amount, result: "failed", reason: inst.failReason });
+            break;   // the rest of this plan waits for the retry too
           } else if (pi.status === "succeeded") {
             const patch: Record<string, unknown> = {
               status: "paid", paidDate: today, stripePaymentIntentId: pi.id,
@@ -884,7 +913,7 @@ serve(async (req) => {
               patch.note = cappedNote;
             }
             const recorded = await recordInstallment(String(row.camp_id), famKey, plan, planIndex, inst, patch, {
-              id: "auto_" + pi.id, family: camperName, familyKey: famKey,
+              id: "auto_" + pi.id, family: camperName, familyKey: famKey,   // name-ok: family payment label; familyKey identifies the family
               amount: amount, date: today, method: "Autopay (card)",
               reference: pi.id,
               notes: capped ? "Monthly autopay installment — " + cappedNote : "Monthly autopay installment",
@@ -892,6 +921,7 @@ serve(async (req) => {
             }, String(pi.id));
             charged++;
             remainingBalance -= amount;
+            await flagPlan(String(row.camp_id), famKey, String(plan.id || ""), null);
             details.push({ camp: row.camp_id, family: f.name, amount,
               result: recorded ? "charged" : "charged_not_recorded" });
           } else {

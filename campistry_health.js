@@ -173,7 +173,7 @@ function _lbl(key) { return String(key == null ? '' : key).replace(/\s#\d+$/, ''
             else {
                 var vh = '';
                 (hd.sickVisits||[]).slice(-5).reverse().forEach(function(v) {
-                    vh += '<div class="visit-card"><div class="visit-time">'+esc(v.time||'')+'</div><div class="visit-body"><div class="visit-header"><span class="visit-camper">'+esc(v.camperName)+'</span>'+bdg(v.disposition||'Logged',v.disposition==='Returned to activity'?'green':'blue')+'</div><div class="visit-complaint">'+esc(v.complaint||'')+'</div>'+(v.treatment?'<div class="visit-treatment"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="20 6 9 17 4 12"/></svg> '+esc(v.treatment)+'</div>':'')+'</div></div>';
+                    vh += '<div class="visit-card"><div class="visit-time">'+esc(v.time||'')+'</div><div class="visit-body"><div class="visit-header"><span class="visit-camper">'+esc(_lbl(v.camperName))+'</span>'+bdg(v.disposition||'Logged',v.disposition==='Returned to activity'?'green':'blue')+'</div><div class="visit-complaint">'+esc(v.complaint||'')+'</div>'+(v.treatment?'<div class="visit-treatment"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="20 6 9 17 4 12"/></svg> '+esc(v.treatment)+'</div>':'')+'</div></div>';
                 });
                 vEl.innerHTML = vh;
             }
@@ -215,7 +215,7 @@ function _lbl(key) { return String(key == null ? '' : key).replace(/\s#\d+$/, ''
         if (!(hd.sickVisits||[]).length) { tbody.innerHTML = '<tr><td colspan="7" class="empty-state">No sick visits logged yet.</td></tr>'; return; }
         var h = '';
         (hd.sickVisits||[]).slice().reverse().forEach(function(v) {
-            h += '<tr><td style="font-weight:600;color:var(--slate-500)">'+esc(v.time||v.date||'')+'</td><td style="font-weight:700">'+esc(v.camperName)+'</td><td>'+esc(v.bunk||'—')+'</td><td>'+esc(v.complaint||'')+'</td><td>'+esc(v.treatment||'—')+'</td><td>'+bdg(v.disposition||'Logged',v.disposition==='Returned to activity'?'green':'blue')+'</td><td>'+esc(v.nurse||'—')+'</td></tr>';
+            h += '<tr><td style="font-weight:600;color:var(--slate-500)">'+esc(v.time||v.date||'')+'</td><td style="font-weight:700">'+esc(_lbl(v.camperName))+'</td><td>'+esc(v.bunk||'—')+'</td><td>'+esc(v.complaint||'')+'</td><td>'+esc(v.treatment||'—')+'</td><td>'+bdg(v.disposition||'Logged',v.disposition==='Returned to activity'?'green':'blue')+'</td><td>'+esc(v.nurse||'—')+'</td></tr>';
         });
         tbody.innerHTML = h;
     }
@@ -225,7 +225,7 @@ function _lbl(key) { return String(key == null ? '' : key).replace(/\s#\d+$/, ''
         if (!(hd.doctorVisits||[]).length) { tbody.innerHTML = '<tr><td colspan="6" class="empty-state">No doctor visits logged.</td></tr>'; return; }
         var h = '';
         (hd.doctorVisits||[]).slice().reverse().forEach(function(v) {
-            h += '<tr><td style="font-weight:600;color:var(--slate-500)">'+esc(v.date||'')+'</td><td style="font-weight:700">'+esc(v.camperName)+'</td><td>'+esc(v.reason||'')+'</td><td>'+esc(v.diagnosis||'—')+'</td><td>'+(v.restrictions?bdg(v.restrictions,'amber'):'—')+'</td><td>'+bdg(v.cleared?'Cleared':'Pending',v.cleared?'green':'amber')+'</td></tr>';
+            h += '<tr><td style="font-weight:600;color:var(--slate-500)">'+esc(v.date||'')+'</td><td style="font-weight:700">'+esc(_lbl(v.camperName))+'</td><td>'+esc(v.reason||'')+'</td><td>'+esc(v.diagnosis||'—')+'</td><td>'+(v.restrictions?bdg(v.restrictions,'amber'):'—')+'</td><td>'+bdg(v.cleared?'Cleared':'Pending',v.cleared?'green':'amber')+'</td></tr>';
         });
         tbody.innerHTML = h;
     }
@@ -333,7 +333,7 @@ function _lbl(key) { return String(key == null ? '' : key).replace(/\s#\d+$/, ''
     // Cloud submissions (authoritative) merged with any legacy localStorage-only rows.
     function getSubmissions(){
         var cloud=(_cloudDocs||[]).map(function(d){
-            return { id:d.id, camperName:d.camper_name, fileName:d.file_name, fileType:d.file_type,
+            return { id:d.id, camperName:d.camper_name, camperId:d.person_id!=null?d.person_id:null, fileName:d.file_name, fileType:d.file_type,
                      fileData:d.file_data, note:d.note, status:d.status, reviewNotes:d.review_notes,
                      submittedAt:d.created_at?new Date(d.created_at).getTime():0, _cloud:true };
         });
@@ -380,6 +380,16 @@ function _lbl(key) { return String(key == null ? '' : key).replace(/\s#\d+$/, ''
         return (d.getMonth()+1)+'/'+d.getDate();
     }
 
+    // Which child a parent's document is for: the camper with the document's
+    // number. Two campers can share a name, so their bunk tells the nurse
+    // which one; a document from a camper no longer on the roster says so.
+    function docWhoHint(doc){
+        if(doc.camperId==null)return '';
+        var g=readGlobal(), r=(g.app1&&g.app1.camperRoster)||{}, hit=null;
+        Object.keys(r).some(function(k){ if(r[k]&&String(r[k].camperId)===String(doc.camperId)){hit=r[k];return true;} return false; });
+        if(!hit)return '<div style="font-size:.7rem;font-weight:500;color:var(--slate-500);">no longer on the roster</div>';
+        return hit.bunk?'<div style="font-size:.7rem;font-weight:500;color:var(--slate-500);">'+esc(hit.bunk)+'</div>':'';
+    }
     function renderParentDocs(){
         var section=document.getElementById('parentDocsSection'); if(!section)return;
         var docs=getSubmissions();
@@ -401,7 +411,7 @@ function _lbl(key) { return String(key == null ? '' : key).replace(/\s#\d+$/, ''
                 '<button class="btn btn-sm btn-danger" onclick="CampistryHealth.flagParentDoc(\''+je(doc.id)+'\')">Flag</button>':
                 viewBtn;
             h+='<tr>'+
-                '<td style="font-weight:700;">'+esc(doc.camperName||'—')+'</td>'+
+                '<td style="font-weight:700;">'+esc(_lbl(doc.camperName)||'—')+docWhoHint(doc)+'</td>'+
                 '<td><span style="font-size:.75rem;">'+esc(doc.fileName||'—')+'</span></td>'+
                 '<td style="font-size:.75rem;color:var(--slate-500);">'+fmtDocTime(doc.submittedAt)+'</td>'+
                 '<td>'+statusBdg+'</td>'+
@@ -415,13 +425,13 @@ function _lbl(key) { return String(key == null ? '' : key).replace(/\s#\d+$/, ''
     function approveParentDoc(id){
         var doc=getSubmissions().find(function(d){return d.id===id;});
         _setDocStatus(id,'approved');
-        toast((doc?doc.camperName:'Camper')+' — document approved','ok');
+        toast((doc?_lbl(doc.camperName):'Camper')+' — document approved','ok');
     }
 
     function flagParentDoc(id){
         var doc=getSubmissions().find(function(d){return d.id===id;});
         _setDocStatus(id,'flagged');
-        toast((doc?doc.camperName:'Camper')+' — document flagged','err');
+        toast((doc?_lbl(doc.camperName):'Camper')+' — document flagged','err');
     }
 
     function renderIntake() {
@@ -455,13 +465,28 @@ function _lbl(key) { return String(key == null ? '' : key).replace(/\s#\d+$/, ''
     function logDispensing(camperName, medName) {
         var hd = getHealth(); if (!hd.dispensingLog) hd.dispensingLog = [];
         hd.dispensingLog.push({ camperName:camperName, camperId:camperIdOf(camperName), medication:medName, status:'Given', nurse:nurse(), timestamp:new Date().toISOString(), date:todayISO(), time:nowTime() });
-        saveHealth(hd); toast(medName+' — Given to '+camperName,'ok'); renderDashboard(); renderMedications();
+        saveHealth(hd); toast(medName+' — Given to '+_lbl(camperName),'ok'); renderDashboard(); renderMedications();
+    }
+
+    // Which camper a form's name box means: the one picked from the list (the
+    // box remembers the pick), or — if a name was typed — the ONE camper with
+    // that name. Two campers who share it, or none: null, and the form asks
+    // for a pick. A name never decides between two children.
+    function pickedCamper(inp) {
+        if (!inp) return null;
+        var roster = getRoster(), key = inp.dataset ? inp.dataset.camperKey : '';
+        if (key && roster[key] && _lbl(key) === inp.value.trim().replace(/\s+\(.*\)$/, '')) return key;
+        var typed = inp.value.trim().toLowerCase();
+        var hits = Object.keys(roster).filter(function (k) { return _lbl(k).toLowerCase() === typed; });
+        return hits.length === 1 ? hits[0] : null;
     }
 
     function saveSickVisit() {
         var inp = document.getElementById('visitCamperInput');
         if (!inp||!inp.value.trim()) { toast('Enter camper name','err'); return; }
-        var name=inp.value.trim(), roster=getRoster(), c=roster[name]||{};
+        var name=pickedCamper(inp);
+        if (!name) { toast('Pick the camper from the list — more than one camper has that name, or none does','err'); return; }
+        var roster=getRoster(), c=roster[name]||{};
         var presets=[]; document.querySelectorAll('.complaint-preset.selected').forEach(function(b){presets.push(b.textContent.trim())});
         var custom = (document.getElementById('visitComplaint')||{}).value||'';
         var complaint = presets.concat(custom?[custom]:[]).join(', ');
@@ -469,10 +494,10 @@ function _lbl(key) { return String(key == null ? '' : key).replace(/\s#\d+$/, ''
         if (temp) complaint += ' ('+temp+'°F)';
         var hd = getHealth(); if (!hd.sickVisits) hd.sickVisits=[];
         hd.sickVisits.push({ camperName:name, camperId:camperIdOf(name), bunk:c.bunk||'', complaint:complaint, treatment:((document.getElementById('visitTreatment')||{}).value||'').trim(), disposition:(document.getElementById('visitDisposition')||{}).value||'', nurse:nurse(), date:todayISO(), time:nowTime(), timestamp:new Date().toISOString() });
-        saveHealth(hd); closeModal('visitModal'); toast('Visit logged for '+name,'ok');
+        saveHealth(hd); closeModal('visitModal'); toast('Visit logged for '+_lbl(name),'ok');
         renderDashboard(); renderSickVisits();
         // clear form
-        inp.value=''; if(document.getElementById('visitComplaint'))document.getElementById('visitComplaint').value='';
+        inp.value=''; if(inp.dataset)delete inp.dataset.camperKey; if(document.getElementById('visitComplaint'))document.getElementById('visitComplaint').value='';
         if(document.getElementById('visitTemp'))document.getElementById('visitTemp').value='';
         if(document.getElementById('visitTreatment'))document.getElementById('visitTreatment').value='';
         document.querySelectorAll('.complaint-preset.selected').forEach(function(b){b.classList.remove('selected')});
@@ -481,8 +506,10 @@ function _lbl(key) { return String(key == null ? '' : key).replace(/\s#\d+$/, ''
     function saveDispensing() {
         var inp=document.getElementById('medCamperInput');
         if (!inp||!inp.value.trim()) { toast('Enter camper name','err'); return; }
+        var who=pickedCamper(inp);
+        if (!who) { toast('Pick the camper from the list — more than one camper has that name, or none does','err'); return; }
         var hd=getHealth(); if(!hd.dispensingLog) hd.dispensingLog=[];
-        hd.dispensingLog.push({ camperName:inp.value.trim(), camperId:camperIdOf(inp.value.trim()), medication:(document.getElementById('medSelect')||{}).value||'', status:(document.getElementById('medStatus')||{}).value||'Given', nurse:nurse(), time:(document.getElementById('medTime')||{}).value||'', notes:((document.getElementById('medNotes')||{}).value||'').trim(), timestamp:new Date().toISOString(), date:todayISO() });
+        hd.dispensingLog.push({ camperName:who, camperId:camperIdOf(who), medication:(document.getElementById('medSelect')||{}).value||'', status:(document.getElementById('medStatus')||{}).value||'Given', nurse:nurse(), time:(document.getElementById('medTime')||{}).value||'', notes:((document.getElementById('medNotes')||{}).value||'').trim(), timestamp:new Date().toISOString(), date:todayISO() });
         saveHealth(hd); closeModal('medModal'); toast('Dispensing logged','ok'); renderDashboard(); renderMedications();
     }
 
@@ -619,7 +646,8 @@ function _lbl(key) { return String(key == null ? '' : key).replace(/\s#\d+$/, ''
     function setupSearch(inputId) {
         var input=document.getElementById(inputId); if(!input) return;
         input.addEventListener('input',function(){
-            var q=input.value.toLowerCase(), roster=getRoster(), names=Object.keys(roster).filter(function(n){return n.toLowerCase().includes(q)});
+            if (input.dataset) delete input.dataset.camperKey;       // typing undoes a pick
+            var q=input.value.toLowerCase(), roster=getRoster(), names=Object.keys(roster).filter(function(n){return _lbl(n).toLowerCase().includes(q)});
             var old=input.parentElement.querySelector('.camper-dd'); if(old) old.remove();
             if(!q||!names.length) return;
             var dd=document.createElement('div'); dd.className='camper-dd';
@@ -628,7 +656,8 @@ function _lbl(key) { return String(key == null ? '' : key).replace(/\s#\d+$/, ''
                 var c=roster[n], item=document.createElement('div');
                 item.style.cssText='padding:8px 12px;cursor:pointer;font-size:.82rem;display:flex;justify-content:space-between';
                 item.innerHTML='<span style="font-weight:600">'+esc(_lbl(n))+'</span><span style="color:var(--slate-400);font-size:.75rem">'+esc(c.bunk||'')+'</span>';
-                item.onclick=function(){ input.value=n; dd.remove(); populateMedDrop(n); };
+                // The box shows the name; it remembers WHICH camper was picked.
+                item.onclick=function(){ input.value=_lbl(n); if(input.dataset)input.dataset.camperKey=n; dd.remove(); populateMedDrop(n); };
                 item.onmouseenter=function(){item.style.background='var(--health-50)'}; item.onmouseleave=function(){item.style.background=''};
                 dd.appendChild(item);
             });

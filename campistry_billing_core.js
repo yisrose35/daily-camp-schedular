@@ -355,7 +355,9 @@
         var res = B.post(account, {
             kind: 'charge', amount: gross, reason: 'tuition',
             date: enr.date, by: enr.by || 'system',
-            note: enr.note || ('Tuition — ' + (enr.camperName || '') +
+            // The name as people read it: without the roster's internal
+            // " #<number>" that tells two same-named campers apart.
+            note: enr.note || ('Tuition — ' + String(enr.camperName || '').replace(/\s#\d+(?:-\d+)?$/, '') +
                   (enr.session ? ', ' + enr.session : '')).trim(),
             source: {
                 enrollmentId: eid, camperId: enr.camperId != null ? enr.camperId : null,
@@ -445,7 +447,7 @@
         return B.post(account, {
             kind: 'credit', amount: amount, reason: 'withdrawal',
             date: o.date, by: o.by || 'office',
-            note: o.note || ('Withdrawn — ' + (o.camperName || 'camper') +
+            note: o.note || ('Withdrawn — ' + (String(o.camperName || '').replace(/\s#\d+(?:-\d+)?$/, '') || 'camper') +
                              (amount < net ? ' (partial)' : '')),
             source: {
                 enrollmentId: eid,

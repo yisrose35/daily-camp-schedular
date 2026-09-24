@@ -235,7 +235,9 @@ test('FIXED: a rescinded application IS kept, marked Withdrawn', () => {
     // tests/public_submission_clobber.test.js) so it is a block now, not one line.
     // What this test cares about is unchanged — the cascade still deletes, which is
     // why rescindEnrollment has to put the withdrawn record back.
-    assert.match(cascade, /if\(e&&e\.camperName===name\)\{\s*\n\s*delete enrollments\[eid\];/,
+    // The match is by camper number now (_enrIsFor), by name only for an
+    // enrollment that has no number.
+    assert.match(cascade, /if\((?:e&&e\.camperName===name|e&&_enrIsFor\(e,name\))\)\{\s*\n\s*delete enrollments\[eid\];/,
         'cascadeCamperDelete no longer deletes enrollments — re-check this test');
 
     // ...and rescindEnrollment calls it BEFORE setting the status.

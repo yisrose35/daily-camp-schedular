@@ -32,10 +32,14 @@
     SnacksCash.money = money;
 
     /** Sum of cash already taken out by one camper on `date`. */
-    SnacksCash.takenOn = function (transactions, camper, date) {
+    SnacksCash.takenOn = function (transactions, camper, date, camperId) {
+        var id = (camperId != null && camperId !== '') ? String(camperId) : null;
         return money((transactions || []).reduce(function (s, t) {
             if (!t || t.kind !== 'cash_out') return s;
-            if (t.camper !== camper) return s;
+            // this camper's: by number when both carry one, by name only for
+            // a row from before numbers
+            if (id != null && t.camperId != null && t.camperId !== '') { if (String(t.camperId) !== id) return s; }
+            else if (t.camper !== camper) return s;
             if (date && t.date !== date) return s;
             return s + Math.abs(parseFloat(t.amount) || 0);
         }, 0));
@@ -64,7 +68,7 @@
         var a = o.account || {};
         var balance = money(a.balance);
         var floor = money(a.balanceFloor);
-        var takenToday = SnacksCash.takenOn(o.transactions, o.camper, o.date);
+        var takenToday = SnacksCash.takenOn(o.transactions, o.camper, o.date, o.camperId);
 
         var max = cfg.cashAllowNegative ? Infinity : Math.max(0, money(balance - floor));
         var reason = (max === 0) ? 'No available balance' : '';
@@ -120,7 +124,7 @@
         var note = String(o.note || '').trim();
         return {
             time: o.time || '',
-            camper: o.camper || '',
+            camper: o.camper || '', camperId: (o.camperId != null && o.camperId !== '') ? o.camperId : null,
             items: 'Cash out' + (note ? ' — ' + note : ''),
             amount: amount,
             type: 'debit',

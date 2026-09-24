@@ -152,18 +152,27 @@ UPDATE camp_state_kv SET value = value #- '{camperRoster,Dov}' WHERE camp_id = '
 UPDATE camp_state_kv SET value = jsonb_set(value, '{camperRoster,Dov 2}', '{"name":"Dov","camperId":21}')
  WHERE camp_id = 'a5400000-0000-0000-0000-000000000001' AND key = 'app1';
 UPDATE camp_people SET name = 'Dov' WHERE camp_id = 'a5400000-0000-0000-0000-000000000001' AND person_id = 21;
-UPDATE camp_state_kv SET value = jsonb_set(value, '{sickVisits}', value->'sickVisits' || '[{"camperName":"Dov","complaint":"fever"}]')
+-- Since 259 a roster key is one child's: "Dov" is the departed #20's, and the
+-- enrolled Dov is filed under "Dov 2". So a record with no number filed under
+-- "Dov" is #20's and goes with him; a record carrying #21's number stays,
+-- whatever name it shows, and so does one filed under "Dov 2".
+UPDATE camp_state_kv SET value = jsonb_set(value, '{sickVisits}', value->'sickVisits'
+        || '[{"camperName":"Dov","complaint":"fever"},
+             {"camperName":"Dov","camperId":21,"complaint":"cough"},
+             {"camperName":"Dov 2","complaint":"rash"}]')
  WHERE camp_id = 'a5400000-0000-0000-0000-000000000001' AND key = 'campistryHealth';
 DO $$
-DECLARE c uuid := 'a5400000-0000-0000-0000-000000000001'; v jsonb;
+DECLARE c uuid := 'a5400000-0000-0000-0000-000000000001'; v jsonb; left_ text[];
 BEGIN
     v := public.erase_camper(c, 20, true);
     IF (v->>'name_shared_with_an_enrolled_camper')::boolean IS NOT TRUE THEN
         RAISE EXCEPTION 'the shared name was not noticed: %', v;
     END IF;
-    IF NOT EXISTS (SELECT 1 FROM camp_state_kv, jsonb_array_elements(value->'sickVisits') s
-                    WHERE camp_id = c AND key = 'campistryHealth' AND s->>'camperName' = 'Dov') THEN
-        RAISE EXCEPTION 'a record that may belong to the enrolled Dov was erased by name';
+    SELECT array_agg(s->>'complaint' ORDER BY s->>'complaint') INTO left_
+      FROM camp_state_kv, jsonb_array_elements(value->'sickVisits') s
+     WHERE camp_id = c AND key = 'campistryHealth' AND s->>'camperName' IN ('Dov', 'Dov 2');
+    IF left_ IS DISTINCT FROM ARRAY['cough', 'rash'] THEN
+        RAISE EXCEPTION 'expected only the enrolled Dov''s records to remain (cough, rash), got %', left_;
     END IF;
 END $$;
 
