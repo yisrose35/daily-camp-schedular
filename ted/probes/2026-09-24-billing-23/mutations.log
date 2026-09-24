@@ -1,0 +1,56 @@
+CAUGHT  P5 (re) _keep_dispute_hold lets a page write its own pause  (exit 1; bash scripts/run_pgtests.sh 288)
+      FAIL   288_autopay_waits_while_a_payment_is_disputed
+CAUGHT  P10 (re) stripe-charge: family read error charges anyway  (exit 1; node --test tests/dispute_pause_everywhere.test.js tests/stripe_refund_and_charge.test.js)
+      not ok 13 - TED-208 (P10): stripe-charge charges nothing when it cannot read the families the second time
+CAUGHT  P17 (re) page: Resume always sends p_even_open true  (exit 1; node --test tests/ach_on_its_way.test.js tests/autopay_lost_answer.test.js tests/batch_charge_counts_failures.test.js tests/office_charge_retry.test.js tests/payer_split_billed.test.js tests/dispute_pause_everywhere.test.js)
+      not ok 49 - TED-208 (P17): Resume sends "resume anyway" only when a dispute is open and the office chose it
+      not ok 50 - TED-208 (P18): a page that loaded before the dispute is asked again with the server's count, and Cancel changes nothing
+CAUGHT  P18 (re) page: server refusal not re-asked  (exit 1; node --test tests/ach_on_its_way.test.js tests/autopay_lost_answer.test.js tests/batch_charge_counts_failures.test.js tests/office_charge_retry.test.js tests/payer_split_billed.test.js tests/dispute_pause_everywhere.test.js)
+      not ok 50 - TED-208 (P18): a page that loaded before the dispute is asked again with the server's count, and Cancel changes nothing
+CAUGHT  P21 (re) check script: 288 note_dispute_lost check off  (exit 1; bash scripts/run_pgtests.sh 288)
+      FAIL   288_autopay_waits_while_a_payment_is_disputed
+CAUGHT  N14 (re) check script: earlier-288 v_cb check off  (exit 1; bash scripts/run_pgtests.sh 288)
+      FAIL   288_autopay_waits_while_a_payment_is_disputed
+CAUGHT  Q1 TED-205 runner: dispute check removed  (exit 1; node --test tests/dispute_pause_everywhere.test.js tests/canteen_autoreload_once.test.js tests/canteen_autoreload_season.test.js tests/canteen_and_payout_alerts.test.js tests/canteen_rows_everywhere.test.js)
+      not ok 42 - TED-205: auto-reload does not charge the card of a family whose payment is disputed, nor its children's other cards; a control child is charged
+CAUGHT  Q2 TED-205 runner: families unreadable -> reload anyway  (exit 1; node --test tests/dispute_pause_everywhere.test.js tests/canteen_autoreload_once.test.js tests/canteen_autoreload_season.test.js tests/canteen_and_payout_alerts.test.js tests/canteen_rows_everywhere.test.js)
+      not ok 43 - TED-205: when the families cannot be read, nothing is reloaded this run
+CAUGHT  Q3 TED-205 runner: card match removed (children only)  (exit 1; node --test tests/dispute_pause_everywhere.test.js tests/canteen_autoreload_once.test.js tests/canteen_autoreload_season.test.js tests/canteen_and_payout_alerts.test.js tests/canteen_rows_everywhere.test.js)
+      not ok 42 - TED-205: auto-reload does not charge the card of a family whose payment is disputed, nor its children's other cards; a control child is charged
+MISSED  Q4 TED-205 runner: plan chargeback marks ignored  (exit 0; node --test tests/dispute_pause_everywhere.test.js tests/canteen_autoreload_once.test.js tests/canteen_autoreload_season.test.js tests/canteen_and_payout_alerts.test.js tests/canteen_rows_everywhere.test.js)
+CAUGHT  Q5 TED-205 webhook: pause call removed  (exit 1; node --test tests/dispute_pause_everywhere.test.js tests/canteen_and_payout_alerts.test.js tests/tuition_dispute_inquiry.test.js)
+      not ok 27 - TED-205: a disputed canteen top-up switches that child's auto-reload off (500 if it cannot, so Stripe sends it again)
+CAUGHT  Q6 TED-205 webhook: pause error ignored (200)  (exit 1; node --test tests/dispute_pause_everywhere.test.js tests/canteen_and_payout_alerts.test.js tests/tuition_dispute_inquiry.test.js)
+      not ok 27 - TED-205: a disputed canteen top-up switches that child's auto-reload off (500 if it cannot, so Stripe sends it again)
+CAUGHT  Q7 TED-205 290: pause function leaves auto-reload on  (exit 1; bash scripts/run_pgtests.sh 290)
+      FAIL   290_a_disputed_top_up_pauses_auto_reload
+CAUGHT  Q8 TED-205 290: nightly-run patch keeps nothing  (exit 1; bash scripts/run_pgtests.sh 290)
+      FAIL   290_a_disputed_top_up_pauses_auto_reload
+CAUGHT  Q9 TED-205 290: parent save does not clear the pause  (exit 1; bash scripts/run_pgtests.sh 290)
+      FAIL   290_a_disputed_top_up_pauses_auto_reload
+MISSED  Q10 TED-205 290 check-script row off  (exit 0; bash scripts/run_pgtests.sh 290)
+CAUGHT  Q11 TED-206 byop: record_chargeback DB error -> 200 again  (exit 1; node --test tests/dispute_pause_everywhere.test.js tests/chargeback_and_blocks.test.js)
+      not ok 35 - TED-206: a database error while posting a Cardknox/Banquest chargeback (or its close) answers 500, so it is sent again; an answer does not
+CAUGHT  Q12 TED-206 byop: close DB error -> 200  (exit 1; node --test tests/dispute_pause_everywhere.test.js tests/chargeback_and_blocks.test.js)
+      not ok 35 - TED-206: a database error while posting a Cardknox/Banquest chargeback (or its close) answers 500, so it is sent again; an answer does not
+CAUGHT  Q13 TED-206 byop: &key= not accepted  (exit 1; node --test tests/dispute_pause_everywhere.test.js tests/chargeback_and_blocks.test.js)
+      not ok 22 - the secret compare is no longer conditional on having one
+      not ok 36 - TED-206: a processor that cannot send a header passes the secret as &key= on the URL; a wrong key is refused
+MISSED  Q14 TED-206 byop: a thrown call answers 200  (exit 0; node --test tests/dispute_pause_everywhere.test.js tests/chargeback_and_blocks.test.js)
+CAUGHT  Q15 TED-207 hold ignores resumed log  (exit 1; bash scripts/run_pgtests.sh 288)
+      FAIL   288_autopay_waits_while_a_payment_is_disputed
+CAUGHT  Q16 TED-207 loss-first not applied to a later hold  (exit 1; bash scripts/run_pgtests.sh 288)
+      FAIL   288_autopay_waits_while_a_payment_is_disputed
+CAUGHT  Q17 TED-207 note_dispute_lost does not log the loss  (exit 1; bash scripts/run_pgtests.sh 288)
+      FAIL   288_autopay_waits_while_a_payment_is_disputed
+CAUGHT  Q18 TED-207 Resume does not log resumed  (exit 1; bash scripts/run_pgtests.sh 288)
+      FAIL   288_autopay_waits_while_a_payment_is_disputed
+CAUGHT  Q19 TED-207 merge drops the server log (page wins)  (exit 1; bash scripts/run_pgtests.sh 288)
+      FAIL   288_autopay_waits_while_a_payment_is_disputed
+CAUGHT  Q20 TED-207 check-script disputeLog row off  (exit 1; bash scripts/run_pgtests.sh 288)
+      FAIL   288_autopay_waits_while_a_payment_is_disputed
+CAUGHT  Q21 TED-209 "paid" never shown (Move back always offered)  (exit 1; node --test tests/ach_on_its_way.test.js tests/autopay_lost_answer.test.js tests/batch_charge_counts_failures.test.js tests/office_charge_retry.test.js tests/payer_split_billed.test.js tests/dispute_pause_everywhere.test.js)
+      not ok 79 - TED-209: a share the fund has paid in full offers no Move back, and pressing it anyway writes nothing
+CAUGHT  Q22 TED-209 no early stop: pressing it writes lines again  (exit 1; node --test tests/ach_on_its_way.test.js tests/autopay_lost_answer.test.js tests/batch_charge_counts_failures.test.js tests/office_charge_retry.test.js tests/payer_split_billed.test.js tests/dispute_pause_everywhere.test.js)
+      not ok 79 - TED-209: a share the fund has paid in full offers no Move back, and pressing it anyway writes nothing
+MISSED  Q23 TED-209 doubled title back  (exit 0; node --test tests/ach_on_its_way.test.js tests/autopay_lost_answer.test.js tests/batch_charge_counts_failures.test.js tests/office_charge_retry.test.js tests/payer_split_billed.test.js tests/dispute_pause_everywhere.test.js)

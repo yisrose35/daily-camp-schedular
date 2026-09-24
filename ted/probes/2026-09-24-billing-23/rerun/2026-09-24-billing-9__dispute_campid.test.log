@@ -1,0 +1,18 @@
+TAP version 13
+# \# A. dispute metadata empty : HTTP 200 | record_chargeback calls: 0 | log: [stripe-webhook] dispute dp_1 has no campId in metadata — cannot post it to a ledger; reconcile by hand (refs: pi_1, ch_1, dp_1)
+# \# B. dispute metadata campId: HTTP 200 | record_chargeback calls: 1 | log: 
+# Subtest: dispute campId
+ok 1 - dispute campId
+  ---
+  duration_ms: 449.72076
+  type: 'test'
+  ...
+1..1
+# tests 1
+# suites 0
+# pass 1
+# fail 0
+# cancelled 0
+# skipped 0
+# todo 0
+# duration_ms 532.547937

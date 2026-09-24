@@ -1,0 +1,49 @@
+T1. Gold pays $500; bank inquiry; inquiry closes
+    owes $500.00 → inquiry (HTTP 200) $500.00 → closed (HTTP 200) $500.00; pause none
+  ok  T1 an inquiry posts nothing and pauses nothing   → $500.00/$500.00
+
+T2. Teal paid $1,000; inquiry
+    plan_due_for before {"index": 0, "amount": 0, "reason": "nothing_owed", "dueDate": "2026-09-24", "remaining": 2}; after {"index": 0, "amount": 0, "reason": "nothing_owed", "dueDate": "2026-09-24", "remaining": 2}
+  ok  T2 an inquiry does not make autopay charge again   → {"index": 0, "amount": 0, "reason": "nothing_owed", "dueDate": "2026-09-24", "remaining": 2}
+
+T3. Teal's inquiry escalates
+    HTTP 200/200 emails 0/0; owes $1000.00; chargeback lines 1; pause {"reason":"chargeback","disputeId":"dp_t2"}; pause notices 1; plan_due_for {"index": 0, "amount": 500.00, "dueDate": "2026-09-24", "remaining": 2}
+  ok  T3 escalated: back on the bill once, autopay paused, one notice, no extra email   → owes $1000.00, lines 1
+
+T4. Teal's dispute won
+    HTTP 200; owes $0.00; pause none
+  ok  T4 won: paid again, pause off   → owes $0.00, none
+
+T5. Rose paid two $500 instalments; the parent disputes both; the camp wins the first while the second is still open
+    both open: owes $1000.00, pause {"reason":"chargeback","disputeId":"dp_rA"}; after A won: owes $500.00, pause {"reason":"chargeback","disputeId":"dp_rB"}; plan_due_for {"index": 0, "amount": 250.00, "dueDate": "2026-09-24", "remaining": 2}
+  ok  T5 dispute B still open → autopay still paused   → pause {"reason":"chargeback","disputeId":"dp_rB"}, plan_due_for {"index": 0, "amount": 250.00, "dueDate": "2026-09-24", "remaining": 2}
+
+T6. Lime paid $1,000; dispute; won; then a late charge.dispute.updated (won) and a re-sent funds_withdrawn
+    after win pause none; late updated(won) HTTP 200 → pause none; re-sent funds_withdrawn HTTP 200 → pause none; owes $0.00; pause notices 1
+  ok  T6a a late "updated" (status won) does not pause autopay after the win   → pause none
+  ok  T6b a re-sent funds_withdrawn after the win does not pause autopay again   → pause none
+
+T7. Plum's plan waits on a declined card (retry 2099); Plum paid $500 earlier by another card; that payment disputed, then won
+    before {"reason":"declined","nextRetryAt":"2099-01-01","attempts":1}; disputed {"reason":"chargeback","disputeId":"dp_p1"}; won {"reason":"declined","nextRetryAt":"2099-01-01","attempts":1}
+  ok  T7 the decline wait survives a dispute that was won   → after win {"reason":"declined","nextRetryAt":"2099-01-01","attempts":1}
+
+T8. Sage paid $1,000; dispute lost; the owner resumes autopay
+    lost → owes $1000.00, pause {"reason":"chargeback","disputeId":"dp_s1"}; resume → {"open": 1, "error": "dispute_open", "message": "A dispute is still open with the bank.", "success": false}; pause {"reason":"chargeback","disputeId":"dp_s1"}
+  BAD T8 lost keeps the pause; the owner resumes it   → {"reason":"chargeback","disputeId":"dp_s1"} → {"reason":"chargeback","disputeId":"dp_s1"}
+
+C9. Dov's $20 canteen top-up disputed, won, then a late updated(won)
+    $20.00 → disputed $0.00 → won $20.00 → late updated/funds_withdrawn $20.00
+  ok  C9 canteen late events after a win take nothing   → $20.00
+
+N1. Nightly run: Mint disputed (paused) and Iris (control) both owe tonight
+    Mint owes $1000.00, pause {"reason":"chargeback","disputeId":"dp_m1"}
+    results ["Iris:charged","Mint:held_for_dispute"]; charges: cus_gold $250.00, cus_iris $500.00
+  ok  N1 paused family not charged; control charged   → cus_gold $250.00, cus_iris $500.00
+
+N2. Mint's card is removed (bank closed it after the fraud claim); a night; then the parent saves a new card; later nights
+    night with no card: ["Mint:held_for_dispute"] → pause {"reason":"chargeback","disputeId":"dp_m1"}
+    later night with the new card: ["Mint:held_for_dispute"]; charges: cus_gold $250.00, cus_iris $500.00; dispute dp_m1 still open
+  ok  N2a the dispute pause survives a night with no card   → pause {"reason":"chargeback","disputeId":"dp_m1"}
+  ok  N2b a new card does not get charged while the dispute is open   → cus_gold $250.00, cus_iris $500.00
+
+1 BAD

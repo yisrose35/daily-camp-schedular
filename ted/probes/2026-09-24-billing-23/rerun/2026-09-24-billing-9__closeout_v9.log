@@ -1,0 +1,6 @@
+default canteen disposition: roll_forward
+steps: [{"kind":"canteen","do":"roll_forward","amount":6}]
+family ledger balance before: 0
+toast: 1 close-out step applied
+family charges[]: []
+family ledger balance after: 0

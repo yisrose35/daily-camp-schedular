@@ -1,0 +1,29 @@
+K0. The secret on the URL (&key=), as the guides now allow
+  right key → HTTP 200 {"received":true}; wrong key → 401; no key → 401
+  ok  K0 &key= accepted, wrong/missing refused   → 200/401/401
+
+K1. Birch paid $500 by Cardknox (ref 9001); owes $500. Cardknox sends its ordinary TRANSACTION postback for that sale to the dispute URL
+  HTTP 200 {"received":true}; chargeback lines: le_cb_ck_9001 $500; Birch now owes $1000; pause ["ck_9001"]
+  log: 
+  BAD K1 an ordinary approved sale postback posts no chargeback and pauses nobody   → chargebacks le_cb_ck_9001 $500, pause yes
+
+K2. Eli (Cardknox camp): auto-reload "below $5 → add $20" on tok_eli; wallet $0
+  run today: Eli $20 → charged
+  wallet $20.00; tok_eli sales: 2026-09-24 $20
+  parent disputes the $20 (ref 7001): HTTP 200 {"received":true}
+  log: [byop-dispute] cardknox: chargeback ck_7001 NOT posted (family_not_found) — the camp's books now overstate collected cash until this is reconciled by hand. refs=7001,7001
+  wallet now $20.00; auto-reload: true / -
+  next day (2026-09-25), after Eli spends it: 
+    run: Eli $20 → charged
+  tok_eli sales: 2026-09-24 $20, 2026-09-25 $20
+  BAD K2 the card whose Cardknox top-up is disputed is not charged again while the bank decides   → 2026-09-24 $20, 2026-09-25 $20
+
+K4. Birch's chargeback (ck_9001, posted in K1) is reversed in the camp's favour: Cardknox status "Chargeback Reversal"
+  HTTP 200 {"received":true}; win lines: none; Birch owes $1000; pause ["ck_9001"]
+  BAD K4 a "Chargeback Reversal" is read as the camp winning (money back on the books, pause lifted)   → none
+
+K3. The TED-206 retry rule
+  posting DB error → HTTP 500; unknown payment → HTTP 200; pause DB error → HTTP 500
+  ok  K3 DB errors 500, answers 200   → 500/200/500
+
+3 BAD

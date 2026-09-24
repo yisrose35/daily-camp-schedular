@@ -1,0 +1,85 @@
+F. Refund made, answer lost; then Stripe FAILS it (card closed); asked again [Stripe marks the replay]
+  ok  F1 Refund All again 1 hour later
+        answers: Refund All: $0, refunded 0, failed 1, skipped 0 [{"camperId":7,"camperName":"Avi","refunded":0,"error":"Stripe did not answer, so this child's refund may have gone through — check the Strip] | Refund All: $20, refunded 1, failed 0, skipped 0 [{"camperId":7,"camperName":"Avi","refunded":20}]
+        → money back $20 [re_1 $20 (FAILED), re_2 $20], wallet $0, holds [posted $20.00], history [refund re_2 $20.00], notices 0
+        (want the parent really gets $20 (money $20 from a new refund, wallet $0), the failed refund not on the history)
+  ok  F2 Refund All again 25 h later
+        answers: Refund All: $0, refunded 0, failed 1, skipped 0 [{"camperId":7,"camperName":"Avi","refunded":0,"error":"Stripe did not answer, so this child's refund may have gone through — check the Strip] | Refund All: $20, refunded 1, failed 0, skipped 0 [{"camperId":7,"camperName":"Avi","refunded":20}]
+        → money back $20 [re_3 $20 (FAILED), re_4 $20], wallet $0, holds [posted $20.00], history [refund re_4 $20.00], notices 0
+        (want the parent really gets $20 (money $20 from a new refund, wallet $0), the failed refund not on the history)
+  ok  F3 single refund, same page key, 1 hour later
+        answers: UNCERTAIN: Stripe did not answer, so this refund may have gone through. Check the child's wallet befo | $20
+        → money back $20 [re_5 $20 (FAILED), re_6 $20], wallet $0, holds [posted $20.00], history [refund re_6 $20.00], notices 0
+        (want the parent really gets $20 (money $20 from a new refund, wallet $0), the failed refund not on the history)
+F. Refund made, answer lost; then Stripe FAILS it (card closed); asked again [NO replay header: the `created` fallback alone]
+  ok  F1 Refund All again 1 hour later
+        answers: Refund All: $0, refunded 0, failed 1, skipped 0 [{"camperId":7,"camperName":"Avi","refunded":0,"error":"Stripe did not answer, so this child's refund may have gone through — check the Strip] | Refund All: $20, refunded 1, failed 0, skipped 0 [{"camperId":7,"camperName":"Avi","refunded":20}]
+        → money back $20 [re_7 $20 (FAILED), re_8 $20], wallet $0, holds [posted $20.00], history [refund re_8 $20.00], notices 0
+        (want the parent really gets $20 (money $20 from a new refund, wallet $0), the failed refund not on the history)
+  ok  F2 Refund All again 25 h later
+        answers: Refund All: $0, refunded 0, failed 1, skipped 0 [{"camperId":7,"camperName":"Avi","refunded":0,"error":"Stripe did not answer, so this child's refund may have gone through — check the Strip] | Refund All: $20, refunded 1, failed 0, skipped 0 [{"camperId":7,"camperName":"Avi","refunded":20}]
+        → money back $20 [re_9 $20 (FAILED), re_10 $20], wallet $0, holds [posted $20.00], history [refund re_10 $20.00], notices 0
+        (want the parent really gets $20 (money $20 from a new refund, wallet $0), the failed refund not on the history)
+  ok  F3 single refund, same page key, 1 hour later
+        answers: UNCERTAIN: Stripe did not answer, so this refund may have gone through. Check the child's wallet befo | $20
+        → money back $20 [re_11 $20 (FAILED), re_12 $20], wallet $0, holds [posted $20.00], history [refund re_12 $20.00], notices 0
+        (want the parent really gets $20 (money $20 from a new refund, wallet $0), the failed refund not on the history)
+F4. As F3, but the re-send under the new key is cut off after Stripe made it; the office presses Refund a 3rd time
+  ok  F4
+        answers: UNCERTAIN: Stripe did not answer, so this refund may have gone through. Check the child's wallet befo | UNCERTAIN: Stripe did not answer, so this refund may have gone through. Check the child's wallet befo | $20 (replayed)
+        → money back $20 [re_13 $20 (FAILED), re_14 $20], wallet $0, holds [posted $20.00], history [refund re_14 $20.00], notices 0
+        (want money $20 once (never $40), wallet $0)
+C. Refund All refunds Avi's $50 (answer lost, made). An hour later the parent tops up $30 and the office refunds $30
+  ok  C1 (TED-127) first press
+        answers: Refund All: $0, refunded 0, failed 1, skipped 0 [{"camperId":7,"camperName":"Avi","refunded":0,"error":"Stripe did not answer, so this child's refund may have gone through — check the Strip] | $30
+        → money back $80 [re_15 $50, re_16 $30], wallet $0, holds [posted $50.00, posted $30.00], history [refund re_15 $50.00, refund re_16 $30.00], notices 0
+        (want $30 refunded on the FIRST press: money $80, wallet $0)
+W. Refund All refunds Avi's $20 (answer received). Later Stripe FAILS it and sends refund.failed
+    after the webhook: wallet $20 [refund re_17 $20.00, refund_failed re_17 $20.00], notices 1; after 2 more deliveries: wallet $20, notices 1  (webhook HTTP 200 email "Stripe alert: a $20.00 refund failed — pass it back to the camp" log "[stripe-webhook] risk alert email sent: Stripe alert: a $20.00 refund failed — pass it back to the camp" | webhook HTTP 200 email "Stripe alert: a $20.00 refund failed — pass it back to the camp" log "[stripe-webhook] risk alert email sent: Stripe alert: a $20.00 refund failed — pass it back to the camp" | webhook HTTP 200 email "Stripe alert: a $20.00 refund failed — pass it back to the camp" log "[stripe-webhook] risk alert email sent: Stripe alert: a $20.00 refund failed — pass it back to the camp")
+  ok  W1 failed 3 days later: the $20 back on the wallet once, a "refund failed" line, one notice
+  ok  W1 failed 3 days later; the office runs Refund All again
+        answers: Refund All: $20, refunded 1, failed 0, skipped 0 [{"camperId":7,"camperName":"Avi","refunded":20}] | webhook HTTP 200 email "Stripe alert: a $20.00 refund failed — pass it back to the camp" log "[stripe-webhook] risk alert email sent: Stripe alert: a $20.00 refund failed — pass it back to the camp" | Refund All: $20, refunded 1, failed 0, skipped 0 [{"camperId":7,"camperName":"Avi","refunded":20}]
+        → money back $20 [re_17 $20 (FAILED), re_18 $20], wallet $0, holds [posted $20.00], history [refund re_17 $20.00, refund_failed re_17 $20.00, refund re_18 $20.00], notices 1
+        (want the $20 refunded again for real: money $20 (a NEW refund), wallet $0 — or, if not, an answer that says why)
+    after the webhook: wallet $20 [refund re_19 $20.00, refund_failed re_19 $20.00], notices 1; after 2 more deliveries: wallet $20, notices 1  (webhook HTTP 200 email "Stripe alert: a $20.00 refund failed — pass it back to the camp" log "[stripe-webhook] risk alert email sent: Stripe alert: a $20.00 refund failed — pass it back to the camp" | webhook HTTP 200 email "Stripe alert: a $20.00 refund failed — pass it back to the camp" log "[stripe-webhook] risk alert email sent: Stripe alert: a $20.00 refund failed — pass it back to the camp" | webhook HTTP 200 email "Stripe alert: a $20.00 refund failed — pass it back to the camp" log "[stripe-webhook] risk alert email sent: Stripe alert: a $20.00 refund failed — pass it back to the camp")
+  ok  W1b failed 2 hours later: the $20 back on the wallet once, a "refund failed" line, one notice
+  ok  W1b failed 2 hours later; the office runs Refund All again
+        answers: Refund All: $20, refunded 1, failed 0, skipped 0 [{"camperId":7,"camperName":"Avi","refunded":20}] | webhook HTTP 200 email "Stripe alert: a $20.00 refund failed — pass it back to the camp" log "[stripe-webhook] risk alert email sent: Stripe alert: a $20.00 refund failed — pass it back to the camp" | Refund All: $20, refunded 1, failed 0, skipped 0 [{"camperId":7,"camperName":"Avi","refunded":20}]
+        → money back $20 [re_19 $20 (FAILED), re_20 $20], wallet $0, holds [posted $20.00], history [refund re_19 $20.00, refund_failed re_19 $20.00, refund re_20 $20.00], notices 1
+        (want the $20 refunded again for real: money $20 (a NEW refund), wallet $0 — or, if not, an answer that says why)
+W2. As W1, but the office uses the child's own Refund button (a new page key) after the put-back
+  ok  W2
+        answers: Refund All: $20, refunded 1, failed 0, skipped 0 [{"camperId":7,"camperName":"Avi","refunded":20}] | webhook HTTP 200 email "Stripe alert: a $20.00 refund failed — pass it back to the camp" log "[stripe-webhook] risk alert email sent: Stripe alert: a $20.00 refund failed — pass it back to the camp" | $20
+        → money back $20 [re_21 $20 (FAILED), re_22 $20], wallet $0, holds [released $20.00, posted $20.00], history [refund re_21 $20.00, refund_failed re_21 $20.00, refund re_22 $20.00], notices 1
+        (want money $20 (a new refund), wallet $0)
+W3. Refund All's answer LOST (money held); Stripe fails the refund and its refund.failed arrives BEFORE any look-up; Refund All 1 hour later
+    after the webhook: wallet $0, holds [open $20.00], history [none]
+  ok  W3
+        answers: Refund All: $0, refunded 0, failed 1, skipped 0 [{"camperId":7,"camperName":"Avi","refunded":0,"error":"Stripe did not answer, so this child's refund may have gone through — check the Strip] | webhook HTTP 200 email "Stripe alert: a $20.00 refund failed — pass it back to the camp" log "[stripe-webhook] risk alert email sent: Stripe alert: a $20.00 refund failed — pass it back to the camp" | Refund All: $20, refunded 1, failed 0, skipped 0 [{"camperId":7,"camperName":"Avi","refunded":20}]
+        → money back $20 [re_23 $20 (FAILED), re_24 $20], wallet $0, holds [posted $20.00], history [refund re_24 $20.00], notices 1
+        (want the parent gets $20 once (a new refund), wallet $0, the money never put back twice)
+W4. A normal refund.updated (still succeeded) and a charge.refunded carrying the refund AFTER it failed
+    refund.updated(succeeded) → wallet $0 (unchanged 0)
+  ok  W4
+        answers: webhook HTTP 200 log "[stripe-webhook] Event: refund.updated (evt_ted12_9)" | webhook HTTP 200 email "Stripe alert: a $20.00 refund failed — pass it back to the camp" log "[stripe-webhook] risk alert email sent: Stripe alert: a $20.00 refund failed — pass it back to the camp" | webhook HTTP 200 log "[stripe-webhook] Event: charge.refunded (evt_ted12_11)" | webhook HTTP 200 log "[stripe-webhook] Event: charge.refunded (evt_ted12_12)"
+        → money back $0 [re_25 $20 (FAILED)], wallet $20, holds [released $20.00], history [refund re_25 $20.00, refund_failed re_25 $20.00], notices 1
+        (want wallet $20 once; the failed refund not booked a second time by charge.refunded)
+T. Gold paid $500 tuition by card (pi_T); the office refunded $500 through Billing (re_T). Stripe fails it and sends refund.failed
+    before: owes $500 [charge:500/tuition, payment:500/card, refund:500/refund]
+    after refund.failed: owes $0 [charge:500/tuition, payment:500/card, refund:500/refund, payment:500.00/refund_failed] rows [pi_pi_14T $500, ref_1_0 $-500, refail_re_26 $500.00] notices 1  (webhook HTTP 200 email "Stripe alert: a $500.00 refund failed — pass it back to the camp" log "[stripe-webhook] risk alert email sent: Stripe alert: a $500.00 refund failed — pass it back to the camp")
+    after 2 more deliveries + the ledger sync: owes $0, rows [pi_pi_14T $500, ref_1_0 $-500, refail_re_26 $500.00], notices 1  (webhook HTTP 200 email "Stripe alert: a $500.00 refund failed — pass it back to the camp" log "[stripe-webhook] risk alert email sent: Stripe alert: a $500.00 refund failed — pass it back to the camp" | webhook HTTP 200 email "Stripe alert: a $500.00 refund failed — pass it back to the camp" log "[stripe-webhook] risk alert email sent: Stripe alert: a $500.00 refund failed — pass it back to the camp")
+    the notice says: "Stripe could not send the $500.00 refund to Gold (re_26) — expired or canceled card. The parent did not get it. It is back on the family's account as a credit: refund it again from Billing, or ask the family for other bank details. Stripe returned it to Campistry's platform account; Campistry has been alerted to pass it back to yours."
+  ok  T1 the $500 goes back on Gold's account once (owes 500 → 0), one payments row, one notice
+ERROR ReferenceError: _famPaymentsIn is not defined
+    at _famRefundablePayments (evalmachine.<anonymous>:2:5)
+    at _famRefundableOnlineAll (evalmachine.<anonymous>:12:12)
+    at Object._famRefundableOnline (evalmachine.<anonymous>:25:12)
+    at Object.<anonymous> (/home/user/daily-camp-schedular/ted/probes/2026-09-24-billing-12/refund_failed_realdb.js:373:21)
+    at Module._compile (node:internal/modules/cjs/loader:1705:14)
+    at Object..js (node:internal/modules/cjs/loader:1838:10)
+    at Module.load (node:internal/modules/cjs/loader:1441:32)
+    at Function._load (node:internal/modules/cjs/loader:1263:12)
+    at TracingChannel.traceSync (node:diagnostics_channel:328:14)
+    at wrapModuleLoad (node:internal/modules/cjs/loader:237:24)
+
+1 BAD

@@ -1,0 +1,15 @@
+R1 tuition dashboard refund, database busy → HTTP 500
+    [stripe-webhook] Event: charge.refunded (evt_1) | [stripe-webhook] Error: refund re_1 not booked yet: canceling statement due to statement timeout
+  ok  R1 answered 500 so Stripe sends it again   → HTTP 500: the $500 refund is never booked; the family's bill still counts money it no longer paid
+R2 tuition chargeback, database busy → HTTP 500
+    [stripe-webhook] Event: charge.dispute.created (evt_2) | [stripe-webhook] Error: chargeback dp_2 not posted yet: canceling statement due to statement timeout
+  ok  R2 answered 500 so Stripe sends it again   → HTTP 500
+R3 tuition dispute won, database busy → HTTP 500
+    [stripe-webhook] Event: charge.dispute.closed (evt_3) | [stripe-webhook] Error: dispute dp_2 close not recorded yet: canceling statement due to statement timeout
+  ok  R3 answered 500 so Stripe sends it again   → HTTP 500
+R4 control: canteen dashboard refund, database busy → HTTP 500
+  ok  R4 control 500   → HTTP 500
+R5 control: tuition payment, database busy → HTTP 500
+  ok  R5 control 500   → HTTP 500
+
+0 BAD

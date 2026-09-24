@@ -1,0 +1,35 @@
+SETUP: in session (2026-09-04 → 2026-10-24); Avi "below $5 → add $20" (cus_avi); Bea weekly $25 on the Gold family's card (cus_gold); Cy weekly $25 (cus_cy, control); all wallets $0
+  run today: Dov $20 → charged; Eve $25 → charged; Sam #4 $25 → charged; Avi $20 → charged; Bea $25 → charged; Cy $25 → charged
+  wallets: Avi $20.00, Bea $25.00, Cy $25.00
+
+A1. Avi's parent disputes the $20 auto-reload charge (pi_reload1) with the bank
+  webhook HTTP 200; Avi's wallet now $0.00
+  next day's run (2026-09-25): {"ok":true,"charged":0,"failed":0,"details":[]}
+  cus_avi charged: 2026-09-24 $20
+  ok  A1 the card whose auto-reload charge is being disputed is not charged again while the bank decides   → 2026-09-24 $20
+  Avi's auto-reload after the dispute: enabled false — "switched off because a top-up was disputed with the bank — switch it back on once that is settled"
+  camp notices: Canteen auto-reload switched off — a top-up was disputed
+
+A3. Katz siblings on one card (cus_katz): Dov "below $5 → $20", Eve weekly $25. Day 0 run above charged: 2026-09-24 $20, 2026-09-24 $25
+  Dov's top-up (pi_reload1) disputed: HTTP 200; Dov enabled false — "switched off because a top-up was disputed with the bank — switch it back on once that is settled"; Eve enabled true
+  (the week-later run for A2 below also runs Eve's weekly slot)
+
+A4. Roe (tuition dispute) has "Sam #3"; Lev (no dispute) has "Sam #4" weekly $25 on cus_lev
+  Roe disputed: HTTP 200; Roe pause ["dp_roe"]
+
+A2. The Gold family (Bea) pays $1,000 tuition by card and disputes it
+  webhook HTTP 200; Gold pause {"since": "2026-09-24T17:01:55Z", "detail": "fraudulent", "lostIds": [], "disputeIds": ["dp_gold"]}
+  the office's notice: "Gold disputed a payment with their bank, so their card will not be charged again — not by autopay, not from Billing. If the camp wins the dispute this lifts by itself; if not, resume it from Billing once you have agreed with the family."
+  a week later (2026-10-01): Eve $25 → charged; Sam #4 $25 → held_for_dispute; Bea $25 → held_for_dispute; Cy $25 → charged
+  cus_gold charged: 2026-09-24 $25; control cus_cy: 2026-09-24 $25, 2026-10-01 $25
+  ok  A2 the paused family's card is not charged by canteen auto-reload during the dispute   → 2026-09-24 $25
+  ok  A0 control Cy charged both weeks   → 2026-09-24 $25, 2026-10-01 $25
+  cus_katz charged: 2026-09-24 $20, 2026-09-24 $25, 2026-10-01 $25
+  BAD A3 Eve's reload is not charged on the family card while her brother's top-up on it is disputed   → 2026-09-24 $20, 2026-09-24 $25, 2026-10-01 $25
+  cus_lev charged: 2026-09-24 $25
+  BAD A4 Lev's "Sam #4" (no dispute) is still reloaded when another family's "Sam #3" is paused   → 2026-09-24 $25
+
+A5. Avi's dispute is WON
+  HTTP 200; Avi's wallet $20.00; Avi enabled false — "switched off because a top-up was disputed with the bank — switch it back on once that is settled"
+
+2 BAD

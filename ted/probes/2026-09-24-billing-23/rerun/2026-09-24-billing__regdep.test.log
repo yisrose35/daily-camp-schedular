@@ -1,0 +1,17 @@
+TAP version 13
+# status 403 {"success":false,"error":"Only the camp's owner or an admin can charge a deposit."} stripe charges: 0 []
+# Subtest: anonymous caller, officeCharge:true
+ok 1 - anonymous caller, officeCharge:true
+  ---
+  duration_ms: 177.191712
+  type: 'test'
+  ...
+1..1
+# tests 1
+# suites 0
+# pass 1
+# fail 0
+# cancelled 0
+# skipped 0
+# todo 0
+# duration_ms 262.785749

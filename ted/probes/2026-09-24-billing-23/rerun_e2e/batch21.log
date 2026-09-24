@@ -1,0 +1,26 @@
+  teal: record_chargeback {"amount": 1000.00, "balance": 2000.00, "entryId": "le_cb_dp_teal", "success": t · hold {"held": true, "changed": true, "success": true}
+  hazel: record_chargeback {"amount": 1000.00, "balance": 2000.00, "entryId": "le_cb_dp_hazel", "success":  · hold {"held": true, "changed": true, "success": true}
+  fern: record_chargeback {"amount": 1000.00, "balance": 2000.00, "entryId": "le_cb_dp_fern", "success": t · hold {"held": true, "changed": true, "success": true}
+  owes: Teal $2000, Hazel $2000, Fern $2000, Olive $500
+D1  Batch Charge
+  window: "Batch Charge — 1 Families×This will charge 1 families for a total of $500 using their saved cards.Olive$500Not charged — a payment is disputed: Fern, Teal, Hazel. Their card is not charged by autopay either; resume from their row (“Payment disputed”) once the dispute is settled.⚠ This action will charge real credit cards. Proceed with caution.CancelSave"
+  ok  D1a Teal (autopay paused) is not in the charge list and is named as disputed   → Batch Charge — 1 Families×This will charge 1 families for a total of $500 using their saved cards.Olive$500
+  ok  D1b Olive (control) is in the charge list   → Batch Charge — 1 Families×This will charge 1 families for a total of $500 using their saved cards.Olive$500
+  ok  D1c Hazel (pays by hand; payment disputed) is not in the charge list   → Batch Charge — 1 Families×This will charge 1 families for a total of $500 using their saved cards.Olive$500
+  ok  D1d Fern (no plan; payment disputed) is not in the charge list   → Batch Charge — 1 Families×This will charge 1 families for a total of $500 using their saved cards.Olive$500
+D2  Charge Card with an amount, per family (recorder in place of stripe-charge)
+  teal: result {"ok":false,"disputed":true,"error":"Teal is disputing a payment with their bank — nothing is charged until that is settled. Once it is, click “Payment disputed; reached stripe-charge: 0
+  ok  D2 teal (payment disputed) never reaches stripe-charge
+  hazel: result {"ok":false,"disputed":true,"error":"Hazel is disputing a payment with their bank — nothing is charged until that is settled. Once it is, click “Payment dispute; reached stripe-charge: 0
+  ok  D2 hazel (payment disputed) never reaches stripe-charge
+  fern: result {"ok":false,"disputed":true,"error":"Fern is disputing a payment with their bank — nothing is charged until that is settled. Once it is, click “Payment disputed; reached stripe-charge: 0
+  ok  D2 fern (payment disputed) never reaches stripe-charge
+  olive: result {"ok":false,"error":"ted probe: not sent","uncertain":false}; reached stripe-charge: 1
+  ok  D2 control Olive reaches stripe-charge   → 1
+D3  what Billing shows on Hazel / Fern
+  Teal: "TealTeal KidPending · Payment disputed — card not chargedOn$2,000View"
+  Hazel: "HazelHazel KidPending · Payment disputed — card not charged—$2,000ViewOliveOlive KidPending—$500ViewTealTeal KidPending · Payment disputed — card not chargedOn$2,000View"
+  Fern: "FernFern KidPending · Payment disputed — card not charged—$2,000ViewHazelHazel KidPending · Payment disputed — card not charged—$2,000ViewOliveOlive KidPending—$500ViewTealTeal KidPending · Payment disputed — card not ch"
+page errors: []
+
+0 BAD

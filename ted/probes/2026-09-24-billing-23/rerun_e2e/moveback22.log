@@ -1,0 +1,36 @@
+B1  Billing: Teal has one open dispute
+  label shown 3 times on Billing (Teal, Rose, Vale expected → 3)
+  ok  B1 the label is on each paused family, once each   → 3
+B2  click Teal's label
+  window: "A dispute is still openTeal disputed a payment with their bank and 1 dispute is still open with the bank. Charging the card they are disputing is what the bank holds against the camp. Resume only if you have agreed with the family — autopay and Charge Card will charge their card again.CancelResume anyway"
+  ok  B2 window says a dispute is still open and offers "Resume anyway"   → A dispute is still openTeal disputed a payment with their bank and 1 dispute is still open with the bank. Charging the card they are disputing is what the bank holds against the camp. Resume only if y
+  toast "✓ Card charges resumed for Teal"; cloud pause none; plan mark none
+  ok  B2 Resume anyway lifts the family pause and the plan mark   → none
+B3  the stale computer adds a $10 charge to Teal
+  Teal owes $1010; pause none; mark none
+  ok  B3 a stale computer does not bring the pause back   → none
+B4  Rose: two disputes, the camp lost one
+  window: "A dispute is still openRose disputed a payment with their bank and 1 dispute is still open with the bank (the camp lost 1). Charging the card they are disputing is what the bank holds against the camp. Resume only if you have agreed with the family — autopay and Charge Card will charge their card again.CancelResume anyway"
+  ok  B4 the window counts 1 still open and 1 lost   → A dispute is still openRose disputed a payment with their bank and 1 dispute is still open with the bank (the camp lost 1). Charging the card they are disputing is what the bank holds against the camp
+  ok  B4 Cancel changes nothing   → {"since": "2026-09-24T17:29:21Z", "detail": "fraudulent", "lostIds": ["dp_rA"], "disputeIds": ["dp_rA", "dp_rB"]}
+B5  Vale: page loaded with the only dispute lost; a new dispute arrives on the server; Resume pressed on the stale page
+  first window: "Charge their card again?Vale disputed a payment with their bank and the camp lost it, so their card has not been charged since. Resume only if you have agreed with the family — autopay and Charge Card will charge their card again.CancelResume charges"
+  second window: "A dispute is still openA dispute is still open with the bank. Resume charging Vale’s card anyway?CancelResume anyway"
+  ok  B5 the server's refusal is shown as a second question   → A dispute is still openA dispute is still open with the bank. Resume charging Vale’s card anyway?CancelResume anyway
+  Vale pause now {"since": "2026-09-24T17:29:21Z", "detail": "fraudulent", "lostIds": ["dp_v1"], "disputeIds": ["dp_v1", "dp_v2"]}
+  ok  B5 Cancel on the second question keeps the pause   → {"since": "2026-09-24T17:29:21Z", "detail": "fraudulent", "lostIds": ["dp_v1"], "disputeIds": ["dp_v1", "dp_v2"]}
+S1  Pine: Add Charge $1,000, Scholarship Fund $800; the fund pays $300
+  Pine owes $200; fund {"charged":800,"paid":300,"owes":500,"lines":2}
+S3  the fund's account → Move back to family (after the fund paid $300)
+  account rows: ["2026-09-24Tuition 2027 — share for Pine$800Cancel shareMove back to family","2026-09-24Payment (Check) #chk 1$300Remove"]
+  confirm said: "Move share back?Move this $800 share back to the Pine family’s own bill? Scholarship Fund has already paid $300 toward it, so that $300 stays on this share and only the unpaid $500 moves to the Pine family. (To move all $800 back and return Scholarship Fund’s money, remove its payment first.)CancelMove back"
+  toast "✓ $500 moved back to Pine’s bill — Scholarship Fund’s $300 stays on the share"
+  Pine owes $700; fund {"charged":300,"paid":300,"owes":0,"lines":4}; plan_due_for {"index": 0, "amount": 700.00, "dueDate": "2026-09-24", "remaining": 1}
+  ok  S3 the window names the $300 paid and the $500 that moves   → Move share back?Move this $800 share back to the Pine family’s own bill? Scholarship Fund has already paid $300 toward it, so that $300 stays on this share and only the unpaid $500 moves to the Pine family. (To move all 
+  ok  S3 Pine owes $700, the fund charged $300 / paid $300, autopay asks $700   → Pine $700, fund {"charged":300,"paid":300,"owes":0,"lines":4}
+S5  Move back again, on the kept "$300 — the part … paid" line
+  account rows: ["2026-09-24Tuition 2027 — share for Pine$800taken back","2026-09-24Payment (Check) #chk 1$300Remove","2026-09-24Tuition 2027 — share for Pine — the part Scholarship Fund paid$300Cancel sharepaid"]
+  BAD the run finished   → locator.click: Timeout 30000ms exceeded. | Call log: | [2m  - waiting for locator('#dynModal tr').filter({ hasText: 'the part Scholarship Fund paid' }).locator('button').filter({ hasText: 'Move back to family' }).first()[22m
+page errors: []
+
+1 BAD

@@ -1,0 +1,4 @@
+before merge: A owes 500 + B owes 525 = 1025
+after merge: A owes 1025 | A.charges: [{"id":"lf_b","category":"Late Fee","description":"Late fee","amount":25,"date":"2026-07-01"}]
+Billing catch-up on next load posted 0 entr(y/ies): [{"id":"le_chg_lf_b","kind":"charge","amount":25,"reason":"fee","source":{"chargeId":"lf_b","category":"Late Fee"}}]
+A now owes 1025
