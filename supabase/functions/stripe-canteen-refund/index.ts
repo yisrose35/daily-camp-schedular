@@ -246,6 +246,7 @@ serve(async (req) => {
     let totalRefunded = priorDone;
     const refunds: Record<string, unknown>[] = priorRefunds.slice();
     let chunkError: string | null = null;
+    let chunkUncertain = false;
 
     for (const dep of deposits) {
       if (remainingToRefund <= 0) break;
@@ -259,7 +260,19 @@ serve(async (req) => {
         if (claimKey) {
           const { data: cl } = await supabase.rpc("claim_refund_intent", {
             p_camp_id: authedCampId, p_key: claimKey, p_amount: chunk, p_payment_ref: dep.paymentIntentId });
-          if (cl && cl.claimed === false) continue;                   // a concurrent try has it
+          if (cl && cl.claimed === false) {
+            // Another press of THIS refund has this top-up (TED-109). Done:
+            // count it. Still going: stop — never move on to the next top-up
+            // and refund the same money from there.
+            if (cl.previous && cl.previous.refundId) {
+              const doneAmt = round2(Number(cl.previous.amount) || chunk);
+              refunds.push({ refundId: cl.previous.refundId, paymentIntentId: dep.paymentIntentId, amount: doneAmt });
+              totalRefunded = round2(totalRefunded + doneAmt);
+              remainingToRefund = round2(remainingToRefund - doneAmt);
+              continue;
+            }
+            throw Object.assign(new Error("This refund is being sent right now — wait a moment and check the child's wallet before trying again."), { uncertain: true });
+          }
         }
         // Re-fetch the PI to auto-detect whether it was a destination charge
         // (reverse_transfer needed) — mirrors stripe-refund/index.ts.
@@ -278,9 +291,17 @@ serve(async (req) => {
       // lost answer repeats the key and Stripe answers with the refund it made.
       // The page's key for this refund when it sends one (TED-105): a retry of
       // the same refund repeats it, so Stripe answers with the refund it made.
-      const refund = await stripePost("/refunds", params, reqKey
-        ? `canteen_refund_${reqKey}_${dep.paymentIntentId}`
-        : `canteen_refund_${dep.paymentIntentId}_${Math.round(dep.remaining * 100)}_${Math.round(chunk * 100)}`);
+      let refund: any;
+      try {
+        refund = await stripePost("/refunds", params, reqKey
+          ? `canteen_refund_${reqKey}_${dep.paymentIntentId}`
+          : `canteen_refund_${dep.paymentIntentId}_${Math.round(dep.remaining * 100)}_${Math.round(chunk * 100)}`);
+      } catch (e) {
+        // Cut off: Stripe may have made it. The claim stays open, and the next
+        // press re-asks with the same key, which Stripe answers with the refund
+        // it made — so this is "check first", never a plain failure (TED-109).
+        throw Object.assign(new Error("Stripe did not answer, so this refund may have gone through. Check the child's wallet before trying again."), { uncertain: true });
+      }
         if (refund.error) {
           if (claimKey) await supabase.rpc("release_refund_intent", { p_camp_id: authedCampId, p_key: claimKey });
           throw new Error(refund.error.message);
@@ -304,11 +325,13 @@ serve(async (req) => {
         remainingToRefund = round2(remainingToRefund - chunk);
       } catch (chunkErr) {
         chunkError = (chunkErr as Error).message;
+        if ((chunkErr as any).uncertain) chunkUncertain = true;
         break;
       }
     }
 
     if (totalRefunded <= 0) {
+      if (chunkUncertain) return json({ uncertain: true, error: chunkError }, 200);
       throw new Error(chunkError || "Refund failed.");
     }
 
@@ -324,7 +347,7 @@ serve(async (req) => {
 
     console.log(`[stripe-canteen-refund] Refunded $${totalRefunded} for ${camperName} (camp ${authedCampId}) across ${refunds.length} deposit(s)${capped ? " (capped)" : ""}`);
 
-    return json({ totalRefunded, requested: round2(requested), capped, cappedReason, refunds });
+    return json({ totalRefunded, requested: round2(requested), capped, cappedReason, refunds, uncertain: chunkUncertain || undefined });
   } catch (err) {
     console.error("[stripe-canteen-refund] Error:", (err as Error).message);
     return json({ error: (err as Error).message }, 500);

@@ -1895,6 +1895,9 @@ window.refundAmtChanged = function() {
     const amtInput = document.getElementById('refundAmt');
     const btn = document.getElementById('refundBtn');
     if (!amtInput || !btn) return;
+    // Never re-enabled while a refund is on its way (TED-109): a second press
+    // then would be a second refund racing the first.
+    if (window._canteenRefundBusy) { btn.disabled = true; return; }
     const max = Number(amtInput.max) || 0;
     const val = Number(amtInput.value) || 0;
     btn.disabled = !(val > 0 && val <= max + 0.001); // small epsilon for float rounding
@@ -1935,6 +1938,8 @@ window.refundCanteenDeposit = async function() {
     const processorKey = await _getSnacksProcessorKey();
     const fnName = processorKey === 'stripe' ? 'stripe-canteen-refund' : 'payments-canteen-refund';
     if (warn) warn.style.display = 'none';
+    if (window._canteenRefundBusy) return;                  // one at a time (TED-109)
+    window._canteenRefundBusy = true;
     if (btn) { btn.disabled = true; btn.textContent = 'Refunding…'; }
     const _rc = getRoster()[name];
     const _rcid = _rc && /^\d+$/.test(String(_rc.camperId == null ? '' : _rc.camperId)) ? Number(_rc.camperId) : undefined;
@@ -1962,6 +1967,7 @@ window.refundCanteenDeposit = async function() {
                 res = await _send();
                 data = res && res.data;
             }
+            window._canteenRefundBusy = false;
             if (btn) { btn.disabled = false; btn.textContent = 'Refund'; }
             var hasError = !!(res && res.error) || !!(data && data.error);
             var err = hasError ? await _edgeFnErrorMessage(res) : null;
@@ -1978,6 +1984,7 @@ window.refundCanteenDeposit = async function() {
                 (data.capped && data.cappedReason ? ' — ' + data.cappedReason : ''));
             _refreshSnacksFromCloud();
         }, function(e) {
+            window._canteenRefundBusy = false;
             if (btn) { btn.disabled = false; btn.textContent = 'Refund'; }
             var msg = (e && e.message) || 'Could not process the refund.';
             if (warn) { warn.style.display = ''; warn.textContent = msg; }

@@ -133,11 +133,16 @@
             var careYear = String(who.careYear || '').slice(0, 4), guessed = false;
             if (!/^\d{4}$/.test(careYear)) {
                 careYear = ymd(e.date).slice(0, 4);
-                // A session with no dates: tuition charged in the autumn is
-                // for NEXT summer — camps enrol September to December for the
-                // coming season. Said on the statement, never silently assumed.
+                // A session with no dates. A year in its name ("Summer 2027")
+                // says it outright. Otherwise tuition charged in the autumn is
+                // for NEXT summer (camps enrol September to December for the
+                // coming season). Either way, for EVERY undated session it is
+                // said on the statement — never silently assumed (TED-101).
+                var named = String(who.session || '').match(/\b(19|20)\d{2}\b/);
                 var mo = Number(ymd(e.date).slice(5, 7));
-                if (who.session && mo >= 9 && /^\d{4}$/.test(careYear)) { careYear = String(Number(careYear) + 1); guessed = true; }
+                if (named) careYear = named[0];
+                else if (who.session && mo >= 9 && /^\d{4}$/.test(careYear)) careYear = String(Number(careYear) + 1);
+                if (who.session) guessed = true;
             }
             lots.push({
                 date: ymd(e.date), seq: idx, open: amt, amount: amt, careYear: careYear, careYearGuessed: guessed,
@@ -369,7 +374,7 @@
         lots.forEach(function (l) { if (l.careYearGuessed && l.session) guessedSessions[l.session] = l.careYear; });
         Object.keys(guessedSessions).forEach(function (ses) {
             report.warnings.push('Session “' + ses + '” has no start date, so its care is taken to be in ' + guessedSessions[ses] +
-                ' (charged in the autumn, for the next summer). Add its dates under Sessions to be certain.');
+                ' (from its name, or from when it was charged). Add its dates under Sessions to be certain which year it belongs to.');
         });
         if (carriedTotal > 0.004) {
             report.warnings.push('Includes ' + carriedTotal.toFixed(2) + ' paid before ' + year + ' for care given in ' + year +
