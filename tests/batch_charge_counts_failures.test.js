@@ -49,7 +49,8 @@ function world(answers) {
     };
     vm.createContext(ctx);
     const pending = ['_pendingChargeStoreKey', '_pendingChargeAll', '_pendingChargeGet', '_pendingChargeSet', '_pendingChargeClear'].map(cut).join('\n');
-    vm.runInContext(cut('chargeStoredCard') + '\n' + cut('batchCharge') + '\n' + pending + '\nthis.chargeStoredCard=chargeStoredCard;this.batchCharge=batchCharge;', ctx);
+    const onWay = ['_familyOnItsWay', '_onItsWayWords', '_recordOnItsWay', '_methodTypeCharged'].map(cut).join('\n');
+    vm.runInContext(cut('chargeStoredCard') + '\n' + cut('batchCharge') + '\n' + pending + '\n' + onWay + '\nthis.chargeStoredCard=chargeStoredCard;this.batchCharge=batchCharge;', ctx);
     return ctx;
 }
 
@@ -83,5 +84,8 @@ test('chargeStoredCard answers ok:true only when the money moved', async () => {
     const ctx = world({ cus_A: { status: 'succeeded', paymentIntentId: 'pi_A' }, cus_B: new Error('nope'), cus_C: { status: 'processing' } });
     assert.strictEqual((await ctx.chargeStoredCard('famA', 50, 'x', true)).ok, true);
     assert.strictEqual((await ctx.chargeStoredCard('famB', 50, 'x', true)).ok, false);
-    assert.strictEqual((await ctx.chargeStoredCard('famC', 50, 'x', true)).ok, false);
+    // a bank debit that has started is not paid yet, and not failed (TED-144)
+    const c = await ctx.chargeStoredCard('famC', 50, 'x', true);
+    assert.strictEqual(c.ok, false);
+    assert.strictEqual(c.pending, true);
 });

@@ -56,6 +56,24 @@ function round2(n: number): number {
   return Math.round(n * 100) / 100;
 }
 
+// A child whose canteen money has just been refunded has their auto-reload
+// switched off (TED-143): otherwise the next run tops the emptied wallet back
+// up from the parent's card — the day after the end-of-season Refund All, and
+// every week after. The parent's Link page shows why and can switch it back on.
+async function pauseAutoReload(supabase: ReturnType<typeof createClient>, campId: string,
+                               camperId: number | null, camperName: string, acct: Record<string, any> | undefined) {
+  const ar = acct && acct.autoReload;
+  if (!ar || ar.enabled !== true) return;
+  const next = Object.assign({}, ar, {
+    enabled: false,
+    disabledAt: new Date().toISOString(),
+    disabledReason: "switched off when the camp refunded the canteen balance — switch it back on if you still want it",
+  });
+  const { error } = await supabase.rpc("update_canteen_autoreload_state", {
+    p_camp_id: campId, p_camper_name: camperName, p_camper_id: camperId, p_autoreload: next });
+  if (error) console.warn(`[canteen-refund] could not switch off auto-reload for ${camperName}: ${error.message}`);
+}
+
 // The ledger, indexed ONCE per run (TED-139): each top-up used to re-scan the
 // whole ledger for its refunds, and the holds for what is on its way — at 1,000
 // children × 15 top-ups that was ~3 s of CPU, over Supabase's limit for a
@@ -459,6 +477,13 @@ serve(async (req) => {
       if (r.refunded > 0) { totalRefunded = round2(totalRefunded + r.refunded); refundedCount++; }
       if (r.error) failedCount++;
       else if (r.skipped) skippedCount++;
+    }
+    // The children refunded here have their auto-reload switched off (TED-143).
+    for (let i = 0; i < results.length; i++) {
+      if (results[i].refunded > 0) {
+        const who = candidates[i].who;
+        await pauseAutoReload(supabase, authedCampId, who.camperId, who.camperName, accounts[who.camperName]);
+      }
     }
 
     console.log(`[stripe-canteen-refund-all] camp ${authedCampId}: refunded $${totalRefunded} across ${refundedCount} camper(s), ${skippedCount} skipped, ${failedCount} failed`);

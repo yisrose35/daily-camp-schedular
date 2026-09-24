@@ -50,7 +50,13 @@ test('no edge function reads the campistrySnacks document', () => {
     // (canteen_autoreload_accounts), whether a camper exists (canteen_camper_known).
     // Inventory is the only thing the document still owns, and no edge function
     // touches inventory.
-    const offenders = edgeFunctions.filter(f => /["']campistrySnacks["']/.test(f.src)).map(f => f.name);
+    // The office's SETTINGS do still live in the document, and are never
+    // stripped — the "charge nobody automatically" switch (TED-143) is one. A
+    // function may read those; it may not read accounts or the ledger there.
+    const offenders = edgeFunctions.filter(f => /["']campistrySnacks["']/.test(f.src)
+        && (!/\.settings\b/.test(f.src)
+            || /(snacks|doc|kv\.value|value)\??\.(accounts|transactions)\b|\[["'](accounts|transactions)["']\]/.test(f.src)))
+        .map(f => f.name);
     assert.deepStrictEqual(offenders, [],
         'these read campistrySnacks from camp_state_kv — its accounts and transactions '
         + 'are stripped on every save since 219, so whatever they find is frozen or empty:\n  '

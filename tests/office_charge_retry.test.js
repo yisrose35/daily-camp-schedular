@@ -25,6 +25,10 @@ const SRC = [
     cut(/function _pendingChargeGet\(famKey,amount\)\{[\s\S]*?\n\}\n/),
     cut(/function _pendingChargeSet\(famKey,amount,v\)\{[\s\S]*?\n\}\n/),
     cut(/function _pendingChargeClear\(famKey,amount\)\{[\s\S]*?\n\}\n/),
+    cut(/function _familyOnItsWay\(famKey\)\{[\s\S]*?\n\}\n/),
+    cut(/function _onItsWayWords\(w\)\{[\s\S]*?\n\}\n/),
+    cut(/function _recordOnItsWay\(f,famKey,piId,amount\)\{[\s\S]*?\n\}\n/),
+    cut(/function _methodTypeCharged\(f\)\{[\s\S]*?\n\}\n/),
 ].join('\n');
 
 function page(answers, dialogs) {
@@ -96,6 +100,7 @@ T.rpc.camp_families_object = () => ({ gold: { name: 'Gold', stripeCustomerId: 'c
 const made: Record<string, any> = {}; let n = 0, posts = 0; T.tables.__charged = [];
 T.fetch = (url: string, init: any) => {
   if (url.includes('/payment_methods/')) return { id: 'pm_G', customer: 'cus_G' };
+  if (url.includes('/payment_intents?customer=')) return { object: 'list', data: [], has_more: false };
   if (init.method === 'POST' && url.endsWith('/payment_intents')) {
     posts++;
     const k = init.headers['Idempotency-Key'];
@@ -121,6 +126,7 @@ T.tables.camps = [{ id: 'camp1', owner: 'u-owner', name: 'Camp One' }];
 T.rpc.camp_families_object = () => ({ gold: { name: 'Gold', stripeCustomerId: 'cus_G' } });
 T.fetch = (url: string, init: any) => {
   if (url.includes('/payment_methods/')) return { id: 'pm_G', customer: 'cus_G' };
+  if (url.includes('/payment_intents?customer=')) return { object: 'list', data: [], has_more: false };
   if (init.method === 'POST' && url.endsWith('/payment_intents')) return { __status: 402, error: { type: 'card_error', code: 'card_declined', message: 'Your card was declined.' } };
   return {};
 };

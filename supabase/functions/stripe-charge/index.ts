@@ -167,6 +167,38 @@ async function stripeGet(endpoint: string) {
   return resp.json();
 }
 
+// ── A bank debit still on its way (TED-144) ───────────────────────────────
+// A bank (ACH) debit is "processing" for several business days before the
+// bank settles or returns it, and until then the family's balance still reads
+// in full. So pressing Charge Card again — on another computer, or the next
+// day — started a SECOND debit for the same bill. Stripe is asked, not this
+// camp's own records (a webhook may not have arrived yet): any of this
+// family's payments at this camp still processing — an office charge or an
+// autopay instalment, not a canteen top-up or a photo purchase, which have
+// their own money — stops another charge until it settles or fails.
+// Answers { pi } for the one on its way, {} for none, { unknown } when Stripe
+// could not be asked (then nothing is charged: a second debit is the one
+// mistake this exists to prevent).
+const OWN_MONEY_SOURCES = new Set(["campistry-canteen-deposit", "campistry-link-photo-purchase", "registration_deposit"]);
+async function bankDebitInFlight(campId: string, customerId: string): Promise<{ pi?: any; unknown?: boolean }> {
+  const since = Math.floor(Date.now() / 1000) - 30 * 86400;
+  let list: any;
+  try {
+    const resp = await fetch(`${STRIPE_API}/payment_intents?customer=${encodeURIComponent(customerId)}&limit=100&created%5Bgte%5D=${since}`, {
+      headers: { "Authorization": `Bearer ${STRIPE_SECRET}` },
+    });
+    if (!resp.ok) return { unknown: true };
+    list = await resp.json();
+  } catch (_) {
+    return { unknown: true };
+  }
+  if (!list || !Array.isArray(list.data)) return { unknown: true };
+  const pi = list.data.find((x: any) => x && x.status === "processing"
+    && String(x.metadata?.campId || "") === campId
+    && !OWN_MONEY_SOURCES.has(String(x.metadata?.source || "")));
+  return pi ? { pi } : {};
+}
+
 // ── An autopay charge the card company never answered (276), answered "it
 // went through" by the office (TED-120) ────────────────────────────────────
 // On an autopay night many families pay the same amount, so a payment id
@@ -311,6 +343,23 @@ serve(async (req) => {
           { status: 400, headers: { ...corsHeaders, "Content-Type": "application/json" } }
         );
       }
+    }
+
+    // A bank debit for this family still on its way: no second charge (TED-144).
+    const inFlight = await bankDebitInFlight(authedCampId, customerId);
+    if (inFlight.unknown) {
+      return new Response(JSON.stringify({ notCharged: true,
+        error: "Could not check with Stripe whether an earlier bank debit for this family is still on its way, so nothing was charged. Try again in a minute." }),
+        { status: 200, headers: { ...corsHeaders, "Content-Type": "application/json" } });
+    }
+    if (inFlight.pi) {
+      const p = inFlight.pi;
+      const amt = ((Number(p.amount) || 0) / 100).toFixed(2);
+      const day = p.created ? new Date(Number(p.created) * 1000).toISOString().slice(0, 10) : "";
+      return new Response(JSON.stringify({ onItsWay: true, paymentIntentId: p.id, amount: (Number(p.amount) || 0) / 100,
+        started: day, paymentMethodType: (p.payment_method_types && p.payment_method_types[0]) || "",
+        error: `A $${amt} bank debit for this family${day ? ", started " + day + "," : ""} is still on its way — bank debits take a few business days. Nothing more was charged; charge again only if that one fails.` }),
+        { status: 200, headers: { ...corsHeaders, "Content-Type": "application/json" } });
     }
 
     // Create PaymentIntent — off_session means customer not present

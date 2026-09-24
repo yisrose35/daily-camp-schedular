@@ -269,7 +269,9 @@ test('TED-131: a failed refund not on Campistry\'s books still alerts the platfo
 
 test('TED-131: the same unbooked failure again (refund.updated after refund.failed) does not alert twice', () => {
     const r = hook(refundEvent('refund.updated', 'failed'),
-        `T.rpc.reverse_failed_stripe_refund = () => ({ success: false, error: 'refund_not_found', firstNotice: false });`);
+        // the first delivery claimed the alert (claim_refund_failure_alert)
+        `T.rpc.reverse_failed_stripe_refund = () => ({ success: false, error: 'refund_not_found', firstNotice: false });
+T.rpc.claim_refund_failure_alert = () => false;`);
     assert.strictEqual(alerted(r), 0, JSON.stringify(r.logs));
 });
 
@@ -278,8 +280,66 @@ test('TED-131: a booked failure alerts once; a repeat does not', () => {
         `T.rpc.reverse_failed_stripe_refund = () => ({ success: true, canteen: true, amount: 20, firstNotice: true });`);
     assert.strictEqual(alerted(first), 1);
     const again = hook(refundEvent('charge.refund.updated', 'failed'),
-        `T.rpc.reverse_failed_stripe_refund = () => ({ success: true, alreadyRecorded: true, canteen: true });`);
+        `T.rpc.reverse_failed_stripe_refund = () => ({ success: true, alreadyRecorded: true, canteen: true });
+T.rpc.claim_refund_failure_alert = () => false;`);
     assert.strictEqual(alerted(again), 0);
+});
+
+// ── TED-150: an alert email that did not send is sent on the next delivery ──
+
+function deliveries(n, extra) {
+    return hook(refundEvent('refund.failed', 'failed'), `T.env.RESEND_API_KEY = 're_test';
+const alertsClaimed = new Set<string>();
+T.rpc.claim_refund_failure_alert = (a: any) => { const first = !alertsClaimed.has(a.p_refund_id); alertsClaimed.add(a.p_refund_id); return first; };
+T.rpc.release_refund_failure_alert = (a: any) => alertsClaimed.delete(a.p_refund_id);
+T.rpc.reverse_failed_stripe_refund = () => ({ success: true, canteen: true, amount: 20, firstNotice: true });
+${extra}
+Object.defineProperty(T, 'requests', { get: () => Array(${n}).fill(T.request) });`);
+}
+
+test('TED-150: the email service fails on the first delivery — 500, and the next delivery sends the alert', () => {
+    const r = deliveries(3, `let tries = 0; T.emailFails = () => ++tries === 1;`);
+    assert.deepStrictEqual(r.responses.map(x => x.status), [500, 200, 200], JSON.stringify(r.responses.map(x => x.body)));
+    assert.strictEqual(r.emails.length, 1, 'alerts sent: ' + r.emails.length);
+    assert.match(r.emails[0].subject, /a \$20\.00 refund failed/);
+    assert.strictEqual(r.rpcs.filter(c => c.name === 'release_refund_failure_alert').length, 1);
+});
+
+test('TED-150: a sent alert is still sent once, however often Stripe repeats the failure', () => {
+    const r = deliveries(4, '');
+    assert.deepStrictEqual(r.responses.map(x => x.status), [200, 200, 200, 200]);
+    assert.strictEqual(r.emails.length, 1);
+    assert.strictEqual(r.rpcs.filter(c => c.name === 'release_refund_failure_alert').length, 0);
+});
+
+test('TED-150: with no email key there is nothing to retry — the delivery is answered, the camp\'s notice stands', () => {
+    const r = hook(refundEvent('refund.failed', 'failed'),
+        `T.rpc.reverse_failed_stripe_refund = () => ({ success: true, canteen: true, amount: 20, firstNotice: true });`);
+    assert.strictEqual(r.status, 200);
+    assert.strictEqual(alerted(r), 1);
+});
+
+test('TED-150: with no camp either, a failed email is tried again on the next delivery', () => {
+    const r = deliveries(2, `T.fetch = () => ({ id: 'x', metadata: {} }); let tries = 0; T.emailFails = () => ++tries === 1;`);
+    assert.deepStrictEqual(r.responses.map(x => x.status), [500, 200]);
+    assert.strictEqual(r.emails.length, 1);
+});
+
+// ── TED-148: the surcharge's share goes back on the bill with the put-back ──
+
+test('TED-148: a family refund put back — its card-surcharge credit is taken back (the database keeps it to once)', () => {
+    const r = deliveries(2, `T.rpc.reverse_failed_stripe_refund = () => ({ success: true, family: true, familyKey: 'slate', amount: 1000, firstNotice: true });
+T.rpc.undo_card_fee_return = (a: any) => ({ success: true, undone: 1, amount: 29.13 });`);
+    const u = r.rpcs.filter(c => c.name === 'undo_card_fee_return');
+    assert.ok(u.length >= 1, 'the surcharge credit was left on the bill');
+    assert.deepStrictEqual(u[0].args, { p_camp_id: 'camp1', p_family_key: 'slate', p_refund_id: 're_16' });
+});
+
+test('TED-148: the database cannot take the credit back yet — 500, so Stripe sends it again', () => {
+    const r = hook(refundEvent('refund.failed', 'failed'),
+        `T.rpc.reverse_failed_stripe_refund = () => ({ success: true, family: true, familyKey: 'slate', amount: 1000, firstNotice: true });
+T.rpc.undo_card_fee_return = () => { throw new Error('connection refused'); };`);
+    assert.strictEqual(r.status, 500);
 });
 
 test('TED-131/137: a failed refund with no camp anywhere alerts the platform — once, however often Stripe sends it', () => {
@@ -385,9 +445,9 @@ test('TED-132: a tuition refund that failed and was put back can be refunded to 
     const refund = { id: 'ref_1', family: 'Gold', amount: -500, refundOf: 'pay_1', stripeRefundId: 're_f1' };
     const putBack = { id: 'refail_re_f1', family: 'Gold', familyKey: 'gold', amount: 500, method: 'Refund failed', failedRefundId: 're_f1' };
     const run = (rows) => {
-        const ctx = { finPayments: rows, normalizePersonId: () => null, camperNameById: () => null };
+        const ctx = { finPayments: rows, families: {}, normalizePersonId: () => null, camperNameById: () => null };
         vm.createContext(ctx);
-        vm.runInContext(['_famRefundablePayments', '_refundedFrom', '_famRefundableOnlineAll'].map(cut).join('\n')
+        vm.runInContext(['_famRefundablePayments', '_famPaymentsIn', '_refundedFrom', '_famRefundableOnlineAll'].map(cut).join('\n')
             + '\nthis.f = _famRefundableOnlineAll;', ctx);
         return JSON.parse(JSON.stringify(ctx.f({ name: 'Gold', camperIds: [] }).map(d => [d.p.id, d.remaining])));
     };
@@ -481,9 +541,9 @@ test('TED-142: Take Out Cash still keeps the floor, and says so — and where th
     const S = { cashDailyMax: 0, cashReasonRequired: false };
     const v = C.validate({ account: { balance: 50, balanceFloor: 10 }, transactions: [], camper: 'Avi', date: '2026-08-20', settings: S, amount: 50 });
     assert.strictEqual(v.ok, false);
-    assert.match(v.error, /Only \$40\.00 available to take out — the other \$10\.00 is under the balance floor; refund it to the card \(Refund\) instead/);
+    assert.match(v.error, /Only \$40\.00 available to take out — the other \$10\.00 is under the balance floor; refund it to the card \(Refund\), or, if it was paid in cash, at the end of the season use Me → Billing → the family → Close out…, which takes the whole balance/);
     const w = C.validate({ account: { balance: 10, balanceFloor: 10 }, transactions: [], camper: 'Avi', date: '2026-08-20', settings: S, amount: 5 });
-    assert.match(w.error, /under the balance floor — it cannot be taken out as cash; refund it to the card/);
+    assert.match(w.error, /under the balance floor — it cannot be taken out as cash here; refund it to the card \(Refund\), or, if it was paid in cash, .*Close out…, which takes the whole balance/);
     // when the DAILY limit is what stops it, the floor is not blamed
     const d = C.validate({ account: { balance: 50, balanceFloor: 10 }, transactions: [], camper: 'Avi', date: '2026-08-20',
         settings: { cashDailyMax: 20, cashReasonRequired: false }, amount: 30 });

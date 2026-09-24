@@ -76,7 +76,7 @@
         // refund to the card returns it — cash to the child does not.
         var floorHolds = !cfg.cashAllowNegative && floor > 0 && balance > 0;
         var reason = (max === 0)
-            ? (floorHolds ? 'The $' + Math.min(balance, floor).toFixed(2) + ' left is under the balance floor — it cannot be taken out as cash; refund it to the card (Refund) instead'
+            ? (floorHolds ? 'The $' + Math.min(balance, floor).toFixed(2) + ' left is under the balance floor — it cannot be taken out as cash here; refund it to the card (Refund), or, if it was paid in cash, at the end of the season use Me → Billing → the family → Close out…, which takes the whole balance'
                           : 'No available balance')
             : '';
 
@@ -116,7 +116,7 @@
         if (lim.reason) return { ok: false, error: lim.reason, amount: amount, limit: lim };
         if (lim.max !== Infinity && amount > lim.max + 1e-9) {
             return { ok: false, error: 'Only $' + lim.max.toFixed(2) + ' available to take out'
-                + (lim.floor > 0 ? ' — the other $' + Math.min(lim.balance - lim.max, lim.floor).toFixed(2) + ' is under the balance floor; refund it to the card (Refund) instead' : ''),
+                + (lim.floor > 0 ? ' — the other $' + Math.min(lim.balance - lim.max, lim.floor).toFixed(2) + ' is under the balance floor; refund it to the card (Refund), or, if it was paid in cash, at the end of the season use Me → Billing → the family → Close out…, which takes the whole balance' : ''),
                 amount: amount, limit: lim };
         }
         return { ok: true, error: '', amount: amount, limit: lim };

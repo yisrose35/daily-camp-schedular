@@ -43,6 +43,7 @@ T.fetch = (url: string, init: any) => {
   // a refund as it stands now — asked before a settled one is replayed (TED-136)
   if (url.includes('/refunds/re_')) return { id: url.split('/refunds/')[1], status: 'succeeded', amount: 10000 };
   if (url.endsWith('/refunds')) return { id: 're_' + T.fetches.length, status: 'succeeded', amount: 10000 };
+  if (url.includes('/payment_intents?customer=')) return { object: 'list', data: [], has_more: false };
   if (url.endsWith('/payment_intents')) return { id: 'pi_new', status: 'succeeded' };
   return {};
 };

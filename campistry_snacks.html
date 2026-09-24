@@ -307,6 +307,14 @@
                     </select>
                     <span class="form-hint">Off means a camper can never take out more cash than they hold.</span>
                 </div>
+                <div class="form-group">
+                    <label class="form-label">Parents' auto-reload</label>
+                    <select class="form-select" id="setAutoReloadOff">
+                        <option value="no">On — parents' cards are topped up automatically</option>
+                        <option value="yes">Off — charge nobody automatically</option>
+                    </select>
+                    <span class="form-hint">Switch off at the end of the season, before Refund All. It also stops by itself after the camp's end date (Dashboard → Camp dates).</span>
+                </div>
             </div>
         </div>
     </div>
@@ -571,14 +579,14 @@ function snacksNav(page, btn) {
 <script src="integration_hooks.js?v=20260923-22"></script>
 <script src="campistry_workspace_ui.js?v=20260917-02"></script>
 <script src="campistry_payments.js?v=20260904-01"></script>
-<script src="campistry_snacks_cash.js?v=20260924-01"></script>
+<script src="campistry_snacks_cash.js?v=20260924-02"></script>
 <script src="xlsx@0.18.5.js?v=20260903-03"></script>
 <script src="campistry_enrollment_window.js?v=20260923-20"></script>
 <script src="campistry_presence.js?v=20260923-21"></script>
 <!-- The master key: which session the whole program is showing. Pure rule; the
      runtime half (the pin, the memo) is in integration_hooks.js. -->
 <script src="campistry_session_scope.js?v=20260918-09"></script>
-<script src="campistry_snacks.js?v=20260924-08"></script>
+<script src="campistry_snacks.js?v=20260924-09"></script>
 <script src="campistry_shop_core.js?v=20260903-03"></script>
 <script src="campistry_snacks_shop.js?v=20260923-21"></script>
 <script>

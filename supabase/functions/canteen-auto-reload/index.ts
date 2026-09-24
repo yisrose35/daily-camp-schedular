@@ -424,6 +424,27 @@ serve(async (req) => {
   for (const c of (allCamps || [])) {
     if (c.payment_processor_key && c.payment_processor_key !== "stripe") campProcessors.set(c.id, c.payment_processor_key);
   }
+  // The camp's own say, per camp (TED-143): the office can switch auto-reload
+  // off for the whole camp (Snacks → Settings), and once the camp's season is
+  // over (campDates.endDate) nothing is charged — a parent who left the dates
+  // blank was otherwise charged after the end-of-season Refund All, the next
+  // day, and every week after.
+  const campIdsHere = [...byCamp.keys()];
+  const campOff = new Map<string, string>();   // camp -> why it is off
+  if (campIdsHere.length) {
+    const { data: kvRows } = await supabase.from("camp_state_kv").select("camp_id, key, value")
+      .in("camp_id", campIdsHere).in("key", ["campDates", "campistrySnacks"]);
+    for (const kv of (kvRows || []) as Record<string, any>[]) {
+      const v = kv.value || {};
+      if (kv.key === "campistrySnacks" && v.settings && v.settings.autoReloadOff === true) {
+        campOff.set(String(kv.camp_id), "switched_off_by_camp");
+      }
+      if (kv.key === "campDates" && typeof v.endDate === "string" && /^\d{4}-\d{2}-\d{2}$/.test(v.endDate) && today > v.endDate
+          && !campOff.has(String(kv.camp_id))) {
+        campOff.set(String(kv.camp_id), "season_over");
+      }
+    }
+  }
   const credCache = new Map<string, Record<string, string> | null>();
   async function byopCredentials(campId: string): Promise<Record<string, string> | null> {
     if (credCache.has(campId)) return credCache.get(campId) || null;
@@ -452,6 +473,11 @@ serve(async (req) => {
   details.push(...unresolvable);
 
   for (const row of (rows || [])) {
+    const offWhy = campOff.get(String(row.camp_id));
+    if (offWhy) {
+      details.push({ camp: row.camp_id, result: "skipped_" + offWhy });
+      continue;
+    }
     for (const { camperName, camperId, acct } of row.accounts) {
       // The number decides; a name-only caller (no number sent) matches by name.
       if (camperIdScope != null ? camperId !== camperIdScope : (scopeCamperName && camperName !== scopeCamperName)) continue;

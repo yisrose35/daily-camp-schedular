@@ -66,7 +66,8 @@ const DEFAULT_SNACKS_SETTINGS = {
     defaultDailyLimit: 10,
     cashDailyMax: 20,           // per camper, per day; 0 = uncapped
     cashReasonRequired: true,
-    cashAllowNegative: false    // off = a camper can't withdraw money they don't have
+    cashAllowNegative: false,   // off = a camper can't withdraw money they don't have
+    autoReloadOff: false        // on = parents' auto-reload may charge (TED-143)
 };
 
 // ==========================================================================
@@ -1032,6 +1033,7 @@ function rSettings() {
     set('setCashDailyMax', cfg.cashDailyMax);
     set('setCashReasonRequired', cfg.cashReasonRequired ? 'yes' : 'no');
     set('setCashAllowNegative', cfg.cashAllowNegative ? 'yes' : 'no');
+    set('setAutoReloadOff', cfg.autoReloadOff ? 'yes' : 'no');
 
     const box = document.getElementById('setPayMethods');
     if (box) {
@@ -1090,7 +1092,10 @@ window.saveSettingsForm = function() {
         defaultDailyLimit: num('setDefaultLimit', DEFAULT_SNACKS_SETTINGS.defaultDailyLimit),
         cashDailyMax: num('setCashDailyMax', DEFAULT_SNACKS_SETTINGS.cashDailyMax),
         cashReasonRequired: (document.getElementById('setCashReasonRequired') || {}).value !== 'no',
-        cashAllowNegative: (document.getElementById('setCashAllowNegative') || {}).value === 'yes'
+        cashAllowNegative: (document.getElementById('setCashAllowNegative') || {}).value === 'yes',
+        // the office's off switch for every parent's auto-reload (TED-143);
+        // canteen-auto-reload reads it from this document's settings
+        autoReloadOff: (document.getElementById('setAutoReloadOff') || {}).value === 'yes'
     });
     saveSnacksData(snacks);
     rSettings(); popSelects();

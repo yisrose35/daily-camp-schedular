@@ -457,7 +457,7 @@
                         <input type="date" class="lk-input" id="arStopDate">
                     </div>
                 </div>
-                <p class="ar-hint">Leave blank to run year-round. Otherwise auto-reload only charges within this window — e.g. just for the camp season.</p>
+                <p class="ar-hint">The end date starts at the last day of camp. Auto-reload only charges within this window — and the camp stops it after the season either way.</p>
             </div>
         </div>
         <div class="ar-option" id="arFreqOption">
@@ -2557,6 +2557,14 @@ function _renderAutoReload(c){
     var scReload=document.getElementById('arScReload'); if(scReload) scReload.value=ar.scheduleReloadAmount!=null?ar.scheduleReloadAmount:25;
     var stD=document.getElementById('arStartDate'); if(stD) stD.value=ar.startDate||'';
     var spD=document.getElementById('arStopDate'); if(spD) spD.value=ar.stopDate||'';
+    // Not set up yet: the end date starts at the camp's last session day
+    // (TED-143) — left blank, auto-reload kept charging after camp was over.
+    // The parent can clear or change it before saving.
+    if(spD && !ar.stopDate && !ar.enabled && c){
+        var _sd=((window._campSessionsByCamp||{})[c.campId]||{}).sessions||[];
+        var _last=_sd.reduce(function(m,x){return x&&x.endDate&&(!m||x.endDate>m)?x.endDate:m},null);
+        if(_last && _last>=new Date().toISOString().slice(0,10)) spD.value=_last;
+    }
     var mxR=document.getElementById('arMaxReloads'); if(mxR) mxR.value=ar.maxReloadsPerPeriod!=null?ar.maxReloadsPerPeriod:1;
     var pdD=document.getElementById('arPeriodDays'); if(pdD) pdD.value=ar.reloadPeriodDays!=null?ar.reloadPeriodDays:1;
     _arRenderSessionPicker(c);
@@ -2589,6 +2597,11 @@ function _renderAutoReload(c){
         _arStatus('almost','<strong>Almost there</strong> — save a card to activate auto-reload.'+windowNote);
         cardBtn.style.display=''; cardBtn.textContent='Add a card';
         offBtn.style.display='';
+    } else if(!ar.enabled && ar.disabledReason && (Number(ar.consecutiveFailures)||0)<3){
+        // switched off by the camp — at the end-of-season refund, say (TED-143)
+        _arStatus('paused','<strong>Auto-reload was switched off</strong> — '+_escHtml(ar.disabledReason)+'.');
+        cardBtn.style.display='none';
+        offBtn.style.display='none';
     } else if(!ar.enabled && (Number(ar.consecutiveFailures)||0)>=3){
         _arStatus('paused','<strong>Auto-reload paused</strong> — your card was declined ('+_escHtml(ar.lastFailureReason||'payment failed')+'). Update your card to resume.');
         cardBtn.style.display=''; cardBtn.textContent='Update card';

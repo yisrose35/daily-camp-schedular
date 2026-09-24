@@ -276,6 +276,16 @@ function todayISO() { return new Date().toISOString().split("T")[0]; }
 //     this below the sum of what's left, so a later installment gets capped
 //     at whatever's actually still owed instead of blindly charging its
 //     original scheduled amount and overcollecting.
+// A processor payment still processing, started in the last fortnight (TED-144).
+// A bank debit settles or is returned within days; an older row stuck at
+// "pending" is a record nobody finished, not money on its way.
+function onItsWay(p: Record<string, any>): boolean {
+  if (!(Number(p.amount) > 0)) return false;
+  if (!p.stripePaymentIntentId && !p.byopTransactionId) return false;
+  const at = Number(p.timestamp) || (p.date ? Date.parse(String(p.date)) : NaN);
+  return Number.isFinite(at) && Date.now() - at < 14 * 86400000;
+}
+
 function computeFamilyBalance(
   me: Record<string, any>,
   f: Record<string, any>,
@@ -743,6 +753,29 @@ serve(async (req) => {
         } catch (_) { /* already told (one notice per question) */ }
         details.push({ camp: row.camp_id, family: f.name, result: "waiting_for_deposit_review" });
         continue;
+      }
+      // A bank debit for this family still on its way that autopay did NOT
+      // start (TED-144) — the office's Charge Card, a pay link. Until the bank
+      // settles it the balance reads in full, so charging tonight would take
+      // the same bill twice; marking instalments "covered" by it would lose
+      // them if the bank returns it. So nothing is decided for this family
+      // until it has an answer: settled, it counts as paid; returned, the
+      // next run charges as usual. Autopay's own debits are held by
+      // pendingCharge below, per plan.
+      {
+        const ownHeld = new Set(plans.map((p) => p && p.pendingCharge && p.pendingCharge.paymentIntentId)
+          .filter(Boolean).map(String));
+        const camperIdsF: string[] = Array.isArray(f.camperIds) ? f.camperIds : [];
+        const inFlight = (Array.isArray(me.finance?.payments) ? me.finance.payments : []).find((p: any) =>
+          p && p.status === "pending" && onItsWay(p)
+          && (p.familyKey === famKey || (!p.familyKey && camperIdsF.includes(p.family)))
+          && !ownHeld.has(String(p.stripePaymentIntentId || "")));
+        if (inFlight) {
+          details.push({ camp: row.camp_id, family: f.name, amount: Number(inFlight.amount) || 0,
+                         result: "waiting_for_office_bank_debit", paymentIntentId: inFlight.stripePaymentIntentId || inFlight.byopTransactionId,
+                         reason: "a bank debit started " + String(inFlight.date || "recently") + " is still on its way" });
+          continue;
+        }
       }
       // An earlier version held these families through the card-failure flag;
       // once the question is answered that flag must not keep autopay waiting.

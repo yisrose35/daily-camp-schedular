@@ -63,7 +63,10 @@ test('TED-067: cashing out a child\'s canteen money takes it off the CANTEEN acc
     vm.runInContext(`_applyCloseout('gold',{steps:[{kind:'canteen',camper:'Avi Gold',do:'cash',amount:6}]})`, ctx);
     await settle();
     assert.strictEqual(bal(ctx), 0);
-    const c = ctx.calls.find(x => x.fn === 'canteen_office_cash_out');
+    // 280 (TED-142/145): the season's own close-out, not the till's cash-out
+    // (whose $20-a-day cash limit and the parent's floor kept money back)
+    assert.ok(!ctx.calls.some(x => x.fn === 'canteen_office_cash_out'), 'the close-out went through the till\'s limits');
+    const c = ctx.calls.find(x => x.fn === 'canteen_season_closeout');
     assert.ok(c, 'the canteen account was not debited');
     assert.strictEqual(c.args.p_amount, 6);
     assert.strictEqual(c.args.p_camper_id, 4, 'the child is named by number');

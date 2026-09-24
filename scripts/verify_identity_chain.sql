@@ -1,5 +1,5 @@
 -- ============================================================================
--- Confirm migrations 222-279 are in and doing their job.
+-- Confirm migrations 222-281 are in and doing their job.
 --
 -- Paste the whole thing into the Supabase SQL Editor. It is READ ONLY — one
 -- SELECT, nothing is created, changed or deleted, and the two purge functions
@@ -653,6 +653,10 @@ UNION ALL
                OR to_regprocedure('public.release_canteen_refund_hold(uuid,text,interval)') IS NULL
                OR pg_get_functiondef(to_regprocedure('public.canteen_refund_view(uuid)')) !~ 'canteen_refund_holds'
           THEN 'apply 275 BEFORE redeploying the four canteen refund functions — every canteen refund fails without it'
+          -- An earlier copy held the parent's balance floor back from a refund
+          -- (TED-142); today's takes the whole balance (TED-151).
+          WHEN pg_get_functiondef(to_regprocedure('public.reserve_canteen_refund(uuid,text,text,numeric,text,text,text,bigint)')) ~ 'balanceFloor'
+          THEN 'apply 275 again — an earlier copy is in place, and it keeps the balance floor back from refunds'
           ELSE 'ok' END),
     -- An autopay charge the card company never answered waits for the office (TED-113).
     ('276  an unanswered autopay charge waits for the office',
@@ -682,6 +686,22 @@ UNION ALL
                OR has_function_privilege('authenticated', 'public.resolve_unconfirmed_autopay_checked(uuid,text,text,text)', 'EXECUTE')
                OR has_function_privilege('authenticated', 'public._record_autopay_answer(uuid,text,text,boolean,text,boolean)', 'EXECUTE')
           THEN 'apply 279 BEFORE redeploying stripe-charge — another family''s payment pasted into "it went through" is credited twice'
+          ELSE 'ok' END),
+    -- The season close-out takes the whole wallet with its own write (TED-142/145).
+    ('280  the season close-out takes the whole wallet',
+     CASE WHEN to_regprocedure('public.canteen_season_closeout(uuid,bigint,text,numeric,text)') IS NULL
+               OR has_function_privilege('anon', 'public.canteen_season_closeout(uuid,bigint,text,numeric,text)', 'EXECUTE')
+          THEN 'apply 280 BEFORE reloading Me — the close-out cannot take a child''s canteen money off'
+          ELSE 'ok' END),
+    -- A failed refund takes its card-surcharge share back; a failed alert email
+    -- is sent again (TED-148, TED-150).
+    ('281  a failed refund takes its surcharge share back',
+     CASE WHEN to_regprocedure('public.undo_card_fee_return(uuid,text,text)') IS NULL
+               OR to_regprocedure('public.release_refund_failure_alert(text)') IS NULL
+          THEN 'apply 281 BEFORE deploying stripe-webhook — a failed refund leaves its surcharge credit on the bill, and the webhook answers 500 to the failure'
+          WHEN has_function_privilege('authenticated', 'public.undo_card_fee_return(uuid,text,text)', 'EXECUTE')
+               OR has_function_privilege('authenticated', 'public.release_refund_failure_alert(text)', 'EXECUTE')
+          THEN 'apply 281 again — a signed-in browser can call the webhook''s own functions'
           ELSE 'ok' END)
     ) AS x(item, result)
 

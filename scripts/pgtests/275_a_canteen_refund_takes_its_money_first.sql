@@ -151,3 +151,21 @@ BEGIN
     IF r IS DISTINCT FROM 'ok' THEN RAISE EXCEPTION 'the checking script''s 275 row says: %', r; END IF;
 END $$;
 ROLLBACK;
+
+-- TED-151: an earlier copy of 275 (one that held the balance floor back) is
+-- caught by the checking script, not passed as "ok"
+BEGIN;
+DO $$
+DECLARE d text := pg_get_functiondef('public.reserve_canteen_refund(uuid,text,text,numeric,text,text,text,bigint)'::regprocedure);
+BEGIN
+    EXECUTE replace(d, 'v_avail := round(COALESCE(NULLIF(v_acct ->> ''balance'', '''')::numeric, 0), 2);',
+        'v_avail := round(COALESCE(NULLIF(v_acct ->> ''balance'', '''')::numeric, 0) - COALESCE(NULLIF(v_acct ->> ''balanceFloor'', '''')::numeric, 0), 2);');
+END $$;
+CREATE TEMP TABLE v275old AS :verify_q
+DO $$
+DECLARE r text;
+BEGIN
+    SELECT result INTO r FROM v275old WHERE item LIKE '275%';
+    IF r NOT LIKE 'apply 275 again%' THEN RAISE EXCEPTION 'TED-151: an earlier 275 passed the checking script: %', r; END IF;
+END $$;
+ROLLBACK;

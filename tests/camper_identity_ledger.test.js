@@ -168,6 +168,9 @@ const FUNCTIONS_ON_NAMES = [
     // anything by it.
     'canteen_office_cash_out',
     'canteen_office_credit',
+    // 280's season close-out. Takes p_camper_id, the name only for an account
+    // with no number — the same shape as the office's other canteen writers.
+    'canteen_season_closeout',
     'canteen_office_set_limit',
     // 243's existence check for the payment edge functions. It answers "is this
     // a camper here?" and moves nothing; the name is what those callers are
@@ -289,6 +292,7 @@ const WHY_THE_NAME_IS_SAFE = {
     add_pickup_alert_league_recipients: 'takes an id',
     canteen_office_cash_out: 'takes an id',
     canteen_office_credit: 'takes an id',
+    canteen_season_closeout: 'takes an id',            // 280
     canteen_office_set_limit: 'takes an id',
     create_cardknox_checkout_intent: 'takes an id',
     mark_pickup_alert_league_checked: 'takes an id',

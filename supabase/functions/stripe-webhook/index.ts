@@ -180,6 +180,24 @@ async function upsertPayment(
   // payment for the same charge. Both the match and the write happen under one
   // row lock, which also makes Stripe's routine webhook retries safe — the
   // duplicate delivery sees the first one's row. See migration 168.
+  // Stripe does not promise the order of its events. A "processing" event that
+  // lands AFTER "succeeded" (a retried delivery, a slow queue) used to patch
+  // the paid row back to pending — the family owed the money again, and
+  // Charge Card offered to debit them a second time (TED-144). So a processing
+  // event is checked against the payment as it stands now, and does nothing
+  // once the payment has a final answer.
+  if (status === "pending" && STRIPE_SECRET && pi.id) {
+    try {
+      const resp = await fetch(`${STRIPE_API}/payment_intents/${encodeURIComponent(String(pi.id))}`, {
+        headers: { "Authorization": `Bearer ${STRIPE_SECRET}` },
+      });
+      const now = resp.ok ? await resp.json() : null;
+      if (now && (now.status === "succeeded" || now.status === "canceled")) {
+        console.log(`[stripe-webhook] ${pi.id} is ${now.status} already — the late 'processing' event changes nothing`);
+        return true;
+      }
+    } catch (_) { /* not asked: recorded as before */ }
+  }
   const patch: Record<string, any> = {
     status: status,
     amount: amount,
@@ -640,10 +658,13 @@ async function handleCanteenAutoReloadSetup(
 // Best-effort — a failed alert email must never fail the webhook response
 // (Stripe retries on non-2xx, and we don't want risk-event handling to
 // become a source of duplicate/stuck webhook deliveries).
-async function sendRiskAlertEmail(subject: string, html: string) {
+// Says whether it went (TED-150): "sent", "failed" (the email service did not
+// take it — worth trying again), or "not_configured" (no key: trying again
+// cannot help, and the camp's own Billing notice still stands).
+async function sendRiskAlertEmail(subject: string, html: string): Promise<"sent" | "failed" | "not_configured"> {
   if (!RESEND_API_KEY) {
     console.error(`[stripe-webhook] RESEND_API_KEY not configured — cannot send risk alert: ${subject}`);
-    return;
+    return "not_configured";
   }
   try {
     const { error } = await resend.emails.send({
@@ -652,10 +673,12 @@ async function sendRiskAlertEmail(subject: string, html: string) {
       subject,
       html,
     });
-    if (error) console.error(`[stripe-webhook] risk alert email failed: ${JSON.stringify(error)}`);
-    else console.log(`[stripe-webhook] risk alert email sent: ${subject}`);
+    if (error) { console.error(`[stripe-webhook] risk alert email failed: ${JSON.stringify(error)}`); return "failed"; }
+    console.log(`[stripe-webhook] risk alert email sent: ${subject}`);
+    return "sent";
   } catch (e) {
     console.error(`[stripe-webhook] risk alert email threw: ${(e as Error).message}`);
+    return "failed";
   }
 }
 
@@ -826,12 +849,21 @@ async function handleRefundFailed(
       the refund was made. ${what} Transfer $${amount.toFixed(2)} back to the camp's connected account.</p>
       <p style="margin-top:20px;color:#64748B;font-size:13px;">Event: ${event.type} (${event.id})</p>
     </div>`);
+  // Once per refund (TED-137): Stripe sends the same failure several times.
+  // The claim is given back when the email did not go (TED-150), and the
+  // delivery answered 500, so Stripe's next delivery sends it.
+  const alertOnce = async (what: string) => {
+    const { data: first, error: claimErr } = await supabase.rpc("claim_refund_failure_alert", { p_refund_id: refundId });
+    if (claimErr) throw new Error(`refund ${refundId} failed and the platform alert could not be claimed: ${claimErr.message}`);
+    if (first === false) return;
+    if ((await alert(what)) === "failed") {
+      await supabase.rpc("release_refund_failure_alert", { p_refund_id: refundId });
+      throw new Error(`refund ${refundId} failed and the platform alert email did not send — Stripe will send the failure again`);
+    }
+  };
   if (!campId) {
     console.error(`[stripe-webhook] refund ${refundId} ${status} but has no camp — nothing put back; reconcile by hand`);
-    // Once per refund (TED-137): Stripe sends the same failure several times.
-    const { data: first, error: claimErr } = await supabase.rpc("claim_refund_failure_alert", { p_refund_id: refundId });
-    if (claimErr) throw new Error(`refund ${refundId} failed with no camp and the alert could not be claimed: ${claimErr.message}`);
-    if (first !== false) await alert("No camp could be found for it, so nothing was changed in Campistry.");
+    await alertOnce("No camp could be found for it, so nothing was changed in Campistry.");
     return;
   }
   const { data, error } = await supabase.rpc("reverse_failed_stripe_refund", {
@@ -843,14 +875,20 @@ async function handleRefundFailed(
   if (!data?.success) {
     console.error(`[stripe-webhook] refund ${refundId} ${status} (camp ${campId}) — not on Campistry's books ` +
       `(${data?.error || "unknown"}); nothing put back`);
-    if (data?.firstNotice !== false) {
-      await alert("It was not on Campistry's books (made in the Stripe dashboard, or its answer was lost), so nothing was changed there; the camp has been told.");
-    }
+    await alertOnce("It was not on Campistry's books (made in the Stripe dashboard, or its answer was lost), so nothing was changed there; the camp has been told.");
     return;
   }
-  if (data.alreadyRecorded || data.firstNotice === false) return;
-  console.warn(`[stripe-webhook] refund ${refundId} ${status}: $${amount} put back for camp ${campId}`);
-  await alert("Campistry has put it back on the family's account (or the child's canteen wallet) and told the camp.");
+  // The card surcharge's share Billing took off the bill with this refund
+  // goes back on it (281, TED-148): the family kept the payment. Once per
+  // refund, so a repeated delivery (or one after a crash here) changes nothing.
+  if (data.familyKey) {
+    const undo = await supabase.rpc("undo_card_fee_return", {
+      p_camp_id: campId, p_family_key: String(data.familyKey), p_refund_id: refundId });
+    if (undo.error) throw new Error(`refund ${refundId}: its card-surcharge credit could not be taken back yet: ${undo.error.message}`);
+    if (undo.data?.undone) console.warn(`[stripe-webhook] refund ${refundId}: $${undo.data.amount} of card surcharge back on ${data.familyKey}'s bill`);
+  }
+  if (!data.alreadyRecorded) console.warn(`[stripe-webhook] refund ${refundId} ${status}: $${amount} put back for camp ${campId}`);
+  await alertOnce("Campistry has put it back on the family's account (or the child's canteen wallet) and told the camp.");
 }
 
 async function handleDisputeLedger(

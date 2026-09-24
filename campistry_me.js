@@ -2314,15 +2314,20 @@ function _applyCloseout(famKey,plan){
     var campId=window.CampistryDB&&window.CampistryDB.getCampId?window.CampistryDB.getCampId():null;
     if(!client||!campId){finish(0,canteenJobs.map(function(j){return _camperLabel(j.camper)+' (not connected)'}));return}
     var done=0,failed=[];
+    // The close-out's own write (280), not the till's cash-out: the register's
+    // $20-a-day cash limit and the parent's balance floor stopped a close-out
+    // of more than that, or of a floored child, from taking anything (TED-142,
+    // TED-145). It takes up to the whole balance, never more, switches the
+    // child's auto-reload off (TED-143), and answers in words.
     Promise.all(canteenJobs.map(function(j){
-        return client.rpc('canteen_office_cash_out',{
-            p_camp_id:campId,p_camper_name:j.camper,p_camper_id:j.camperId,p_amount:j.amount,
-            p_note:'Season close-out: '+j.note,p_by:'office (close-out)',p_date:today()
+        return client.rpc('canteen_season_closeout',{
+            p_camp_id:campId,p_camper_id:j.camperId,p_camper_name:j.camper,p_amount:j.amount,
+            p_note:'Season close-out: '+j.note
         }).then(function(res){
             var d=res&&res.data;
-            if(res&&res.error||!d||!d.success)failed.push(_camperLabel(j.camper)+' ('+((d&&d.error)||(res&&res.error&&res.error.message)||'refused')+')');
+            if(res&&res.error||!d||!d.success)failed.push(_camperLabel(j.camper)+' \u2014 '+((d&&(d.message||d.error))||(res&&res.error&&res.error.message)||'refused'));
             else done++;
-        },function(e){failed.push(_camperLabel(j.camper)+' ('+((e&&e.message)||'error')+')')});
+        },function(e){failed.push(_camperLabel(j.camper)+' \u2014 '+((e&&e.message)||'error'))});
     })).then(function(){finish(done,failed)});
 }
 
@@ -2414,6 +2419,10 @@ function addCardSurcharge(famKey){
         // The family's OWN card decides it (TED-140): a surcharge on a debit or
         // prepaid card is what the brands forbid, and a card whose type is not
         // on file is treated the same — never assumed to be credit.
+        // ...and only when that card is what will be charged (TED-147).
+        if(_familyDefaultIsBank(f)){
+            toast('Not added: '+(f.name||'this family')+'\u2019s default payment method is a bank account, so Charge Card and autopay would take a card fee by bank debit \u2014 which the card brands forbid. Make their credit card the default first.','error');return;
+        }
         var q=F.quote(pol,{amount:base,method:'card',funding:_familyCardFunding(f),channel:'online'});
         if(!q||!q.permitted){
             toast((q&&q.label)||'That fee is not permitted \u2014 see Card Fees','error');return;
@@ -2425,7 +2434,8 @@ function addCardSurcharge(famKey){
             // the version that gets a camp in trouble with the brands.
             description:F.disclosure(pol,{fmt:fm})||'Card fee',
             amount:Math.round(q.fee*100)/100,date:today(),timestamp:Date.now(),
-            cardFee:{mode:q.mode,base:Math.round(base*100)/100,reason:q.reason,funding:_familyCardFunding(f)}});
+            cardFee:{mode:q.mode,base:Math.round(base*100)/100,reason:q.reason,funding:_familyCardFunding(f),
+                token:(_familyCardOnFile(f)||{}).token||null}});
         _postLedgerCharge(f,f.charges[f.charges.length-1]);
         f.balance=(f.balance||0)+Math.round(q.fee*100)/100;
         save();closeModal('dynModal');
@@ -2441,10 +2451,21 @@ function addCardSurcharge(famKey){
  * stores `funding` on savedPaymentMethods). The default card first; otherwise
  * the only card on file; otherwise unknown, which is never surcharged (TED-140).
  */
+// The card that Charge Card and autopay will actually charge (TED-147): the
+// family's DEFAULT method when one is set — and when that default is a bank
+// account there is no card to surcharge, whatever other card is saved, because
+// the fee would be collected by bank debit. With no default, the one card on
+// file (stripe-charge picks a card then).
 function _familyCardOnFile(f){
-    var pms=(f&&Array.isArray(f.savedPaymentMethods))?f.savedPaymentMethods.filter(function(m){return m&&m.type!=='us_bank_account'}):[];
+    var all=(f&&Array.isArray(f.savedPaymentMethods))?f.savedPaymentMethods.filter(Boolean):[];
+    var pms=all.filter(function(m){return m.type!=='us_bank_account'});
     var def=f&&f.stripePaymentMethodId;
-    return (def&&pms.find(function(m){return m.token===def}))||(pms.length===1?pms[0]:null);
+    if(def)return pms.find(function(m){return m.token===def})||null;
+    return pms.length===1?pms[0]:null;
+}
+function _familyDefaultIsBank(f){
+    var def=f&&f.stripePaymentMethodId;
+    return !!(def&&Array.isArray(f.savedPaymentMethods)&&f.savedPaymentMethods.some(function(m){return m&&m.token===def&&m.type==='us_bank_account'}));
 }
 function _familyCardFunding(f){
     var m=_familyCardOnFile(f);
@@ -2452,6 +2473,7 @@ function _familyCardFunding(f){
     return fu||'unknown';
 }
 function _familyCardLabel(f){
+    if(_familyDefaultIsBank(f))return 'none that will be charged \u2014 the family\'s default payment method is a bank account, so Charge Card and autopay would take the fee by bank debit';
     var m=_familyCardOnFile(f);
     if(!m)return 'none on file whose type we know';
     var fu=_familyCardFunding(f);
@@ -13384,8 +13406,12 @@ function viewApplication(id){
                             ? 'their card is on file, so you can take it now.'
                             : 'no card reached us, so there is nothing to charge.')
                           +'</div>';
-                        if(_hasCard){
+                        // Only the owner or an admin can charge a card (the
+                        // function refuses anyone else) — so only they see it (TED-149).
+                        if(_hasCard&&_canChargeCards()){
                             b+='<button class="me-btn me-btn--pri me-btn--sm" style="margin-top:6px" onclick="CampistryMe.chargeDepositNow(\''+je(id)+'\')">Charge '+fm(_out)+' now</button> ';
+                        }else if(_hasCard){
+                            b+='<div style="font-size:.76rem;color:var(--s500);margin-top:6px">The camp\u2019s owner or an admin can charge it from here.</div>';
                         }
                         b+='<button class="me-btn me-btn--ghost me-btn--sm" style="margin-top:6px" onclick="CampistryMe.markDepositPaid(\''+je(id)+'\')">Mark received anyway</button>';
                     }else{
@@ -15784,7 +15810,7 @@ function renderFinance(){
                 var _pend=(_st==='pending'||_st==='failed');
                 var _amtTxt=_isRef?'−'+fm(Math.abs(p.amount)):fm(p.amount);
                 var _amtCol=_isRef?'var(--err)':_pend?'var(--s400)':'var(--ok)';
-                var _stBadge=_st==='pending'?' '+bdg('pending','warn'):_st==='failed'?' '+bdg('failed','err'):'';
+                var _stBadge=_st==='pending'?' '+bdg((Number(p.amount)>0&&(p.stripePaymentIntentId||p.byopTransactionId))?'on its way':'pending','warn'):_st==='failed'?' '+bdg('failed','err'):'';
                 var _acts='<button class="me-btn me-btn--ghost me-btn--sm" style="color:var(--err)" onclick="CampistryMe.finRemovePayment(\''+je(String(p.id))+'\')">✕</button>';
                 h+='<tr><td style="font-size:.75rem;color:var(--s400)">'+esc(p.date||'—')+'</td><td class="bold">'+esc(p.family)+(_isRef&&p.notes?' <span style="font-size:.7rem;font-weight:400;color:var(--s400)">'+esc(p.notes)+'</span>':'')+'</td><td style="font-weight:700;color:'+_amtCol+'">'+_amtTxt+'</td><td>'+bdg((_payLabel(p.method)||p.method||'—'),_isRef?'err':_st==='failed'?'err':_st==='pending'?'warn':'ok')+_stBadge+'</td><td style="text-align:right;white-space:nowrap">'+_acts+'</td></tr>';
             });
@@ -18098,8 +18124,10 @@ function renderFamilyDetailPage(){
         }
     }
     h+='</div>';
+    var _wayD=_familyOnItsWay(l.famKey);
     h+='<div style="text-align:right"><div style="font-size:.72rem;font-weight:700;color:var(--s400);text-transform:uppercase;letter-spacing:.05em">Balance</div>'
-        +'<div style="font-size:2rem;font-weight:800;line-height:1.1;color:'+(l.balance>0?'var(--err)':'var(--ok)')+'">'+fm(l.balance)+'</div></div>';
+        +'<div style="font-size:2rem;font-weight:800;line-height:1.1;color:'+(l.balance>0?'var(--err)':'var(--ok)')+'">'+fm(l.balance)+'</div>'
+        +(_wayD.amount>0?'<div style="font-size:.78rem;color:var(--s600);margin-top:4px">'+fm(_wayD.amount)+' on its way \u2014 bank debits take a few business days</div>':'')+'</div>';
     h+='</div>';
 
     // Action bar — moved above everything else. What you can DO on this
@@ -18386,14 +18414,25 @@ function addChargeForFamily(famKey){
 // unrefunded money left on it — the candidate list for the Refund side of
 // Issue Credit/Refund.
 function _famRefundablePayments(f){
+    return _famPaymentsIn(f).filter(function(p){
+        return Math.round((p.amount-_refundedFrom(p))*100)/100>0;
+    });
+}
+// Every payment in (amount > 0) this family made that the money arrived for:
+// not one still on its way or one that failed (TED-144) — there is nothing
+// there to refund yet. A payment that names its family by key is that
+// family's; the rest by the child's number, or the name for an old one.
+function _famPaymentsIn(f){
     return finPayments.filter(function(p){
-        if((p.amount||0)<=0) return false;
+        if(!p||(p.amount||0)<=0) return false;
+        if(p.status==='pending'||p.status==='failed') return false;
+        if(p.familyKey&&families[p.familyKey]) return families[p.familyKey]===f;
         // A payment for one of this family's children: by the child's number
         // when the payment carries one, by name only for one from before numbers.
         var _pk=normalizePersonId(p.camperId)?camperNameById(normalizePersonId(p.camperId)):null;
         if(_pk!=null){ if((f.camperIds||[]).indexOf(_pk)<0) return false; }
         else if(!(f.name===p.family||f.name===p.camper||(f.camperIds||[]).indexOf(p.family)>=0||(f.camperIds||[]).indexOf(p.camper)>=0)) return false;
-        return Math.round((p.amount-_refundedFrom(p))*100)/100>0;
+        return true;
     });
 }
 // What has been refunded from a payment — less a refund the processor failed
@@ -18468,15 +18507,79 @@ function _famRefundExpired(f){
     });
 }
 function _crFamChanged(){ _crUpdateRefundSummary(); }
-// The card surcharge a family paid and still keeps: surcharge charges, less
-// what has gone back with refunds (TED-141).
+// Which card payment carried which surcharge (TED-146). A surcharge is a fee
+// on a CARD payment, and the card brands return it in proportion to what is
+// refunded OF THAT PAYMENT — not of everything the family ever paid. So each
+// surcharge ("3% on $3,000", i.e. $3,090 to be collected) is matched to the
+// card payments made after it was added, oldest first, until its $3,090 is
+// covered; each of those payments carries the fee in proportion. A deposit
+// paid before the fee existed, or a bank payment, carries none of it.
+function _paidByCard(p){
+    if(!p||!(Number(p.amount)>0))return false;
+    if(p.status==='pending'||p.status==='failed')return false;
+    if(!p.stripePaymentIntentId&&!p.byopTransactionId)return false;
+    if(p.paidWith)return p.paidWith==='card';
+    return !/ach|bank/i.test(String(p.method||''));
+}
+function _surchargeCarried(f){
+    var out={};
+    if(!f)return out;
+    var when=function(o){return Number(o.timestamp)||Date.parse(o.date||'')||0};
+    var fees=(f.charges||[]).filter(function(c){return c&&c.cardFee&&c.cardFee.mode==='surcharge'&&!c.voided&&Number(c.amount)>0;})
+        .map(function(c){var fee=Number(c.amount);return {fee:fee,need:Math.round(((Number(c.cardFee.base)||0)+fee)*100)/100,at:when(c),day:String(c.date||'')};})
+        .sort(function(a,b){return a.at-b.at});
+    if(!fees.length)return out;
+    var pays=_famPaymentsIn(f).filter(_paidByCard)
+        .map(function(p){return {p:p,at:when(p),day:String(p.date||''),left:Number(p.amount)}})
+        .sort(function(a,b){return a.at-b.at});
+    fees.forEach(function(s){
+        var need=s.need;
+        pays.forEach(function(x){
+            if(need<=0.005||x.left<=0.005)return;
+            // paid before the fee was added: not with it (by the clock when both
+            // have one, else by the day)
+            if(x.p.timestamp&&s.at?(x.at<s.at-300000):(x.day<s.day))return;
+            var take=Math.min(need,x.left);
+            x.left-=take; need-=take;
+            var k=String(x.p.id);
+            out[k]=(out[k]||0)+s.fee*take/s.need;
+        });
+    });
+    Object.keys(out).forEach(function(k){out[k]=Math.round(out[k]*100)/100});
+    return out;
+}
+// What of a payment's surcharge a refund of `chunk` returns, when `before` of
+// the payment had already been refunded: the difference of the two shares, so
+// several partial refunds add up to exactly the fee, never a cent more.
+function _feeShareOfRefund(carried,p,before,chunk){
+    if(!(carried>0))return 0;
+    var amt=Number(p.amount)||0;
+    return Math.max(0,Math.round((_surchargeShare(carried,amt,Math.min(amt,before+chunk))-_surchargeShare(carried,amt,before))*100)/100);
+}
+// The surcharge still kept on the family's card payments: each payment's
+// share, less what its refunds took back (a refund that failed and was put
+// back does not count, TED-148).
 function _surchargeKept(f){
     if(!f)return 0;
-    var fees=(f.charges||[]).filter(function(c){return c&&c.cardFee&&c.cardFee.mode==='surcharge'&&!c.voided;})
-        .reduce(function(t,c){return t+(Number(c.amount)||0)},0);
-    var back=(f.credits||[]).filter(function(c){return c&&c.cardFeeReturn;})
-        .reduce(function(t,c){return t+(Number(c.amount)||0)},0);
-    return Math.max(0,Math.round((fees-back)*100)/100);
+    var carried=_surchargeCarried(f), t=0;
+    _famPaymentsIn(f).forEach(function(p){
+        var c=carried[String(p.id)]; if(!(c>0))return;
+        t+=c-_surchargeShare(c,Number(p.amount),Math.min(Number(p.amount),_refundedFrom(p)));
+    });
+    return Math.max(0,Math.round(t*100)/100);
+}
+// The surcharge a refund of `amount` returns — worked out chunk by chunk the
+// way the refund itself is drawn (newest payment first), for the window's
+// "balance owed after this refund" (TED-146).
+function _refundFeeShare(f,amount){
+    var carried=_surchargeCarried(f), left=amount, t=0;
+    _famRefundableOnline(f).forEach(function(d){
+        if(left<=0.001)return;
+        var chunk=Math.round(Math.min(d.remaining,left)*100)/100;
+        t+=_feeShareOfRefund(carried[String(d.p.id)]||0,d.p,Number(d.p.amount)-d.remaining,chunk);
+        left=Math.round((left-chunk)*100)/100;
+    });
+    return Math.round(t*100)/100;
 }
 // Its share of a refund, by the card-fee rules' own refundShare: in proportion
 // to the refund against what is still on the card (the whole of it when the
@@ -18571,8 +18674,12 @@ function _crUpdateBalancePreview(){
     var amtEl=document.getElementById('crRefundAmount');
     var amt=amtEl?parseFloat(amtEl.value)||0:0;
     if(!f||!amt){previewEl.textContent='';return}
-    var newBalance=(f.balance||0)+amt;
-    previewEl.innerHTML='Balance owed after this refund: <strong>'+fm(newBalance)+'</strong> (currently '+fm(f.balance||0)+')';
+    // A card refund also takes the surcharge's share off the bill (TED-146).
+    var _type=(document.getElementById('crType')||{}).value;
+    var _fee=_type==='refund_gateway'?_refundFeeShare(f,amt):0;
+    var newBalance=Math.round(((f.balance||0)+amt-_fee)*100)/100;
+    previewEl.innerHTML='Balance owed after this refund: <strong>'+fm(newBalance)+'</strong> (currently '+fm(f.balance||0)+')'
+        +(_fee>0?' \u2014 '+fm(_fee)+' of the refund is card surcharge, which comes off their bill too':'');
 }
 // The "Unmatched" stat tile on Billing sums real money (payments recorded
 // with a family/camper name that never matched an actual family record) that
@@ -18730,9 +18837,10 @@ function issueCreditForFamily(famKey){
                     +':'+Math.round((Number(left)||0)*100)+':'+Math.round((Number(amt)||0)*100);
             };
             var remaining=refundAmt, done=0, failMsg=null;
-            // The card surcharge this family paid, and what of it is still kept,
-            // before any of this refund is booked (TED-141).
-            var _feeBefore=_surchargeKept(f), _paidBefore=onlineTotal;
+            // Which card payment carried which surcharge, before any of this
+            // refund is booked (TED-141, TED-146); each chunk returns its own
+            // payment's share.
+            var _carried=_surchargeCarried(f), _feeBack=0, _feeCredits=[];
             toast('Processing refund…');
             for(var ci=0; ci<chunks.length && remaining>0.001; ci++){
                 var p=chunks[ci].p;
@@ -18788,10 +18896,21 @@ function issueCreditForFamily(famKey){
                     byopRefundId:isStripe?null:(refId||null),
                     byopProcessor:isStripe?null:p.byopProcessor,offline:false,timestamp:Date.now()
                 };
+                var _before=Math.round((Number(p.amount)-chunks[ci].remaining)*100)/100;
                 finPayments.push(_refRow);
                 _postPaymentEntry(f,_refRow);   // a refund the family no longer holds as credit
                 f.totalPaid=Math.max(0,(f.totalPaid||0)-chunk);f.balance=(f.balance||0)+chunk;
                 done=Math.round((done+chunk)*100)/100;
+                // This payment's surcharge share, one credit per refund, carrying
+                // the refund's id — so if that refund fails later the share goes
+                // back on the bill with it (281, TED-148).
+                var _share=_feeShareOfRefund(_carried[String(p.id)]||0,p,_before,chunk);
+                if(_share>0){
+                    _feeBack=Math.round((_feeBack+_share)*100)/100;
+                    _feeCredits.push({id:'cfr_'+Date.now()+'_'+ci,amount:_share,date:today(),reason:'correction',cardFeeReturn:true,
+                        refundId:refId||null,refundOf:p.id,
+                        note:'Card surcharge returned in proportion to the '+fm(chunk)+' refund of this card payment',timestamp:Date.now()});
+                }
                 remaining=Math.round((remaining-chunk)*100)/100;
             }
             if(done<=0){toast('Refund failed'+(failMsg?': '+failMsg:''),'error');return}
@@ -18800,13 +18919,12 @@ function issueCreditForFamily(famKey){
             // card already carries it (the fee was part of the payment); this is
             // the fee on the bill coming down by the same share, so the family
             // keeps only the fee on what they kept.
-            var _feeBack=_surchargeShare(_feeBefore,_paidBefore,done);
-            if(_feeBack>0){
+            if(_feeCredits.length){
                 if(!Array.isArray(f.credits))f.credits=[];
-                var _fc={id:'cfr_'+Date.now(),amount:_feeBack,date:today(),reason:'correction',cardFeeReturn:true,
-                    note:'Card surcharge returned in proportion to the '+fm(done)+' refund',timestamp:Date.now()};
-                f.credits.push(_fc);
-                _postLedgerCredit(f,_fc);
+                _feeCredits.forEach(function(_fc){
+                    f.credits.push(_fc);
+                    _postLedgerCredit(f,_fc);
+                });
                 f.balance=Math.round(((f.balance||0)-_feeBack)*100)/100;
             }
             save();closeModal('dynModal');
@@ -19274,6 +19392,52 @@ async function requestCardSetup(famKey){
     }
 }
 
+// The kind of method stripe-charge takes from this family: its default, or a
+// card when none is set (stripe-charge picks one then). null when unknown.
+function _methodTypeCharged(f){
+    var def=f&&f.stripePaymentMethodId;
+    if(!def)return 'card';
+    var m=Array.isArray(f.savedPaymentMethods)?f.savedPaymentMethods.find(function(x){return x&&x.token===def}):null;
+    return m?(m.type==='us_bank_account'?'us_bank_account':'card'):null;
+}
+// A bank debit still on its way (TED-144). A bank (ACH) debit is "processing"
+// for several business days, and until the bank settles it the family's
+// balance still reads in full — so a second press of Charge Card, here or on
+// another computer, used to start a SECOND debit for the same bill. A payment
+// the processor has started and not yet answered, in the last fortnight, is
+// money on its way: shown, taken off what is offered, and no second charge is
+// started while it is there (stripe-charge refuses one too, asking Stripe).
+function _familyOnItsWay(famKey){
+    var out={amount:0,items:[]};
+    (finPayments||[]).forEach(function(p){
+        if(!p||p.status!=='pending'||!(Number(p.amount)>0))return;
+        if(!p.stripePaymentIntentId&&!p.byopTransactionId)return;
+        var fk=(p.familyKey&&families[p.familyKey])?p.familyKey:(typeof _payFamilyByName==='function'?_payFamilyByName(p):null);
+        if(fk!==famKey)return;
+        var at=Number(p.timestamp)||(p.date?Date.parse(p.date):NaN);
+        if(!isFinite(at)||Date.now()-at>=14*86400000)return;
+        out.amount=Math.round((out.amount+Number(p.amount))*100)/100;
+        out.items.push({amount:Number(p.amount),date:p.date||'',ref:p.stripePaymentIntentId||p.byopTransactionId});
+    });
+    return out;
+}
+function _onItsWayWords(w){
+    var first=w.items[0]||{};
+    return 'A '+fm(w.amount)+' bank debit'+(first.date?' started '+first.date:'')+' is still on its way \u2014 bank debits take a few business days';
+}
+// The debit a charge just started (or found already started): on this page at
+// once, as on its way, under the SAME id the webhook gives it — one row.
+function _recordOnItsWay(f,famKey,piId,amount){
+    if(!piId)return;
+    var id='pi_'+piId;
+    var twin=(finPayments||[]).filter(function(p){return p&&(p.id===id||p.stripePaymentIntentId===piId)})[0];
+    if(twin){if(!twin.status||twin.status==='pending')twin.status='pending';return;}
+    finPayments.push({id:id,family:f.name,familyKey:famKey,amount:amount,date:new Date().toISOString().split('T')[0],
+        method:'Bank debit (ACH)',reference:piId,stripePaymentIntentId:piId,status:'pending',
+        notes:'Bank debit \u2014 on its way (bank debits take a few business days)',timestamp:Date.now()});
+    save();
+}
+
 // Charge a family's stored card
 // Answers {ok:true} only when the money really moved, so batchCharge can count
 // real failures (TED-059). `quiet` leaves the per-family toasts to the batch.
@@ -19281,6 +19445,17 @@ async function chargeStoredCard(famKey,amount,description,quiet){
     var f=families[famKey];
     if(!f||(!f.stripeCustomerId&&!f.byopCustomerRef)){if(!quiet)toast('No payment method on file yet','error');return {ok:false,error:'No payment method on file'}}
 
+    var _way=_familyOnItsWay(famKey);
+    if(!amount&&_way.amount>0){
+        showModal('Charge Card','<div class="me-modal-form"><p style="font-size:.85rem;color:var(--s600);margin-bottom:12px"><strong>'+esc(f.name)+'</strong>: '+esc(_onItsWayWords(_way))+'.</p>'
+            +'<p style="font-size:.8rem;color:var(--s500)">Nothing more is charged to this family until the bank settles it (it then shows as paid) or returns it (Billing then says it failed, and you can charge again).</p></div>',
+            function(){closeModal('dynModal');});
+        return {ok:false,onItsWay:true,error:_onItsWayWords(_way)};
+    }
+    if(amount&&_way.amount>0){
+        if(!quiet)toast(_onItsWayWords(_way)+' \u2014 nothing more was charged.','error');
+        return {ok:false,onItsWay:true,error:_onItsWayWords(_way)};
+    }
     if(!amount){
         // Ask for amount
         var ledgers=buildFamilyLedgers();
@@ -19399,6 +19574,8 @@ async function chargeStoredCard(famKey,amount,description,quiet){
                 stripePaymentIntentId:isBYOP?null:result.paymentIntentId,
                 byopTransactionId:isBYOP?result.externalTransactionId:null,
                 byopProcessor:isBYOP?f.byopProcessor:null,
+                // card or bank — which a card surcharge's refund share depends on (TED-146)
+                paidWith:isBYOP?'card':_methodTypeCharged(f),
                 timestamp:Date.now()
             };
             // Already here (the webhook's row reached this page first): one row.
@@ -19416,12 +19593,30 @@ async function chargeStoredCard(famKey,amount,description,quiet){
             save();if(curPage==='familydetail')renderFamilyDetailPage();else renderBilling();
             if(!quiet)toast('Charged '+fm(amount)+' to '+f.name+' — payment succeeded!');
             return {ok:true};
+        }else if(!isBYOP&&result.status==='processing'){
+            // A bank debit: started, and on its way for a few business days
+            // (TED-144) — not a failure, and not paid yet.
+            _pendingChargeClear(famKey,amount);
+            _recordOnItsWay(f,famKey,result.paymentIntentId,amount);
+            if(curPage==='familydetail')renderFamilyDetailPage();else renderBilling();
+            if(!quiet)toast('A '+fm(amount)+' bank debit has started for '+f.name+' \u2014 it is on its way. Bank debits take a few business days; Billing shows it as paid once the bank settles it.');
+            // Not ok (the money has not arrived) and not failed: its own answer.
+            return {ok:false,pending:true,error:'bank debit on its way'};
         }else{
             if(!quiet)toast('Payment status: '+result.status,'error');
             return {ok:false,error:'Payment status: '+result.status};
         }
     }catch(err){
         console.error('[Me] Charge error:',err);
+        // Stripe says a bank debit for this family is already on its way
+        // (TED-144): nothing was charged now. Shown as on its way here too.
+        if(err.data&&err.data.onItsWay){
+            _pendingChargeClear(famKey,amount);
+            _recordOnItsWay(f,famKey,err.data.paymentIntentId,Number(err.data.amount)||amount);
+            if(curPage==='familydetail')renderFamilyDetailPage();else renderBilling();
+            if(!quiet)toast(err.message,'error');
+            return {ok:false,onItsWay:true,error:err.message};
+        }
         // A definite "no" (a decline, a refused request) starts fresh next time.
         // No answer at all may have charged the card: never "failed" (TED-111).
         var _unsure=(err.data&&err.data.uncertain)||(!err.data&&err.noAnswer!==false);
@@ -19459,7 +19654,10 @@ async function batchCharge(){
     var eligible=Object.entries(ledgers).filter(function([fk,l]){
         return l.balance>0&&_famChargeable(families[fk]);
     });
-    if(!eligible.length){toast('No families with card on file and outstanding balance','error');return}
+    // A family with a bank debit still on its way is not charged again (TED-144).
+    var onWay=eligible.filter(function([fk]){return _familyOnItsWay(fk).amount>0});
+    eligible=eligible.filter(function([fk]){return !(_familyOnItsWay(fk).amount>0)});
+    if(!eligible.length){toast(onWay.length?'Nothing to charge \u2014 '+onWay.length+' famil'+(onWay.length!==1?'ies have':'y has')+' a bank debit still on its way':'No families with card on file and outstanding balance','error');return}
 
     var total=eligible.reduce(function(s,[,l]){return s+l.balance},0);
     var h='<div>';
@@ -19469,18 +19667,20 @@ async function batchCharge(){
         h+='<div style="display:flex;justify-content:space-between;padding:8px 12px;border-bottom:1px solid var(--s100);font-size:.8rem"><span class="bold">'+esc(l.family.name)+'</span><span style="font-weight:700;color:var(--err)">'+fm(l.balance)+'</span></div>';
     });
     h+='</div>';
+    if(onWay.length)h+='<p style="font-size:.78rem;color:var(--s600);margin-bottom:10px">Not charged: '+onWay.map(function([fk,l]){return esc(l.family.name)}).join(', ')+' \u2014 a bank debit is still on its way (bank debits take a few business days).</p>';
     h+='<p style="font-size:.75rem;color:var(--warn);font-weight:600">⚠ This action will charge real credit cards. Proceed with caution.</p>';
     h+='</div>';
 
     showModal('Batch Charge — '+eligible.length+' Families',h,async function(){
         closeModal('dynModal');
         toast('Processing batch charges...');
-        var success=0,failed=0,failedNames=[];
+        var success=0,failed=0,failedNames=[],onTheirWay=0;
         for(var[fk,l]of eligible){
             var r;
             try{ r=await chargeStoredCard(fk,l.balance,'Batch payment — '+families[fk].name,true); }
             catch(e){ r={ok:false,error:e&&e.message}; }
-            if(r&&r.ok) success++;
+            if(r&&r.pending) onTheirWay++;
+            else if(r&&r.ok) success++;
             else{
                 failed++;
                 failedNames.push((families[fk]&&families[fk].name||fk)+(r&&r.error?' ('+r.error+')':''));
@@ -19489,7 +19689,7 @@ async function batchCharge(){
             // Small delay between charges to avoid rate limits
             await new Promise(function(r){setTimeout(r,500)});
         }
-        toast('Batch complete: '+success+' charged, '+failed+' failed'+(failedNames.length?' — '+failedNames.join('; '):''),failed?'error':undefined);
+        toast('Batch complete: '+success+' charged, '+(onTheirWay?onTheirWay+' bank debit'+(onTheirWay!==1?'s':'')+' on the way (a few business days), ':'')+failed+' failed'+(failedNames.length?' — '+failedNames.join('; '):''),failed?'error':undefined);
         renderBilling();
     });
 }
@@ -20085,6 +20285,14 @@ async function markDepositPaid(id,undo){
  * owed on this application and charges that, the same way it does from the
  * form, so the office cannot overcharge by having a stale page open.
  */
+// Whether this person can charge a stored card: the owner or an admin — the
+// same rule every charge function checks (callerCampId). A hint for what to
+// show; the function still decides.
+function _canChargeCards(){
+    var role=null;
+    try{ role=(window.CampistryDB&&(window.CampistryDB.getRole?window.CampistryDB.getRole():null))||null; }catch(_){}
+    return role==='owner'||role==='admin';
+}
 async function chargeDepositNow(id){
     var e=enrollments[id];
     var P=_depPolicyAPI();
@@ -20110,8 +20318,25 @@ async function chargeDepositNow(id){
         var body={campId:campId,enrollmentId:id,
                   returnUrl:window.location.origin+window.location.pathname,
                   officeCharge:true};
-        var r=await client.functions.invoke('registration-deposit-checkout',{body:body});
-        var d=r&&r.data;
+        // The function's own answer, whatever its status (TED-149): a refusal
+        // (403 "Only the camp's owner or an admin…", 404 no such application)
+        // comes back as r.error with the body on its response, and reading only
+        // r.data made every refusal "The card was declined" — a card that was
+        // never tried.
+        var _ask=async function(){
+            var rr=await client.functions.invoke('registration-deposit-checkout',{body:body});
+            if(rr&&rr.data)return rr.data;
+            var ctx=rr&&rr.error&&rr.error.context, out=null;
+            try{ if(ctx&&typeof ctx.json==='function')out=await (typeof ctx.clone==='function'?ctx.clone():ctx).json(); }catch(_){}
+            // A refusal (4xx) charged nothing; a 5xx may have been cut off after
+            // the card company was asked, so it is never called "not charged".
+            var st=ctx&&typeof ctx.status==='number'?ctx.status:null;
+            if(out&&typeof out==='object'&&st!=null&&st<500)return Object.assign({notTried:true},out);
+            if(out&&typeof out==='object'&&out.error)return Object.assign({},out,{notTried:true,noAnswer:true,
+                error:out.error+' \u2014 it may have gone through; check the processor\u2019s dashboard before charging again'});
+            return {notTried:true,noAnswer:true,error:'No answer from the payment service'+(rr&&rr.error&&rr.error.message?' ('+rr.error.message+')':'')+' \u2014 check the processor\u2019s dashboard before charging again'};
+        };
+        var d=await _ask();
         // An earlier charge was cut off after the card company was asked, and
         // nobody knows if it went through (TED-083). Only the office can say —
         // by looking at the processor's dashboard — and only then charge.
@@ -20124,8 +20349,7 @@ async function chargeDepositNow(id){
             });
             if(!sure)return toast('Not charged');
             body.confirmNotCharged=true;
-            r=await client.functions.invoke('registration-deposit-checkout',{body:body});
-            d=r&&r.data;
+            d=await _ask();
         }
         if(d&&d.success&&(d.paid||d.alreadyPaid)){
             // The function already recorded it server-side; re-reading is what
@@ -20139,7 +20363,8 @@ async function chargeDepositNow(id){
             renderRegistrationPage();
             return toast(d.alreadyPaid?'Already paid':'Charged '+fm(d.amount||owed));
         }
-        toast((d&&d.error)||'The card was declined');
+        // "Declined" only when the card company said so.
+        toast((d&&d.error)?(d.notTried&&!d.noAnswer?'Not charged: '+d.error:d.error):'The card was declined','error');
     }catch(err){
         toast('Could not charge the card — '+((err&&err.message)||'try again'));
     }

@@ -110,7 +110,7 @@ export function createClient(_url: string, _key: string, opts?: any) {
 `;
 
 const FAKE_RESEND = `
-export class Resend { emails = { send: async (m: any) => { (globalThis as any).__T.emails.push(m); return { data: { id: 'em_1' }, error: null }; } }; constructor(_k?: string) {} }
+export class Resend { emails = { send: async (m: any) => { const T = (globalThis as any).__T; if (typeof T.emailFails === 'function' && T.emailFails(m)) return { data: null, error: { name: 'rate_limit_exceeded', message: 'Too many requests' } }; T.emails.push(m); return { data: { id: 'em_1' }, error: null }; } }; constructor(_k?: string) {} }
 `;
 
 /**
