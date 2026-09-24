@@ -1,30 +1,41 @@
 # Ted's ledger
 
 ## Last commit checked
-`10e0758` (2026-09-24)
+`6e9a2a7` (2026-09-24; billing code last changed at `79ed2a0`)
 
 ## Open findings
 | ID | Severity | Description | Found | Status |
 |----|----------|-------------|-------|--------|
-| TED-063 | 🔴 | Link Stripe "Pay Now" sends no familyKey: payment never reaches the family ledger (parent still sees full balance) and settles in the platform's Stripe account | 2026-09-24 | Open |
-| TED-064 | 🔴 | Autopay by bank account (ACH): a "processing" debit records nothing, so the runner debits again every night; no Idempotency-Key on autopay charges | 2026-09-24 | Open |
-| TED-065 | 🔴 | Me-page charge backfill (TED-053 fix) double-posts charges that convert_family_ledgers already posted as le_conv_* (625 → 650) | 2026-09-24 | Open (owner to check if any camp converted) |
-| TED-066 | 🟠 | A shop order billed to the family and then cancelled/re-priced keeps its posted ledger charge | 2026-09-24 | Open |
-| TED-067 | 🟠 | Close-out of a camper's canteen money posts a charge to the family's tuition ledger (default roll_forward); roll_forward creates no opening credit anywhere | 2026-09-24 | Open |
-| TED-068 | 🟠 | Office plan editor's per-row amounts are discarded; autopay splits the whole balance evenly, even when only part was scheduled | 2026-09-24 | Open |
-| TED-069 | 🟠 | registration-deposit-checkout `officeCharge` needs no login and has no claim: anyone with camp+application id can trigger it; concurrent calls double-charge | 2026-09-24 | Open |
-| TED-070 | 🟠 | Banquest deposit hosted page reads `credRes.credential` (never set) so it always fails; bqBase ignores gatewayUrl | 2026-09-24 | Open |
-| TED-071 | 🟠 | Cardknox webhook amount-matching: two pending same-amount deposits → paid one never recorded, no alert; an unknown xInvoice still falls through to amount matching | 2026-09-24 | Open |
-| TED-072 | 🟠 | payments-hosted-complete falls back to the newest transaction on the whole account when none matches the link key | 2026-09-24 | Open |
-| TED-073 | 🟠 | Nightly tip-transfer retry sends the internal staff id as Stripe destination (always fails) and pays tip − fee | 2026-09-24 | Open |
-| TED-074 | 🟠 | "Parents set up their own plan" setting points to a Link builder that was removed; office loses the Set Up button | 2026-09-24 | Open |
-| TED-075 | 🟡 | Canteen auto-reload has no claim/idempotency: two simultaneous triggers charge twice | 2026-09-24 | Open |
-| TED-076 | 🟡 | Loose ends: refund amount ≤0 = full refund; deposit Stripe charge lacks on_behalf_of/idempotency; plan edit clears paused/collectionBlocked; some billing tests text-only | 2026-09-24 | Open |
-| TED-005 | 🟠 | 14 auto-scheduler tests fail (`auto_full_day.test.js`); still 14 at 10e0758. Owner deferred. | 2026-09-23 | Open (deferred by owner) |
+| TED-077 | 🔴 | Zelle/ACH bank deposits never reach posted ledgers: office balance, parent balance and autopay ignore them (family overcharged) | 2026-09-24 | Open |
+| TED-078 | 🟠 | Stale Billing tab writes whole family rows back: wipes autopay's bank-debit hold (and runner/webhook writes) → debited again | 2026-09-24 | Open |
+| TED-079 | 🟠 | Plan with office-set amounts (264): a declined instalment is never collected; plan ends with balance owed | 2026-09-24 | Open |
+| TED-080 | 🟠 | Link parent portal shows even-split plan amounts, not the office's amounts ($466.67 shown, $1,000 taken) | 2026-09-24 | Open |
+| TED-081 | 🟠 | Merge Families moves entries but not charges[]; Billing catch-up then cancels the merged family's extra charges | 2026-09-24 | Open |
+| TED-082 | 🟠 | Converted camps: pre-conversion shop charge re-priced → counted twice (95), cancelled → still billed (40) | 2026-09-24 | Open |
+| TED-083 | 🟠 | Deposit claim stuck after a network error → "already paid" forever, nothing charged | 2026-09-24 | Open |
+| TED-084 | 🟠 | Bank-debit hold skips plans without an id / legacy single f.plan → still debited nightly (reports processing_held) | 2026-09-24 | Open |
+| TED-085 | 🟡 | Idempotency keys outlive a decline: deposit retry and same-day auto-reload retries replay the decline (Likely) | 2026-09-24 | Open |
+| TED-086 | 🟡 | processor_transactions kind check refuses registration_deposit / registration_card_capture | 2026-09-24 | Open |
+| TED-087 | 🟡 | Loose ends: Cardknox no-PIN → 200 and payments lost; tip-retry row lacks PI id; IMMUTABLE+now(); old APPLY_BUNDLE undoes 263/264; unmatched-payment notice shown to all staff | 2026-09-24 | Open |
+| TED-076 | 🟡 | Narrowed: two billing tests still text-only (five-writers, TED-062) | 2026-09-24 | Open (rest fixed) |
+| TED-005 | 🟠 | 14 auto-scheduler tests fail (`auto_full_day.test.js`); still 14 at 79ed2a0. Owner deferred. | 2026-09-23 | Open (deferred by owner) |
 
 ## Closed findings
 | ID | What it was | Closed | Proof |
 |----|-------------|--------|-------|
+| TED-063 | Link Pay Now credited no family, settled to platform | 2026-09-24 | At 79ed2a0: probes/…-3/recheck_harness: signed-in parent → own family + acct_CAMP; no login + unknown family → 400; test file 4/5 fail on old |
+| TED-064 | ACH autopay debited nightly | 2026-09-24 | At 79ed2a0: hold carried across 3 harness nights → 1 debit, recorded on clear; 5 runner tests fail on old. Residuals TED-078/084 |
+| TED-065 | Catch-up re-posted converted charges | 2026-09-24 | At 79ed2a0: probes/…-3/dup_recheck (real conversion) → posted [0,0], 625 in JS and SQL. Residual TED-082 |
+| TED-066 | Cancelled shop order stayed billed | 2026-09-24 | At 79ed2a0: unchanged probes/2026-09-24-billing/shop.js → balance 0.00; pgtest 263. Residuals TED-081/082 |
+| TED-067 | Close-out billed canteen money / roll_forward consumed credit | 2026-09-24 | At 79ed2a0: unchanged closeout.js → no charge posted; test file 3/4 fail on old |
+| TED-068 | Office plan amounts ignored | 2026-09-24 | At 79ed2a0: unchanged plan.js → 1000/200/200, 300+300; pgtest 264. Residuals TED-079/080 |
+| TED-069 | officeCharge no login / no claim | 2026-09-24 | At 79ed2a0: unchanged regdep.test.js → 403, 0 charges; builder test double request → 1 charge (fails on old). Residuals TED-083/085 |
+| TED-070 | Banquest deposit keys / gateway | 2026-09-24 | At 79ed2a0: registration_deposit_charge 5/6 fail on old; code read :83-89, :451 |
+| TED-071 | Sola amount matching | 2026-09-24 | At 79ed2a0: unchanged ck.test.js → unknown-xInvoice sale not recorded; notice test; 5/7 fail on old |
+| TED-072 | Hosted return took newest txn | 2026-09-24 | At 79ed2a0: unchanged hosted.test.js → pending, nothing recorded |
+| TED-073 | Tip retry wrong destination / short | 2026-09-24 | At 79ed2a0: code read charge-due-installments:1069-1135; runner tip tests fail on old. Residual in TED-087 |
+| TED-074 | Plan setting pointed at removed Link builder | 2026-09-24 | At 79ed2a0: campistry_me.js:13179 button always shown; test TED-074 |
+| TED-075 | Canteen auto-reload twice | 2026-09-24 | At 79ed2a0: recheck_harness with insert-if-absent claim → 1 charge; test 2/2 fail on old. Residual TED-085 |
 | TED-051 | Autopay skipped parent-built (dueDates) plans | 2026-09-24 | At 10e0758: autopay_runner.test.js test 1 passes; all 3 runner tests fail against 32c9f59's runner (scratch worktree) |
 | TED-052 | stripe-refund had no caller check | 2026-09-24 | At 10e0758: 4 refund tests in stripe_refund_and_charge.test.js pass, fail on old code (8/9 of file fail on old); code read stripe-refund/index.ts:129-199. Residual in TED-076 |
 | TED-053 | Late fees/surcharges/charges never reached the ledger | 2026-09-24 | At 10e0758: charges_reach_the_ledger.test.js passes (fails on old); pgtest 215 billing block 600→625. Side effects filed as TED-065/066/067 |
@@ -97,9 +108,9 @@
 | Auto Builder (solver, layers, grid) | never (only test results seen) |
 | Manual Builder | never |
 | Cloud sync / schedules / rotation | never |
-| Billing & payments (edge functions, autopay runner, refunds, late fees/surcharges/credits, plans, parent balance) | 2026-09-24 (second pass: registration deposits, Link pay/saved card/plans, hosted pages + return, Connect routing + tips, close-out, canteen auto-reload; not browser, not live processors) |
+| Billing & payments (edge functions, autopay runner, refunds, late fees/surcharges/credits, plans, parent balance) | 2026-09-24 (third pass: two ledger writers, 262-264 re-run, claims/holds, webhook secrets, family merge, conversion interplay, Link plan view; not browser, not live processors) |
 | Payroll | never |
-| Bank deposit matching (`deposit-inbox`) | never |
+| Bank deposit matching (`deposit-inbox`) | 2026-09-24: only what happens after a match (TED-077); parser/matcher never |
 | Canteen / Snacks / Shop / POS | canteen auto-reload + shop bill-to-family settlement 2026-09-24; POS maths never |
 | Parent portal (Link) | never in a browser (database-level invite ownership checked 2026-09-23; Parents-page refusal wording run in isolation 2026-09-23) |
 | Health, Go, Live, Lite | never (touched only through camper numbers) |
@@ -128,3 +139,4 @@
 | 2026-09-23 | Check my work: TED-048, 049 fixes + Parents page wording | 4ce2489 | unit 3280/14 · pg 50/0 · keys 42/0 · lite 12/0 · smoke 32/0 · scale 24/0 | 🟢 | [report](reports/2026-09-23-camper-id-sixteenth-recheck.md) |
 | 2026-09-23 | Audit: billing | 32c9f59 | unit 3280/14 · pg 50/0 · smoke 32/0 · own harness 5 runs | 🔴 | [report](reports/2026-09-23-billing-audit.md) |
 | 2026-09-24 | Check my work + billing deep pass | 10e0758 | unit 3323/14 · pg 50/0 · keys 42/0 · lite 12/0 · smoke 32/0 · scale 24/0 · old-code runs of 8 new tests · 3 scratch DB + 8 harness probes | 🔴 | [report](reports/2026-09-24-billing-recheck.md) |
+| 2026-09-24 | Check my work: TED-063..076 fixes + billing hunt | 79ed2a0 (HEAD 6e9a2a7) | unit 3365/14 · pg 53/0 · keys 42/0 · lite 12/0 · smoke 32/0 · scale 24/0 · old-code runs of 9 new test files · 7 scratch DB + 3 harness + 3 real-code probes | 🔴 | [report](reports/2026-09-24-billing-third-pass.md) |
