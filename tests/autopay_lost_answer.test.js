@@ -140,6 +140,8 @@ const path = require('node:path');
 const ME = fs.readFileSync(path.join(__dirname, '..', 'campistry_me.js'), 'utf8');
 const RESOLVE = ME.match(/async function resolveUnconfirmedAutopay\(fk,planRef\)\{[\s\S]*?\n\}\n/)[0];
 const WARN = ME.match(/function _collectionWarning\(l\)\{[\s\S]*?\n\}\n/)[0];
+// (TED-200: the dispute label reads the family's pause)
+const HELD = ME.match(/function _famDisputeHeld\(f\)\{[\s\S]*?\n\}\n/)[0];
 
 function billing(answers, prompt, processor) {
     const calls = [], toasts = [];
@@ -156,7 +158,7 @@ function billing(answers, prompt, processor) {
 }
 
 test('TED-113: Billing shows a held autopay charge, and the office records it with its reference', async () => {
-    const w = new Function('je', 'esc', 'fm', '_flatStatus', WARN + '; return _collectionWarning;')(
+    const w = new Function('je', 'esc', 'fm', '_flatStatus', HELD + WARN + '; return _collectionWarning;')(
         (s) => s, (s) => String(s), (n) => '$' + n, (l) => l);
     const html = w({ famKey: 'gold', family: { plans: [{ id: 'plan_g', pendingCharge: { unconfirmed: true, amount: 500, since: '2026-06-01' } }] } });
     assert.match(html, /resolveUnconfirmedAutopay\('gold','plan_g'\)/);
@@ -222,4 +224,16 @@ T.request = { headers: { 'x-cron-secret': 'cron' }, body: { resumeAfter: { camp:
     assert.deepStrictEqual(r.tables.__sales, ['Silver']);
     assert.strictEqual(r.body.done, true);
     assert.ok(!r.rpcs.some(c => c.name === 'flag_expiring_cards'), 'the camp\'s card check ran twice in one night');
+});
+
+test('TED-200: Billing names a disputed family whose card is paused — no plan, or a plan not on autopay — once', () => {
+    const w = new Function('je', 'esc', 'fm', '_flatStatus', HELD + WARN + '; return _collectionWarning;')(
+        (s) => s, (s) => String(s), (n) => '$' + n, (l) => l);
+    const fern = w({ famKey: 'fern', family: { name: 'Fern', disputeHold: { disputeIds: ['dp_1'], lostIds: [] } }, collectionBlocked: [] });
+    assert.match(fern, /Payment disputed — card not charged/);
+    assert.match(fern, /resumeAutopayAfterDispute\('fern'\)/);
+    const hazel = w({ famKey: 'hazel', family: { disputeHold: { disputeIds: ['dp_1'] }, plans: [{ id: 'p', autopay: false, collectionBlocked: { reason: 'chargeback' } }] },
+        collectionBlocked: [{ reason: 'chargeback' }] });
+    assert.strictEqual((hazel.match(/Payment disputed/g) || []).length, 1, hazel);
+    assert.doesNotMatch(w({ famKey: 'oak', family: { disputeHold: { disputeIds: [] } }, collectionBlocked: [] }), /disputed/);
 });

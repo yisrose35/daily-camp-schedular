@@ -38,20 +38,21 @@ function billing(shares) {
     const reg = P.normalize({ org_fund: { name: 'Scholarship Fund', kind: 'organization' } });
     const els = {}, toasts = [], ctx_payOpts = [];
     let onOk = null;
+    const dialogs = [];
     const val = (id, v) => (els[id] = { value: v });
     const ctx = {
         families: { pine: fam }, payers: reg, _payersAPI: () => P, _billingCore: () => B, _secEdit: () => true,
         esc: (s) => String(s), fm: (n) => '$' + Number(n).toFixed(2), je: (s) => s, today: () => '2026-08-20',
         save() {}, closeModal() {}, renderBilling() {}, renderFamilyDetailPage() {}, curPage: 'billing',
         toast: (t) => toasts.push(t), showModal: (t, h, ok) => { onOk = ok; }, _payOptions: (ctx, sel) => { ctx_payOpts.push(sel); return ''; },
-        confirmDialog: () => Promise.resolve(true), _payLabel: (m) => m,
+        confirmDialog: (o) => { dialogs.push(o); return Promise.resolve(true); }, _payLabel: (m) => m,
         _payerSharesFromForm: () => shares,
         document: { getElementById: (id) => els[id] || null, querySelectorAll: () => [] },
     };
     const names = ['addChargeForFamily', '_splitToPayers', '_familyOtherPayers', 'recordPayerPayment', '_postLedgerCharge',
         '_payerLedgerOf', '_migratePayerLedgers', '_payerLines', '_payerStanding', '_payerAccount', '_payerTotals', '_placePayerPayment', 'payerLines', 'voidPayerLine'];
     const fns = new Function(...Object.keys(ctx), names.map(cut).join('\n') + '\nreturn { ' + names.join(', ') + ' };')(...Object.values(ctx));
-    return { fam, reg, fns, els, toasts, val, payOpts: ctx_payOpts, families: ctx.families, press: () => onOk && onOk() };
+    return { fam, reg, fns, els, toasts, dialogs, val, payOpts: ctx_payOpts, families: ctx.families, press: () => onOk && onOk() };
 }
 
 test('TED-165: $1,000 with $800 from the Scholarship Fund — Pine is billed $200; the fund owes $800 on its own account', () => {
@@ -237,4 +238,45 @@ test('TED-199 (M17): a cheque that was split across two families is not placed a
     b.reg.org_fund.ledger = [{ id: 'prp_old', kind: 'payment', amount: 1000 }];
     const acc = b.fns._payerAccount('org_fund');
     assert.deepStrictEqual([acc.charged, acc.paid, acc.balance], [1000, 1000, 0], 'the split cheque was placed again');
+});
+
+test('TED-204 (N13): the Cancel-share window says what the fund already paid', async () => {
+    const b = billing([{ payerId: 'org_fund', amount: 800 }]);
+    split(b, 1000);
+    b.fns.recordPayerPayment('org_fund');
+    b.val('ppAmt', '300'); b.val('ppDate', '2026-08-25'); b.val('ppMethod', 'check'); b.val('ppRef', '');
+    b.press();
+    const share = b.fam.payerLedger.find(e => e.kind === 'charge');
+    b.fns.voidPayerLine('org_fund', share.id, 'cancel');
+    await tick();
+    assert.match(b.dialogs[b.dialogs.length - 1].message, /Scholarship Fund has paid \$300\.00 so far/);
+});
+
+test('TED-203: Move back after the fund paid $300 of its $800 share — only the unpaid $500 goes to the family, and the window says so', async () => {
+    const b = billing([{ payerId: 'org_fund', amount: 800 }]);
+    split(b, 1000);
+    b.fns.recordPayerPayment('org_fund');
+    b.val('ppAmt', '300'); b.val('ppDate', '2026-08-25'); b.val('ppMethod', 'check'); b.val('ppRef', '');
+    b.press();
+    const share = b.fam.payerLedger.find(e => e.kind === 'charge');
+    b.fns.voidPayerLine('org_fund', share.id);
+    await tick();
+    const d = b.dialogs[b.dialogs.length - 1];
+    assert.match(d.message, /already paid \$300\.00 toward it/);
+    assert.match(d.message, /only the unpaid \$500\.00 moves to the Pine family/);
+    assert.strictEqual(B.balance(b.fam), 700, 'the family was billed money the fund already paid');
+    const acc = b.fns._payerAccount('org_fund');
+    assert.deepStrictEqual([acc.charged, acc.paid, acc.balance], [300, 300, 0]);
+    assert.match(b.toasts[b.toasts.length - 1], /\$500\.00 moved back to Pine.s bill — Scholarship Fund.s \$300\.00 stays on the share/);
+    // pressed again: nothing more
+    b.fns.voidPayerLine('org_fund', share.id);
+    await tick();
+    assert.strictEqual(B.balance(b.fam), 700);
+    // a fund that paid nothing: the whole share moves, as before
+    const c = billing([{ payerId: 'org_fund', amount: 800 }]);
+    split(c, 1000);
+    c.fns.voidPayerLine('org_fund', c.fam.payerLedger.find(e => e.kind === 'charge').id);
+    await tick();
+    assert.strictEqual(B.balance(c.fam), 1000);
+    assert.match(c.dialogs[0].message, /Scholarship Fund will no longer owe it/);
 });

@@ -3,7 +3,7 @@
 -- charge them again on its own.
 --
 -- Standalone. Paste into the Supabase SQL Editor and click Run. Safe to run
--- more than once. Requires 175 and 213. Run it BEFORE deploying stripe-webhook
+-- more than once. Requires 175, 213 and 286. Run it BEFORE deploying stripe-webhook
 -- and charge-due-installments, and before reloading Me.
 --
 -- ── THE PROBLEM (TED-186) ──────────────────────────────────────────────────
@@ -17,7 +17,12 @@
 -- ── THE CHANGE ─────────────────────────────────────────────────────────────
 -- (Edited after pass 20 — TED-193/194/196/197: the pause lists every open
 -- dispute; a decline mark is kept under it; the runner's own marks never
--- replace it; a dispute already won pauses nothing.)
+-- replace it; a dispute already won pauses nothing. Edited after pass 21 —
+-- TED-200/201/202: the pause is kept on the FAMILY (disputeHold) and on every
+-- plan, autopay on or not, the old single plan too; Billing, Charge Card,
+-- Batch Charge, the runner and stripe-charge / payments-charge all refuse a
+-- paused family; a lost dispute is marked lost, and Resume is refused while
+-- another is still open.)
 -- hold_autopay_for_dispute(camp, family, dispute, hold): for stripe-webhook
 -- only. When a chargeback is posted, every autopay plan of that family is
 -- marked collectionBlocked {reason 'chargeback', disputeId} — the nightly
@@ -32,17 +37,62 @@ DO $$
 BEGIN
     IF to_regprocedure('public.camp_family_for_update(uuid,text)') IS NULL
        OR to_regprocedure('public.camp_family_save(uuid,text,jsonb)') IS NULL
-       OR to_regprocedure('public.user_section_level(uuid,text)') IS NULL THEN
-        RAISE EXCEPTION '288 needs migrations 213 and the access resolver — apply those first';
+       OR to_regprocedure('public.user_section_level(uuid,text)') IS NULL
+       OR to_regprocedure('public._keep_payer_ledger(jsonb,jsonb)') IS NULL THEN
+        RAISE EXCEPTION '288 needs migrations 213, 286 and the access resolver — apply those first';
     END IF;
 END $$;
 
--- The plans of a family with a dispute added to their pause, or taken off it.
--- The pause lists every open dispute (disputeIds) and comes off only when none
--- is left (TED-193); a card-decline or no-card mark already on the plan is
--- kept under it (under) and put back when the pause lifts, so its retry date
--- survives (TED-197). p_dispute_id NULL with p_hold false: the office's resume
--- — every dispute off.
+-- The pause, on ONE plan: a dispute added to it, or taken off. The pause lists
+-- every open dispute (disputeIds) and comes off only when none is left
+-- (TED-193); a card-decline or no-card mark already on the plan is kept under
+-- it (under) and put back when the pause lifts, so its retry date survives
+-- (TED-197). Every plan is paused, autopay on or not (TED-200): autopay
+-- switched on during the dispute must not charge.
+CREATE OR REPLACE FUNCTION public._mark_one_plan_for_dispute(p jsonb, p_dispute_id text, p_hold boolean, p_detail text, p_since text)
+RETURNS jsonb
+LANGUAGE plpgsql
+IMMUTABLE
+SET search_path = public, pg_catalog
+AS $$
+DECLARE
+    b     jsonb;
+    v_ids jsonb;
+BEGIN
+    IF jsonb_typeof(p) IS DISTINCT FROM 'object' THEN RETURN p; END IF;
+    b := p -> 'collectionBlocked';
+    IF COALESCE(jsonb_typeof(b) = 'object' AND b ->> 'reason' = 'chargeback', false) THEN
+        v_ids := CASE WHEN jsonb_typeof(b -> 'disputeIds') = 'array' THEN b -> 'disputeIds'
+                      WHEN b ? 'disputeId' THEN jsonb_build_array(b ->> 'disputeId') ELSE '[]'::jsonb END;
+        IF p_hold THEN
+            IF NOT v_ids ? p_dispute_id THEN
+                p := jsonb_set(p, '{collectionBlocked}', b || jsonb_build_object('disputeIds', v_ids || to_jsonb(p_dispute_id)), true);
+            END IF;
+        ELSE
+            v_ids := CASE WHEN p_dispute_id IS NULL THEN '[]'::jsonb ELSE v_ids - p_dispute_id END;
+            IF jsonb_array_length(v_ids) > 0 THEN
+                p := jsonb_set(p, '{collectionBlocked}', b || jsonb_build_object('disputeIds', v_ids, 'disputeId', v_ids ->> 0), true);
+            ELSIF jsonb_typeof(b -> 'under') = 'object' THEN
+                p := jsonb_set(p, '{collectionBlocked}', b -> 'under', true);
+            ELSE
+                p := p - 'collectionBlocked';
+            END IF;
+        END IF;
+    ELSIF p_hold THEN
+        p := jsonb_set(p, '{collectionBlocked}', jsonb_build_object(
+                'reason', 'chargeback', 'disputeId', p_dispute_id, 'disputeIds', jsonb_build_array(p_dispute_id),
+                'detail', p_detail, 'since', p_since)
+             || CASE WHEN jsonb_typeof(b) = 'object' THEN jsonb_build_object('under', b) ELSE '{}'::jsonb END, true);
+    END IF;
+    RETURN p;
+END $$;
+REVOKE ALL ON FUNCTION public._mark_one_plan_for_dispute(jsonb, text, boolean, text, text) FROM public, anon, authenticated;
+
+-- The family with a dispute added to its pause, or taken off it. The pause is
+-- kept on the FAMILY (disputeHold: disputeIds, lostIds, since, detail) — so a
+-- family that pays by hand, or has no plan yet, is paused too (TED-200) — and
+-- on every plan, the old single plan included (TED-201). p_dispute_id NULL
+-- with p_hold false: every dispute off (the office's resume).
 CREATE OR REPLACE FUNCTION public._mark_plans_for_dispute(p_fam jsonb, p_dispute_id text, p_hold boolean, p_detail text)
 RETURNS jsonb
 LANGUAGE plpgsql
@@ -50,43 +100,50 @@ STABLE
 SET search_path = public, pg_catalog
 AS $$
 DECLARE
+    v_out   jsonb := p_fam;
     v_plans jsonb := '[]'::jsonb;
     p       jsonb;
-    b       jsonb;
+    h       jsonb;
     v_ids   jsonb;
+    v_lost  jsonb;
     now_ts  text := to_char(now(), 'YYYY-MM-DD"T"HH24:MI:SS"Z"');
 BEGIN
-    IF jsonb_typeof(p_fam -> 'plans') IS DISTINCT FROM 'array' THEN RETURN p_fam; END IF;
-    FOR p IN SELECT * FROM jsonb_array_elements(p_fam -> 'plans') LOOP
-        IF jsonb_typeof(p) = 'object' THEN
-            b := p -> 'collectionBlocked';
-            IF COALESCE(jsonb_typeof(b) = 'object' AND b ->> 'reason' = 'chargeback', false) THEN
-                v_ids := CASE WHEN jsonb_typeof(b -> 'disputeIds') = 'array' THEN b -> 'disputeIds'
-                              WHEN b ? 'disputeId' THEN jsonb_build_array(b ->> 'disputeId') ELSE '[]'::jsonb END;
-                IF p_hold THEN
-                    IF NOT v_ids ? p_dispute_id THEN
-                        p := jsonb_set(p, '{collectionBlocked}', b || jsonb_build_object('disputeIds', v_ids || to_jsonb(p_dispute_id)), true);
-                    END IF;
-                ELSE
-                    v_ids := CASE WHEN p_dispute_id IS NULL THEN '[]'::jsonb ELSE v_ids - p_dispute_id END;
-                    IF jsonb_array_length(v_ids) > 0 THEN
-                        p := jsonb_set(p, '{collectionBlocked}', b || jsonb_build_object('disputeIds', v_ids, 'disputeId', v_ids ->> 0), true);
-                    ELSIF jsonb_typeof(b -> 'under') = 'object' THEN
-                        p := jsonb_set(p, '{collectionBlocked}', b -> 'under', true);
-                    ELSE
-                        p := p - 'collectionBlocked';
-                    END IF;
-                END IF;
-            ELSIF p_hold AND COALESCE((p ->> 'autopay')::boolean, false) THEN
-                p := jsonb_set(p, '{collectionBlocked}', jsonb_build_object(
-                        'reason', 'chargeback', 'disputeId', p_dispute_id, 'disputeIds', jsonb_build_array(p_dispute_id),
-                        'detail', p_detail, 'since', now_ts)
-                     || CASE WHEN jsonb_typeof(b) = 'object' THEN jsonb_build_object('under', b) ELSE '{}'::jsonb END, true);
-            END IF;
+    IF jsonb_typeof(p_fam) IS DISTINCT FROM 'object' THEN RETURN p_fam; END IF;
+
+    -- the family's own pause
+    h := CASE WHEN jsonb_typeof(p_fam -> 'disputeHold') = 'object' THEN p_fam -> 'disputeHold' END;
+    v_ids  := CASE WHEN jsonb_typeof(h -> 'disputeIds') = 'array' THEN h -> 'disputeIds' ELSE '[]'::jsonb END;
+    v_lost := CASE WHEN jsonb_typeof(h -> 'lostIds') = 'array' THEN h -> 'lostIds' ELSE '[]'::jsonb END;
+    IF p_hold THEN
+        IF NOT v_ids ? p_dispute_id THEN v_ids := v_ids || to_jsonb(p_dispute_id); END IF;
+        v_out := jsonb_set(v_out, '{disputeHold}',
+                   COALESCE(h, jsonb_strip_nulls(jsonb_build_object('since', now_ts, 'detail', p_detail)))
+                   || jsonb_build_object('disputeIds', v_ids, 'lostIds', v_lost), true);
+    ELSE
+        IF p_dispute_id IS NULL THEN
+            v_ids := '[]'::jsonb;
+        ELSE
+            v_ids := v_ids - p_dispute_id;
+            v_lost := v_lost - p_dispute_id;
         END IF;
-        v_plans := v_plans || jsonb_build_array(p);
-    END LOOP;
-    RETURN jsonb_set(p_fam, '{plans}', v_plans, true);
+        IF jsonb_array_length(v_ids) > 0 THEN
+            v_out := jsonb_set(v_out, '{disputeHold}', h || jsonb_build_object('disputeIds', v_ids, 'lostIds', v_lost), true);
+        ELSE
+            v_out := v_out - 'disputeHold';
+        END IF;
+    END IF;
+
+    -- every plan
+    IF jsonb_typeof(p_fam -> 'plans') = 'array' THEN
+        FOR p IN SELECT * FROM jsonb_array_elements(p_fam -> 'plans') LOOP
+            v_plans := v_plans || jsonb_build_array(public._mark_one_plan_for_dispute(p, p_dispute_id, p_hold, p_detail, now_ts));
+        END LOOP;
+        v_out := jsonb_set(v_out, '{plans}', v_plans, true);
+    END IF;
+    IF jsonb_typeof(p_fam -> 'plan') = 'object' THEN
+        v_out := jsonb_set(v_out, '{plan}', public._mark_one_plan_for_dispute(p_fam -> 'plan', p_dispute_id, p_hold, p_detail, now_ts), true);
+    END IF;
+    RETURN v_out;
 END $$;
 REVOKE ALL ON FUNCTION public._mark_plans_for_dispute(jsonb, text, boolean, text) FROM public, anon, authenticated;
 
@@ -129,10 +186,10 @@ BEGIN
     IF p_hold AND to_regclass('public.notifications') IS NOT NULL THEN
         INSERT INTO notifications (camp_id, source, source_id, title, body, link_target)
         VALUES (p_camp_id, 'autopay_blocked', p_family_key || ':chargeback:' || p_dispute_id,
-                'Autopay paused — a payment was disputed',
+                'A payment was disputed — card charges paused',
                 COALESCE(v_fam ->> 'name', p_family_key)
-                  || ' disputed a payment with their bank, so autopay will not charge them again on its own. '
-                  || 'If the camp wins the dispute it starts again by itself; if not, resume it from Billing once you have agreed with the family.',
+                  || ' disputed a payment with their bank, so their card will not be charged again — not by autopay, not from Billing. '
+                  || 'If the camp wins the dispute this lifts by itself; if not, resume it from Billing once you have agreed with the family.',
                 'campistry_me.html')
         ON CONFLICT (camp_id, source, source_id) DO NOTHING;
     END IF;
@@ -141,8 +198,9 @@ END $$;
 REVOKE ALL ON FUNCTION public.hold_autopay_for_dispute(uuid, text, text, boolean, text) FROM public, anon, authenticated;
 GRANT EXECUTE ON FUNCTION public.hold_autopay_for_dispute(uuid, text, text, boolean, text) TO service_role;
 
--- The office's own "resume autopay" after a dispute the camp did not win.
-CREATE OR REPLACE FUNCTION public.resume_autopay_after_dispute(p_camp_id uuid, p_family_key text)
+-- A dispute the camp LOST (TED-202): the pause stays, but that dispute is
+-- marked lost — the office may resume once no dispute is still open.
+CREATE OR REPLACE FUNCTION public.note_dispute_lost(p_camp_id uuid, p_family_key text, p_dispute_id text)
 RETURNS jsonb
 LANGUAGE plpgsql
 SECURITY DEFINER
@@ -150,7 +208,47 @@ SET search_path = public, pg_catalog
 AS $$
 DECLARE
     v_fam jsonb;
-    v_new jsonb;
+    h     jsonb;
+    v_lost jsonb;
+BEGIN
+    IF p_camp_id IS NULL OR NULLIF(btrim(COALESCE(p_family_key, '')), '') IS NULL
+       OR NULLIF(btrim(COALESCE(p_dispute_id, '')), '') IS NULL THEN
+        RETURN jsonb_build_object('success', false, 'error', 'missing_argument');
+    END IF;
+    v_fam := public.camp_family_for_update(p_camp_id, p_family_key);
+    IF v_fam IS NULL OR jsonb_typeof(v_fam) <> 'object' THEN
+        RETURN jsonb_build_object('success', false, 'error', 'family_not_found');
+    END IF;
+    h := CASE WHEN jsonb_typeof(v_fam -> 'disputeHold') = 'object' THEN v_fam -> 'disputeHold' END;
+    IF h IS NULL OR jsonb_typeof(h -> 'disputeIds') IS DISTINCT FROM 'array' OR NOT (h -> 'disputeIds') ? p_dispute_id THEN
+        RETURN jsonb_build_object('success', true, 'changed', false);
+    END IF;
+    v_lost := CASE WHEN jsonb_typeof(h -> 'lostIds') = 'array' THEN h -> 'lostIds' ELSE '[]'::jsonb END;
+    IF v_lost ? p_dispute_id THEN
+        RETURN jsonb_build_object('success', true, 'changed', false);
+    END IF;
+    PERFORM public.camp_family_save(p_camp_id, p_family_key,
+        jsonb_set(v_fam, '{disputeHold,lostIds}', v_lost || to_jsonb(p_dispute_id), true));
+    RETURN jsonb_build_object('success', true, 'changed', true);
+END $$;
+REVOKE ALL ON FUNCTION public.note_dispute_lost(uuid, text, text) FROM public, anon, authenticated;
+GRANT EXECUTE ON FUNCTION public.note_dispute_lost(uuid, text, text) TO service_role;
+
+-- The office's own "resume" after a dispute the camp did not win. While a
+-- dispute is still open with the bank it is refused (TED-202) unless the
+-- office says it is resuming anyway (p_even_open).
+DROP FUNCTION IF EXISTS public.resume_autopay_after_dispute(uuid, text);
+CREATE OR REPLACE FUNCTION public.resume_autopay_after_dispute(p_camp_id uuid, p_family_key text, p_even_open boolean DEFAULT false)
+RETURNS jsonb
+LANGUAGE plpgsql
+SECURITY DEFINER
+SET search_path = public, pg_catalog
+AS $$
+DECLARE
+    v_fam  jsonb;
+    v_new  jsonb;
+    h      jsonb;
+    v_open integer := 0;
 BEGIN
     IF auth.uid() IS NULL THEN RETURN jsonb_build_object('success', false, 'error', 'not_authenticated'); END IF;
     IF NOT public.camp_staff_member(p_camp_id)
@@ -162,14 +260,61 @@ BEGIN
     IF v_fam IS NULL OR jsonb_typeof(v_fam) <> 'object' THEN
         RETURN jsonb_build_object('success', false, 'error', 'family_not_found');
     END IF;
+    h := CASE WHEN jsonb_typeof(v_fam -> 'disputeHold') = 'object' THEN v_fam -> 'disputeHold' END;
+    IF jsonb_typeof(h -> 'disputeIds') = 'array' THEN
+        SELECT count(*) INTO v_open FROM jsonb_array_elements_text(h -> 'disputeIds') d
+         WHERE NOT (CASE WHEN jsonb_typeof(h -> 'lostIds') = 'array' THEN h -> 'lostIds' ELSE '[]'::jsonb END) ? d;
+    END IF;
+    IF v_open > 0 AND NOT COALESCE(p_even_open, false) THEN
+        RETURN jsonb_build_object('success', false, 'error', 'dispute_open', 'open', v_open,
+            'message', CASE WHEN v_open = 1 THEN 'A dispute is still open with the bank.'
+                            ELSE v_open || ' disputes are still open with the bank.' END);
+    END IF;
     v_new := public._mark_plans_for_dispute(v_fam, NULL, false, NULL);
     IF v_new IS DISTINCT FROM v_fam THEN
         PERFORM public.camp_family_save(p_camp_id, p_family_key, v_new);
     END IF;
     RETURN jsonb_build_object('success', true, 'changed', v_new IS DISTINCT FROM v_fam);
 END $$;
-REVOKE ALL ON FUNCTION public.resume_autopay_after_dispute(uuid, text) FROM public, anon;
-GRANT EXECUTE ON FUNCTION public.resume_autopay_after_dispute(uuid, text) TO authenticated;
+REVOKE ALL ON FUNCTION public.resume_autopay_after_dispute(uuid, text, boolean) FROM public, anon;
+GRANT EXECUTE ON FUNCTION public.resume_autopay_after_dispute(uuid, text, boolean) TO authenticated;
+
+-- The family's pause is the server's (TED-200): an office computer that
+-- loaded the family before the dispute (or after it was lifted) never writes
+-- its own copy back. _merge_family_from_page (as 286 left it) takes the
+-- server's disputeHold, or none, whatever the page sent.
+CREATE OR REPLACE FUNCTION public._keep_dispute_hold(p_server jsonb, p_merged jsonb)
+RETURNS jsonb
+LANGUAGE plpgsql
+IMMUTABLE
+SET search_path = public, pg_catalog
+AS $$
+BEGIN
+    IF p_merged IS NULL OR jsonb_typeof(p_merged) IS DISTINCT FROM 'object'
+       OR p_server IS NULL OR jsonb_typeof(p_server) IS DISTINCT FROM 'object' THEN
+        RETURN p_merged;
+    END IF;
+    IF jsonb_typeof(p_server -> 'disputeHold') = 'object' THEN
+        RETURN jsonb_set(p_merged, '{disputeHold}', p_server -> 'disputeHold', true);
+    END IF;
+    RETURN p_merged - 'disputeHold';
+END $$;
+REVOKE ALL ON FUNCTION public._keep_dispute_hold(jsonb, jsonb) FROM public, anon, authenticated;
+
+DO $$
+DECLARE
+    d   text := pg_get_functiondef('public._merge_family_from_page(jsonb,jsonb)'::regprocedure);
+    old text := 'public._keep_payer_ledger(p_server, v_out)';
+BEGIN
+    IF position('_keep_dispute_hold' IN d) > 0 THEN
+        RAISE NOTICE '288: _merge_family_from_page already keeps the dispute pause';
+        RETURN;
+    END IF;
+    IF position(old IN d) = 0 THEN
+        RAISE EXCEPTION '288: _merge_family_from_page does not look the way this file expects (run 286 first) — send this message to the builder';
+    END IF;
+    EXECUTE replace(d, old, 'public._keep_dispute_hold(p_server, ' || old || ')');
+END $$;
 
 -- The nightly runner's own marks (a declined card, no card on file) never
 -- replace a dispute pause (TED-194): flag_plan_collection (214) keeps the

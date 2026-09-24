@@ -49,7 +49,7 @@ function world(answers) {
     };
     vm.createContext(ctx);
     const pending = ['_pendingChargeStoreKey', '_pendingChargeAll', '_pendingChargeGet', '_pendingChargeSet', '_pendingChargeClear'].map(cut).join('\n');
-    const onWay = ['_familyOnItsWay', '_familyDisputed', '_onItsWayWords', '_recordOnItsWay', '_methodTypeCharged'].map(cut).join('\n');
+    const onWay = ['_familyOnItsWay', '_familyDisputed', '_famDisputeHeld', '_onItsWayWords', '_recordOnItsWay', '_methodTypeCharged'].map(cut).join('\n');
     vm.runInContext(cut('chargeStoredCard') + '\n' + cut('batchCharge') + '\n' + pending + '\n' + onWay + '\nthis.chargeStoredCard=chargeStoredCard;this.batchCharge=batchCharge;', ctx);
     return ctx;
 }

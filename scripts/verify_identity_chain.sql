@@ -761,7 +761,6 @@ UNION ALL
     -- Autopay waits while a family's payment is charged back (TED-186).
     ('288  autopay waits while a payment is disputed',
      CASE WHEN to_regprocedure('public.hold_autopay_for_dispute(uuid,text,text,boolean,text)') IS NULL
-               OR to_regprocedure('public.resume_autopay_after_dispute(uuid,text)') IS NULL
           THEN 'apply 288 BEFORE deploying stripe-webhook and charge-due-installments — autopay charges a family again for a payment their bank is disputing'
           WHEN has_function_privilege('authenticated', 'public.hold_autopay_for_dispute(uuid,text,text,boolean,text)', 'EXECUTE')
           THEN 'apply 288 again — a signed-in browser can pause or resume autopay'
@@ -769,6 +768,11 @@ UNION ALL
                OR pg_get_functiondef(to_regprocedure('public.hold_autopay_for_dispute(uuid,text,text,boolean,text)')) !~ 'le_cbwon_'
                OR pg_get_functiondef(to_regprocedure('public._mark_plans_for_dispute(jsonb,text,boolean,text)')) !~ 'disputeIds'
           THEN 'apply 288 again — an earlier copy is in place: a second dispute, a replaced card or a late message can restart autopay mid-dispute'
+          WHEN to_regprocedure('public.note_dispute_lost(uuid,text,text)') IS NULL
+               OR to_regprocedure('public.resume_autopay_after_dispute(uuid,text,boolean)') IS NULL
+               OR pg_get_functiondef(to_regprocedure('public._mark_plans_for_dispute(jsonb,text,boolean,text)')) !~ 'disputeHold'
+               OR pg_get_functiondef(to_regprocedure('public._merge_family_from_page(jsonb,jsonb)')) !~ '_keep_dispute_hold'
+          THEN 'apply 288 again — an earlier copy is in place: a family that pays by hand can be charged on a card it is disputing, and Resume clears a dispute still open'
           ELSE 'ok' END),
     -- A register sale keeps what it sold, by item id (TED-192).
     ('289  a register sale keeps what it sold',

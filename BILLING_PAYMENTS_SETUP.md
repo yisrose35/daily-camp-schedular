@@ -76,10 +76,13 @@ Dashboard → Developers → Webhooks → Add endpoint:
     payment back. An *inquiry* (the bank only asking a question, no money moved)
     posts nothing; if it escalates, Stripe sends `updated` / `funds_withdrawn`,
     and only then does the payment go back on the family's bill (or come off the
-    child's canteen wallet). While a family's payment is charged back, autopay
-    does not charge them again; it resumes by itself if the camp wins, and from
-    Billing ("Autopay paused — a payment is disputed") if it does not
-    (migration 288).
+    child's canteen wallet). While a family's payment is charged back, their
+    card is not charged again — not by autopay, not by Charge Card or Batch
+    Charge, whether or not they are on autopay (the server refuses it too). It
+    resumes by itself if the camp wins; if the camp loses, from Billing
+    ("Payment disputed — card not charged"), which says so if another dispute
+    of theirs is still open (migration 288). Cardknox and Banquest disputes
+    (byop-dispute-webhook) pause the card the same way.
   - `radar.early_fraud_warning.created`, `review.opened`, `payout.failed`
 - Copy the signing secret into `STRIPE_WEBHOOK_SECRET` (step 3).
 

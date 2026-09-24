@@ -27,6 +27,7 @@ const SRC = [
     cut(/function _pendingChargeClear\(famKey,amount\)\{[\s\S]*?\n\}\n/),
     cut(/function _familyOnItsWay\(famKey\)\{[\s\S]*?\n\}\n/),
     cut(/function _familyDisputed\(famKey\)\{[\s\S]*?\n\}\n/),
+    cut(/function _famDisputeHeld\(f\)\{[\s\S]*?\n\}\n/),
     cut(/function _onItsWayWords\(w\)\{[\s\S]*?\n\}\n/),
     cut(/function _recordOnItsWay\(f,famKey,piId,amount\)\{[\s\S]*?\n\}\n/),
     cut(/function _methodTypeCharged\(f\)\{[\s\S]*?\n\}\n/),

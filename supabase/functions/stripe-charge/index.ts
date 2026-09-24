@@ -266,6 +266,23 @@ async function confirmAutopay(campId: string, body: Record<string, any>): Promis
   return { success: true, recorded: true };
 }
 
+// A family whose payment is disputed with their bank (288, TED-200) is not
+// charged again from the office while the bank decides — the server's check,
+// so an office computer that loaded Billing before the dispute cannot either.
+function disputedFamily(families: unknown, match: (f: any) => boolean): any | null {
+  if (!families || typeof families !== "object") return null;
+  for (const f of Object.values(families as Record<string, any>)) {
+    if (!f || !match(f)) continue;
+    const held = (f.disputeHold && Array.isArray(f.disputeHold.disputeIds) && f.disputeHold.disputeIds.length > 0)
+      || [...(Array.isArray(f.plans) ? f.plans : []), f.plan].some((p: any) => p && p.collectionBlocked && p.collectionBlocked.reason === "chargeback");
+    if (held) return f;
+  }
+  return null;
+}
+const DISPUTED_MSG = (name: string) =>
+  `${name || "This family"} disputed a payment with their bank, so their card is not charged again until the dispute is over ` +
+  `(or someone who can edit Billing resumes it, from the family's "Payment disputed" label). Nothing was charged.`;
+
 serve(async (req) => {
   if (req.method === "OPTIONS") {
     return new Response("ok", { headers: corsHeaders });
@@ -316,6 +333,19 @@ serve(async (req) => {
         status: 403,
         headers: { ...corsHeaders, "Content-Type": "application/json" },
       });
+    }
+    {
+      const svc = createClient(SUPABASE_URL, SUPABASE_SERVICE_KEY);
+      const { data: fams, error: famErr } = await svc.rpc("camp_families_object", { p_camp_id: authedCampId });
+      if (famErr) {
+        return new Response(JSON.stringify({ error: "Could not read the family's record, so nothing was charged. Try again in a minute." }), {
+          status: 503, headers: { ...corsHeaders, "Content-Type": "application/json" } });
+      }
+      const disputed = disputedFamily(fams, (f: any) => f.stripeCustomerId === customerId);
+      if (disputed) {
+        return new Response(JSON.stringify({ error: DISPUTED_MSG(disputed.name), disputed: true }), {
+          status: 409, headers: { ...corsHeaders, "Content-Type": "application/json" } });
+      }
     }
     // ...and a given payment method must be that family's own.
     if (paymentMethodId) {

@@ -1075,6 +1075,12 @@ async function handleDisputeLedger(
       const rel = await supabase.rpc("hold_autopay_for_dispute", {
         p_camp_id: campId, p_family_key: String(data.familyKey), p_dispute_id: disputeId, p_hold: false });
       if (rel.error) throw new Error(`dispute ${disputeId} won: autopay could not be resumed yet: ${rel.error.message}`);
+    } else if (!won && data?.familyKey) {
+      // Lost (TED-202): the pause stays, marked lost — the office may resume
+      // once no other dispute of the family's is still open.
+      const lost = await supabase.rpc("note_dispute_lost", {
+        p_camp_id: campId, p_family_key: String(data.familyKey), p_dispute_id: disputeId });
+      if (lost.error) throw new Error(`dispute ${disputeId} lost: not marked yet: ${lost.error.message} — is migration 288 applied?`);
     }
   }
 }

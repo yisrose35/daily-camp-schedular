@@ -261,13 +261,24 @@ serve(async (req) => {
     });
   }
 
+  let pauseFailed = "";
   try {
     if (d.closed) {
-      const { error } = await supabase.rpc("resolve_chargeback", {
+      const { data, error } = await supabase.rpc("resolve_chargeback", {
         p_camp_id: camp, p_dispute_id: d.disputeId,
         p_won: d.won, p_status: d.status,
       });
       if (error) console.warn(`[byop-dispute] ${processor} close not recorded: ${error.message}`);
+      // The family's card pause (288, TED-200): won lifts this dispute from
+      // it; lost marks it lost, so the office may resume from Billing.
+      if (!error && data?.familyKey) {
+        const r = d.won
+          ? await supabase.rpc("hold_autopay_for_dispute", {
+              p_camp_id: camp, p_family_key: String(data.familyKey), p_dispute_id: d.disputeId, p_hold: false })
+          : await supabase.rpc("note_dispute_lost", {
+              p_camp_id: camp, p_family_key: String(data.familyKey), p_dispute_id: d.disputeId });
+        if (r.error) pauseFailed = `dispute ${d.disputeId} closed, but the family's card pause was not updated: ${r.error.message} — is migration 288 applied?`;
+      }
     } else {
       // A missing amount is NOT a reason to refuse. Cardknox's postback has no
       // amount field at all, so requiring one meant the camp stayed exactly
@@ -286,12 +297,29 @@ serve(async (req) => {
           `(${error?.message || data?.error || "unknown"}) — the camp's books now overstate ` +
           `collected cash until this is reconciled by hand. refs=${d.refs.join(",")}`);
       }
+      // The family's card is not charged again — by autopay or from Billing —
+      // while their bank decides (288, TED-200), as for a Stripe dispute.
+      if (!error && data?.success && data.familyKey) {
+        const hold = await supabase.rpc("hold_autopay_for_dispute", {
+          p_camp_id: camp, p_family_key: String(data.familyKey), p_dispute_id: d.disputeId, p_hold: true,
+          p_detail: d.reason || null });
+        if (hold.error) pauseFailed = `chargeback ${d.disputeId} posted, but the family's card was not paused: ${hold.error.message} — is migration 288 applied?`;
+      }
     }
   } catch (e) {
     console.error(`[byop-dispute] ${processor} threw: ${(e as Error).message}`);
   }
 
-  // Always 200. A dispute notification retried forever because our own write
+  // The pause is the one write a retry fixes (every writer here is keyed on the
+  // dispute, so sending it again posts nothing twice): 500, so the processor
+  // sends it again, instead of leaving the family's card chargeable.
+  if (pauseFailed) {
+    console.error(`[byop-dispute] ${processor}: ${pauseFailed}`);
+    return new Response(JSON.stringify({ received: true, paused: false }), {
+      status: 500, headers: { ...corsHeaders, "Content-Type": "application/json" },
+    });
+  }
+  // Otherwise 200. A dispute notification retried forever because our own write
   // failed helps nobody; the log line above is the actionable signal.
   return new Response(JSON.stringify({ received: true }), {
     status: 200, headers: { ...corsHeaders, "Content-Type": "application/json" },

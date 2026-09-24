@@ -6622,21 +6622,44 @@ async function resolveUnconfirmedAutopay(fk,planRef){
     try{if(curPage==='familydetail')renderFamilyDetailPage();else renderBilling()}catch(_){}
 }
 
-// Autopay paused by a chargeback (TED-186): it starts again by itself when
-// the camp wins; after a loss the office decides, here.
+// A family's card paused by a chargeback (TED-186/200): it starts again by
+// itself when the camp wins; after a loss the office decides, here. While
+// another dispute of theirs is still open with the bank, the window says so
+// and the server refuses unless the office resumes anyway (TED-202).
+function _disputeCounts(f){
+    var h=f&&f.disputeHold||{};
+    var ids=Array.isArray(h.disputeIds)?h.disputeIds:[];
+    var lost=Array.isArray(h.lostIds)?h.lostIds:[];
+    var open=ids.filter(function(id){return lost.indexOf(id)<0}).length;
+    return {open:open,lost:ids.length-open};
+}
 async function resumeAutopayAfterDispute(fk){
-    if(!_secEdit('billing','Resuming autopay'))return;
+    if(!_secEdit('billing','Resuming card charges'))return;
     var f=families[fk]; if(!f)return;
-    var ok=await confirmDialog({title:'Resume autopay?',confirmLabel:'Resume autopay',
-        message:f.name+' disputed a payment with their bank, so autopay stopped charging them. Resume it only if the dispute is over and you have agreed with the family \u2014 their card will be charged on the next due date.'});
+    var c=_disputeCounts(f);
+    var openWords=c.open===1?'1 dispute is still open with the bank':c.open+' disputes are still open with the bank';
+    var ok=await confirmDialog({title:c.open?'A dispute is still open':'Charge their card again?',
+        confirmLabel:c.open?'Resume anyway':'Resume charges',
+        message:c.open
+            ?f.name+' disputed a payment with their bank and '+openWords+(c.lost?' (the camp lost '+c.lost+')':'')+'. Charging the card they are disputing is what the bank holds against the camp. Resume only if you have agreed with the family \u2014 autopay and Charge Card will charge their card again.'
+            :f.name+' disputed a payment with their bank and the camp lost it, so their card has not been charged since. Resume only if you have agreed with the family \u2014 autopay and Charge Card will charge their card again.'});
     if(!ok)return;
     var client=window.CampistryDB&&window.CampistryDB.getClient?window.CampistryDB.getClient():null;
     var campId=window.CampistryDB&&window.CampistryDB.getCampId?window.CampistryDB.getCampId():null;
     if(!client||!campId)return toast('Not connected','error');
-    var res=await client.rpc('resume_autopay_after_dispute',{p_camp_id:campId,p_family_key:fk});
+    var res=await client.rpc('resume_autopay_after_dispute',{p_camp_id:campId,p_family_key:fk,p_even_open:c.open>0});
     var d=res&&res.data;
-    if(res&&res.error||!d||d.success!==true)return toast('Could not resume autopay: '+((res&&res.error&&res.error.message)||(d&&(d.message||d.error))||'no answer'),'error');
-    toast('Autopay resumed for '+f.name);
+    // The server knew of an open dispute this page did not (it loaded before
+    // the dispute arrived): ask again, with the server's count.
+    if(d&&d.error==='dispute_open'){
+        var again=await confirmDialog({title:'A dispute is still open',confirmLabel:'Resume anyway',
+            message:(d.message||'A dispute is still open with the bank.')+' Resume charging '+f.name+'\u2019s card anyway?'});
+        if(!again)return;
+        res=await client.rpc('resume_autopay_after_dispute',{p_camp_id:campId,p_family_key:fk,p_even_open:true});
+        d=res&&res.data;
+    }
+    if(res&&res.error||!d||d.success!==true)return toast('Could not resume: '+((res&&res.error&&res.error.message)||(d&&(d.message||d.error))||'no answer'),'error');
+    toast('Card charges resumed for '+f.name);
     try{ await _loadFamiliesFromRows(); }catch(_){}
     try{if(curPage==='familydetail')renderFamilyDetailPage();else renderBilling()}catch(_){}
 }
@@ -17935,17 +17958,18 @@ function viewFamily(famKey){
 function _collectionWarning(l){
     if(!l)return '';
     var out=[];
+    // A disputed payment (TED-186/200, 288): the family's card is not charged
+    // — by autopay or from here — shown once, plan or no plan; clicking asks
+    // whether to resume (after a dispute the camp did not win).
+    if(_famDisputeHeld(l.family)){
+        out.push('<span style="font-size:.78rem;font-weight:700;color:var(--err);cursor:pointer;text-decoration:underline" '
+            +'onclick="event.stopPropagation();CampistryMe.resumeAutopayAfterDispute(\''+je(l.famKey)+'\')">'
+            +esc('Payment disputed \u2014 card not charged')+'</span>');
+    }
     (l.collectionBlocked||[]).forEach(function(b){
         if(!b)return;
         var n=Number(b.attempts)||0;
-        // A disputed payment (TED-186, 288): autopay waits — clicking asks
-        // whether to resume it (after a dispute the camp did not win).
-        if(b.reason==='chargeback'){
-            out.push('<span style="font-size:.78rem;font-weight:700;color:var(--err);cursor:pointer;text-decoration:underline" '
-                +'onclick="event.stopPropagation();CampistryMe.resumeAutopayAfterDispute(\''+je(l.famKey)+'\')">'
-                +esc('Autopay paused \u2014 a payment is disputed with the bank')+'</span>');
-            return;
-        }
+        if(b.reason==='chargeback')return;
         var label=b.reason==='no_card'?'No card on file'
                  :b.reason==='declined'?'Card declined'
                  :b.reason==='no_processor'?'Processor not connected'
@@ -18838,9 +18862,21 @@ function voidPayerLine(pid,lineId,mode){
     if(!targets.length){toast('Already taken back','error');return}
     var isPay=targets[0].kind==='payment', name=(payers[pid]&&payers[pid].name)||pid;
     var tot=targets.reduce(function(t,e){return t+(Number(e.amount)||0)},0);
+    // Move back after the payer has paid (TED-203): what it paid that its other
+    // shares do not need stays on THIS share, and only the unpaid part moves to
+    // the family — never billing the family for money the payer already gave.
+    var kept=0;
+    if(!isPay&&!cancel&&targets.length===1){
+        var left=Math.round((a.paid-(a.charged-tot))*100)/100;
+        kept=Math.max(0,Math.min(tot,left));
+    }
+    var back=Math.round((tot-kept)*100)/100;
     var msg=isPay?'Remove this '+fm(tot)+' payment from '+name+'? Use this for a payment entered by mistake, or one you gave back. '+name+' will owe it again.'
                  :cancel?'Cancel this '+fm(tot)+' share? Nobody will owe it \u2014 not '+name+', not the '+targets[0].family+' family. Use this when the charge was a mistake or is waived.'
                     +(a.paid>0?' '+name+' has paid '+fm(a.paid)+' so far; whatever that leaves over its other shares stays on its account as a credit, to return to them or keep for a later share.':'')
+                 :kept>0?'Move this '+fm(tot)+' share back to the '+targets[0].family+' family\u2019s own bill? '+name+' has already paid '+fm(kept)+' toward it, so that '+fm(kept)+' stays on this share and '
+                    +(back>0?'only the unpaid '+fm(back)+' moves to the '+targets[0].family+' family.':'nothing moves to the '+targets[0].family+' family \u2014 it is paid.')
+                    +' (To move all '+fm(tot)+' back and return '+name+'\u2019s money, remove its payment first.)'
                  :'Move this '+fm(tot)+' share back to the '+targets[0].family+' family\u2019s own bill? '+name+' will no longer owe it.';
     confirmDialog({title:isPay?'Remove payment?':cancel?'Cancel share?':'Move share back?',message:msg,confirmLabel:isPay?'Remove':cancel?'Cancel share':'Move back',danger:isPay||cancel}).then(function(ok){
         if(!ok)return;
@@ -18850,15 +18886,20 @@ function voidPayerLine(pid,lineId,mode){
             if(L.some(function(x){return x&&x.id===vid}))return;
             L.push({id:vid,payerId:pid,kind:'void',voidOf:e.id,amount:e.amount,date:today(),timestamp:Date.now()});
             if(e.kind==='charge'&&!cancel){
+                if(kept>0&&!L.some(function(x){return x&&x.id==='prkeep_'+e.id}))
+                    L.push({id:'prkeep_'+e.id,payerId:pid,kind:'charge',amount:kept,chargeId:e.chargeId,
+                        description:(e.description||'Share')+' \u2014 the part '+name+' paid',date:today(),timestamp:Date.now()});
+                if(!(back>0))return;
                 if(!Array.isArray(f.charges))f.charges=[];
                 var chg={id:'prback_'+e.id,category:'Share moved back',description:(e.description||'Share')+' \u2014 moved back from '+name,
-                    amount:Number(e.amount)||0,date:today(),timestamp:Date.now()};
+                    amount:back,date:today(),timestamp:Date.now()};
                 f.charges.push(chg); _postLedgerCharge(f,chg); f.balance=(f.balance||0)+chg.amount;
             }
         });
         save(); closeModal('dynModal');
         toast(isPay?fm(tot)+' payment removed \u2014 '+name+': '+_payerStanding(_payerAccount(pid))
             :cancel?fm(tot)+' share cancelled \u2014 '+name+': '+_payerStanding(_payerAccount(pid))
+            :kept>0?fm(back)+' moved back to '+targets[0].family+'\u2019s bill \u2014 '+name+'\u2019s '+fm(kept)+' stays on the share'
             :fm(tot)+' moved back to '+targets[0].family+'\u2019s bill');
         if(curPage==='familydetail')renderFamilyDetailPage(); else if(typeof renderBilling==='function')renderBilling();
     });
@@ -19981,9 +20022,14 @@ function _methodTypeCharged(f){
 // money on its way: shown, taken off what is offered, and no second charge is
 // started while it is there (stripe-charge refuses one too, asking Stripe).
 // A payment of this family's is charged back and the bank is still deciding
-// (TED-186/195, migration 288): its plans carry the dispute pause.
+// (TED-186/195/200, migration 288): the family carries the dispute pause
+// (disputeHold) — autopay or not, plan or not — and so do its plans.
 function _familyDisputed(famKey){
-    var f=families[famKey]; if(!f)return false;
+    return _famDisputeHeld(families[famKey]);
+}
+function _famDisputeHeld(f){
+    if(!f)return false;
+    if(f.disputeHold&&Array.isArray(f.disputeHold.disputeIds)&&f.disputeHold.disputeIds.length)return true;
     var plans=Array.isArray(f.plans)?f.plans:(f.plan&&typeof f.plan==='object'?[f.plan]:[]);
     return plans.some(function(p){return p&&p.collectionBlocked&&p.collectionBlocked.reason==='chargeback'});
 }
@@ -20028,7 +20074,7 @@ async function chargeStoredCard(famKey,amount,description,quiet){
     // A family disputing a payment with their bank is not charged from here
     // either (TED-195): resume autopay once the dispute is settled, then charge.
     if(_familyDisputed(famKey)){
-        var _dw=f.name+' is disputing a payment with their bank \u2014 nothing is charged until that is settled. Once it is, click \u201cAutopay paused\u201d on their row to resume.';
+        var _dw=f.name+' is disputing a payment with their bank \u2014 nothing is charged until that is settled. Once it is, click \u201cPayment disputed\u201d on their row to resume.';
         if(!quiet)toast(_dw,'error');
         return {ok:false,disputed:true,error:_dw};
     }
@@ -20259,7 +20305,7 @@ async function batchCharge(){
         h+='<div style="display:flex;justify-content:space-between;padding:8px 12px;border-bottom:1px solid var(--s100);font-size:.8rem"><span class="bold">'+esc(l.family.name)+'</span><span style="font-weight:700;color:var(--err)">'+fm(l.balance)+'</span></div>';
     });
     h+='</div>';
-    if(disputed.length)h+='<p style="font-size:.78rem;color:var(--err);margin-bottom:10px">Not charged \u2014 a payment is disputed: '+disputed.map(function([fk,l]){return esc(l.family.name)}).join(', ')+'. Autopay is paused for them too; resume it from their row once the dispute is settled.</p>';
+    if(disputed.length)h+='<p style="font-size:.78rem;color:var(--err);margin-bottom:10px">Not charged \u2014 a payment is disputed: '+disputed.map(function([fk,l]){return esc(l.family.name)}).join(', ')+'. Their card is not charged by autopay either; resume from their row (\u201cPayment disputed\u201d) once the dispute is settled.</p>';
     if(onWay.length)h+='<p style="font-size:.78rem;color:var(--s600);margin-bottom:10px">Not charged: '+onWay.map(function([fk,l]){return esc(l.family.name)}).join(', ')+' \u2014 a bank debit is still on its way (bank debits take a few business days).</p>';
     h+='<p style="font-size:.75rem;color:var(--warn);font-weight:600">⚠ This action will charge real credit cards. Proceed with caution.</p>';
     h+='</div>';

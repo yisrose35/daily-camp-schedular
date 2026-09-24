@@ -788,7 +788,10 @@ serve(async (req) => {
       // A payment of this family's is disputed with the bank (TED-186/194,
       // migration 288): nothing is charged, and — before the card check — the
       // pause is not touched by a "no card" mark while the card is replaced.
-      if (plans.some((p: any) => p && p.collectionBlocked && p.collectionBlocked.reason === "chargeback")) {
+      // The family's own pause (TED-200) covers a plan added or switched to
+      // autopay during the dispute.
+      if ((f.disputeHold && Array.isArray(f.disputeHold.disputeIds) && f.disputeHold.disputeIds.length > 0)
+          || plans.some((p: any) => p && p.collectionBlocked && p.collectionBlocked.reason === "chargeback")) {
         details.push({ camp: row.camp_id, family: f.name, result: "held_for_dispute",
                        reason: "a payment is disputed with the bank" });
         continue;

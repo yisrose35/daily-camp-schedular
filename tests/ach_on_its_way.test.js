@@ -118,11 +118,13 @@ function billing(finPayments, answers, withGold) {
             return a;
         },
     };
-    const names = ['chargeStoredCard', 'batchCharge', '_familyOnItsWay', '_familyDisputed', '_onItsWayWords', '_recordOnItsWay', '_methodTypeCharged',
+    const names = ['chargeStoredCard', 'batchCharge', '_familyOnItsWay', '_familyDisputed', '_famDisputeHeld', '_onItsWayWords', '_recordOnItsWay', '_methodTypeCharged',
         '_pendingChargeStoreKey', '_pendingChargeAll', '_pendingChargeGet', '_pendingChargeSet', '_pendingChargeClear'];
     const fns = new Function(...Object.keys(ctx), names.map(cut).join('\n') + '\nreturn { chargeStoredCard, batchCharge };')(...Object.values(ctx));
     return { ...fns, sent, toasts, modals, finPayments,
-        setDispute: (fk) => { ctx.families[fk].plans = [{ id: 'p1', autopay: true, collectionBlocked: { reason: 'chargeback', disputeIds: ['dp_1'] } }]; } };
+        setDispute: (fk) => { ctx.families[fk].plans = [{ id: 'p1', autopay: true, collectionBlocked: { reason: 'chargeback', disputeIds: ['dp_1'] } }]; },
+        // TED-200: the family's own pause — no plan, or a plan not on autopay
+        setFamilyDispute: (fk, plans) => { ctx.families[fk].disputeHold = { disputeIds: ['dp_h'], lostIds: [] }; if (plans) ctx.families[fk].plans = plans; } };
 }
 const pendingRow = () => ({ id: 'pi_pi_1', family: 'Iron', familyKey: 'iron', amount: 1000, date: '2026-09-24',
     stripePaymentIntentId: 'pi_1', status: 'pending', timestamp: Date.now() - 3600000 });
@@ -204,6 +206,21 @@ test('TED-195: Batch Charge and Charge Card leave out a family whose payment is 
     const r = await b.chargeStoredCard('gold', 1000, 'Camp payment');
     assert.strictEqual(r.disputed, true);
     assert.strictEqual(b.sent.length, 1, 'Charge Card charged a disputed family');
+});
+
+test('TED-200: a family paying by hand, or with no plan, whose payment is disputed is not charged by Batch Charge or Charge Card', async () => {
+    for (const plans of [null, [{ id: 'p1', autopay: false, dueDates: ['2026-07-01'] }]]) {
+        const b = billing([], [{ paymentIntentId: 'pi_i', status: 'succeeded', amount: 1000 }], true);
+        b.setFamilyDispute('gold', plans);
+        b.batchCharge();
+        const m = b.modals[b.modals.length - 1];
+        assert.match(m.html, /Not charged — a payment is disputed: Gold/);
+        await m.ok();
+        assert.deepStrictEqual(b.sent.map(x => x.customerId), ['cus_I'], 'the disputed family was charged in the batch');
+        const r = await b.chargeStoredCard('gold', 1000, 'Camp payment');
+        assert.strictEqual(r.disputed, true);
+        assert.strictEqual(b.sent.length, 1, 'Charge Card charged a disputed family');
+    }
 });
 
 // ── the nightly autopay waits ───────────────────────────────────────────────

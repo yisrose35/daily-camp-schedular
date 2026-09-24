@@ -157,6 +157,23 @@ async function callerCampId(req: Request): Promise<string | null> {
   return null;
 }
 
+// A family whose payment is disputed with their bank (288, TED-200) is not
+// charged again from the office while the bank decides — the server's check,
+// so an office computer that loaded Billing before the dispute cannot either.
+function disputedFamily(families: unknown, match: (f: any) => boolean): any | null {
+  if (!families || typeof families !== "object") return null;
+  for (const f of Object.values(families as Record<string, any>)) {
+    if (!f || !match(f)) continue;
+    const held = (f.disputeHold && Array.isArray(f.disputeHold.disputeIds) && f.disputeHold.disputeIds.length > 0)
+      || [...(Array.isArray(f.plans) ? f.plans : []), f.plan].some((p: any) => p && p.collectionBlocked && p.collectionBlocked.reason === "chargeback");
+    if (held) return f;
+  }
+  return null;
+}
+const DISPUTED_MSG = (name: string) =>
+  `${name || "This family"} disputed a payment with their bank, so their card is not charged again until the dispute is over ` +
+  `(or someone who can edit Billing resumes it, from the family's "Payment disputed" label). Nothing was charged.`;
+
 serve(async (req) => {
   if (req.method === "OPTIONS") return new Response("ok", { headers: corsHeaders });
 
@@ -183,6 +200,8 @@ serve(async (req) => {
     const owns = !!families && typeof families === "object" &&
       Object.values(families as Record<string, any>).some((f: any) => f && String(f.byopCustomerRef || "") === String(customerRef));
     if (!owns) return json({ error: "That card is not on file for a family at your camp." }, 403);
+    const disputed = disputedFamily(families, (f: any) => String(f.byopCustomerRef || "") === String(customerRef));
+    if (disputed) return json({ error: DISPUTED_MSG(disputed.name), disputed: true }, 409);
 
     const { data: credResult } = await service.rpc("_admin_get_processor_credential", { p_camp_id: campId });
     if (!credResult?.success) return json({ error: credResult?.error || "This camp's processor isn't connected/verified yet." }, 400);
