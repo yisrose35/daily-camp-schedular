@@ -6381,25 +6381,52 @@ function _postLedgerCharge(f,c){
  * reason 'fee' and nothing linking them to the charge's id. So each such
  * converted charge "covers" one charge of the same amount (and date, when the
  * conversion kept it), matched one to one; only a charge nothing covers is
- * posted. Returns how many were posted.
+ * posted. A charge already on the ledger is kept EQUAL to charges[] (TED-066):
+ * re-priced, the difference is posted; gone (a cancelled Camp Shop order), it
+ * is taken back — the same entries migration 263's _sync_charge_to_ledger
+ * writes, so the two never double up. Returns how many entries were posted.
  */
 function _postExistingCharges(f){
-    if(!f||!Array.isArray(f.charges)||!f.charges.length)return 0;
-    if(!Array.isArray(f.entries)||!f.entries.length)return 0;
+    if(!f||!Array.isArray(f.entries)||!f.entries.length)return 0;
+    var B=_billingCore(); if(!B)return 0;
+    var charges=Array.isArray(f.charges)?f.charges:[];
     var cents=function(v){return Math.round((Number(v)||0)*100)};
     var pool=f.entries.filter(function(e){
         return e&&e.kind==='charge'&&e.reason==='fee'&&/^le_conv_/.test(String(e.id||''));
     }).map(function(e){return {cents:cents(e.amount),date:String(e.date||''),used:false}});
-    var n=0;
-    f.charges.forEach(function(c){
+    // What the ledger already holds for each charge id (TED-066): charges
+    // posted, less anything taken back.
+    var net={},count={};
+    f.entries.forEach(function(e){
+        var cid=e&&e.source&&e.source.chargeId; if(cid==null||cid==='')return;
+        cid=String(cid);
+        net[cid]=(net[cid]||0)+(e.kind==='charge'?cents(e.amount):(e.kind==='credit'?-cents(e.amount):0));
+        count[cid]=(count[cid]||0)+1;
+    });
+    var n=0, adjust=function(cid,diffC,desc){
+        if(!diffC)return;
+        var r=B.post(f,{id:'le_chgadj_'+cid+'_'+(count[cid]||0),kind:diffC>0?'charge':'credit',
+            amount:Math.abs(diffC)/100,reason:diffC>0?'other':'reversal',
+            note:(diffC<0&&!charges.some(function(c){return c&&String(c.id)===cid})?'Cancelled — ':'Changed — ')+(desc||'charge'),
+            by:'system',source:{chargeId:cid}});
+        if(r&&r.ok){n++;count[cid]=(count[cid]||0)+1;net[cid]=(net[cid]||0)+diffC;}
+    };
+    var seen={};
+    charges.forEach(function(c){
         if(!c||c.id==null)return;
-        if(f.entries.some(function(e){return e&&e.id==='le_chg_'+String(c.id)}))return;   // already posted
+        var cid=String(c.id); seen[cid]=1;
+        if(count[cid]){                                                          // posted before: keep it equal
+            adjust(cid,Math.max(0,cents(c.amount))-(net[cid]||0),c.description||c.category);
+            return;
+        }
         var cc=cents(c.amount), cd=String(c.date||'');
         var hit=pool.filter(function(p){return !p.used&&p.cents===cc&&p.date===cd})[0]
               ||pool.filter(function(p){return !p.used&&p.cents===cc})[0];
-        if(hit){hit.used=true;return}                                                       // the conversion posted it
+        if(hit){hit.used=true;return}                                           // the conversion posted it
         if(_postLedgerCharge(f,c))n++;
     });
+    // A charge that is gone from charges[] (a cancelled shop order) comes off.
+    Object.keys(net).forEach(function(cid){ if(!seen[cid]&&net[cid])adjust(cid,-net[cid],'charge'); });
     return n;
 }
 

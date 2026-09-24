@@ -196,6 +196,7 @@ const MIGRATIONS = [
     '260_numbers_stay_with_their_child',
     '261_only_the_camp_office_writes_parent_invites',
     '262_autopay_waits_for_a_bank_debit',
+    '263_a_cancelled_charge_leaves_the_ledger',
 ];
 
 // The one thing the stubs deliberately get wrong for our purposes: they define

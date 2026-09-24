@@ -1,5 +1,5 @@
 -- ============================================================================
--- Confirm migrations 222-262 are in and doing their job.
+-- Confirm migrations 222-263 are in and doing their job.
 --
 -- Paste the whole thing into the Supabase SQL Editor. It is READ ONLY — one
 -- SELECT, nothing is created, changed or deleted, and the two purge functions
@@ -560,6 +560,13 @@ UNION ALL
     ('262  autopay waits for a bank debit',
      CASE WHEN to_regprocedure('public.hold_autopay_charge(uuid,text,text,jsonb)') IS NULL
           THEN 'apply 262 — a family paying by bank account on autopay can be debited again every night until the first debit clears'
+          ELSE 'ok' END),
+    -- A cancelled or re-priced shop order leaves the ledger too (TED-066).
+    ('263  a cancelled charge leaves the ledger',
+     CASE WHEN to_regprocedure('public._sync_charge_to_ledger(jsonb,text)') IS NULL
+               OR to_regprocedure('public.settle_shop_order(uuid,text,text,numeric,boolean)') IS NULL
+               OR pg_get_functiondef(to_regprocedure('public.settle_shop_order(uuid,text,text,numeric,boolean)')) !~ '_sync_charge_to_ledger'
+          THEN 'apply 263 — a Camp Shop order billed to a family and then cancelled keeps billing them'
           ELSE 'ok' END)
     ) AS x(item, result)
 
