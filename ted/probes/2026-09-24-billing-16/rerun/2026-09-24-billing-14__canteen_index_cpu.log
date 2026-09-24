@@ -1,0 +1,13 @@
+machine: Intel(R) Xeon(R) Processor @ 2.10GHz, node v22.22.2
+
+1. processing time (ms) of today's code — Supabase stops a function at 2,000 ms
+     600 children ×  8 top-ups (12600 ledger rows): window (Stripe) 11 · window (Sola) 10 · Refund All (Stripe) 14 · Refund All (Sola) 17
+    1000 children × 15 top-ups (28000 ledger rows): window (Stripe) 25 · window (Sola) 30 · Refund All (Stripe) 23 · Refund All (Sola) 24
+    1500 children × 20 top-ups (49500 ledger rows): window (Stripe) 50 · window (Sola) 33 · Refund All (Stripe) 32 · Refund All (Sola) 13
+
+2a. today's answers vs before the change (fef6edb), 400 random ledgers (floors and failed refunds on any payment): 2479 the same, 1521 different
+   stripeOne: now {"Avi":{"camperId":1,"wallet":69.59,"card":180,"now":69.59},"Bea":{"camperId":2,"wallet":5.96,"card":125,"now":5.96},"Avi Katz":{"camperId":3,"wallet":16.77,"card":25,"now":16.77},"Dov":{"camperId":nu | before {"Avi":{"camperId":1,"wallet":59.59,"card":180,"now":59.59},"Bea":{"camperId":2,"wallet":0,"card":125,"now":0},"Avi Katz":{"camperId":3,"wallet":16.77,"card":25,"now":16.77},"Dov":{"camperId":null,"wa
+   solaOne: now {"Avi":{"camperId":1,"wallet":18.53,"card":200,"now":18.53},"Bea":{"camperId":2,"wallet":1.06,"card":10,"now":1.06},"Avi Katz":{"camperId":3,"wallet":75.1,"card":70,"now":70},"Dov":{"camperId":4,"wall | before {"Avi":{"camperId":1,"wallet":18.53,"card":200,"now":18.53},"Bea":{"camperId":2,"wallet":0,"card":10,"now":0},"Avi Katz":{"camperId":3,"wallet":75.1,"card":70,"now":70},"Dov":{"camperId":4,"wallet":31
+   solaAll {"camperId":1,"camperName":"Avi"}: now [{"externalTransactionId":"cardknox_1","remaining":50,"timestamp":0},{"externalTransactionId":"cardknox_2","remaining":15,"timestamp":1},{"externalTransactionId":"cardknox_4","remaining":50,"timestamp | before [{"externalTransactionId":"cardknox_1","remaining":45,"timestamp":0},{"externalTransactionId":"cardknox_2","remaining":15,"timestamp":1},{"externalTransactionId":"cardknox_4","remaining":50,"timestamp
+
+2b. today's answers vs before the change (fef6edb), 400 random ledgers — WITHOUT a balance floor and without failed-refund rows on non-Stripe payments (the two rules that changed on purpose): 4000 the same, 0 different

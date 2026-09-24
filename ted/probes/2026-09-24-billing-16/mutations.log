@@ -1,0 +1,17 @@
+== control: HEAD's 281/282 unchanged (scratch copy of 4811cd7)
+  ok     281_a_failed_refund_takes_its_surcharge_share_back
+  ok     282_a_parent_save_clears_the_camps_pause_note
+2 passed, 0 failed — against 129 migrations, one database copy per test
+== M1: 281 undoes every surcharge credit, not just the failed refund's (15th pass M5, not caught then)
+  FAIL   281_a_failed_refund_takes_its_surcharge_share_back
+           psql:scripts/pgtests/281_a_failed_refund_takes_its_surcharge_share_back.sql:100: ERROR:  undo: {"amount": 39.13, "undone": 2, "success": true}
+0 passed, 1 failed — against 129 migrations, one database copy per test
+== M2: 282 does nothing
+  FAIL   282_a_parent_save_clears_the_camps_pause_note
+           psql:scripts/pgtests/282_a_parent_save_clears_the_camps_pause_note.sql:51: ERROR:  TED-156: the camp's note survived the parent switching it back on: {"enabled": true, "stopDate": null, "startDate": null, "cardOnFile": true, "disabledAt": "2026-08-20T10:00:00Z", "scheduleDay": null, "disabledReason": "switched off when the camp refunded the canteen balance — switch it back on if you still want it", "scheduleEnabled": false, "thresholdAmount": 5, "reloadPeriodDays": 1, "stripeCustomerId": "cus_G", "thresholdEnabled": true, "scheduleFrequency": null, "consecutiveFailures": 0, "maxReloadsPerPeriod": 1, "scheduleReloadAmount": null, "thresholdReloadAmount": 20}
+0 passed, 1 failed — against 129 migrations, one database copy per test
+== M3: the checking script without its 282 row
+  FAIL   282_a_parent_save_clears_the_camps_pause_note
+           psql:scripts/pgtests/282_a_parent_save_clears_the_camps_pause_note.sql:64: ERROR:  the checking script's 282 row says: <NULL>
+0 passed, 1 failed — against 129 migrations, one database copy per test
+== after restoring: git status of the scratch copy

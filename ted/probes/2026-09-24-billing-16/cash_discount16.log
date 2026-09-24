@@ -1,0 +1,51 @@
+SETUP: 6 families owe $1,000 each (Card Fees: discount for not paying by card, 3%). Hawk's online bank payment: {"count": 1, "success": true, "updated": false, "ledgerPosted": true, "alreadyRecorded": false}; Hawk owes $30
+Record Payment methods offered: ["credit","debit","cash","check","ach","zelle","wire","paypal","plan","other"]
+
+D1. Wolf pays $970 by cheque → Billing → Record Payment
+    preview in the window before saving: "Discount for not paying by card: $30 — also taken off their bill with this payment."
+    toast: "Payment of $970 recorded for Wolf — with $30 off for not paying by card"
+    ledger: charge 1000 tuition [le_t_wolf]; payment 970 check [le_pay_pay_1790247369351_02ubu]; credit 30 discount [le_cdisc_pay_1790247369351_02ubu]
+  ok  D1 $970 by cheque settles $1,000 (owes $0) and the preview showed $30   → owes $0
+
+D2. Fox pays the full $1,000 by cheque
+    preview: "Discount for not paying by card: $30 — also taken off their bill with this payment."; toast: "Payment of $1,000 recorded for Fox — with $30 off for not paying by card"
+  ok  D2 the posted price by cheque leaves $30 of credit   → owes $-30
+
+D3. Lynx pays $500 by bank transfer (ACH), then $470 by Zelle
+    previews: "Discount for not paying by card: $15.46 — also taken off their bill with this payment." / "Discount for not paying by card: $14.54 — also taken off their bill with this payment."
+    ledger: charge 1000 tuition [le_t_lynx]; payment 500 ach [le_pay_pay_1790247376665_dfi3d]; credit 15.46 discount [le_cdisc_pay_1790247376665_dfi3d]; payment 470 zelle [le_pay_pay_1790247380282_8i92y]; credit 14.54 discount [le_cdisc_pay_1790247380282_8i92y]
+  ok  D3 two part payments earn exactly $30 in all   → owes $0
+
+D4. Bear pays $970 by credit card (recorded by hand)
+    preview: ""
+  ok  D4 a card payment gets no discount   → owes $30
+
+D5. Moss pays $970 by cheque; the office records it on Finance → Revenue → "+ Record Payment"
+    Finance → Revenue shows a "+ Record Payment" button: true
+    its window: "(closed)"
+    toast: "Payment recorded"
+    Finance's own lists now show Moss as: "2026-09-24Moss$970Check✕"
+    Billing's figure for Moss: "$1,000"; the ledger (what the parent's Link balance and autopay read): owes $1000
+    Moss's ledger: charge 1000 tuition [le_t_moss]
+  BAD D5 a cheque recorded on the Finance page reduces what Moss owes   → Moss still owes $1000 on the ledger (Billing: "$1,000")
+
+D6. Wolf's cheque was entered by mistake → Finance → Revenue → Payment Log → ✕ on it
+    pressed ✕ on: "2026-09-24Wolf$970Check✕"
+    toast: "Removed"
+    Wolf owes on the ledger: before $0, after $0; Billing: "$0"
+    Wolf's ledger: charge 1000 tuition [le_t_wolf]; payment 970 check [le_pay_pay_1790247369351_02ubu]; credit 30 discount [le_cdisc_pay_1790247369351_02ubu]
+  BAD D6 removing the mistaken $970 cheque puts Wolf back to owing $1,000   → Wolf owes $0 — the payment and its $30 discount are still on the ledger
+
+D7. Hawk paid $970 online by bank (owes $30). Family menu → "Discount for not paying by card…" → 970
+    window: "(closed)"
+    toast: "$30 off Hawk for not paying by card"; Hawk owes $0
+    pressed again for the same payment → toast: "$29.1 off Hawk for not paying by card"; Hawk owes $-29.1
+  ok  D7 the online-bank discount settles Hawk (owes $0)   → owes $0
+  BAD D7b giving it a second time for the same payment is refused   → second press took another $29.1 off — Hawk now owes $-29.1
+
+D8. The family page's More menu in this mode (cash discount)
+    menu items: ["Discount for not paying by card…"]
+  ok  D8 the menu says "Discount for not paying by card…" in this mode   → ["Discount for not paying by card…"]
+page errors: []
+
+3 BAD

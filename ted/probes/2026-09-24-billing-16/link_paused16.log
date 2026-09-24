@@ -1,0 +1,25 @@
+SETUP: Refund All paused Avi's auto-reload → {"success": true, "autoReloadD; stored enabled false, reason "switched off when the camp refunded the canteen balance — switch it back on if you still want it"
+
+P0. The parent opens Link after the refund:
+    status "Auto-reload was switched off — switched off when the camp refunded the canteen balance — switch it back on if you still want it."; buttons ["Switch it back on"]; "below $5" box ticked: true
+  ok  P0 a "Switch it back on" button is shown while the camp has it paused   → ["Switch it back on"]
+
+P1. The parent presses "Switch it back on" → sent {"enabled":true,"thresholdEnabled":true,"thresholdAmount":5,"thresholdReloadAmount":20,"scheduleEnabled":false,"scheduleFrequency":"weekly","scheduleDay":0,"scheduleReloadAmount":25,"startDate":null,"stopDate":null,"maxReloadsPerPeriod":1,"reloadPeriodDays":1}
+    stored: enabled true, disabledReason null, card kept cus_avi
+    Link: "✓ Auto-reload is on · charging Visa ···· 4242"; buttons ["Update card","Turn off"]; toasts ["Auto-reload saved for Avi"]
+  ok  P1 it is back on, the camp's note is gone, Link says on   → ✓ Auto-reload is on · charging Visa ···· 4242
+
+P2. Later the parent presses "Turn off" → stored enabled false, reason null
+    Link: "Auto-reload is off."; buttons []; "below $5" box ticked: true; toasts ["Auto-reload turned off for Avi"]
+  ok  P2 Link does not say the camp switched it off   → Auto-reload is off.
+  NOTE P2 in the parent's own Off state the buttons shown are []; the trigger box is still ticked
+
+P3. In that Off state the parent changes only the reload amount ($20 → $30):
+    sent [{"enabled":true,"thresholdEnabled":true,"thresholdAmount":5,"thresholdReloadAmount":30,"scheduleEnabled":false,"scheduleFrequency":"weekly","scheduleDay":0,"scheduleReloadAmount":25,"startDate":null,"stopDate":null,"maxReloadsPerPeriod":1,"reloadPeriodDays":1}]
+    stored: enabled true, thresholdReloadAmount 30; Link "✓ Auto-reload is on · charging Visa ···· 4242"; toasts ["(saved hint)"]
+  NOTE P3 editing an amount while Off SWITCHES IT BACK ON (enabled true), with only a "saved" hint
+
+P4. Paused by the camp again; the parent changes only the amount ($30 → $25): sent [{"enabled":true,"thresholdReloadAmount":25}]
+    stored: enabled true, reason null; Link "✓ Auto-reload is on · charging Visa ···· 4242"
+
+0 BAD

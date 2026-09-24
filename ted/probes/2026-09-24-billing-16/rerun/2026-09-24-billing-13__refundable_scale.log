@@ -1,0 +1,10 @@
+stripe-canteen-refund      100 children ×  8 top-ups (1000 ledger rows): 2 answers in 200 ms (incl. harness start-up); refundable for 100 children; child 1 → {"camperId":1,"wallet":50,"card":190,"now":50}
+payments-canteen-refund    100 children ×  8 top-ups (1000 ledger rows): 2 answers in 193 ms (incl. harness start-up); refundable for 100 children; child 1 → {"camperId":1,"wallet":50,"card":190,"now":50}
+stripe-canteen-refund      300 children ×  8 top-ups (3000 ledger rows): 2 answers in 228 ms (incl. harness start-up); refundable for 300 children; child 1 → {"camperId":1,"wallet":50,"card":190,"now":50}
+payments-canteen-refund    300 children ×  8 top-ups (3000 ledger rows): 2 answers in 222 ms (incl. harness start-up); refundable for 300 children; child 1 → {"camperId":1,"wallet":50,"card":190,"now":50}
+stripe-canteen-refund      600 children ×  8 top-ups (6000 ledger rows): 2 answers in 271 ms (incl. harness start-up); refundable for 600 children; child 1 → {"camperId":1,"wallet":50,"card":190,"now":50}
+payments-canteen-refund    600 children ×  8 top-ups (6000 ledger rows): 2 answers in 271 ms (incl. harness start-up); refundable for 600 children; child 1 → {"camperId":1,"wallet":50,"card":190,"now":50}
+stripe-canteen-refund      600 children × 15 top-ups (10800 ledger rows): 2 answers in 359 ms (incl. harness start-up); refundable for 600 children; child 1 → {"camperId":1,"wallet":50,"card":360,"now":50}
+payments-canteen-refund    600 children × 15 top-ups (10800 ledger rows): 2 answers in 361 ms (incl. harness start-up); refundable for 600 children; child 1 → {"camperId":1,"wallet":50,"card":360,"now":50}
+stripe-canteen-refund     1000 children × 10 top-ups (12000 ledger rows): 2 answers in 381 ms (incl. harness start-up); refundable for 1000 children; child 1 → {"camperId":1,"wallet":50,"card":240,"now":50}
+payments-canteen-refund   1000 children × 10 top-ups (12000 ledger rows): 2 answers in 383 ms (incl. harness start-up); refundable for 1000 children; child 1 → {"camperId":1,"wallet":50,"card":240,"now":50}

@@ -1,0 +1,11 @@
+DIFF  2026-09-24-billing-13__refundable_scale.log
+DIFF  2026-09-24-billing-14__autoreload_after_season.log
+DIFF  2026-09-24-billing-14__canteen_index_cpu.log
+DIFF  2026-09-24-billing-15__autoreload_dates15.log
+NEW   2026-09-24-billing-15__charge_card_same_or_new15.test.log
+DIFF  2026-09-24-billing-15__sola_pause15.log
+DIFF  2026-09-24-billing-3__recheck_harness.test.log
+DIFF  2026-09-24-billing-5__ledger_start_scale.log
+DIFF  2026-09-24-billing-7__negative_payment.test.log
+DIFF  2026-09-24-billing__reload.test.log
+same 102 · differ 9 · new 1

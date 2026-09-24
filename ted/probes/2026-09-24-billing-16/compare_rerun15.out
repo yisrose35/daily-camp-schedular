@@ -1,0 +1,126 @@
+DIFF  ach15.e2e.log
+        37c37
+        <     Stripe re-delivers the old "processing" event late → HTTP 200; rows: pi_pi_1 $1000 succeeded, pi_pi_2 $200 , pi_pi_3 $700 pending; Steel owes $700
+        ---
+        >     Stripe re-delivers the old "processing" event late → HTTP 200; rows: pi_pi_1 $1000 succeeded, pi_pi_2 $200 , pi_pi_3 $700 failed; Steel owes $700
+        39,42c39,42
+        <     Steel's family page: "Balance$700$700 on its way — bank debits take a few business daysRecord PaymentCharge CardChase ···· 6789More ⋯Send Pay LinkSet"
+        <     Charge Card → the window: "Charge Card×Steel: A $700 bank debit started 2026-09-24 is still on its way — bank debits take a few business days.Nothing more is charged to this family until the bank settles it (it then shows as paid) or returns it (Billing then says it failed, and you can charge again).CancelSave"
+        <     toast: []; Steel's debits: pi_3 re_<id>_payment_method
+        <   BAD A6 a re_<id> debit stays "failed" after a late "processing", so the office can charge Steel again   → row status "pending", Steel's debits 1
+        ---
+        >     Steel's family page: "Balance$700Record PaymentCharge CardChase ···· 6789More ⋯Send Pay LinkSet up Payment PlanReplace payment methodAdd ChargeAdd ca"
+        >     Charge Card → the window: "Charge Card×Charge the card on file for SteelBalance due: $700 · Card on file ✓Amount to Charge ($)DescriptionCancelSave"
+        >     toast: ["✓ A $700 bank debit has started for Steel — it is on its way. Bank debits take a few business days; Billing shows it as paid once the bank settles it."]; Steel's debits: pi_3 re_<id>_payment_method, pi_4 processing
+        >   ok  A6 a re_<id> debit stays "failed" after a late "processing", so the office can charge Steel again   → row status "failed", Steel's debits 2
+        45c45
+        < 1 BAD
+        ---
+        > 0 BAD
+SAME  alert_retry_realdb15.log
+DIFF  autoreload_dates15.log
+        8,12c8,12
+        <     run today (2026-09-24): Avi threshold $20 → charged; Bea schedule $25 → charged
+        <     run week 2 (2026-10-01): Bea schedule $25 → charged
+        <     run week 3 (2026-10-08): Bea schedule $25 → charged
+        <     run week 4 (2026-10-15): Bea schedule $25 → charged
+        <   BAD D2 months before camp starts, nobody is charged   → 5 charge(s): $20 from cus_avi, $25 from cus_bea, $25 from cus_bea, $25 from cus_bea, $25 from cus_bea; wallets Avi $20.00, Bea $100.00
+        ---
+        >     run today (2026-09-24): camp → skipped_not_in_session
+        >     run week 2 (2026-10-01): camp → skipped_not_in_session
+        >     run week 3 (2026-10-08): camp → skipped_not_in_session
+        >     run week 4 (2026-10-15): camp → skipped_not_in_session
+        >   ok  D2 months before camp starts, nobody is charged   → 0 charge(s): none; wallets Avi $0, Bea $0
+        15c15
+        <     run: Avi threshold $20 → charged; Bea schedule $25 → charged
+        ---
+        >     run: camp → skipped_no_session_dates
+        17c17
+        <   NOTE D3 no dates → charged as before (the builder's stated behaviour): $20 from cus_avi, $25 from cus_bea
+        ---
+        >   NOTE D3 no dates → charged as before (the builder's stated behaviour): none
+        27c27
+        < 1 BAD
+        ---
+        > 0 BAD
+DIFF  billing_refund_again15.e2e.log
+        1c1
+        < postgres up with 128 migrations applied
+        ---
+        > postgres up with 129 migrations applied
+DIFF  cash_discount15.e2e.log
+        2c2
+        < Places that read a quote's discount: none
+        ---
+        > Places that read a quote's discount: ./campistry_me.js:18338:    var d=Math.max(0,Math.round((Number(q.discount)||0)*100)/100);
+        11,13c11,13
+        <     after typing $970 by cheque: "Record Payment×FamilyWolfAmount ($)DateMethodCredit cardDebit cardCashCheckACH / bank transferZelleWire transferPayPalPayment planOtherReference #Notes (optional)CancelSave"
+        <     Wolf now owes $30
+        <   BAD C2 a family that pays by cheque with the promised 3% off owes nothing   → Wolf still owes $30 — the 3% the form promised was never taken off
+        ---
+        >     after typing $970 by cheque: "Record Payment×FamilyWolfAmount ($)DateMethodCredit cardDebit cardCashCheckACH / bank transferZelleWire transferPayPalPayment planOtherReference #Discount for not paying by card: $30 — also taken off their bill with this payment.Notes (optional)CancelSave"
+        >     Wolf now owes $0
+        >   ok  C2 a family that pays by cheque with the promised 3% off owes nothing   → Wolf still owes $0 — the 3% the form promised was never taken off
+        16,17c16,17
+        <     window: "Add card surcharge×Amount being paid by card ($)Card on file: none on file whose type we know. If the family ends up paying another way, remove this fee from their bill.Prices shown include card processing. Paying by cheque or bank transfer takes 3% off.CancelSave"
+        <     toast: "That works out to no fee"; Wolf owes $30
+        ---
+        >     window: "Discount for not paying by card×Cheques, cash and bank transfers you record with Record Payment get the discount automatically. Use this for a bank payment the family made online (a pay link or a bank debit) — enter what they paid, before the discount.Paid by bank ($)They owe $0 now.CancelSave"
+        >     toast: "Payment of $970 re_<id> for Wolf — with $30 off for not paying by card"; Wolf owes $0
+        20c20
+        < 1 BAD
+        ---
+        > 0 BAD
+SAME  charge_card_same_or_new15.log
+SAME  check_script_280_281.log
+SAME  closeout_access15.log
+DIFF  closeout_sales15.e2e.log
+        10,12c10,12
+        <     Dashboard: Sales today "$40", Cash out "$10"; Analytics: Revenue "$40.00", 2 txns, avg $20.00; weekly bars [$0 $0 $0 $0 $0 $0 $40]
+        <     today's list: ["<clock>Avi KatzSeason close-out: Hand back in cash — Avi Katz’s canteen moneyPurchase−$37.00","<clock>Avi KatzCash out — trip moneyCash out−$10.00","<clock>Avi KatzChipsPurchase−$3.00"]
+        <   BAD Z2 the $37 handed back at close-out is not counted as a canteen sale (Sales today and Revenue stay at the $3 snack)   → Sales today $3 → $40; Revenue $3.00 → $40.00; the close-out row is labelled "Purchase"
+        ---
+        >     Dashboard: Sales today "$3", Cash out "$10"; Analytics: Revenue "$3.00", 1 txns, avg $3.00; weekly bars [$0 $0 $0 $0 $0 $0 $3]
+        >     today's list: ["<clock>Avi KatzSeason close-out: Hand back in cash — Avi Katz’s canteen moneySeason close-out−$37.00","<clock>Avi KatzCash out — trip moneyCash out−$10.00","<clock>Avi KatzChipsPurchase−$3.00"]
+        >   ok  Z2 the $37 handed back at close-out is not counted as a canteen sale (Sales today and Revenue stay at the $3 snack)   → Sales today $3 → $3; Revenue $3.00 → $3.00; the close-out row is labelled "<clock>Avi KatzSeason close-out: Hand back in cash — Avi Katz’s canteen moneySeason close-out−$37.00"
+        15c15
+        < 1 BAD
+        ---
+        > 0 BAD
+DIFF  link_paused_reason.e2e.log
+        7c7
+        <     stored: enabled true, disabledReason "switched off when the camp re_<id> the canteen balance — switch it back on if you still want it"
+        ---
+        >     stored: enabled true, disabledReason null
+        11,13c11,13
+        <     stored: enabled false, disabledReason "switched off when the camp re_<id> the canteen balance — switch it back on if you still want it"
+        <     Link: "Auto-reload was switched off — switched off when the camp re_<id> the canteen balance — switch it back on if you still want it."; buttons []
+        <   BAD P2 after the parent turned it off themselves, Link does not say the camp switched it off   → "Auto-reload was switched off — switched off when the camp re_<id> the canteen balance — switch it back on if you still want it."
+        ---
+        >     stored: enabled false, disabledReason null
+        >     Link: "Auto-reload is off."; buttons []
+        >   ok  P2 after the parent turned it off themselves, Link does not say the camp switched it off   → "Auto-reload is off."
+        15c15
+        < 1 BAD
+        ---
+        > 0 BAD
+SAME  refund_failed_realdb15.log
+DIFF  sola_pause15.log
+        8c8,9
+        < P5 control: a Sola wallet at $0 with auto-reload still on → run: {"ok":true,"charged":1,"failed":0,"details":[{"camp":"<uuid>","camper":"Avi","camperId":7,"amount":20,"kind":"threshold","result":; money moved ["SALE $20.00 on tok_avi"]
+        ---
+        > P5 control: a Sola wallet at $0 with auto-reload still on → run: {"ok":true,"charged":0,"failed":0,"details":[{"camp":"<uuid>","result":"skipped_no_session_dates"}]}; money moved []
+        >   (the control did not charge — P4 proves nothing)
+        10c11
+        < 0 BAD
+        ---
+        > 1 BAD
+DIFF  surcharge15.e2e.log
+        1c1
+        < postgres up with 128 migrations applied
+        ---
+        > postgres up with 129 migrations applied
+        52c52
+        <         toast ["✕ Not added: Zinc’s default payment method is a bank account, so Charge Card and autopay would take a card fee by bank debit — which the card brands forbid. Make their credit card the default first."]; zinc's fee charges: none
+        ---
+        >         toast ["✓ Card fee of $5 added to Zinc"]; zinc's fee charges: fee $5

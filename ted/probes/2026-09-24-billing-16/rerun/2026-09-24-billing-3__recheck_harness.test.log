@@ -1,0 +1,36 @@
+TAP version 13
+# parent signed in, body names ANOTHER family (silver) => 200 destination acct_CAMP | familyKey gold
+# office pay link (anon key), family gold => 200 destination acct_CAMP | familyKey gold
+# no login, family not of this camp => 400 {"error":"We couldn't find your family's account at this camp — please contact the camp office."}
+# night 1 (Stripe says processing for the held debit): new debits 1 | recorded [] | hold now {"paymentIntentId":"pi_ach1","index":0,"dueDate":"2026-09-24","amount":500,"since":"2026-09-24"}
+# night 2 (Stripe says processing for the held debit): new debits 0 | recorded [] | hold now {"paymentIntentId":"pi_ach1","index":0,"dueDate":"2026-09-24","amount":500,"since":"2026-09-24"}
+# night 3 (Stripe says succeeded for the held debit): new debits 0 | recorded [500] | hold now null
+# debits for one instalment over 3 nights: 1
+# card charges made: 0 | Idempotency-Key: undefined
+# Subtest: TED-063 parent Pay Now (signed in) and the office pay link
+ok 1 - TED-063 parent Pay Now (signed in) and the office pay link
+  ---
+  duration_ms: 495.764414
+  type: 'test'
+  ...
+# Subtest: TED-064 three nights, the hold carried from night to night
+ok 2 - TED-064 three nights, the hold carried from night to night
+  ---
+  duration_ms: 525.306591
+  type: 'test'
+  ...
+# Subtest: TED-075 two POS triggers at once, with an insert-if-absent claim
+ok 3 - TED-075 two POS triggers at once, with an insert-if-absent claim
+  ---
+  duration_ms: 166.444213
+  type: 'test'
+  ...
+1..3
+# tests 3
+# suites 0
+# pass 3
+# fail 0
+# cancelled 0
+# skipped 0
+# todo 0
+# duration_ms 1268.60513
