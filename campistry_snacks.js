@@ -1283,6 +1283,7 @@ function buildOfflineExportData(data) {
 }
 
 window.downloadOfflinePOS = async function() {
+    if (!_secEdit('offline-pos', 'Downloading offline POS data')) return;
     var statusEl = document.getElementById('offlinePosStatus');
     if (statusEl) statusEl.textContent = 'Preparing download...';
 
@@ -1319,6 +1320,7 @@ window.downloadOfflinePOS = async function() {
 };
 
 window.exportForOfflinePOS = async function() {
+    if (!_secEdit('offline-pos', 'Exporting offline POS data')) return;
     var data = await _withLiveCanteenRows();
     if (!data) { toast(OFFLINE_EXPORT_NEEDS_ROWS, 1); return; }
     var roster = getRoster();

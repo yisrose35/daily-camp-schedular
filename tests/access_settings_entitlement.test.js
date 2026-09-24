@@ -166,8 +166,13 @@ test('a role fully covered by the plan is not flagged', () => {
 test('office keeps the Me sections it is meant to have', () => {
     // Guards against the lock being too broad — a plan that includes Me must
     // leave the Office role's Me sections alone.
+    // granted is 15 not 14: office's 'link.*' wildcard now also reaches the
+    // new link.settings capability (Program Settings) — a real, previously
+    // uncatalogued section, not a change to office's own grants. reachable
+    // stays 6: ENT above doesn't entitle 'link' at all, so link.settings
+    // (like the rest of Link) isn't reachable in this simulated camp either.
     const office = presetReach('office');
-    assert.strictEqual(office.granted, 14);
+    assert.strictEqual(office.granted, 15);
     assert.strictEqual(office.reachable, 6);
     assert.strictEqual(C.resolve('me.billing', staff({}, 'office')), 'edit');
     assert.strictEqual(C.resolve('me.campers', staff({}, 'office')), 'edit');

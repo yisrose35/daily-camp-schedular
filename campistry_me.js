@@ -4375,7 +4375,7 @@ function _famHouseholdHtml(id,f){
 // Registration and Hiring are now two separate top-level sidebar entries
 // under Operations, matching CampMinder's separate-products approach —
 // _renderRegistrationPane()/_renderHiringPane() each carry their own
-// me.enrollment/me.staffing gating internally.
+// me.enrollment/me.hiring gating internally.
 function renderRegistrationPage(){
     var c=document.getElementById('page-registration');
     if(!c)return;
@@ -4497,7 +4497,7 @@ function _refreshPplIfActive(){
     else if(curPage==='hiring')renderHiringPage();
 }
 // Registration and Staffing used to be their own gated pages — a role could
-// have me.campers without either, or me.enrollment without me.staffing (the
+// have me.campers without either, or me.enrollment without me.hiring (the
 // Office/Registrar preset is exactly that). Merging them into one page means
 // the generic per-page view/edit enforcement in campistry_access_sections.js
 // can no longer tell them apart, so the Registration/Hiring panes and the
@@ -4987,12 +4987,12 @@ function _renderRegistrationPane(){
 }
 
 function _renderHiringPane(){
-    var canStaff=_secCan('me.staffing');
+    var canStaff=_secCan('me.hiring');
     if(!canStaff){
         return '<div class="me-empty"><h3>No access to Hiring</h3><p>Your account isn\'t set up to open this section.</p></div>';
     }
     _syncAcceptedContractsToPayroll();
-    var editStaff=_pplCanEdit('me.staffing');
+    var editStaff=_pplCanEdit('me.hiring');
     var list=buildPipelineList().filter(function(r){return r.type==='staff';});
     var hiredList=hiredStaff();
     if(pplStaffSubTab!=='applicants'&&pplStaffSubTab!=='hired')pplStaffSubTab='applicants';
@@ -5110,7 +5110,7 @@ function renderCampers(filter){
     // the Staffing or Payroll pages, each separately gated — showing it here
     // to anyone with plain me.campers access would leak it to roles that were
     // never granted either (Division Head, Nurse, Canteen, Bus Coordinator…).
-    var canStaff=_secCan('me.staffing')||_secCan('me.payroll');
+    var canStaff=_secCan('me.hiring')||_secCan('me.payroll');
     var allCamperEntries=Object.entries(roster);
     var enrolledEntries=allCamperEntries.filter(function(pair){return !pair[1].unenrolled;});
     var unenrolledEntries=allCamperEntries.filter(function(pair){return pair[1].unenrolled;});
@@ -10223,6 +10223,10 @@ function _leadLabel(s){var x=LEAD_STAGES.find(function(g){return g.key===s;});re
 
 function renderLeads(){
     var c=document.getElementById('page-leads');
+    if(!_secCan('me.leads')){
+        c.innerHTML='<div class="me-empty"><h3>No access to Leads</h3><p>Your account isn\'t set up to open this section.</p></div>';
+        return;
+    }
     var arr=Object.entries(leads);
     var total=arr.length;
     var by={}; LEAD_STAGES.forEach(function(g){if(g.key!=='all')by[g.key]=0;});
@@ -10316,8 +10320,9 @@ function setLeadStatus(id,status){var l=leads[id];if(!l)return;l.status=status;i
 function saveLeadNotes(id){var l=leads[id];if(!l)return;var el=document.getElementById('leadNote');if(el)l.notes=el.value;save();toast('Notes saved');}
 function setLeadFollowUp(id){var l=leads[id];if(!l)return;var el=document.getElementById('leadFU');if(el)l.nextFollowUp=el.value;save();renderLeads();viewLead(id);toast('Follow-up set');}
 function addLeadActivity(id){var l=leads[id];if(!l)return;var el=document.getElementById('leadAct');var t=el&&el.value.trim();if(!t)return;if(!l.activity)l.activity=[];l.activity.push({date:today(),text:t});save();viewLead(id);}
-async function deleteLead(id){if(!leads[id])return;var ok=await confirmDialog({title:'Delete Lead?',message:'This lead will be permanently deleted.',confirmLabel:'Delete',danger:true});if(!ok)return;delete leads[id];save();closeModal('dynModal');renderLeads();toast('Lead deleted');}
+async function deleteLead(id){if(!leads[id])return;if(!_secEdit('me.leads','Deleting a lead'))return;var ok=await confirmDialog({title:'Delete Lead?',message:'This lead will be permanently deleted.',confirmLabel:'Delete',danger:true});if(!ok)return;delete leads[id];save();closeModal('dynModal');renderLeads();toast('Lead deleted');}
 function addLead(){
+    if(!_secEdit('me.leads','Adding a lead'))return;
     var h='<div class="me-modal-form">';
     h+='<div class="me-field"><label>Parent / guardian name</label><input class="me-input" id="ldN"></div>';
     h+='<div style="display:grid;grid-template-columns:1fr 1fr;gap:10px"><div class="me-field"><label>Email</label><input class="me-input" id="ldE"></div><div class="me-field"><label>Phone</label><input class="me-input" id="ldP"></div></div>';
@@ -20400,6 +20405,10 @@ function _dpSetHtml(el,html){
 // ═══════════════════════════════════════════════════════════════
 function renderBroadcasts(){
     var c=document.getElementById('page-broadcasts');
+    if(!_secCan('me.broadcasts')){
+        c.innerHTML='<div class="me-empty"><h3>No access to Broadcasts</h3><p>Your account isn\'t set up to open this section.</p></div>';
+        return;
+    }
     var h='<div class="sec-hd"><div><h2 class="sec-title">Broadcasts & Messaging</h2><p class="sec-desc">'+broadcasts.length+' message'+(broadcasts.length!==1?'s':'')+' sent</p></div><div class="sec-actions"><button class="me-btn me-btn--sec me-btn--sm" onclick="CampistryMe.sendPaymentReminders()">💰 Payment Reminders</button><button class="me-btn me-btn--sec me-btn--sm" onclick="CampistryMe.sendFormReminders()">📋 Form Reminders</button><button class="me-btn me-btn--pri" onclick="CampistryMe.openBroadcastModal()">+ New Broadcast</button></div></div>';
 
     // Quick stats
@@ -20447,6 +20456,7 @@ function _bcRefreshPreview(){
     wrap.innerHTML=window.LinkBranding.buildPreviewHtml({variant:variant,campName:campName,branding:_getLinkBranding(),subject:subject?subject.value:'',body:body?body.value:''});
 }
 function openBroadcastModal(){
+    if(!_secEdit('me.broadcasts','Sending a broadcast'))return;
     var divOpts=Object.keys(structure).map(function(d){return'<option value="'+esc(d)+'">'+esc(d)+'</option>'}).join('');
     var h='<div class="me-modal-form" style="display:grid;grid-template-columns:1fr 1fr;gap:18px;align-items:start">';
     h+='<div><div class="me-field"><label>To</label><select id="bcTo" class="me-input" onchange="document.getElementById(\'bcDivWrap\').style.display=this.value===\'division\'?\'block\':\'none\'"><option value="all">All Families</option><option value="division">Specific Division</option><option value="enrolled">Enrolled Families Only</option><option value="staff">Staff Only</option></select></div>';
@@ -21978,6 +21988,7 @@ async function sendAutoNotification(type,enrollmentId){
     try{await callEdgeFunction('auto-notify',{campId:getCampId(),recipients:[{email:e.parentEmail,name:e.parentName||''}],type:type,data:{campName:campName,camperName:_lbl(e.camperName||''),parentName:e.parentName||'',amount:fm(e.sessionTuition||0)}})}catch(err){console.error('[Me] Auto-notify:',err)} // name-ok: the words of an email
 }
 async function sendPaymentReminders(){
+    if(!_secEdit('me.broadcasts','Sending reminders'))return;
     var svcPr=await _emailServiceOn();
     if(!svcPr.enabled){toast(_emailBlockedReason(svcPr),'error');return}
     var campName='';try{var ss=JSON.parse(localStorage.getItem('campGlobalSettings_v1')||'{}');campName=ss.camp_name||ss.campName||'Camp'}catch(ex){}
@@ -21992,6 +22003,7 @@ async function sendPaymentReminders(){
     toast(jobs.length+' payment reminder'+(jobs.length!==1?'s':'')+' sent');
 }
 async function sendFormReminders(){
+    if(!_secEdit('me.broadcasts','Sending reminders'))return;
     var svcFr=await _emailServiceOn();
     if(!svcFr.enabled){toast(_emailBlockedReason(svcFr),'error');return}
     var campName='';try{var ss=JSON.parse(localStorage.getItem('campGlobalSettings_v1')||'{}');campName=ss.camp_name||ss.campName||'Camp'}catch(ex){}
