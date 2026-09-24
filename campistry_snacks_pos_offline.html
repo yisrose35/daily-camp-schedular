@@ -1205,8 +1205,12 @@ async function performImport(data) {
     // Note: un-synced transactions are preserved (not cleared)
 }
 
-POS.exportTransactions = function() {
-    var unsynced = transactions.filter(function(t) { return !t.exported; });
+// Every sale on the tablet, exported or not (TED-171): if an exported file never
+// reached the office, its sales can be sent again. The office's import takes
+// each sale once (by its id), so a sale already imported is not charged twice.
+POS.exportAllTransactions = function() { POS.exportTransactions(true); };
+POS.exportTransactions = function(all) {
+    var unsynced = transactions.filter(function(t) { return all === true || !t.exported; });
     var exportData = {
         exportedAt: new Date().toISOString(),
         campName: meta.campName || '',
@@ -1229,7 +1233,7 @@ POS.exportTransactions = function() {
         await saveTransaction(t);
     });
 
-    toast('Exported ' + unsynced.length + ' transactions');
+    toast('Exported ' + unsynced.length + ' transactions' + (all === true ? ' (every sale on this tablet — the office\u2019s import skips any it already has)' : ''));
 };
 
 // ─── Settings UI ────────────────────────────────────────────────────────
@@ -1282,6 +1286,7 @@ function renderSettingsBody() {
             '<div class="settings-actions">' +
                 '<button class="btn-secondary" onclick="POS.triggerImport(\'settings\')">Import Fresh Data</button>' +
                 '<button class="btn-secondary" onclick="POS.exportTransactions()">Export Transactions</button>' +
+                (exportedCount > 0 ? '<button class="btn-secondary" onclick="POS.exportAllTransactions()" title="If an exported file never reached the office">Export all sales again</button>' : '') +
                 '<button class="btn-danger" onclick="POS.clearAllDataPrompt()">Clear All Data</button>' +
             '</div>' +
         '</div>';
@@ -1339,6 +1344,16 @@ POS.clearAllDataPrompt = function() {
             '<div style="font-size:2rem;margin-bottom:12px">&#9888;&#65039;</div>' +
             '<h3 style="font-size:1rem;margin-bottom:8px;color:var(--red)">Clear All Data?</h3>' +
             '<p style="font-size:.85rem;color:var(--text-dim);margin-bottom:16px">This will delete all accounts, inventory, transactions, and settings. This cannot be undone.</p>' +
+            (function() {
+                // The tablet cannot see whether the office imported a file (TED-171) —
+                // said here, before its sales are gone for good.
+                var never = transactions.filter(function(t) { return !t.exported; }).length;
+                var sent = transactions.filter(function(t) { return t.exported; }).length;
+                return (never || sent) ? '<p style="font-size:.82rem;color:var(--red);margin-bottom:16px">' +
+                    (never ? never + ' sale' + (never !== 1 ? 's have' : ' has') + ' never been exported \u2014 export first, or they are lost. ' : '') +
+                    (sent ? 'Check the office imported the exported file' + (sent !== 1 ? 's' : '') + ' (' + sent + ' sale' + (sent !== 1 ? 's' : '') + ') before clearing \u2014 or use \u201cExport all sales again\u201d.' : '') +
+                    '</p>' : '';
+            })() +
             '<div class="field"><label>Enter PIN to confirm</label>' +
             '<input type="password" inputmode="numeric" pattern="[0-9]*" maxlength="8" id="clearPinInput" class="pin-input"></div>' +
             '<div class="err-box" id="clearPinErr"></div>' +
@@ -1654,8 +1669,15 @@ function updateChargeBtn() {
 
 // ── Charge ──────────────────────────────────────────────────────────────
 
+// One sale at a time (TED-170): a double tap on a slow tablet used to record
+// two sales for one item — the charge waits on the tablet's storage before it
+// clears the cart, and nothing stopped a second tap in between.
+var _offlineCharging = false;
 POS.charge = async function() {
     if (!sel || !cart.length) return;
+    if (_offlineCharging) return;
+    var saleCamper = sel;
+    var saleCart = cart.map(function(ci) { return { id: ci.id, qty: ci.qty }; });
     var a = getAccount(sel);
     var total = Math.round(cart.reduce(function(s, ci) {
         var item = inventory.find(function(i) { return i.id === ci.id; });
@@ -1682,14 +1704,18 @@ POS.charge = async function() {
         return;
     }
 
+    _offlineCharging = true;
+    var _btn = document.getElementById('chargeBtn');
+    if (_btn) { _btn.disabled = true; _btn.textContent = 'Charging…'; }
+    try {
     // Deduct balance
     a.balance = Math.round((a.balance - total) * 100) / 100;
     a.spentToday = Math.round((a.spentToday + total) * 100) / 100;
     a.lastSpendDate = todayStr();
-    await saveAccount(sel);
+    await saveAccount(saleCamper);
 
     // Decrement stock, update sold counts
-    for (var ci of cart) {
+    for (var ci of saleCart) {
         var item = inventory.find(function(i) { return i.id === ci.id; });
         if (item) {
             if (item.stock != null) item.stock -= ci.qty;
@@ -1706,7 +1732,7 @@ POS.charge = async function() {
         // The PERSON, not just the spelling: the import posts this sale to the
         // account of whoever carries this id, even if they are renamed before
         // the file comes back (migration 242).
-        camper: sel, camperId: (a.camperId != null && a.camperId !== '') ? a.camperId : null,
+        camper: saleCamper, camperId: (a.camperId != null && a.camperId !== '') ? a.camperId : null,
         items: itemNames,
         amount: total,
         type: 'debit',
@@ -1720,11 +1746,15 @@ POS.charge = async function() {
     // Visual feedback
     var cp = document.querySelector('.cart-panel');
     if (cp) { cp.classList.add('flash'); setTimeout(function() { cp.classList.remove('flash'); }, 600); }
-    toast('Charged $' + total.toFixed(2) + ' to ' + sel);
+    toast('Charged $' + total.toFixed(2) + ' to ' + saleCamper);
 
     // Reset
     cart = [];
     sel = null;
+    } finally {
+        _offlineCharging = false;
+        renderCart();          // the button back, whatever happened
+    }
     POS.renderCampers();
     POS.renderItems();
     renderCart();

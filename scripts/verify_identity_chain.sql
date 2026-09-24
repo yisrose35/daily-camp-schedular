@@ -1,5 +1,5 @@
 -- ============================================================================
--- Confirm migrations 222-283 are in and doing their job.
+-- Confirm migrations 222-285 are in and doing their job.
 --
 -- Paste the whole thing into the Supabase SQL Editor. It is READ ONLY — one
 -- SELECT, nothing is created, changed or deleted, and the two purge functions
@@ -702,6 +702,10 @@ UNION ALL
           WHEN has_function_privilege('authenticated', 'public.undo_card_fee_return(uuid,text,text)', 'EXECUTE')
                OR has_function_privilege('authenticated', 'public.release_refund_failure_alert(text)', 'EXECUTE')
           THEN 'apply 281 again — a signed-in browser can call the webhook''s own functions'
+          -- An earlier copy did not give back the "not paying by card" discount
+          -- taken back with a refund that then failed (TED-160, TED-173).
+          WHEN pg_get_functiondef(to_regprocedure('public.undo_card_fee_return(uuid,text,text)')) !~ 'cashDiscountBack'
+          THEN 'apply 281 again — an earlier copy is in place: when a refund fails, the discount for not paying by card that came off with it is not given back'
           ELSE 'ok' END),
     -- A parent's own auto-reload save clears the camp's pause note (TED-156).
     ('282  a parent''s save clears the camp''s pause note',
@@ -717,6 +721,24 @@ UNION ALL
           WHEN has_function_privilege('anon', 'public.submit_canteen_purchase_once(uuid,text,text,numeric,text,date,bigint)', 'EXECUTE')
                OR has_table_privilege('authenticated', 'public.canteen_sale_keys', 'SELECT')
           THEN 'apply 283 again — the sale keys are open to browsers'
+          ELSE 'ok' END),
+    -- A register sale made by mistake can be voided (TED-175).
+    ('284  a register sale can be voided',
+     CASE WHEN to_regprocedure('public.canteen_void_sale(uuid,text,jsonb,text)') IS NULL
+          THEN 'apply 284 BEFORE reloading Snacks — a sale charged by mistake can only be given back as a fake deposit'
+          WHEN has_function_privilege('anon', 'public.canteen_void_sale(uuid,text,jsonb,text)', 'EXECUTE')
+          THEN 'apply 284 again — the void is open to browsers that are not signed in'
+          WHEN pg_get_functiondef(COALESCE(to_regprocedure('public._get_canteen_history__by_name(uuid,text,text,integer)'),
+                                           to_regprocedure('public.get_canteen_history(uuid,text,text,integer)'))) !~ 'x\.sig'
+          THEN 'apply 284 again — older sales in a child''s history cannot be voided'
+          ELSE 'ok' END),
+    -- A refunded or disputed staff tip is marked and taken back (TED-176).
+    ('285  a refunded or disputed tip is taken back',
+     CASE WHEN to_regprocedure('public.record_tip_reversal(uuid,numeric,text,numeric,text)') IS NULL
+               OR to_regprocedure('public.mark_tip_reversal_alerted(uuid,text)') IS NULL
+          THEN 'apply 285 BEFORE deploying stripe-connect-webhook — a refunded or disputed tip stays with the staff member and the webhook answers 500'
+          WHEN has_function_privilege('authenticated', 'public.record_tip_reversal(uuid,numeric,text,numeric,text)', 'EXECUTE')
+          THEN 'apply 285 again — a signed-in browser can change a tip''s refund record'
           ELSE 'ok' END)
     ) AS x(item, result)
 

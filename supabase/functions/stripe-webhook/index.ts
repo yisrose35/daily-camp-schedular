@@ -236,8 +236,10 @@ async function upsertPayment(
     p_update_on_match: patch,
   });
   if (res.error || res.data?.success !== true) {
-    console.warn(`[stripe-webhook] could not record ${pi.id}: ${res.error?.message || res.data?.error || "unknown"}`);
-    return false;
+    // Not recorded (TED-164): the delivery is answered 500 so Stripe sends it
+    // again (the write is keyed on the payment, so a retry cannot book it
+    // twice) — and no receipt goes out for a payment Campistry has no record of.
+    throw new Error(`could not record ${pi.id}: ${res.error?.message || res.data?.error || "unknown"}`);
   }
   return true;
 }
@@ -272,6 +274,10 @@ async function handleCanteenDeposit(
     p_payment_intent_id: pi.id,
   });
   console.log(`[stripe-webhook] canteen deposit $${(pi.amount || 0) / 100} for ${camperName} (camp ${campId}): ${error ? "FAILED " + error.message : JSON.stringify(data)}`);
+  // Not credited (TED-164): 500, so Stripe sends it again (keyed on the payment).
+  if (error || !(data as any)?.success) {
+    throw new Error(`canteen deposit ${pi.id} not credited: ${error?.message || (data as any)?.error || "unknown"}`);
+  }
 }
 
 // Same "only 'succeeded' counts" rule as canteen deposits above — a parent
@@ -314,7 +320,8 @@ async function handleRegistrationDeposit(
     // The money moved. Anything other than a loud log here loses a paid
     // family into a list of unpaid ones.
     console.error(`[stripe-webhook] could not mark registration deposit for camp ${campId} enrollment ${enrollmentId}: ${error?.message || (data as any)?.error}`);
-    return;
+    // TED-164: 500, so Stripe sends it again.
+    throw new Error(`registration deposit ${pi.id} not recorded: ${error?.message || (data as any)?.error || "unknown"}`);
   }
   console.log(`[stripe-webhook] registration deposit $${(pi.amount || 0) / 100} marked on ${enrollmentId}${(data as any)?.duplicate ? " (already recorded)" : ""}`);
 
@@ -379,6 +386,9 @@ async function handleLinkPhotoPurchase(
         p_payment_intent_id: pi.id,
       });
       console.log(`[stripe-webhook] link photo purchase (facial_recognition) for ${name}, camp ${campId}: ${error ? "FAILED " + error.message : JSON.stringify(data)}`);
+      if (error || !(data as any)?.success) {
+        throw new Error(`photo purchase ${pi.id} for ${name} not recorded: ${error?.message || (data as any)?.error || "unknown"}`);
+      }
     }
     return;
   }
@@ -393,6 +403,10 @@ async function handleLinkPhotoPurchase(
     p_payment_intent_id: pi.id,
   });
   console.log(`[stripe-webhook] link photo purchase (${meta.kind}) $${(pi.amount || 0) / 100} camp ${campId}: ${error ? "FAILED " + error.message : JSON.stringify(data)}`);
+  // Not recorded (TED-164): 500, so Stripe sends it again (once per payment).
+  if (error || !(data as any)?.success) {
+    throw new Error(`photo purchase ${pi.id} not recorded: ${error?.message || (data as any)?.error || "unknown"}`);
+  }
 }
 
 // A card checked on a public registration form (migration 189). The parent is
@@ -1069,10 +1083,13 @@ serve(async (req) => {
         // ordinary payment when the office accepts and enrolls.
         await handleRegistrationDeposit(supabase, campId, pi, statusFor[event.type]);
       } else {
-        const ok = await upsertPayment(supabase, campId, pi, statusFor[event.type]);
-        console.log(`[stripe-webhook] ledger ${statusFor[event.type]} $${(pi.amount || 0) / 100} camp ${campId}: ${ok ? "ok" : "FAILED"}`);
+        await upsertPayment(supabase, campId, pi, statusFor[event.type]);   // throws when not recorded
+        console.log(`[stripe-webhook] ledger ${statusFor[event.type]} $${(pi.amount || 0) / 100} camp ${campId}: ok`);
       }
 
+      // Only reached once the payment is recorded (every writer above throws
+      // when it is not, TED-164), so a receipt never describes a payment
+      // Campistry has no record of.
       // The receipt goes out from HERE for every Stripe charge in the product —
       // a pay link, a registration deposit, a canteen top-up, an autopay
       // instalment, a card the office charged. All of them end up as a

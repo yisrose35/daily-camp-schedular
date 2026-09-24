@@ -4899,7 +4899,8 @@ function _loadCloudTips(cb) {
     if (!db) { if (cb) cb(); return; }
     db.client
         .from('link_tips')
-        .select('id, camper_name, parent_name, recipient_name, recipient_role, amount, status, created_at')
+        // '*': the refund/dispute columns (migration 285) when they are there
+        .select('*')
         .eq('camp_id', db.campId)
         .order('created_at', { ascending: false })
         .limit(3000)
@@ -4912,7 +4913,16 @@ function _loadCloudTips(cb) {
 
 function _mergedTipLog() {
     var log = _cloudTipRows.map(function(t) {
-        return { id: t.id, from: t.parent_name || '', childName: t.camper_name || '', recipientName: t.recipient_name, role: t.recipient_role || '', amount: parseFloat(t.amount) || 0, date: t.created_at, _cloud: true };
+        // A tip the parent got back (TED-176): refunded, or disputed while the
+        // bank decides or after it ruled for the parent — the staff member no
+        // longer has that part, so it does not count toward their total.
+        var amt = parseFloat(t.amount) || 0;
+        var lost = Math.min(amt, Math.max(parseFloat(t.refunded_amount) || 0,
+            (t.dispute_status === 'open' || t.dispute_status === 'lost') ? amt : 0));
+        var note = t.dispute_status === 'open' ? 'Disputed' : t.dispute_status === 'lost' ? 'Dispute lost'
+                 : lost >= amt && amt > 0 ? 'Refunded' : lost > 0 ? 'Part refunded' : '';
+        return { id: t.id, from: t.parent_name || '', childName: t.camper_name || '', recipientName: t.recipient_name, role: t.recipient_role || '',
+                 amount: Math.round((amt - lost) * 100) / 100, originalAmount: amt, reversal: note, date: t.created_at, _cloud: true };
     });
     var seen = {}; log.forEach(function(t) { seen[t.id] = 1; });
     _loadTipsLog().forEach(function(t) { if (!seen[t.id]) log.push(t); });
@@ -4983,7 +4993,8 @@ function _renderTipHistory() {
                 '<td style="padding:8px 10px;font-weight:600;">' + esc(t.recipientName||'—') + '</td>' +
                 '<td style="padding:8px 10px;">' + esc(t.role||'—') + '</td>' +
                 '<td style="padding:8px 10px;color:var(--text-muted);">' + esc(t.childName||'—') + '</td>' +
-                '<td style="padding:8px 10px;text-align:right;color:var(--green-600);font-weight:700;">$' + (t.amount||0).toFixed(2) + '</td>' +
+                '<td style="padding:8px 10px;text-align:right;color:var(--green-600);font-weight:700;">$' + (t.amount||0).toFixed(2) +
+                    (t.reversal ? '<div style="font-size:.7rem;font-weight:600;color:var(--amber-600,#b45309);">' + esc(t.reversal) + ' · was $' + (t.originalAmount||0).toFixed(2) + '</div>' : '') + '</td>' +
                 '<td style="padding:8px 10px;text-align:right;color:var(--text-muted);">' + d + '</td>' +
             '</tr>';
         }).join('') + '</tbody></table>';

@@ -30,7 +30,8 @@ function day() {
         cashOutTotal: () => 0,
     };
     vm.createContext(ctx);
-    vm.runInContext(cut('todayStr') + '\n' + cut('_isSale') + '\n' + cut('renderStats') + '\n' + cut('_histRowHtml')
+    vm.runInContext('var _voidRows = [], _voidCache = { arr: null, len: -1, set: {} };\n' + cut('_voidedSigs') + '\n' + cut('_canVoid') + '\n' + cut('_mayEditAccounts') + '\n'
+        + cut('todayStr') + '\n' + cut('_isSale') + '\n' + cut('renderStats') + '\n' + cut('_histRowHtml')
         + '\nthis.renderStats = renderStats; this.todayStr = todayStr; this.isSale = _isSale; this.row = _histRowHtml;', ctx);
     const today = ctx.todayStr();
     ctx.snacks = { accounts: { Avi: { balance: 0 } }, inventory: [], transactions: [

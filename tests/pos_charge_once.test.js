@@ -17,6 +17,14 @@ const path = require('node:path');
 const vm = require('node:vm');
 
 const POS_NOW = fs.readFileSync(path.join(__dirname, '..', 'campistry_snacks_pos.js'), 'utf8');
+function extra(src) {
+    const c1 = src.indexOf('window.clearCart = function() {');
+    const c2 = src.indexOf('};', c1) + 2;
+    const p1 = src.indexOf('window.pickCamper = function(name) {');
+    let i = src.indexOf('{', p1), d = 0;
+    for (; i < src.length; i++) { if (src[i] === '{') d++; else if (src[i] === '}' && --d === 0) break; }
+    return src.slice(c1, c2) + '\n' + src.slice(p1, i + 2);
+}
 function chargeCode(src) {
     const a = src.indexOf('function updateChargeBtn() {');
     const endMark = "localCharge('⚠ Offline — spending limits not checked, will reconcile when back online');\n};";
@@ -36,7 +44,7 @@ function register({ lose = [], noOnce = false, refuse = false } = {}) {
         console, setTimeout, Promise, Math, Date, JSON, Number, String, Object,
         toasts, db, btn,
         localStorage: { getItem: () => null, setItem() {} },
-        document: { getElementById: (id) => (id === 'chargeBtn' ? btn : null), querySelector: () => null },
+        document: { getElementById: (id) => (id === 'chargeBtn' ? btn : null), querySelector: () => null, body: { classList: { add() {}, remove() {} } } },
         toast: (m, bad) => toasts.push([m, !!bad]),
         renderCampers() {}, renderItems() {}, renderCart() {}, updateCamperBar() {}, saveSnacksData() {}, _dbg() {},
         todayStr: () => '2026-08-20', STORE_KEY: 'k', SNACKS_LOCAL_KEY: 'k2',
@@ -66,11 +74,16 @@ function register({ lose = [], noOnce = false, refuse = false } = {}) {
     }) } };
     vm.createContext(ctx);
     vm.runInContext(`var sel = 'Avi', cart = [{ id: 1, qty: 1 }];
-var snacks = { inventory: [{ id: 1, name: 'Chips', price: 2.5, stock: 10 }], transactions: [], accounts: { Avi: { balance: 10, dailyLimit: 10, spentToday: 0 } } };
-var campers = [{ name: 'Avi', camperId: 7 }];
+var snacks = { inventory: [{ id: 1, name: 'Ices', price: 2.5, stock: 10 }, { id: 2, name: 'Chips', price: 1.5, stock: 50 }], transactions: [], accounts: { Avi: { balance: 10, dailyLimit: 10, spentToday: 0 }, Bina: { balance: 10, dailyLimit: 10, spentToday: 0 } } };
+function renderCampers() {} function renderItems() {} function renderCart() {} function updateCamperBar() {} function refreshAccountsFromCloud() {}
+var campers = [{ name: 'Avi', camperId: 7 }, { name: 'Bina', camperId: 8 }];
 function getAccount(n) { return snacks.accounts[n]; }
-` + chargeCode(POS_NOW) + `
+` + chargeCode(POS_NOW) + '\n' + extra(POS_NOW) + `
 this.tap = function () { window.charge(); };
+this.clear = function () { window.clearCart(); };
+this.pick = function (n) { window.pickCamper(n); };
+this.add = function (id) { cart.push({ id: id, qty: 1 }); };
+this.stock = function () { return JSON.parse(JSON.stringify(snacks.inventory.map(function (i) { return [i.id, i.stock, i.soldToday || 0]; }))); };
 this.reset = function () { sel = 'Avi'; cart = [{ id: 1, qty: 1 }]; };
 this.state = function () { return { sel: sel, cart: cart.length }; };`, ctx);
     return ctx;
@@ -99,7 +112,7 @@ test('TED-159: the answer is lost after the server charged — "could not confir
     r.tap();                                   // the counselor tries again
     await settle();
     assert.strictEqual(r.db.debits, 1, 'the retry charged the child again');
-    assert.ok(r.toasts.some(([m]) => m === '✓ $2.50 charged to Avi'));
+    assert.ok(r.toasts.some(([m]) => /^Already charged — the earlier \$2\.50 charge to Avi went through/.test(m)), JSON.stringify(r.toasts));
 });
 
 test('TED-159: after a sale is answered, the next sale is a new one (a new key) and is charged', async () => {
@@ -122,4 +135,30 @@ test('TED-159: before migration 283 is pasted the register still charges (once p
     r.tap(); await settle();
     assert.strictEqual(r.db.debits, 1);
     assert.deepStrictEqual(r.db.calls.filter(c => c.startsWith('submit_canteen')), ['submit_canteen_purchase_once', 'submit_canteen_purchase']);
+});
+
+test('TED-168: after "could not confirm", Clear All ends that sale — the same child\'s next identical sale IS charged', async () => {
+    const r = register({ lose: [1] });
+    r.tap(); await settle();                  // charged, answer lost
+    r.clear();                                // the counselor checks, it went through: Clear All
+    r.reset(); r.tap(); await settle();       // the child buys another Ices
+    assert.strictEqual(r.db.debits, 2, 'the second Ices was not charged');
+    assert.ok(r.toasts.some(([m]) => m === '✓ $2.50 charged to Avi'));
+});
+
+test('TED-168: a retry that replays the first answer says "already charged", not "✓ charged"', async () => {
+    const r = register({ lose: [1] });
+    r.tap(); await settle();
+    r.tap(); await settle();                  // same sale again
+    assert.strictEqual(r.db.debits, 1);
+    assert.match(r.toasts[r.toasts.length - 1][0], /^Already charged — the earlier \$2\.50 charge to Avi went through; not charged again/);
+});
+
+test('TED-169: starting the next child\'s sale while "Charging…" — that cart stays, and only the sold items leave stock', async () => {
+    const r = register();
+    r.tap();                                  // Avi's Ices, on its way
+    r.pick('Bina'); r.add(2);                 // the next child: Chips
+    await settle();
+    assert.deepStrictEqual(JSON.parse(JSON.stringify(r.state())), { sel: 'Bina', cart: 2 }, 'Bina\'s cart was wiped');
+    assert.deepStrictEqual(r.stock(), [[1, 9, 1], [2, 50, 0]], 'Chips were counted as sold');
 });

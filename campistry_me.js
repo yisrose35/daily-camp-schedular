@@ -1864,6 +1864,10 @@ function managePayers(){
               +(p.contact||p.email||p.phone?'<div style="font-size:.74rem;color:var(--s400)">'
                  +esc([p.contact,p.email,p.phone].filter(Boolean).join(' \u00b7 '))+'</div>':'')
               +'</div>'
+              +(function(){var ac=P.account(p);return ac.charged>0?'<div style="font-size:.76rem;color:var(--s600)">Owes '+fm(ac.balance)+' (shares '+fm(ac.charged)+', paid '+fm(ac.paid)+')</div>':''})()
+              +'</div>'
+              +(P.account(p).charged>0?'<button type="button" class="me-btn me-btn--sec me-btn--sm" '
+                +'onclick="CampistryMe.recordPayerPayment(\''+je(id)+'\')">Record payment</button>':'')
               +'<button type="button" class="me-btn me-btn--ghost me-btn--sm" '
               +'onclick="CampistryMe.togglePayerArchived(\''+je(id)+'\')">'
               +(p.archived?'Restore':'Archive')+'</button>'
@@ -15862,7 +15866,10 @@ function renderFinance(){
                 var _amtTxt=_isRef?'−'+fm(Math.abs(p.amount)):fm(p.amount);
                 var _amtCol=_isRef?'var(--err)':_pend?'var(--s400)':'var(--ok)';
                 var _stBadge=_st==='pending'?' '+bdg((Number(p.amount)>0&&(p.stripePaymentIntentId||p.byopTransactionId))?'on its way':'pending','warn'):_st==='failed'?' '+bdg('failed','err'):'';
-                var _acts='<button class="me-btn me-btn--ghost me-btn--sm" style="color:var(--err)" onclick="CampistryMe.finRemovePayment(\''+je(String(p.id))+'\')">✕</button>';
+                // Only what the office typed in can be removed (TED-163); money a
+                // processor moved — a payment, a refund, a failed refund's put-back —
+                // was really moved, and is corrected with a refund, not a ✕.
+                var _acts=_throughProcessor(p)?'':'<button class="me-btn me-btn--ghost me-btn--sm" style="color:var(--err)" title="Remove this payment you recorded" onclick="CampistryMe.finRemovePayment(\''+je(String(p.id))+'\')">✕</button>';
                 h+='<tr><td style="font-size:.75rem;color:var(--s400)">'+esc(p.date||'—')+'</td><td class="bold">'+esc(p.family)+(_isRef&&p.notes?' <span style="font-size:.7rem;font-weight:400;color:var(--s400)">'+esc(p.notes)+'</span>':'')+'</td><td style="font-weight:700;color:'+_amtCol+'">'+_amtTxt+'</td><td>'+bdg((_payLabel(p.method)||p.method||'—'),_isRef?'err':_st==='failed'?'err':_st==='pending'?'warn':'ok')+_stBadge+'</td><td style="text-align:right;white-space:nowrap">'+_acts+'</td></tr>';
             });
             h+='</tbody></table>'+_pagerHtml(sortedPayments.length,PAGE_SIZE,_analyticsPaymentPage,'setAnalyticsPaymentPage')+'</div></div>';
@@ -17748,20 +17755,65 @@ function _prRunsTab(){
     return h;
 }
 
+// ── Which weeks a pay run covers (TED-166) ─────────────────────────────────
+// A timesheet is a Sunday–Saturday week, and a run takes every sheet whose
+// Sunday falls in its From–To. The window used to fill in "Sunday of last week
+// → today", which takes THIS week while it is still being worked: weekly runs
+// a week apart both paid the middle week (Ana 112 h paid for 96 worked), and
+// two-weekly runs never paid the rest of that week. The defaults are now the
+// COMPLETE weeks since the last run ended; a range that takes a week another
+// run already paid, or a week that is not over, is said out loud before saving.
+function _prAddDays(iso,n){
+    var p=iso.split('-'), d=new Date(+p[0],+p[1]-1,+p[2]);
+    d.setDate(d.getDate()+n);
+    return d.getFullYear()+'-'+String(d.getMonth()+1).padStart(2,'0')+'-'+String(d.getDate()).padStart(2,'0');
+}
+function _prDefaultRange(){
+    var today=_prToday();
+    var lastSat=_prAddDays(_prWeekStart(today),-1);           // the last week that is over
+    var prevEnd=(payroll.payRuns||[]).reduce(function(m,r){return r&&r.to&&r.to>m?r.to:m},'');
+    var from=prevEnd?_prShiftWeek(_prWeekStart(prevEnd),1):_prShiftWeek(_prWeekStart(today),-1);
+    return {from:from,to:lastSat,nothingNew:from>lastSat};
+}
+/** The weeks (by their Sunday) a range would pay that another run already paid. */
+function _prOverlappingRuns(from,to,exceptId){
+    return (payroll.payRuns||[]).filter(function(r){
+        if(!r||r.id===exceptId||!r.from||!r.to)return false;
+        var lo=from>r.from?from:r.from, hi=to<r.to?to:r.to;
+        if(lo>hi)return false;
+        // a Sunday in [lo, hi] is a week both runs pay
+        var sun=_prWeekStart(lo); if(sun<lo)sun=_prShiftWeek(sun,1);
+        return sun<=hi;
+    });
+}
 function prNewRun(){
     var core=PC(); if(!core)return;
     if(!payroll.staff.length){toast('Add staff first','error');return}
-    var to=_prToday(), from=_prShiftWeek(_prWeekStart(to),-1);
-    var h=ff('From','runFrom',from,'date')+ff('To','runTo',to,'date');
+    var _def=_prDefaultRange();
+    var to=_def.nothingNew?_def.from:_def.to, from=_def.from;
+    var h=(_def.nothingNew?'<p style="font-size:.78rem;color:#92400E;margin:0 0 8px">No complete week since the last pay run ended. The week that is still going is paid in the next run, once it is over.</p>':'')
+        +ff('From','runFrom',from,'date')+ff('To','runTo',to,'date');
+    h+='<p style="font-size:.7rem;color:var(--s400);margin:-4px 0 8px">Timesheets are Sunday\u2013Saturday weeks; a week is in the run when its Sunday is between these dates.</p>';
     h+='<div class="fg"><label class="fl" style="display:flex;align-items:center;gap:7px;cursor:pointer"><input type="checkbox" id="runFinal"> Final period of the season</label>'+
         '<p style="font-size:.68rem;color:var(--s400);margin:2px 0 0">Flat stipends pay out on the final period only, so they don\'t repeat every run.</p></div>';
     h+='<p style="font-size:.72rem;color:var(--s400);margin:8px 0 0">Season salaries are divided across the number of runs you expect — set that below.</p>';
     h+=ff('Runs in the season','runPeriods','7','number');
-    showModal('New Pay Run',h,function(){
+    showModal('New Pay Run',h,async function(){
         function v(id){var e=document.getElementById(id);return e?(e.value||'').trim():''}
         var f=v('runFrom'), t=v('runTo');
         if(!f||!t){toast('Pick both dates','error');return}
         if(f>t){toast('The end date is before the start date','error');return}
+        // Said before saving: a week another run already paid, or a week still going.
+        var _ov=_prOverlappingRuns(f,t);
+        var _thisWeek=_prWeekStart(_prToday());
+        var _warn=[];
+        if(_ov.length)_warn.push('It takes week(s) the pay run of '+_ov.map(function(r){return esc(r.from)+' \u2013 '+esc(r.to)}).join(', ')
+            +' already paid \u2014 those hours would be paid twice.');
+        if(t>=_thisWeek)_warn.push('It takes the week of '+esc(_thisWeek)+', which is not over \u2014 its hours so far would be paid, and the rest of that week would not be paid by a later run.');
+        if(_warn.length){
+            var _go=await confirmDialog({title:'Check these dates',message:_warn.join('<br><br>'),confirmLabel:'Create it anyway',danger:true});
+            if(!_go)return;
+        }
         var run=core.buildPayRun(payroll.staff,payroll.timesheets,{
             from:f, to:t,
             periodsInSeason:parseFloat(v('runPeriods'))||7,
@@ -18163,6 +18215,16 @@ function renderFamilyDetailPage(){
         +'<div style="font-size:2rem;font-weight:800;line-height:1.1;color:'+(l.balance>0?'var(--err)':'var(--ok)')+'">'+fm(l.balance)+'</div>'
         +(_wayD.amount>0?'<div style="font-size:.78rem;color:var(--s600);margin-top:4px">'+fm(_wayD.amount)+' on its way \u2014 bank debits take a few business days</div>':'')
         +(function(){
+            // Others paying part of this family's bill (TED-165): their shares are
+            // on their own accounts, not in the balance above.
+            try{
+                var op=_familyOtherPayers(l.famKey);
+                return op.length?'<div style="font-size:.78rem;color:var(--s600);margin-top:4px">Also paying part of this bill: '
+                    +op.map(function(o){return esc(o.name)+' '+fm(o.share)+(o.owes>0?' (still owes '+fm(o.owes)+')':' (paid)')}).join(', ')
+                    +' \u2014 <a href="#" onclick="CampistryMe.managePayers();return false">payers</a></div>':'';
+            }catch(_){return ''}
+        })()
+        +(function(){
             // Bank payments made online that have not had the camp's "not paying
             // by card" discount yet (TED-160) — said here, where the office looks.
             try{
@@ -18512,11 +18574,85 @@ function addChargeForFamily(famKey){
         // Stored only when there IS a split, so an ordinary charge is byte-identical
         // to one written before this feature existed.
         if(_shares.length)_chg.payers=_shares;
+        // The household is billed ITS share only (TED-165): the fund's $800 of a
+        // $1,000 charge was on the family's bill, in Link and in autopay. The
+        // other payers' shares go on their own accounts (Manage payers).
+        var _others=_shares.length?_splitToPayers(_chg,fk,f):[];
+        if(_others.length){
+            _chg.fullAmount=amt;
+            _chg.amount=Math.round((amt-_others.reduce(function(t,o){return t+o.amount},0))*100)/100;
+        }
         f.charges.push(_chg);
         _postLedgerCharge(f,_chg);
-        f.balance=(f.balance||0)+amt;
-        save();closeModal('dynModal');if(curPage==='familydetail')renderFamilyDetailPage();else renderBilling();toast('Charge of '+fm(amt)+' added to '+f.name);
+        f.balance=(f.balance||0)+_chg.amount;
+        save();closeModal('dynModal');if(curPage==='familydetail')renderFamilyDetailPage();else renderBilling();
+        toast(_others.length
+            ? 'Charge of '+fm(amt)+' added \u2014 '+f.name+' owes '+fm(_chg.amount)+'; '
+              +_others.map(function(o){return o.name+' owes '+fm(o.amount)}).join(', ')+' (on their own account, in Manage payers)'
+            : 'Charge of '+fm(amt)+' added to '+f.name);
     });
+}
+
+// A split charge's shares that are not the household's, onto each payer's own
+// account (TED-165). Returns [{payerId,name,amount}].
+function _splitToPayers(chg,fk,f){
+    var P=_payersAPI(); if(!P)return [];
+    var out=[];
+    P.allocate(chg.amount,chg.payers,'__family__').forEach(function(a){
+        if(a.payerId==='__family__'||!(a.cents>0))return;
+        var py=payers[a.payerId];
+        if(!py){py=payers[a.payerId]={id:a.payerId,name:a.payerId,kind:'organization'};}
+        if(!Array.isArray(py.ledger))py.ledger=[];
+        var id='prc_'+chg.id+'_'+a.payerId;
+        if(py.ledger.some(function(e){return e&&e.id===id}))return;
+        py.ledger.push({id:id,kind:'charge',amount:a.amount,familyKey:fk,family:f.name,chargeId:chg.id,
+            description:(chg.description||chg.category||'Charge')+' \u2014 share for '+f.name+(a.note?' ('+a.note+')':''),
+            date:chg.date||today(),timestamp:Date.now()});
+        out.push({payerId:a.payerId,name:py.name||a.payerId,amount:a.amount});
+    });
+    return out;
+}
+// What the other payers owe on this family's split charges, for its page.
+function _familyOtherPayers(fk){
+    var P=_payersAPI(); if(!P)return [];
+    var out=[];
+    Object.keys(payers||{}).forEach(function(id){
+        var py=payers[id]; if(!py||!Array.isArray(py.ledger))return;
+        var mine=py.ledger.filter(function(e){return e&&e.kind==='charge'&&e.familyKey===fk});
+        if(!mine.length)return;
+        var share=mine.reduce(function(t,e){return t+(Number(e.amount)||0)},0);
+        out.push({payerId:id,name:py.name||id,share:Math.round(share*100)/100,owes:P.account(py).balance});
+    });
+    return out;
+}
+// A payment from a payer that is not the household — the fund's cheque — on
+// the payer's own account, never on the family's (TED-165).
+function recordPayerPayment(id){
+    if(!_secEdit('billing','Recording a payment'))return;
+    var P=_payersAPI(); var py=payers[id];
+    if(!P||!py){toast('Payer not found','error');return}
+    var acct=P.account(py);
+    var h='<div class="me-modal-form">';
+    h+='<p style="font-size:.84rem;color:var(--s600);margin:0 0 10px">'+esc(py.name||id)+' owes <strong>'+fm(acct.balance)+'</strong> on the charges it shares.</p>';
+    h+='<div style="display:grid;grid-template-columns:1fr 1fr;gap:10px">';
+    h+='<div class="me-field"><label>Amount ($)</label><input type="number" id="ppAmt" class="me-input" step="0.01" min="0" value="'+(acct.balance>0?acct.balance.toFixed(2):'')+'"></div>';
+    h+='<div class="me-field"><label>Date</label><input type="date" id="ppDate" class="me-input" value="'+today()+'"></div>';
+    h+='</div>';
+    h+='<div style="display:grid;grid-template-columns:1fr 1fr;gap:10px">';
+    h+='<div class="me-field"><label>Method</label><select id="ppMethod" class="me-input">'+_payOptions('tuition')+'</select></div>';
+    h+='<div class="me-field"><label>Reference #</label><input type="text" id="ppRef" class="me-input" placeholder="Check #, grant ref"></div>';
+    h+='</div></div>';
+    showModal('Payment from '+(py.name||id),h,function(){
+        var amt=Math.round((parseFloat((document.getElementById('ppAmt')||{}).value)||0)*100)/100;
+        if(!(amt>0)){toast('Enter an amount above zero','error');return}
+        if(!Array.isArray(py.ledger))py.ledger=[];
+        py.ledger.push({id:'prp_'+Date.now()+'_'+Math.random().toString(36).slice(2,7),kind:'payment',amount:amt,
+            date:(document.getElementById('ppDate')||{}).value||today(),method:(document.getElementById('ppMethod')||{}).value||'',
+            reference:((document.getElementById('ppRef')||{}).value||'').trim(),timestamp:Date.now()});
+        save();closeModal('dynModal');
+        toast(fm(amt)+' from '+(py.name||id)+' recorded \u2014 it owes '+fm(P.account(py).balance)+' now');
+        if(curPage==='familydetail')renderFamilyDetailPage();
+    },'Record payment');
 }
 
 // Every payment (amount > 0) belonging to this family that still has
@@ -18807,12 +18943,16 @@ function _crUpdateBalancePreview(){
     var amtEl=document.getElementById('crRefundAmount');
     var amt=amtEl?parseFloat(amtEl.value)||0:0;
     if(!f||!amt){previewEl.textContent='';return}
+    // From the balance Billing shows — the family's ledger — not the old
+    // per-family figure, which a payment recorded by the processor's webhook
+    // never moves (TED-167: "$1,400 (currently $1,000)" for a family who owed $0).
+    var _now=(function(){ try{ var L=buildFamilyLedgers()[fk]; if(L&&typeof L.balance==='number')return L.balance; }catch(_){} return f.balance||0; })();
     // A card refund also takes the surcharge's share off the bill (TED-146).
     var _type=(document.getElementById('crType')||{}).value;
     var _fee=_type==='refund_gateway'?_refundFeeShare(f,amt):0;
     var _dback=_type==='refund_gateway'?_refundDiscountBack(f,amt):0;
-    var newBalance=Math.round(((f.balance||0)+amt-_fee+_dback)*100)/100;
-    previewEl.innerHTML='Balance owed after this refund: <strong>'+fm(newBalance)+'</strong> (currently '+fm(f.balance||0)+')'
+    var newBalance=Math.round((_now+amt-_fee+_dback)*100)/100;
+    previewEl.innerHTML='Balance owed after this refund: <strong>'+fm(newBalance)+'</strong> (currently '+fm(_now)+')'
         +(_fee>0?' \u2014 '+fm(_fee)+' of the refund is card surcharge, which comes off their bill too':'')
         +(_dback>0?' \u2014 the '+fm(_dback)+' not-paying-by-card discount that payment earned goes back on their bill':'');
     // An offline refund is not tied to a payment, so its discount cannot be
@@ -19324,10 +19464,23 @@ async function removePayment(idx){
 // discount that came with it goes too, and the row leaves the payments list.
 // Money that went through a processor is not removed here — it was really
 // taken, and giving it back is a refund.
+// Money a processor actually moved, in either direction (TED-163): a payment
+// (Stripe, Sola), a refund sent through one (Billing's, or one made in the
+// Stripe dashboard), or the row Campistry adds when a refund FAILED and the
+// money came back (278). None of these is the office's typing to undo.
+function _throughProcessor(p){
+    return !!(p&&(p.stripePaymentIntentId||p.byopTransactionId||p.stripeRefundId||p.byopRefundId||p.failedRefundId
+        ||p.stripeChargeId||p.stripeDisputeId));
+}
 async function _removeRecordedPayment(p){
     if(!_secEdit('billing','Removing a payment'))return false;
-    if(p.stripePaymentIntentId||p.byopTransactionId){
-        toast('That payment went through the card processor \u2014 to give the money back, use Issue Credit/Refund.','error');
+    if(_throughProcessor(p)){
+        var _isRefund=(Number(p.amount)||0)<0||p.stripeRefundId||p.byopRefundId;
+        toast(p.failedRefundId
+            ? 'That row is a refund the processor failed \u2014 the money really came back. To send it again, use Issue Credit/Refund.'
+            : _isRefund
+                ? 'That refund went through the card processor \u2014 the money really went back to the family, so it cannot be undone here.'
+                : 'That payment went through the card processor \u2014 to give the money back, use Issue Credit/Refund.','error');
         return false;
     }
     var fk=(p.familyKey&&families[p.familyKey])?p.familyKey:(typeof _payFamilyByName==='function'?_payFamilyByName(p):null);
@@ -19335,15 +19488,23 @@ async function _removeRecordedPayment(p){
     var disc=f&&Array.isArray(f.credits)?f.credits.filter(function(c){return c&&c.cashDiscount&&String(c.paymentId)===String(p.id)}):[];
     var discAmt=disc.reduce(function(t,c){return t+(Number(c.amount)||0)},0);
     var amt=Number(p.amount)||0;
+    // Is it on the family's bill at all? An old row from before Finance's form
+    // was Billing's never reached it — removing that changes no balance.
+    var _refs=_paymentRefsOf(p);
+    var onBill=!!(f&&((Array.isArray(f.entries)&&f.entries.some(function(e){return e&&!e.reverses&&(e.kind==='payment'||e.kind==='refund')
+            &&_refs.some(function(r){return e.id==='le_pay_'+r||(e.source&&String(e.source.paymentId||'')===r)})}))
+        ||!(Array.isArray(f.entries)&&f.entries.length)));
     var ok=await confirmDialog({title:'Remove this payment?',
         message:(amt<0?'The '+fm(-amt)+' refund':'The '+fm(amt)+' payment')+(p.method?' ('+esc(_payLabel(p.method)||p.method)+')':'')
-            +(f?' comes off '+esc(f.name)+'\u2019s account \u2014 '+(amt<0?'the refund is undone.':'they will owe it again'
-              +(discAmt>0?', and the '+fm(discAmt)+' discount that came with it goes too.':'.')):' is removed from the list.'),
+            +(f&&onBill?' comes off '+esc(f.name)+'\u2019s account \u2014 '+(amt<0?'the refund is undone.':'they will owe it again'
+              +(discAmt>0?', and the '+fm(discAmt)+' discount that came with it goes too.':'.'))
+              :' is removed from the list. It was never on '+(f?esc(f.name)+'\u2019s':'a family\u2019s')+' bill, so no balance changes.'),
         confirmLabel:'Remove payment',danger:true});
     if(!ok)return false;
+    if(f&&!onBill)f=null;
     if(f){
         var B=_billingCore();
-        var refs=_paymentRefsOf(p);
+        var refs=_refs;
         if(B&&Array.isArray(f.entries)){
             f.entries.filter(function(e){
                 return e&&!e.reverses&&(e.kind==='payment'||e.kind==='refund')&&refs.some(function(r){
@@ -19365,7 +19526,7 @@ async function _removeRecordedPayment(p){
     if(i>=0)finPayments.splice(i,1);
     save();
     try{ if(curPage==='finance')renderFinance();else if(curPage==='familydetail')renderFamilyDetailPage();else renderBilling(); }catch(_){}
-    toast('Payment removed'+(f?' \u2014 '+(f.name||'the family')+'\u2019s balance is back up by '+fm(Math.max(0,amt)+discAmt):''));
+    toast('Payment removed'+(f?' \u2014 '+(f.name||'the family')+'\u2019s balance is '+(amt<0?'back down by '+fm(-amt):'back up by '+fm(amt+discAmt)):''));
     return true;
 }
 
@@ -24363,7 +24524,7 @@ window.CampistryMe={
     ptDownloadTemplate:ptDownloadTemplate,ptUploadTemplate:ptUploadTemplate,
     finSetTab:finSetTab,finAddStaff:finAddStaff,finEditStaff:finEditStaff,finStaffModal:finStaffModal,_staffPhotoPick:_staffPhotoPick,_staffPhotoClear:_staffPhotoClear,finRemoveStaff:finRemoveStaff,
     finAddExpense:finAddExpense,finRemoveExpense:finRemoveExpense,
-    finAddPayment:finAddPayment,finRemovePayment:finRemovePayment,
+    finAddPayment:finAddPayment,finRemovePayment:finRemovePayment,recordPayerPayment:recordPayerPayment,
     sendPayLink:sendPayLink,copyPayLink:copyPayLink,toggleBillingAccess:toggleBillingAccess,
     monthlyPlan:monthlyPlan,toggleFamilyAutopay:toggleFamilyAutopay,cancelMonthlyPlan:cancelMonthlyPlan,
     _mpGenerate:_mpGenerate,_mpBasis:_mpBasis,_mpPreview:_mpPreview,_mpAddRow:_mpAddRow,_mpUpdateTotal:_mpUpdateTotal,_mpSwitchTab:_mpSwitchTab,

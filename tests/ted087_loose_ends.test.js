@@ -31,7 +31,7 @@ test('a Sola notice for a camp with no PIN is not acknowledged (Sola retries ins
     assert.ok(r.status >= 500, 'answered ' + r.status + ' — Sola treats a 2xx as delivered');
 });
 
-const TIP = (tipsKnown) => `
+const TIP = (tipsKnown, charge) => `
 T.env = { STRIPE_SECRET_KEY: 'sk_test_x', SUPABASE_URL: 'http://db', SUPABASE_SERVICE_ROLE_KEY: 'svc', INSTALLMENT_CRON_SECRET: 'cron' };
 T.tables.camp_state_kv = [{ camp_id: 'camp1', key: 'campistryMe', value: { enrollments: {}, sessions: [] } }];
 T.tables.camps = [{ id: 'camp1', name: 'Camp One', payment_processor_key: null }];
@@ -45,6 +45,7 @@ T.tables.link_tip_cart_items = [{ id: 'item1', cart_id: 'cart1', camp_id: 'camp1
 T.tables.link_tips = ${JSON.stringify(tipsKnown)};
 T.fetch = (url: string, init: any) => {
   if (init.method === 'GET' && url.includes('/transfers?')) return { data: [] };
+  if (init.method === 'GET' && url.includes('/charges?payment_intent=')) return { data: [${JSON.stringify(charge || { id: 'ch_p', amount: 2040, amount_refunded: 0, disputed: false })}] };
   if (init.method === 'POST' && url.endsWith('/transfers')) return { id: 'tr_retry' };
   return {};
 };
@@ -61,4 +62,15 @@ test('a tip the webhook already recorded under that payment is not recorded twic
     const r = runEdge('charge-due-installments', TIP([{ id: 't1', stripe_payment_intent_id: 'pi_parent', staff_account_id: 'lsa-1', stripe_transfer_id: null }]));
     assert.ok(!r.writes.some(w => w.table === 'link_tips' && w.op === 'insert'), 'the tip was recorded twice');
     assert.ok(!r.rpcs.some(x => x.name === 'increment_staff_total_earned'), 'the counselor\'s total was counted twice');
+});
+
+test('TED-176: a tip whose payment was refunded or disputed before the retry is not sent, and leaves the queue', () => {
+    for (const charge of [{ id: 'ch_p', amount: 2040, amount_refunded: 2040, disputed: false },
+                          { id: 'ch_p', amount: 2040, amount_refunded: 0, disputed: true }]) {
+        const r = runEdge('charge-due-installments', TIP([], charge));
+        assert.ok(!r.fetches.some(f => f.method === 'POST' && f.url.endsWith('/transfers')), 'the refunded tip was sent to the staff member');
+        const upd = r.writes.find(w => w.table === 'link_tip_cart_items' && w.op === 'update');
+        assert.ok(upd && upd.payload.processed_at, 'it stays in the nightly queue');
+        assert.match(upd.payload.transfer_error, /^Not sent: the parent's payment was (refunded \(\$20\.40 of \$20\.40\)|disputed)/);
+    }
 });

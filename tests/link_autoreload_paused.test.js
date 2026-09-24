@@ -71,7 +71,7 @@ function autoSave(ar, targetId, checked) {
         _activeCanteenChild: () => ({ name: 'Avi Gold', campId: 'camp1', autoReload: ar }),
         _saveAutoReloadConfig: (c, cfg) => sent.push(cfg), _arSaveTimer: null };
     vm.createContext(ctx);
-    vm.runInContext('var _arSaveTimer=null;\n' + cut('_arAutoSave') + '\nthis.save = _arAutoSave;', ctx);
+    vm.runInContext('var _arSaveTimer=null, _arPendingOn={};\n' + cut('_arKey') + '\n' + cut('_arAutoSave') + '\nthis.save = _arAutoSave;', ctx);
     el('arThEnabled').checked = true; el('arThAmount').value = '5'; el('arThReload').value = '30';
     ctx.save({ target: el(targetId), type: 'change' });
     if (checked !== undefined) el(targetId).checked = checked;
@@ -88,4 +88,61 @@ test('TED-161: editing the amount while auto-reload is OFF saves it without swit
 test('TED-161: ticking a trigger is still how a parent switches it on; edits while on keep it on', () => {
     assert.strictEqual(autoSave({ enabled: false }, 'arThEnabled')[0].enabled, true);
     assert.strictEqual(autoSave({ enabled: true, thresholdEnabled: true }, 'arThReload')[0].enabled, true);
+});
+
+// ── TED-172: a tick, then an amount edit before the save — still ON ──────────
+// The real timers, the real save and its answer (a slow phone's), with the
+// parent's actions in the order a parent makes them.
+function link(answerMs) {
+    const els = {};
+    const el = (id) => (els[id] = els[id] || { id, value: '', checked: false });
+    const sent = [], stored = {};
+    const child = { name: 'Chaim Katz', campId: 'camp1', autoReload: { enabled: false } };
+    const ctx = { document: { getElementById: el }, setTimeout, clearTimeout, console,
+        _activeCanteenChild: () => child, toast() {}, _flashSavedHint() {}, _renderAutoReload() {},
+        startCanteenAutoReloadSetup() {},
+        window: { _parentDB: { rpc() {} },
+            _pRpc: (fn, args) => { sent.push(args.p_config.enabled);
+                return new Promise(r => setTimeout(() => { stored.enabled = args.p_config.enabled;
+                    r({ data: { success: true, autoReload: args.p_config, cardOnFile: true } }); }, answerMs)); } } };
+    vm.createContext(ctx);
+    vm.runInContext('var window=this.window; var _arSaveTimer=null, _arPendingOn={};\n' + cut('_arKey') + '\n' + cut('_arAutoSave')
+        + '\n' + cut('_saveAutoReloadConfig') + '\n' + cut('turnOffAutoReload') + '\nthis.save = _arAutoSave; this.off = turnOffAutoReload;', ctx);
+    el('arThAmount').value = '5'; el('arThReload').value = '30';
+    const tick = () => { el('arThEnabled').checked = true; ctx.save({ target: el('arThEnabled') }); };
+    const amount = (v) => { el('arThReload').value = v; ctx.save({ target: el('arThReload') }); };
+    return { ctx, el, sent, stored, child, tick, amount };
+}
+const wait = (ms) => new Promise(r => setTimeout(r, ms));
+
+test('TED-172: tick, then an amount edit inside the half-second wait — saved ON', async () => {
+    const L = link(10);
+    L.tick(); await wait(100); L.amount('40');
+    await wait(800);
+    assert.deepStrictEqual(L.sent, [true], 'the amount edit replaced the switch-on with "off"');
+    assert.strictEqual(L.stored.enabled, true);
+});
+
+test('TED-172: tick, then an amount edit while the first save is still on its way — saved ON', async () => {
+    const L = link(1500);
+    L.tick(); await wait(600); L.amount('40');
+    await wait(2800);
+    assert.deepStrictEqual(L.sent, [true, true], 'the second save said "off"');
+    assert.strictEqual(L.stored.enabled, true);
+    L.amount('45'); await wait(2100);                  // after both answers: on, from the saved answer
+    assert.deepStrictEqual(L.sent, [true, true, true]);
+});
+
+test('TED-172: unticking again, or the parent\'s own Turn off, cancels a waiting switch-on', async () => {
+    const A = link(10);
+    A.tick(); A.el('arScEnabled').checked = true;       // the other trigger stays ticked
+    A.el('arThEnabled').checked = false; A.ctx.save({ target: A.el('arThEnabled') });
+    await wait(700);
+    assert.deepStrictEqual(A.sent, [false], 'a tick taken back still switched it on');
+    const B = link(10);
+    B.tick(); B.child.autoReload = { enabled: false }; B.ctx.off();
+    await wait(700);
+    assert.deepStrictEqual(B.sent, [false], 'Turn off, then the waiting tick switched it back on');
+    B.amount('40'); await wait(700);
+    assert.deepStrictEqual(B.sent, [false, false]);
 });

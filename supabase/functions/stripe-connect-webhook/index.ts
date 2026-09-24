@@ -79,6 +79,19 @@
 //                                 record_staff_payout().
 //   - payment_intent.payment_failed → logged only; nothing was written on
 //                                 success, so there's nothing to roll back.
+//   - charge.refunded / charge.dispute.created / charge.dispute.updated /
+//     charge.dispute.closed (the "Your account" endpoint — tick them there)
+//                               → a tip the parent got back (TED-176). The
+//                                 refund or chargeback is paid from the
+//                                 PLATFORM's balance, while the tip itself sits
+//                                 in the staff member's Stripe account. So:
+//                                 the tip's share is taken back from that
+//                                 account (a transfer reversal), the tip is
+//                                 marked and comes off the staff member's
+//                                 total (migration 285), and the platform is
+//                                 emailed once per new state with what is left
+//                                 to do by hand (TIPPING_SETUP.md). A payment
+//                                 that is not a tip is left to stripe-webhook.
 // =============================================================================
 import { serve } from "https://deno.land/std@0.168.0/http/server.ts";
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
@@ -89,6 +102,9 @@ const STRIPE_SECRET = Deno.env.get("STRIPE_SECRET_KEY");
 const STRIPE_API = "https://api.stripe.com/v1";
 const SUPABASE_URL = Deno.env.get("SUPABASE_URL") || "";
 const SUPABASE_SERVICE_KEY = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY") || "";
+const RESEND_API_KEY = Deno.env.get("RESEND_API_KEY");
+// The platform's own address — the same one stripe-webhook's risk alerts go to.
+const PLATFORM_ALERT_EMAIL = "campistryoffice@gmail.com";
 
 // Only used by the cart fan-out (handleTipCartSucceeded) — the
 // single-recipient flow never calls the Stripe API from this function at
@@ -111,6 +127,11 @@ async function stripePost(endpoint: string, body: Record<string, string>, idempo
     headers,
     body: new URLSearchParams(body).toString(),
   });
+  return resp.json();
+}
+
+async function stripeGet(endpoint: string) {
+  const resp = await fetch(`${STRIPE_API}${endpoint}`, { headers: { "Authorization": `Bearer ${STRIPE_SECRET}` } });
   return resp.json();
 }
 
@@ -408,6 +429,126 @@ async function handleTipCartSucceeded(supabase: ReturnType<typeof createClient>,
 }
 
 
+// ── A tip the parent got back: refunded, or disputed (TED-176) ─────────────
+async function sendPlatformAlert(subject: string, html: string): Promise<"sent" | "failed" | "not_configured"> {
+  if (!RESEND_API_KEY) {
+    console.error(`[stripe-connect-webhook] RESEND_API_KEY not configured — cannot send: ${subject}`);
+    return "not_configured";
+  }
+  try {
+    const resp = await fetch("https://api.resend.com/emails", {
+      method: "POST",
+      headers: { "Authorization": `Bearer ${RESEND_API_KEY}`, "Content-Type": "application/json" },
+      body: JSON.stringify({ from: "Campistry Platform Alerts <onboarding@resend.dev>", to: [PLATFORM_ALERT_EMAIL], subject, html }),
+    });
+    if (!resp.ok) { console.error(`[stripe-connect-webhook] alert email failed: ${resp.status}`); return "failed"; }
+    return "sent";
+  } catch (e) {
+    console.error(`[stripe-connect-webhook] alert email threw: ${(e as Error).message}`);
+    return "failed";
+  }
+}
+
+const money = (cents: number) => `$${(cents / 100).toFixed(2)}`;
+
+async function handleTipReversal(supabase: ReturnType<typeof createClient>, event: Record<string, any>) {
+  const obj = event.data.object || {};
+  const isDispute = String(event.type).startsWith("charge.dispute.");
+  const chargeId = String((isDispute ? obj.charge : obj.id) || "");
+  let piId = String(obj.payment_intent || "");
+  // The charge: its amount, what was refunded, and (for a single tip) the
+  // transfer that sent the tip on. A dispute carries only the charge's id.
+  let charge: Record<string, any> | null = isDispute ? null : obj;
+  if (!charge || charge.amount == null || !piId) {
+    if (!chargeId) return;
+    charge = await stripeGet(`/charges/${encodeURIComponent(chargeId)}`);
+    if (!charge || charge.error) throw new Error(`could not read charge ${chargeId} from Stripe`);  // retried
+    piId = piId || String(charge.payment_intent || "");
+  }
+  if (!piId) return;
+
+  // Our tips on this payment. None: not a tip — stripe-webhook handles it.
+  const { data: tips, error: tipErr } = await supabase.from("link_tips")
+    .select("id, amount, staff_account_id, stripe_transfer_id, recipient_name, camp_id")
+    .eq("stripe_payment_intent_id", piId);
+  if (tipErr) throw new Error(`link_tips lookup failed: ${tipErr.message}`);   // retried
+  if (!tips || !tips.length) return;
+
+  const chargeCents = Number(charge.amount) || 0;
+  const refundedCents = Number(charge.amount_refunded) || 0;
+  // open while the bank decides; won/lost once it has (a closed inquiry cost
+  // nothing, like a win)
+  const disputeStatus = !isDispute ? null
+    : event.type === "charge.dispute.closed" ? (String(obj.status) === "lost" ? "lost" : "won")
+    : "open";
+
+  for (const tip of tips) {
+    const tipCents = Math.round(Number(tip.amount) * 100);
+    // this tip's share of what the parent got back
+    const refundCents = chargeCents > 0 ? Math.min(tipCents, Math.round(refundedCents * tipCents / chargeCents)) : 0;
+    // the tip's own transfer (a cart), else the charge's (a destination charge)
+    const transferId = tip.stripe_transfer_id || (tips.length === 1 ? (charge.transfer || null) : null);
+    let clawedCents: number | null = null;
+    let note = "";
+    if (transferId) {
+      const tr = await stripeGet(`/transfers/${encodeURIComponent(String(transferId))}`);
+      if (!tr || tr.error) {
+        note = `Could not read transfer ${transferId} from Stripe — take the tip back by hand.`;
+      } else {
+        const reversed = Number(tr.amount_reversed) || 0;
+        // What to take back now: the refunded share, or the whole tip while
+        // the parent's bank has the money (a dispute is paid from the
+        // platform's balance at once). A won dispute takes nothing more.
+        const { data: prev } = await supabase.from("link_tips").select("dispute_status").eq("id", tip.id).maybeSingle();
+        const dispNow = disputeStatus || prev?.dispute_status || null;
+        const want = Math.min(Number(tr.amount) || tipCents,
+          Math.max(refundCents, dispNow === "open" || dispNow === "lost" ? tipCents : 0));
+        if (want > reversed) {
+          // The same key for the same target: a repeated delivery, or two at
+          // once, reverse once.
+          const rev = await stripePost(`/transfers/${encodeURIComponent(String(transferId))}/reversals`, {
+            amount: String(want - reversed),
+            "metadata[reason]": isDispute ? "tip_disputed" : "tip_refunded",
+            "metadata[tipId]": String(tip.id),
+          }, `tiprev_${transferId}_${want}`);
+          if (rev.error) note = `Could not take ${money(want - reversed)} back from ${tip.recipient_name}'s Stripe account: ${rev.error.message}`;
+          else clawedCents = want;
+        } else {
+          clawedCents = reversed;
+        }
+      }
+    } else {
+      note = "No transfer to this staff member was found on this payment — take the tip back by hand.";
+    }
+
+    const { data: rec, error: recErr } = await supabase.rpc("record_tip_reversal", {
+      p_tip_id: tip.id, p_refunded: refundCents / 100, p_dispute_status: disputeStatus,
+      p_clawed_back: clawedCents == null ? null : clawedCents / 100, p_note: note || null,
+    });
+    if (recErr || !rec?.success) throw new Error(`tip ${tip.id}: not recorded (${recErr?.message || rec?.error || "unknown"}) — is migration 285 applied?`);
+    console.log(`[stripe-connect-webhook] tip ${tip.id} (${tip.recipient_name}): refunded $${rec.refunded}, dispute ${rec.disputeStatus || "none"}, taken back $${rec.clawedBack}`);
+
+    if (rec.alerted) continue;
+    const lostCents = Math.round(Number(rec.lost) * 100);
+    const clawCents = Math.round(Number(rec.clawedBack) * 100);
+    const todo = rec.disputeStatus === "won" && clawCents > 0
+      ? `<p><strong>The dispute was won.</strong> ${money(clawCents)} was taken back from ${tip.recipient_name}'s Stripe account while it was open — send it to them again: Stripe Dashboard → Connect → their account → Send funds (a transfer of ${money(clawCents)}).</p>`
+      : clawCents < lostCents
+        ? `<p><strong>To do:</strong> ${money(lostCents - clawCents)} of this tip is still in ${tip.recipient_name}'s Stripe account. ${rec.note || note || ""} In the Stripe Dashboard: Payments → this payment → the transfer → Reverse transfer.</p>`
+        : `<p>The tip's share (${money(clawCents)}) was taken back from ${tip.recipient_name}'s Stripe account automatically — nothing to do but ${isDispute ? "answer the dispute in Stripe" : "note it"}.</p>`;
+    const sent = await sendPlatformAlert(
+      `Stripe: a staff tip was ${isDispute ? "disputed" : "refunded"} — ${tip.recipient_name}`,
+      `<h2>A tip to ${tip.recipient_name} was ${isDispute ? `disputed (${rec.disputeStatus})` : "refunded"}</h2>
+       <p><strong>Tip:</strong> $${Number(rec.amount).toFixed(2)} · <strong>refunded:</strong> $${Number(rec.refunded).toFixed(2)} · <strong>dispute:</strong> ${rec.disputeStatus || "none"}</p>
+       <p><strong>Camp:</strong> ${tip.camp_id} · <strong>Payment:</strong> ${piId} · <strong>Charge:</strong> ${chargeId || charge.id}</p>
+       ${todo}`);
+    // Not sent: 500, so Stripe sends the event again — the tip is already
+    // recorded, and only the email is tried again.
+    if (sent === "failed") throw new Error(`tip ${tip.id}: the platform alert did not send`);
+    await supabase.rpc("mark_tip_reversal_alerted", { p_tip_id: tip.id, p_state: rec.state });
+  }
+}
+
 /** A camper id (from the page, or from metadata), or null. */
 function camperIdIn(v: unknown): number | null {
   return v != null && /^\d+$/.test(String(v)) ? Number(v) : null;
@@ -461,6 +602,10 @@ serve(async (req) => {
       } else if (meta.source === "campistry-link-tip-cart") {
         console.log(`[stripe-connect-webhook] cart tip payment failed for cart ${meta.cartId}: ${event.data.object.last_payment_error?.message || "unknown"}`);
       }
+    } else if (event.type === "charge.refunded" || event.type === "charge.dispute.created"
+               || event.type === "charge.dispute.updated" || event.type === "charge.dispute.closed") {
+      // A tip the parent got back (TED-176); anything else is stripe-webhook's.
+      await handleTipReversal(supabase, event);
     } else if (event.type === "payout.failed") {
       // The camp's OWN payout, not the platform's. stripe-webhook already
       // handles payout.failed, but that is Campistry's payout and its alert goes

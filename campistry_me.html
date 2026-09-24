@@ -243,7 +243,7 @@
 <script src="campistry_tax_statement.js?v=20260924-04"></script>
 <!-- Who is paying a charge, and how much of it. Pure rule; loaded before
      campistry_me.js, which asks it to validate and describe a split. -->
-<script src="campistry_payers.js?v=20260917-02"></script>
+<script src="campistry_payers.js?v=20260924-01"></script>
 <!-- Payment plans: the schedule, and whether this camp allows them at all.
      Loaded after campistry_payments.js, which it asks about "plan". -->
 <script src="campistry_installments.js?v=20260918-01"></script>
@@ -298,12 +298,12 @@
   // token form.
   window.CAMPISTRY_INBOUND_PREFIX = 'deposits+';
 </script>
-<script src="campistry_deposit_parser.js?v=20260923-21"></script>
-<script src="campistry_deposit_match.js?v=20260923-21"></script>
+<script src="campistry_deposit_parser.js?v=20260924-01"></script>
+<script src="campistry_deposit_match.js?v=20260924-01"></script>
 <!-- Learned per-bank layouts. Must load BEFORE the UI, which offers to teach
      one. tests/deposit_scripts_loaded.test.js fails the build if a deposit
      module ever ships without a tag here. -->
-<script src="campistry_deposit_template.js?v=20260923-21"></script>
+<script src="campistry_deposit_template.js?v=20260924-01"></script>
 <!-- Teaching a layout from a printed email. PDF.js is already vendored here
      (campistry_link_parent.html uses it too), so nothing is fetched from a CDN
      and the worker path must be set before any document is opened. -->
@@ -311,8 +311,8 @@
 <script>
 if (window.pdfjsLib) { window.pdfjsLib.GlobalWorkerOptions.workerSrc = 'pdfjs-dist@3.11.174.worker.min.js?v=20260915-01'; }
 </script>
-<script src="campistry_deposit_teach_pdf.js?v=20260923-21"></script>
-<script src="campistry_deposits_ui.js?v=20260923-21"></script>
+<script src="campistry_deposit_teach_pdf.js?v=20260924-01"></script>
+<script src="campistry_deposits_ui.js?v=20260924-01"></script>
 <script src="campistry_payroll_core.js?v=20260907-01"></script>
 <!-- The family billing account: an append-only ledger. Must load BEFORE
      campistry_me.js, which posts to it whenever a camper is enrolled or
@@ -340,7 +340,7 @@ if (window.pdfjsLib) { window.pdfjsLib.GlobalWorkerOptions.workerSrc = 'pdfjs-di
      footer/watermark) — reused here so the Broadcast composer's preview
      shows exactly what will be sent, off the camp's real branding config. -->
 <script src="campistry_link_branding.js?v=20260906-01"></script>
-<script src="campistry_me.js?v=20260924-26"></script>
+<script src="campistry_me.js?v=20260924-27"></script>
 <script src="plan_limits.js?v=20260903-03"></script>
 <script src="trial_guard.js?v=20260903-03"></script>
 <script src="campistry_notes_quick.js?v=20260903-03"></script>

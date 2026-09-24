@@ -82,10 +82,30 @@
                 email: str(p.email),
                 phone: str(p.phone),
                 note: str(p.note),
-                archived: !!p.archived
+                archived: !!p.archived,
+                // What this payer owes and has paid, when it is not the camper's
+                // own household (TED-165): its share of each split charge, and
+                // the payments recorded from it. Kept here, on the payer, so the
+                // household's bill carries only the household's share.
+                ledger: (Array.isArray(p.ledger) ? p.ledger : []).filter(function (e) {
+                    return e && typeof e === 'object' && (e.kind === 'charge' || e.kind === 'payment') && e.id;
+                })
             };
         });
         return out;
+    };
+
+    /**
+     * What a payer (not the household) owes: its shares of split charges, less
+     * the payments recorded from it. { charged, paid, balance } in dollars.
+     */
+    P.account = function (payer) {
+        var ch = 0, pd = 0;
+        ((payer && payer.ledger) || []).forEach(function (e) {
+            if (e.kind === 'charge') ch += cents(e.amount);
+            else if (e.kind === 'payment') pd += cents(e.amount);
+        });
+        return { charged: dollars(ch), paid: dollars(pd), balance: dollars(ch - pd) };
     };
 
     /** A payer id for a new payer, stable and safe to use as an object key. */

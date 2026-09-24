@@ -486,6 +486,10 @@
             }
         });
 
+        // What says WHO paid, before the amount is looked at: decide() needs it
+        // to tell two households with the same parent name apart (TED-174).
+        Object.keys(scores).forEach(function (fk) { scores[fk].identity = scores[fk].score; });
+
         // Amount corroboration. Never enough on its own -- lots of families owe
         // the same round number -- but it separates a real match from a
         // coincidental surname when the office is choosing between two.
@@ -555,6 +559,16 @@
 
         if (runnerUp && (top.score - runnerUp.score) < s.ambiguousGap) {
             return out('review', 'Two families match about equally (' + top.familyName + ' / ' + runnerUp.familyName + ')');
+        }
+
+        // A name never posts money by itself (TED-174). Two households with a
+        // parent of the same name -- common enough -- match the payer equally,
+        // and "this one owes exactly that amount" does not say which of them
+        // sent it: the other may have paid ahead, or paid for a sibling.
+        if (runnerUp && top.identity < M.SCORE.PARENT_HANDLE
+            && (top.identity - (Number(runnerUp.identity) || 0)) < s.ambiguousGap) {
+            return out('review', 'Two families match the payer\u2019s name (' + top.familyName + ' / ' + runnerUp.familyName
+                + ') \u2014 the amount alone does not say which one sent it');
         }
 
         // Overpayment guard. A deposit meaningfully larger than the balance is

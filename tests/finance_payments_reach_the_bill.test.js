@@ -52,7 +52,7 @@ function office(policy) {
     const names = ['_cashDiscountFor', '_postCashDiscount', '_payDiscountPreview', 'openPaymentForFamily', 'finAddPayment',
         'finRemovePayment', '_removeRecordedPayment', '_postPaymentEntry', '_paymentRefOf', '_paymentRefsOf', '_postLedgerCredit',
         '_camperIdOf', '_giveCashDiscount', '_onlineBankPaymentsWithoutDiscount', '_famPaymentsIn', '_paidByCard',
-        '_cashDiscountOf', '_cashDiscountBackOf'];
+        '_cashDiscountOf', '_cashDiscountBackOf', '_throughProcessor'];
     const extra = { normalizePersonId: () => null, camperNameById: () => null, _camperLabel: (x) => x, roster: {} };
     Object.assign(ctx, extra);
     const fns = new Function(...Object.keys(ctx), VARS + '\n' + names.map(cut).join('\n') + '\nreturn { ' + names.join(', ') + ' };')(...Object.values(ctx));
@@ -131,4 +131,36 @@ test('TED-160: refunding a discounted payment takes its share of the discount ba
     // the card refund posts it, carrying the refund's id (for 281 if the refund fails)
     assert.match(ME, /var _db=_cashDiscountBackOf\(f,p,_before,chunk\);/);
     assert.match(ME, /cashDiscountBack:true,paymentId:p\.id,refundId:refId\|\|null/);
+});
+
+test('TED-163: a refund that went through Stripe or Sola, or a failed refund\'s put-back, cannot be "removed"', async () => {
+    for (const row of [
+        { id: 'ref_1', familyKey: 'moss', amount: -970, method: 'Refund', stripeRefundId: 're_1', refundOf: 'pi_pi_b' },
+        { id: 'ref_2', familyKey: 'moss', amount: -500, method: 'Refund', byopRefundId: 'R9', byopProcessor: 'cardknox' },
+        { id: 'refail_re_3', familyKey: 'moss', amount: 970, method: 'Refund failed', failedRefundId: 're_3', status: 'succeeded' },
+        { id: 'ext_re_4', familyKey: 'moss', amount: -100, method: 'Refund', stripeRefundId: 're_4' },   // made in the Stripe dashboard
+    ]) {
+        const o = office();
+        o.ctx.finPayments.push(row);
+        const before = B.balance(o.fam);
+        await o.fns.finRemovePayment(row.id);
+        assert.strictEqual(o.ctx.finPayments.length, 1, row.id + ' was removed');
+        assert.strictEqual(B.balance(o.fam), before, row.id + ' moved the balance');
+        assert.strictEqual(o.dialogs.length, 0, 'it even asked to remove ' + row.id);
+        assert.match(o.toasts[0][0], /processor/);
+    }
+    // an offline refund the office typed in can still be taken back
+    assert.strictEqual(o_fns_throughProcessor({ id: 'ref_5', amount: -50, method: 'Refund', offline: true }), false);
+    // and the Payment Log shows no ✕ on processor rows
+    assert.match(ME, /var _acts=_throughProcessor\(p\)\?'':'<button/);
+});
+function o_fns_throughProcessor(p) { return office().fns._throughProcessor(p); }
+
+test('Ted\'s wording note: a row that never reached the bill is removed without claiming a balance change', async () => {
+    const o = office();
+    o.ctx.finPayments.push({ id: 1700000000000, family: 'Moss', familyKey: 'moss', amount: 970, method: 'check', date: '2026-08-01', status: 'paid' });
+    await o.fns.finRemovePayment('1700000000000');
+    assert.match(o.dialogs[0].message, /It was never on Moss’s bill, so no balance changes\./);
+    assert.strictEqual(B.balance(o.fam), 1000);
+    assert.strictEqual(o.toasts[o.toasts.length - 1][0], 'Payment removed');
 });

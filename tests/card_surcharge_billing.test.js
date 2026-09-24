@@ -145,6 +145,7 @@ test('TED-146: the window\'s "Balance owed after this refund" includes the surch
     const silver = { name: 'X', balance: 0, charges: [sur(30, 1000, T0)], credits: [] };
     const els = { crFamKey: { value: 'fam' }, crRefundAmount: { value: '1000' }, crType: { value: 'refund_gateway' }, crBalancePreview: { innerHTML: '', textContent: '' } };
     const ctx = { _cfAPI: () => F, families: { fam: silver }, finPayments: [pay('p1', 1030, T0 + 60000)],
+        buildFamilyLedgers: () => ({ fam: { balance: 0 } }),
         normalizePersonId: () => null, camperNameById: () => null, REFUND_WINDOW_DAYS: 120, _paymentAgeDays: () => 1,
         fm: (n) => '$' + Number(n).toFixed(2), document: { getElementById: (id) => els[id] || null } };
     const names = ['_famPaymentsIn', '_refundedFrom', '_paidByCard', '_surchargeCarried', '_feeShareOfRefund', '_surchargeShare',
@@ -198,4 +199,20 @@ test('TED-155: a flat online payment fee is allowed for a family paying by bank 
 test('TED-153: in cash-discount mode the family tool gives the discount instead of "no fee"', () => {
     const b = billing({ name: 'Iron', balance: 1000, charges: [] }, { mode: 'cash_discount', cashDiscountPct: 3 });
     assert.strictEqual(b.fn.addCardSurcharge('gold'), 'discount-tool');
+});
+
+test('TED-167: the preview starts from the ledger balance Billing shows, not the stale per-family figure', () => {
+    // Finch paid $1,000 online; the webhook recorded it on the ledger ($0 owed),
+    // and the old per-family figure still says $1,000.
+    const finch = { name: 'X', balance: 1000, charges: [], credits: [] };
+    const els = { crFamKey: { value: 'fam' }, crRefundAmount: { value: '400' }, crType: { value: 'refund_gateway' }, crBalancePreview: { innerHTML: '', textContent: '' } };
+    const ctx = { _cfAPI: () => F, families: { fam: finch }, finPayments: [pay('p1', 1000, T0 + 60000)],
+        buildFamilyLedgers: () => ({ fam: { balance: 0 } }),
+        normalizePersonId: () => null, camperNameById: () => null, REFUND_WINDOW_DAYS: 120, _paymentAgeDays: () => 1,
+        fm: (n) => '$' + Number(n).toFixed(2), document: { getElementById: (id) => els[id] || null } };
+    const names = ['_famPaymentsIn', '_refundedFrom', '_paidByCard', '_surchargeCarried', '_feeShareOfRefund', '_surchargeShare',
+        '_refundFeeShare', '_famRefundableOnline', '_famRefundableOnlineAll', '_famRefundablePayments', '_crUpdateBalancePreview',
+        '_refundDiscountBack', '_cashDiscountOf', '_cashDiscountBackOf'];
+    new Function(...Object.keys(ctx), names.map(cut).join('\n') + '\n_crUpdateBalancePreview();')(...Object.values(ctx));
+    assert.match(els.crBalancePreview.innerHTML, /Balance owed after this refund: <strong>\$400\.00<\/strong> \(currently \$0\.00\)/, els.crBalancePreview.innerHTML);
 });

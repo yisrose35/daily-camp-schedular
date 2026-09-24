@@ -119,3 +119,21 @@ BEGIN
     IF r IS DISTINCT FROM 'ok' THEN RAISE EXCEPTION 'the checking script''s 281 row says: %', r; END IF;
 END $$;
 ROLLBACK;
+
+-- TED-173: an earlier copy of 281 (one without the discount give-back) is
+-- caught by the checking script, not passed as "ok"
+BEGIN;
+DO $$
+DECLARE d text := pg_get_functiondef('public.undo_card_fee_return(uuid,text,text)'::regprocedure);
+BEGIN
+    -- the earlier copy had no second loop: stand it in by a loop that never matches
+    EXECUTE replace(d, 'cashDiscountBack', 'noSuchFlag');
+END $$;
+CREATE TEMP TABLE v281old AS :verify_q
+DO $$
+DECLARE r text;
+BEGIN
+    SELECT result INTO r FROM v281old WHERE item LIKE '281%';
+    IF r NOT LIKE 'apply 281 again%' THEN RAISE EXCEPTION 'TED-173: an earlier 281 passed the checking script: %', r; END IF;
+END $$;
+ROLLBACK;

@@ -1363,6 +1363,25 @@ serve(async (req) => {
           transfer = (Array.isArray(list?.data) ? list.data : []).find((x: any) => x?.metadata?.cartItemId === String(item.id)) || null;
         } catch (_) { /* could not look: fall through to the keyed create */ }
 
+        // The parent got the money back before this tip ever reached the
+        // staff member (TED-176): refunded, or disputed with their bank. Then
+        // it is not sent — the platform would pay a tip it no longer has —
+        // and it leaves the queue with the reason, for the office to settle
+        // by hand. Stripe not answering: try again tomorrow.
+        if (!transfer && item.stripe_payment_intent_id) {
+          const cr = await fetch(`${STRIPE_API}/charges?payment_intent=${encodeURIComponent(String(item.stripe_payment_intent_id))}&limit=1`, { headers: auth });
+          const cl = await cr.json();
+          if (!cr.ok || cl?.error || !Array.isArray(cl?.data)) throw new Error(`could not check the parent's payment ${item.stripe_payment_intent_id} with Stripe`);
+          const ch = cl.data[0];
+          if (ch && ((Number(ch.amount_refunded) || 0) > 0 || ch.disputed)) {
+            const why = `Not sent: the parent's payment was ${ch.disputed ? "disputed" : `refunded ($${((Number(ch.amount_refunded) || 0) / 100).toFixed(2)} of $${((Number(ch.amount) || 0) / 100).toFixed(2)})`} before this tip reached ${item.staff_name || "the staff member"} — settle it by hand`;
+            await supabase.from("link_tip_cart_items")
+              .update({ processed_at: new Date().toISOString(), transfer_error: why }).eq("id", item.id);
+            console.warn(`[autopay] tip ${item.id}: ${why}`);
+            continue;
+          }
+        }
+
         if (!transfer) {
           const resp = await fetch(`${STRIPE_API}/transfers`, {
             method: "POST",

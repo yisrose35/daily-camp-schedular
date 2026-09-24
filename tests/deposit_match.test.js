@@ -122,6 +122,35 @@ test('two households sharing a surname never auto-post', () => {
     assert.strictEqual(r.familyKey, null);
 });
 
+test('TED-174: two households whose parent has the same name never auto-post, whichever owes the amount', () => {
+    // Two David Cohens, one owing $1,000 and one $500. The matching balance is
+    // the only thing between them, and it does not say who sent the money.
+    const cohens = {
+        cohenA: { name: 'Cohen Family',   parents: [{ name: 'David Cohen', email: 'dc1@example.com' }] },
+        cohenB: { name: 'Cohen-Levi Family', parents: [{ name: 'David Cohen', email: 'dc2@example.com' }] }
+    };
+    const led = { cohenA: { balance: 1000 }, cohenB: { balance: 500 } };
+    for (const amount of [1000, 500]) {
+        const r = M.decide({ amount, payerName: 'DAVID COHEN', kind: 'zelle' }, { families: cohens, ledgers: led, aliases: [] });
+        assert.strictEqual(r.decision, 'review', '$' + amount + ' was posted to ' + r.familyKey + ' on a name and an amount');
+        assert.strictEqual(r.familyKey, null);
+        assert.match(r.guardrail, /match the payer\u2019s name/);
+        // still suggested first to the office, with the reason
+        assert.strictEqual(r.candidates[0].familyKey, amount === 1000 ? 'cohenA' : 'cohenB');
+    }
+    // the payer's email is on file for the OTHER Cohen, who owes $500: the
+    // $1,000 balance must not outweigh it and post to the first Cohen
+    const byHandle = M.decide({ amount: 1000, payerName: 'DAVID COHEN', payerHandle: 'dc2@example.com', kind: 'zelle' },
+        { families: cohens, ledgers: led, aliases: [] });
+    assert.notStrictEqual(byHandle.familyKey, 'cohenA', 'posted against the payer\'s own email, on the amount');
+    assert.strictEqual(byHandle.decision, 'review');
+    // only one David Cohen at camp: a name corroborated by the exact balance posts, as before
+    const one = M.decide({ amount: 1000, payerName: 'DAVID COHEN', kind: 'zelle' },
+        { families: { cohenA: cohens.cohenA }, ledgers: led, aliases: [] });
+    assert.strictEqual(one.decision, 'auto');
+    assert.strictEqual(one.familyKey, 'cohenA');
+});
+
 test('a deposit larger than the balance never auto-posts', () => {
     const code = M.memoCode('fam_klein', 'Klein Family');
     const r = M.decide({ amount: 5000, payerName: 'Shimon Klein', memoCode: code }, ctx());

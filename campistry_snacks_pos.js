@@ -376,6 +376,7 @@ window.renderCampers = function() {
 };
 
 window.pickCamper = function(name) {
+    if (sel !== name) _pendingSale = null;   // another child: a new sale (TED-168)
     sel = name;
     // Pull this camper's current limit/balance from the cloud so a limit the
     // parent just raised (or a fresh deposit) is reflected immediately — fixes
@@ -593,7 +594,10 @@ window.addItem = function(id) {
 // CART
 // ==========================================================================
 
-window.clearCart = function() { cart = []; renderCart(); };
+// Clearing the cart ends that sale: a later sale of the same items to the same
+// child is a new sale with a new key (TED-168) — kept, it would replay the first
+// sale's answer and charge nothing.
+window.clearCart = function() { cart = []; _pendingSale = null; renderCart(); };
 window.changeQty = function(id, d) {
     const ci = cart.find(c => c.id === id);
     if (!ci) return;
@@ -670,6 +674,10 @@ window.charge = function() {
     if (!sel || !cart.length) return;
     if (_chargeInFlight) return;
     const camperName = sel;           // the toast must not read `sel` after it is cleared
+    // THIS sale's items, as they are now (TED-169): the answer may come back
+    // after the counselor has started the next child's sale, and that cart is
+    // not what was sold.
+    const saleCart = cart.map(ci => ({ id: ci.id, qty: ci.qty }));
     const a = getAccount(sel);
     const total = Math.round(cart.reduce((s, ci) => {
         const item = snacks.inventory.find(i => i.id === ci.id);
@@ -693,10 +701,10 @@ window.charge = function() {
     const _cdb = window.CampistryDB;
     const client = _cdb && _cdb.getClient && _cdb.getClient();
     const campId = _cdb && _cdb.getCampId && _cdb.getCampId();
-    const finish = (viaRpc) => {
+    const finish = (viaRpc, replayed) => {
         const hr = new Date().getHours();
-        const itemDeltas = cart.map(ci => ({ id: ci.id, qty: ci.qty }));
-        cart.forEach(ci => { const item = snacks.inventory.find(i => i.id === ci.id); if (item) { if (item.stock != null) item.stock -= ci.qty; item.soldToday = (item.soldToday || 0) + ci.qty; item.totalSold = (item.totalSold || 0) + ci.qty; } });
+        const itemDeltas = saleCart.map(ci => ({ id: ci.id, qty: ci.qty }));
+        saleCart.forEach(ci => { const item = snacks.inventory.find(i => i.id === ci.id); if (item) { if (item.stock != null) item.stock -= ci.qty; item.soldToday = (item.soldToday || 0) + ci.qty; item.totalSold = (item.totalSold || 0) + ci.qty; } });
         if (!snacks.hourlyActivity) snacks.hourlyActivity = {};
         snacks.hourlyActivity[hr] = (snacks.hourlyActivity[hr] || 0) + 1;
         if (viaRpc && client && campId && client.rpc) {
@@ -726,10 +734,20 @@ window.charge = function() {
             saveSnacksData(snacks);
         }
         const cp = document.querySelector('.cart-panel'); if (cp) { cp.classList.add('flash'); setTimeout(() => cp.classList.remove('flash'), 600); }
-        toast('✓ $' + total.toFixed(2) + ' charged to ' + camperName);
-        cart = []; sel = null;
+        // A repeat of a sale that had already gone through (the answer was lost
+        // the first time) says so, rather than "✓ charged" for a charge not made.
+        toast(replayed ? 'Already charged — the earlier $' + total.toFixed(2) + ' charge to ' + camperName + ' went through; not charged again'
+                       : '✓ $' + total.toFixed(2) + ' charged to ' + camperName);
+        // Clear the screen only if it still shows THIS sale (TED-169).
+        // The same child by number where the account has one (a key otherwise).
+        const saleCamperId = a && a.camperId != null ? String(a.camperId) : null;
+        const selCamperId = sel != null && getAccount(sel) && getAccount(sel).camperId != null ? String(getAccount(sel).camperId) : null;
+        const sameChild = sel != null && (saleCamperId != null && selCamperId != null ? selCamperId === saleCamperId : sel === camperName);
+        const stillThisSale = sameChild && cart.length === saleCart.length
+            && cart.every((ci, i) => ci.id === saleCart[i].id && ci.qty === saleCart[i].qty);
+        if (stillThisSale) { cart = []; sel = null; }
         renderCampers(); renderItems(); renderCart(); updateCamperBar();
-        var cs = document.getElementById('camperSearch'); if (cs) { cs.value = ''; cs.focus(); }
+        if (stillThisSale) { var cs = document.getElementById('camperSearch'); if (cs) { cs.value = ''; cs.focus(); } }
     };
 
     // Best-effort local charge (offline, or before the purchase RPC exists).
@@ -747,11 +765,12 @@ window.charge = function() {
         a.spentToday = Math.round((a.spentToday + total) * 100) / 100;
         a.lastSpendDate = todayStr();
         if (!snacks.transactions) snacks.transactions = [];
-        snacks.transactions.unshift({ time: new Date().toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' }), camper: sel,
+        // THIS sale's child (camperName), not whoever is selected now (TED-169).
+        snacks.transactions.unshift({ time: new Date().toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' }), camper: camperName,
             // See _reconcileBalances: the ledger joins on camperId when it has
             // one, so a reused name cannot inherit another camper's balance.
-            camperId: (snacks.accounts && snacks.accounts[sel] && snacks.accounts[sel].camperId) != null
-                ? snacks.accounts[sel].camperId : undefined,
+            camperId: (snacks.accounts && snacks.accounts[camperName] && snacks.accounts[camperName].camperId) != null
+                ? snacks.accounts[camperName].camperId : undefined,
             items: itemNames, amount: total, type: 'debit', date: todayStr() });
         finish(false);
     };
@@ -805,7 +824,7 @@ window.charge = function() {
                 }
                 _pendingSale = null;                 // answered: the next sale is a new one
                 a.balance = Number(d.balance); a.spentToday = Number(d.spentToday); a.lastSpendDate = todayStr();
-                finish(true);
+                finish(true, !!d.replayed);
                 // Instant auto-reload check — fire-and-forget, never blocks the
                 // register. submit_canteen_purchase (migration 140) only sets
                 // needsReloadCheck when this sale just pushed the camper under

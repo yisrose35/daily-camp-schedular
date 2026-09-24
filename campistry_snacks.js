@@ -801,6 +801,7 @@ function _renderHistoryBody() {
     }
     // The live rows, then — once the ledger has been compacted — a way to pull
     // the older ones from the archive without ever writing them back.
+    _voidRows = [];
     body.innerHTML = txs.map(_histRowHtml).join('') + _archivedHistoryHtml();
 }
 
@@ -811,8 +812,116 @@ function _renderHistoryBody() {
  * one rule, for the sales tile, the day's revenue and the week's chart.
  */
 function _isSale(t) {
-    return !!t && t.type !== 'credit' && t.kind !== 'cash_out' && t.kind !== 'refund' && t.kind !== 'closeout';
+    return !!t && t.type !== 'credit' && t.kind !== 'cash_out' && t.kind !== 'refund' && t.kind !== 'closeout'
+        // a sale the office voided (TED-175) never happened
+        && !(t.sig && _voidedSigs()[t.sig]);
 }
+
+// ── Voiding a register sale (TED-175) ──────────────────────────────────────
+// A child charged by mistake gets the money back as the reversal of THAT sale
+// (migration 284's canteen_void_sale: a 'void' line naming the sale, with no
+// payment method), never as a deposit that books cash nobody paid in.
+
+/** The sales that have been voided, by their ledger row's sig. */
+var _voidCache = { arr: null, len: -1, set: {} };
+function _voidedSigs() {
+    const txs = (typeof snacks !== 'undefined' && snacks && snacks.transactions) || [];
+    if (_voidCache.arr !== txs || _voidCache.len !== txs.length) {
+        const set = {};
+        txs.forEach(t => { if (t && t.kind === 'void' && t.voidOf) set[t.voidOf] = 1; });
+        _voidCache = { arr: txs, len: txs.length, set: set };
+    }
+    return _voidCache.set;
+}
+/** A register sale (in person or from the offline register), not yet voided. */
+function _canVoid(t) {
+    return !!t && !!t.sig && t.type === 'debit' && (!t.kind || t.kind === 'sale' || t.kind === 'offline_sale')
+        && !_voidedSigs()[t.sig];
+}
+function _mayEditAccounts() {
+    const S = window.CampistrySections;
+    return S && S.canEdit ? S.canEdit('accounts') : true;
+}
+/** "Ices ×2, Chips" → the items on today's list, to offer back to stock. */
+function _saleItemsToRestock(items) {
+    return String(items || '').split(',').map(x => x.trim()).filter(Boolean).map(part => {
+        const m = part.match(/^(.*?)\s*[×x]\s*(\d+)$/);
+        const name = (m ? m[1] : part).trim();
+        const qty = m ? parseInt(m[2], 10) : 1;
+        const item = (snacks.inventory || []).find(i => i && String(i.name || '').trim().toLowerCase() === name.toLowerCase());
+        return { id: item ? item.id : null, name: name, qty: qty, tracked: !!item && item.stock != null };
+    });
+}
+var _voidRows = [];        // the rows the history shows, so a button names one by index
+var _voidTarget = null;
+var _voidBusy = false;
+window.openVoidSale = function(idx) {
+    if (!_secEdit('accounts', 'Voiding a sale')) return;
+    const t = _voidRows[idx];
+    if (!_canVoid(t)) { toast('That sale cannot be voided', 1); return; }
+    _voidTarget = t;
+    const amt = Number(t.amount) || 0;
+    const who = t.camper || _histCamper || 'this child';
+    const sum = document.getElementById('voidSummary');
+    if (sum) sum.innerHTML = '<strong>$' + amt.toFixed(2) + '</strong> · ' + esc(t.items || 'Purchase') + ' · ' + esc(who) +
+        '<div style="font-size:.8rem;color:var(--text-muted)">' + esc((t.date || '') + (t.time ? ' · ' + t.time : '')) + '</div>' +
+        '<p style="font-size:.85rem;margin:.6rem 0 0">The $' + amt.toFixed(2) + ' goes back on ' + esc(who) +
+        '\u2019s canteen balance as a void of this sale \u2014 not as a deposit, so no cash or card is recorded, and it no longer counts as a sale.</p>';
+    const box = document.getElementById('voidItems');
+    if (box) {
+        const list = _saleItemsToRestock(t.items);
+        box.innerHTML = list.length ? list.map((it, i) => it.id != null && it.tracked
+            ? '<label class="pay-row"><input type="checkbox" data-void-item="' + i + '" checked><span>Put ' + it.qty + ' \u00d7 ' + esc(it.name) + ' back in stock</span></label>'
+            : '<div style="font-size:.8rem;color:var(--text-muted)">' + esc(it.name) + (it.id == null ? ' \u2014 not on the item list any more, not restocked' : ' \u2014 stock is not counted for this item') + '</div>'
+        ).join('') + '<div style="font-size:.75rem;color:var(--text-muted);margin-top:.3rem">Untick an item the child kept or ate.</div>' : '';
+        box._list = list;
+    }
+    const note = document.getElementById('voidNote'); if (note) note.value = '';
+    const btn = document.getElementById('voidBtn'); if (btn) { btn.disabled = false; btn.textContent = 'Void sale'; }
+    openM('void');
+};
+window.confirmVoidSale = function() {
+    const t = _voidTarget;
+    if (!t || _voidBusy) return;
+    if (!_secEdit('accounts', 'Voiding a sale')) return;
+    const rpc = _deskRpc();
+    if (!rpc) { toast('Not connected — a sale cannot be voided offline', 1); return; }
+    const box = document.getElementById('voidItems');
+    const list = (box && box._list) || [];
+    const restock = [];
+    if (box) box.querySelectorAll('input[data-void-item]').forEach(cb => {
+        const it = list[Number(cb.getAttribute('data-void-item'))];
+        if (cb.checked && it && it.id != null) restock.push({ id: it.id, qty: it.qty });
+    });
+    const noteEl = document.getElementById('voidNote');
+    const btn = document.getElementById('voidBtn');
+    _voidBusy = true;
+    if (btn) { btn.disabled = true; btn.textContent = 'Voiding…'; }
+    const who = t.camper || _histCamper;
+    rpc.client.rpc('canteen_void_sale', {
+        p_camp_id: rpc.campId, p_sig: t.sig, p_restock: restock, p_note: (noteEl && noteEl.value.trim()) || null
+    }).then(function (res) {
+        _voidBusy = false;
+        if (btn) { btn.disabled = false; btn.textContent = 'Void sale'; }
+        const d = res && res.data;
+        if ((res && res.error) || !d || !d.success) {
+            toast((d && d.message) || _deskMessage(res, d, 'Could not void the sale'), 1);
+            return;
+        }
+        closeM('void');
+        _voidTarget = null;
+        // the stock the server gave back, on this page's copy too
+        restock.forEach(r => { const item = (snacks.inventory || []).find(i => i.id === r.id);
+            if (item) { if (item.stock != null) item.stock += r.qty; item.totalSold = Math.max(0, (item.totalSold || 0) - r.qty);
+                        if (t.date === todayStr()) item.soldToday = Math.max(0, (item.soldToday || 0) - r.qty); } });
+        _deskRefresh(function () { if (_histCamper) { try { viewAccountHistory(_histCamper); } catch (_) {} } }, who, d);
+        toast('Voided — $' + Number(d.amount).toFixed(2) + ' back on ' + who + '\u2019s balance' + (d.restocked ? ' and ' + d.restocked + ' item' + (d.restocked === 1 ? '' : 's') + ' back in stock' : ''));
+    }, function () {
+        _voidBusy = false;
+        if (btn) { btn.disabled = false; btn.textContent = 'Void sale'; }
+        toast('Could not void the sale — connection error. Open the history again before retrying: it may have gone through.', 1);
+    });
+};
 
 function _histRowHtml(t) {
     const credit = t.type === 'credit';
@@ -824,15 +933,25 @@ function _histRowHtml(t) {
     else if (isRefund) label = 'Refund';
     else if (t.kind === 'refund_failed') label = 'Refund failed — money back on the wallet';
     else if (t.kind === 'closeout') label = t.items || 'Season close-out';
+    else if (t.kind === 'void') label = t.items || 'Sale voided';
     else if (isCashOut) label = 'Cash out';
-    const tag = auto ? '<span class="hist-tag">Auto-Pay</span>' : '';
+    const voided = !!(t.sig && _voidedSigs()[t.sig]);
+    const tag = auto ? '<span class="hist-tag">Auto-Pay</span>'
+              : voided ? '<span class="hist-tag">Voided</span>'
+              : t.kind === 'void' ? '<span class="hist-tag">Void</span>' : '';
+    // TED-175: a sale made by mistake is voided here, not given back as a deposit
+    let voidBtn = '';
+    if (_canVoid(t) && _mayEditAccounts()) {
+        _voidRows.push(t);
+        voidBtn = ' <button class="btn btn-secondary btn-sm" style="margin-left:.4rem" onclick="openVoidSale(' + (_voidRows.length - 1) + ')">Void</button>';
+    }
     const when = (t.date || '') + (t.time ? ' · ' + t.time : '');
     const amt = Number(t.amount) || 0;
     const amtHtml = credit
         ? '<span style="color:var(--green-600);font-weight:700">+$' + amt.toFixed(2) + '</span>'
         : '<span style="color:var(--red-600);font-weight:700">−$' + amt.toFixed(2) + '</span>';
     return '<div class="hist-row"><div class="hist-main"><div class="hist-label">' + esc(label) + tag +
-        '</div><div class="hist-when">' + esc(when) + '</div></div><div class="hist-amt">' + amtHtml + '</div></div>';
+        '</div><div class="hist-when">' + esc(when) + '</div></div><div class="hist-amt">' + amtHtml + voidBtn + '</div></div>';
 }
 
 /** Open a modal with its camper select pre-filled (and its dependent UI refreshed). */
@@ -1021,7 +1140,9 @@ function rAnalytics() {
         const credit = t.type === 'credit';
         const cashOut = t.kind === 'cash_out';
         const refund = t.kind === 'refund' || t.kind === 'closeout';
-        const kind = t.kind === 'closeout' ? '<span class="badge badge-amber">Season close-out</span>'
+        const kind = t.kind === 'void' ? '<span class="badge badge-amber">Sale voided</span>'
+                   : (t.sig && _voidedSigs()[t.sig]) ? '<span class="badge badge-neutral">Purchase \u00b7 voided</span>'
+                   : t.kind === 'closeout' ? '<span class="badge badge-amber">Season close-out</span>'
                    : refund  ? '<span class="badge badge-amber">Refund</span>'
                    : t.kind === 'refund_failed' ? '<span class="badge badge-amber">Refund failed</span>'
                    : cashOut ? '<span class="badge badge-amber">Cash out</span>'
@@ -1608,6 +1729,10 @@ const DESK_ERRORS = {
     no_available_balance:     'No available balance to take out.',
     daily_cash_limit_reached: 'The daily cash-out limit has already been reached.',
     over_available:           'More than this camper has available to take out.',
+    sale_not_found:           'That sale is not on the ledger — reopen the history.',
+    not_a_sale:               'Only a register sale can be voided.',
+    already_voided:           'That sale was already voided.',
+    no_canteen_account:       'This child has no canteen account.',
 };
 
 function _deskMessage(res, d, fallback) {
