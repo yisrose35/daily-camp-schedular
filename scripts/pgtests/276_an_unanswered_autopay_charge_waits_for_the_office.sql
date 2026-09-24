@@ -79,8 +79,11 @@ BEGIN
     r := public.resolve_unconfirmed_autopay(c, 'blue', '#0', true, 'pi_other');
     IF r->>'error' IS DISTINCT FROM 'reference_is_another_payment' THEN RAISE EXCEPTION 'TED-120: another payment''s id was taken: %', r; END IF;
 
-    -- 3. an old-style instalment plan, by position
+    -- 3. an old-style instalment plan, by position — a Stripe one is recorded
+    -- through the server's door once stripe-charge has checked it (279)
     r := public.resolve_unconfirmed_autopay(c, 'blue', '#0', true, 'pi_276');
+    IF r->>'error' IS DISTINCT FROM 'stripe_check_needed' THEN RAISE EXCEPTION '279: a Stripe answer taken from the browser: %', r; END IF;
+    r := public.resolve_unconfirmed_autopay_checked(c, 'blue', '#0', 'pi_276');
     fam := public.camp_family(c, 'blue');
     IF (r->>'success')::boolean IS NOT TRUE OR fam #>> '{plans,0,installments,0,status}' <> 'paid'
        OR fam #>> '{plans,0,installments,0,stripePaymentIntentId}' <> 'pi_276' OR fam #> '{plans,0,pendingCharge}' IS NOT NULL THEN

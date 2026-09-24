@@ -148,6 +148,7 @@ function billing(answers, prompt, processor) {
         confirmDialog: async () => answers.shift(),
         toast: (t) => toasts.push(t), fm: (n) => '$' + n, esc: (s) => String(s), getCampId: () => 'camp1', curPage: 'billing',
         renderBilling: () => {}, renderFamilyDetailPage: () => {}, _loadFamiliesFromRows: async () => {}, _loadPaymentsFromRows: async () => {},
+        callEdgeFunctionAuthed: async (fn, body) => { calls.push([fn, body]); if (ctx.__edgeRefuses) throw new Error(ctx.__edgeRefuses); return { success: true }; },
         window: { prompt: () => prompt, CampistryDB: { getClient: () => ({ rpc: async (n, a) => { calls.push([n, a]); return { data: { success: true } }; } }) } },
     };
     const fn = new Function(...Object.keys(ctx), RESOLVE + '; return resolveUnconfirmedAutopay;')(...Object.values(ctx));
@@ -187,7 +188,18 @@ test('TED-120: on Stripe the office\'s answer must be the payment\'s id (pi_), n
     assert.ok(b.toasts.some(t => /pi_/.test(t)), JSON.stringify(b.toasts));
     const ok = billing([true], 'pi_3Nx', 'stripe');
     await ok.fn('gold', 'plan_g');
-    assert.strictEqual(ok.calls[0][1].p_reference, 'pi_3Nx');
+    // checked with Stripe by stripe-charge before it is recorded (279)
+    assert.deepStrictEqual(ok.calls, [['stripe-charge', { action: 'confirmAutopay', familyKey: 'gold', planRef: 'plan_g', paymentIntentId: 'pi_3Nx' }]]);
+    assert.ok(!ok.ctx.families.gold.plans[0].pendingCharge);
+});
+
+test('TED-120: a Stripe payment Stripe says is not this family\'s is not recorded, and the office is told why', async () => {
+    const b = billing([true], 'pi_SILVER', 'stripe');
+    b.ctx.__edgeRefuses = 'That payment is not Gold\'s — it was made on another customer\'s card.';
+    await b.fn('gold', 'plan_g');
+    assert.ok(b.ctx.families.gold.plans[0].pendingCharge, 'the hold was cleared for a refused payment');
+    assert.ok(b.toasts.some(t => /another customer/.test(t)), JSON.stringify(b.toasts));
+    assert.ok(!b.calls.some(c => c[0] === 'resolve_unconfirmed_autopay'), 'it went round the Stripe check');
 });
 
 // ── TED-123: the run keeps inside its time and hands the rest on ───────────

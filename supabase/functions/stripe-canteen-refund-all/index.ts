@@ -71,12 +71,50 @@ async function stripePost(endpoint: string, body: Record<string, string>, idempo
   // details — nothing about whether the first refund was made (TED-117).
   if (out && typeof out === "object" && out.error) out.__definite = resp.status >= 400 && resp.status < 500 && resp.status !== 409 && resp.status !== 429
     && out.error.type !== "idempotency_error";
+  if (out && typeof out === "object" && !out.error) {
+    // Stripe marks an answer repeated from its memory of the key (TED-126).
+    try { out.__replayed = resp.headers?.get?.("Idempotent-Replayed") === "true"; } catch (_) { /* no headers */ }
+  }
   return out;
 }
 
 async function stripeGet(endpoint: string) {
   const resp = await fetch(`${STRIPE_API}${endpoint}`, { headers: { Authorization: `Bearer ${STRIPE_SECRET}` } });
   return resp.json();
+}
+
+// Stripe keeps each Idempotency-Key's first answer for 24 hours and answers a
+// repeat from that memory. A refund it made under the key and has since FAILED
+// (the parent's card account closed, say) comes back as it was then —
+// "succeeded" — with nothing sent (TED-126). So a repeated answer is checked
+// against the refund as it is NOW, and a failed one moves the key on, to one
+// made from the failed refund's own id: the same new key again if this send is
+// itself cut off and repeated, and a newer one still if that one fails too.
+async function sendRefund(params: Record<string, string>, key: string): Promise<any> {
+  let k = key;
+  for (let i = 0; i < 5; i++) {
+    const out = await stripePost("/refunds", params, k);
+    if (!out || out.error || !out.id) return out;
+    const replayed = out.__replayed === true
+      || (Number(out.created) > 0 && Date.now() - Number(out.created) * 1000 > 120000);
+    if (!replayed) return out;
+    let now: any = null;
+    try { now = await stripeGet(`/refunds/${encodeURIComponent(String(out.id))}`); } catch (_) { now = null; }
+    if (!now || now.error || !now.id) {
+      return { error: { message: "Stripe did not say what became of this refund." }, __definite: false };
+    }
+    if (now.status !== "failed" && now.status !== "canceled") return now;
+    k = `${key}_after_${now.id}`;
+  }
+  return { error: { message: "This refund has failed at Stripe five times — refund it by hand." }, __definite: true };
+}
+
+// The refund Stripe has for this reservation, if any: one still standing is
+// the answer; only when every refund carrying the key has failed is it "failed"
+// (a failed one is sent again under a new key, with the same key in metadata).
+function refundForHold(list: any[], key: string): any {
+  const tagged = list.filter((r: any) => r && r.metadata && r.metadata.campistryHold === key);
+  return tagged.find((r: any) => r.status !== "failed" && r.status !== "canceled") || tagged[0] || null;
 }
 
 // Copied verbatim from stripe-charge/index.ts (and stripe-canteen-refund) —
@@ -137,9 +175,13 @@ function depositsFor(who: { camperId: number | null; camperName: string }, trans
   return transactions
     .filter((t) => t && mine(t) && t.kind === "deposit" && t.method === "stripe" && t.stripePaymentIntentId)
     .map((dep) => {
-      // what is already refunded from it, and what another refund has on its way from it (275)
+      // what is already refunded from it (less any refund that failed later and
+      // was put back, TED-126), and what another refund has on its way from it (275)
       const refundedSoFar = transactions
         .filter((t) => t && t.kind === "refund" && t.stripePaymentIntentId === dep.stripePaymentIntentId)
+        .reduce((sum, t) => sum + (Number(t.amount) || 0), 0)
+        - transactions
+        .filter((t) => t && t.kind === "refund_failed" && t.stripePaymentIntentId === dep.stripePaymentIntentId)
         .reduce((sum, t) => sum + (Number(t.amount) || 0), 0)
         + holds.filter((h) => h.method === "stripe" && h.paymentRef === dep.stripePaymentIntentId)
             .reduce((sum, h) => sum + (Number(h.amount) || 0), 0);
@@ -233,7 +275,7 @@ async function refundOneCamper(
 
       let refund: any;
       try {
-        refund = await stripePost("/refunds", params, stripeKeyFor(chunk));
+        refund = await sendRefund(params, stripeKeyFor(chunk));
       } catch (_) {
         // Cut off: Stripe may have made it. The money stays off the wallet, and
         // the next run (or a single refund of this child) asks Stripe again
@@ -285,7 +327,7 @@ async function settleWaitingRefunds(supabase: ReturnType<typeof createClient>, c
     if (!list || list.error || !Array.isArray(list.data)) continue;
     const cents = Math.round(Number(h.amount) * 100);
     const sinceMs = Date.parse(String(h.createdAt || "")) || 0;
-    const hit = list.data.find((r: any) => r && r.metadata && r.metadata.campistryHold === h.key)
+    const hit = refundForHold(list.data, h.key)
       || list.data.find((r: any) => r && !(r.metadata && r.metadata.campistryHold) && !booked.has(String(r.id))
            && Number(r.amount) === cents && (!sinceMs || Number(r.created) * 1000 >= sinceMs - 300000));
     if (hit && hit.status !== "failed" && hit.status !== "canceled") {

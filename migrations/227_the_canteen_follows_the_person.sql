@@ -186,11 +186,13 @@ BEGIN
     ON CONFLICT (camp_id, account_key) DO NOTHING;
 
     -- THE lock, and the whole point of 219: one camper's row, not the camp's
-    -- document. Deleting `FOR UPDATE` here breaks no test and cannot — a row
-    -- lock is invisible to a single connection, and the behaviour test runs in
-    -- one. What a lost lock would cost: two registers ringing up the SAME
-    -- camper at the same instant would both read the balance before either
-    -- wrote, and one sale would be given away free.
+    -- document. A row lock is invisible to a single connection, so the test
+    -- that guards it runs TWO: scripts/pgtests/275's race holds this lock on
+    -- one connection and checks a refund on the other waits for it (TED-122) —
+    -- deleting `FOR UPDATE` here fails that test. What a lost lock would cost:
+    -- two registers ringing up the SAME camper at the same instant would both
+    -- read the balance before either wrote, and one sale would be given away
+    -- free.
     SELECT * INTO v_row FROM camp_canteen_accounts
      WHERE camp_id = p_camp_id AND account_key = v_key
      FOR UPDATE;

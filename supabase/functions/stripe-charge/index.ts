@@ -167,6 +167,73 @@ async function stripeGet(endpoint: string) {
   return resp.json();
 }
 
+// ── An autopay charge the card company never answered (276), answered "it
+// went through" by the office (TED-120) ────────────────────────────────────
+// On an autopay night many families pay the same amount, so a payment id
+// pasted from the Stripe dashboard can easily be another family's — or a typo.
+// Recorded as it stood, that credited this family twice (or for money never
+// collected). So Stripe is asked about the payment, and it is recorded only
+// when it is: succeeded; this family's Stripe customer; for this instalment's
+// amount; made on or after the day autopay tried (a day's slack for time
+// zones); and, when it carries Campistry's stamp, this camp's and this
+// family's. The database then refuses it again if it is booked for anyone else.
+async function confirmAutopay(campId: string, body: Record<string, any>): Promise<Record<string, unknown>> {
+  const familyKey = String(body.familyKey || "");
+  const planRef = String(body.planRef || "");
+  const piId = String(body.paymentIntentId || "").trim();
+  if (!familyKey || !planRef) return { success: false, error: "Which family and plan?" };
+  if (!/^pi_[A-Za-z0-9]+$/.test(piId)) return { success: false, error: "On Stripe, use the payment's id — it starts with pi_." };
+  const service = createClient(SUPABASE_URL, SUPABASE_SERVICE_KEY);
+  const { data: families, error: famErr } = await service.rpc("camp_families_object", { p_camp_id: campId });
+  if (famErr || !families || typeof families !== "object") return { success: false, error: "Could not read this camp's families — try again." };
+  const fam = (families as Record<string, any>)[familyKey];
+  if (!fam) return { success: false, error: "That family is not at your camp." };
+  const plans: any[] = Array.isArray(fam.plans) ? fam.plans : [];
+  const plan = plans.find((p: any, i: number) => p && ((p.id && String(p.id) === planRef) || (!p.id && `#${i}` === planRef)));
+  const hold = plan && plan.pendingCharge;
+  if (!hold || !hold.unconfirmed) return { success: false, error: "That charge was already answered." };
+  if (String(hold.processor || "") !== "stripe") return { success: false, error: "That charge did not go through Stripe." };
+  if (!fam.stripeCustomerId) return { success: false, error: "This family has no Stripe customer on file, so the payment cannot be checked." };
+
+  let pi: any;
+  try {
+    const resp = await fetch(`${STRIPE_API}/payment_intents/${encodeURIComponent(piId)}`, {
+      headers: { "Authorization": `Bearer ${STRIPE_SECRET}` } });
+    if (resp.status >= 500 || resp.status === 429) return { success: false, error: "Stripe did not answer — try again in a minute." };
+    pi = await resp.json();
+  } catch (_) {
+    return { success: false, error: "Stripe did not answer — try again in a minute." };
+  }
+  if (!pi || pi.error || !pi.id) return { success: false, error: `Stripe has no payment ${piId} — check the id (it is on the payment's page in the Stripe dashboard).` };
+  const customer = typeof pi.customer === "string" ? pi.customer : pi.customer?.id;
+  const cents = Math.round(Number(hold.amount) * 100);
+  const got = Number(pi.amount_received ?? pi.amount) || 0;
+  const meta = pi.metadata || {};
+  if (pi.status !== "succeeded") return { success: false, error: `That payment has not gone through (Stripe says "${pi.status}").` };
+  if (customer !== fam.stripeCustomerId) return { success: false, error: `That payment is not ${fam.name || "this family"}'s — it was made on another customer's card.` };
+  if (got !== cents) return { success: false, error: `That payment is for $${(got / 100).toFixed(2)}, not this instalment's $${(cents / 100).toFixed(2)}.` };
+  if ((meta.campId && String(meta.campId) !== campId) || (meta.familyKey && String(meta.familyKey) !== familyKey)) {
+    return { success: false, error: "That payment was made for another family." };
+  }
+  if (meta.planId && hold.planId && String(meta.planId) !== String(hold.planId)) {
+    return { success: false, error: "That payment was made for another payment plan." };
+  }
+  const since = Date.parse(String(hold.since || "") + "T00:00:00Z");
+  if (Number.isFinite(since) && Number(pi.created) * 1000 < since - 86400000) {
+    return { success: false, error: `That payment was made before autopay tried this instalment (${hold.since}) — it is an earlier payment.` };
+  }
+
+  const { data: rec, error: recErr } = await service.rpc("resolve_unconfirmed_autopay_checked", {
+    p_camp_id: campId, p_family_key: familyKey, p_plan_ref: planRef, p_reference: piId });
+  if (recErr) return { success: false, error: "Could not record it — try again. (" + recErr.message + ")" };
+  if (!rec || rec.success !== true) {
+    const why = rec?.error === "reference_is_another_payment" ? "that payment is already booked for another family or amount"
+      : rec?.error === "nothing_to_answer" ? "that charge was already answered" : (rec?.error || "not recorded");
+    return { success: false, error: "Not recorded: " + why + "." };
+  }
+  return { success: true, recorded: true };
+}
+
 serve(async (req) => {
   if (req.method === "OPTIONS") {
     return new Response("ok", { headers: corsHeaders });
@@ -188,7 +255,16 @@ serve(async (req) => {
       });
     }
 
-    const { customerId, paymentMethodId, amount, currency, description, metadata, idempotencyKey } = await req.json();
+    const reqBody = await req.json();
+    // "The autopay charge went through" on Stripe (279, TED-120): checked with
+    // Stripe here, never taken from the browser.
+    if (reqBody && reqBody.action === "confirmAutopay") {
+      const out = await confirmAutopay(authedCampId, reqBody);
+      return new Response(JSON.stringify(out), {
+        status: 200, headers: { ...corsHeaders, "Content-Type": "application/json" },
+      });
+    }
+    const { customerId, paymentMethodId, amount, currency, description, metadata, idempotencyKey } = reqBody;
 
     if (!customerId || !amount || !(Number(amount) > 0)) {
       return new Response(JSON.stringify({ error: "customerId and a positive amount required" }), {

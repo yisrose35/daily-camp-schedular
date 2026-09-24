@@ -56,7 +56,12 @@ async function stripePost(endpoint: string, body: Record<string, string>, idempo
     headers,
     body: new URLSearchParams(body).toString(),
   });
-  return resp.json();
+  const out = await resp.json();
+  if (out && typeof out === "object" && !out.error) {
+    // Stripe marks an answer repeated from its memory of the key (TED-126).
+    try { out.__replayed = resp.headers?.get?.("Idempotent-Replayed") === "true"; } catch (_) { /* no headers */ }
+  }
+  return out;
 }
 
 async function stripeGet(endpoint: string) {
@@ -64,6 +69,29 @@ async function stripeGet(endpoint: string) {
     headers: { "Authorization": `Bearer ${STRIPE_SECRET}` },
   });
   return resp.json();
+}
+
+// Stripe keeps each Idempotency-Key's first answer for 24 hours and answers a
+// repeat from that memory. A refund it made under the key and has since FAILED
+// comes back as it was then — "succeeded" — with nothing sent (TED-126). So a
+// repeated answer is checked against the refund as it is now, and a failed one
+// moves the key on, to one made from the failed refund's own id.
+async function sendRefund(params: Record<string, string>, key: string | undefined): Promise<any> {
+  if (!key) return stripePost("/refunds", params);
+  let k = key;
+  for (let i = 0; i < 5; i++) {
+    const out = await stripePost("/refunds", params, k);
+    if (!out || out.error || !out.id) return out;
+    const replayed = out.__replayed === true
+      || (Number(out.created) > 0 && Date.now() - Number(out.created) * 1000 > 120000);
+    if (!replayed) return out;
+    let now: any = null;
+    try { now = await stripeGet(`/refunds/${encodeURIComponent(String(out.id))}`); } catch (_) { now = null; }
+    if (!now || now.error || !now.id) return { error: { type: "api_error", message: "Stripe did not say what became of this refund." } };
+    if (now.status !== "failed" && now.status !== "canceled") return now;
+    k = `${key}_after_${now.id}`;
+  }
+  return { error: { type: "invalid_request_error", message: "This refund has failed at Stripe five times — refund it by hand." } };
 }
 
 function json(body: unknown, status = 200) {
@@ -203,7 +231,7 @@ serve(async (req) => {
       // answers with the refund it made, or makes it now — so fall through.
     }
 
-    const refund = await stripePost("/refunds", params, claimKey ? `refund:${campId}:${claimKey}` : undefined);
+    const refund = await sendRefund(params, claimKey ? `refund:${campId}:${claimKey}` : undefined);
 
     if (refund.error) {
       // Still running at Stripe (a concurrent try with this key): not a "no".

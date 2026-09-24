@@ -425,7 +425,11 @@ test('no RPC is left with an overload PostgREST cannot choose between', () => {
         }
         events.sort((a, b) => a.at - b.at);
         for (const e of events) {
-            const n = e.args ? e.args.split(',').length : 0;
+            // Comments out first: a comma inside one ("-- the plan's id, or
+            // '#<position>'") is not an argument, and counting it made one
+            // function look like two arities.
+            const a = e.args.replace(/--[^\n]*/g, '').trim();
+            const n = a ? a.split(',').length : 0;
             const set = live[e.name] || (live[e.name] = new Set());
             if (e.kind === 'drop') { set.delete(n); continue; }
             set.add(n);

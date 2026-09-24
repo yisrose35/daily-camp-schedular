@@ -210,6 +210,8 @@ const MIGRATIONS = [
     '275_a_canteen_refund_takes_its_money_first',
     '276_an_unanswered_autopay_charge_waits_for_the_office',
     '277_billing_answers_only_its_own_camp',
+    '278_a_refund_that_fails_later_puts_the_money_back',
+    '279_a_stripe_autopay_answer_is_checked_with_stripe',
 ];
 
 // The one thing the stubs deliberately get wrong for our purposes: they define

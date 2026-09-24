@@ -759,6 +759,10 @@ async function handleChargeRefunded(
     const refundId = String(r.id || "");
     const amount = Number((((r.amount || 0) / 100)).toFixed(2));
     if (!refundId || !(amount > 0)) continue;
+    // A refund that failed (or was canceled) sent nothing back (TED-126): it is
+    // not booked here, and one booked before it failed is put back by
+    // handleRefundFailed.
+    if (r.status === "failed" || r.status === "canceled") continue;
     try {
       const { data, error } = await supabase.rpc("record_external_refund", {
         p_camp_id: campId, p_refund_id: refundId, p_refs: refs,
@@ -774,6 +778,60 @@ async function handleChargeRefunded(
       console.error(`[stripe-webhook] refund ${refundId} threw: ${(e as Error).message}`);
     }
   }
+}
+
+// ── A refund Stripe accepted and then FAILED (TED-126) ─────────────────────
+// Stripe can fail a refund days after accepting it (the card account was
+// closed, say). The money comes back to the PLATFORM's balance — a canteen
+// top-up and a camp payment are destination charges, and the transfer reversal
+// is not undone — and the family's bill or the child's wallet still said
+// "refunded" with the parent paid nothing. Stripe says so with refund.failed
+// (and, on older API versions or some payment methods, a refund.updated or
+// charge.refund.updated whose status is failed); each is handled once:
+// reverse_failed_stripe_refund (278) puts the money back where it was booked
+// and raises a Billing notice, and the platform is emailed to pass the money
+// back to the camp's own account.
+const REFUND_FAILED_TYPES = new Set(["refund.failed", "refund.updated", "charge.refund.updated"]);
+
+async function handleRefundFailed(
+  supabase: ReturnType<typeof createClient>,
+  event: Record<string, any>,
+) {
+  const r = event.data.object || {};
+  const status = String(r.status || "");
+  if (status !== "failed" && status !== "canceled") return;     // an update that is not a failure
+  const refundId = String(r.id || "");
+  if (!refundId) return;
+  const campId = await campIdFor({ metadata: r.metadata, payment_intent: r.payment_intent, charge: r.charge });
+  const amount = Number(((Number(r.amount) || 0) / 100).toFixed(2));
+  const why = r.failure_reason ? String(r.failure_reason).replace(/_/g, " ") : (status === "canceled" ? "canceled" : null);
+  if (!campId) {
+    console.error(`[stripe-webhook] refund ${refundId} ${status} but has no camp — nothing put back; reconcile by hand`);
+    return;
+  }
+  const { data, error } = await supabase.rpc("reverse_failed_stripe_refund", {
+    p_camp_id: campId, p_refund_id: refundId, p_reason: why });
+  // The database not answering is not an answer: 500, so Stripe sends it again.
+  if (error) throw new Error(`refund ${refundId} failed at Stripe and could not be put back yet: ${error.message}`);
+  if (!data?.success) {
+    console.error(`[stripe-webhook] refund ${refundId} ${status} (camp ${campId}) — not on Campistry's books ` +
+      `(${data?.error || "unknown"}); nothing put back`);
+    return;
+  }
+  if (data.alreadyRecorded) return;
+  console.warn(`[stripe-webhook] refund ${refundId} ${status}: $${amount} put back for camp ${campId}`);
+  await sendRiskAlertEmail(`Stripe alert: a $${amount.toFixed(2)} refund failed — pass it back to the camp`, `
+    <div style="font-family:sans-serif;max-width:600px;">
+      <h2 style="color:#B91C1C;">A refund failed after Stripe accepted it</h2>
+      <p><strong>Refund:</strong> ${refundId} (${status}${why ? ", " + why : ""})</p>
+      <p><strong>Amount:</strong> $${amount.toFixed(2)}</p>
+      <p><strong>Payment:</strong> ${r.payment_intent || r.charge || "—"}</p>
+      <p><strong>Camp:</strong> ${campId}</p>
+      <p>The money is back in the PLATFORM's Stripe balance; the camp's own account was debited when
+      the refund was made. Campistry has put it back on the family's account (or the child's canteen
+      wallet) and told the camp. Transfer $${amount.toFixed(2)} back to the camp's connected account.</p>
+      <p style="margin-top:20px;color:#64748B;font-size:13px;">Event: ${event.type} (${event.id})</p>
+    </div>`);
 }
 
 async function handleDisputeLedger(
@@ -988,6 +1046,8 @@ serve(async (req) => {
       // Billing's refund action writes, so whichever arrives second does
       // nothing rather than crediting the refund twice.
       await handleChargeRefunded(supabase, event);
+    } else if (REFUND_FAILED_TYPES.has(event.type)) {
+      await handleRefundFailed(supabase, event);
     } else if (event.type === "setup_intent.succeeded") {
       // Not a payment at all — a saved card/bank account for future autopay
       // (tuition) or auto-reload (canteen). Either/or, routed by source.

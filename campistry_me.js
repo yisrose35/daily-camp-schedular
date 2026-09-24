@@ -6487,13 +6487,22 @@ async function resolveUnconfirmedAutopay(fk,planRef){
     var client=window.CampistryDB&&window.CampistryDB.getClient?window.CampistryDB.getClient():null;
     var campId=getCampId();
     if(!client||!campId)return toast('Not signed in','error');
-    var res=await client.rpc('resolve_unconfirmed_autopay',{p_camp_id:campId,p_family_key:fk,p_plan_ref:planRef,p_went_through:!!went,p_reference:ref});
-    var d=res&&res.data;
-    if(res&&res.error||!d||d.success!==true){
-        var why=(res&&res.error&&res.error.message)||(d&&d.error)||'no answer';
-        if(why==='stripe_needs_payment_id')why='on Stripe, use the payment\u2019s id \u2014 it starts with pi_';
-        else if(why==='reference_is_another_payment')why='that reference belongs to another payment';
-        return toast('Could not save the answer: '+why,'error');
+    if(went&&h.processor==='stripe'){
+        // Checked with Stripe before it is recorded (279, TED-120): succeeded,
+        // this family's card, this instalment's amount, made after autopay
+        // tried — a look-alike payment of another family's, or a typo, is refused.
+        try{ await callEdgeFunctionAuthed('stripe-charge',{action:'confirmAutopay',familyKey:fk,planRef:planRef,paymentIntentId:ref}); }
+        catch(cErr){ return toast('Not recorded: '+(cErr&&cErr.message||'no answer'),'error'); }
+    }else{
+        var res=await client.rpc('resolve_unconfirmed_autopay',{p_camp_id:campId,p_family_key:fk,p_plan_ref:planRef,p_went_through:!!went,p_reference:ref});
+        var d=res&&res.data;
+        if(res&&res.error||!d||d.success!==true){
+            var why=(res&&res.error&&res.error.message)||(d&&d.error)||'no answer';
+            if(why==='stripe_needs_payment_id')why='on Stripe, use the payment\u2019s id \u2014 it starts with pi_';
+            else if(why==='reference_is_another_payment')why='that reference is already booked for another family or amount';
+            else if(why==='stripe_check_needed')why='reload the page and try again (Stripe payments are checked with Stripe)';
+            return toast('Could not save the answer: '+why,'error');
+        }
     }
     delete p.pendingCharge;
     toast(went?'Recorded — autopay carries on':'Autopay will try again on its next run');

@@ -160,7 +160,8 @@ ${scenario}
   const ans = T.fetch ? await T.fetch(url, { body, headers, method: (init && init.method) || 'GET' }) : {};
   const status = ans && ans.__status || 200;
   const text = typeof ans === 'string' ? ans : JSON.stringify(ans);
-  return new Response(text, { status, headers: { 'content-type': 'application/json' } });
+  // __headers: response headers a scenario sets (Stripe's Idempotent-Replayed)
+  return new Response(text, { status, headers: Object.assign({ 'content-type': 'application/json' }, (ans && ans.__headers) || {}) });
 };
 const _log = console.log, _err = console.error, _warn = console.warn;
 console.log = (...a: any[]) => { T.logs.push(a.join(' ')); };

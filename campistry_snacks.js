@@ -811,6 +811,7 @@ function _histRowHtml(t) {
     let label = t.items || (credit ? 'Deposit' : 'Purchase');
     if (auto) label = 'Auto-reload top-up';
     else if (isRefund) label = 'Refund';
+    else if (t.kind === 'refund_failed') label = 'Refund failed — money back on the wallet';
     else if (isCashOut) label = 'Cash out';
     const tag = auto ? '<span class="hist-tag">Auto-Pay</span>' : '';
     const when = (t.date || '') + (t.time ? ' · ' + t.time : '');
@@ -1009,6 +1010,7 @@ function rAnalytics() {
         const cashOut = t.kind === 'cash_out';
         const refund = t.kind === 'refund';
         const kind = refund  ? '<span class="badge badge-amber">Refund</span>'
+                   : t.kind === 'refund_failed' ? '<span class="badge badge-amber">Refund failed</span>'
                    : cashOut ? '<span class="badge badge-amber">Cash out</span>'
                    : credit  ? '<span class="badge badge-green">Deposit</span>'
                              : '<span class="badge badge-neutral">Purchase</span>';
@@ -1851,7 +1853,11 @@ function _onlineRefundCapacity(name, processorKey) {
     const txs = snacks.transactions || [];
     const idField = processorKey === 'stripe' ? 'stripePaymentIntentId' : 'byopTransactionId';
     return Math.round(_onlineDeposits(name, processorKey).reduce((sum, dep) => {
+        // less a refund that failed at the card company later and was put back
+        // on the wallet (TED-126): that money can be refunded again
         const refundedSoFar = txs.filter(t => t && t.kind === 'refund' && t[idField] === dep[idField])
+            .reduce((s, t) => s + (Number(t.amount) || 0), 0)
+            - txs.filter(t => t && t.kind === 'refund_failed' && t[idField] === dep[idField])
             .reduce((s, t) => s + (Number(t.amount) || 0), 0);
         return sum + Math.max(0, Number(dep.amount) - refundedSoFar);
     }, 0) * 100) / 100;

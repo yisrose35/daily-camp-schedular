@@ -1,5 +1,5 @@
 -- ============================================================================
--- Confirm migrations 222-277 are in and doing their job.
+-- Confirm migrations 222-279 are in and doing their job.
 --
 -- Paste the whole thing into the Supabase SQL Editor. It is READ ONLY — one
 -- SELECT, nothing is created, changed or deleted, and the two purge functions
@@ -667,6 +667,21 @@ UNION ALL
                OR has_function_privilege('authenticated', 'public.append_camp_payment(uuid,jsonb,text,jsonb)', 'EXECUTE')
                OR has_function_privilege('authenticated', 'public.record_autopay_installment(uuid,text,text,integer,text,jsonb,jsonb,text)', 'EXECUTE')
           THEN 'apply 277 NOW — anyone with a Campistry login can read and change this camp''s billing'
+          ELSE 'ok' END),
+    -- A refund Stripe fails after accepting it puts the money back (TED-126).
+    ('278  a refund that fails later puts the money back',
+     CASE WHEN to_regprocedure('public.reverse_failed_stripe_refund(uuid,text,text)') IS NULL
+               OR NOT public.is_money_notice('refund_failed')
+               OR has_function_privilege('authenticated', 'public.reverse_failed_stripe_refund(uuid,text,text)', 'EXECUTE')
+          THEN 'apply 278 BEFORE redeploying stripe-webhook — a refund Stripe fails later still shows as refunded'
+          ELSE 'ok' END),
+    -- "The autopay charge went through" is checked before it is recorded (TED-120).
+    ('279  a Stripe autopay answer is checked with Stripe',
+     CASE WHEN to_regprocedure('public.resolve_unconfirmed_autopay_checked(uuid,text,text,text)') IS NULL
+               OR pg_get_functiondef(to_regprocedure('public.resolve_unconfirmed_autopay(uuid,text,text,boolean,text)')) !~ '_record_autopay_answer'
+               OR has_function_privilege('authenticated', 'public.resolve_unconfirmed_autopay_checked(uuid,text,text,text)', 'EXECUTE')
+               OR has_function_privilege('authenticated', 'public._record_autopay_answer(uuid,text,text,boolean,text,boolean)', 'EXECUTE')
+          THEN 'apply 279 BEFORE redeploying stripe-charge — another family''s payment pasted into "it went through" is credited twice'
           ELSE 'ok' END)
     ) AS x(item, result)
 

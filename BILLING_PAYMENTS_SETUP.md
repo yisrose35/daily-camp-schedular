@@ -40,20 +40,21 @@ Run `migrations/046_get_my_balance.sql` in the Supabase SQL editor (lets a paren
 see only their own balance).
 
 ### 2. Deploy the edge functions
-```bash
-supabase functions deploy stripe-setup
-supabase functions deploy stripe-charge
-supabase functions deploy stripe-refund
-supabase functions deploy stripe-checkout
-supabase functions deploy stripe-webhook
-```
+In the Supabase Dashboard → **Edge Functions**, for each of `stripe-setup`,
+`stripe-charge`, `stripe-refund`, `stripe-checkout` and `stripe-webhook`:
+**Deploy a new function** (or open it → **Edit**), name it exactly that, paste
+the file `supabase/functions/<name>/index.ts`, and click **Deploy**.
+
+For **`stripe-webhook`** only: open it → **Settings** → turn **OFF** "Enforce
+JWT Verification" → save (Stripe's servers call it with no Supabase login; its
+own signature check is the security).
 
 ### 3. Set secrets
-```bash
-supabase secrets set STRIPE_SECRET_KEY=sk_live_xxx
-supabase secrets set STRIPE_WEBHOOK_SECRET=whsec_xxx   # from the webhook you create in step 5
-# SUPABASE_URL and SUPABASE_SERVICE_ROLE_KEY are injected automatically.
-```
+Supabase Dashboard → **Edge Functions** → **Secrets** → add:
+- `STRIPE_SECRET_KEY` = your `sk_live_…` key (Stripe Dashboard → Developers → API keys)
+- `STRIPE_WEBHOOK_SECRET` = the `whsec_…` signing secret of the webhook you create in step 5
+
+`SUPABASE_URL` and `SUPABASE_SERVICE_ROLE_KEY` are provided automatically.
 
 ### 4. Set your publishable key in the app
 Campistry Me → Settings → Stripe publishable key (`pk_live_...`). Used by the
@@ -62,9 +63,21 @@ save-card flow.
 ### 5. Register the webhook in Stripe
 Dashboard → Developers → Webhooks → Add endpoint:
 - URL: `https://<your-project>.supabase.co/functions/v1/stripe-webhook`
-- Events: `payment_intent.processing`, `payment_intent.succeeded`,
-  `payment_intent.payment_failed`
+- Events — select every one of these (the webhook ignores anything else):
+  - `payment_intent.processing`, `payment_intent.succeeded`, `payment_intent.payment_failed`
+  - `setup_intent.succeeded`
+  - `charge.refunded`
+  - `refund.failed`, `refund.updated`, `charge.refund.updated` — a refund Stripe
+    accepted and then failed (a closed card account). Without these the family's
+    bill or the child's canteen wallet keeps saying "refunded" when the parent
+    got nothing (migration 278 puts the money back and tells Billing).
+  - `charge.dispute.created`, `charge.dispute.closed`
+  - `radar.early_fraud_warning.created`, `review.opened`, `payout.failed`
 - Copy the signing secret into `STRIPE_WEBHOOK_SECRET` (step 3).
+
+**Already have the endpoint?** Stripe Dashboard → Developers → Webhooks → click
+the `stripe-webhook` endpoint → **⋯ → Update details** → add any events above
+that are not yet selected → **Update endpoint**.
 
 ### 6. Enable the payment methods you want
 Stripe Dashboard → Settings → Payment methods: turn on **ACH Direct Debit
@@ -87,10 +100,9 @@ reaches Campistry's servers or database. Stripe confirms completion via a
 PaymentMethod straight onto the family record.
 
 ### Deploy stripe-setup-checkout
-```bash
-supabase functions deploy stripe-setup-checkout
-```
-No new secrets needed — it reuses `STRIPE_SECRET_KEY` (already set in step 3
+Supabase Dashboard → **Edge Functions** → **Deploy a new function** → name it
+`stripe-setup-checkout` → paste `supabase/functions/stripe-setup-checkout/index.ts`
+→ **Deploy**. No new secrets needed — it reuses `STRIPE_SECRET_KEY` (already set in step 3
 above).
 
 ### Add the new webhook event
@@ -110,9 +122,17 @@ autopay" prompt and current status.
 1. Supabase Dashboard → **Edge Functions** → **Deploy a new function** (or open
    `charge-due-installments` → **Edit**) → paste
    `supabase/functions/charge-due-installments/index.ts` → **Deploy**.
-2. Edge Functions → **Secrets** → add `INSTALLMENT_CRON_SECRET` = a long random
+2. Open `charge-due-installments` → **Settings** → turn **OFF** "Enforce JWT
+   Verification" → save (on a first deploy the same toggle is on the deploy
+   screen). The nightly call below carries only the `x-cron-secret` header, never
+   a Supabase login, so with this ON Supabase refuses every night's run before
+   the function starts — and nobody is charged, silently. The function's own
+   `x-cron-secret` check is the security. (Same step as in `BYOP_SETUP.md`.)
+   After the next due date, open the function's **Logs** and look for a line
+   starting `[autopay] done`.
+3. Edge Functions → **Secrets** → add `INSTALLMENT_CRON_SECRET` = a long random
    string.
-3. Optional: `AUTOPAY_TIME_BUDGET_MS` (default 110000). A night with many
+4. Optional: `AUTOPAY_TIME_BUDGET_MS` (default 110000). A night with many
    families stops itself cleanly between two families at this point and starts
    a new run for the rest the same night, picking up after the last family it
    started — nobody is charged twice. Keep it well under your plan's function
