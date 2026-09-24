@@ -5112,15 +5112,15 @@ function _renderHiringPane(){
     var h='<div class="sec-hd"><div><h2 class="sec-title">Hiring</h2><p class="sec-desc">'+list.length+' applicant'+(list.length!==1?'s':'')+' in progress · '+hiredList.length+' hired</p></div>';
     h+='<div class="sec-actions">';
     if(editStaff){
-        h+='<div class="me-more-wrap"><button class="me-btn me-btn--teal" onclick="CampistryMe._toggleMenu(\'pplFormsMenu\')">Customize Forms ▾</button>'
-            +'<div class="me-more-menu" id="pplFormsMenu" style="min-width:210px">'
+        h+='<div class="me-more-wrap"><button class="me-btn me-btn--teal" onclick="CampistryMe._toggleMenu(\'pplHiringFormsMenu\')">Customize Forms ▾</button>'
+            +'<div class="me-more-menu" id="pplHiringFormsMenu" style="min-width:210px">'
             +'<button onclick="CampistryMe.openStaffFormConfig()">Staff Application Form</button>'
             +'<button onclick="CampistryMe.openPostHireFormConfig()">Post-Hire Form</button>'
             +'</div></div>'
             +'<button class="me-btn me-btn--pri" onclick="CampistryMe.addStaffApp()">+ Manual Entry</button>';
     }
-    h+='<div class="me-more-wrap"><button class="me-btn me-btn--sec me-btn--sm" onclick="CampistryMe._toggleMenu(\'pplLinkMenu\')">🔗 Get Link</button>'
-        +'<div class="me-more-menu" id="pplLinkMenu" style="min-width:250px">'
+    h+='<div class="me-more-wrap"><button class="me-btn me-btn--sec me-btn--sm" onclick="CampistryMe._toggleMenu(\'pplHiringLinkMenu\')">🔗 Get Link</button>'
+        +'<div class="me-more-menu" id="pplHiringLinkMenu" style="min-width:250px">'
         +'<button onclick="CampistryMe.copyStaffLink()">📋 Copy Link</button>'
         +'<button onclick="CampistryMe.openSendStaffLinkModal()">✉ Send Link</button>'
         +'<button onclick="CampistryMe.openEmbedLinkModal(\'staff\')">🌐 Embed on Your Website</button>'
@@ -11999,7 +11999,9 @@ function _collectFormConfigDraft(){
         sectionOrder:_readSectionOrder('fc'),
         branding:{
             logo:(document.getElementById('fcLogoData')?.value||''),
-            color:(document.getElementById('fcAccentColor')?.value||'')
+            color:(document.getElementById('fcAccentColor')?.value||''),
+            header:(document.getElementById('fcHeader')?.value||''),
+            footer:(document.getElementById('fcFooter')?.value||'')
         }
     };
 }
@@ -12020,7 +12022,9 @@ function _collectStaffFormConfigDraft(){
         sectionOrder:_readSectionOrder('sfc'),
         branding:{
             logo:(document.getElementById('sfcLogoData')?.value||''),
-            color:(document.getElementById('sfcAccentColor')?.value||'')
+            color:(document.getElementById('sfcAccentColor')?.value||''),
+            header:(document.getElementById('sfcHeader')?.value||''),
+            footer:(document.getElementById('sfcFooter')?.value||'')
         }
     };
 }
@@ -12053,7 +12057,9 @@ function _collectPostAcceptFormConfigDraft(){
         },
         branding:{
             logo:(document.getElementById('pafLogoData')?.value||''),
-            color:(document.getElementById('pafAccentColor')?.value||'')
+            color:(document.getElementById('pafAccentColor')?.value||''),
+            header:(document.getElementById('pafHeader')?.value||''),
+            footer:(document.getElementById('pafFooter')?.value||'')
         }
     };
 }
@@ -12077,7 +12083,9 @@ function _collectPostHireFormConfigDraft(){
         policies:_readPhfPolicies(),
         branding:{
             logo:(document.getElementById('phfLogoData')?.value||''),
-            color:(document.getElementById('phfAccentColor')?.value||'')
+            color:(document.getElementById('phfAccentColor')?.value||''),
+            header:(document.getElementById('phfHeader')?.value||''),
+            footer:(document.getElementById('phfFooter')?.value||'')
         }
     };
 }
@@ -12308,6 +12316,44 @@ function _brandingLogoClear(prefix){
     // the preview kept showing the removed logo.
     if(typeof _fbPushPreview==='function')_fbPushPreview();
 }
+// Header style + footer signature markup, shared by all four form builders'
+// Branding cards (Registration/Post-Acceptance/Staff Application/Post-Hire) —
+// same fields Message Branding (Link) offers, so a form can look like the
+// rest of a camp's branded surfaces instead of only ever getting a logo +
+// accent color.
+function _brandingHeaderFooterHtml(prefix,branding){
+    branding=branding||{};
+    var header=branding.header||'plain';
+    function opt(v,label){return '<option value="'+v+'"'+(header===v?' selected':'')+'>'+label+'</option>';}
+    return '<div class="fg"><label class="fl">Header style</label>'
+        +'<select class="fi" id="'+prefix+'Header">'
+            +opt('plain','White with logo')
+            +opt('bar','Colour bar with logo')
+            +opt('none','No header')
+        +'</select></div>'
+        +'<div class="fg" style="margin-bottom:0"><label class="fl">Footer / signature</label>'
+        +'<textarea class="fi" id="'+prefix+'Footer" rows="2" placeholder="e.g. Warm regards, The Camp Office">'+esc(branding.footer||'')+'</textarea></div>';
+}
+// Copies logo + accent color + footer from the camp's Message Branding
+// (Link) settings into this form builder's own branding fields, one click —
+// the same shared settings.branding.logo Dashboard > Profile also writes to,
+// so a camp's existing logo/colors reach forms without a second upload.
+function _brandingUseLinkBranding(prefix){
+    var gs=(typeof window.loadGlobalSettings==='function')?(window.loadGlobalSettings()||{}):{};
+    var raw=(gs.campistryLink&&gs.campistryLink.settings&&gs.campistryLink.settings.branding)||{};
+    var b=window.LinkBranding?window.LinkBranding.normalize(raw):raw;
+    if(!b.logo&&!b.brandColor&&!b.footer){ if(typeof toast==='function')toast('No Message Branding set yet — set one under Link first.'); return; }
+    if(b.logo){
+        document.getElementById(prefix+'LogoData').value=b.logo;
+        var img=document.getElementById(prefix+'LogoPreview');
+        if(img){img.src=b.logo;img.style.display='block';}
+    }
+    var color=document.getElementById(prefix+'AccentColor'); if(color&&b.brandColor)color.value=b.brandColor;
+    var header=document.getElementById(prefix+'Header'); if(header&&b.header)header.value=b.header;
+    var footer=document.getElementById(prefix+'Footer'); if(footer&&b.footer)footer.value=b.footer;
+    if(typeof _fbPushPreview==='function')_fbPushPreview();
+    if(typeof toast==='function')toast('Pulled logo, color, header and footer from Message Branding');
+}
 
 // Shared tab-bar renderer for the parent (fc) and staff (sfc) form
 // customizers — two buttons flip between a Quick Setup pane and an
@@ -12429,11 +12475,13 @@ function _buildFcPanelHtml(){
     // ── ADVANCED — same drawer pattern; fields are grouped by section ──
     h+='<div id="fcTabAdv" style="display:none">';
 
-    var brandHtml='<div class="fg"><label class="fl">Camp Logo</label>'
+    var brandHtml='<button type="button" class="me-btn me-btn--ghost me-btn--sm" style="margin-bottom:10px" onclick="CampistryMe._brandingUseLinkBranding(\'fc\')">↓ Use my Message Branding</button>'
+        +'<div class="fg"><label class="fl">Camp Logo</label>'
         +'<input type="hidden" id="fcLogoData" value="'+esc((fc.branding&&fc.branding.logo)||'')+'">'
         +'<img id="fcLogoPreview" src="'+esc((fc.branding&&fc.branding.logo)||'')+'" style="display:'+((fc.branding&&fc.branding.logo)?'block':'none')+';max-height:60px;max-width:200px;margin-bottom:6px;border-radius:6px">'
         +'<div style="display:flex;gap:8px;align-items:center"><input type="file" accept="image/*" class="fi" style="flex:1" onchange="CampistryMe._brandingLogoPick(\'fc\',this)"><button type="button" class="me-btn me-btn--ghost me-btn--sm" onclick="CampistryMe._brandingLogoClear(\'fc\')">Remove</button></div></div>'
-        +'<div class="fg" style="margin-bottom:0"><label class="fl">Accent Color</label><input type="color" id="fcAccentColor" value="'+esc((fc.branding&&fc.branding.color)||'#D97706')+'" style="width:60px;height:34px;padding:2px;border:1.5px solid var(--s200);border-radius:var(--r);cursor:pointer"></div>';
+        +'<div class="fg"><label class="fl">Accent Color</label><input type="color" id="fcAccentColor" value="'+esc((fc.branding&&fc.branding.color)||'#D97706')+'" style="width:60px;height:34px;padding:2px;border:1.5px solid var(--s200);border-radius:var(--r);cursor:pointer"></div>'
+        +_brandingHeaderFooterHtml('fc',fc.branding);
     h+=_accCard('Branding',brandHtml,{open:true});
 
     var orderHtml='<p style="font-size:.78rem;color:var(--s400);margin:0 0 10px">Reorder how sections appear on the form.</p>'+_renderSectionOrderList('fc',FC_SECTIONS,fc.sectionOrder);
@@ -12940,11 +12988,13 @@ function _buildSfcPanelHtml(){
     // ── ADVANCED — same drawer pattern; fields are grouped by section ──
     h+='<div id="sfcTabAdv" style="display:none">';
 
-    var brandHtml='<div class="fg"><label class="fl">Camp Logo</label>'
+    var brandHtml='<button type="button" class="me-btn me-btn--ghost me-btn--sm" style="margin-bottom:10px" onclick="CampistryMe._brandingUseLinkBranding(\'sfc\')">↓ Use my Message Branding</button>'
+        +'<div class="fg"><label class="fl">Camp Logo</label>'
         +'<input type="hidden" id="sfcLogoData" value="'+esc((fc.branding&&fc.branding.logo)||'')+'">'
         +'<img id="sfcLogoPreview" src="'+esc((fc.branding&&fc.branding.logo)||'')+'" style="display:'+((fc.branding&&fc.branding.logo)?'block':'none')+';max-height:60px;max-width:200px;margin-bottom:6px;border-radius:6px">'
         +'<div style="display:flex;gap:8px;align-items:center"><input type="file" accept="image/*" class="fi" style="flex:1" onchange="CampistryMe._brandingLogoPick(\'sfc\',this)"><button type="button" class="me-btn me-btn--ghost me-btn--sm" onclick="CampistryMe._brandingLogoClear(\'sfc\')">Remove</button></div></div>'
-        +'<div class="fg" style="margin-bottom:0"><label class="fl">Accent Color</label><input type="color" id="sfcAccentColor" value="'+esc((fc.branding&&fc.branding.color)||'#D97706')+'" style="width:60px;height:34px;padding:2px;border:1.5px solid var(--s200);border-radius:var(--r);cursor:pointer"></div>';
+        +'<div class="fg"><label class="fl">Accent Color</label><input type="color" id="sfcAccentColor" value="'+esc((fc.branding&&fc.branding.color)||'#D97706')+'" style="width:60px;height:34px;padding:2px;border:1.5px solid var(--s200);border-radius:var(--r);cursor:pointer"></div>'
+        +_brandingHeaderFooterHtml('sfc',fc.branding);
     h+=_accCard('Branding',brandHtml,{open:true});
 
     var orderHtml='<p style="font-size:.78rem;color:var(--s400);margin:0 0 10px">Reorder how sections appear on the form.</p>'+_renderSectionOrderList('sfc',SFC_SECTIONS,fc.sectionOrder);
@@ -13053,11 +13103,13 @@ function _buildPafPanelHtml(){
     // ── ADVANCED ──
     h+='<div id="pafTabAdv" style="display:none">';
 
-    var brandHtml='<div class="fg"><label class="fl">Camp Logo</label>'
+    var brandHtml='<button type="button" class="me-btn me-btn--ghost me-btn--sm" style="margin-bottom:10px" onclick="CampistryMe._brandingUseLinkBranding(\'paf\')">↓ Use my Message Branding</button>'
+        +'<div class="fg"><label class="fl">Camp Logo</label>'
         +'<input type="hidden" id="pafLogoData" value="'+esc((fc.branding&&fc.branding.logo)||'')+'">'
         +'<img id="pafLogoPreview" src="'+esc((fc.branding&&fc.branding.logo)||'')+'" style="display:'+((fc.branding&&fc.branding.logo)?'block':'none')+';max-height:60px;max-width:200px;margin-bottom:6px;border-radius:6px">'
         +'<div style="display:flex;gap:8px;align-items:center"><input type="file" accept="image/*" class="fi" style="flex:1" onchange="CampistryMe._brandingLogoPick(\'paf\',this)"><button type="button" class="me-btn me-btn--ghost me-btn--sm" onclick="CampistryMe._brandingLogoClear(\'paf\')">Remove</button></div></div>'
-        +'<div class="fg" style="margin-bottom:0"><label class="fl">Accent Color</label><input type="color" id="pafAccentColor" value="'+esc((fc.branding&&fc.branding.color)||'#D97706')+'" style="width:60px;height:34px;padding:2px;border:1.5px solid var(--s200);border-radius:var(--r);cursor:pointer"></div>';
+        +'<div class="fg"><label class="fl">Accent Color</label><input type="color" id="pafAccentColor" value="'+esc((fc.branding&&fc.branding.color)||'#D97706')+'" style="width:60px;height:34px;padding:2px;border:1.5px solid var(--s200);border-radius:var(--r);cursor:pointer"></div>'
+        +_brandingHeaderFooterHtml('paf',fc.branding);
     h+=_accCard('Branding',brandHtml,{open:true});
 
     var orderHtml='<p style="font-size:.78rem;color:var(--s400);margin:0 0 10px">Reorder how sections appear on the form.</p>'+_renderSectionOrderList('paf',PAF_SECTIONS,fc.sectionOrder);
@@ -13151,11 +13203,13 @@ function _buildPhfPanelHtml(){
     // ── ADVANCED ──
     h+='<div id="phfTabAdv" style="display:none">';
 
-    var brandHtml='<div class="fg"><label class="fl">Camp Logo</label>'
+    var brandHtml='<button type="button" class="me-btn me-btn--ghost me-btn--sm" style="margin-bottom:10px" onclick="CampistryMe._brandingUseLinkBranding(\'phf\')">↓ Use my Message Branding</button>'
+        +'<div class="fg"><label class="fl">Camp Logo</label>'
         +'<input type="hidden" id="phfLogoData" value="'+esc((fc.branding&&fc.branding.logo)||'')+'">'
         +'<img id="phfLogoPreview" src="'+esc((fc.branding&&fc.branding.logo)||'')+'" style="display:'+((fc.branding&&fc.branding.logo)?'block':'none')+';max-height:60px;max-width:200px;margin-bottom:6px;border-radius:6px">'
         +'<div style="display:flex;gap:8px;align-items:center"><input type="file" accept="image/*" class="fi" style="flex:1" onchange="CampistryMe._brandingLogoPick(\'phf\',this)"><button type="button" class="me-btn me-btn--ghost me-btn--sm" onclick="CampistryMe._brandingLogoClear(\'phf\')">Remove</button></div></div>'
-        +'<div class="fg" style="margin-bottom:0"><label class="fl">Accent Color</label><input type="color" id="phfAccentColor" value="'+esc((fc.branding&&fc.branding.color)||'#D97706')+'" style="width:60px;height:34px;padding:2px;border:1.5px solid var(--s200);border-radius:var(--r);cursor:pointer"></div>';
+        +'<div class="fg"><label class="fl">Accent Color</label><input type="color" id="phfAccentColor" value="'+esc((fc.branding&&fc.branding.color)||'#D97706')+'" style="width:60px;height:34px;padding:2px;border:1.5px solid var(--s200);border-radius:var(--r);cursor:pointer"></div>'
+        +_brandingHeaderFooterHtml('phf',fc.branding);
     h+=_accCard('Branding',brandHtml,{open:true});
 
     var orderHtml='<p style="font-size:.78rem;color:var(--s400);margin:0 0 10px">Reorder how sections appear on the form.</p>'+_renderSectionOrderList('phf',PHF_SECTIONS,fc.sectionOrder);
@@ -24791,7 +24845,7 @@ window.CampistryMe={
     openSendPostAcceptModal:openSendPostAcceptModal,
     openSendPostHireModal:openSendPostHireModal,
     addPositionRow:addPositionRow,addCertRow:addCertRow,
-    _fcSwitchTab:_fcSwitchTab,_brandingLogoPick:_brandingLogoPick,_brandingLogoClear:_brandingLogoClear,_toggleAcc:_toggleAcc,
+    _fcSwitchTab:_fcSwitchTab,_brandingLogoPick:_brandingLogoPick,_brandingLogoClear:_brandingLogoClear,_brandingUseLinkBranding:_brandingUseLinkBranding,_toggleAcc:_toggleAcc,
     openFormBuilder:openFormBuilder,closeFormBuilder:closeFormBuilder,_fbOpenPreviewWindow:_fbOpenPreviewWindow,
     _toggleMenu:_toggleMenu,
     _openPhotoLightbox:_openPhotoLightbox,

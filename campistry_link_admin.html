@@ -502,6 +502,56 @@
         <button class="btn btn-ghost btn-sm" onclick="closeComposeDrawer()" style="padding:4px 10px;">✕</button>
     </div>
     <div class="compose-drawer-body">
+        <!-- Bottom bar — moved to the top so channel + send/preview/schedule
+             actions are visible without scrolling past the whole form first. -->
+        <div style="display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:8px;padding-bottom:14px;margin-bottom:16px;border-bottom:1px solid var(--border-light);">
+            <div class="channel-btns" id="cChannelBtns">
+                <button class="channel-btn selected" data-ch="app" onclick="toggleCompCh(this)">
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="14" height="14"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/></svg>
+                    In-App
+                </button>
+                <button class="channel-btn" data-ch="email" onclick="toggleCompCh(this)">
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="14" height="14"><path d="M4 4h16c1.1 0 2 .9 2 2v12c0 1.1-.9 2-2 2H4c-1.1 0-2-.9-2-2V6c0-1.1.9-2 2-2z"/><polyline points="22,6 12,13 2,6"/></svg>
+                    Email
+                </button>
+                <button class="channel-btn" data-ch="sms" onclick="toggleCompCh(this)">
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="14" height="14"><path d="M22 16.92v3a2 2 0 0 1-2.18 2 19.79 19.79 0 0 1-8.63-3.07 19.5 19.5 0 0 1-6-6 19.79 19.79 0 0 1-3.07-8.67A2 2 0 0 1 4.11 2h3"/></svg>
+                    SMS
+                </button>
+            </div>
+            <div style="display:flex;gap:8px;flex-wrap:wrap;">
+                <button class="btn btn-secondary btn-sm" onclick="openComposePreview()" title="See exactly what lands in the inbox / app">
+                    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/><circle cx="12" cy="12" r="3"/></svg>
+                    Preview
+                </button>
+                <button class="btn btn-secondary btn-sm" id="cPreviewAllBtn" style="display:none;" onclick="showComposePreviewAll()">Preview All</button>
+                <button class="btn btn-ghost btn-sm" style="border:1px solid var(--border-light);" onclick="sendTestToMe()" title="Send yourself a real copy with merge tags filled in">
+                    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 20h9"/><path d="M16.5 3.5a2.12 2.12 0 0 1 3 3L7 19l-4 1 1-4Z"/></svg>
+                    Send test to me
+                </button>
+                <button class="btn btn-secondary btn-sm" id="cScheduleBtn" onclick="toggleScheduleRow()">
+                    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="9"/><polyline points="12 7 12 12 15 14"/></svg>
+                    Schedule
+                </button>
+                <button class="btn btn-primary" onclick="sendCompose()">
+                    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><line x1="22" y1="2" x2="11" y2="13"/><polygon points="22 2 15 22 11 13 2 9 22 2"/></svg>
+                    Send now
+                </button>
+            </div>
+        </div>
+        <!-- Schedule row (revealed by the Schedule button) -->
+        <div id="cScheduleRow" style="display:none;margin-bottom:16px;padding:12px 14px;background:var(--slate-50);border:1px solid var(--border-light);border-radius:var(--radius-md);">
+            <div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap;">
+                <label style="font-size:.8rem;font-weight:600;color:var(--slate-700);margin:0;">Send on</label>
+                <input type="datetime-local" class="lk-input" id="cScheduleAt" style="max-width:230px;" oninput="_updateScheduleHint()">
+                <button class="btn btn-primary btn-sm" onclick="scheduleCompose()">
+                    <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="9"/><polyline points="12 7 12 12 15 14"/></svg>
+                    Schedule broadcast
+                </button>
+                <span id="cScheduleHint" style="font-size:.75rem;color:var(--text-muted);"></span>
+            </div>
+        </div>
+
         <!-- Quick templates + branding -->
         <div style="margin-bottom:16px;padding-bottom:14px;border-bottom:1px solid var(--border-light);">
             <div style="display:flex;align-items:center;gap:7px;flex-wrap:wrap;margin-bottom:9px;">
@@ -617,54 +667,6 @@
              from the after-the-fact toast. -->
         <div id="cReachBar" class="reach-bar" style="display:none;"></div>
 
-        <!-- Bottom bar -->
-        <div style="display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:8px;padding-top:10px;border-top:1px solid var(--border-light);">
-            <div class="channel-btns" id="cChannelBtns">
-                <button class="channel-btn selected" data-ch="app" onclick="toggleCompCh(this)">
-                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="14" height="14"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/></svg>
-                    In-App
-                </button>
-                <button class="channel-btn" data-ch="email" onclick="toggleCompCh(this)">
-                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="14" height="14"><path d="M4 4h16c1.1 0 2 .9 2 2v12c0 1.1-.9 2-2 2H4c-1.1 0-2-.9-2-2V6c0-1.1.9-2 2-2z"/><polyline points="22,6 12,13 2,6"/></svg>
-                    Email
-                </button>
-                <button class="channel-btn" data-ch="sms" onclick="toggleCompCh(this)">
-                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="14" height="14"><path d="M22 16.92v3a2 2 0 0 1-2.18 2 19.79 19.79 0 0 1-8.63-3.07 19.5 19.5 0 0 1-6-6 19.79 19.79 0 0 1-3.07-8.67A2 2 0 0 1 4.11 2h3"/></svg>
-                    SMS
-                </button>
-            </div>
-            <div style="display:flex;gap:8px;flex-wrap:wrap;">
-                <button class="btn btn-secondary btn-sm" onclick="openComposePreview()" title="See exactly what lands in the inbox / app">
-                    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/><circle cx="12" cy="12" r="3"/></svg>
-                    Preview
-                </button>
-                <button class="btn btn-secondary btn-sm" id="cPreviewAllBtn" style="display:none;" onclick="showComposePreviewAll()">Preview All</button>
-                <button class="btn btn-ghost btn-sm" style="border:1px solid var(--border-light);" onclick="sendTestToMe()" title="Send yourself a real copy with merge tags filled in">
-                    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 20h9"/><path d="M16.5 3.5a2.12 2.12 0 0 1 3 3L7 19l-4 1 1-4Z"/></svg>
-                    Send test to me
-                </button>
-                <button class="btn btn-secondary btn-sm" id="cScheduleBtn" onclick="toggleScheduleRow()">
-                    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="9"/><polyline points="12 7 12 12 15 14"/></svg>
-                    Schedule
-                </button>
-                <button class="btn btn-primary" onclick="sendCompose()">
-                    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><line x1="22" y1="2" x2="11" y2="13"/><polygon points="22 2 15 22 11 13 2 9 22 2"/></svg>
-                    Send now
-                </button>
-            </div>
-        </div>
-        <!-- Schedule row (revealed by the Schedule button) -->
-        <div id="cScheduleRow" style="display:none;margin-top:12px;padding:12px 14px;background:var(--slate-50);border:1px solid var(--border-light);border-radius:var(--radius-md);">
-            <div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap;">
-                <label style="font-size:.8rem;font-weight:600;color:var(--slate-700);margin:0;">Send on</label>
-                <input type="datetime-local" class="lk-input" id="cScheduleAt" style="max-width:230px;" oninput="_updateScheduleHint()">
-                <button class="btn btn-primary btn-sm" onclick="scheduleCompose()">
-                    <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="9"/><polyline points="12 7 12 12 15 14"/></svg>
-                    Schedule broadcast
-                </button>
-                <span id="cScheduleHint" style="font-size:.75rem;color:var(--text-muted);"></span>
-            </div>
-        </div>
         <div id="cPreviewAll" style="display:none;margin-top:12px;"></div>
     </div>
 </div>
@@ -2207,7 +2209,7 @@ function openLinkBranding() {
     ov.style.cssText = 'position:fixed;inset:0;z-index:1200;background:rgba(15,23,42,.5);display:flex;align-items:center;justify-content:center;padding:16px;';
     var logoPrev = _isSafeImg(b.logo)
         ? '<img id="lbLogoImg" src="' + b.logo + '" alt="logo" style="max-height:70px;max-width:200px;object-fit:contain;border:1px solid var(--border-light);border-radius:8px;padding:6px;background:#fff;">'
-        : '<div id="lbLogoImg" style="font-size:.8rem;color:var(--text-muted);">No logo uploaded</div>';
+        : '<div id="lbLogoImg" style="font-size:.8rem;color:var(--text-muted);">No logo yet — set one on Dashboard &gt; Profile, or upload one just for messages below.</div>';
     var w = b.watermark || {};
     function opt(v, label, cur) { return '<option value="' + v + '"' + (cur === v ? ' selected' : '') + '>' + label + '</option>'; }
 
@@ -2222,6 +2224,7 @@ function openLinkBranding() {
             // ── left: controls ──
             '<div style="flex:1 1 380px;min-width:300px;padding:18px 20px;">' +
                 '<div class="lk-field"><label>Logo</label><div style="margin-bottom:8px;">' + logoPrev + '</div>' +
+                    (_isSafeImg(b.logo) ? '<div style="font-size:.71rem;color:var(--text-muted);margin-bottom:6px;">This is your camp logo from Dashboard &gt; Profile. Uploading a new one here replaces it everywhere, including there.</div>' : '') +
                     '<input type="file" id="lbLogoFile" accept="image/png,image/jpeg,image/gif,image/webp" onchange="_lbUploadLogo(this)" style="font-size:.82rem;">' +
                     (_isSafeImg(b.logo) ? ' <button class="btn btn-ghost btn-sm" style="color:#EF4444;" onclick="_lbRemoveLogo()">Remove</button>' : '') +
                     '<div style="font-size:.7rem;color:var(--text-muted);margin-top:4px;">PNG, JPG, GIF or WebP, under 500&nbsp;KB.</div></div>' +

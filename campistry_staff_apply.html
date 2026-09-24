@@ -325,7 +325,36 @@ function applyBranding(branding){
         if(branding.logo){img.src=branding.logo;img.style.display='block';}
         else{img.src='';img.style.display='none';}
     }
-    document.documentElement.style.setProperty('--me',branding.color||BRAND_COLOR_DEFAULT);
+    var color=branding.color||branding.brandColor||BRAND_COLOR_DEFAULT;
+    document.documentElement.style.setProperty('--me',color);
+    _applyBrandHeader(branding,color);
+    _applyBrandFooter(branding);
+}
+// Header style ('bar' colours the header band, 'plain' is the default white
+// header, 'none' hides it) and footer signature — same model Message
+// Branding (Link) uses, so a form can match a camp's other branded surfaces
+// instead of only ever getting a logo + accent color.
+function _applyBrandHeader(branding,color){
+    var hdr=document.querySelector('.hdr'); if(!hdr)return;
+    var title=document.getElementById('campTitle'), nm=document.getElementById('campNm');
+    if(branding.header==='none'){ hdr.style.display='none'; return; }
+    hdr.style.display='';
+    if(branding.header==='bar'){
+        hdr.style.background=color; hdr.style.borderRadius='10px'; hdr.style.padding='16px 14px';
+        if(title)title.style.color='#fff'; if(nm)nm.style.color='rgba(255,255,255,.85)';
+    }else{
+        hdr.style.background=''; hdr.style.borderRadius=''; hdr.style.padding='';
+        if(title)title.style.color=''; if(nm)nm.style.color='';
+    }
+}
+function _applyBrandFooter(branding){
+    var wrap=document.querySelector('.wrap');
+    var foot=document.getElementById('brandFooterNote');
+    if(branding.footer){
+        if(!foot){ foot=document.createElement('div'); foot.id='brandFooterNote'; if(wrap)wrap.appendChild(foot); }
+        foot.style.cssText='margin-top:18px;padding-top:12px;border-top:1px solid #e2e8f0;font-size:12px;line-height:1.55;color:#64748b;white-space:pre-wrap;max-width:640px;margin-left:auto;margin-right:auto;';
+        foot.textContent=branding.footer;
+    }else if(foot){ foot.remove(); }
 }
 
 // Every section is toggleable now — nothing is locked required.
