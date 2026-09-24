@@ -296,3 +296,28 @@ test('TED-091: a shop charge a stale tab never saw is NOT taken off by its Billi
     ctx.catchUp(f); ctx.catchUp(f);
     assert.strictEqual(B.balance(f), 650, 'the shop order was cancelled by an old tab');
 });
+
+test('TED-108: both Record Payment forms refuse zero and negative amounts', async () => {
+    for (const [field, extra] of [['payAmount', { payFamKey: 'fg', payMethod: 'check', payDate: '2026-07-01', payRef: '', payNotes: '' }],
+                                  ['fapAmount', { fapFamily: 'Gold', fapMethod: 'check', fapDate: '2026-07-01' }]]) {
+        for (const v of ['-500', '0', '']) {
+            const f = family(); const toasts = []; const pushed = [];
+            const c = { _billingCore: () => B, families: { fg: f }, curPage: 'billing', finPayments: pushed,
+                document: { getElementById: (id) => ({ value: id === field ? v : (extra[id] != null ? extra[id] : '') }) },
+                toast: (m, k) => toasts.push([m, k]), save() {}, closeModal() {}, renderBilling() {}, renderFinance() {},
+                renderFamilyDetailPage() {}, fm: (n) => '$' + n, _payAllowed: () => true, today: '2026-07-01' };
+            vm.createContext(c);
+            vm.runInContext('this.cbs=[' + [...ME.matchAll(/showModal\('Record Payment',h,/g)].map(m => {
+                const fnAt = ME.indexOf('function(', m.index);
+                let i = ME.indexOf('{', fnAt), d = 0;
+                for (; i < ME.length; i++) { if (ME[i] === '{') d++; else if (ME[i] === '}' && --d === 0) break; }
+                return ME.slice(fnAt, i + 1);
+            }).join(',') + '];', c);
+            const cb = c.cbs.find(fn => fn.toString().includes(field));
+            await cb();
+            assert.strictEqual(pushed.length, 0, field + ' "' + v + '" was recorded as a payment');
+            assert.strictEqual(B.balance(f), 600);
+            assert.strictEqual(toasts[0][1], 'error');
+        }
+    }
+});

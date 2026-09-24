@@ -630,16 +630,33 @@ serve(async (req) => {
       // not on the ledger yet, so the balance reads high by that deposit. Charge
       // nothing for this family until the office answers — and tell them, on
       // the plan (a Billing notice), which is what gets it answered.
+      //
+      // NOT through flag_plan_collection (TED-106): that is the card-failure
+      // path — attempts, retry dates, "this card is not going to start working".
+      // Nothing is wrong with the card. One plain Billing notice per question,
+      // and nothing left behind once the office answers.
       if (Array.isArray(f.depositReview) && f.depositReview.length) {
         const q = f.depositReview[0] || {};
-        for (const p of plans) {
-          if (p && p.autopay && !p.paused && (Array.isArray(p.dueDates) || Array.isArray(p.installments))) {
-            await flagPlan(String(row.camp_id), famKey, refOf(p), "deposit_review",
-              `a card deposit of $${Number(q.amount || 0).toFixed(2)} may already have been recorded by hand — answer the question on this family in Billing; autopay waits until then`);
-          }
-        }
+        try {
+          await supabase.from("notifications").insert({
+            camp_id: row.camp_id, source: "autopay_blocked",
+            source_id: `${famKey}:deposit_review:${String(q.ref || "")}`,
+            title: "Autopay is waiting for an answer",
+            body: `${f.name || famKey} — a card deposit of $${Number(q.amount || 0).toFixed(2)} may already have been recorded by hand. `
+                + `Answer the question on this family in Billing; autopay resumes the same night.`,
+            link_target: "campistry_me.html",
+          });
+        } catch (_) { /* already told (one notice per question) */ }
         details.push({ camp: row.camp_id, family: f.name, result: "waiting_for_deposit_review" });
         continue;
+      }
+      // An earlier version held these families through the card-failure flag;
+      // once the question is answered that flag must not keep autopay waiting.
+      for (const p of plans) {
+        if (p && p.collectionBlocked && p.collectionBlocked.reason === "deposit_review") {
+          await flagPlan(String(row.camp_id), famKey, refOf(p), null);
+          delete p.collectionBlocked;
+        }
       }
       if (!f.cardOnFile || (processorKey ? !f.byopCustomerRef : !f.stripeCustomerId)) {
         const why = !f.cardOnFile ? "no card on file"

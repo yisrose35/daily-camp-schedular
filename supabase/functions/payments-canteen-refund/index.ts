@@ -209,6 +209,33 @@ serve(async (req) => {
     const balanceFloor = Number(account.balanceFloor) || 0;
     const walletAvailable = Math.max(0, round2(balance - balanceFloor));
 
+    // What this refund (the page's key) already did, on an earlier try whose
+    // answer was lost (TED-105). Settled parts are counted — not re-split
+    // against today's remaining and sent again — and a part that was sent and
+    // never confirmed stops everything until the office has looked.
+    const reqKey = (typeof idempotencyKey === "string" && idempotencyKey.trim()) ? idempotencyKey.trim() : "";
+    let priorDone = 0;
+    const priorRefunds: Record<string, unknown>[] = [];
+    const priorDeposits = new Set<string>();
+    if (reqKey) {
+      const { data: prior } = await service.from("refund_intents").select("key, result, settled_at")
+        .eq("camp_id", authedCampId).like("key", `canteen:${reqKey}:%`);
+      for (const c of (Array.isArray(prior) ? prior : [])) {
+        const dep = String(c.key).slice(`canteen:${reqKey}:`.length);
+        priorDeposits.add(dep);
+        if (c.settled_at && c.result && Number(c.result.amount) > 0) {
+          priorDone = round2(priorDone + Number(c.result.amount));
+          priorRefunds.push({ refundId: c.result.externalTransactionId, externalTransactionId: dep, amount: Number(c.result.amount) });
+        } else if (!c.settled_at && confirmNotRefunded !== true) {
+          return json({ uncertain: true, error: "An earlier try at this refund was never confirmed by the card company. Check the processor's dashboard: if it is not there, confirm and it will be sent." }, 200);
+        }
+      }
+    }
+    const requestedAll = amount != null && Number(amount) > 0 ? round2(Number(amount)) : null;
+    if (requestedAll != null && priorDone >= requestedAll - 0.004) {
+      return json({ totalRefunded: priorDone, requested: requestedAll, capped: false, cappedReason: null, refunds: priorRefunds, replayed: true });
+    }
+
     if (walletAvailable <= 0) {
       return json({ error: "Nothing available to refund — this balance has already been spent." }, 409);
     }
@@ -229,8 +256,9 @@ serve(async (req) => {
 
     const processorCapacity = round2(deposits.reduce((sum, d) => sum + d.remaining, 0));
 
-    const requested = amount != null && Number(amount) > 0 ? round2(Number(amount)) : walletAvailable;
-    const targetAmount = round2(Math.min(requested, walletAvailable, processorCapacity));
+    const requested = requestedAll != null ? requestedAll : walletAvailable;
+    // What is left of THIS refund after what an earlier try already did.
+    const targetAmount = round2(Math.min(round2(requested - priorDone), walletAvailable, processorCapacity));
 
     if (targetAmount <= 0) {
       if (processorCapacity <= 0) {
@@ -245,13 +273,16 @@ serve(async (req) => {
     // succeeded for real money, so those are kept and reported rather than
     // rolled back or hidden.
     let remainingToRefund = targetAmount;
-    let totalRefunded = 0;
-    const refunds: Record<string, unknown>[] = [];
+    let totalRefunded = priorDone;
+    const refunds: Record<string, unknown>[] = priorRefunds.slice();
     let chunkError: string | null = null;
     let chunkUncertain = false;
 
     for (const dep of deposits) {
       if (remainingToRefund <= 0) break;
+      // one part per top-up per refund: a top-up this refund already drew on
+      // was counted above
+      if (reqKey && priorDeposits.has(dep.externalTransactionId) && confirmNotRefunded !== true) continue;
       const chunk = round2(Math.min(dep.remaining, remainingToRefund));
       if (chunk <= 0) continue;
 
@@ -269,9 +300,8 @@ serve(async (req) => {
         // whose answer was lost meets its first attempt, while a deliberate
         // second refund (a new key) is its own. Without one, the deposit and
         // what is left on it.
-        const reqKey = (typeof idempotencyKey === "string" && idempotencyKey.trim()) ? idempotencyKey.trim() : "";
         const chunkKey = reqKey
-          ? `canteen:${reqKey}:${dep.externalTransactionId}:${chunkCents}`
+          ? `canteen:${reqKey}:${dep.externalTransactionId}`
           : `canteen:${dep.externalTransactionId}:${Math.round(dep.remaining * 100)}:${chunkCents}`;
         if (chunkKey) {
           const { data: claim } = await service.rpc("claim_refund_intent", {

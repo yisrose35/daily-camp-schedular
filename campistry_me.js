@@ -16038,8 +16038,10 @@ function finAddPayment(){
     showModal('Record Payment',h,function(){
         var family=(document.getElementById('fapFamily').value||'').trim();
         if(!family){toast('Family name is required','error');return}
-        var amount=parseFloat(document.getElementById('fapAmount').value)||0;
-        if(!amount){toast('Enter an amount','error');return}
+        var amount=Math.round((parseFloat(document.getElementById('fapAmount').value)||0)*100)/100;
+        // A payment is money IN (TED-108): "-500" was booked as a $500 refund
+        // nobody made. Money back to a family is Issue Credit/Refund.
+        if(!(amount>0)){toast('Enter an amount above zero — to give money back, use Issue Credit/Refund','error');return}
         var method=document.getElementById('fapMethod').value;
         if(!_payAllowed(method,'tuition')){toast('That payment method isn\'t accepted for tuition.','error');return}
         finPayments.push({id:Date.now(),family:family,amount:amount,method:method,
@@ -18189,8 +18191,9 @@ function openPaymentForFamily(famKey){
         var fk=document.getElementById('payFamKey').value;
         var f=families[fk];
         if(!fk||!f){toast('Select a family','error');return}
-        var amt=parseFloat(document.getElementById('payAmount').value)||0;
-        if(!amt){toast('Enter an amount','error');return}
+        var amt=Math.round((parseFloat(document.getElementById('payAmount').value)||0)*100)/100;
+        // Money IN only (TED-108) — see the Finance page's Record Payment.
+        if(!(amt>0)){toast('Enter an amount above zero — to give money back, use Issue Credit/Refund','error');return}
         var date=document.getElementById('payDate').value;
         var method=document.getElementById('payMethod').value;
         // Guard the save path too — a stale tab or an edited DOM must not slip
@@ -18856,7 +18859,7 @@ async function printTaxStatement(famKey,year){
            '</td><td class="right">'+fm(b.total)+'</td></tr>';
     });
     h+='<tr style="border-top:2px solid #333"><td class="bold">Total</td><td class="right bold">'+fm(rep.qualifying)+
-       '</td><td class="right bold">'+fm(rep.notQualifying+rep.needsReview)+'</td><td class="right bold">'+fm(rep.paid.net)+'</td></tr>';
+       '</td><td class="right bold">'+fm(rep.notQualifying+rep.needsReview)+'</td><td class="right bold">'+fm(rep.claimedTotal!=null?rep.claimedTotal:rep.paid.net)+'</td></tr>';
     h+='</tbody></table>';
 
     if(rep.paid.refunds>0.004){
