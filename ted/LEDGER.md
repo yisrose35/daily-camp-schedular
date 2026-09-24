@@ -1,22 +1,25 @@
 # Ted's ledger
 
 ## Last commit checked
-`3390aba` (2026-09-24, billing sixth pass)
+`66a65df` (2026-09-24, billing seventh pass)
 
 ## Open findings
 | ID | Severity | Description | Found | Status |
 |----|----------|-------------|-------|--------|
-| TED-100 | 🟠 | stripe-refund now accepts any payment stamped with the camp — including Campistry's own SMS fees (telnyx), refundable by the camp to itself if it has the payment id | 2026-09-24 | Open |
-| TED-101 | 🟠 | Tax statement: December deposit for next summer counted in the payment year when next summer's tuition is on the books (dated at enrolment); prepaid money never appears on the next year's statement | 2026-09-24 | Open |
-| TED-102 | 🟡 | Deposit links: typed payment linked by reference isn't card-refundable; sibling questions point at the same typed payment, stale question relinks it | 2026-09-24 | Open |
-| TED-103 | 🟡 | While "already recorded by hand?" is unanswered, the card deposit is off the ledger: parent sees it owed, autopay can collect it; no notification | 2026-09-24 | Open |
-| TED-104 | 🟡 | Check script says 270/271 ok on the 25378b1 copies (autopay_setup not Billing-only, old trigger/_application_entry) | 2026-09-24 | Open |
-| TED-105 | 🟡 | Snacks single canteen refund has no per-click key: lost answer + Refund again = second refund (Stripe lost pi+amount protection with TED-097 fix) | 2026-09-24 | Open |
-| TED-005 | 🟠 | 14 auto-scheduler tests fail (`auto_full_day.test.js`); still 14 at 3390aba. Owner deferred. | 2026-09-23 | Open (deferred by owner) |
+| TED-105 | 🟠 | Canteen refund retried after a lost answer still sent twice when the child topped up more than once (Cardknox $50+$50; both processors when the refund spans top-ups); Cardknox single top-up retry says "Refund failed." though it went through. Fixed only for one Stripe top-up | 2026-09-24 | Open (re-checked 66a65df, raised to 🟠) |
+| TED-106 | 🟠 | deposit_review autopay hold uses the decline machinery: backoff 3/5/7/14 days, "card is not going to start working" escalation on night 3, flag survives the answer (no charge until retry date), stale Billing label; re-pasting 269 doesn't add its wording | 2026-09-24 | Open |
+| TED-107 | 🟠 | Tax statement: earlier-year money carried into its care year is never reduced by refunds — cancelled + refunded Dec deposit → 2026 says $500 claimable (and "nothing claimable") | 2026-09-24 | Open |
+| TED-101 | 🟡 | Tax year of Dec deposit: fixed for dated sessions; undated session still puts it in the payment year; printed Total row ≠ child rows when earlier-year money is included | 2026-09-24 | Open (narrowed at 66a65df) |
+| TED-108 | 🟡 | Record Payment (Billing + Finance) accepts a negative amount and books it as a refund (balance 1000 → 1500, no money moved) | 2026-09-24 | Open |
+| TED-005 | 🟠 | 14 auto-scheduler tests fail (`auto_full_day.test.js`); still 14 at 66a65df. Owner deferred. | 2026-09-23 | Open (deferred by owner) |
 
 ## Closed findings
 | ID | What it was | Closed | Proof |
 |----|-------------|--------|-------|
+| TED-100 | Camp could refund Campistry's SMS fees | 2026-09-24 | At 66a65df: unchanged probes/…-6/platform_fee_refund → 403, 0 refunds (was 200, 1); all Stripe payment creators checked (telnyx purpose stamped; deposits source-stamped; Link Pay Now customerless) |
+| TED-102 | Typed deposit not card-refundable; sibling questions shared a payment | 2026-09-24 | At 66a65df: probes/…-7/ref_link_refundable → pi / byop+processor set, 750; sibling_review → pi_A→pay_h1, pi_B→pay_h2, 1500 in all cases |
+| TED-103 | Open deposit question → autopay collected | 2026-09-24 | At 66a65df: runner result waiting_for_deposit_review, 0 charges (test fails on old); Billing notice raised. Residual TED-106 |
+| TED-104 | Check script passed old 270/271 | 2026-09-24 | At 66a65df: old_270_271_verify → apply 270 / apply 271; probes/…-7/old_268_272_verify → apply 268 / apply 272 on old copies, 19/19 ok after re-paste and on fresh chain |
 | TED-095 | Hand-typed card deposit counted twice | 2026-09-24 | At 3390aba: unchanged probes/…-5/deposit_twice → 750 both cases, 1 row (was 500); tests 3/10 fail on old. Residuals TED-102/103 |
 | TED-096 | Stripe deposit refund 403 | 2026-09-24 | At 3390aba: unchanged deposit_refund → 3/3 HTTP 200, 1 refund. Side effect TED-100 |
 | TED-093 | Refund-all refunded twice; young claim releasable | 2026-09-24 | At 3390aba: unchanged refund_all_lost (body {}) → 1 gateway refund (was 2); pgtest 273; refund_lost_answer 5/9 fail on old |
@@ -126,9 +129,9 @@
 | Auto Builder (solver, layers, grid) | never (only test results seen) |
 | Manual Builder | never |
 | Cloud sync / schedules / rotation | never |
-| Billing & payments (edge functions, autopay runner, refunds, late fees/surcharges/credits, plans, parent balance) | 2026-09-24 (sixth pass: 255-273 re-run + check script vs old copies, deposit review (siblings, refundability), stripe-refund ownership vs platform fees, refund keys, scale to 2,500; not browser, not live processors) |
+| Billing & payments (edge functions, autopay runner, refunds, late fees/surcharges/credits, plans, parent balance) | 2026-09-24 (seventh pass: TED-100..105 re-checked; canteen refund retries with several top-ups; deposit_review hold through flag_plan_collection over 3 nights; check script vs old 268/272; Record Payment sign; not browser, not live processors) |
 | Payroll | never |
-| Tax statement (`campistry_tax_statement.js`) | 2026-09-24: year/prepaid logic only (TED-101); classification rules never |
+| Tax statement (`campistry_tax_statement.js`) | 2026-09-24 (7th pass): care-year logic with Me's real resolveCharge, dated/undated sessions, cancellation refund, arrears, partial refund (TED-101/107); classification rules never |
 | Bank deposit matching (`deposit-inbox`) | 2026-09-24: only what happens after a match (TED-077); parser/matcher never |
 | Canteen / Snacks / Shop / POS | canteen auto-reload, shop bill-to-family, canteen refunds (single/all, Stripe/BYOP) 2026-09-24; POS maths never |
 | Parent portal (Link) | balance RPC (get_my_balance) re-traced 2026-09-24 fifth pass (TED-088 closed); never in a browser (database-level invite ownership checked 2026-09-23; Parents-page refusal wording run in isolation 2026-09-23) |
@@ -162,3 +165,4 @@
 | 2026-09-24 | Check my work: TED-076..087 fixes + billing hunt (4th pass) | f3d38a9 | unit 3393/14 · pg 59/0 · keys 42/0 · lite 12/0 · smoke 32/0 · scale 24/0 · old-code runs of 6 test files · 11 scratch DB + 1 harness probes | 🔴 | [report](reports/2026-09-24-billing-fourth-pass.md) |
 | 2026-09-24 | Check my work: TED-077, 088..094 fixes + billing hunt (5th pass) | 25378b1 | unit 3407/14 · pg 61/0 · keys 42/0 · lite 12/0 · smoke 32/0 · scale 24/0 · old-code runs of 6 test files · 5 scratch DB + 4 harness + 1 real-code probes, 10 4th-pass probes re-run | 🔴 | [report](reports/2026-09-24-billing-fifth-pass.md) |
 | 2026-09-24 | Check my work: TED-093..099 fixes + billing hunt (6th pass) | 3390aba | unit 3415/14 · pg 62/0 · keys 42/0 · lite 12/0 · smoke 32/0 · scale 24/0 · old-code runs of 3 test files · 9 5th-pass probes re-run · 8 new probes | 🟡 | [report](reports/2026-09-24-billing-sixth-pass.md) |
+| 2026-09-24 | Check my work: TED-100..105 fixes + billing hunt (7th pass) | 66a65df | unit 3426/14 · pg 62/0 · keys 42/0 · lite 12/0 · smoke 32/0 · scale 24/0 · old-code runs of 5 test files · 6th-pass probes re-run · 8 new probes | 🟡 | [report](reports/2026-09-24-billing-seventh-pass.md) |
