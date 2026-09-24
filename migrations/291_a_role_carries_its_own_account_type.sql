@@ -1,3 +1,4 @@
+
 -- ============================================================================
 -- Migration 275: a Role carries its own account type (admin/manager/
 -- scheduler/viewer) — invites pick a Role, not a raw account type.
