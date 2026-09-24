@@ -312,7 +312,14 @@ serve(async (req) => {
           // than refunding this one twice.
           if (claim && claim.claimed === false) {
             if (claim.previous && claim.previous.externalTransactionId) {
-              console.log(`[canteen-refund] chunk already settled, skipping: ${chunkKey}`);
+              // Done already — by this refund's other press, a moment ago
+              // (TED-109). It IS part of this refund: count it, and never move
+              // on to the next top-up to refund the same money again.
+              const doneAmt = round2(Number(claim.previous.amount) || chunk);
+              console.log(`[canteen-refund] chunk already settled, counting it: ${chunkKey}`);
+              refunds.push({ refundId: claim.previous.externalTransactionId, externalTransactionId: dep.externalTransactionId, amount: doneAmt });
+              totalRefunded = round2(totalRefunded + doneAmt);
+              remainingToRefund = round2(remainingToRefund - doneAmt);
               continue;
             }
             // Asked before and never confirmed (TED-093): stop here rather than

@@ -109,7 +109,9 @@ test('a claim that loses replays the first answer instead of refunding again', (
     // The canteen loops skip the chunk rather than returning, because the other
     // chunks in the batch may still need doing.
     // ...but only a SETTLED one (TED-093); one never confirmed stops instead.
-    assert.match(CANTEEN, /if \(claim && claim\.claimed === false\) \{\s*if \(claim\.previous && claim\.previous\.externalTransactionId\) \{[\s\S]{0,160}continue;/);
+    // The settled one is COUNTED toward this refund first (TED-109), so the
+    // loop never goes on to refund the same money from the next top-up.
+    assert.match(CANTEEN, /if \(claim && claim\.claimed === false\) \{\s*if \(claim\.previous && claim\.previous\.externalTransactionId\) \{[\s\S]{0,700}remainingToRefund = round2\(remainingToRefund - doneAmt\);\s*continue;/);
     assert.match(CANTEEN_ALL, /if \(claim && claim\.claimed === false\) \{[\s\S]{0,700}continue;/);
 });
 

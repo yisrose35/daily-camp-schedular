@@ -342,3 +342,18 @@ test('TED-101: the printed Total equals the sum of the child rows', () => {
     const ME = require('node:fs').readFileSync(require('node:path').join(__dirname, '..', 'campistry_me.js'), 'utf8');
     assert.match(ME, /fm\(rep\.claimedTotal!=null\?rep\.claimedTotal:rep\.paid\.net\)/);
 });
+
+// ── TED-101 (8th pass): undated sessions charged in the summer ─────────────
+test('TED-101: an undated "Summer 2027" re-enrolment paid in August 2026 belongs to 2027', () => {
+    const named = (e) => Object.assign({}, resolveCharge(e), { session: 'Summer 2027' });
+    const entries = [charge('2026-08-01', 3000, 'e1'), pay('2026-08-01', 500)];
+    const r26 = T.build({ year: 2026, entries, resolveCharge: named });
+    assert.strictEqual(r26.qualifying, 0, 'next summer\'s deposit is on this year\'s statement');
+    assert.strictEqual(r26.prepaid, 500);
+    assert.strictEqual(T.build({ year: 2027, entries, resolveCharge: named }).qualifying, 500);
+});
+
+test('TED-101: every undated session is named on the statement, whatever month it was charged', () => {
+    const r = build(2026, [charge('2026-08-01', 3000, 'e1'), pay('2026-08-01', 500)]);
+    assert.match(r.warnings.join(' '), /no start date/, 'an August charge on an undated session was assumed silently');
+});
