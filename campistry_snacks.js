@@ -842,8 +842,18 @@ function _mayEditAccounts() {
     const S = window.CampistrySections;
     return S && S.canEdit ? S.canEdit('accounts') : true;
 }
-/** "Ices ×2, Chips" → the items on today's list, to offer back to stock. */
-function _saleItemsToRestock(items) {
+/**
+ * What a sale sold, to offer back to stock: by item id when the register kept
+ * them with the sale (migration 289, TED-192) — an item named "Chips, BBQ" or
+ * "Trail Mix 2" included — else read from its line ("Ices ×2, Chips").
+ */
+function _saleItemsToRestock(items, sold) {
+    if (Array.isArray(sold) && sold.length) {
+        return sold.filter(x => x && x.id != null && Number(x.qty) > 0).map(x => {
+            const item = (snacks.inventory || []).find(i => i && String(i.id) === String(x.id));
+            return { id: item ? item.id : null, name: item ? item.name : ('item #' + x.id), qty: Number(x.qty), tracked: !!item && item.stock != null };
+        });
+    }
     return String(items || '').split(',').map(x => x.trim()).filter(Boolean).map(part => {
         const m = part.match(/^(.*?)\s*[×x]\s*(\d+)$/);
         const name = (m ? m[1] : part).trim();
@@ -869,7 +879,7 @@ window.openVoidSale = function(idx) {
         '\u2019s canteen balance as a void of this sale \u2014 not as a deposit, so no cash or card is recorded, and it no longer counts as a sale.</p>';
     const box = document.getElementById('voidItems');
     if (box) {
-        const list = _saleItemsToRestock(t.items);
+        const list = _saleItemsToRestock(t.items, t.soldItems);
         box.innerHTML = list.length ? list.map((it, i) => it.id != null && it.tracked
             ? '<label class="pay-row"><input type="checkbox" data-void-item="' + i + '" checked><span>Put ' + it.qty + ' \u00d7 ' + esc(it.name) + ' back in stock</span></label>'
             : '<div style="font-size:.8rem;color:var(--text-muted)">' + esc(it.name) + (it.id == null ? ' \u2014 not on the item list any more, not restocked' : ' \u2014 stock is not counted for this item') + '</div>'

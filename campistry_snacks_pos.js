@@ -795,11 +795,16 @@ window.charge = function() {
             toast('Could not confirm the charge to ' + camperName + ' — it may have gone through. Check their transactions; pressing Charge again for the same items will not charge twice.', true);
         };
         const _send = (fn, args) => client.rpc(fn, args);
-        _send('submit_canteen_purchase_once', Object.assign({ p_sale_key: _saleKey }, _args))
+        const _missing = (res) => !!(res && res.error && /PGRST202|could not find|schema cache|does not exist|no function/i.test(res.error.message || ''));
+        // What this sale sold, by item id (TED-192, migration 289), kept with
+        // the sale so a void can put exactly those items back in stock.
+        const _sold = saleCart.map(ci => ({ id: ci.id, qty: ci.qty }));
+        _send('submit_canteen_purchase_once', Object.assign({ p_sale_key: _saleKey, p_sold: _sold }, _args))
+            // 289 not applied yet: the same keyed sale without the item list
+            .then(res => _missing(res) ? _send('submit_canteen_purchase_once', Object.assign({ p_sale_key: _saleKey }, _args)) : res)
             .then(res => {
-                const m = (res && res.error && res.error.message) || '';
                 // 283 not applied yet: the charge as it was, one request.
-                if (res && res.error && /PGRST202|could not find|schema cache|does not exist|no function/i.test(m)) return _send('submit_canteen_purchase', _args);
+                if (_missing(res)) return _send('submit_canteen_purchase', _args);
                 return res;
             })
             .then(res => {

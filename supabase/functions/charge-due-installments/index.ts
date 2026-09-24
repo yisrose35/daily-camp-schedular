@@ -826,6 +826,13 @@ serve(async (req) => {
         // through the whole plan in a week of due dates and leaves it reading
         // finished with the balance untouched.
         const blocked = plan.collectionBlocked;
+        // A payment of this family's is charged back and their bank is still
+        // deciding (TED-186, migration 288): nothing is charged again on its own.
+        if (blocked && blocked.reason === "chargeback") {
+          details.push({ camp: row.camp_id, family: f.name, result: "held_for_dispute",
+                         reason: "a payment is disputed with the bank" + (blocked.disputeId ? " (" + blocked.disputeId + ")" : "") });
+          continue;
+        }
         if (blocked && blocked.nextRetryAt && String(blocked.nextRetryAt) > today) {
           details.push({ camp: row.camp_id, family: f.name, result: "waiting_to_retry",
                          reason: blocked.reason, attempts: blocked.attempts,
@@ -1079,6 +1086,13 @@ serve(async (req) => {
         // plan's (migration 179), not dropped (TED-055): until the plan's
         // next retry date, leave it alone.
         const blockedL = plan.collectionBlocked;
+        // A payment of this family's is charged back and their bank is still
+        // deciding (TED-186, migration 288): nothing is charged again on its own.
+        if (blockedL && blockedL.reason === "chargeback") {
+          details.push({ camp: row.camp_id, family: f.name, result: "held_for_dispute",
+                         reason: "a payment is disputed with the bank" + (blockedL.disputeId ? " (" + blockedL.disputeId + ")" : "") });
+          continue;
+        }
         if (blockedL && blockedL.nextRetryAt && String(blockedL.nextRetryAt) > today) {
           details.push({ camp: row.camp_id, family: f.name, result: "waiting_to_retry",
                          reason: blockedL.reason, attempts: blockedL.attempts,

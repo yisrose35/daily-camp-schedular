@@ -1,5 +1,5 @@
 -- ============================================================================
--- Confirm migrations 222-287 are in and doing their job.
+-- Confirm migrations 222-289 are in and doing their job.
 --
 -- Paste the whole thing into the Supabase SQL Editor. It is READ ONLY — one
 -- SELECT, nothing is created, changed or deleted, and the two purge functions
@@ -715,10 +715,12 @@ UNION ALL
           ELSE 'ok' END),
     -- A register sale is charged once (TED-159).
     ('283  a register sale is charged once',
-     CASE WHEN to_regprocedure('public.submit_canteen_purchase_once(uuid,text,text,numeric,text,date,bigint)') IS NULL
+     CASE WHEN COALESCE(to_regprocedure('public.submit_canteen_purchase_once(uuid,text,text,numeric,text,date,bigint,jsonb)'),
+                        to_regprocedure('public.submit_canteen_purchase_once(uuid,text,text,numeric,text,date,bigint)')) IS NULL
                OR to_regclass('public.canteen_sale_keys') IS NULL
           THEN 'apply 283 BEFORE reloading the register — a second tap can charge a child twice'
-          WHEN has_function_privilege('anon', 'public.submit_canteen_purchase_once(uuid,text,text,numeric,text,date,bigint)', 'EXECUTE')
+          WHEN has_function_privilege('anon', COALESCE(to_regprocedure('public.submit_canteen_purchase_once(uuid,text,text,numeric,text,date,bigint,jsonb)'),
+                                                        to_regprocedure('public.submit_canteen_purchase_once(uuid,text,text,numeric,text,date,bigint)'))::oid, 'EXECUTE')
                OR has_table_privilege('authenticated', 'public.canteen_sale_keys', 'SELECT')
           THEN 'apply 283 again — the sale keys are open to browsers'
           ELSE 'ok' END),
@@ -732,6 +734,7 @@ UNION ALL
                                            to_regprocedure('public.get_canteen_history(uuid,text,text,integer)'))) !~ 'x\.sig'
           THEN 'apply 284 again — older sales in a child''s history cannot be voided'
           WHEN pg_get_functiondef(to_regprocedure('public.canteen_void_sale(uuid,text,jsonb,text)')) !~ 'sale_items'
+               OR pg_get_functiondef(to_regprocedure('public.canteen_void_sale(uuid,text,jsonb,text)')) !~ 'soldItems'
           THEN 'apply 284 again — an earlier copy is in place: a void can put back in stock more than the sale had'
           ELSE 'ok' END),
     -- A refunded or disputed staff tip is marked and taken back (TED-176).
@@ -754,6 +757,21 @@ UNION ALL
           THEN 'apply 287 BEFORE deploying stripe-webhook — a top-up refunded in Stripe or disputed stays on the child''s wallet, and the webhook answers 500'
           WHEN has_function_privilege('authenticated', 'public.record_canteen_stripe_reversal(uuid,text,text,numeric,text,text)', 'EXECUTE')
           THEN 'apply 287 again — a signed-in browser can take money off a wallet'
+          ELSE 'ok' END),
+    -- Autopay waits while a family's payment is charged back (TED-186).
+    ('288  autopay waits while a payment is disputed',
+     CASE WHEN to_regprocedure('public.hold_autopay_for_dispute(uuid,text,text,boolean,text)') IS NULL
+               OR to_regprocedure('public.resume_autopay_after_dispute(uuid,text)') IS NULL
+          THEN 'apply 288 BEFORE deploying stripe-webhook and charge-due-installments — autopay charges a family again for a payment their bank is disputing'
+          WHEN has_function_privilege('authenticated', 'public.hold_autopay_for_dispute(uuid,text,text,boolean,text)', 'EXECUTE')
+          THEN 'apply 288 again — a signed-in browser can pause or resume autopay'
+          ELSE 'ok' END),
+    -- A register sale keeps what it sold, by item id (TED-192).
+    ('289  a register sale keeps what it sold',
+     CASE WHEN to_regprocedure('public.submit_canteen_purchase_once(uuid,text,text,numeric,text,date,bigint,jsonb)') IS NULL
+          THEN 'apply 289 BEFORE reloading the register — a void cannot put back items whose names have a comma or end in a number'
+          WHEN to_regprocedure('public.submit_canteen_purchase_once(uuid,text,text,numeric,text,date,bigint)') IS NOT NULL
+          THEN 'apply 289 again — two versions of the register''s charge are in place and it cannot choose between them'
           ELSE 'ok' END)
     ) AS x(item, result)
 

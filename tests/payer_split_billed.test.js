@@ -119,6 +119,16 @@ test('TED-177: accounts kept on the payer before the move are moved onto the fam
     assert.strictEqual(b.fns._payerAccount('org_fund').balance, 500, 'moved twice');
 });
 
+test('TED-190: an old page writing the old list back after the move does not count the fund\'s cheque twice', () => {
+    const b = billing([]);
+    b.reg.org_fund.ledger = [{ id: 'prc_c1_org_fund', kind: 'charge', amount: 800, familyKey: 'pine' }, { id: 'prp_old', kind: 'payment', amount: 1000 }];
+    assert.strictEqual(b.fns._payerAccount('org_fund').paid, 1000);
+    // the old page saves its copy of the registry, with the old list in it
+    b.reg.org_fund.ledger = [{ id: 'prc_c1_org_fund', kind: 'charge', amount: 800, familyKey: 'pine' }, { id: 'prp_old', kind: 'payment', amount: 1000 }];
+    const acc = b.fns._payerAccount('org_fund');
+    assert.deepStrictEqual([acc.charged, acc.paid, acc.balance], [800, 1000, -200], 'the cheque (or the share) was counted twice');
+});
+
 test('TED-178: Finance counts the fund — charged, collected, outstanding and its cheque in the log', () => {
     const b = billing([{ payerId: 'org_fund', amount: 800 }]);
     split(b, 1000);
@@ -183,4 +193,17 @@ test('TED-165: the payer accounts survive a save (the registry keeps them)', () 
         { id: 'prc_1', kind: 'charge', amount: 800 }, { id: 'prp_1', kind: 'payment', amount: 300 }, { junk: 1 }] } });
     assert.strictEqual(reg.org_fund.ledger.length, 2);
     assert.strictEqual(P.account(reg.org_fund).balance, 500);
+});
+
+test('TED-189: "Cancel share" — the fund no longer owes it, and neither does the family', async () => {
+    const b = billing([{ payerId: 'org_fund', amount: 800 }]);
+    split(b, 1000);
+    const share = b.fam.payerLedger.find(e => e.kind === 'charge');
+    b.fns.voidPayerLine('org_fund', share.id, 'cancel');
+    await tick();
+    assert.strictEqual(b.fns._payerAccount('org_fund').balance, 0);
+    assert.strictEqual(B.balance(b.fam), 200, 'the cancelled share was billed to the household');
+    assert.ok(!b.fam.charges.some(c => /^prback_/.test(c.id)));
+    // and the credit window points the office to it
+    assert.match(ME, /A credit here comes off <strong>/);
 });

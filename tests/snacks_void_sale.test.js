@@ -131,3 +131,13 @@ test('TED-175: the dialog is on the page', () => {
     assert.match(HTML, /onclick="confirmVoidSale\(\)"/);
     assert.match(HTML, /id="voidItems"/);
 });
+
+test('TED-192: a sale that kept its items by id offers exactly those back — names with commas or numbers included', () => {
+    const P = page();
+    P.snacks.inventory.push({ id: 3, name: 'Chips, BBQ', price: 1, stock: 4 }, { id: 4, name: 'Trail Mix 2', price: 2, stock: 4 });
+    const list = P.restock('Trail Mix 2 ×2, Chips, BBQ', [{ id: 4, qty: 2 }, { id: 3, qty: 1 }]);
+    assert.deepStrictEqual(JSON.parse(JSON.stringify(list)), [
+        { id: 4, name: 'Trail Mix 2', qty: 2, tracked: true }, { id: 3, name: 'Chips, BBQ', qty: 1, tracked: true }]);
+    // an older sale with no ids still goes by its line
+    assert.deepStrictEqual(JSON.parse(JSON.stringify(P.restock('Ices ×2').map(x => [x.id, x.qty]))), [[1, 2]]);
+});

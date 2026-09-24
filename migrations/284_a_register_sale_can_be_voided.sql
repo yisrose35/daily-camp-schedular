@@ -27,7 +27,8 @@
 --   • posts one line, kind 'void', a credit that names the sale it reverses
 --     (voidOf) — with no payment method, so it is never cash or card taken in;
 --   • puts the items the office ticked back in stock (and off "sold") — never
---     more of an item than the sale had (TED-184).
+--     more of an item than the sale had (TED-184): by item id where the
+--     register recorded them (289, TED-192), by the sale's item line otherwise.
 -- The page leaves a voided sale out of sales and revenue.
 --
 -- get_canteen_history now carries each row's `sig` too, so a sale from the
@@ -160,14 +161,26 @@ BEGIN
                AND jsonb_typeof(it -> 'qty') = 'number'
                AND floor((it ->> 'qty')::numeric) BETWEEN 1 AND 100
              GROUP BY 1),
+        -- What the register recorded it sold, by item id (289, TED-192): that
+        -- when the sale has it; the item line by name for older sales.
+        sold_by_id AS (
+            SELECT x ->> 'id' AS id, sum(COALESCE(NULLIF(x ->> 'qty', '')::numeric, 0)) AS qty
+              FROM jsonb_array_elements(CASE WHEN jsonb_typeof(t.payload -> 'soldItems') = 'array'
+                                             THEN t.payload -> 'soldItems' ELSE '[]'::jsonb END) x
+             WHERE jsonb_typeof(x) = 'object'
+             GROUP BY 1),
         back AS (
-            SELECT a.id, LEAST(a.qty, si.qty) AS qty
-              FROM asked a
-              JOIN camp_state_kv kv0 ON kv0.camp_id = p_camp_id AND kv0.key = 'campistrySnacks'
-              JOIN LATERAL (SELECT e FROM jsonb_array_elements(CASE WHEN jsonb_typeof(kv0.value -> 'inventory') = 'array'
-                                                                    THEN kv0.value -> 'inventory' ELSE '[]'::jsonb END) e
-                             WHERE e ->> 'id' = a.id LIMIT 1) inv ON true
-              JOIN sale_items si ON si.name = lower(btrim(COALESCE(inv.e ->> 'name', ''))))
+            SELECT a.id, LEAST(a.qty, COALESCE(
+                       CASE WHEN jsonb_typeof(t.payload -> 'soldItems') = 'array'
+                            THEN (SELECT sb.qty FROM sold_by_id sb WHERE sb.id = a.id)
+                            ELSE (SELECT si.qty
+                                    FROM camp_state_kv kv0
+                                    JOIN LATERAL (SELECT e FROM jsonb_array_elements(CASE WHEN jsonb_typeof(kv0.value -> 'inventory') = 'array'
+                                                                                          THEN kv0.value -> 'inventory' ELSE '[]'::jsonb END) e
+                                                   WHERE e ->> 'id' = a.id LIMIT 1) inv ON true
+                                    JOIN sale_items si ON si.name = lower(btrim(COALESCE(inv.e ->> 'name', '')))
+                                   WHERE kv0.camp_id = p_camp_id AND kv0.key = 'campistrySnacks') END, 0)) AS qty
+              FROM asked a)
         UPDATE camp_state_kv kv
            SET value = jsonb_set(kv.value, '{inventory}', (
                    SELECT COALESCE(jsonb_agg(

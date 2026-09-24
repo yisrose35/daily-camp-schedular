@@ -71,7 +71,15 @@ Dashboard → Developers → Webhooks → Add endpoint:
     accepted and then failed (a closed card account). Without these the family's
     bill or the child's canteen wallet keeps saying "refunded" when the parent
     got nothing (migration 278 puts the money back and tells Billing).
-  - `charge.dispute.created`, `charge.dispute.closed`
+  - `charge.dispute.created`, `charge.dispute.updated`,
+    `charge.dispute.funds_withdrawn`, `charge.dispute.closed` — a bank taking a
+    payment back. An *inquiry* (the bank only asking a question, no money moved)
+    posts nothing; if it escalates, Stripe sends `updated` / `funds_withdrawn`,
+    and only then does the payment go back on the family's bill (or come off the
+    child's canteen wallet). While a family's payment is charged back, autopay
+    does not charge them again; it resumes by itself if the camp wins, and from
+    Billing ("Autopay paused — a payment is disputed") if it does not
+    (migration 288).
   - `radar.early_fraud_warning.created`, `review.opened`, `payout.failed`
 - Copy the signing secret into `STRIPE_WEBHOOK_SECRET` (step 3).
 

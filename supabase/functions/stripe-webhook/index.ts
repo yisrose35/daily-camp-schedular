@@ -878,19 +878,20 @@ async function handleChargeRefunded(
     const now = await stripeGetJson(`/refunds/${encodeURIComponent(refundId)}`);
     const status = String((now && now.status) || r.status || "");
     if (status === "failed" || status === "canceled") continue;
-    try {
+    {
       const { data, error } = await supabase.rpc("record_external_refund", {
         p_camp_id: campId, p_refund_id: refundId, p_refs: refs,
         p_amount: amount,
         p_note: r.reason ? `Refund — ${r.reason}` : "Refund issued at the processor",
       });
-      if (error || !data?.success) {
+      // A database error: 500, so Stripe sends the refund again (TED-187; the
+      // entry is keyed on the refund id). An answer is only logged.
+      if (error) throw new Error(`refund ${refundId} not booked yet: ${error.message}`);
+      if (!data?.success) {
         console.error(`[stripe-webhook] refund ${refundId} NOT posted ` +
           `(${error?.message || data?.error || "unknown"}) — the family still shows a ` +
           `credit they no longer have. refs=${refs.join(",")}`);
       }
-    } catch (e) {
-      console.error(`[stripe-webhook] refund ${refundId} threw: ${(e as Error).message}`);
     }
   }
 }
@@ -993,20 +994,35 @@ async function handleDisputeLedger(
   const refs = [obj.payment_intent, obj.charge, obj.id]
     .filter(Boolean).map(String);
 
-  // A canteen top-up (TED-181): the disputed money off the child's wallet
-  // while the bank decides; back on if the camp wins. An inquiry (warning_*)
-  // moves no money.
-  if (!String(obj.status || "").startsWith("warning_")) {
-    const canteen = await canteenPaymentOf(obj);
-    if (canteen) {
-      const amount = Number(((obj.amount || 0) / 100).toFixed(2));
-      if (event.type === "charge.dispute.created") {
-        await canteenReversal(supabase, canteen.campId, canteen.pi, disputeId, amount, "dispute", obj.reason ? `Disputed — ${String(obj.reason).replace(/_/g, " ")}` : null);
-      } else if (event.type === "charge.dispute.closed" && String(obj.status || "") === "won") {
-        await canteenReversal(supabase, canteen.campId, canteen.pi, disputeId, amount, "dispute_won", null);
-      }
-      return;
+  // An INQUIRY (warning_needs_response, warning_under_review, warning_closed)
+  // is the bank asking a question: no money has moved, so nothing is posted —
+  // not on a family's bill (TED-186), not on a child's wallet (TED-181). If it
+  // escalates, Stripe says so with the same dispute in a money-moving status
+  // (charge.dispute.updated / charge.dispute.funds_withdrawn), handled below.
+  const status = String(obj.status || "");
+  if (status.startsWith("warning_")) {
+    console.log(`[stripe-webhook] ${event.type} ${disputeId}: an inquiry (${status}) — nothing posted`);
+    return;
+  }
+  // Money taken: the first of created / updated / funds_withdrawn in a real
+  // dispute status posts it (each writer is keyed on the dispute, so the
+  // others change nothing). Closed: won puts it back; lost leaves it.
+  const taking = event.type === "charge.dispute.created" || event.type === "charge.dispute.updated"
+              || event.type === "charge.dispute.funds_withdrawn";
+  const closed = event.type === "charge.dispute.closed";
+  if (!taking && !closed) return;
+
+  // A canteen top-up (TED-181, TED-188): off the child's wallet while the
+  // bank decides; back on if the camp wins.
+  const canteen = await canteenPaymentOf(obj);
+  if (canteen) {
+    const amount = Number(((obj.amount || 0) / 100).toFixed(2));
+    if (taking) {
+      await canteenReversal(supabase, canteen.campId, canteen.pi, disputeId, amount, "dispute", obj.reason ? `Disputed — ${String(obj.reason).replace(/_/g, " ")}` : null);
+    } else if (status === "won") {
+      await canteenReversal(supabase, canteen.campId, canteen.pi, disputeId, amount, "dispute_won", null);
     }
+    return;
   }
 
   // Which camp? The PAYMENT's metadata carries campId on every path that takes
@@ -1020,30 +1036,44 @@ async function handleDisputeLedger(
     return;
   }
 
-  try {
-    if (event.type === "charge.dispute.created") {
-      const { data, error } = await supabase.rpc("record_chargeback", {
-        p_camp_id: campId, p_dispute_id: disputeId, p_refs: refs,
-        p_amount: Number(((obj.amount || 0) / 100).toFixed(2)),
-        p_reason: obj.reason || null, p_status: obj.status || null,
-      });
-      if (error || !data?.success) {
-        console.error(`[stripe-webhook] chargeback ${disputeId} NOT posted to the ledger ` +
-          `(${error?.message || data?.error || "unknown"}) — the camp's books now ` +
-          `overstate collected cash until this is reconciled by hand`);
-      }
-    } else if (event.type === "charge.dispute.closed") {
-      // `won` means the camp kept the money. Anything else leaves the refund
-      // standing, which is already correct.
-      const won = String(obj.status || "") === "won";
-      const { error } = await supabase.rpc("resolve_chargeback", {
-        p_camp_id: campId, p_dispute_id: disputeId, p_won: won,
-        p_status: obj.status || null,
-      });
-      if (error) console.warn(`[stripe-webhook] dispute ${disputeId} close not recorded: ${error.message}`);
+  // A database error is thrown (TED-187): 500, so Stripe sends the event again
+  // (every writer here is keyed on the dispute). An ANSWER — no such payment —
+  // is logged: sending it again would not change it.
+  if (taking) {
+    const { data, error } = await supabase.rpc("record_chargeback", {
+      p_camp_id: campId, p_dispute_id: disputeId, p_refs: refs,
+      p_amount: Number(((obj.amount || 0) / 100).toFixed(2)),
+      p_reason: obj.reason || null, p_status: obj.status || null,
+    });
+    if (error) throw new Error(`chargeback ${disputeId} not posted yet: ${error.message}`);
+    if (!data?.success) {
+      console.error(`[stripe-webhook] chargeback ${disputeId} NOT posted to the ledger ` +
+        `(${data?.error || "unknown"}) — the camp's books now ` +
+        `overstate collected cash until this is reconciled by hand`);
+      return;
     }
-  } catch (e) {
-    console.error(`[stripe-webhook] dispute ${disputeId} ledger write threw: ${(e as Error).message}`);
+    // Autopay does not charge the family again while their bank is deciding
+    // (288). Won: it starts again; lost: the office decides, in Billing.
+    if (data.familyKey) {
+      const hold = await supabase.rpc("hold_autopay_for_dispute", {
+        p_camp_id: campId, p_family_key: String(data.familyKey), p_dispute_id: disputeId, p_hold: true,
+        p_detail: obj.reason ? String(obj.reason).replace(/_/g, " ") : null });
+      if (hold.error) throw new Error(`chargeback ${disputeId}: autopay could not be paused yet: ${hold.error.message} — is migration 288 applied?`);
+    }
+  } else {
+    // `won` means the camp kept the money. Anything else leaves the refund
+    // standing, which is already correct.
+    const won = status === "won";
+    const { data, error } = await supabase.rpc("resolve_chargeback", {
+      p_camp_id: campId, p_dispute_id: disputeId, p_won: won,
+      p_status: obj.status || null,
+    });
+    if (error) throw new Error(`dispute ${disputeId} close not recorded yet: ${error.message}`);
+    if (won && data?.familyKey) {
+      const rel = await supabase.rpc("hold_autopay_for_dispute", {
+        p_camp_id: campId, p_family_key: String(data.familyKey), p_dispute_id: disputeId, p_hold: false });
+      if (rel.error) throw new Error(`dispute ${disputeId} won: autopay could not be resumed yet: ${rel.error.message}`);
+    }
   }
 }
 
@@ -1261,6 +1291,10 @@ serve(async (req) => {
       } else {
         await handleAutopaySetup(supabase, si);
       }
+    } else if (event.type === "charge.dispute.updated" || event.type === "charge.dispute.funds_withdrawn") {
+      // An inquiry that escalated, or the money actually leaving (TED-186/188):
+      // posted once, keyed on the dispute; no second platform email.
+      await handleDisputeLedger(supabase, event);
     } else if (RISK_EVENT_TYPES.has(event.type)) {
       // A dispute also moves real money out of the CAMP's account, so it needs a
       // ledger entry as well as the platform alert. Ledger first: if the email

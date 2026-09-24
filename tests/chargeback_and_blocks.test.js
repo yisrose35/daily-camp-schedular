@@ -209,7 +209,7 @@ test('the webhook handles dispute CLOSED as well as created', () => {
     const hook = read('supabase/functions/stripe-webhook/index.ts');
     assert.match(hook, /"charge\.dispute\.closed"/,
         'a dispute the camp WINS never puts the money back');
-    assert.match(hook, /const won = String\(obj\.status \|\| ""\) === "won";/,
+    assert.match(hook, /const status = String\(obj\.status \|\| ""\);[\s\S]*const won = status === "won";/,
         'the outcome is no longer read from the dispute status');
     // Ledger before email: if the mail provider is down the money must still be right.
     const ledger = hook.indexOf('await handleDisputeLedger(supabase, event)');

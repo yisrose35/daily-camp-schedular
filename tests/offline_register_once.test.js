@@ -97,3 +97,34 @@ test('TED-185: the office hands out this register\'s build, never a stored older
     assert.match(SN, /is not the version this page expects/);
     assert.match(HTML, /Register version<\/span><span class="value">' \+ OFFLINE_POS_BUILD/);
 });
+
+test('TED-191: a stored older register (another build) is refused, not handed to a tablet; the right one downloads', async () => {
+    const SN = fs.readFileSync(path.join(__dirname, '..', 'campistry_snacks.js'), 'utf8');
+    const at = SN.indexOf('window.downloadOfflinePOS = async function() {');
+    const end = SN.indexOf('\n};', at) + 3;
+    const build = SN.match(/var OFFLINE_POS_BUILD = '([^']+)'/)[0];
+    async function run(served) {
+        const status = { textContent: '' }, downloads = [], asked = [];
+        const ctx = {
+            console, Promise, JSON, Object, Error,
+            _secEdit: () => true, toast() {},
+            fetch: async (url, o) => { asked.push([url, o && o.cache]); return { ok: true, text: async () => served }; },
+            _withLiveCanteenRows: async () => ({}), buildOfflineExportData: () => ({ accounts: {}, inventory: [] }),
+            OFFLINE_EXPORT_NEEDS_ROWS: 'x',
+            Blob: function (parts) { this.html = parts[0]; }, URL: { createObjectURL: (b) => { downloads.push(b.html); return 'blob:'; }, revokeObjectURL() {} },
+            document: { getElementById: () => status, createElement: () => ({ click() {} }), body: { appendChild() {}, removeChild() {} } },
+            window: {},
+        };
+        vm.createContext(ctx);
+        vm.runInContext('var window = this.window;\n' + build + '\n' + SN.slice(at, end) + '\nthis.go = window.downloadOfflinePOS;', ctx);
+        await ctx.go();
+        return { status: status.textContent, downloads, asked };
+    }
+    const good = await run(HTML);
+    assert.strictEqual(good.downloads.length, 1, good.status);
+    assert.deepStrictEqual(good.asked[0][1], 'no-store');
+    assert.match(good.asked[0][0], /campistry_snacks_pos_offline\.html\?v=/);
+    const old = await run(HTML.replace(/var OFFLINE_POS_BUILD = '[^']+'/, "var OFFLINE_POS_BUILD = '20200101-01'"));
+    assert.strictEqual(old.downloads.length, 0, 'an older register was handed out');
+    assert.match(old.status, /not the version this page expects/);
+});

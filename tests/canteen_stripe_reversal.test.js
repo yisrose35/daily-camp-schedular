@@ -74,3 +74,14 @@ test('TED-181: a tuition payment refunded in the dashboard still goes to the fam
     assert.deepStrictEqual(rev(r), []);
     assert.ok(r.rpcs.some(c => c.name === 'record_external_refund'));
 });
+
+test('TED-188: a canteen inquiry that escalates comes off the wallet — once, on the dispute', () => {
+    const r = deliver([
+        { id: 'evt_q', type: 'charge.dispute.created', data: { object: { id: 'dp_e', charge: 'ch_top', amount: 2000, status: 'warning_needs_response' } } },
+        { id: 'evt_u', type: 'charge.dispute.updated', data: { object: { id: 'dp_e', charge: 'ch_top', amount: 2000, status: 'needs_response' } } },
+        { id: 'evt_f', type: 'charge.dispute.funds_withdrawn', data: { object: { id: 'dp_e', charge: 'ch_top', amount: 2000, status: 'needs_response' } } },
+    ]);
+    assert.deepStrictEqual(r.responses.map(x => x.status), [200, 200, 200]);
+    // both money-moving messages reach the dispute-keyed writer (pgtest 287: the second changes nothing)
+    assert.deepStrictEqual(rev(r), [['pi_top', 'dp_e', 20, 'dispute'], ['pi_top', 'dp_e', 20, 'dispute']]);
+});

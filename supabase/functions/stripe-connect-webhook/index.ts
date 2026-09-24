@@ -614,7 +614,8 @@ serve(async (req) => {
         console.log(`[stripe-connect-webhook] cart tip payment failed for cart ${meta.cartId}: ${event.data.object.last_payment_error?.message || "unknown"}`);
       }
     } else if (event.type === "charge.refunded" || event.type === "charge.dispute.created"
-               || event.type === "charge.dispute.updated" || event.type === "charge.dispute.closed") {
+               || event.type === "charge.dispute.updated" || event.type === "charge.dispute.funds_withdrawn"
+               || event.type === "charge.dispute.closed") {
       // A tip the parent got back (TED-176); anything else is stripe-webhook's.
       await handleTipReversal(supabase, event);
     } else if (event.type === "payout.failed") {

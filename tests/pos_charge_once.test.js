@@ -36,8 +36,8 @@ function chargeCode(src) {
 // A server that charges like submit_canteen_purchase (+ 283's key when asked),
 // answering on a later tick. `lose` = which request numbers lose their answer
 // after the server has done its work.
-function register({ lose = [], noOnce = false, refuse = false } = {}) {
-    const db = { balance: 10, debits: 0, keys: {}, calls: [], sold: [] };
+function register({ lose = [], noOnce = false, refuse = false, no289 = false } = {}) {
+    const db = { balance: 10, debits: 0, keys: {}, calls: [], sold: [], onceArgs: [] };
     const toasts = [];
     const btn = { disabled: false, textContent: '' };
     const ctx = {
@@ -62,7 +62,8 @@ function register({ lose = [], noOnce = false, refuse = false } = {}) {
             db.calls.push(fn);
             if (fn === 'record_canteen_sale_inventory') db.sold.push(JSON.parse(JSON.stringify(args.p_items)));
             let out;
-            if (fn === 'submit_canteen_purchase_once' && noOnce) out = { data: null, error: { code: 'PGRST202', message: 'Could not find the function' } };
+            if (fn === 'submit_canteen_purchase_once') db.onceArgs.push(JSON.parse(JSON.stringify(args)));
+            if (fn === 'submit_canteen_purchase_once' && (noOnce || (no289 && 'p_sold' in args))) out = { data: null, error: { code: 'PGRST202', message: 'Could not find the function' } };
             else if (fn === 'submit_canteen_purchase_once') {
                 const k = args.p_sale_key;
                 if (db.keys[k]) out = { data: Object.assign({}, db.keys[k], { replayed: true }), error: null };
@@ -135,7 +136,19 @@ test('TED-159: before migration 283 is pasted the register still charges (once p
     const r = register({ noOnce: true });
     r.tap(); await settle();
     assert.strictEqual(r.db.debits, 1);
-    assert.deepStrictEqual(r.db.calls.filter(c => c.startsWith('submit_canteen')), ['submit_canteen_purchase_once', 'submit_canteen_purchase']);
+    // with the item list (289), then without it (283), then the plain charge
+    assert.deepStrictEqual(r.db.calls.filter(c => c.startsWith('submit_canteen')), ['submit_canteen_purchase_once', 'submit_canteen_purchase_once', 'submit_canteen_purchase']);
+});
+
+test('TED-192: the sale sends what it sold by item id; before 289 is pasted, the same keyed sale without it', async () => {
+    const r = register();
+    r.tap(); await settle();
+    assert.deepStrictEqual(r.db.onceArgs.map(a => a.p_sold), [[{ id: 1, qty: 1 }]]);
+    const old = register({ no289: true });
+    old.tap(); await settle();
+    assert.strictEqual(old.db.debits, 1, 'no charge (or two) when 289 is missing');
+    assert.deepStrictEqual(old.db.onceArgs.map(a => 'p_sold' in a), [true, false]);
+    assert.strictEqual(old.db.onceArgs[0].p_sale_key, old.db.onceArgs[1].p_sale_key, 'the retry must be the same sale');
 });
 
 test('TED-168: after "could not confirm", Clear All ends that sale — the same child\'s next identical sale IS charged', async () => {

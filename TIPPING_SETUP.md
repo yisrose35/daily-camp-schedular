@@ -188,8 +188,8 @@ one endpoint is not enough — you must create **both**:
   accounts" OFF here)
 - Events: `payment_intent.succeeded`, `payment_intent.payment_failed`,
   `charge.refunded`, `charge.dispute.created`, `charge.dispute.updated`,
-  `charge.dispute.closed`
-- The four `charge.*` events are how Campistry learns a tip was refunded or
+  `charge.dispute.funds_withdrawn`, `charge.dispute.closed`
+- The five `charge.*` events are how Campistry learns a tip was refunded or
   disputed (see "When a tip is refunded or disputed" below). The billing
   `stripe-webhook` receives the same events for camp payments; each function
   ignores the payments that are not its own.
@@ -306,7 +306,7 @@ against the deployed test-mode functions. `stripe listen` conveniently
 forwards both platform and connected-account events through one CLI session
 with a single temporary `whsec_...` (unlike the two separate Dashboard
 endpoints/secrets required in step 5) — forward with:
-`stripe listen --events account.updated,payment_intent.succeeded,payment_intent.payment_failed,charge.refunded,charge.dispute.created,charge.dispute.updated,charge.dispute.closed --forward-to https://<project-ref>.supabase.co/functions/v1/stripe-connect-webhook`
+`stripe listen --events account.updated,payment_intent.succeeded,payment_intent.payment_failed,charge.refunded,charge.dispute.created,charge.dispute.updated,charge.dispute.funds_withdrawn,charge.dispute.closed --forward-to https://<project-ref>.supabase.co/functions/v1/stripe-connect-webhook`
 and set BOTH `STRIPE_CONNECT_WEBHOOK_SECRET` and
 `STRIPE_CONNECT_ACCOUNT_WEBHOOK_SECRET` to that one printed secret while
 testing this way. Or just register the two permanent Dashboard endpoints

@@ -6619,6 +6619,25 @@ async function resolveUnconfirmedAutopay(fk,planRef){
     try{if(curPage==='familydetail')renderFamilyDetailPage();else renderBilling()}catch(_){}
 }
 
+// Autopay paused by a chargeback (TED-186): it starts again by itself when
+// the camp wins; after a loss the office decides, here.
+async function resumeAutopayAfterDispute(fk){
+    if(!_secEdit('billing','Resuming autopay'))return;
+    var f=families[fk]; if(!f)return;
+    var ok=await confirmDialog({title:'Resume autopay?',confirmLabel:'Resume autopay',
+        message:f.name+' disputed a payment with their bank, so autopay stopped charging them. Resume it only if the dispute is over and you have agreed with the family \u2014 their card will be charged on the next due date.'});
+    if(!ok)return;
+    var client=window.CampistryDB&&window.CampistryDB.getClient?window.CampistryDB.getClient():null;
+    var campId=window.CampistryDB&&window.CampistryDB.getCampId?window.CampistryDB.getCampId():null;
+    if(!client||!campId)return toast('Not connected','error');
+    var res=await client.rpc('resume_autopay_after_dispute',{p_camp_id:campId,p_family_key:fk});
+    var d=res&&res.data;
+    if(res&&res.error||!d||d.success!==true)return toast('Could not resume autopay: '+((res&&res.error&&res.error.message)||(d&&(d.message||d.error))||'no answer'),'error');
+    toast('Autopay resumed for '+f.name);
+    try{ await _loadFamiliesFromRows(); }catch(_){}
+    try{if(curPage==='familydetail')renderFamilyDetailPage();else renderBilling()}catch(_){}
+}
+
 function _postTuitionFor(f,eid){
     var B=_billingCore();
     if(!B||!f)return false;
@@ -17916,6 +17935,14 @@ function _collectionWarning(l){
     (l.collectionBlocked||[]).forEach(function(b){
         if(!b)return;
         var n=Number(b.attempts)||0;
+        // A disputed payment (TED-186, 288): autopay waits — clicking asks
+        // whether to resume it (after a dispute the camp did not win).
+        if(b.reason==='chargeback'){
+            out.push('<span style="font-size:.78rem;font-weight:700;color:var(--err);cursor:pointer;text-decoration:underline" '
+                +'onclick="event.stopPropagation();CampistryMe.resumeAutopayAfterDispute(\''+je(l.famKey)+'\')">'
+                +esc('Autopay paused \u2014 a payment is disputed with the bank')+'</span>');
+            return;
+        }
         var label=b.reason==='no_card'?'No card on file'
                  :b.reason==='declined'?'Card declined'
                  :b.reason==='no_processor'?'Processor not connected'
@@ -18631,7 +18658,13 @@ function _migratePayerLedgers(){
             } else if(e.kind==='payment') pays.push(e);
         });
         delete py.ledger;   // first: placing a payment reads the accounts again
-        pays.forEach(function(e){ _placePayerPayment(pid,e.amount,{date:e.date,method:e.method,reference:e.reference,paymentId:e.id}); });
+        // A cheque already moved (an office computer still on the old page wrote
+        // the old list back after the move) is not placed twice (TED-190).
+        var placed={};
+        Object.keys(families||{}).forEach(function(fk){ var f=families[fk];
+            (f&&Array.isArray(f.payerLedger)?f.payerLedger:[]).forEach(function(x){ if(x&&x.paymentId)placed[x.paymentId]=1; }); });
+        pays.forEach(function(e){ if(placed[e.id])return;
+            _placePayerPayment(pid,e.amount,{date:e.date,method:e.method,reference:e.reference,paymentId:e.id}); });
     });
 }
 // Every line for one payer, across the families it pays for.
@@ -18778,13 +18811,17 @@ function payerLines(id){
             return '<tr><td>'+esc(e.date||'')+'</td><td>Payment'+(e.method?' ('+esc(_payLabel(e.method)||e.method)+')':'')+(e.reference?' #'+esc(e.reference):'')+'</td><td style="text-align:right">'+fm(tot)+'</td><td style="text-align:right">'
                 +(off?'<span style="color:var(--s400)">removed</span>':'<button class="me-btn me-btn--ghost me-btn--sm" style="color:var(--err)" onclick="CampistryMe.voidPayerLine(\''+je(id)+'\',\''+je(k)+'\')">Remove</button>')+'</td></tr>'; }
         return '<tr><td>'+esc(e.date||'')+'</td><td>'+esc(e.description||'Share')+'</td><td style="text-align:right">'+fm(e.amount)+'</td><td style="text-align:right">'
-            +(off?'<span style="color:var(--s400)">moved back</span>':'<button class="me-btn me-btn--ghost me-btn--sm" style="color:var(--err)" onclick="CampistryMe.voidPayerLine(\''+je(id)+'\',\''+je(e.id)+'\')">Move back to family</button>')+'</td></tr>';
+            +(off?'<span style="color:var(--s400)">taken back</span>':'<button class="me-btn me-btn--ghost me-btn--sm" style="color:var(--err)" onclick="CampistryMe.voidPayerLine(\''+je(id)+'\',\''+je(e.id)+'\',\'cancel\')">Cancel share</button>'
+                +'<button class="me-btn me-btn--ghost me-btn--sm" onclick="CampistryMe.voidPayerLine(\''+je(id)+'\',\''+je(e.id)+'\')">Move back to family</button>')+'</td></tr>';
     }).join('');
     h+=rows?'<table class="me-t"><tbody>'+rows+'</tbody></table>':'<p style="color:var(--s500)">Nothing on this account yet.</p>';
     h+='</div>';
     showModal(py.name||id,h,null);
 }
-function voidPayerLine(pid,lineId){
+// mode 'cancel' (TED-189): the share is simply not owed by anyone any more —
+// a charge billed by mistake, or waived — so nothing goes to the household.
+function voidPayerLine(pid,lineId,mode){
+    var cancel=mode==='cancel';
     if(!_secEdit('billing','Correcting a payer\u2019s account'))return;
     var a=_payerAccount(pid);
     var targets=a.lines.filter(function(e){return !a.voided[e.id]&&e.kind!=='void'&&(e.id===lineId||(e.kind==='payment'&&(e.paymentId||e.id)===lineId))});
@@ -18792,15 +18829,16 @@ function voidPayerLine(pid,lineId){
     var isPay=targets[0].kind==='payment', name=(payers[pid]&&payers[pid].name)||pid;
     var tot=targets.reduce(function(t,e){return t+(Number(e.amount)||0)},0);
     var msg=isPay?'Remove this '+fm(tot)+' payment from '+name+'? Use this for a payment entered by mistake, or one you gave back. '+name+' will owe it again.'
+                 :cancel?'Cancel this '+fm(tot)+' share? Nobody will owe it \u2014 not '+name+', not the '+targets[0].family+' family. Use this when the charge was a mistake or is waived.'
                  :'Move this '+fm(tot)+' share back to the '+targets[0].family+' family\u2019s own bill? '+name+' will no longer owe it.';
-    confirmDialog({title:isPay?'Remove payment?':'Move share back?',message:msg,confirmLabel:isPay?'Remove':'Move back',danger:isPay}).then(function(ok){
+    confirmDialog({title:isPay?'Remove payment?':cancel?'Cancel share?':'Move share back?',message:msg,confirmLabel:isPay?'Remove':cancel?'Cancel share':'Move back',danger:isPay||cancel}).then(function(ok){
         if(!ok)return;
         targets.forEach(function(e){
             var f=families[e.familyKey]; if(!f)return;
             var L=_payerLedgerOf(f), vid='prv_'+e.id;
             if(L.some(function(x){return x&&x.id===vid}))return;
             L.push({id:vid,payerId:pid,kind:'void',voidOf:e.id,amount:e.amount,date:today(),timestamp:Date.now()});
-            if(e.kind==='charge'){
+            if(e.kind==='charge'&&!cancel){
                 if(!Array.isArray(f.charges))f.charges=[];
                 var chg={id:'prback_'+e.id,category:'Share moved back',description:(e.description||'Share')+' \u2014 moved back from '+name,
                     amount:Number(e.amount)||0,date:today(),timestamp:Date.now()};
@@ -18808,7 +18846,9 @@ function voidPayerLine(pid,lineId){
             }
         });
         save(); closeModal('dynModal');
-        toast(isPay?fm(tot)+' payment removed \u2014 '+name+' owes '+fm(_payerAccount(pid).balance):fm(tot)+' moved back to '+targets[0].family+'\u2019s bill');
+        toast(isPay?fm(tot)+' payment removed \u2014 '+name+' owes '+fm(_payerAccount(pid).balance)
+            :cancel?fm(tot)+' share cancelled \u2014 '+name+' owes '+fm(_payerAccount(pid).balance)
+            :fm(tot)+' moved back to '+targets[0].family+'\u2019s bill');
         if(curPage==='familydetail')renderFamilyDetailPage(); else if(typeof renderBilling==='function')renderBilling();
     });
 }
@@ -19222,6 +19262,14 @@ function issueCreditForFamily(famKey){
     h+='<div id="crCreditFields">';
     h+='<div style="background:var(--s50);padding:10px 14px;border-radius:var(--r);margin-bottom:14px;font-size:.8rem;color:var(--s600)">A credit only adjusts what the family owes in Campistry — no money is returned to a card. It stays on the household account for next summer, a sibling, or a canteen top-up. To actually send money back to a parent, use one of the Refund types instead.</div>';
     h+='<div style="display:grid;grid-template-columns:2fr 1fr;gap:10px">';
+    // A credit here is the household's (TED-189): a fund's share of a split
+    // charge is cancelled on the fund's own account, never by this credit.
+    if(famKey){try{var _op=_familyOtherPayers(famKey);
+        if(_op.length)h+='<div style="background:#FFFBEB;padding:8px 12px;border-radius:var(--r);margin-bottom:10px;font-size:.78rem;color:var(--s600)">Part of this bill is paid by '
+            +_op.map(function(o){return esc(o.name)+' ('+fm(o.share)+')'}).join(', ')
+            +'. A credit here comes off <strong>'+esc((families[famKey]||{}).name||'')+'</strong>\u2019s own share only. To cancel a fund\u2019s share, use '
+            +'<a href="#" onclick="CampistryMe.payerLines(\''+je(_op[0].payerId)+'\');return false">that payer\u2019s account \u2192 Cancel share</a>.</div>';
+    }catch(_){}}
     h+='<div class="me-field"><label>Reason</label><input type="text" id="crReason" class="me-input" placeholder="e.g., Referral credit, adjustment"></div>';
     h+='<div class="me-field"><label>Amount ($)</label><input type="number" id="crAmount" class="me-input" placeholder="0.00" step="0.01" min="0"></div>';
     h+='</div></div>';
@@ -24682,7 +24730,7 @@ window.CampistryMe={
     ptDownloadTemplate:ptDownloadTemplate,ptUploadTemplate:ptUploadTemplate,
     finSetTab:finSetTab,finAddStaff:finAddStaff,finEditStaff:finEditStaff,finStaffModal:finStaffModal,_staffPhotoPick:_staffPhotoPick,_staffPhotoClear:_staffPhotoClear,finRemoveStaff:finRemoveStaff,
     finAddExpense:finAddExpense,finRemoveExpense:finRemoveExpense,
-    finAddPayment:finAddPayment,finRemovePayment:finRemovePayment,recordPayerPayment:recordPayerPayment,payerLines:payerLines,voidPayerLine:voidPayerLine,
+    finAddPayment:finAddPayment,finRemovePayment:finRemovePayment,recordPayerPayment:recordPayerPayment,resumeAutopayAfterDispute:resumeAutopayAfterDispute,payerLines:payerLines,voidPayerLine:voidPayerLine,
     sendPayLink:sendPayLink,copyPayLink:copyPayLink,toggleBillingAccess:toggleBillingAccess,
     monthlyPlan:monthlyPlan,toggleFamilyAutopay:toggleFamilyAutopay,cancelMonthlyPlan:cancelMonthlyPlan,
     _mpGenerate:_mpGenerate,_mpBasis:_mpBasis,_mpPreview:_mpPreview,_mpAddRow:_mpAddRow,_mpUpdateTotal:_mpUpdateTotal,_mpSwitchTab:_mpSwitchTab,

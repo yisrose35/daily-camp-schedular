@@ -65,6 +65,25 @@ BEGIN
     -- 5. never more than the top-up had left: $30, $10 refunded by Campistry → at most $20
     r := public.record_canteen_stripe_reversal(c, 'pi_c', 're_big', 30, 'refund', NULL);
     IF (r->>'amount')::numeric <> 20 THEN RAISE EXCEPTION 'more than the top-up had left: %', r; END IF;
+    -- TED-191: repeated partial refunds, each once; never past what is left
+    PERFORM public.credit_canteen_balance_from_stripe(p_camp_id => c, p_camper_name => 'Dov', p_amount => 30, p_payment_intent_id => 'pi_d');
+    r := public.record_canteen_stripe_reversal(c, 'pi_d', 're_p1', 10, 'refund', NULL);
+    r := public.record_canteen_stripe_reversal(c, 'pi_d', 're_p1', 10, 'refund', NULL);
+    r := public.record_canteen_stripe_reversal(c, 'pi_d', 're_p2', 10, 'refund', NULL);
+    SELECT balance INTO bal FROM camp_canteen_accounts WHERE camp_id = c AND account_key = 'Dov';
+    IF bal <> 10 THEN RAISE EXCEPTION 'TED-191: two $10 refunds (one sent twice) should leave $10, not %', bal; END IF;
+    r := public.record_canteen_stripe_reversal(c, 'pi_d', 're_p3', 25, 'refund', NULL);
+    SELECT balance INTO bal FROM camp_canteen_accounts WHERE camp_id = c AND account_key = 'Dov';
+    IF (r->>'amount')::numeric <> 10 OR bal <> 0 THEN RAISE EXCEPTION 'TED-191: a $25 refund of the last $10 took % (balance %)', r->>'amount', bal; END IF;
+    r := public.record_canteen_stripe_reversal(c, 'pi_d', 're_p4', 5, 'refund', NULL);
+    IF r->>'nothing' IS DISTINCT FROM 'already_refunded' THEN RAISE EXCEPTION 'TED-191: past a fully refunded top-up: %', r; END IF;
+    -- the same dispute told twice (created, then funds_withdrawn): once
+    PERFORM public.credit_canteen_balance_from_stripe(p_camp_id => c, p_camper_name => 'Eli', p_amount => 20, p_payment_intent_id => 'pi_e');
+    r := public.record_canteen_stripe_reversal(c, 'pi_e', 'dp_e', 20, 'dispute', NULL);
+    r := public.record_canteen_stripe_reversal(c, 'pi_e', 'dp_e', 20, 'dispute', NULL);
+    SELECT balance INTO bal FROM camp_canteen_accounts WHERE camp_id = c AND account_key = 'Eli';
+    IF bal <> 0 OR (r->>'alreadyRecorded')::boolean IS NOT TRUE THEN RAISE EXCEPTION 'TED-191: a dispute taken twice: % / %', bal, r; END IF;
+
     r := public.record_canteen_stripe_reversal(c, 'pi_zzz', 're_x', 5, 'refund', NULL);
     IF r->>'error' IS DISTINCT FROM 'deposit_not_found' THEN RAISE EXCEPTION 'not a top-up: %', r; END IF;
     IF has_function_privilege('authenticated', 'public.record_canteen_stripe_reversal(uuid,text,text,numeric,text,text)', 'EXECUTE') THEN

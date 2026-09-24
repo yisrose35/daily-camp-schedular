@@ -103,3 +103,13 @@ BEGIN
 END $$;
 REVOKE ALL ON FUNCTION public.submit_canteen_purchase_once(uuid, text, text, numeric, text, date, bigint) FROM public, anon;
 GRANT EXECUTE ON FUNCTION public.submit_canteen_purchase_once(uuid, text, text, numeric, text, date, bigint) TO authenticated;
+
+-- Pasted again after 289 (which added the sold items and replaced this
+-- signature): keep only 289's, or the API cannot choose between the two.
+DO $$
+BEGIN
+    IF to_regprocedure('public.submit_canteen_purchase_once(uuid,text,text,numeric,text,date,bigint,jsonb)') IS NOT NULL THEN
+        DROP FUNCTION IF EXISTS public.submit_canteen_purchase_once(uuid, text, text, numeric, text, date, bigint);
+        RAISE NOTICE '283: 289''s version is in place — kept it';
+    END IF;
+END $$;

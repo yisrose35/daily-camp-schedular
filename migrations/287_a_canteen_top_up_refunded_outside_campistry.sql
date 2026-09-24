@@ -78,7 +78,7 @@ DECLARE
     v_n     integer;
     now_ts  timestamptz := now();
 BEGIN
-    IF p_camp_id IS NULL OR v_pi IS NULL OR v_ref IS NULL OR p_kind NOT IN ('refund', 'dispute', 'dispute_won') THEN
+    IF p_camp_id IS NULL OR v_pi IS NULL OR v_ref IS NULL OR COALESCE(p_kind, '') NOT IN ('refund', 'dispute', 'dispute_won') THEN
         RETURN jsonb_build_object('success', false, 'error', 'missing_argument');
     END IF;
     SELECT * INTO dep FROM canteen_transactions

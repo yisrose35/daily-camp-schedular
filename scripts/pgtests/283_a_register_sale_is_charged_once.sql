@@ -80,7 +80,7 @@ BEGIN
     r := public.submit_canteen_purchase_once('f2830000-0000-0000-0000-000000000001', 'sale_x', 'Avi', 1, 'x', NULL, 8301);
     IF r->>'error' IS DISTINCT FROM 'not_authorized' THEN RAISE EXCEPTION 'a stranger charged a child: %', r; END IF;
     IF EXISTS (SELECT 1 FROM canteen_sale_keys WHERE sale_key = 'sale_x') THEN RAISE EXCEPTION 'a stranger left a key'; END IF;
-    IF has_function_privilege('anon', 'public.submit_canteen_purchase_once(uuid,text,text,numeric,text,date,bigint)', 'EXECUTE') THEN
+    IF has_function_privilege('anon', 'public.submit_canteen_purchase_once(uuid,text,text,numeric,text,date,bigint,jsonb)', 'EXECUTE') THEN
         RAISE EXCEPTION 'anyone can charge';
     END IF;
     IF has_table_privilege('authenticated', 'public.canteen_sale_keys', 'SELECT') THEN
