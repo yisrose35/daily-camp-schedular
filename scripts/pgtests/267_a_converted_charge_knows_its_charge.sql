@@ -117,6 +117,19 @@ BEGIN
     RAISE NOTICE 'ok  267 B: converted now: 40 -> re-price 55 -> cancel 0';
 END $$;
 
+-- A family with no ledger is saved exactly as the page sent it (no entries
+-- key appears from nowhere — that put every row out of step with the document).
+DO $$
+DECLARE m jsonb;
+BEGIN
+    m := public._merge_family_from_page('{"name":"N","charges":[{"id":"x","amount":5}]}'::jsonb,
+                                        '{"name":"N","charges":[{"id":"x","amount":5},{"id":"y","amount":6}]}'::jsonb);
+    IF m ? 'entries' THEN RAISE EXCEPTION 'the merge gave a family with no ledger an entries key: %', m; END IF;
+    IF public._link_converted_charges('{"charges":[{"id":"x","amount":5}]}'::jsonb) ? 'entries' THEN
+        RAISE EXCEPTION 'linking gave a family with no ledger an entries key';
+    END IF;
+END $$;
+
 \set verify_q `cat scripts/verify_identity_chain.sql`
 BEGIN;
 CREATE TEMP TABLE v267 AS :verify_q

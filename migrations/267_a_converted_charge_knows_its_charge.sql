@@ -43,9 +43,10 @@ DECLARE
     v_changed boolean := false;
     c         jsonb;
 BEGIN
-    IF p_fam IS NULL OR jsonb_typeof(p_fam) <> 'object'
-       OR jsonb_typeof(p_fam->'entries') <> 'array'
-       OR jsonb_typeof(p_fam->'charges') <> 'array' THEN
+    -- COALESCE: a missing key's type is NULL, and "NULL <> 'array'" is not true.
+    IF p_fam IS NULL OR COALESCE(jsonb_typeof(p_fam), '') <> 'object'
+       OR COALESCE(jsonb_typeof(p_fam->'entries'), '') <> 'array'
+       OR COALESCE(jsonb_typeof(p_fam->'charges'), '') <> 'array' THEN
         RETURN p_fam;
     END IF;
     v_entries := p_fam->'entries';
@@ -131,8 +132,8 @@ DECLARE
     e     jsonb;
 BEGIN
     IF p_server IS NULL OR p_merged IS NULL
-       OR jsonb_typeof(p_server->'entries') <> 'array'
-       OR jsonb_typeof(p_merged->'entries') <> 'array' THEN
+       OR COALESCE(jsonb_typeof(p_server->'entries'), '') <> 'array'
+       OR COALESCE(jsonb_typeof(p_merged->'entries'), '') <> 'array' THEN
         RETURN p_merged;
     END IF;
     FOR e IN SELECT * FROM jsonb_array_elements(p_merged->'entries') LOOP
