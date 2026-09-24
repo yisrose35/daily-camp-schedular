@@ -199,6 +199,8 @@ const FUNCTIONS_ON_NAMES = [
     'submit_camper_mail',
     'submit_canteen_deposit',
     'submit_canteen_purchase',
+    // 283's once-per-sale wrapper: the same arguments as the register's charge.
+    'submit_canteen_purchase_once',
     'submit_health_document',
     'submit_link_form_response',
     'submit_link_tip',
@@ -286,6 +288,7 @@ const WHY_THE_NAME_IS_SAFE = {
     refund_canteen_deposit_from_stripe: 'takes an id',
     reserve_canteen_refund: 'takes an id',             // 275
     submit_canteen_purchase: 'takes an id',
+    submit_canteen_purchase_once: 'takes an id',       // 283
     update_canteen_autoreload_state: 'takes an id',
 
     // Accept an id alongside the name.

@@ -2451,26 +2451,48 @@ function addCardSurcharge(famKey){
     _surchargePreview();
 }
 
+// The discount for a bank payment made ONLINE (TED-160): a pay link, a bank
+// debit, a bank autopay instalment — Record Payment never sees those. The
+// office picks the payment; each gets its discount once (the same
+// cdisc_<payment id> line Record Payment posts), so it cannot be given twice.
+function _onlineBankPaymentsWithoutDiscount(famKey){
+    var f=families[famKey]; if(!f)return [];
+    var had={};
+    (f.credits||[]).forEach(function(c){ if(c&&c.cashDiscount&&c.paymentId!=null)had[String(c.paymentId)]=1; });
+    return _famPaymentsIn(f).filter(function(p){
+        return (p.stripePaymentIntentId||p.byopTransactionId)&&!_paidByCard(p)&&!had[String(p.id)];
+    });
+}
 function _giveCashDiscount(famKey){
     var f=families[famKey];
     if(!f){toast('Family not found','error');return}
+    var pays=_onlineBankPaymentsWithoutDiscount(famKey);
+    if(!pays.length){
+        showModal('Discount for not paying by card','<p style="font-size:.84rem;color:var(--s600);margin:0;line-height:1.6">'
+            +'Every bank payment '+esc(f.name||'this family')+' made online already has its discount. Cheques, cash and bank transfers you record with '
+            +'<strong>Record Payment</strong> get theirs automatically.</p>',function(){closeModal('dynModal');});
+        return;
+    }
     var owed=Math.max(0,(buildFamilyLedgers()[famKey]||{}).balance||0);
     var h='<div class="me-modal-form">';
-    h+='<p style="font-size:.84rem;color:var(--s600);margin:0 0 10px;line-height:1.6">Cheques, cash and bank transfers you record with <strong>Record Payment</strong> get the discount automatically. '
-      +'Use this for a bank payment the family made <strong>online</strong> (a pay link or a bank debit) \u2014 enter what they paid, before the discount.</p>';
-    h+='<div class="me-field"><label>Paid by bank ($)</label><input type="number" id="cdAmt" class="me-input" step="0.01" min="0"></div>';
-    h+='<p style="font-size:.78rem;color:var(--s500);margin:6px 0 0">They owe '+fm(owed)+' now.</p>';
+    h+='<p style="font-size:.84rem;color:var(--s600);margin:0 0 10px;line-height:1.6">Bank payments made <strong>online</strong> that have not had their discount yet. '
+      +'Cheques, cash and bank transfers you record with <strong>Record Payment</strong> get it automatically.</p>';
+    h+='<div class="me-field"><label>Bank payment</label><select id="cdPay" class="me-input">'
+      +pays.map(function(p){return '<option value="'+esc(String(p.id))+'">'+esc(p.date||'')+' \u2014 '+fm(p.amount)+(p.method?' ('+esc(p.method)+')':'')+'</option>'}).join('')
+      +'</select></div>';
     h+='</div>';
     showModal('Discount for not paying by card',h,function(){
-        var amt=parseFloat((document.getElementById('cdAmt')||{}).value)||0;
-        if(!(amt>0)){toast('Enter what they paid by bank','error');return}
+        var id=(document.getElementById('cdPay')||{}).value;
+        var p=pays.find(function(x){return String(x.id)===String(id)});
+        if(!p){toast('Pick the payment','error');return}
         // What they owed before that payment is what it settled against.
-        var cd=_cashDiscountFor(owed+amt,amt,'ach');
+        var cd=_cashDiscountFor(owed+Number(p.amount||0),p.amount,'ach');
         if(!(cd.discount>0)){toast('That works out to no discount','error');return}
-        var n=_postCashDiscount(f,{id:'manual_'+Date.now(),date:today()},cd);
+        var n=_postCashDiscount(f,p,cd);
+        if(!(n>0)){toast('That payment already has its discount','error');return}
         save();closeModal('dynModal');
         if(curPage==='familydetail')renderFamilyDetailPage();else renderBilling();
-        toast(fm(n)+' off '+(f.name||'the account')+' for not paying by card');
+        toast(fm(n)+' off '+(f.name||'the account')+' for the '+fm(p.amount)+' bank payment');
     },'Give discount');
 }
 
@@ -16166,41 +16188,24 @@ function finAddExpense(){
     save();renderFinance();toast('Expense added');
 }
 function finRemoveExpense(i){finExpenses.splice(i,1);save();renderFinance();toast('Removed')}
+// Finance's "+ Record Payment" is Billing's (TED-157). It used to save a row
+// with only a typed family name and nothing on the family's bill, so Billing,
+// the parent's balance in Link and the nightly autopay never saw it — a $1,000
+// cheque recorded there was charged again that night. A family's payment has
+// one way in: the family picker, the ledger entry, the cheque discount.
 function finAddPayment(){
-    if(!_secEdit('finance','Recording a payment'))return;
-
-    // A modal rather than a prompt chain, so the method comes from the camp's
-    // payment policy instead of whatever the user types into a text box.
-    var today=new Date().toISOString().split('T')[0];
-    var h='<div class="me-modal-form">';
-    h+='<div class="me-field"><label>Family</label><input type="text" id="fapFamily" class="me-input" placeholder="Family name"></div>';
-    h+='<div style="display:grid;grid-template-columns:1fr 1fr;gap:10px">';
-    h+='<div class="me-field"><label>Amount ($)</label><input type="number" id="fapAmount" class="me-input" step="0.01" min="0" placeholder="0.00"></div>';
-    h+='<div class="me-field"><label>Date</label><input type="date" id="fapDate" class="me-input" value="'+today+'"></div>';
-    h+='</div>';
-    h+='<div class="me-field"><label>Method</label><select id="fapMethod" class="me-input">'+_payOptions('tuition')+'</select>'+_payBlockedNote('tuition')+'</div>';
-    h+='</div>';
-    showModal('Record Payment',h,function(){
-        var family=(document.getElementById('fapFamily').value||'').trim();
-        if(!family){toast('Family name is required','error');return}
-        var amount=Math.round((parseFloat(document.getElementById('fapAmount').value)||0)*100)/100;
-        // A payment is money IN (TED-108): "-500" was booked as a $500 refund
-        // nobody made. Money back to a family is Issue Credit/Refund.
-        if(!(amount>0)){toast('Enter an amount above zero — to give money back, use Issue Credit/Refund','error');return}
-        var method=document.getElementById('fapMethod').value;
-        if(!_payAllowed(method,'tuition')){toast('That payment method isn\'t accepted for tuition.','error');return}
-        finPayments.push({id:Date.now(),family:family,amount:amount,method:method,
-                          date:document.getElementById('fapDate').value||today,status:'paid'});
-        closeModal('dynModal');
-        save();renderFinance();toast('Payment recorded');
-    });
+    if(!_secEdit('billing','Recording a payment'))return;
+    openPaymentForFamily(null);
 }
-function finRemovePayment(id){
+// Finance's ✕ takes the payment off the family's bill too (TED-158) — it used
+// to remove only the list row, leaving the payment (and its discount) on the
+// ledger, so the family owed nothing for money the camp never kept.
+async function finRemovePayment(id){
     // ★ remove by stable id, not by render-index (the list is sorted before display, so an
     //   index would target the wrong row; identical rows were also indistinguishable).
-    var idx=finPayments.findIndex(function(p){return String(p.id)===String(id)});
-    if(idx<0){toast('Payment not found','error');return}
-    finPayments.splice(idx,1);save();renderFinance();toast('Removed');
+    var p=finPayments.find(function(x){return x&&String(x.id)===String(id)});
+    if(!p){toast('Payment not found','error');return}
+    await _removeRecordedPayment(p);
 }
 
 function finSetBudget(){
@@ -18156,7 +18161,17 @@ function renderFamilyDetailPage(){
     var _wayD=_familyOnItsWay(l.famKey);
     h+='<div style="text-align:right"><div style="font-size:.72rem;font-weight:700;color:var(--s400);text-transform:uppercase;letter-spacing:.05em">Balance</div>'
         +'<div style="font-size:2rem;font-weight:800;line-height:1.1;color:'+(l.balance>0?'var(--err)':'var(--ok)')+'">'+fm(l.balance)+'</div>'
-        +(_wayD.amount>0?'<div style="font-size:.78rem;color:var(--s600);margin-top:4px">'+fm(_wayD.amount)+' on its way \u2014 bank debits take a few business days</div>':'')+'</div>';
+        +(_wayD.amount>0?'<div style="font-size:.78rem;color:var(--s600);margin-top:4px">'+fm(_wayD.amount)+' on its way \u2014 bank debits take a few business days</div>':'')
+        +(function(){
+            // Bank payments made online that have not had the camp's "not paying
+            // by card" discount yet (TED-160) — said here, where the office looks.
+            try{
+                var F=_cfAPI(); if(!F||F.normalize(enrollSettings.cardFeePolicy).mode!=='cash_discount')return '';
+                var n=_onlineBankPaymentsWithoutDiscount(l.famKey).length;
+                return n?'<div style="font-size:.78rem;color:var(--s600);margin-top:4px">'+n+' bank payment'+(n!==1?'s':'')+' made online without the not-paying-by-card discount \u2014 '
+                    +'<a href="#" onclick="CampistryMe.addCardSurcharge(\''+je(l.famKey)+'\');return false">give it</a></div>':'';
+            }catch(_){return ''}
+        })()+'</div>';
     h+='</div>';
 
     // Action bar — moved above everything else. What you can DO on this
@@ -18422,7 +18437,8 @@ function openPaymentForFamily(famKey){
         f.totalPaid=(f.totalPaid||0)+amt;
         f.balance=Math.max(0,(f.balance||0)-amt);
         var _disc=_postCashDiscount(f,_payRow,_cd);
-        save();closeModal('dynModal');if(curPage==='familydetail')renderFamilyDetailPage();else renderBilling();
+        save();closeModal('dynModal');
+        if(curPage==='finance')renderFinance();else if(curPage==='familydetail')renderFamilyDetailPage();else renderBilling();
         toast('Payment of '+fm(amt)+' recorded for '+f.name+(_disc>0?' \u2014 with '+fm(_disc)+' off for not paying by card':''));
     });
     ['payFamKey','payAmount','payMethod'].forEach(function(id){
@@ -18661,6 +18677,30 @@ function _surchargeKept(f){
     });
     return Math.max(0,Math.round(t*100)/100);
 }
+// The "not paying by card" discount a payment earned, and the share of it a
+// refund of `chunk` takes back when `before` of the payment was already
+// refunded (TED-160): refunding the payment, the family keeps no discount for
+// it. Differences of cumulative shares, so partial refunds add up exactly.
+function _cashDiscountOf(f,p){
+    return (f&&Array.isArray(f.credits)?f.credits:[]).filter(function(c){return c&&c.cashDiscount&&String(c.paymentId)===String(p.id)})
+        .reduce(function(t,c){return t+(Number(c.amount)||0)},0);
+}
+function _cashDiscountBackOf(f,p,before,chunk){
+    var d=_cashDiscountOf(f,p), amt=Number(p.amount)||0;
+    if(!(d>0)||!(amt>0))return 0;
+    var r2=function(n){return Math.round(n*100)/100};
+    return Math.max(0,r2(r2(d*Math.min(amt,before+chunk)/amt)-r2(d*before/amt)));
+}
+function _refundDiscountBack(f,amount){
+    var left=amount, t=0;
+    _famRefundableOnline(f).forEach(function(d){
+        if(left<=0.001)return;
+        var chunk=Math.round(Math.min(d.remaining,left)*100)/100;
+        t+=_cashDiscountBackOf(f,d.p,Number(d.p.amount)-d.remaining,chunk);
+        left=Math.round((left-chunk)*100)/100;
+    });
+    return Math.round(t*100)/100;
+}
 // The surcharge a refund of `amount` returns — worked out chunk by chunk the
 // way the refund itself is drawn (newest payment first), for the window's
 // "balance owed after this refund" (TED-146).
@@ -18770,9 +18810,18 @@ function _crUpdateBalancePreview(){
     // A card refund also takes the surcharge's share off the bill (TED-146).
     var _type=(document.getElementById('crType')||{}).value;
     var _fee=_type==='refund_gateway'?_refundFeeShare(f,amt):0;
-    var newBalance=Math.round(((f.balance||0)+amt-_fee)*100)/100;
+    var _dback=_type==='refund_gateway'?_refundDiscountBack(f,amt):0;
+    var newBalance=Math.round(((f.balance||0)+amt-_fee+_dback)*100)/100;
     previewEl.innerHTML='Balance owed after this refund: <strong>'+fm(newBalance)+'</strong> (currently '+fm(f.balance||0)+')'
-        +(_fee>0?' \u2014 '+fm(_fee)+' of the refund is card surcharge, which comes off their bill too':'');
+        +(_fee>0?' \u2014 '+fm(_fee)+' of the refund is card surcharge, which comes off their bill too':'')
+        +(_dback>0?' \u2014 the '+fm(_dback)+' not-paying-by-card discount that payment earned goes back on their bill':'');
+    // An offline refund is not tied to a payment, so its discount cannot be
+    // worked out here — say so, rather than leave the family with it (TED-160).
+    if(_type==='refund_offline'){
+        var _cdT=(f.credits||[]).filter(function(c){return c&&c.cashDiscount}).reduce(function(t,c){return t+(Number(c.amount)||0)},0);
+        if(_cdT>0)previewEl.innerHTML+='<div style="font-size:.74rem;color:#92400E;margin-top:4px">This family was given '+fm(_cdT)
+            +' off for not paying by card. If this refund gives back a payment that earned it, add that discount back with <strong>Add Charge</strong>.</div>';
+    }
 }
 // The "Unmatched" stat tile on Billing sums real money (payments recorded
 // with a family/camper name that never matched an actual family record) that
@@ -18933,7 +18982,7 @@ function issueCreditForFamily(famKey){
             // Which card payment carried which surcharge, before any of this
             // refund is booked (TED-141, TED-146); each chunk returns its own
             // payment's share.
-            var _carried=_surchargeCarried(f), _feeBack=0, _feeCredits=[];
+            var _carried=_surchargeCarried(f), _feeBack=0, _feeCredits=[], _discBack=0, _discBackCharges=[];
             toast('Processing refund…');
             for(var ci=0; ci<chunks.length && remaining>0.001; ci++){
                 var p=chunks[ci].p;
@@ -19004,6 +19053,16 @@ function issueCreditForFamily(famKey){
                         refundId:refId||null,refundOf:p.id,
                         note:'Card surcharge returned in proportion to the '+fm(chunk)+' refund of this card payment',timestamp:Date.now()});
                 }
+                // ...and the "not paying by card" discount this payment earned
+                // comes back in the same proportion (TED-160), carrying the
+                // refund's id so a refund that fails gives it back again (281).
+                var _db=_cashDiscountBackOf(f,p,_before,chunk);
+                if(_db>0){
+                    _discBack=Math.round((_discBack+_db)*100)/100;
+                    _discBackCharges.push({id:'cdback_'+Date.now()+'_'+ci,category:'Discount returned',
+                        description:'Discount for not paying by card, returned with the '+fm(chunk)+' refund of this payment',
+                        amount:_db,date:today(),timestamp:Date.now(),cashDiscountBack:true,paymentId:p.id,refundId:refId||null});
+                }
                 remaining=Math.round((remaining-chunk)*100)/100;
             }
             if(done<=0){toast('Refund failed'+(failMsg?': '+failMsg:''),'error');return}
@@ -19020,6 +19079,11 @@ function issueCreditForFamily(famKey){
                 });
                 f.balance=Math.round(((f.balance||0)-_feeBack)*100)/100;
             }
+            if(_discBackCharges.length){
+                if(!Array.isArray(f.charges))f.charges=[];
+                _discBackCharges.forEach(function(_dc){ f.charges.push(_dc); _postLedgerCharge(f,_dc); });
+                f.balance=Math.round(((f.balance||0)+_discBack)*100)/100;
+            }
             save();closeModal('dynModal');
             // The refunds (finPayments pushes + save) are already done here — a
             // rendering failure below must never look like the refund vanished.
@@ -19030,7 +19094,8 @@ function issueCreditForFamily(famKey){
                 toast('Refund recorded, but the page failed to refresh (see console) — reload to see it.','error');
             }
             if(failMsg){ toast('Refunded '+fm(done)+' before an error stopped the rest: '+failMsg,'error'); }
-            else { toast('Refunded '+fm(done)+' to card/bank for '+(f.name||'family')+(_feeBack>0?' \u2014 '+fm(_feeBack)+' of it was the card surcharge, taken off their bill':'')); }
+            else { toast('Refunded '+fm(done)+' to card/bank for '+(f.name||'family')+(_feeBack>0?' \u2014 '+fm(_feeBack)+' of it was the card surcharge, taken off their bill':'')
+                +(_discBack>0?' \u2014 the '+fm(_discBack)+' discount that payment earned is back on their bill':'')); }
             return;
         }
         if(type==='refund_offline'){
@@ -19248,23 +19313,60 @@ async function printTaxStatement(famKey,year){
 }
 
 async function removePayment(idx){
-    var ok=await confirmDialog({title:'Remove Payment?',message:'This will remove the payment record and adjust the family balance.',confirmLabel:'Remove',danger:true});
-    if(!ok)return;
     var p=finPayments[idx];
-    var captured=p?JSON.parse(JSON.stringify(p)):null;
-    if(p){
-        var f=Object.values(families).find(function(f){return f.name===p.family});
-        if(f){f.totalPaid=Math.max(0,(f.totalPaid||0)-p.amount);f.balance=(f.balance||0)+p.amount}
+    if(!p){toast('Payment not found','error');return}
+    await _removeRecordedPayment(p);
+}
+
+// Take a payment the office recorded back off the books (TED-158): a cheque
+// entered by mistake, or one that bounced. The family owes it again: its
+// ledger entry is reversed (the history keeps both), the "not paying by card"
+// discount that came with it goes too, and the row leaves the payments list.
+// Money that went through a processor is not removed here — it was really
+// taken, and giving it back is a refund.
+async function _removeRecordedPayment(p){
+    if(!_secEdit('billing','Removing a payment'))return false;
+    if(p.stripePaymentIntentId||p.byopTransactionId){
+        toast('That payment went through the card processor \u2014 to give the money back, use Issue Credit/Refund.','error');
+        return false;
     }
-    finPayments.splice(idx,1);save();if(curPage==='familydetail')renderFamilyDetailPage();else renderBilling();
-    toast('Payment removed','ok',{actionLabel:'Undo',onAction:function(){
-        if(captured){
-            var f=Object.values(families).find(function(f){return f.name===captured.family});
-            if(f){f.totalPaid=(f.totalPaid||0)+captured.amount;f.balance=Math.max(0,(f.balance||0)-captured.amount)}
-            finPayments.splice(idx,0,captured);
+    var fk=(p.familyKey&&families[p.familyKey])?p.familyKey:(typeof _payFamilyByName==='function'?_payFamilyByName(p):null);
+    var f=fk?families[fk]:null;
+    var disc=f&&Array.isArray(f.credits)?f.credits.filter(function(c){return c&&c.cashDiscount&&String(c.paymentId)===String(p.id)}):[];
+    var discAmt=disc.reduce(function(t,c){return t+(Number(c.amount)||0)},0);
+    var amt=Number(p.amount)||0;
+    var ok=await confirmDialog({title:'Remove this payment?',
+        message:(amt<0?'The '+fm(-amt)+' refund':'The '+fm(amt)+' payment')+(p.method?' ('+esc(_payLabel(p.method)||p.method)+')':'')
+            +(f?' comes off '+esc(f.name)+'\u2019s account \u2014 '+(amt<0?'the refund is undone.':'they will owe it again'
+              +(discAmt>0?', and the '+fm(discAmt)+' discount that came with it goes too.':'.')):' is removed from the list.'),
+        confirmLabel:'Remove payment',danger:true});
+    if(!ok)return false;
+    if(f){
+        var B=_billingCore();
+        var refs=_paymentRefsOf(p);
+        if(B&&Array.isArray(f.entries)){
+            f.entries.filter(function(e){
+                return e&&!e.reverses&&(e.kind==='payment'||e.kind==='refund')&&refs.some(function(r){
+                    return e.id==='le_pay_'+r||(e.source&&String(e.source.paymentId||'')===r);
+                });
+            }).forEach(function(e){
+                if(!B.isReversed(f,e.id))B.reverse(f,e.id,{note:'Payment removed by the office'+(p.reference?' ('+p.reference+')':'')});
+            });
+            disc.forEach(function(c){
+                var le='le_'+c.id;
+                if(B.find(f,le)&&!B.isReversed(f,le))B.reverse(f,le,{note:'The discount that came with a removed payment'});
+            });
         }
-        save();if(curPage==='familydetail')renderFamilyDetailPage();else renderBilling();toast('Payment restored');
-    }});
+        if(disc.length)f.credits=f.credits.filter(function(c){return disc.indexOf(c)<0});
+        if(amt>0){f.totalPaid=Math.max(0,(f.totalPaid||0)-amt);f.balance=Math.round(((f.balance||0)+amt+discAmt)*100)/100;}
+        else{f.balance=Math.round(((f.balance||0)+amt)*100)/100;}
+    }
+    var i=finPayments.indexOf(p);
+    if(i>=0)finPayments.splice(i,1);
+    save();
+    try{ if(curPage==='finance')renderFinance();else if(curPage==='familydetail')renderFamilyDetailPage();else renderBilling(); }catch(_){}
+    toast('Payment removed'+(f?' \u2014 '+(f.name||'the family')+'\u2019s balance is back up by '+fm(Math.max(0,amt)+discAmt):''));
+    return true;
 }
 
 // ═══════════════════════════════════════════════════════════════

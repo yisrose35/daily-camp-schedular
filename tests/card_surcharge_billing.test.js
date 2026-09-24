@@ -134,7 +134,7 @@ test('TED-144: a payment still on its way or one that failed is not refundable (
 });
 
 test('TED-141/146: Billing\'s card refund posts one surcharge credit per refund, carrying the refund\'s id', () => {
-    assert.match(ME, /var _carried=_surchargeCarried\(f\), _feeBack=0, _feeCredits=\[\];/);
+    assert.match(ME, /var _carried=_surchargeCarried\(f\), _feeBack=0, _feeCredits=\[\], _discBack=0, _discBackCharges=\[\];/);
     assert.match(ME, /var _share=_feeShareOfRefund\(_carried\[String\(p\.id\)\]\|\|0,p,_before,chunk\);/);
     assert.match(ME, /refundId:refId\|\|null,refundOf:p\.id,/);
     assert.match(ME, /cardFeeReturn:true/);
@@ -148,7 +148,8 @@ test('TED-146: the window\'s "Balance owed after this refund" includes the surch
         normalizePersonId: () => null, camperNameById: () => null, REFUND_WINDOW_DAYS: 120, _paymentAgeDays: () => 1,
         fm: (n) => '$' + Number(n).toFixed(2), document: { getElementById: (id) => els[id] || null } };
     const names = ['_famPaymentsIn', '_refundedFrom', '_paidByCard', '_surchargeCarried', '_feeShareOfRefund', '_surchargeShare',
-        '_refundFeeShare', '_famRefundableOnline', '_famRefundableOnlineAll', '_famRefundablePayments', '_crUpdateBalancePreview'];
+        '_refundFeeShare', '_famRefundableOnline', '_famRefundableOnlineAll', '_famRefundablePayments', '_crUpdateBalancePreview',
+        '_refundDiscountBack', '_cashDiscountOf', '_cashDiscountBackOf'];
     new Function(...Object.keys(ctx), names.map(cut).join('\n') + '\n_crUpdateBalancePreview();')(...Object.values(ctx));
     assert.match(els.crBalancePreview.innerHTML, /Balance owed after this refund: <strong>\$970\.87<\/strong>/, els.crBalancePreview.innerHTML);
     assert.match(els.crBalancePreview.innerHTML, /\$29\.13 of the refund is card surcharge/);

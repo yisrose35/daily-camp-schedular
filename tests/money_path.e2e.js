@@ -22,7 +22,7 @@
 //   1. the owner signs in and the app resolves their camp and role from the DB
 //   2. a camper is added on the Me page and saved      → camp_people gets an id
 //   3. the canteen desk takes a deposit                → the ledger gets a row
-//   4. the register charges a purchase                 → submit_canteen_purchase
+//   4. the register charges a purchase                 → submit_canteen_purchase_once (283)
 //  4b. the offline register exports, sells, imports    → canteen_office_import_offline
 //   5. a shop order is charged to the camp bill        → settle_shop_order
 //
@@ -330,7 +330,7 @@ function kvRead(db, key) {
             credits.length ? credits[0].kind + '/' + credits[0].method : 'no row');
 
         // ── 4. the register charges a purchase, server-side ─────────────────
-        step(4, 'the register charges $' + PURCHASE + ' through submit_canteen_purchase');
+        step(4, 'the register charges $' + PURCHASE + ' through submit_canteen_purchase_once (a sale is charged once, 283)');
         // The register is its own page, not a tab — a till runs on a device that
         // never leaves it.
         await open('campistry_snacks_pos.html', () => !!window.CampistrySnacksPOS);
@@ -348,10 +348,18 @@ function kvRead(db, key) {
         await page.click('#chargeBtn');
 
         // The charge is an RPC, so wait for the RPC — not for a toast.
-        await waitFor('submit_canteen_purchase to be called', () =>
-            bridge.calls.slice(posCalls).some(c => c.fn === 'submit_canteen_purchase'), 20000);
+        await waitFor('submit_canteen_purchase_once to be called', () =>
+            bridge.calls.slice(posCalls).some(c => c.fn === 'submit_canteen_purchase_once'), 20000);
 
-        const charge = bridge.calls.slice(posCalls).filter(c => c.fn === 'submit_canteen_purchase');
+        const charge = bridge.calls.slice(posCalls).filter(c => c.fn === 'submit_canteen_purchase_once');
+        // TED-159: the sale carries its key, and the old one-request-per-tap
+        // function is not called beside it
+        check('the register sends a key for the sale, so a repeat cannot charge twice',
+            charge.length === 1 && (charge[0].args || []).includes('p_sale_key'),
+            charge.length ? 'args=' + (charge[0].args || []).join(',') : 'never called');
+        check('the register did not also charge the old way',
+            !bridge.calls.slice(posCalls).some(c => c.fn === 'submit_canteen_purchase'),
+            bridge.calls.slice(posCalls).map(c => c.fn).join(','));
         check('the register went through the server, not the offline fallback',
             charge.length === 1 && !charge[0].error,
             charge.length ? (charge[0].error || 'ok') : 'never called');

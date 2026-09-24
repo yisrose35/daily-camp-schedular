@@ -41,15 +41,51 @@ test('TED-156: paused by the camp — the note, and a "Switch it back on" button
     assert.match(LINK, /id="arOnBtn" onclick="saveAutoReload\(\)"[^>]*>Switch it back on</);
 });
 
-test('TED-156: on, or off by the parent — no "Switch it back on", and no camp note', () => {
+test('TED-156: on — no "Switch it back on"; off by the parent — no camp note', () => {
     const on = show({ enabled: true, thresholdEnabled: true, cardOnFile: true });
     assert.strictEqual(on.arOnBtn.style.display, 'none');
     const off = show({ enabled: false, thresholdEnabled: true, cardOnFile: true });
-    assert.strictEqual(off.arOnBtn.style.display, 'none');
     assert.match(off.arStatusMsg.innerHTML, /Auto-reload is off\./);
+    assert.ok(!/switched off<\/strong> —/.test(off.arStatusMsg.innerHTML));
 });
 
 test('TED-143: Link tells the parent it only charges while camp is in session', () => {
     assert.match(LINK, /Auto-reload only charges within this window, and only on days camp is in session\./);
     assert.ok(!/the camp stops it after the season either way/.test(LINK));
+});
+
+// ── TED-161: the parent's own "Turn off" ─────────────────────────────────────
+test('TED-161: turned off by the parent — "Switch it back on" is there when it was set up before', () => {
+    const els = show({ enabled: false, thresholdEnabled: true, thresholdAmount: 5, thresholdReloadAmount: 20, cardOnFile: true });
+    assert.match(els.arStatusMsg.innerHTML, /Auto-reload is off\./);
+    assert.strictEqual(els.arOnBtn.style.display, '', 'no way back on after the parent\'s own Turn off');
+    const never = show({ enabled: false });
+    assert.strictEqual(never.arOnBtn.style.display, 'none', 'never set up: ticking a trigger is the way on');
+});
+
+function autoSave(ar, targetId, checked) {
+    const els = {};
+    const el = (id) => (els[id] = els[id] || { id, value: '', checked: false });
+    const sent = [];
+    const ctx = { document: { getElementById: el }, setTimeout: (f) => f(), clearTimeout() {},
+        _activeCanteenChild: () => ({ name: 'Avi Gold', campId: 'camp1', autoReload: ar }),
+        _saveAutoReloadConfig: (c, cfg) => sent.push(cfg), _arSaveTimer: null };
+    vm.createContext(ctx);
+    vm.runInContext('var _arSaveTimer=null;\n' + cut('_arAutoSave') + '\nthis.save = _arAutoSave;', ctx);
+    el('arThEnabled').checked = true; el('arThAmount').value = '5'; el('arThReload').value = '30';
+    ctx.save({ target: el(targetId), type: 'change' });
+    if (checked !== undefined) el(targetId).checked = checked;
+    return sent;
+}
+
+test('TED-161: editing the amount while auto-reload is OFF saves it without switching it on', () => {
+    const sent = autoSave({ enabled: false, thresholdEnabled: true }, 'arThReload');
+    assert.strictEqual(sent.length, 1);
+    assert.strictEqual(sent[0].enabled, false, 'an amount edit switched auto-reload back on');
+    assert.strictEqual(sent[0].thresholdReloadAmount, 30);
+});
+
+test('TED-161: ticking a trigger is still how a parent switches it on; edits while on keep it on', () => {
+    assert.strictEqual(autoSave({ enabled: false }, 'arThEnabled')[0].enabled, true);
+    assert.strictEqual(autoSave({ enabled: true, thresholdEnabled: true }, 'arThReload')[0].enabled, true);
 });

@@ -212,7 +212,7 @@ const MIGRATIONS = [
     '277_billing_answers_only_its_own_camp',
     '278_a_refund_that_fails_later_puts_the_money_back',
     '279_a_stripe_autopay_answer_is_checked_with_stripe',
-    '280_the_season_closeout_takes_the_whole_wallet', '281_a_failed_refund_takes_its_surcharge_share_back', '282_a_parent_save_clears_the_camps_pause_note',
+    '280_the_season_closeout_takes_the_whole_wallet', '281_a_failed_refund_takes_its_surcharge_share_back', '282_a_parent_save_clears_the_camps_pause_note', '283_a_register_sale_is_charged_once',
 ];
 
 // The one thing the stubs deliberately get wrong for our purposes: they define

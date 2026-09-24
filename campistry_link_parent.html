@@ -2615,6 +2615,9 @@ function _renderAutoReload(c){
         _arStatus('off','Auto-reload is off.');
         cardBtn.style.display='none';
         offBtn.style.display='none';
+        // Set up before and turned off: a plain way back on, with the settings
+        // shown (TED-161). Never set up: ticking a trigger above switches it on.
+        if(onBtn && (ar.thresholdEnabled || ar.scheduleEnabled)) onBtn.style.display='';
     }
     // Which card is on file for THIS camper's auto-reload (its own token slot,
     // separate from the family's Pay-Now card even if it's the same physical
@@ -2719,7 +2722,12 @@ function _saveAutoReloadConfig(c,cfg,promptCardIfMissing,silent){
 // there — add a card" with the Add-a-card button, so we never auto-launch the
 // card page mid-edit.
 var _arSaveTimer=null;
-function _arAutoSave(){
+function _arAutoSave(ev){
+    // Ticking a trigger is how a parent switches auto-reload ON; editing an
+    // amount or a date while it is off only saves the setting (TED-161) — it
+    // used to switch auto-reload back on, with only a small "saved" hint.
+    var _tgt=ev&&ev.target;
+    var _switchOn=!!(_tgt&&(_tgt.id==='arThEnabled'||_tgt.id==='arScEnabled')&&_tgt.checked);
     clearTimeout(_arSaveTimer);
     _arSaveTimer=setTimeout(function(){
         var c=_activeCanteenChild(); if(!c) return;
@@ -2733,8 +2741,9 @@ function _arAutoSave(){
         var periodDays=parseInt((document.getElementById('arPeriodDays')||{}).value||'1',10);
         if(!(maxReloads>=1)) maxReloads=1;
         if(!(periodDays>=1)) periodDays=1;
+        var _wasOn=!!(c.autoReload&&c.autoReload.enabled);
         var cfg={
-            enabled:true,
+            enabled:_wasOn||_switchOn,
             thresholdEnabled:thEnabled,
             thresholdAmount:parseFloat((document.getElementById('arThAmount')||{}).value||'0'),
             thresholdReloadAmount:parseFloat((document.getElementById('arThReload')||{}).value||'0'),

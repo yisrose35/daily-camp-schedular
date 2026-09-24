@@ -18,7 +18,10 @@ INSERT INTO camp_state_kv (camp_id, key, value) VALUES ('f2810000-0000-0000-0000
        'charges', jsonb_build_array(
           jsonb_build_object('id', 't1', 'category', 'Tuition', 'amount', 1000),
           jsonb_build_object('id', 'sur_1', 'category', 'Card Fee', 'amount', 30,
-                             'cardFee', jsonb_build_object('mode', 'surcharge', 'base', 1000))),
+                             'cardFee', jsonb_build_object('mode', 'surcharge', 'base', 1000)),
+          -- a "not paying by card" discount taken back with the same refund (TED-160)
+          jsonb_build_object('id', 'cdback_1', 'category', 'Discount returned', 'amount', 5,
+                             'cashDiscountBack', true, 'refundId', 're_s1')),
        'credits', jsonb_build_array(
           jsonb_build_object('id', 'cfr_1', 'amount', 29.13, 'reason', 'correction', 'cardFeeReturn', true,
                              'refundId', 're_s1', 'refundOf', 'pi_pi_s'),
@@ -28,6 +31,7 @@ INSERT INTO camp_state_kv (camp_id, key, value) VALUES ('f2810000-0000-0000-0000
        'entries', jsonb_build_array(
           jsonb_build_object('id', 'le_chg_t1', 'kind', 'charge', 'amount', 1000, 'reason', 'tuition', 'source', jsonb_build_object('chargeId', 't1')),
           jsonb_build_object('id', 'le_chg_sur_1', 'kind', 'charge', 'amount', 30, 'reason', 'fee', 'source', jsonb_build_object('chargeId', 'sur_1')),
+          jsonb_build_object('id', 'le_chg_cdback_1', 'kind', 'charge', 'amount', 5, 'reason', 'fee', 'source', jsonb_build_object('chargeId', 'cdback_1')),
           jsonb_build_object('id', 'le_pay_pi_s', 'kind', 'payment', 'amount', 1030, 'reason', 'card', 'source', jsonb_build_object('paymentId', 'pi_s')),
           jsonb_build_object('id', 'le_pay_re_s1', 'kind', 'refund', 'amount', 1000, 'reason', 'refund', 'source', jsonb_build_object('paymentId', 're_s1')),
           jsonb_build_object('id', 'le_cfr_1', 'kind', 'credit', 'amount', 29.13, 'reason', 'correction', 'source', jsonb_build_object('creditId', 'cfr_1')),
@@ -42,25 +46,31 @@ DECLARE
     b   boolean;
 BEGIN
     fam := public.camp_family_for_update(c, 'slate');
-    IF public.family_ledger_balance(fam) <> 960.87 THEN
-        RAISE EXCEPTION 'setup: Slate should owe $960.87 after the refunds, owes %', public.family_ledger_balance(fam);
+    IF public.family_ledger_balance(fam) <> 965.87 THEN
+        RAISE EXCEPTION 'setup: Slate should owe $965.87 after the refunds, owes %', public.family_ledger_balance(fam);
     END IF;
 
     -- 1. the refund fails: the $1,000 back (278), and the $29.13 back (281)
     r := public.reverse_failed_stripe_refund(c, 're_s1', 'expired or canceled card');
     IF (r->>'success')::boolean IS NOT TRUE OR r->>'familyKey' <> 'slate' THEN RAISE EXCEPTION 'put-back: %', r; END IF;
     fam := public.camp_family_for_update(c, 'slate');
-    IF public.family_ledger_balance(fam) <> -39.13 THEN
-        RAISE EXCEPTION 'setup: after the put-back alone Slate should hold $39.13 of credit, balance %', public.family_ledger_balance(fam);
+    IF public.family_ledger_balance(fam) <> -34.13 THEN
+        RAISE EXCEPTION 'setup: after the put-back alone Slate should hold $34.13 of credit, balance %', public.family_ledger_balance(fam);
     END IF;
     r := public.undo_card_fee_return(c, 'slate', 're_s1');
-    IF (r->>'success')::boolean IS NOT TRUE OR (r->>'undone')::int <> 1 OR (r->>'amount')::numeric <> 29.13 THEN
+    IF (r->>'success')::boolean IS NOT TRUE OR (r->>'undone')::int <> 2 OR (r->>'amount')::numeric <> 29.13
+       OR (r->>'discountBack')::numeric <> 5 THEN
         RAISE EXCEPTION 'undo: %', r;
     END IF;
     fam := public.camp_family_for_update(c, 'slate');
+    -- the $5 discount charge and the $5 given back cancel: only the other
+    -- refund's $10 surcharge credit is left
     IF public.family_ledger_balance(fam) <> -10 THEN
-        RAISE EXCEPTION 'TED-148: after the undo Slate should keep only the other refund''s $10 — balance %', public.family_ledger_balance(fam);
+        RAISE EXCEPTION 'TED-148/160: after the undo Slate should keep only the other refund''s $10 — balance %', public.family_ledger_balance(fam);
     END IF;
+    SELECT count(*) INTO n FROM jsonb_array_elements(fam->'credits') x
+     WHERE x->>'id' = 'cdback_undo_cdback_1' AND (x->>'amount')::numeric = 5;
+    IF n <> 1 THEN RAISE EXCEPTION 'TED-160: the discount taken back with the failed refund was not given back: %', fam->'credits'; END IF;
     -- only the failed refund's credit came back, not every surcharge credit
     SELECT count(*) INTO n FROM jsonb_array_elements(fam->'charges') x WHERE x->>'id' LIKE 'cfr_undo_%';
     IF n <> 1 OR EXISTS (SELECT 1 FROM jsonb_array_elements(fam->'charges') x WHERE x->>'id' = 'cfr_undo_cfr_2') THEN

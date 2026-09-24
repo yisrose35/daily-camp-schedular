@@ -297,9 +297,9 @@ test('TED-091: a shop charge a stale tab never saw is NOT taken off by its Billi
     assert.strictEqual(B.balance(f), 650, 'the shop order was cancelled by an old tab');
 });
 
-test('TED-108: both Record Payment forms refuse zero and negative amounts', async () => {
-    for (const [field, extra] of [['payAmount', { payFamKey: 'fg', payMethod: 'check', payDate: '2026-07-01', payRef: '', payNotes: '' }],
-                                  ['fapAmount', { fapFamily: 'Gold', fapMethod: 'check', fapDate: '2026-07-01' }]]) {
+test('TED-108: Record Payment refuses zero and negative amounts (Finance\'s button is the same form now, TED-157)', async () => {
+    assert.strictEqual([...ME.matchAll(/showModal\('Record Payment',h,/g)].length, 1, 'a second Record Payment form is back');
+    for (const [field, extra] of [['payAmount', { payFamKey: 'fg', payMethod: 'check', payDate: '2026-07-01', payRef: '', payNotes: '' }]]) {
         for (const v of ['-500', '0', '']) {
             const f = family(); const toasts = []; const pushed = [];
             const c = { _billingCore: () => B, families: { fg: f }, curPage: 'billing', finPayments: pushed,

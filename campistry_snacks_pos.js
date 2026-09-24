@@ -635,6 +635,7 @@ function renderCart() {
 
 function updateChargeBtn() {
     const btn = document.getElementById('chargeBtn');
+    if (_chargeInFlight) { btn.disabled = true; btn.textContent = 'Charging…'; return; }
     const total = cart.reduce((s, ci) => {
         const item = snacks.inventory.find(i => i.id === ci.id);
         return s + (item ? item.price * ci.qty : 0);
@@ -652,8 +653,23 @@ function updateChargeBtn() {
 // CHARGE — deducts balance, decrements stock, logs transaction
 // ==========================================================================
 
+// One sale at a time, and one key per sale (TED-159). Tapping Charge again
+// while a charge is on its way does nothing; a retry of the SAME sale (same
+// child, same items) after an answer never came sends the same key, which the
+// server (migration 283) answers with the first result instead of charging the
+// child again. A different sale gets a new key.
+var _chargeInFlight = false;
+var _pendingSale = null;          // { key, fp } — a sale with no answer yet
+function _saleKeyFor(fp) {
+    if (_pendingSale && _pendingSale.fp === fp) return _pendingSale.key;
+    _pendingSale = { fp: fp, key: 'sale_' + Date.now().toString(36) + '_' + Math.random().toString(36).slice(2, 10) };
+    return _pendingSale.key;
+}
+
 window.charge = function() {
     if (!sel || !cart.length) return;
+    if (_chargeInFlight) return;
+    const camperName = sel;           // the toast must not read `sel` after it is cleared
     const a = getAccount(sel);
     const total = Math.round(cart.reduce((s, ci) => {
         const item = snacks.inventory.find(i => i.id === ci.id);
@@ -710,7 +726,7 @@ window.charge = function() {
             saveSnacksData(snacks);
         }
         const cp = document.querySelector('.cart-panel'); if (cp) { cp.classList.add('flash'); setTimeout(() => cp.classList.remove('flash'), 600); }
-        toast('✓ $' + total.toFixed(2) + ' charged to ' + sel);
+        toast('✓ $' + total.toFixed(2) + ' charged to ' + camperName);
         cart = []; sel = null;
         renderCampers(); renderItems(); renderCart(); updateCamperBar();
         var cs = document.getElementById('camperSearch'); if (cs) { cs.value = ''; cs.focus(); }
@@ -741,7 +757,6 @@ window.charge = function() {
     };
 
     if (client && campId && client.rpc) {
-        const camperName = sel;
         // The PERSON, when the roster has an id for them (migration 247): the
         // server charges the account of whoever carries this id, not whoever
         // the name resolves to — two campers can share a name.
@@ -749,14 +764,37 @@ window.charge = function() {
         const _cid = _c && _c.camperId != null && _c.camperId !== '' ? Number(_c.camperId) : null;
         const _args = { p_camp_id: campId, p_camper_name: camperName, p_amount: total, p_items: itemNames, p_date: todayStr() };
         if (_cid != null && !isNaN(_cid)) _args.p_camper_id = _cid;
-        client.rpc('submit_canteen_purchase', _args)
+        const _fp = (_cid != null && !isNaN(_cid) ? _cid : 'n:' + camperName) + '|' + total.toFixed(2) + '|' + itemNames;
+        const _saleKey = _saleKeyFor(_fp);
+        const _btn = document.getElementById('chargeBtn');
+        _chargeInFlight = true;
+        if (_btn) { _btn.disabled = true; _btn.textContent = 'Charging…'; }
+        const _done = () => { _chargeInFlight = false; updateChargeBtn(); };
+        const _noAnswer = () => {
+            // Nothing definite came back: it may have gone through. The key is
+            // kept, so pressing Charge again for this sale cannot charge twice.
+            toast('Could not confirm the charge to ' + camperName + ' — it may have gone through. Check their transactions; pressing Charge again for the same items will not charge twice.', true);
+        };
+        const _send = (fn, args) => client.rpc(fn, args);
+        _send('submit_canteen_purchase_once', Object.assign({ p_sale_key: _saleKey }, _args))
             .then(res => {
+                const m = (res && res.error && res.error.message) || '';
+                // 283 not applied yet: the charge as it was, one request.
+                if (res && res.error && /PGRST202|could not find|schema cache|does not exist|no function/i.test(m)) return _send('submit_canteen_purchase', _args);
+                return res;
+            })
+            .then(res => {
+                _done();
                 const d = res && res.data;
-                const emsg = (res.error && res.error.message) || '';
+                const emsg = (res && res.error && res.error.message) || '';
                 // Migration 026 not applied yet → RPC doesn't exist → don't break
                 // the register; fall back to the local path.
-                if (res.error && /PGRST202|could not find|schema cache|does not exist|no function/i.test(emsg)) { localCharge('⚠ Spending limits not synced yet — charge not verified against caps'); return; }
+                if (res && res.error && /PGRST202|could not find|schema cache|does not exist|no function/i.test(emsg)) { _pendingSale = null; localCharge('⚠ Spending limits not synced yet — charge not verified against caps'); return; }
+                // No answer from the server (a dropped connection comes back as an
+                // error with no database code): never "Charge failed".
+                if (!res || (res.error && !res.error.code && !d)) { _noAnswer(); return; }
                 if (res.error || !d || !d.success) {
+                    _pendingSale = null;             // refused: nothing was charged
                     const err = (d && d.error) || emsg || 'charge_failed';
                     const msg = err === 'daily_limit_exceeded' ? 'Blocked — over daily limit ($' + (Number((d && d.remaining) || 0)).toFixed(2) + ' left today)'
                               : err === 'insufficient_balance' ? 'Blocked — insufficient balance ($' + (Number((d && d.spendable) || 0)).toFixed(2) + ' spendable)'
@@ -765,6 +803,7 @@ window.charge = function() {
                     toast(msg, true);
                     return;
                 }
+                _pendingSale = null;                 // answered: the next sale is a new one
                 a.balance = Number(d.balance); a.spentToday = Number(d.spentToday); a.lastSpendDate = todayStr();
                 finish(true);
                 // Instant auto-reload check — fire-and-forget, never blocks the
@@ -778,7 +817,7 @@ window.charge = function() {
                 if (d.needsReloadCheck && client.functions && client.functions.invoke) {
                     client.functions.invoke('canteen-auto-reload', { body: { campId: campId, camperName: camperName, camperId: _cid != null && !isNaN(_cid) ? _cid : undefined } }).catch(() => {});
                 }
-            }, e => { toast('Charge failed — connection error', true); });
+            }, e => { _done(); _noAnswer(); });
         return;
     }
 

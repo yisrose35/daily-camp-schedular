@@ -41,7 +41,7 @@ function office(policy, owed) {
         _postLedgerCredit: (f, c) => { posted.push(c); return true; },
         document: { getElementById: (id) => els[id] || null },
     };
-    const names = ['_cashDiscountFor', '_postCashDiscount', '_payDiscountPreview', 'openPaymentForFamily', '_giveCashDiscount'];
+    const names = ['_cashDiscountFor', '_postCashDiscount', '_payDiscountPreview', 'openPaymentForFamily'];
     const fns = new Function(...Object.keys(ctx), VARS + '\n' + names.map(cut).join('\n') + '\nreturn { ' + names.join(', ') + ' };')(...Object.values(ctx));
     const pay = (amount, method) => {
         els.payDiscount = { innerHTML: '' };
@@ -110,15 +110,8 @@ test('TED-153: Record Payment shows the discount before it is saved', () => {
     assert.match(o.els.payDiscount.innerHTML, /Discount for not paying by card: <strong>\$30\.00<\/strong>/);
 });
 
-test('TED-153: the family tool gives the discount for a bank payment made online, once per use', () => {
-    // they paid $970 online by bank; the bill already shows $30 owing
-    const o = office(THREE, 30);
-    o.fns._giveCashDiscount('gold');
-    o.input('cdAmt', '970');
-    o.press();
-    assert.strictEqual(o.fam.credits.length, 1);
-    assert.strictEqual(o.fam.credits[0].amount, 30);
-    assert.strictEqual(o.fam.balance, 0);
+test('TED-153: the family tool is for bank payments made online (which payment: tests/finance_payments_reach_the_bill.test.js)', () => {
+    assert.match(cut('_giveCashDiscount'), /_onlineBankPaymentsWithoutDiscount\(famKey\)/);
 });
 
 test('TED-153: the Card Fees setting says where the discount is given', () => {

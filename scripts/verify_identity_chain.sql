@@ -1,5 +1,5 @@
 -- ============================================================================
--- Confirm migrations 222-282 are in and doing their job.
+-- Confirm migrations 222-283 are in and doing their job.
 --
 -- Paste the whole thing into the Supabase SQL Editor. It is READ ONLY — one
 -- SELECT, nothing is created, changed or deleted, and the two purge functions
@@ -708,6 +708,15 @@ UNION ALL
      CASE WHEN to_regprocedure('public.set_canteen_auto_reload(uuid,text,jsonb,bigint)') IS NULL
                OR pg_get_functiondef(to_regprocedure('public.set_canteen_auto_reload(uuid,text,jsonb,bigint)')) !~ 'disabledReason'
           THEN 'apply 282 — Link keeps telling a parent the camp switched auto-reload off after they switched it back on'
+          ELSE 'ok' END),
+    -- A register sale is charged once (TED-159).
+    ('283  a register sale is charged once',
+     CASE WHEN to_regprocedure('public.submit_canteen_purchase_once(uuid,text,text,numeric,text,date,bigint)') IS NULL
+               OR to_regclass('public.canteen_sale_keys') IS NULL
+          THEN 'apply 283 BEFORE reloading the register — a second tap can charge a child twice'
+          WHEN has_function_privilege('anon', 'public.submit_canteen_purchase_once(uuid,text,text,numeric,text,date,bigint)', 'EXECUTE')
+               OR has_table_privilege('authenticated', 'public.canteen_sale_keys', 'SELECT')
+          THEN 'apply 283 again — the sale keys are open to browsers'
           ELSE 'ok' END)
     ) AS x(item, result)
 
