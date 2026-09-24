@@ -1,0 +1,56 @@
+
+> daily-camp-schedular@0.0.0 test:smoke
+> node tests/money_path.e2e.js
+
+postgres up with 120 migrations applied
+
+1. the Me page resolves this camp and this role from the database
+  ok   the camp id comes back from the camps row   → 51000000-0000-0000-0000-0000000000c1
+  ok   the role is owner, verified against the DB rather than cached   → owner verified=true
+
+2. a camper is added on the Me page and saved
+  ok   the camper has a person row, with an id   → [{"person_id":1,"name":"Shaya Brickman","source_key":"Shaya Brickman","deleted_at":null}]
+  ok   the roster carries the same camper id the projection assigned   → roster=1 camp_people=1
+  ok   a family row exists for the new camper   → [{"family_key":"fam_brickman_1","name":"Brickman Family"}]
+
+3. the canteen desk takes a $40 deposit
+  ok   canteen_office_credit accepted the deposit   → {"amount":40,"camper":"Shaya Brickman","balance":40,"success":true,"camperId":1}
+  ok   the canteen account holds the deposit   → balance=40
+  ok   the canteen account is joined to the PERSON, not just the name   → account.person_id=1 camp_people=1
+  ok   the deposit is a row in the ledger, not only a balance   → [{"amount":40,"camper_id":"1","kind":"deposit","method":"cash"}]
+  ok   the ledger row carries the camper's person id   → camper_id=1
+  ok   the ledger row says how it was paid   → deposit/cash
+
+4. the register charges $2.5 through submit_canteen_purchase
+  ok   the register went through the server, not the offline fallback   → ok
+  ok   the register sends the camper id with the charge   → args=p_camp_id,p_camper_name,p_amount,p_items,p_date,p_camper_id
+  ok   exactly one debit, for the price of the item   → [{"amount":2.5,"camper_id":"1","items":"Ices"}]
+  ok   the debit is on the same person as the deposit   → camper_id=1
+  ok   the balance is the deposit less the purchase   → balance=37.5 expected=37.5
+
+4b. the offline register is loaded with the live balance, and its sale comes back
+  ok   the export carries the LIVE balance, read from the rows   → balance=37.5
+  ok   the export carries the camper id   → camperId=1
+  ok   canteen_office_import_offline took the sale   → {"campers":{"Shaya Brickman":{"balance":35.25,"camperId":1}},"refused":[],"success":true,"imported":1,"duplicates":0}
+  ok   the same file again is recognised, not charged twice   → {"campers":{},"refused":[],"success":true,"imported":0,"duplicates":1}
+  ok   one offline sale in the ledger, on the same person   → [{"amount":2.25,"camper_id":"1"}]
+  ok   the balance is down by the offline sale, once   → balance=35.25
+
+5. a Camp Shop order is charged to the family’s camp bill
+  ok   settle_shop_order ran without a SQL error   → ok
+  ok   settle_shop_order reports success   → {"amount":18,"method":"bill","balance":null,"success":true,"camperId":1,"familyKey":"fam_brickman_1","previousAmount":0,"previousMethod":"none"}
+  ok   the family has exactly one charge   → [{"id":"shop_ord_1790216957499_5668","date":"2026-09-24","amount":18,"category":"Camp Shop","timestamp":1790216957521,"description":"Camp Shop order — Shaya Brickman","shopOrderId":"ord_1790216957499_5668"}]
+  ok   the charge is the price of the shirt   → 18
+  ok   the charge says what it was for   → {"id":"shop_ord_1790216957499_5668","date":"2026-09-24","amount":18,"category":"Camp Shop","timestamp":1790216957521,"de
+
+6. the harness answered everything the pages asked for
+  ok   no Supabase call fell through unimplemented
+  ok   no call came back with a database error
+  ok   every call that named a camper also sent the camper id   → 3 calls named a camper
+  ok   no uncaught page errors
+  ok   the Me page does not re-fetch the ledger without end   → get_camp_payments=4 get_camp_families=4
+
+114 Supabase calls went through the bridge
+
+All 32 assertions passed.
+EXIT 0
