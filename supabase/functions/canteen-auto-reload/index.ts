@@ -533,7 +533,11 @@ serve(async (req) => {
         `${campNames.get(String(row.camp_id)) || "Camp"} — canteen auto-reload (${due.kind}), ${displayName(camperName)}`,
         { campId: String(row.camp_id), camperName, camperId: camperId != null ? String(camperId) : "", source: "campistry-canteen-deposit", auto: "true" },
         campDestinations.get(String(row.camp_id)) || null,
-        `${row.camp_id}:${reloadKey}`,
+        // The failure count makes a retry after a decline a NEW request
+        // (TED-085): Stripe replays a key's first answer — the decline — for
+        // 24 hours, and three replays would switch auto-reload off for a
+        // parent who had already fixed their card.
+        `${row.camp_id}:${reloadKey}:f${Number(ar.consecutiveFailures) || 0}`,
       );
 
       if (pi.error || pi.status === "requires_action") {
@@ -560,7 +564,14 @@ serve(async (req) => {
         details.push({ camp: row.camp_id, camper: camperName, camperId, amount: due.amount, kind: due.kind, result: "charged", stripeStatus: pi.status });
         await persistAr(String(row.camp_id), camperName, ar, camperId);
       } else {
-        details.push({ camp: row.camp_id, camper: camperName, camperId, amount: due.amount, kind: due.kind, result: pi.status });
+        // requires_payment_method, canceled, …: no money moved. Give the slot
+        // back rather than holding it until tomorrow, and count it as the
+        // failure it is.
+        await releaseReload();
+        markFailure(ar, today, String(pi.status || "not_charged"));
+        failed++;
+        details.push({ camp: row.camp_id, camper: camperName, camperId, amount: due.amount, kind: due.kind, result: "failed", reason: pi.status });
+        await persistAr(String(row.camp_id), camperName, ar, camperId);
       }
     }
   }

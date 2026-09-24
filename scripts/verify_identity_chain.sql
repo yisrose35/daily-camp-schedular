@@ -1,5 +1,5 @@
 -- ============================================================================
--- Confirm migrations 222-267 are in and doing their job.
+-- Confirm migrations 222-268 are in and doing their job.
 --
 -- Paste the whole thing into the Supabase SQL Editor. It is READ ONLY — one
 -- SELECT, nothing is created, changed or deleted, and the two purge functions
@@ -591,6 +591,13 @@ UNION ALL
                OR pg_get_functiondef(to_regprocedure('public.convert_family_ledgers(uuid,boolean)')) !~ 'chargeId'
                OR pg_get_functiondef(to_regprocedure('public._merge_family_from_page(jsonb,jsonb)')) !~ '_keep_charge_links'
           THEN 'apply 267 — on a converted camp, re-pricing a shop order bills it twice and cancelling it takes nothing off'
+          ELSE 'ok' END),
+    -- A card charge that was cut off can be tried again (TED-083/085/086).
+    ('268  a cut-off charge can be tried again',
+     CASE WHEN to_regprocedure('public.claim_charge_intent(uuid,text,numeric,text,boolean)') IS NULL
+               OR EXISTS (SELECT 1 FROM pg_constraint WHERE conrelid = 'public.processor_transactions'::regclass
+                           AND contype = 'c' AND pg_get_constraintdef(oid) ~ 'refund''')
+          THEN 'apply 268 BEFORE redeploying registration-deposit-checkout — a deposit charge that is cut off tells the parent "already paid" for ever'
           ELSE 'ok' END)
     ) AS x(item, result)
 

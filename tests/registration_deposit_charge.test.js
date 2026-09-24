@@ -26,10 +26,24 @@ T.tables.camp_state_kv = [{ camp_id: 'camp1', key: 'campistryMe', value: { enrol
 T.rpc._registration_deposit_owed = () => ({ success: true, owed: 250, label: 'Deposit', camperName: 'Avi' });
 T.rpc._record_registration_deposit = () => ({ success: true });
 T.rpc._admin_get_processor_credential = () => ({ success: true, credentials: { sourceKey: 'sk', pin: '1', paymentPageSlug: 'slug1', gatewayUrl: 'https://sandbox.banquest.test/api/v2' } });
+// migration 268's claim, as a model (scripts/pgtests/268 tests the SQL). Each
+// claim moves the clock on T.gap minutes, so a test can make a claim stale.
 const claims: Record<string, any> = {};
-T.rpc.claim_refund_intent = (a: any) => { if (claims[a.p_key]) return { claimed: false, previous: claims[a.p_key] }; claims[a.p_key] = {}; return { claimed: true }; };
-T.rpc.settle_refund_intent = (a: any) => { claims[a.p_key] = a.p_result; return true; };
-T.rpc.release_refund_intent = (a: any) => { delete claims[a.p_key]; return true; };
+let clock = 0; T.gap = 0;
+T.rpc.claim_charge_intent = (a: any) => {
+  clock += T.gap;
+  const c = claims[a.p_key];
+  if (!c) { claims[a.p_key] = { at: clock, attempt: 0 }; return { claimed: true, state: 'new', attempt: 0 }; }
+  if (c.settled) return { claimed: false, state: 'settled', previous: c.result };
+  if (c.released || (c.called == null && clock - c.at >= 10) || (a.p_take_stale && c.called != null && clock - c.called >= 10)) {
+    c.released = false; c.at = clock; return { claimed: true, state: 'retaken', attempt: c.attempt };
+  }
+  if (c.called != null && clock - c.called >= 10) return { claimed: false, state: 'stale', attempt: c.attempt };
+  return { claimed: false, state: 'in_progress', attempt: c.attempt };
+};
+T.rpc.mark_charge_intent_called = (a: any) => { claims[a.p_key].called = clock; return true; };
+T.rpc.settle_refund_intent = (a: any) => { claims[a.p_key].settled = true; claims[a.p_key].result = a.p_result; return true; };
+T.rpc.release_charge_intent = (a: any) => { const c = claims[a.p_key]; if (c && !c.settled) { c.released = true; c.called = null; if (a.p_declined) c.attempt++; } return true; };
 T.fetch = (url: string) => {
   if (url.endsWith('/payment_intents')) return { id: 'pi_' + T.fetches.length, status: 'succeeded', amount_received: 25000 };
   if (url.includes('/transactions/charge')) return { status_code: 'A', status: 'Approved', reference_number: 555 };
@@ -87,4 +101,64 @@ test('a declined deposit releases its claim, so the parent can try again', () =>
     assert.strictEqual(r.responses[0].body.success, false);
     assert.strictEqual(r.responses[1].body.paid, true, 'the retry after a decline was refused');
     assert.strictEqual(charges(r).length, 2);
+});
+
+const OFFICE_REQ = `const req = { headers: { Authorization: 'Bearer owner' }, body: { campId: 'camp1', enrollmentId: 'enr_1', returnUrl: 'https://camp.test/', officeCharge: true } };`;
+const idem = r => charges(r).map(c => c.headers['Idempotency-Key']);
+
+test('TED-083: a Cardknox charge cut off mid-way is never reported as paid, and the office can finish it', () => {
+    const r = runEdge('registration-deposit-checkout', W('cardknox') + `
+      T.rpc._admin_get_processor_credential = () => ({ success: true, credentials: { apiKey: 'ck' } });
+      let n = 0;
+      T.fetch = (url: string) => { if (url.includes('cardknox')) { if (n++ === 0) throw new Error('connection reset'); return 'xResult=A&xRefNum=77'; } return {}; };
+      ${OFFICE_REQ}
+      T.requests = [req, req, { ...req, body: { ...req.body } }, { ...req, body: { ...req.body, confirmNotCharged: true } }];
+      const orig = T.rpc.claim_charge_intent; let k = 0;
+      T.rpc.claim_charge_intent = (a: any) => { T.gap = k++ >= 2 ? 11 : 0; return orig(a); };`);
+    const b = r.responses.map(x => x.body);
+    assert.strictEqual(b[0].success, false, 'try 1 was cut off');
+    for (const x of b.slice(0, 3)) assert.ok(!x.alreadyPaid && !x.paid, 'a cut-off charge was reported as paid: ' + JSON.stringify(x));
+    assert.strictEqual(b[1].reason, 'in_progress', JSON.stringify(b[1]));
+    assert.strictEqual(b[2].reason, 'needs_check', 'after 10 minutes the office is asked to check: ' + JSON.stringify(b[2]));
+    assert.strictEqual(b[3].paid, true, 'the office confirmed nothing went through, and it was not charged: ' + JSON.stringify(b[3]));
+    assert.strictEqual(r.fetches.filter(f => f.url.includes('cardknox')).length, 2, 'the card company was asked more than twice');
+});
+
+test('TED-083: a Stripe charge cut off mid-way is re-asked with the SAME key (Stripe says what happened)', () => {
+    const r = runEdge('registration-deposit-checkout', W(null) + `
+      let n = 0;
+      T.fetch = (url: string) => { if (url.endsWith('/payment_intents')) { if (n++ === 0) throw new Error('connection reset'); return { id: 'pi_1', status: 'succeeded', amount_received: 25000 }; } return {}; };
+      ${OFFICE_REQ}
+      T.requests = [req, req];`);
+    assert.strictEqual(r.responses[0].body.success, false);
+    assert.ok(!r.responses[0].body.alreadyPaid);
+    assert.strictEqual(r.responses[1].body.paid, true, JSON.stringify(r.responses[1].body));
+    const k = idem(r);
+    assert.strictEqual(k.length, 2);
+    assert.strictEqual(k[0], k[1], 'a retry after a lost answer must re-ask Stripe with the same key');
+});
+
+test('TED-085: a retry after a decline is a NEW Stripe request (a new Idempotency-Key)', () => {
+    const r = runEdge('registration-deposit-checkout', W(null) + `
+      let n = 0;
+      T.fetch = (url: string) => url.endsWith('/payment_intents') ? (n++ === 0 ? { __status: 402, error: { type: 'card_error', message: 'Your card was declined.' } } : { id: 'pi_ok', status: 'succeeded', amount_received: 25000 }) : {};
+      ${OFFICE_REQ}
+      T.requests = [req, req, req];`);
+    assert.strictEqual(r.responses[0].body.success, false);
+    assert.strictEqual(r.responses[1].body.paid, true);
+    assert.strictEqual(r.responses[2].body.alreadyPaid, true, 'only a settled claim is "already paid"');
+    const k = idem(r);
+    assert.strictEqual(k.length, 2);
+    assert.notStrictEqual(k[0], k[1], 'Stripe would replay the decline for 24 hours');
+});
+
+test('TED-083: a charge still running is "in progress", never "already paid"', () => {
+    const r = runEdge('registration-deposit-checkout', W(null) + `
+      ${OFFICE_REQ}
+      T.requests = [req];
+      T.rpc.claim_charge_intent = () => ({ claimed: false, state: 'in_progress', attempt: 0 });`);
+    assert.strictEqual(r.body.success, false);
+    assert.strictEqual(r.body.inProgress, true);
+    assert.ok(!r.body.alreadyPaid);
+    assert.strictEqual(charges(r).length, 0);
 });

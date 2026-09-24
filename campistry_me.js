@@ -19685,12 +19685,26 @@ async function chargeDepositNow(id){
 
     toast('Charging…');
     try{
-        var r=await client.functions.invoke('registration-deposit-checkout',{
-            body:{campId:campId,enrollmentId:id,
+        var body={campId:campId,enrollmentId:id,
                   returnUrl:window.location.origin+window.location.pathname,
-                  officeCharge:true}
-        });
+                  officeCharge:true};
+        var r=await client.functions.invoke('registration-deposit-checkout',{body:body});
         var d=r&&r.data;
+        // An earlier charge was cut off after the card company was asked, and
+        // nobody knows if it went through (TED-083). Only the office can say —
+        // by looking at the processor's dashboard — and only then charge.
+        if(d&&d.reason==='needs_check'){
+            var sure=await confirmDialog({
+                title:'Did the earlier charge go through?',
+                message:esc(d.error||'')+'<br><br>Only continue if the processor\u2019s dashboard shows NO charge of '
+                       +fm(owed)+' for '+esc(e.camperName||'this family')+(d.since?' since '+esc(String(d.since).slice(0,16).replace('T',' ')):'')+'.',
+                confirmLabel:'Nothing went through \u2014 charge '+fm(owed)
+            });
+            if(!sure)return toast('Not charged');
+            body.confirmNotCharged=true;
+            r=await client.functions.invoke('registration-deposit-checkout',{body:body});
+            d=r&&r.data;
+        }
         if(d&&d.success&&(d.paid||d.alreadyPaid)){
             // The function already recorded it server-side; re-reading is what
             // makes this page agree with the database rather than guessing.

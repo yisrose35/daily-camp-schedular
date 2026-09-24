@@ -151,7 +151,7 @@ serve(async (req) => {
   if (req.method === "OPTIONS") return new Response("ok", { headers: corsHeaders });
 
   try {
-    const { campId, enrollmentId, returnUrl, saveCard, captureReference, keepOnFile, officeCharge } = await req.json();
+    const { campId, enrollmentId, returnUrl, saveCard, captureReference, keepOnFile, officeCharge, confirmNotCharged } = await req.json();
     if (!campId || !enrollmentId || !returnUrl) {
       return json({ success: false, error: "campId, enrollmentId and returnUrl are required" }, 400);
     }
@@ -266,28 +266,65 @@ serve(async (req) => {
 
       // ONE charge per application at a time (TED-069): an office click and a
       // parent's retry arriving together could both pass the "owed" check above
-      // and both charge. The claim is taken before the processor is called,
-      // released if it declines, and kept once it succeeds.
+      // and both charge. The claim is taken before the processor is called
+      // (migration 268), given back on a decline, and kept once it succeeds.
       // Keyed on the amount too: a settled claim is kept, and a later, different
       // deposit on the same application must still be chargeable.
+      //
+      // A claim somebody else holds is NOT "paid" (TED-083): only a settled one
+      // is. A charge still running says so; one that was cut off after the
+      // processor was asked is re-asked (Stripe, same Idempotency-Key — Stripe
+      // answers with what really happened) or, on the other processors, left
+      // for the office to confirm nothing went through.
       const depositKey = "deposit:" + String(enrollmentId) + ":" + amountCents;
-      const { data: dclaim } = await service.rpc("claim_refund_intent", {
+      const { data: dclaim, error: dclaimErr } = await service.rpc("claim_charge_intent", {
         p_camp_id: campId, p_key: depositKey, p_amount: owed, p_payment_ref: String(enrollmentId),
+        p_take_stale: claim.processor === "stripe" || (!!claimOverride && confirmNotCharged === true),
       });
-      if (dclaim && dclaim.claimed === false) {
-        return json({ success: true, alreadyPaid: true, replayed: true });
+      if (dclaimErr || !dclaim) {
+        console.error("[registration-deposit] claim_charge_intent failed — is migration 268 applied?", dclaimErr?.message);
+        return json({ success: false, error: "Could not start the payment. Please try again in a minute." }, 200);
       }
+      if (dclaim.claimed !== true) {
+        if (dclaim.state === "settled") return json({ success: true, alreadyPaid: true, replayed: true });
+        if (dclaim.state === "stale") {
+          return json({
+            success: false, reason: "needs_check", since: dclaim.since || null,
+            error: claimOverride
+              ? "A charge for this deposit was started and the card company never answered. Check the processor's dashboard: if nothing went through, confirm and it will be charged."
+              : "A payment for this deposit was started and is being checked by the camp office — please don't pay again.",
+          }, 200);
+        }
+        return json({
+          success: false, inProgress: true, reason: "in_progress",
+          error: "A payment for this deposit is already in progress — please wait a minute before trying again.",
+        }, 200);
+      }
+      const attempt = Number(dclaim.attempt) || 0;
+      // Attempt 0 keeps the key the function always used, so a charge already in
+      // flight when this was deployed is still recognised by Stripe.
+      const idemKey = `deposit:${campId}:${enrollmentId}:${amountCents}` + (attempt > 0 ? `:a${attempt}` : "");
+      let called = false;
+      const release = (declined: boolean) =>
+        service.rpc("release_charge_intent", { p_camp_id: campId, p_key: depositKey, p_declined: declined });
+      const markCalled = async () => {
+        await service.rpc("mark_charge_intent_called", { p_camp_id: campId, p_key: depositKey });
+        called = true;
+      };
       const last4 = claim.last4 || null, brand = claim.brand || null;
 
+      try {
       if (claim.processor === "banquest") {
         const { data: credRes } = await service.rpc("_admin_get_processor_credential", { p_camp_id: campId });
         const creds = (credRes?.credentials || credRes?.credential || credRes) as Record<string, string> | null;
         if (!creds?.sourceKey || !creds?.pin) {
-          { await service.rpc("release_refund_intent", { p_camp_id: campId, p_key: depositKey }); return json({ success: false, error: "This camp has not finished setting up online payments." }, 200); }
+          await release(false);
+          return json({ success: false, error: "This camp has not finished setting up online payments." }, 200);
         }
         // A saved card is charged as source "tkn-<card_ref>" -- the same shape
         // charge-due-installments already uses for autopay.
         const ref = String(claim.method || claim.customer || "");
+        await markCalled();
         const resp = await fetch(`${bqBase(creds)}/transactions/charge`, {
           method: "POST",
           headers: { "Content-Type": "application/json", "Authorization": bqAuth(creds) },
@@ -302,6 +339,12 @@ serve(async (req) => {
         const approved = String(d?.status_code || "").toUpperCase() === "A"
                       || String(d?.status || "").toLowerCase() === "approved";
         txnId = d?.reference_number != null ? String(d.reference_number) : "";
+        if (resp.status >= 500 && !txnId) {
+          // The gateway failed without saying whether it charged: not a
+          // decline. The claim stays, and goes to the office after 10 minutes.
+          console.error(`[registration-deposit] banquest ${resp.status} with no answer, camp ${campId} enroll ${enrollmentId}`);
+          return json({ success: false, error: "The card company did not answer. Please don't pay again — the camp office will confirm whether this went through." }, 200);
+        }
         if (resp.status < 200 || resp.status >= 300 || !approved || !txnId) {
           console.error(`[registration-deposit] banquest saved-card charge failed camp ${campId}:`, resp.status, JSON.stringify(d));
           const detail = bqErrDetail(d?.error_details) || bqErrDetail(d?.error_messages);
@@ -313,9 +356,10 @@ serve(async (req) => {
       } else if (claim.processor === "cardknox") {
         const { data: credResult } = await service.rpc("_admin_get_processor_credential", { p_camp_id: campId });
         const apiKey = credResult?.success ? credResult.credentials?.apiKey : null;
-        if (!apiKey) { await service.rpc("release_refund_intent", { p_camp_id: campId, p_key: depositKey }); return json({ success: false, error: "This camp has not finished setting up online payments." }, 200); }
+        if (!apiKey) { await release(false); return json({ success: false, error: "This camp has not finished setting up online payments." }, 200); }
         // The unique xInvoice is load-bearing: Sola blocks a transaction whose
         // Key+Card+Amount+Invoice match another within 10 minutes.
+        await markCalled();
         const resp = await fetch("https://x1.cardknox.com/gateway", {
           method: "POST",
           headers: { "Content-Type": "application/x-www-form-urlencoded" },
@@ -329,10 +373,14 @@ serve(async (req) => {
         });
         const parsed: Record<string, string> = {};
         new URLSearchParams(await resp.text()).forEach((v, k) => { parsed[k] = v; });
+        if (!parsed.xResult) {
+          console.error(`[registration-deposit] cardknox HTTP ${resp.status} with no result, camp ${campId} enroll ${enrollmentId}`);
+          return json({ success: false, error: "The card company did not answer. Please don't pay again — the camp office will confirm whether this went through." }, 200);
+        }
         if (parsed.xResult !== "A") declineMsg = parsed.xError || "Declined";
         else txnId = parsed.xRefNum || "";
       } else if (claim.processor === "stripe") {
-        if (!STRIPE_SECRET_KEY) { await service.rpc("release_refund_intent", { p_camp_id: campId, p_key: depositKey }); return json({ success: false, error: "Online payment is not configured." }, 200); }
+        if (!STRIPE_SECRET_KEY) { await release(false); return json({ success: false, error: "Online payment is not configured." }, 200); }
         const params: Record<string, string> = {
           amount: String(amountCents), currency: "usd",
           customer: String(claim.customer || ""),
@@ -350,13 +398,26 @@ serve(async (req) => {
           // (TED-076) — the same pairing stripe-charge uses.
           params["on_behalf_of"] = String(camp.stripe_account_id);
         }
+        await markCalled();
         const resp = await fetch("https://api.stripe.com/v1/payment_intents", {
           method: "POST",
           headers: { "Authorization": `Bearer ${STRIPE_SECRET_KEY}`, "Content-Type": "application/x-www-form-urlencoded",
-                     "Idempotency-Key": `deposit:${campId}:${enrollmentId}:${amountCents}` },
+                     "Idempotency-Key": idemKey },
           body: new URLSearchParams(params).toString(),
         });
         const pi = await resp.json();
+        if (pi?.error?.type === "idempotency_error" || resp.status === 409) {
+          // The same attempt is still running at Stripe, or was sent with a
+          // different card: not a decline, and not a reason to start a second
+          // charge. The next try re-asks with this same key.
+          await release(false);
+          return json({ success: false, inProgress: true, reason: "in_progress",
+                        error: "A payment for this deposit is already in progress — please wait a minute before trying again." }, 200);
+        }
+        if (resp.status >= 500) {
+          await release(false);           // same key next time: Stripe will say what happened
+          return json({ success: false, error: "The card company did not answer. Please try again in a minute." }, 200);
+        }
         if (!resp.ok || pi?.status !== "succeeded") {
           declineMsg = pi?.error?.message || pi?.last_payment_error?.message || "Declined";
         } else {
@@ -366,9 +427,19 @@ serve(async (req) => {
       } else {
         declineMsg = "This camp takes payment another way.";
       }
+      } catch (e) {
+        // Cut off. Before the processor was asked, or on Stripe (whose key makes
+        // asking again safe), the claim goes back. Otherwise whether money moved
+        // is unknown: the claim stays, and after 10 minutes the office is asked.
+        if (!called || claim.processor === "stripe") await release(false);
+        console.error(`[registration-deposit] charge cut off (processor ${called ? "was" : "was not"} asked):`, (e as Error).message);
+        return json({ success: false, error: called && claim.processor !== "stripe"
+          ? "The connection to the card company dropped. Please don't pay again — the camp office will confirm whether this went through."
+          : "The connection to the card company dropped. Please try again." }, 200);
+      }
 
       if (declineMsg || !txnId) {
-        await service.rpc("release_refund_intent", { p_camp_id: campId, p_key: depositKey });
+        await release(true);
         return json({ success: false, error: declineMsg || "The card was declined." }, 200);
       }
       await service.rpc("settle_refund_intent", {
