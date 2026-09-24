@@ -1,0 +1,14 @@
+SETUP: Avi Katz (#1) $20 cash in, then $5 "Ices ×2" at the register → wallet $15.00; Ices 8 left, 2 sold today, 2 sold
+    before: Sales today "$5", Revenue "$5.00", 1 txns; drawer "Cash deposits in+$20.00Cash paid out−$0.00Net in drawer$20.00No cash paid out today."
+
+D1. Avi's history: which lines offer "Void"?
+    [{"t":"Ices ×22026-09-24 · 02:12 PM−$5.00 Void","v":true},{"t":"Deposit2026-09-24 · 02:12 PM+$20.00","v":false}]
+  ok  D1 only the register sale offers Void   → [{"t":"Ices ×22026-09-24 · 02:12 PM−$5.00 Void","v":true},{"t":"Deposit2026-09-24 · 02:12 PM+$20.00","v":false}]
+
+D2. Void it (both Ices back)
+    window: "$5.00 · Ices ×2 · Avi Katz2026-09-24 · 02:12 PMThe $5.00 goes back on Avi Katz’s canteen balance as a void of this sale — not as a deposit, so no cash or card is recorded, and it no longer counts as a sale. | Put 2 × Ices back in stockUntick an item the child kept or ate."
+    the Void window on screen: {"modalClass":"modal-overlay open","modalDisplay":"flex","z":"200","btnRect":[916,681,100,33],"topmost":"voidBtn","openModals":["m-void z200"]}
+  BAD the run finished   → page.click: Timeout 5000ms exceeded. | Call log: | [2m  - waiting for locator('#m-history .modal-footer button')[22m
+page errors: []
+
+1 BAD

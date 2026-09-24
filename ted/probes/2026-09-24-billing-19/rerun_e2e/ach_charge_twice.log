@@ -1,0 +1,15 @@
+A1. Computer A: Iron owes $1000 and pays by bank (default method). Billing → Iron → Charge Card
+    the window: "Charge Card×Charge the card on file for IronBalance due: $1,000 · Card on file ✓Amount to Charge ($)DescriptionCancelSave"
+    toast: ["✕ Charge failed: Could not check with Stripe whether an earlier bank debit for this family is still on its way, so nothing was charged. Try again in a minute."]; debits started: none
+
+A2. Stripe: payment_intent.processing for pi_1 → the real webhook
+    webhook HTTP 500; payment rows: ; Iron owes $1000
+
+A3. Computer B (another staff member — or A after a day): Billing
+    Iron's row: "IronAri IronPending—$1,000View"
+    the window: "Charge Card×Charge the card on file for IronBalance due: $1,000 · Card on file ✓Amount to Charge ($)DescriptionCancelSave"
+    toast: ["✕ Charge failed: Could not check with Stripe whether an earlier bank debit for this family is still on its way, so nothing was charged. Try again in a minute."]; debits started: none
+  BAD A3 a second $1,000 bank debit is not started while the first is still processing   → 0 debits of $1,000 from Iron's bank account for one $1,000 bill: none
+page errors: []
+
+1 BAD

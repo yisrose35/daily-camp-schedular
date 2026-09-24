@@ -1,0 +1,61 @@
+SETUP: $20 card top-ups → Avi $20.00, Bina $20.00, Chaim $20.00, Dov $20.00, Eli $20.00, Fay $20.00, Gil $20.00, Hadas $20.00
+
+C1. Avi's $20 top-up refunded in the Stripe Dashboard (twice delivered)
+    HTTP 200/200; Avi $0.00; notices 1
+  ok  C1 off the wallet once, one notice   → Avi $0.00, notices 1
+
+C2. Bina's top-up disputed, then won (won delivered twice)
+    log(created): [stripe-webhook] Event: charge.dispute.created (evt_d10) | [stripe-webhook] canteen dispute dp_2 on pi_k2: {"amount":20,"camper":"Bina Gold","balance":0,"success":true,"overdrawn":false} | [stripe-webhook] RISK EVENT: charge.dispute.created (evt_d10) | [stripe-webhook] risk alert email sent: Stripe alert: A parent disputed a charge (chargeback filed)
+    HTTP 200/200/200; Bina after open $0.00, after won $20.00
+  ok  C2 off while open, back once when won   → open $0.00, won $20.00
+
+C3. Chaim's top-up disputed and lost
+  ok  C3 lost → stays off   → Chaim $0.00 (HTTP 200)
+
+C4. Dov's top-up: a bank inquiry, then the inquiry is escalated to a chargeback
+    inquiry HTTP 200 → Dov $20.00; escalated (updated HTTP 200, funds_withdrawn HTTP 200) → Dov $20.00; notices for Dov 0
+  ok  C4a an inquiry takes nothing   → Dov $20.00
+  BAD C4b an escalated inquiry (money withdrawn) comes off, or the camp is told   → Dov $20.00, notices 0
+
+C5. Eli: $5 then $15 refunded in the dashboard, then a bogus third $5
+    after $5: $15.00; after $15: $0.00; after bogus 3rd: $0.00
+  ok  C5 partial refunds add up, never more than the top-up   → 15.00 / 0.00 / 0.00
+
+C6. Fay spent $15 of her $20, then the $20 is refunded in the dashboard
+    Fay $-15.00; notice: A $20.00 refund of Fay Gold's top-up was made in the Stripe dashboard, so it has come off Fay Gold's canteen wallet. Next time, refund from Snacks. Fay Gold had already spent it: the wallet is now $-15.00 — the family owes the canteen that much.
+  ok  C6 wallet −$15 and the notice says the family owes it   → Fay $-15.00
+
+C7. Gil: a refund made from Snacks (tagged campistryHold) arrives as charge.refunded
+  ok  C7 the webhook leaves a Snacks refund to Snacks (no second deduction)   → Gil $20.00 (HTTP 200)
+
+C8. Hadas: a dashboard refund that then FAILS at the bank (refund.failed)
+    after refund $0.00; after refund.failed (HTTP 200, again 200) $20.00; emails 1+0
+    log: [stripe-webhook] Event: refund.failed (evt_f8) | [stripe-webhook] refund re_8 failed: $20 put back for camp 0ed19900-0000-0000-0000-000000000001 | [stripe-webhook] risk alert email sent: Stripe alert: a $20.00 refund failed — pass it back to the camp
+  ok  C8 failed dashboard refund goes back on the wallet once   → $0.00 → $20.00
+
+T1. Gold pays $500 tuition by card; the bank opens an INQUIRY; the inquiry closes (no money moved)
+    owes after paying $500.00; after inquiry opened (HTTP 200) $1000.00; after inquiry closed (HTTP 200) $1000.00
+    log(inquiry closed): [stripe-webhook] Event: charge.dispute.closed (evt_d25) | [stripe-webhook] RISK EVENT: charge.dispute.closed (evt_d25) | [stripe-webhook] risk alert email sent: Stripe alert: A disputed charge was closed — warning_closed
+    log(inquiry created): [stripe-webhook] Event: charge.dispute.created (evt_d24) | [stripe-webhook] RISK EVENT: charge.dispute.created (evt_d24) | [stripe-webhook] risk alert email sent: Stripe alert: A parent disputed a charge (chargeback filed)
+    chargeback lines: [{"by": "system", "id": "le_cb_dp_t1", "date": "2026-09-24", "kind": "refund", "note": "Chargeback — general", "amount": 500.00, "reason": "chargeback", "source": {"refs": ["pi_t1", "ch_t1", "dp_t1"], "disputeId": "dp_t1", "amountSource": "processor"}, "postedAt": "2026-09-24T13:45:54Z"}]
+  BAD T1 a bank inquiry moves no money: the family still owes $500 (not $1,000)   → opened → $1000.00, closed → $1000.00
+
+T2. Teal paid the whole $1,000 by card; autopay plan due today; then a bank INQUIRY
+    before the inquiry autopay asks plan_due_for → {"index": 0, "amount": 0, "reason": "nothing_owed", "dueDate": "2026-09-24", "remaining": 1}
+    after the inquiry  autopay asks plan_due_for → {"index": 0, "amount": 1000.00, "dueDate": "2026-09-24", "remaining": 1}
+    camp notice: Teal — $1000.00 was pulled back by the bank (general). Their balance has gone back up by that amount.
+  BAD T2 an inquiry does not make tonight's autopay charge the parent again   → {"index": 0, "amount": 1000.00, "dueDate": "2026-09-24", "remaining": 1}
+
+P1. a top-up for child #99 (erased): delivered twice
+    HTTP 200/200; emails 1/0; body {"received":true,"recorded":false,"reason":"unknown_camper"}
+  ok  P1 200, told once   → 200/200, 1/0
+
+P2. same, but the email service is down the first time
+    HTTP 500/200; email attempts 0/1
+  ok  P2 500 until the alert goes, then 200   → 500/200
+
+P3. same, but no email key is configured
+    HTTP 200; emails 0; camp notices naming it 0
+  BAD P3 without email someone is still told (camp notice) or Stripe keeps retrying   → HTTP 200, emails 0, notices 0
+
+4 BAD

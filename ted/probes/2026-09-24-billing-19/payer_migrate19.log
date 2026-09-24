@@ -1,0 +1,12 @@
+M1  an office computer on the new code opens a camp whose fund lines are in the old place, and saves something
+  fund from the family rows {"charged":1300,"paid":1000,"owes":300,"lines":4}; cloud payers.ledger: none
+  ok  M1 moved once: shares $1,300, paid $1,000   → {"charged":1300,"paid":1000,"owes":300,"lines":4}
+M2  a computer still on the OLD page (not reloaded after the update) saves the settings document with its old payers.ledger
+  fund {"charged":1300,"paid":2000,"owes":-700,"lines":5}
+  Pine payerLedger [{"id": "prc_a_org_scholarship_fund", "date": "2026-06-01", "kind": "charge", "amount": 800, "family": "Pine", "payerId": "org_scholarship_fund", "chargeId": "a", "familyKey": "pine", "description": "Tuition — share for Pine"}, {"id": "prp_old1_1", "date": "2026-06-10", "kind": "payment", "amount": 500, "method": "check", "payerId": "org_scholarship_fund", "paymentId": "prp_old1", "reference": "1001", "timestamp": 1790257794968}, {"id": "prp_old1", "date": "2026-06-10", "kind": "payment", "amount": 1000, "method": "check", "payerId": "org_scholarship_fund", "paymentId": "prp_old1", "reference": "1001", "timestamp": 1790257803196}]
+  Oak payerLedger [{"id": "prc_b_org_scholarship_fund", "date": "2026-06-01", "kind": "charge", "amount": 500, "family": "Oak", "payerId": "org_scholarship_fund", "chargeId": "b", "familyKey": "oak", "description": "Tuition — share for Oak"}, {"id": "prp_old1_0", "date": "2026-06-10", "kind": "payment", "amount": 500, "method": "check", "payerId": "org_scholarship_fund", "paymentId": "prp_old1", "reference": "1001", "timestamp": 1790257794968}]
+  Manage payers on H: "Owes $-700 (shares $1,300, paid $2,000)"
+  BAD M2 the $1,000 cheque still counted once   → {"charged":1300,"paid":2000,"owes":-700,"lines":5}
+page errors: []
+
+1 BAD

@@ -1,0 +1,15 @@
+R1 tuition dashboard refund, database busy → HTTP 200
+    [stripe-webhook] Event: charge.refunded (evt_1) | [stripe-webhook] refund re_1 NOT posted (canceling statement due to statement timeout) — the family still shows a credit they no longer have. refs=pi_1,ch_1
+  BAD R1 answered 500 so Stripe sends it again   → HTTP 200: the $500 refund is never booked; the family's bill still counts money it no longer paid
+R2 tuition chargeback, database busy → HTTP 200
+    [stripe-webhook] Event: charge.dispute.created (evt_2) | [stripe-webhook] chargeback dp_2 NOT posted to the ledger (canceling statement due to statement timeout) — the camp's books now overstate collected cash until this is reconciled by hand | [stripe-webhook] RISK EVENT: charge.dispute.created (evt_2) | [stripe-webhook] risk alert email sent: Stripe alert: A parent disputed a charge (chargeback 
+  BAD R2 answered 500 so Stripe sends it again   → HTTP 200
+R3 tuition dispute won, database busy → HTTP 200
+    [stripe-webhook] Event: charge.dispute.closed (evt_3) | [stripe-webhook] dispute dp_2 close not recorded: canceling statement due to statement timeout | [stripe-webhook] RISK EVENT: charge.dispute.closed (evt_3) | [stripe-webhook] risk alert email sent: Stripe alert: A disputed charge was closed — won
+  BAD R3 answered 500 so Stripe sends it again   → HTTP 200
+R4 control: canteen dashboard refund, database busy → HTTP 500
+  ok  R4 control 500   → HTTP 500
+R5 control: tuition payment, database busy → HTTP 500
+  ok  R5 control 500   → HTTP 500
+
+3 BAD

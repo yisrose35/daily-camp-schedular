@@ -1,0 +1,64 @@
+CAUGHT  M1 TED-177 286 server merge drops payer lines the page never saw  (exit 1; bash scripts/run_pgtests.sh 286)
+      FAIL   286_an_old_tab_keeps_the_payers_share
+CAUGHT  M2 TED-177 split share written to the payer again, not the family  (exit 1; node --test tests/payer_split_billed.test.js)
+      not ok 1 - TED-165: $1,000 with $800 from the Scholarship Fund — Pine is billed $200; the fund owes $800 on its own account
+      not ok 2 - TED-165: the fund's cheque is recorded on the fund — the family's balance does not move
+      not ok 5 - TED-178: Finance counts the fund — charged, collected, outstanding and its cheque in the log
+      not ok 6 - TED-178: a cheque entered by mistake is removed; a share billed by mistake goes back to the family
+      not ok 7 - TED-178: one cheque for two families pays each family's share
+      # fail 5
+CAUGHT  M3 TED-178 Finance leaves the funds out again  (exit 1; node --test tests/payer_split_billed.test.js)
+      not ok 5 - TED-178: Finance counts the fund — charged, collected, outstanding and its cheque in the log
+      // Stripe dashboard), or the row Campistry adds when a refund FAILED and the
+      # fail 1
+CAUGHT  M4 TED-178 Move back to family does not bill the family  (exit 1; node --test tests/payer_split_billed.test.js)
+      not ok 6 - TED-178: a cheque entered by mistake is removed; a share billed by mistake goes back to the family
+      # fail 1
+CAUGHT  M5 TED-178 fund payment method back to the first option  (exit 1; node --test tests/payer_split_billed.test.js)
+      not ok 2 - TED-165: the fund's cheque is recorded on the fund — the family's balance does not move
+      # fail 1
+MISSED  M6 TED-181 287 no cap at what the top-up has left  (exit 0; bash scripts/run_pgtests.sh 287)
+CAUGHT  M7 TED-181 287 takes money while a Snacks refund is waiting  (exit 1; bash scripts/run_pgtests.sh 287)
+      FAIL   287_a_canteen_top_up_refunded_outside_campistry
+CAUGHT  M8 TED-181 287 takes a Campistry refund again  (exit 1; bash scripts/run_pgtests.sh 287)
+      FAIL   287_a_canteen_top_up_refunded_outside_campistry
+MISSED  M9 TED-181 287 once-per-refund check removed  (exit 0; bash scripts/run_pgtests.sh 287)
+CAUGHT  M10 TED-181 webhook takes a Snacks (campistryHold) refund  (exit 1; node --test tests/canteen_stripe_reversal.test.js tests/stripe_webhook_write_fails.test.js)
+      not ok 2 - TED-181: Campistry's own canteen refund (it carries its hold) is not taken a second time
+      # fail 1
+CAUGHT  M11 TED-181 webhook takes money on a canteen inquiry  (exit 1; node --test tests/canteen_stripe_reversal.test.js)
+      not ok 3 - TED-181: a disputed top-up comes off while the bank decides, and goes back on when the camp wins; an inquiry moves nothing
+      # fail 1
+CAUGHT  M12 TED-181 webhook never gives a won dispute back  (exit 1; node --test tests/canteen_stripe_reversal.test.js)
+      not ok 3 - TED-181: a disputed top-up comes off while the bank decides, and goes back on when the camp wins; an inquiry moves nothing
+      # fail 1
+CAUGHT  M13 TED-182 tip inquiry claws back again  (exit 1; node --test tests/tip_refund_dispute.test.js)
+      not ok 8 - TED-182: a bank inquiry (no money moved) takes nothing from the staff member and records nothing
+      # fail 1
+CAUGHT  M14 TED-182 late opened after a decided dispute claws back  (exit 1; node --test tests/tip_refund_dispute.test.js)
+      not ok 9 - TED-182: an "opened" message arriving after the dispute was won takes nothing
+      # fail 1
+CAUGHT  M15 TED-183 every refusal retried again (no never-recorded list)  (exit 1; node --test tests/stripe_webhook_write_fails.test.js)
+      not ok 6 - TED-183: a top-up for a child number that is no longer anyone — the platform is told once, Stripe gets 200, no receipt
+      not ok 7 - TED-183: a deposit for a deleted application — the same
+      not ok 8 - TED-183: the email does not go — 500 and the claim given back, so the next delivery tells the platform
+      # fail 3
+CAUGHT  M16 TED-183 failed alert email not released (never sent)  (exit 1; node --test tests/stripe_webhook_write_fails.test.js)
+      not ok 8 - TED-183: the email does not go — 500 and the claim given back, so the next delivery tells the platform
+      # fail 1
+CAUGHT  M17 TED-183 transient refusal treated as permanent  (exit 1; node --test tests/stripe_webhook_write_fails.test.js)
+      not ok 1 - TED-164: Link Pay Now (tuition) — the database fails: 500 and no receipt; Stripe's next delivery records it and sends one
+      not ok 2 - TED-164: a canteen top-up — the database fails: 500 and no receipt; Stripe's next delivery records it and sends one
+      not ok 3 - TED-164: a photo purchase — the database fails: 500 and no receipt; Stripe's next delivery records it and sends one
+      not ok 4 - TED-164: a registration deposit — the database fails: 500 and no receipt; Stripe's next delivery records it and sends one
+      # fail 4
+CAUGHT  M18 TED-184 void restocks whatever it is asked  (exit 1; bash scripts/run_pgtests.sh 284)
+      FAIL   284_a_register_sale_can_be_voided
+CAUGHT  M19 TED-184 register finish() counts the next cart (18th-pass M9 again)  (exit 1; node --test tests/pos_charge_once.test.js)
+      not ok 8 - TED-169: starting the next child's sale while "Charging…" — that cart stays, and only the sold items leave stock
+      # fail 1
+CAUGHT  M20 TED-185 download without no-store  (exit 1; node --test tests/offline_register_once.test.js)
+      not ok 4 - TED-185: the office hands out this register's build, never a stored older copy, and the tablet shows it
+      # fail 1
+MISSED  M21 TED-185 no build check on the downloaded register  (exit 0; node --test tests/offline_register_once.test.js)
+      # fail 0
