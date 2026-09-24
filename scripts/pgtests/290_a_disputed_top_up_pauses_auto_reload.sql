@@ -114,6 +114,38 @@ BEGIN
     END IF;
 END $$;
 
+-- 6. TED-211/214: the disputed charge is an AUTO-RELOAD one (kind 'autoreload'
+--    on the BYOP path), not a hand-typed top-up. This is the case the mocked
+--    edge test could not reach: the real lookup must find it by its number.
+DO $$
+DECLARE c uuid := 'f2900000-0000-0000-0000-000000000901'; r jsonb; bal numeric; k text;
+BEGIN
+    r := public.credit_canteen_balance_from_processor(c, 'Rex', 20.00, 'cardknox', 'tx_rex', 'autoreload');
+    IF (r->>'success')::boolean IS NOT TRUE THEN RAISE EXCEPTION 'auto-reload credit: %', r; END IF;
+    SELECT payload ->> 'kind' INTO k FROM canteen_transactions WHERE camp_id = c AND payload ->> 'byopTransactionId' = 'tx_rex';
+    IF k IS DISTINCT FROM 'autoreload' THEN RAISE EXCEPTION 'expected an autoreload row, got kind=%', k; END IF;
+    PERFORM public.camp_family_save(c, 'rexfam', '{"name":"Rex Fam","camperIds":["Rex"]}'::jsonb);
+    -- the lookup must find the auto-reload row by its number, and name the family
+    r := public.canteen_dispute_family(c, 'tx_rex');
+    IF r->>'familyKey' IS DISTINCT FROM 'rexfam' THEN
+        RAISE EXCEPTION 'TED-211: a disputed AUTO-RELOAD charge was not found (kind autoreload): %', r;
+    END IF;
+    -- the money comes off the wallet
+    r := public.record_canteen_stripe_reversal(c, 'tx_rex', 'cb_rex', 999999, 'dispute', NULL);
+    SELECT balance INTO bal FROM camp_canteen_accounts WHERE camp_id = c AND account_key = 'Rex';
+    IF (r->>'success')::boolean IS NOT TRUE OR bal <> 0 THEN
+        RAISE EXCEPTION 'TED-211: a disputed auto-reload charge stayed on the wallet: % / %', r, bal;
+    END IF;
+    -- that child's auto-reload switches off, and the family is named for pausing
+    PERFORM public.canteen_account_save(c, 'Rex', (SELECT payload FROM camp_canteen_accounts WHERE camp_id = c AND account_key = 'Rex')
+        || '{"autoReload":{"enabled":true,"cardOnFile":true,"byopCustomerRef":"tok_rex","thresholdEnabled":true,"thresholdAmount":5,"thresholdReloadAmount":20}}'::jsonb);
+    r := public.pause_canteen_autoreload_for_dispute(c, 'tx_rex', 'cb_rex');
+    IF (r->>'changed')::boolean IS NOT TRUE OR r->>'familyKey' IS DISTINCT FROM 'rexfam' THEN
+        RAISE EXCEPTION 'TED-211: a disputed auto-reload charge did not pause the child/family: %', r;
+    END IF;
+    RAISE NOTICE 'ok  290: a disputed Cardknox/Banquest AUTO-RELOAD charge is found, reversed and paused';
+END $$;
+
 \i migrations/290_a_disputed_top_up_pauses_auto_reload.sql
 
 \set verify_q `cat scripts/verify_identity_chain.sql`

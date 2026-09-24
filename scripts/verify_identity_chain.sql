@@ -797,6 +797,9 @@ UNION ALL
           WHEN to_regprocedure('public.canteen_dispute_family(uuid,text)') IS NULL
                OR pg_get_functiondef(to_regprocedure('public.record_canteen_stripe_reversal(uuid,text,text,numeric,text,text)')) !~ 'byopTransactionId'
           THEN 'apply 290 again — an earlier copy is in place: a Cardknox/Banquest top-up dispute is ignored, and a sibling on the same card is still charged'
+          WHEN pg_get_functiondef(to_regprocedure('public._canteen_deposit_of(uuid,text)')) !~ 'autoreload'
+               OR pg_get_functiondef(to_regprocedure('public.record_canteen_stripe_reversal(uuid,text,text,numeric,text,text)')) !~ '''deposit'', ''autoreload'''
+          THEN 'apply 290 again — an earlier copy is in place: a disputed Cardknox/Banquest AUTO-RELOAD charge is ignored (kind autoreload), so the card is charged again'
           ELSE 'ok' END)
     ) AS x(item, result)
 

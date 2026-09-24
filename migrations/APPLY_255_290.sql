@@ -7865,8 +7865,10 @@ LANGUAGE sql
 STABLE
 SET search_path = public, pg_catalog
 AS $$
+    -- 'deposit' is a hand-typed top-up; 'autoreload' is an auto-reload charge
+    -- on the BYOP path (219 stores it so). Both can be disputed (TED-211).
     SELECT * FROM canteen_transactions
-     WHERE camp_id = p_camp_id AND tx_type = 'credit' AND COALESCE(payload ->> 'kind', '') = 'deposit'
+     WHERE camp_id = p_camp_id AND tx_type = 'credit' AND COALESCE(payload ->> 'kind', '') IN ('deposit', 'autoreload')
        AND (payload ->> 'stripePaymentIntentId' = p_ref OR payload ->> 'byopTransactionId' = p_ref)
      ORDER BY first_seen LIMIT 1
 $$;
@@ -7958,26 +7960,34 @@ REVOKE ALL ON FUNCTION public.pause_canteen_autoreload_for_dispute(uuid, text, t
 GRANT EXECUTE ON FUNCTION public.pause_canteen_autoreload_for_dispute(uuid, text, text) TO service_role;
 
 -- A Cardknox/Banquest top-up is taken off the wallet (and put back if won) the
--- same way as a Stripe one (TED-211): 287 finds the top-up by either id.
+-- same way as a Stripe one (TED-211): 287 finds the top-up by either id, and
+-- an auto-reload charge (kind 'autoreload' on the BYOP path) as well as a
+-- hand-typed one (kind 'deposit'). Both replaces are idempotent — each is a
+-- no-op once done — so a database left half-patched by an earlier 290 is
+-- finished off, not skipped.
 DO $$
 DECLARE
-    d   text := replace(pg_get_functiondef('public.record_canteen_stripe_reversal(uuid,text,text,numeric,text,text)'::regprocedure), chr(13), '');
-    old text := $o$payload ->> 'stripePaymentIntentId' = v_pi
+    d        text := replace(pg_get_functiondef('public.record_canteen_stripe_reversal(uuid,text,text,numeric,text,text)'::regprocedure), chr(13), '');
+    pi_old   text := $o$payload ->> 'stripePaymentIntentId' = v_pi
        AND tx_type = 'credit'$o$;
-    new text := $n$(payload ->> 'stripePaymentIntentId' = v_pi OR payload ->> 'byopTransactionId' = v_pi)
+    pi_new   text := $n$(payload ->> 'stripePaymentIntentId' = v_pi OR payload ->> 'byopTransactionId' = v_pi)
        AND tx_type = 'credit'$n$;
+    kind_old text := $k$AND COALESCE(payload ->> 'kind', '') = 'deposit'$k$;
+    kind_new text := $k$AND COALESCE(payload ->> 'kind', '') IN ('deposit', 'autoreload')$k$;
 BEGIN
     -- Pasted from Windows the patterns carry CR LF; the function text has none.
-    old := replace(old, chr(13), '');
-    new := replace(new, chr(13), '');
-    IF position('byopTransactionId' IN d) > 0 THEN
-        RAISE NOTICE '290: record_canteen_stripe_reversal already finds a Cardknox/Banquest top-up';
+    pi_old := replace(pi_old, chr(13), '');
+    pi_new := replace(pi_new, chr(13), '');
+    IF position('byopTransactionId' IN d) > 0 AND position('''deposit'', ''autoreload''' IN d) > 0 THEN
+        RAISE NOTICE '290: record_canteen_stripe_reversal already finds a Cardknox/Banquest auto-reload top-up';
         RETURN;
     END IF;
-    IF position(old IN d) = 0 THEN
+    IF position(pi_old IN d) = 0 AND position('byopTransactionId' IN d) = 0 THEN
         RAISE EXCEPTION '290: record_canteen_stripe_reversal does not look the way this file expects (run 287 first) — send this message to the builder';
     END IF;
-    EXECUTE replace(d, old, new);
+    d := replace(d, pi_old, pi_new);       -- add the Cardknox/Banquest id (no-op if already there)
+    d := replace(d, kind_old, kind_new);   -- match an auto-reload top-up too (no-op if already there)
+    EXECUTE d;
 END $$;
 
 -- The nightly run writes back the copy it read: that copy never switches a
