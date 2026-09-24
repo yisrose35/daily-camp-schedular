@@ -1,0 +1,122 @@
+TAP version 13
+# Subtest: TED-140: a family whose card on file is DEBIT is not surcharged
+ok 1 - TED-140: a family whose card on file is DEBIT is not surcharged
+  ---
+  duration_ms: 5.352614
+  type: 'test'
+  ...
+# Subtest: TED-140: a card whose type is not on file is not surcharged either (never assumed credit)
+ok 2 - TED-140: a card whose type is not on file is not surcharged either (never assumed credit)
+  ---
+  duration_ms: 2.343759
+  type: 'test'
+  ...
+# Subtest: TED-140: a CREDIT card on file is surcharged — 3% of $1,000, and the card type is recorded
+ok 3 - TED-140: a CREDIT card on file is surcharged — 3% of $1,000, and the card type is recorded
+  ---
+  duration_ms: 1.597722
+  type: 'test'
+  ...
+# Subtest: TED-141: Silver — a $1,000 refund of a $1,030 card payment returns $29.13 of the $30; the rest returns $0.87
+ok 4 - TED-141: Silver — a $1,000 refund of a $1,030 card payment returns $29.13 of the $30; the rest returns $0.87
+  ---
+  duration_ms: 15.215376
+  type: 'test'
+  ...
+# Subtest: TED-146: Bronze — the deposit paid before the fee carries none of it; refunding the $3,090 returns all $90
+ok 5 - TED-146: Bronze — the deposit paid before the fee carries none of it; refunding the $3,090 returns all $90
+  ---
+  duration_ms: 12.589019
+  type: 'test'
+  ...
+# Subtest: TED-146: Copper — a refund drawn from the BANK payment returns none of the card surcharge
+ok 6 - TED-146: Copper — a refund drawn from the BANK payment returns none of the card surcharge
+  ---
+  duration_ms: 23.62658
+  type: 'test'
+  ...
+# Subtest: TED-146/148: a refund that failed and was put back does not count — the full share is returned again, once
+ok 7 - TED-146/148: a refund that failed and was put back does not count — the full share is returned again, once
+  ---
+  duration_ms: 13.308926
+  type: 'test'
+  ...
+# Subtest: TED-144: a payment still on its way or one that failed is not refundable (and carries no surcharge)
+ok 8 - TED-144: a payment still on its way or one that failed is not refundable (and carries no surcharge)
+  ---
+  duration_ms: 11.547894
+  type: 'test'
+  ...
+# Subtest: TED-141/146: Billing's card refund posts one surcharge credit per refund, carrying the refund's id
+ok 9 - TED-141/146: Billing's card refund posts one surcharge credit per refund, carrying the refund's id
+  ---
+  duration_ms: 2.158361
+  type: 'test'
+  ...
+# Subtest: TED-146: the window's "Balance owed after this refund" includes the surcharge's share
+ok 10 - TED-146: the window's "Balance owed after this refund" includes the surcharge's share
+  ---
+  duration_ms: 16.90508
+  type: 'test'
+  ...
+# Subtest: TED-147: Iron's DEFAULT method is a bank account — no surcharge, even with a credit card saved
+ok 11 - TED-147: Iron's DEFAULT method is a bank account — no surcharge, even with a credit card saved
+  ---
+  duration_ms: 1.143291
+  type: 'test'
+  ...
+# Subtest: TED-147: with the credit card as the default, the fee is added and names that card
+ok 12 - TED-147: with the credit card as the default, the fee is added and names that card
+  ---
+  duration_ms: 0.953113
+  type: 'test'
+  ...
+# Subtest: TED-146: the office's charge row records whether a card or a bank account paid it
+ok 13 - TED-146: the office's charge row records whether a card or a bank account paid it
+  ---
+  duration_ms: 3.09925
+  type: 'test'
+  ...
+# Subtest: TED-155: a flat online payment fee is allowed for a family paying by bank (it is not a card rule)
+ok 14 - TED-155: a flat online payment fee is allowed for a family paying by bank (it is not a card rule)
+  ---
+  duration_ms: 1.869313
+  type: 'test'
+  ...
+# Subtest: TED-153: in cash-discount mode the family tool gives the discount instead of "no fee"
+ok 15 - TED-153: in cash-discount mode the family tool gives the discount instead of "no fee"
+  ---
+  duration_ms: 1.69233
+  type: 'test'
+  ...
+# Subtest: TED-167: the preview starts from the ledger balance Billing shows, not the stale per-family figure
+not ok 16 - TED-167: the preview starts from the ledger balance Billing shows, not the stale per-family figure
+  ---
+  duration_ms: 17.804606
+  type: 'test'
+  location: '/tmp/claude-0/-home-user-daily-camp-schedular/39278441-0cf3-5f6a-bf8e-a51bef67e95d/scratchpad/old18/tests/card_surcharge_billing.test.js:204:1'
+  failureType: 'testCodeFailure'
+  error: 'Balance owed after this refund: <strong>$1400.00</strong> (currently $1000.00)'
+  code: 'ERR_ASSERTION'
+  name: 'AssertionError'
+  expected:
+  actual: 'Balance owed after this refund: <strong>$1400.00</strong> (currently $1000.00)'
+  operator: 'match'
+  stack: |-
+    TestContext.<anonymous> (/tmp/claude-0/-home-user-daily-camp-schedular/39278441-0cf3-5f6a-bf8e-a51bef67e95d/scratchpad/old18/tests/card_surcharge_billing.test.js:217:12)
+    Test.runInAsyncScope (node:async_hooks:214:14)
+    Test.run (node:internal/test_runner/test:1047:25)
+    Test.processPendingSubtests (node:internal/test_runner/test:744:18)
+    Test.postRun (node:internal/test_runner/test:1173:19)
+    Test.run (node:internal/test_runner/test:1101:12)
+    async Test.processPendingSubtests (node:internal/test_runner/test:744:7)
+  ...
+1..16
+# tests 16
+# suites 0
+# pass 15
+# fail 1
+# cancelled 0
+# skipped 0
+# todo 0
+# duration_ms 232.166826

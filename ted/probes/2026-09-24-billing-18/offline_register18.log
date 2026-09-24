@@ -1,0 +1,34 @@
+set up: {"bal":20,"sales":0,"unexported":0,"stock":30}; charge button "Select a camper"
+
+O0. one tap
+    {"bal":17.5,"sales":1,"unexported":1,"stock":29}
+  ok  O0 one tap → one $2.50 sale   → {"bal":17.5,"sales":1,"unexported":1,"stock":29}
+
+O1. a double tap registered in the same instant
+    before {"bal":17.5,"sales":1,"unexported":1,"stock":29} → after {"bal":15,"sales":2,"unexported":2,"stock":28}
+  ok  O1 one Ices, one sale   → 1 sales, balance 17.5 → 15, stock 29 → 28
+
+O2. two taps 40 ms apart
+    before {"bal":15,"sales":2,"unexported":2,"stock":28} → after {"bal":12.5,"sales":3,"unexported":3,"stock":27}
+  ok  O2 one Ices, one sale   → 1 sales, balance 15 → 12.5
+
+O3. "Export sales" → the file; then the file is lost, export again
+    first file: 3 sales; register now {"bal":12.5,"sales":3,"unexported":0,"stock":27}
+    second file: 0 sales
+    settings screen: "Settings ✕ CampCamp NameSecurityChange PINLicenseExpiry Date2027-03-23Sync StatusLast Import9/24/2026, 12:48:56 PMTotal Transactions3Un-synced0Exported3DataImport Fresh DataExport TransactionsExport all sales againClear All Data"
+  ok  O3 sales from a lost export file can be exported again   → second export holds 0 sales; no "export again" in settings
+
+O4. the file is lost: Settings → "Export all sales again"
+    button shown: true; third file: 3 sales; same ids as the first file: true
+  ok  O4 "Export all sales again" is offered and holds every sale   → 3 vs 3
+    import file 1 → {"campers": {"Shaya Brickman": {"balance": 12.50, "camperId": 1}}, "refused": [], "success": true, "imported": 3, "duplicates": 0}
+    import file 3 → {"campers": {}, "refused": [], "success": true, "imported": 0, "duplicates": 3}
+    Shaya's wallet $20 → $12.50; offline sales on the ledger 3
+  ok  O4b importing the first file and the re-export charges each sale once   → wallet $12.50 (expected $12.5), 3 sales
+
+O5. one more sale (never exported), then Clear All Data
+    Clear All Data says: "1 sale has never been exported — export first, or they are lost. | Check the office imported the exported files (3 sales) before clearing — or use “Export all sales again”."
+  ok  O5 Clear All Data names the unexported sale and the exported ones   → 1 sale has never been exported — export first, or they are lost. | Check the office imported the exported files (3 sales) before clearing — or use “Export all sales again”.
+page errors: []
+
+0 BAD

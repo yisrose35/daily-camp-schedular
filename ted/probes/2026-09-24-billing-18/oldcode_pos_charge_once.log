@@ -1,0 +1,128 @@
+TAP version 13
+# Subtest: TED-159: two taps while the charge is on its way — one request, one charge
+ok 1 - TED-159: two taps while the charge is on its way — one request, one charge
+  ---
+  duration_ms: 45.198011
+  type: 'test'
+  ...
+# Subtest: TED-159: the answer is lost after the server charged — "could not confirm", and a second tap charges nothing more
+not ok 2 - TED-159: the answer is lost after the server charged — "could not confirm", and a second tap charges nothing more
+  ---
+  duration_ms: 83.227036
+  type: 'test'
+  location: '/tmp/claude-0/-home-user-daily-camp-schedular/39278441-0cf3-5f6a-bf8e-a51bef67e95d/scratchpad/old18/tests/pos_charge_once.test.js:104:1'
+  failureType: 'testCodeFailure'
+  error: '[["Could not confirm the charge to Avi — it may have gone through. Check their transactions; pressing Charge again for the same items will not charge twice.",true],["✓ $2.50 charged to Avi",false]]'
+  code: 'ERR_ASSERTION'
+  name: 'AssertionError'
+  expected: true
+  actual: false
+  operator: '=='
+  stack: |-
+    TestContext.<anonymous> (/tmp/claude-0/-home-user-daily-camp-schedular/39278441-0cf3-5f6a-bf8e-a51bef67e95d/scratchpad/old18/tests/pos_charge_once.test.js:115:12)
+    async Test.run (node:internal/test_runner/test:1054:7)
+    async Test.processPendingSubtests (node:internal/test_runner/test:744:7)
+  ...
+# Subtest: TED-159: after a sale is answered, the next sale is a new one (a new key) and is charged
+ok 3 - TED-159: after a sale is answered, the next sale is a new one (a new key) and is charged
+  ---
+  duration_ms: 82.907692
+  type: 'test'
+  ...
+# Subtest: TED-159: a refusal is final for that sale — nothing charged, the next tap is a new try
+ok 4 - TED-159: a refusal is final for that sale — nothing charged, the next tap is a new try
+  ---
+  duration_ms: 41.410759
+  type: 'test'
+  ...
+# Subtest: TED-159: before migration 283 is pasted the register still charges (once per tap, as before)
+ok 5 - TED-159: before migration 283 is pasted the register still charges (once per tap, as before)
+  ---
+  duration_ms: 41.015086
+  type: 'test'
+  ...
+# Subtest: TED-168: after "could not confirm", Clear All ends that sale — the same child's next identical sale IS charged
+not ok 6 - TED-168: after "could not confirm", Clear All ends that sale — the same child's next identical sale IS charged
+  ---
+  duration_ms: 82.824602
+  type: 'test'
+  location: '/tmp/claude-0/-home-user-daily-camp-schedular/39278441-0cf3-5f6a-bf8e-a51bef67e95d/scratchpad/old18/tests/pos_charge_once.test.js:140:1'
+  failureType: 'testCodeFailure'
+  error: |-
+    the second Ices was not charged
+    
+    1 !== 2
+    
+  code: 'ERR_ASSERTION'
+  name: 'AssertionError'
+  expected: 2
+  actual: 1
+  operator: 'strictEqual'
+  stack: |-
+    TestContext.<anonymous> (/tmp/claude-0/-home-user-daily-camp-schedular/39278441-0cf3-5f6a-bf8e-a51bef67e95d/scratchpad/old18/tests/pos_charge_once.test.js:145:12)
+    async Test.run (node:internal/test_runner/test:1054:7)
+    async Test.processPendingSubtests (node:internal/test_runner/test:744:7)
+  ...
+# Subtest: TED-168: a retry that replays the first answer says "already charged", not "✓ charged"
+not ok 7 - TED-168: a retry that replays the first answer says "already charged", not "✓ charged"
+  ---
+  duration_ms: 82.186395
+  type: 'test'
+  location: '/tmp/claude-0/-home-user-daily-camp-schedular/39278441-0cf3-5f6a-bf8e-a51bef67e95d/scratchpad/old18/tests/pos_charge_once.test.js:149:1'
+  failureType: 'testCodeFailure'
+  error: |-
+    The input did not match the regular expression /^Already charged — the earlier \$2\.50 charge to Avi went through; not charged again/. Input:
+    
+    '✓ $2.50 charged to Avi'
+    
+  code: 'ERR_ASSERTION'
+  name: 'AssertionError'
+  expected:
+  actual: '✓ $2.50 charged to Avi'
+  operator: 'match'
+  stack: |-
+    TestContext.<anonymous> (/tmp/claude-0/-home-user-daily-camp-schedular/39278441-0cf3-5f6a-bf8e-a51bef67e95d/scratchpad/old18/tests/pos_charge_once.test.js:154:12)
+    async Test.run (node:internal/test_runner/test:1054:7)
+    async Test.processPendingSubtests (node:internal/test_runner/test:744:7)
+  ...
+# Subtest: TED-169: starting the next child's sale while "Charging…" — that cart stays, and only the sold items leave stock
+not ok 8 - TED-169: starting the next child's sale while "Charging…" — that cart stays, and only the sold items leave stock
+  ---
+  duration_ms: 42.230288
+  type: 'test'
+  location: '/tmp/claude-0/-home-user-daily-camp-schedular/39278441-0cf3-5f6a-bf8e-a51bef67e95d/scratchpad/old18/tests/pos_charge_once.test.js:157:1'
+  failureType: 'testCodeFailure'
+  error: |-
+    Bina's cart was wiped
+    + actual - expected
+    
+      {
+    +   cart: 0,
+    +   sel: null
+    -   cart: 2,
+    -   sel: 'Bina'
+      }
+    
+  code: 'ERR_ASSERTION'
+  name: 'AssertionError'
+  expected:
+    sel: 'Bina'
+    cart: 2
+  actual:
+    sel: ~
+    cart: 0
+  operator: 'deepStrictEqual'
+  stack: |-
+    TestContext.<anonymous> (/tmp/claude-0/-home-user-daily-camp-schedular/39278441-0cf3-5f6a-bf8e-a51bef67e95d/scratchpad/old18/tests/pos_charge_once.test.js:162:12)
+    async Test.run (node:internal/test_runner/test:1054:7)
+    async Test.processPendingSubtests (node:internal/test_runner/test:744:7)
+  ...
+1..8
+# tests 8
+# suites 0
+# pass 4
+# fail 4
+# cancelled 0
+# skipped 0
+# todo 0
+# duration_ms 582.589629

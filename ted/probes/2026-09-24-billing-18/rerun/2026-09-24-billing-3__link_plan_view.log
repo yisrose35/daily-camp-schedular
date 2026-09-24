@@ -1,0 +1,2 @@
+parent portal shows: [1000,200,200]
+autopay charges on 1 Jun: {"index":0,"dueDate":"2026-06-01","amount":1000,"remaining":3}

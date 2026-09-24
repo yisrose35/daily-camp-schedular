@@ -1,0 +1,20 @@
+Files that read the card-fee policy at all: ./campistry_card_fees.js, ./campistry_me.js, ./campistry_register.html
+Places that read a quote's discount: ./campistry_me.js:18415:    var d=Math.max(0,Math.round((Number(q.discount)||0)*100)/100);
+
+C1. A parent opens the registration form (campistry_register.html?camp=51000000-0000-0000-0000-0000000000c1)
+    the card-fee note on the form: "Prices shown include card processing. Paying by cheque or bank transfer takes 3% off."
+
+C2. Wolf owes $1000 and pays by cheque, taking the promised 3% off: $970. Me → Billing → Wolf → Record Payment $970 (cheque)
+    Record Payment entry points on the page: ["finAddPayment","openPaymentForFamily"]
+    the Record Payment window: "Record Payment×FamilyWolfAmount ($)DateMethodCredit cardDebit cardCashCheckACH / bank transferZelleWire transferPayPalPayment planOtherReference #Notes (optional)CancelSave"
+    its fields: ["payFamKey:SELECT[wolf]","payAmount:INPUT","payDate:INPUT","payMethod:SELECT[credit|debit|cash|check|ach|zelle|wire|paypal|plan|other]","payRef:INPUT","payNotes:INPUT"]
+    after typing $970 by cheque: "Record Payment×FamilyWolfAmount ($)DateMethodCredit cardDebit cardCashCheckACH / bank transferZelleWire transferPayPalPayment planOtherReference #Discount for not paying by card: $30 — also taken off their bill with this payment.Notes (optional)CancelSave"
+    Wolf now owes $0
+  ok  C2 a family that pays by cheque with the promised 3% off owes nothing   → Wolf still owes $0 — the 3% the form promised was never taken off
+
+C3. The office looks for a way to give the discount: Billing → Wolf → "Add card surcharge…" in this mode
+    window: "Discount for not paying by card×Every bank payment Wolf made online already has its discount. Cheques, cash and bank transfers you record with Record Payment get theirs automatically.CancelSave"
+    toast: "Payment of $970 recorded for Wolf — with $30 off for not paying by card"; Wolf owes $0
+page errors: []
+
+0 BAD

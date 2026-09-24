@@ -1,0 +1,15 @@
+A. full chain: 282 row → "ok"
+  ok  A full chain is ok   → ok
+B. 231 pasted again after 282: ran — NOTICE:  function public.submit_canteen_deposit(text,pg_catalog.numeric,uuid) does not exist, skipping | NOTICE:  function public.set_canteen_limits(text,pg_catalog.numeric,pg_catalog.numeric,pg_catalog.numeric,uuid) does not exist, skipping | NOTICE:  function public.set_canteen_auto_reload(uuid,te
+   282 row → "apply 282 — Link keeps telling a parent the camp switched auto-reload off after they switched it back on"
+  ok  B the check notices the fix is gone   → apply 282 — Link keeps telling a parent the camp switched auto-reload off after they switched it back on
+   282 pasted again: ran
+   282 row → "ok"
+  ok  B after 282 again it is ok   → ok
+C. 282 pasted a second time: ran — NOTICE:  282: set_canteen_auto_reload already clears the note
+  ok  C still ok after a repeat   → ok
+  ok  C the note-clearing line is in the function once, not once per paste   → 1 copies
+  ok  the patched function keeps its grants (parents yes, signed-out no)   → true / anon false
+D. 282 on a database without 231's function: ERROR — ERROR:  282 needs migration 231 — apply it first
+
+0 BAD

@@ -1,0 +1,56 @@
+TAP version 13
+# Subtest: Cardknox cannot be connected without its webhook PIN (nothing is tested or stored)
+ok 1 - Cardknox cannot be connected without its webhook PIN (nothing is tested or stored)
+  ---
+  duration_ms: 174.85051
+  type: 'test'
+  ...
+# Subtest: a Sola notice for a camp with no PIN is not acknowledged (Sola retries instead of dropping it)
+ok 2 - a Sola notice for a camp with no PIN is not acknowledged (Sola retries instead of dropping it)
+  ---
+  duration_ms: 164.709249
+  type: 'test'
+  ...
+# Subtest: a retried tip is recorded against the parent's payment
+ok 3 - a retried tip is recorded against the parent's payment
+  ---
+  duration_ms: 178.626312
+  type: 'test'
+  ...
+# Subtest: a tip the webhook already recorded under that payment is not recorded twice
+ok 4 - a tip the webhook already recorded under that payment is not recorded twice
+  ---
+  duration_ms: 177.030431
+  type: 'test'
+  ...
+# Subtest: TED-176: a tip whose payment was refunded or disputed before the retry is not sent, and leaves the queue
+not ok 5 - TED-176: a tip whose payment was refunded or disputed before the retry is not sent, and leaves the queue
+  ---
+  duration_ms: 176.907319
+  type: 'test'
+  location: '/tmp/claude-0/-home-user-daily-camp-schedular/39278441-0cf3-5f6a-bf8e-a51bef67e95d/scratchpad/old18/tests/ted087_loose_ends.test.js:67:1'
+  failureType: 'testCodeFailure'
+  error: 'the refunded tip was sent to the staff member'
+  code: 'ERR_ASSERTION'
+  name: 'AssertionError'
+  expected: true
+  actual: false
+  operator: '=='
+  stack: |-
+    TestContext.<anonymous> (/tmp/claude-0/-home-user-daily-camp-schedular/39278441-0cf3-5f6a-bf8e-a51bef67e95d/scratchpad/old18/tests/ted087_loose_ends.test.js:71:16)
+    Test.runInAsyncScope (node:async_hooks:214:14)
+    Test.run (node:internal/test_runner/test:1047:25)
+    Test.processPendingSubtests (node:internal/test_runner/test:744:18)
+    Test.postRun (node:internal/test_runner/test:1173:19)
+    Test.run (node:internal/test_runner/test:1101:12)
+    async Test.processPendingSubtests (node:internal/test_runner/test:744:7)
+  ...
+1..5
+# tests 5
+# suites 0
+# pass 4
+# fail 1
+# cancelled 0
+# skipped 0
+# todo 0
+# duration_ms 967.178733

@@ -1,0 +1,249 @@
+TAP version 13
+# Subtest: TED-176: a tip refunded in full — taken back from the staff member once, marked, one email; the repeat does nothing
+not ok 1 - TED-176: a tip refunded in full — taken back from the staff member once, marked, one email; the repeat does nothing
+  ---
+  duration_ms: 172.261502
+  type: 'test'
+  location: '/tmp/claude-0/-home-user-daily-camp-schedular/39278441-0cf3-5f6a-bf8e-a51bef67e95d/scratchpad/old18/tests/tip_refund_dispute.test.js:66:1'
+  failureType: 'testCodeFailure'
+  error: |-
+    the tip was taken back twice (or never)
+    
+    0 !== 1
+    
+  code: 'ERR_ASSERTION'
+  name: 'AssertionError'
+  expected: 1
+  actual: 0
+  operator: 'strictEqual'
+  stack: |-
+    TestContext.<anonymous> (/tmp/claude-0/-home-user-daily-camp-schedular/39278441-0cf3-5f6a-bf8e-a51bef67e95d/scratchpad/old18/tests/tip_refund_dispute.test.js:70:12)
+    Test.runInAsyncScope (node:async_hooks:214:14)
+    Test.run (node:internal/test_runner/test:1047:25)
+    Test.start (node:internal/test_runner/test:944:17)
+    startSubtestAfterBootstrap (node:internal/test_runner/harness:296:17)
+  ...
+# Subtest: TED-176: a disputed tip — the whole tip is taken back while the bank decides; won — the platform is told to send it back
+not ok 2 - TED-176: a disputed tip — the whole tip is taken back while the bank decides; won — the platform is told to send it back
+  ---
+  duration_ms: 171.325646
+  type: 'test'
+  location: '/tmp/claude-0/-home-user-daily-camp-schedular/39278441-0cf3-5f6a-bf8e-a51bef67e95d/scratchpad/old18/tests/tip_refund_dispute.test.js:83:1'
+  failureType: 'testCodeFailure'
+  error: |-
+    Expected values to be strictly equal:
+    
+    0 !== 1
+    
+  code: 'ERR_ASSERTION'
+  name: 'AssertionError'
+  expected: 1
+  actual: 0
+  operator: 'strictEqual'
+  stack: |-
+    TestContext.<anonymous> (/tmp/claude-0/-home-user-daily-camp-schedular/39278441-0cf3-5f6a-bf8e-a51bef67e95d/scratchpad/old18/tests/tip_refund_dispute.test.js:89:12)
+    Test.runInAsyncScope (node:async_hooks:214:14)
+    Test.run (node:internal/test_runner/test:1047:25)
+    Test.processPendingSubtests (node:internal/test_runner/test:744:18)
+    Test.postRun (node:internal/test_runner/test:1173:19)
+    Test.run (node:internal/test_runner/test:1101:12)
+    async startSubtestAfterBootstrap (node:internal/test_runner/harness:296:3)
+  ...
+# Subtest: TED-176: a cart of tips, half refunded — each staff member gives back their own share
+not ok 3 - TED-176: a cart of tips, half refunded — each staff member gives back their own share
+  ---
+  duration_ms: 200.118512
+  type: 'test'
+  location: '/tmp/claude-0/-home-user-daily-camp-schedular/39278441-0cf3-5f6a-bf8e-a51bef67e95d/scratchpad/old18/tests/tip_refund_dispute.test.js:98:1'
+  failureType: 'testCodeFailure'
+  error: |-
+    Expected values to be strictly deep-equal:
+    + actual - expected
+    
+    + []
+    - [
+    -   [
+    -     'tr_A',
+    -     '500'
+    -   ],
+    -   [
+    -     'tr_B',
+    -     '500'
+    -   ]
+    - ]
+    
+  code: 'ERR_ASSERTION'
+  name: 'AssertionError'
+  expected:
+    0:
+      0: 'tr_A'
+      1: '500'
+    1:
+      0: 'tr_B'
+      1: '500'
+  actual:
+  operator: 'deepStrictEqual'
+  stack: |-
+    TestContext.<anonymous> (/tmp/claude-0/-home-user-daily-camp-schedular/39278441-0cf3-5f6a-bf8e-a51bef67e95d/scratchpad/old18/tests/tip_refund_dispute.test.js:106:12)
+    Test.runInAsyncScope (node:async_hooks:214:14)
+    Test.run (node:internal/test_runner/test:1047:25)
+    Test.processPendingSubtests (node:internal/test_runner/test:744:18)
+    Test.postRun (node:internal/test_runner/test:1173:19)
+    Test.run (node:internal/test_runner/test:1101:12)
+    async Test.processPendingSubtests (node:internal/test_runner/test:744:7)
+  ...
+# Subtest: TED-176: not a tip — left to stripe-webhook: nothing taken back, nothing recorded
+ok 4 - TED-176: not a tip — left to stripe-webhook: nothing taken back, nothing recorded
+  ---
+  duration_ms: 177.674627
+  type: 'test'
+  ...
+# Subtest: TED-176: the email does not go — 500, Stripe sends it again, and only the email is tried again
+not ok 5 - TED-176: the email does not go — 500, Stripe sends it again, and only the email is tried again
+  ---
+  duration_ms: 175.447278
+  type: 'test'
+  location: '/tmp/claude-0/-home-user-daily-camp-schedular/39278441-0cf3-5f6a-bf8e-a51bef67e95d/scratchpad/old18/tests/tip_refund_dispute.test.js:119:1'
+  failureType: 'testCodeFailure'
+  error: |-
+    Expected values to be strictly deep-equal:
+    + actual - expected
+    
+      [
+    -   500,
+        200,
+    +   200
+      ]
+    
+  code: 'ERR_ASSERTION'
+  name: 'AssertionError'
+  expected:
+    0: 500
+    1: 200
+  actual:
+    0: 200
+    1: 200
+  operator: 'deepStrictEqual'
+  stack: |-
+    TestContext.<anonymous> (/tmp/claude-0/-home-user-daily-camp-schedular/39278441-0cf3-5f6a-bf8e-a51bef67e95d/scratchpad/old18/tests/tip_refund_dispute.test.js:122:12)
+    Test.runInAsyncScope (node:async_hooks:214:14)
+    Test.run (node:internal/test_runner/test:1047:25)
+    Test.processPendingSubtests (node:internal/test_runner/test:744:18)
+    Test.postRun (node:internal/test_runner/test:1173:19)
+    Test.run (node:internal/test_runner/test:1101:12)
+    async Test.processPendingSubtests (node:internal/test_runner/test:744:7)
+  ...
+# Subtest: TED-176: the reversal is refused (the staff account has no balance) — the email says what to do by hand
+not ok 6 - TED-176: the reversal is refused (the staff account has no balance) — the email says what to do by hand
+  ---
+  duration_ms: 176.235652
+  type: 'test'
+  location: '/tmp/claude-0/-home-user-daily-camp-schedular/39278441-0cf3-5f6a-bf8e-a51bef67e95d/scratchpad/old18/tests/tip_refund_dispute.test.js:127:1'
+  failureType: 'testCodeFailure'
+  error: "Cannot read properties of undefined (reading 'args')"
+  code: 'ERR_TEST_FAILURE'
+  name: 'TypeError'
+  stack: |-
+    TestContext.<anonymous> (/tmp/claude-0/-home-user-daily-camp-schedular/39278441-0cf3-5f6a-bf8e-a51bef67e95d/scratchpad/old18/tests/tip_refund_dispute.test.js:131:67)
+    Test.runInAsyncScope (node:async_hooks:214:14)
+    Test.run (node:internal/test_runner/test:1047:25)
+    Test.processPendingSubtests (node:internal/test_runner/test:744:18)
+    Test.postRun (node:internal/test_runner/test:1173:19)
+    Test.run (node:internal/test_runner/test:1101:12)
+    async Test.processPendingSubtests (node:internal/test_runner/test:744:7)
+  ...
+# Subtest: TED-176: Link admin counts a refunded or disputed tip at what the staff member kept
+not ok 7 - TED-176: Link admin counts a refunded or disputed tip at what the staff member kept
+  ---
+  duration_ms: 5.953583
+  type: 'test'
+  location: '/tmp/claude-0/-home-user-daily-camp-schedular/39278441-0cf3-5f6a-bf8e-a51bef67e95d/scratchpad/old18/tests/tip_refund_dispute.test.js:138:1'
+  failureType: 'testCodeFailure'
+  error: |-
+    Expected values to be strictly deep-equal:
+    + actual - expected
+    
+      {
+        a: [
+    +     20,
+    +     null
+    -     0,
+    -     'Refunded'
+        ],
+        b: [
+    +     10,
+    +     null
+    -     0,
+    -     'Disputed'
+        ],
+        c: [
+          10,
+    +     null
+    -     ''
+        ],
+        d: [
+    +     10,
+    +     null
+    -     6,
+    -     'Part refunded'
+        ],
+        e: [
+          5,
+    +     null
+    -     ''
+        ]
+      }
+    
+  code: 'ERR_ASSERTION'
+  name: 'AssertionError'
+  expected:
+    a:
+      0: 0
+      1: 'Refunded'
+    b:
+      0: 0
+      1: 'Disputed'
+    c:
+      0: 10
+      1: ''
+    d:
+      0: 6
+      1: 'Part refunded'
+    e:
+      0: 5
+      1: ''
+  actual:
+    e:
+      0: 5
+      1: ~
+    d:
+      0: 10
+      1: ~
+    c:
+      0: 10
+      1: ~
+    b:
+      0: 10
+      1: ~
+    a:
+      0: 20
+      1: ~
+  operator: 'deepStrictEqual'
+  stack: |-
+    TestContext.<anonymous> (/tmp/claude-0/-home-user-daily-camp-schedular/39278441-0cf3-5f6a-bf8e-a51bef67e95d/scratchpad/old18/tests/tip_refund_dispute.test.js:153:12)
+    Test.runInAsyncScope (node:async_hooks:214:14)
+    Test.run (node:internal/test_runner/test:1047:25)
+    Test.processPendingSubtests (node:internal/test_runner/test:744:18)
+    Test.postRun (node:internal/test_runner/test:1173:19)
+    Test.run (node:internal/test_runner/test:1101:12)
+    async Test.processPendingSubtests (node:internal/test_runner/test:744:7)
+  ...
+1..7
+# tests 7
+# suites 0
+# pass 1
+# fail 6
+# cancelled 0
+# skipped 0
+# todo 0
+# duration_ms 1190.415795

@@ -1,0 +1,68 @@
+postgres up with 132 migrations applied
+SETUP: Gold paid $500 tuition by card (pi_GOLD1) on 2026-08-25.
+    start: Stripe sent back $0 [none] | books: Gold owes $0; payment rows [pi_pi_GOLD1 $500]
+
+C1. The office refunds $500 (Billing → Issue Credit/Refund → Direct Refund)
+    toast: ["✓ Refunded $500 to card/bank for Gold"]
+    after C1: Stripe sent back $500 [re_1 $500 succeeded] | books: Gold owes $500; payment rows [pi_pi_GOLD1 $500, ref_1790255605312_0 $-500 [re_1]]
+  ok  C1 one refund, $500 back   → re_1 $500 succeeded
+
+C2. Three days later re_1 fails
+    re_1 FAILS at Stripe (card account closed); refund.failed → the real webhook → HTTP 200
+    after the put-back: Stripe sent back $0 [re_1 $500 failed] | books: Gold owes $0; payment rows [pi_pi_GOLD1 $500, ref_1790255605312_0 $-500 [re_1], refail_re_1 $500.00]
+  ok  C2 put back once   → pi_pi_GOLD1 $500, ref_1790255605312_0 $-500 [re_1], refail_re_1 $500.00
+
+C3. The office refunds again from Billing (what the notice says to do)
+    window: "$500 refundable to card/bank across 1 online payment. Enter any amount up to that — it dra" | amount "500.00"
+    toast: ["✓ Refunded $500 to card/bank for Gold"]
+    after C3: Stripe sent back $500 [re_1 $500 failed, re_2 $500 succeeded] | books: Gold owes $500; payment rows [pi_pi_GOLD1 $500, ref_1790255605312_0 $-500 [re_1], refail_re_1 $500, ref_1790255612724_0 $-500 [re_2]]
+    refund claims: rfnd_gold:pi_pi_GOLD1:50000:50000 → re_1 ; rfnd_gold:pi_pi_GOLD1:50000:50000:after:re_1 → re_2
+  ok  C3 a NEW refund reaches Stripe ($500 back, re_2), booked once   → Stripe: re_1 $500 failed, re_2 $500 succeeded; rows: pi_pi_GOLD1 $500, ref_1790255605312_0 $-500 [re_1], refail_re_1 $500, ref_1790255612724_0 $-500 [re_2]; owes 500
+
+C4. Stripe's later messages: charge.refunded (listing both refunds), refund.updated for re_2 (succeeded), refund.failed for re_1 again under a new event id
+    after C4: Stripe sent back $500 [re_1 $500 failed, re_2 $500 succeeded] | books: Gold owes $500; payment rows [pi_pi_GOLD1 $500, ref_1790255605312_0 $-500 [re_1], refail_re_1 $500, ref_1790255612724_0 $-500 [re_2]]
+  ok  C4 the books are unchanged (no second booking of re_2, no second put-back of re_1)   → HTTP 200,200,200,200; rows pi_pi_GOLD1 $500, ref_1790255605312_0 $-500 [re_1], refail_re_1 $500, ref_1790255612724_0 $-500 [re_2]
+    'refund failed' notices for the office so far: 1
+
+C5. The SECOND refund (re_2) fails too
+    re_2 FAILS at Stripe (the new card account was closed as well); refund.failed → the real webhook → HTTP 200
+    after the put-back: Stripe sent back $0 [re_1 $500 failed, re_2 $500 failed] | books: Gold owes $0; payment rows [pi_pi_GOLD1 $500, ref_1790255605312_0 $-500 [re_1], refail_re_1 $500, ref_1790255612724_0 $-500 [re_2], refail_re_2 $500.00]
+    window: "$500 refundable to card/bank across 1 online payment. Enter any amount up to that — it dra" | amount "500.00"
+  ok  C5 re_2 put back once; the window offers $500 again   → rows pi_pi_GOLD1 $500, ref_1790255605312_0 $-500 [re_1], refail_re_1 $500, ref_1790255612724_0 $-500 [re_2], refail_re_2 $500.00; owes 0
+
+C6. The office refunds a third time
+    toast: ["✓ Refunded $500 to card/bank for Gold"]
+    after C6: Stripe sent back $500 [re_1 $500 failed, re_2 $500 failed, re_3 $500 succeeded] | books: Gold owes $500; payment rows [pi_pi_GOLD1 $500, ref_1790255605312_0 $-500 [re_1], refail_re_1 $500, ref_1790255612724_0 $-500 [re_2], refail_re_2 $500, ref_1790255621089_0 $-500 [re_3]]
+    refund claims: rfnd_gold:pi_pi_GOLD1:50000:50000 → re_1 ; rfnd_gold:pi_pi_GOLD1:50000:50000:after:re_1 → re_2 ; rfnd_gold:pi_pi_GOLD1:50000:50000:after:re_2 → re_3
+  ok  C6 a third refund (re_3) reaches Stripe once; $500 back in total   → Stripe: re_1 $500 failed, re_2 $500 failed, re_3 $500 succeeded; owes 500
+
+C7. re_3 fails too; then, when the office presses, Stripe cannot be asked about the earlier refunds (GET /refunds/{id} → 500)
+    re_3 FAILS at Stripe (third failure); refund.failed → the real webhook → HTTP 200
+    toast: ["✕ Refund failed: Stripe could not be asked what became of the earlier refund with these details — try again in a minute."]
+    after C7: Stripe sent back $0 [re_1 $500 failed, re_2 $500 failed, re_3 $500 failed] | books: Gold owes $0; payment rows [pi_pi_GOLD1 $500, ref_1790255605312_0 $-500 [re_1], refail_re_1 $500, ref_1790255612724_0 $-500 [re_2], refail_re_2 $500, ref_1790255621089_0 $-500 [re_3], refail_re_3 $500.00]
+  ok  C7 the office is told it did not go through (the reason, not "Edge Function returned…"); nothing sent; nothing booked   → toast ["✕ Refund failed: Stripe could not be asked what became of the earlier refund with these details — try again in a minute."]; Stripe refunds made 3; rows changed: false
+
+C8. Stripe answers again; the office presses once more
+    toast: ["✓ Refunded $500 to card/bank for Gold"]
+    after C8: Stripe sent back $500 [re_1 $500 failed, re_2 $500 failed, re_3 $500 failed, re_4 $500 succeeded] | books: Gold owes $500; payment rows [pi_pi_GOLD1 $500, ref_1790255605312_0 $-500 [re_1], refail_re_1 $500, ref_1790255612724_0 $-500 [re_2], refail_re_2 $500, ref_1790255621089_0 $-500 [re_3], refail_re_3 $500, ref_1790255635322_0 $-500 [re_4]]
+    refund claims: rfnd_gold:pi_pi_GOLD1:50000:50000 → re_1 ; rfnd_gold:pi_pi_GOLD1:50000:50000:after:re_1 → re_2 ; rfnd_gold:pi_pi_GOLD1:50000:50000:after:re_2 → re_3 ; rfnd_gold:pi_pi_GOLD1:50000:50000:after:re_3 → re_4
+  ok  C8 one new refund (re_4), $500 back, booked once   → Stripe: re_1 $500 failed, re_2 $500 failed, re_3 $500 failed, re_4 $500 succeeded; owes 500
+
+    Gold's history in the books (payment rows): pi_pi_GOLD1 $500, ref_1790255605312_0 $-500 [re_1], refail_re_1 $500, ref_1790255612724_0 $-500 [re_2], refail_re_2 $500, ref_1790255621089_0 $-500 [re_3], refail_re_3 $500, ref_1790255635322_0 $-500 [re_4]
+    'refund failed' notices for the office: 3
+
+edge calls: stripe-refund→200 {"refundId":"re_1","status":"succeeded","amount":500}
+   stripe-webhook→200 {"received":true} email:Stripe alert: a $500.00 refund failed — pass it back to the 
+   stripe-refund→200 {"refundId":"re_2","status":"succeeded","amount":500}
+   stripe-webhook→200 {"received":true}
+   stripe-webhook→200 {"received":true}
+   stripe-webhook→200 {"received":true}
+   stripe-webhook→200 {"received":true}
+   stripe-webhook→200 {"received":true} email:Stripe alert: a $500.00 refund failed — pass it back to the 
+   stripe-refund→200 {"refundId":"re_3","status":"succeeded","amount":500}
+   stripe-webhook→200 {"received":true} email:Stripe alert: a $500.00 refund failed — pass it back to the 
+   stripe-refund→200 {"uncertain":true,"error":"Stripe could not be asked what became of the earlier refund with these details — tr
+   stripe-refund→200 {"refundId":"re_4","status":"succeeded","amount":500}
+page errors: []
+
+0 BAD

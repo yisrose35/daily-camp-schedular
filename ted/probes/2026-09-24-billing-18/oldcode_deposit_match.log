@@ -1,0 +1,228 @@
+TAP version 13
+# Subtest: memo codes are stable and self-validating
+ok 1 - memo codes are stable and self-validating
+  ---
+  duration_ms: 1.974752
+  type: 'test'
+  ...
+# Subtest: the check digit rejects stray reference numbers
+ok 2 - the check digit rejects stray reference numbers
+  ---
+  duration_ms: 5.001442
+  type: 'test'
+  ...
+# Subtest: a memo code beats a conflicting payer name outright
+ok 3 - a memo code beats a conflicting payer name outright
+  ---
+  duration_ms: 2.556742
+  type: 'test'
+  ...
+# Subtest: business suffixes normalize away in every spelling
+ok 4 - business suffixes normalize away in every spelling
+  ---
+  duration_ms: 0.218705
+  type: 'test'
+  ...
+# Subtest: name matching is order-independent and nickname-aware
+ok 5 - name matching is order-independent and nickname-aware
+  ---
+  duration_ms: 0.298598
+  type: 'test'
+  ...
+# Subtest: phone handles compare regardless of formatting
+ok 6 - phone handles compare regardless of formatting
+  ---
+  duration_ms: 0.13171
+  type: 'test'
+  ...
+# Subtest: a learned alias auto-posts a payer whose name matches nothing
+ok 7 - a learned alias auto-posts a payer whose name matches nothing
+  ---
+  duration_ms: 0.706145
+  type: 'test'
+  ...
+# Subtest: an alias is not re-learned once it exists
+ok 8 - an alias is not re-learned once it exists
+  ---
+  duration_ms: 0.14083
+  type: 'test'
+  ...
+# Subtest: a Zelle handle already on file as a parent contact auto-posts
+ok 9 - a Zelle handle already on file as a parent contact auto-posts
+  ---
+  duration_ms: 0.434079
+  type: 'test'
+  ...
+# Subtest: two households sharing a surname never auto-post
+ok 10 - two households sharing a surname never auto-post
+  ---
+  duration_ms: 0.573382
+  type: 'test'
+  ...
+# Subtest: TED-174: two households whose parent has the same name never auto-post, whichever owes the amount
+not ok 11 - TED-174: two households whose parent has the same name never auto-post, whichever owes the amount
+  ---
+  duration_ms: 1.2758
+  type: 'test'
+  location: '/tmp/claude-0/-home-user-daily-camp-schedular/39278441-0cf3-5f6a-bf8e-a51bef67e95d/scratchpad/old18/tests/deposit_match.test.js:125:1'
+  failureType: 'testCodeFailure'
+  error: |-
+    $1000 was posted to cohenA on a name and an amount
+    
+    'auto' !== 'review'
+    
+  code: 'ERR_ASSERTION'
+  name: 'AssertionError'
+  expected: 'review'
+  actual: 'auto'
+  operator: 'strictEqual'
+  stack: |-
+    TestContext.<anonymous> (/tmp/claude-0/-home-user-daily-camp-schedular/39278441-0cf3-5f6a-bf8e-a51bef67e95d/scratchpad/old18/tests/deposit_match.test.js:135:16)
+    Test.runInAsyncScope (node:async_hooks:214:14)
+    Test.run (node:internal/test_runner/test:1047:25)
+    Test.processPendingSubtests (node:internal/test_runner/test:744:18)
+    Test.postRun (node:internal/test_runner/test:1173:19)
+    Test.run (node:internal/test_runner/test:1101:12)
+    async Test.processPendingSubtests (node:internal/test_runner/test:744:7)
+  ...
+# Subtest: a deposit larger than the balance never auto-posts
+ok 12 - a deposit larger than the balance never auto-posts
+  ---
+  duration_ms: 0.357628
+  type: 'test'
+  ...
+# Subtest: a reversal always goes to a human
+ok 13 - a reversal always goes to a human
+  ---
+  duration_ms: 0.399974
+  type: 'test'
+  ...
+# Subtest: dry run posts nothing but still ranks and explains
+ok 14 - dry run posts nothing but still ranks and explains
+  ---
+  duration_ms: 0.218741
+  type: 'test'
+  ...
+# Subtest: an unreadable payer with no code stays unmatched rather than guessing
+ok 15 - an unreadable payer with no code stays unmatched rather than guessing
+  ---
+  duration_ms: 0.176437
+  type: 'test'
+  ...
+# Subtest: a weak surname-only match is suggested, never posted
+ok 16 - a weak surname-only match is suggested, never posted
+  ---
+  duration_ms: 0.157101
+  type: 'test'
+  ...
+# Subtest: every candidate carries the reason it was chosen
+ok 17 - every candidate carries the reason it was chosen
+  ---
+  duration_ms: 0.98742
+  type: 'test'
+  ...
+# Subtest: parents are read from households[].parents[], the shape Me actually stores
+ok 18 - parents are read from households[].parents[], the shape Me actually stores
+  ---
+  duration_ms: 0.233928
+  type: 'test'
+  ...
+# Subtest: with no known balance the overpay guardrail simply does not fire
+ok 19 - with no known balance the overpay guardrail simply does not fire
+  ---
+  duration_ms: 0.138966
+  type: 'test'
+  ...
+# Subtest: a reference resolves to the camper’s family
+ok 20 - a reference resolves to the camper’s family
+  ---
+  duration_ms: 0.497957
+  type: 'test'
+  ...
+# Subtest: it tells apart two families with the identical name
+ok 21 - it tells apart two families with the identical name
+  ---
+  duration_ms: 0.200396
+  type: 'test'
+  ...
+# Subtest: the camp number is the guard, not decoration
+ok 22 - the camp number is the guard, not decoration
+  ---
+  duration_ms: 0.139077
+  type: 'test'
+  ...
+# Subtest: a camper this camp does not have resolves to nothing
+ok 23 - a camper this camp does not have resolves to nothing
+  ---
+  duration_ms: 0.079719
+  type: 'test'
+  ...
+# Subtest: with no camp number assigned, no reference can match
+ok 24 - with no camp number assigned, no reference can match
+  ---
+  duration_ms: 0.07974
+  type: 'test'
+  ...
+# Subtest: a reference in the message body posts the deposit by itself
+ok 25 - a reference in the message body posts the deposit by itself
+  ---
+  duration_ms: 0.265153
+  type: 'test'
+  ...
+# Subtest: the camper index joins family rosters to camper numbers
+ok 26 - the camper index joins family rosters to camper numbers
+  ---
+  duration_ms: 0.130771
+  type: 'test'
+  ...
+# Subtest: a camp’s own four-digit camper numbers resolve to one family
+ok 27 - a camp’s own four-digit camper numbers resolve to one family
+  ---
+  duration_ms: 0.139535
+  type: 'test'
+  ...
+# Subtest: camper numbers are not confused by leading zeros
+ok 28 - camper numbers are not confused by leading zeros
+  ---
+  duration_ms: 0.07682
+  type: 'test'
+  ...
+# Subtest: a deposit held back by Manual mode still names the family
+ok 29 - a deposit held back by Manual mode still names the family
+  ---
+  duration_ms: 0.219869
+  type: 'test'
+  ...
+# Subtest: a taught address credits the family even with no readable payer
+ok 30 - a taught address credits the family even with no readable payer
+  ---
+  duration_ms: 0.142407
+  type: 'test'
+  ...
+# Subtest: the address is found anywhere in the message, not just the sender
+ok 31 - the address is found anywhere in the message, not just the sender
+  ---
+  duration_ms: 0.356826
+  type: 'test'
+  ...
+# Subtest: an address nobody taught still matches nobody
+ok 32 - an address nobody taught still matches nobody
+  ---
+  duration_ms: 0.144303
+  type: 'test'
+  ...
+# Subtest: a taught sender does not outrank a payment reference
+ok 33 - a taught sender does not outrank a payment reference
+  ---
+  duration_ms: 0.162218
+  type: 'test'
+  ...
+1..33
+# tests 33
+# suites 0
+# pass 32
+# fail 1
+# cancelled 0
+# skipped 0
+# todo 0
+# duration_ms 122.037987
