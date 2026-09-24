@@ -1,0 +1,48 @@
+CAUGHT  M1 TED-186 tuition inquiry posted again (warning_ skip removed)  (exit 1; node --test tests/tuition_dispute_inquiry.test.js tests/canteen_stripe_reversal.test.js tests/chargeback_and_blocks.test.js)
+      not ok 3 - TED-181: a disputed top-up comes off while the bank decides, and goes back on when the camp wins; an inquiry moves nothing
+      not ok 6 - TED-188: a canteen inquiry that escalates comes off the wallet — once, on the dispute
+      not ok 31 - TED-186: a bank inquiry on a tuition payment posts nothing, and its close undoes nothing because nothing was done
+      not ok 32 - TED-186/188: the inquiry escalates — the money comes back on the bill once, and autopay pauses
+CAUGHT  M2 TED-186/188 updated / funds_withdrawn not routed  (exit 1; node --test tests/tuition_dispute_inquiry.test.js tests/canteen_stripe_reversal.test.js)
+      not ok 6 - TED-188: a canteen inquiry that escalates comes off the wallet — once, on the dispute
+      not ok 8 - TED-186/188: the inquiry escalates — the money comes back on the bill once, and autopay pauses
+CAUGHT  M3 TED-186 chargeback does not pause autopay  (exit 1; node --test tests/tuition_dispute_inquiry.test.js)
+      not ok 2 - TED-186/188: the inquiry escalates — the money comes back on the bill once, and autopay pauses
+      not ok 3 - TED-186: the camp wins — the payment goes back and autopay starts again; lost — autopay stays paused
+CAUGHT  M4 TED-186 won does not resume autopay  (exit 1; node --test tests/tuition_dispute_inquiry.test.js)
+      not ok 3 - TED-186: the camp wins — the payment goes back and autopay starts again; lost — autopay stays paused
+CAUGHT  M5 TED-187 refund DB error answered 200 again  (exit 1; node --test tests/tuition_dispute_inquiry.test.js tests/stripe_webhook_write_fails.test.js)
+      not ok 12 - TED-187: a database error on a chargeback, a close or a dashboard refund is answered 500 (Stripe sends it again)
+CAUGHT  M6 TED-187 chargeback DB error answered 200 again  (exit 1; node --test tests/tuition_dispute_inquiry.test.js tests/stripe_webhook_write_fails.test.js)
+      not ok 12 - TED-187: a database error on a chargeback, a close or a dashboard refund is answered 500 (Stripe sends it again)
+CAUGHT  M7 TED-187 close DB error answered 200 again  (exit 1; node --test tests/tuition_dispute_inquiry.test.js tests/stripe_webhook_write_fails.test.js)
+      not ok 12 - TED-187: a database error on a chargeback, a close or a dashboard refund is answered 500 (Stripe sends it again)
+MISSED  M8 TED-187 autopay-pause DB error answered 200  (exit 0; node --test tests/tuition_dispute_inquiry.test.js)
+MISSED  M9 TED-186 runner charges a paused dueDates plan  (exit 0; node --test tests/tuition_dispute_inquiry.test.js tests/autopay_runner.test.js)
+MISSED  M10 TED-186 runner charges a paused installments plan  (exit 0; node --test tests/tuition_dispute_inquiry.test.js tests/autopay_runner.test.js)
+CAUGHT  M11 TED-186 288 a win releases any dispute's pause  (exit 1; bash scripts/run_pgtests.sh 288)
+      FAIL   288_autopay_waits_while_a_payment_is_disputed
+MISSED  M12 TED-186 288 resume needs no Billing edit (staff enough)  (exit 0; bash scripts/run_pgtests.sh 288)
+CAUGHT  M13 TED-186 288 pause marks plans without autopay too  (exit 1; bash scripts/run_pgtests.sh 288)
+      FAIL   288_autopay_waits_while_a_payment_is_disputed
+CAUGHT  M14 TED-188 canteen: only charge.dispute.created takes the money  (exit 1; node --test tests/canteen_stripe_reversal.test.js tests/tuition_dispute_inquiry.test.js)
+      not ok 6 - TED-188: a canteen inquiry that escalates comes off the wallet — once, on the dispute
+MISSED  M15 TED-188 tips: funds_withdrawn not routed  (exit 0; node --test tests/tip_refund_dispute.test.js)
+CAUGHT  M16 TED-189 Cancel share bills the family anyway  (exit 1; node --test tests/payer_split_billed.test.js)
+      not ok 11 - TED-189: "Cancel share" — the fund no longer owes it, and neither does the family
+MISSED  M17 TED-190 old payer cheque placed again  (exit 0; node --test tests/payer_split_billed.test.js)
+CAUGHT  M18 TED-191 287 no cap at what the top-up has left (19th M6)  (exit 1; bash scripts/run_pgtests.sh 287)
+      FAIL   287_a_canteen_top_up_refunded_outside_campistry
+CAUGHT  M19 TED-191 287 once-per-refund check removed (19th M9)  (exit 1; bash scripts/run_pgtests.sh 287)
+      FAIL   287_a_canteen_top_up_refunded_outside_campistry
+CAUGHT  M20 TED-191 no build check on the downloaded register (19th M21)  (exit 1; node --test tests/offline_register_once.test.js)
+      not ok 5 - TED-191: a stored older register (another build) is refused, not handed to a tablet; the right one downloads
+CAUGHT  M21 TED-192 289 does not keep soldItems  (exit 1; bash scripts/run_pgtests.sh 289)
+      FAIL   289_a_register_sale_keeps_what_it_sold
+CAUGHT  M22 TED-192 284 by-id restock not capped at the sale  (exit 1; bash -c bash scripts/run_pgtests.sh 284 && bash scripts/run_pgtests.sh 289)
+      FAIL   284_a_register_sale_can_be_voided
+CAUGHT  M23 TED-192 register sends no p_sold  (exit 1; node --test tests/pos_charge_once.test.js)
+      not ok 6 - TED-192: the sale sends what it sold by item id; before 289 is pasted, the same keyed sale without it
+MISSED  M24 TED-192 Snacks void offer ignores soldItems  (exit 0; node --test tests/snacks_void_sale.test.js)
+CAUGHT  M25 TED-192 283 re-pasted after 289 leaves two versions  (exit 1; bash -c bash scripts/run_pgtests.sh 283 && bash scripts/run_pgtests.sh 289)
+      FAIL   289_a_register_sale_keeps_what_it_sold

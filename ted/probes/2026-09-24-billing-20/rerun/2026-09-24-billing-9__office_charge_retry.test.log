@@ -1,0 +1,49 @@
+TAP version 13
+# \# part 2a Stripe: answers ["200 Could not check with Stripe whether an earlier bank debit for this family is still on its way, so nothing was charged. Try again in a minute.","200 Could not check with Stripe whether an earlier bank debit for this family is still on its way, so nothing was charged. Try again in a minute."] | the parent was charged: []
+# \# part 2b Cardknox: answers ["200 The card company did not answer (connection reset), so this charge may have gone through. Check the processor's dashboard before charging again.","200 Approved"] | the parent was charged: ["sale 1 $500.00","sale 2 $500.00"]
+# \# part 3 Banquest 504: office is told {"uncertain":true,"canConfirm":true,"error":"The card company did not answer (No answer from the card company (HTTP 504)), so this charge may have gone through. Check the processor's dashboard before charging again."} | claim released: []
+# Subtest: part 1: the key each press of Charge Card sends
+not ok 1 - part 1: the key each press of Charge Card sends
+  ---
+  duration_ms: 11.82759
+  type: 'test'
+  location: '/home/user/daily-camp-schedular/ted/probes/2026-09-24-billing-9/office_charge_retry.test.js:20:1'
+  failureType: 'testCodeFailure'
+  error: '_familyOnItsWay is not defined'
+  code: 'ERR_TEST_FAILURE'
+  name: 'ReferenceError'
+  stack: |-
+    chargeStoredCard (eval at <anonymous> (/home/user/daily-camp-schedular/ted/probes/2026-09-24-billing-9/office_charge_retry.test.js:36:13), <anonymous>:7:14)
+    TestContext.<anonymous> (/home/user/daily-camp-schedular/ted/probes/2026-09-24-billing-9/office_charge_retry.test.js:37:9)
+    Test.runInAsyncScope (node:async_hooks:214:14)
+    Test.run (node:internal/test_runner/test:1047:25)
+    Test.start (node:internal/test_runner/test:944:17)
+    startSubtestAfterBootstrap (node:internal/test_runner/harness:296:17)
+  ...
+# Subtest: part 2a: Stripe — answer lost, office presses again
+ok 2 - part 2a: Stripe — answer lost, office presses again
+  ---
+  duration_ms: 161.67123
+  type: 'test'
+  ...
+# Subtest: part 2b: Cardknox — answer lost, office presses again
+ok 3 - part 2b: Cardknox — answer lost, office presses again
+  ---
+  duration_ms: 159.644186
+  type: 'test'
+  ...
+# Subtest: part 3: Banquest gateway times out (504, no body)
+ok 4 - part 3: Banquest gateway times out (504, no body)
+  ---
+  duration_ms: 160.073865
+  type: 'test'
+  ...
+1..4
+# tests 4
+# suites 0
+# pass 3
+# fail 1
+# cancelled 0
+# skipped 0
+# todo 0
+# duration_ms 577.389563

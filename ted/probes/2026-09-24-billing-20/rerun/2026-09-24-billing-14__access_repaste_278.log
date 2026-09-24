@@ -1,0 +1,25 @@
+1. WHO CAN CALL / READ (anon | authenticated | service_role)
+   public._notice_unbooked_refund_failure(uuid,text,text,numeric,text,text): false|false|false
+   public.reverse_failed_stripe_refund(uuid,text,text,numeric,text,text): false|false|true
+   public.claim_refund_failure_alert(text): false|false|true
+   table refund_failure_alerts SELECT: false|false (anon|authenticated)
+   table refund_failure_alerts INSERT: false|false (anon|authenticated)
+   table refund_failure_alerts UPDATE: false|false (anon|authenticated)
+   table refund_failure_alerts DELETE: false|false (anon|authenticated)
+   row level security on refund_failure_alerts: t
+   overloads now: reverse_failed_stripe_refund(uuid,text,text,numeric,text,text) || _notice_unbooked_refund_failure(uuid,text,text,numeric,text,text)
+   check script: ok
+
+2. RE-PASTING
+   only the EARLIER 278 from f3ee2ed (3-argument): reverse_failed_stripe_refund(uuid,text,text) || (none)
+       check script: apply 278 BEFORE redeploying stripe-webhook — a refund Stripe fails later still shows as refunded
+   today's 278 pasted (1): reverse_failed_stripe_refund(uuid,text,text,numeric,text,text) || _notice_unbooked_refund_failure(uuid,text,text,numeric,text,text) || claim: claim_refund_failure_alert(text)
+       check script: ok
+   today's 278 pasted (2): reverse_failed_stripe_refund(uuid,text,text,numeric,text,text) || _notice_unbooked_refund_failure(uuid,text,text,numeric,text,text) || claim: claim_refund_failure_alert(text)
+       check script: ok
+   only the EARLIER 278 from fef6edb (5-argument): reverse_failed_stripe_refund(uuid,text,text,numeric,text) || _notice_unbooked_refund_failure(uuid,text,text,numeric,text)
+       check script: apply 278 BEFORE redeploying stripe-webhook — a refund Stripe fails later still shows as refunded
+   today's 278 pasted (1): reverse_failed_stripe_refund(uuid,text,text,numeric,text,text) || _notice_unbooked_refund_failure(uuid,text,text,numeric,text,text) || claim: claim_refund_failure_alert(text)
+       check script: ok
+   today's 278 pasted (2): reverse_failed_stripe_refund(uuid,text,text,numeric,text,text) || _notice_unbooked_refund_failure(uuid,text,text,numeric,text,text) || claim: claim_refund_failure_alert(text)
+       check script: ok

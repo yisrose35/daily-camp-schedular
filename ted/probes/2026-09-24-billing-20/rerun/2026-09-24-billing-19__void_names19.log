@@ -1,0 +1,8 @@
+N1 void "Trail Mix 2" (tick 1): {"amount": 2.00, "camper": "Avi", "balance": 14.00, "success": true, "camperId": "1", "restocked": 0, "dailyLimit": null, "spentToday": 6.00}
+  BAD N1 "Trail Mix 2" back in stock   → stock 9 (was 9); money back: 2
+N2 void "Chips, BBQ" (tick 1): {"amount": 1.00, "camper": "Avi", "balance": 15.00, "success": true, "camperId": "1", "restocked": 0, "dailyLimit": null, "spentToday": 5.00}
+  BAD N2 "Chips, BBQ" back in stock   → stock 9 (was 9); money back: 1
+N3 void "Ices ×2" (tick 2): {"amount": 5.00, "camper": "Avi", "balance": 20.00, "success": true, "camperId": "1", "restocked": 2, "dailyLimit": null, "spentToday": 0}
+  ok  N3 "Ices ×2" back in stock   → stock 11 (was 9); money back: 5
+
+2 BAD

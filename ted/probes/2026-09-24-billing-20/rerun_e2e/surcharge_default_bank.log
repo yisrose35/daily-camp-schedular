@@ -1,0 +1,11 @@
+I1. Iron owes $1000. Default method: the BANK account (Chase ···· 6789); also saved: one credit card (Visa ···· 1111). Office: Add card surcharge… $1,000
+    the window: "Add card surcharge×Amount being paid by card ($)Card type unknown — no surcharge appliedCard on file: none that will be charged — the family's default payment method is a bank account, so Charge Card and autopay would take the fee by bank debit. If the family ends up paying another way, remove this "
+    toast ["✕ Not added: Iron’s default payment method is a bank account, so Charge Card and autopay would take a card fee by bank debit — which the card brands forbid. Make their credit card the default first."]; Iron's ledger [charge tuition $1000], owes $1000
+
+I2. Office: Billing → Iron → Charge Card for the balance
+    the window: "Charge Card×Charge the card on file for IronBalance due: $1,000 · Card on file ✓Amount to Charge ($)DescriptionCancelSave"
+    toast ["✕ Charge failed: Could not check with Stripe whether an earlier bank debit for this family is still on its way, so nothing was charged. Try again in a minute."]; what Stripe was asked to take, and from which method: none
+  ok  I1/I2 no card surcharge ends up collected from a bank account   → the 3% card surcharge ($30) was added on the strength of the credit card, and Charge Card took $1,030 from the BANK account (pm_bank)
+page errors: []
+
+0 BAD

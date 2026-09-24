@@ -1,0 +1,29 @@
+SETUP: 6 families owe $1,000 each (Card Fees: discount for not paying by card, 3%). Hawk's online bank payment: {"count": 1, "success": true, "updated": false, "ledgerPosted": true, "alreadyRecorded": false}; Hawk owes $30
+Record Payment methods offered: ["credit","debit","cash","check","ach","zelle","wire","paypal","plan","other"]
+
+D1. Wolf pays $970 by cheque → Billing → Record Payment
+    preview in the window before saving: "Discount for not paying by card: $30 — also taken off their bill with this payment."
+    toast: "Payment of $970 recorded for Wolf — with $30 off for not paying by card"
+    ledger: charge 1000 tuition [le_t_wolf]; payment 970 check [le_pay_pay_1790261317578_ioj0i]; credit 30 discount [le_cdisc_pay_1790261317578_ioj0i]
+  ok  D1 $970 by cheque settles $1,000 (owes $0) and the preview showed $30   → owes $0
+
+D2. Fox pays the full $1,000 by cheque
+    preview: "Discount for not paying by card: $30 — also taken off their bill with this payment."; toast: "Payment of $1,000 recorded for Fox — with $30 off for not paying by card"
+  ok  D2 the posted price by cheque leaves $30 of credit   → owes $-30
+
+D3. Lynx pays $500 by bank transfer (ACH), then $470 by Zelle
+    previews: "Discount for not paying by card: $15.46 — also taken off their bill with this payment." / "Discount for not paying by card: $14.54 — also taken off their bill with this payment."
+    ledger: charge 1000 tuition [le_t_lynx]; payment 500 ach [le_pay_pay_1790261324858_uzv1k]; credit 15.46 discount [le_cdisc_pay_1790261324858_uzv1k]; payment 470 zelle [le_pay_pay_1790261328458_3181w]; credit 14.54 discount [le_cdisc_pay_1790261328458_3181w]
+  ok  D3 two part payments earn exactly $30 in all   → owes $0
+
+D4. Bear pays $970 by credit card (recorded by hand)
+    preview: ""
+  ok  D4 a card payment gets no discount   → owes $30
+
+D5. Moss pays $970 by cheque; the office records it on Finance → Revenue → "+ Record Payment"
+    Finance → Revenue shows a "+ Record Payment" button: true
+    its window: "(closed)"
+  BAD the run finished   → page.fill: Timeout 30000ms exceeded. | Call log: | [2m  - waiting for locator('#fapFamily')[22m
+page errors: []
+
+1 BAD

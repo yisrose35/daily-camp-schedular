@@ -1,0 +1,12 @@
+sync_camp_billing → {"success": true, "familiesDeleted": 0, "paymentsDeleted": 0, "familiesUpserted": 2, "paymentsUpserted": 2}
+BEFORE THE NIGHT: payments on file [{"id": 1790261225320, "date": "2026-09-24", "amount": 1000, "family": "Gold", "method": "check", "status": "paid"}, {"id": "pay_1790261225319_abcde", "date": "2026-09-24", "notes": "", "amount": 1000, "family": "Silver", "method": "check", "familyKey": "silver", "reference": "", "timestamp": 179026
+  Gold owes (ledger) $1000.00; plan_due_for → {"index": 0, "amount": 1000.00, "dueDate": "2026-09-24", "remaining": 1}
+  Silver owes (ledger) $0.00; plan_due_for → {"index": 0, "amount": 0, "reason": "nothing_owed", "dueDate": "2026-09-24", "remaining": 1}
+
+THE NIGHT: HTTP 200; results ["Gold:charged $1000","Silver:nothing_owed $0"]
+  card sales made: Gold $1000.00
+  after: Gold owes $0.00, Silver owes $0.00
+  ok  control: Silver (cheque recorded in Billing) is not charged   → 0 sale(s)
+  BAD Gold (cheque recorded on the Finance page) is not charged again   → 1 sale(s): Gold $1000.00 — Gold paid $1,000 by cheque AND was charged by card
+
+1 BAD

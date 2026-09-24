@@ -1,0 +1,6 @@
+  Batch Charge button: true; window: "Batch Charge — 1 Families×This will charge 1 families for a total of $1,000 using their saved cards.Teal$1,000⚠ This action will charge real credit cards. Proceed with caution.CancelSave"
+  Teal plan mark in the cloud: {"since": "2026-09-24T14:43:17Z", "detail": "fraudulent", "reason": "chargeback", "disputeId": "dp_t"}
+  BAD Teal (payment disputed, autopay paused) is left out of Batch Charge or named as disputed   → Batch Charge — 1 Families×This will charge 1 families for a total of $1,000 using their saved cards.Teal$1,000⚠ This action will charge real credit cards. Proceed with caution.CancelSave
+page errors: []
+
+1 BAD

@@ -1,0 +1,22 @@
+TAP version 13
+# \# row after load: {"id":"pay_1727","familyKey":"gold","amount":250,"method":"Card","reference":"pi_dep","date":"2026-05-02","status":"succeeded","depositReference":"pi_dep","stripePaymentIntentId":"pi_dep"}
+# \# office typed it as a Card payment, reference = the pi: balance before 750 -> after Billing load 750 (should stay 750); payment rows 1
+# \# row after load: {"id":"pay_ck","familyKey":"gold","amount":250,"method":"Card","reference":"123456789","date":"2026-05-02","status":"succeeded","depositReference":"123456789","byopTransactionId":"123456789","byopProcessor":"cardknox"}
+# \# CARDKNOX deposit, office typed it with reference = the xRefNum: balance before 750 -> after Billing load 750 (should stay 750); payment rows 1
+# \# row after load: {"id":"pay_1728","familyKey":"gold","amount":250,"method":"Card","date":"2026-05-02","status":"succeeded"}
+# \# office typed it as a Card payment, no reference: balance before 750 -> after Billing load 750 (should stay 750); payment rows 1
+# Subtest: probe
+ok 1 - probe
+  ---
+  duration_ms: 10.118108
+  type: 'test'
+  ...
+1..1
+# tests 1
+# suites 0
+# pass 1
+# fail 0
+# cancelled 0
+# skipped 0
+# todo 0
+# duration_ms 100.048488
