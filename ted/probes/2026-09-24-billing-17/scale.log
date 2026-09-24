@@ -1,0 +1,44 @@
+
+> daily-camp-schedular@0.0.0 test:scale
+> node tests/scale_600.e2e.js
+
+
+seeding a 600-camper camp through the real triggers…
+           13 ms  write campStructure
+          127 ms  write roster (600 campers, projection trigger)
+         1938 ms  write campistryMe (families + enrollments + payments)
+           15 ms  write campistrySnacks (inventory)
+         3968 ms  canteen accounts (600 × canteen_account_save)
+          745 ms  ledger (36000 rows)
+
+1. the hot paths, on 600 campers
+  ok   a register sale   → 2.45 ms (budget 50)
+  ok   a desk deposit   → 10.77 ms (budget 50)
+  ok   the Snacks page's whole-camp read   → 159.14 ms (budget 400)
+  ok   …and its size   → 1.71 MB (budget 2.5 MB)
+  ok   re-saving the roster with one camper changed   → 27 ms (budget 250)
+  ok   re-saving billing with one family changed   → 24 ms (budget 400)
+  ok   every camper became a person   → {"people":600,"accounts":600,"unattributed":0}
+  ok   every canteen account belongs to a person   → 0 unattributed (same-named campers are keyed "<name> #<id>")
+
+2. the pages, on 600 campers
+  ok   Me — roster on screen   → 976 ms (budget 20000)
+  ok   Me — no call made once per camper   → 33 calls
+  ok   Me billing — 300 families rendered   → 54 ms to render (budget 3000)
+  ok   Snacks — roster on screen   → 589 ms (budget 20000)
+  ok   Snacks — no call made once per camper   → 16 calls
+  ok   a desk deposit at 600 campers   → 2259 ms, calls: get_camp_cache_epoch, canteen_office_credit, get_camp_cache_epoch, get_canteen_history, get_camp_pos_login_status
+  ok   …refreshes one camper, not the whole camp   → get_camp_cache_epoch, canteen_office_credit, get_camp_cache_epoch, get_canteen_history, get_camp_pos_login_status
+  ok   Register — roster on screen   → 311 ms (budget 20000)
+  ok   Register — no call made once per camper   → 10 calls
+  ok   Health — roster on screen   → 186 ms (budget 20000)
+  ok   Health — no call made once per camper   → 13 calls
+  ok   Go — roster on screen   → 238 ms (budget 20000)
+  ok   Go — no call made once per camper   → 3 calls
+
+3. nothing broke on the way
+  ok   no call fell through unimplemented
+  ok   no call came back with a database error
+  ok   no uncaught page errors
+
+All 24 checks passed.

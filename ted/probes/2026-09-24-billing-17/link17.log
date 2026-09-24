@@ -1,0 +1,27 @@
+L1. Avi is on (card on file). The parent presses "Turn off"
+    stored enabled false; Link "Auto-reload is off."; buttons ["Switch it back on"]; box ticked true; toasts ["Auto-reload turned off for Avi"]; calls [{"child":"Avi Katz","enabled":false,"thresholdEnabled":true,"thresholdReloadAmount":20}]
+  ok  L1 in the plain Off state there is a way back on   → ["Switch it back on"]
+    pressed "Switch it back on" → stored enabled true; Link "✓ Auto-reload is on · charging Visa ···· 4242"
+  ok  L1b it is on again   → ✓ Auto-reload is on · charging Visa ···· 4242
+
+L2. Off again; the parent types $35 in "Reload amount" and tabs away
+    sent [{"child":"Avi Katz","enabled":false,"thresholdEnabled":true,"thresholdReloadAmount":35}]; stored enabled false, amount 35; Link "Auto-reload is off."; ["Auto-reload turned off for Avi","(saved hint)"]
+  ok  L2 the amount is saved and auto-reload stays off   → enabled false
+
+L3. Bina, never set up: the parent ticks "Reload when balance drops below a threshold"
+    sent [{"child":"Bina Katz","enabled":true,"thresholdEnabled":true,"thresholdReloadAmount":20}]; stored enabled true; Link "Almost there — save a card to activate auto-reload."; buttons ["Add a card","Turn off"]
+  ok  L3 ticking a trigger switches it on (Almost there — add a card)   → Almost there — save a card to activate auto-reload.
+
+L4. Avi switched back on; the parent changes the amount to $40
+    stored enabled true, amount 40; Link "✓ Auto-reload is on · charging Visa ···· 4242"
+  ok  L4 an edit while on keeps it on   → ✓ Auto-reload is on · charging Visa ···· 4242
+
+L5. Chaim, never set up: ticks the trigger, then 0.2 s later presses the up-arrow on "Reload amount" ($20 → $21)
+    sent [{"child":"Chaim Katz","enabled":false,"thresholdEnabled":true,"thresholdReloadAmount":21}]; stored enabled false; Link "Auto-reload is off."; box ticked true; buttons ["Switch it back on"]
+  BAD L5 a parent who ticked the trigger and then nudged the amount has auto-reload on   → stored enabled false; the box is ticked (true) but Link says "Auto-reload is off."
+
+L6. Dov, never set up; each save takes 1.5 s to answer (slow phone). Ticks the trigger, then 0.8 s later changes the amount to $30 and tabs away
+    sent [{"child":"Dov Katz","enabled":true,"thresholdEnabled":true,"thresholdReloadAmount":20},{"child":"Dov Katz","enabled":false,"thresholdEnabled":true,"thresholdReloadAmount":30}]; stored enabled false, amount 30; Link "Auto-reload is off."; box ticked true; toasts ["(saved hint)","(saved hint)"]
+  BAD L6 ticking the trigger then setting the amount leaves auto-reload on   → stored enabled false — Link "Auto-reload is off.", box ticked true
+
+2 BAD

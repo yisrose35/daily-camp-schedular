@@ -1,0 +1,15 @@
+SETUP: Refund All paused Avi's auto-reload (update_canteen_autoreload_state → {"success": true, "autoReloadDisabled": ): enabled false, reason "switched off when the camp refunded the canteen balance — switch it back on if you still want it"
+
+P0. The parent opens Link after the refund:
+    status "Auto-reload was switched off — switched off when the camp refunded the canteen balance — switch it back on if you still want it."; buttons []; "below $5" trigger box ticked: true
+
+P1. The parent switches it back on (Link's auto-save sends enabled:true) → success true
+    stored: enabled true, disabledReason null
+    Link: "✓ Auto-reload is on · charging Visa ···· 4242"
+
+P2. Weeks later the parent presses "Turn off" themselves → success true
+    stored: enabled false, disabledReason null
+    Link: "Auto-reload is off."; buttons []
+  ok  P2 after the parent turned it off themselves, Link does not say the camp switched it off   → "Auto-reload is off."
+
+0 BAD

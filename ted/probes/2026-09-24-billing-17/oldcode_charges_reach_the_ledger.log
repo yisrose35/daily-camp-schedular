@@ -1,0 +1,156 @@
+TAP version 13
+# Subtest: TED-053: a $25 late fee raises the balance from $600 to $625
+ok 1 - TED-053: a $25 late fee raises the balance from $600 to $625
+  ---
+  duration_ms: 1.662753
+  type: 'test'
+  ...
+# Subtest: TED-053: posting the same charge again does nothing (a re-render cannot bill twice)
+ok 2 - TED-053: posting the same charge again does nothing (a re-render cannot bill twice)
+  ---
+  duration_ms: 0.242218
+  type: 'test'
+  ...
+# Subtest: TED-053: every kind of charge reaches the ledger with a known reason
+ok 3 - TED-053: every kind of charge reaches the ledger with a known reason
+  ---
+  duration_ms: 0.350403
+  type: 'test'
+  ...
+# Subtest: a family with no ledger yet is left alone (its balance still comes from charges[])
+ok 4 - a family with no ledger yet is left alone (its balance still comes from charges[])
+  ---
+  duration_ms: 0.177982
+  type: 'test'
+  ...
+# Subtest: a zero or negative charge never posts
+ok 5 - a zero or negative charge never posts
+  ---
+  duration_ms: 0.260729
+  type: 'test'
+  ...
+# Subtest: TED-053/076: Charge several accounts posts each charge to the ledger
+ok 6 - TED-053/076: Charge several accounts posts each charge to the ledger
+  ---
+  duration_ms: 2.014716
+  type: 'test'
+  ...
+# Subtest: TED-053/076: a card surcharge reaches the ledger
+ok 7 - TED-053/076: a card surcharge reaches the ledger
+  ---
+  duration_ms: 1.8793
+  type: 'test'
+  ...
+# Subtest: TED-053/076: Charge late fees posts each fee to the ledger, once
+ok 8 - TED-053/076: Charge late fees posts each fee to the ledger, once
+  ---
+  duration_ms: 2.065294
+  type: 'test'
+  ...
+# Subtest: close-out and Add Charge post through _postLedgerCharge; Billing posts old ones on load
+ok 9 - close-out and Add Charge post through _postLedgerCharge; Billing posts old ones on load
+  ---
+  duration_ms: 1.090659
+  type: 'test'
+  ...
+# Subtest: TED-062: Add Charge refuses zero and negative amounts, and posts a real one
+ok 10 - TED-062: Add Charge refuses zero and negative amounts, and posts a real one
+  ---
+  duration_ms: 9.305146
+  type: 'test'
+  ...
+# Subtest: TED-062: Issue Credit refuses zero and negative amounts, and posts a real one
+ok 11 - TED-062: Issue Credit refuses zero and negative amounts, and posts a real one
+  ---
+  duration_ms: 8.482762
+  type: 'test'
+  ...
+# Subtest: TED-065: on a camp that ran the ledger conversion, opening Billing does not post old charges twice
+ok 12 - TED-065: on a camp that ran the ledger conversion, opening Billing does not post old charges twice
+  ---
+  duration_ms: 0.755558
+  type: 'test'
+  ...
+# Subtest: TED-065: two same-amount charges against one converted entry — only one is covered
+ok 13 - TED-065: two same-amount charges against one converted entry — only one is covered
+  ---
+  duration_ms: 0.16728
+  type: 'test'
+  ...
+# Subtest: TED-066: a charge that disappears comes off the ledger, once
+ok 14 - TED-066: a charge that disappears comes off the ledger, once
+  ---
+  duration_ms: 0.177882
+  type: 'test'
+  ...
+# Subtest: TED-066: a re-priced charge moves the balance by the difference only
+ok 15 - TED-066: a re-priced charge moves the balance by the difference only
+  ---
+  duration_ms: 0.261932
+  type: 'test'
+  ...
+# Subtest: TED-066: the database already took a cancelled charge off — the Me page adds nothing
+ok 16 - TED-066: the database already took a cancelled charge off — the Me page adds nothing
+  ---
+  duration_ms: 0.153588
+  type: 'test'
+  ...
+# Subtest: TED-081: merging two families keeps every charge the second one was billed
+ok 17 - TED-081: merging two families keeps every charge the second one was billed
+  ---
+  duration_ms: 3.257021
+  type: 'test'
+  ...
+# Subtest: TED-082: a charge the conversion posted is linked, so re-pricing and cancelling it follow
+ok 18 - TED-082: a charge the conversion posted is linked, so re-pricing and cancelling it follow
+  ---
+  duration_ms: 0.275491
+  type: 'test'
+  ...
+# Subtest: TED-082: a converted fee migration 267 already linked is not handed to another charge
+ok 19 - TED-082: a converted fee migration 267 already linked is not handed to another charge
+  ---
+  duration_ms: 0.123622
+  type: 'test'
+  ...
+# Subtest: TED-091: a shop charge a stale tab never saw is NOT taken off by its Billing load
+ok 20 - TED-091: a shop charge a stale tab never saw is NOT taken off by its Billing load
+  ---
+  duration_ms: 0.166457
+  type: 'test'
+  ...
+# Subtest: TED-108: Record Payment refuses zero and negative amounts (Finance's button is the same form now, TED-157)
+not ok 21 - TED-108: Record Payment refuses zero and negative amounts (Finance's button is the same form now, TED-157)
+  ---
+  duration_ms: 1.630551
+  type: 'test'
+  location: '/tmp/claude-0/-home-user-daily-camp-schedular/39278441-0cf3-5f6a-bf8e-a51bef67e95d/scratchpad/old_aa72c69/tests/charges_reach_the_ledger.test.js:300:1'
+  failureType: 'testCodeFailure'
+  error: |-
+    a second Record Payment form is back
+    
+    2 !== 1
+    
+  code: 'ERR_ASSERTION'
+  name: 'AssertionError'
+  expected: 1
+  actual: 2
+  operator: 'strictEqual'
+  stack: |-
+    TestContext.<anonymous> (/tmp/claude-0/-home-user-daily-camp-schedular/39278441-0cf3-5f6a-bf8e-a51bef67e95d/scratchpad/old_aa72c69/tests/charges_reach_the_ledger.test.js:301:12)
+    Test.runInAsyncScope (node:async_hooks:214:14)
+    Test.run (node:internal/test_runner/test:1047:25)
+    Test.processPendingSubtests (node:internal/test_runner/test:744:18)
+    Test.postRun (node:internal/test_runner/test:1173:19)
+    Test.run (node:internal/test_runner/test:1101:12)
+    async Test.processPendingSubtests (node:internal/test_runner/test:744:7)
+  ...
+1..21
+# tests 21
+# suites 0
+# pass 20
+# fail 1
+# cancelled 0
+# skipped 0
+# todo 0
+# duration_ms 150.718459

@@ -1,0 +1,20 @@
+Run 1, Tue Jul 7: the window's defaults From 2026-06-28 To 2026-07-07, runs in season 7 → pressed Save
+   stored runs: 1
+Run 2, Tue Jul 14: defaults From 2026-07-05 To 2026-07-14 → pressed Save
+   stored runs: 2
+   run 1 (2026-06-28 → 2026-07-07): camp total $1740; Ana 56 h / 2 wk → $840; Ben 56 h / 2 wk → $600; Cara 56 h / 2 wk → $300
+   run 2 (2026-07-05 → 2026-07-14): camp total $1740; Ana 56 h / 2 wk → $840; Ben 56 h / 2 wk → $600; Cara 56 h / 2 wk → $300
+   paid over the two runs: Ana 112 h, 4 weeks, $1680; Ben 112 h, 4 weeks, $1200; Cara 112 h, 4 weeks, $600
+   worked by Tue Jul 14: Ana 40 + 40 + 16 = 96 h ($1,440); Ben 2 full weeks + 2 days
+  BAD the two default runs pay Ana for the hours she worked (96 h), each hour once   → Ana paid for 112 h ($1680) — the week of Jul 5 is in both runs
+  BAD the two default runs pay Ben for each week once   → Ben paid 4 weeks ($1200) over 2 runs a week apart
+  BAD a run that overlaps an earlier one is flagged (or its dates start after the last run)   → run 2 starts 2026-07-05, run 1 ended 2026-07-07; no warning
+
+B. The same camp paying every TWO weeks with the defaults: runs on Tue Jul 7 and Tue Jul 21
+   run 1 (2026-06-28 → 2026-07-07): Ana 56 h → $840
+   run 2 (2026-07-12 → 2026-07-21): Ana 56 h → $840
+   Ana paid for 112 h over the two runs; worked by Tue Jul 21: 40 + 40 + 40 + 16 = 136 h — the Wed–Sat of the week of Jul 5 (24 h) is in neither run's count, and Jul 19's rest will be missed the same way
+  BAD two-weekly runs with the defaults pay every hour worked   → Ana paid for 112 h of 136 h ($1680 of $2040)
+page errors: []
+
+4 BAD
