@@ -1,0 +1,38 @@
+SETUP: Avi Katz (#1), $50 on the canteen wallet (cash, at the office); the Katz family has no credit on its bill.
+
+K0. Default Snacks settings (daily cash limit $20), NO floor. Close out… → "Hand back in cash"
+    toast: ["✕ Could not take canteen money off: Avi Katz (over_available) — do it from the Canteen page"]
+    wallet now $50; lines taken off: none
+  BAD K0 "Hand back in cash": the $50 the close-out offered comes off the wallet   → wallet still $50
+
+K0. Default Snacks settings (daily cash limit $20), NO floor. Close out… → "Donate to the camp"
+    toast: ["✕ Could not take canteen money off: Avi Katz (over_available) — do it from the Canteen page"]
+    wallet now $50; lines taken off: none
+  BAD K0 "Donate to the camp": the $50 the close-out offered comes off the wallet   → wallet still $50
+
+K0. Default Snacks settings (daily cash limit $20), NO floor. Close out… → "Send a cheque"
+    toast: ["✕ Could not take canteen money off: Avi Katz (over_available) — do it from the Canteen page"]
+    wallet now $50; lines taken off: none
+  BAD K0 "Send a cheque": the $50 the close-out offered comes off the wallet   → wallet still $50
+
+— Snacks settings: daily cash limit switched OFF (0) from here on —
+
+K1. The parent set a $10 Balance Floor. Billing → Katz → Close out… → "Hand back in cash"
+    the window: "Decide what happens to each amount. Nothing is applied until you confirm, and a card refund that can only be partly done will say so below.Avi Katz’s canteen money$50Leave as credit on their billRefun"
+    toast: ["✕ Could not take canteen money off: Avi Katz (over_available) — do it from the Canteen page"]
+    wallet now $50; lines taken off: none
+  BAD K1 the $50 the close-out offered comes off the wallet ("Hand back in cash")   → wallet still $50
+
+K2. The parent set a $10 Balance Floor. Billing → Katz → Close out… → "Donate to the camp"
+    the window: "Decide what happens to each amount. Nothing is applied until you confirm, and a card refund that can only be partly done will say so below.Avi Katz’s canteen money$50Leave as credit on their billRefun"
+    toast: ["✕ Could not take canteen money off: Avi Katz (over_available) — do it from the Canteen page"]
+    wallet now $50; lines taken off: none
+  BAD K2 the $50 the close-out offered comes off the wallet ("Donate to the camp")   → wallet still $50
+
+K3. Control: no floor. Close out… → "Hand back in cash"
+    toast: ["✓ 1 close-out step applied"]
+    wallet now $0; lines taken off: cash_out $50.00
+  ok  K3 (control) with no floor the $50 comes off   → wallet $0
+page errors: []
+
+5 BAD

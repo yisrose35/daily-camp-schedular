@@ -1,0 +1,4 @@
+charge => {"success": true}
+registration_deposit => {"success": true}
+registration_card_capture => {"success": true}
+rows: charge, registration_deposit, registration_card_capture

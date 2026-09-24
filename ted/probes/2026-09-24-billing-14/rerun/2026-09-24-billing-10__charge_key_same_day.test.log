@@ -1,0 +1,73 @@
+TAP version 13
+# [Me] Charge error: Error: Stripe did not give a final answer (connection reset), so this charge may have gone through. Check the family's payments or the Stripe dashboard before charging again — pressing Charge Card again for the same amount is safe: Stripe answers with the first charge instead of making a second.
+#     at callEdgeFunctionAuthed (/home/user/daily-camp-schedular/ted/probes/2026-09-24-billing-10/charge_key_same_day.test.js:87:47)
+#     at Object.chargeStoredCard [as charge] (eval at page (/home/user/daily-camp-schedular/ted/probes/2026-09-24-billing-10/charge_key_same_day.test.js:91:18), <anonymous>:74:21)
+#     at TestContext.<anonymous> (/home/user/daily-camp-schedular/ted/probes/2026-09-24-billing-10/charge_key_same_day.test.js:99:22)
+#     at Test.runInAsyncScope (node:async_hooks:214:14)
+#     at Test.run (node:internal/test_runner/test:1047:25)
+#     at Test.start (node:internal/test_runner/test:944:17)
+#     at startSubtestAfterBootstrap (node:internal/test_runner/harness:296:17) {
+#   data: {
+#     uncertain: true,
+#     error: "Stripe did not give a final answer (connection reset), so this charge may have gone through. Check the family's payments or the Stripe dashboard before charging again — pressing Charge Card again for the same amount is safe: Stripe answers with the first charge instead of making a second."
+#   }
+# }
+#   10:00 press → ok=false uncertain=true | toast: Stripe did not give a final answer (connection reset), so this charge may have gone throug
+# [Me] Charge error: Error: The card company did not answer (connection reset), so this charge may have gone through. Check the processor's dashboard before charging again.
+#     at callEdgeFunctionAuthed (/home/user/daily-camp-schedular/ted/probes/2026-09-24-billing-10/charge_key_same_day.test.js:87:47)
+#     at Object.chargeStoredCard [as charge] (eval at page (/home/user/daily-camp-schedular/ted/probes/2026-09-24-billing-10/charge_key_same_day.test.js:91:18), <anonymous>:73:21)
+#     at TestContext.<anonymous> (/home/user/daily-camp-schedular/ted/probes/2026-09-24-billing-10/charge_key_same_day.test.js:111:22)
+#     at Test.runInAsyncScope (node:async_hooks:214:14)
+#     at Test.run (node:internal/test_runner/test:1047:25)
+#     at Test.processPendingSubtests (node:internal/test_runner/test:744:18)
+#     at Test.postRun (node:internal/test_runner/test:1173:19)
+#     at Test.run (node:internal/test_runner/test:1101:12)
+#     at async startSubtestAfterBootstrap (node:internal/test_runner/harness:296:3) {
+#   data: {
+#     uncertain: true,
+#     canConfirm: true,
+#     error: "The card company did not answer (connection reset), so this charge may have gone through. Check the processor's dashboard before charging again."
+#   }
+# }
+#   10:00 press → ok=false uncertain=true | toast: The card company did not answer (connection reset), so this charge may have gone through. 
+# Subtest: Stripe: a same-amount charge later the same day after a lost answer
+not ok 1 - Stripe: a same-amount charge later the same day after a lost answer
+  ---
+  duration_ms: 190.68359
+  type: 'test'
+  location: '/home/user/daily-camp-schedular/ted/probes/2026-09-24-billing-10/charge_key_same_day.test.js:95:1'
+  failureType: 'testCodeFailure'
+  error: 'confirmDialog is not defined'
+  code: 'ERR_TEST_FAILURE'
+  name: 'ReferenceError'
+  stack: |-
+    Object.chargeStoredCard [as charge] (eval at page (/home/user/daily-camp-schedular/ted/probes/2026-09-24-billing-10/charge_key_same_day.test.js:91:18), <anonymous>:43:19)
+    TestContext.<anonymous> (/home/user/daily-camp-schedular/ted/probes/2026-09-24-billing-10/charge_key_same_day.test.js:102:22)
+    async Test.run (node:internal/test_runner/test:1054:7)
+    async startSubtestAfterBootstrap (node:internal/test_runner/harness:296:3)
+  ...
+# Subtest: Cardknox: the same
+not ok 2 - Cardknox: the same
+  ---
+  duration_ms: 161.706019
+  type: 'test'
+  location: '/home/user/daily-camp-schedular/ted/probes/2026-09-24-billing-10/charge_key_same_day.test.js:107:1'
+  failureType: 'testCodeFailure'
+  error: 'confirmDialog is not defined'
+  code: 'ERR_TEST_FAILURE'
+  name: 'ReferenceError'
+  stack: |-
+    Object.chargeStoredCard [as charge] (eval at page (/home/user/daily-camp-schedular/ted/probes/2026-09-24-billing-10/charge_key_same_day.test.js:91:18), <anonymous>:43:19)
+    TestContext.<anonymous> (/home/user/daily-camp-schedular/ted/probes/2026-09-24-billing-10/charge_key_same_day.test.js:114:22)
+    async Test.run (node:internal/test_runner/test:1054:7)
+    async Test.processPendingSubtests (node:internal/test_runner/test:744:7)
+  ...
+1..2
+# tests 2
+# suites 0
+# pass 0
+# fail 2
+# cancelled 0
+# skipped 0
+# todo 0
+# duration_ms 447.435666

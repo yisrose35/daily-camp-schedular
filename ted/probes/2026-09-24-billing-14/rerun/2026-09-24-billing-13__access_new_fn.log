@@ -1,0 +1,19 @@
+/home/user/daily-camp-schedular/tests/e2e/db.js:314
+            throw e;
+            ^
+
+Error: ERROR:  function "public._notice_unbooked_refund_failure(uuid,text,text,numeric,text)" does not exist
+    at run (/home/user/daily-camp-schedular/tests/e2e/db.js:312:23)
+    at Object.sql (/home/user/daily-camp-schedular/tests/e2e/db.js:323:16)
+    at Object.<anonymous> (/home/user/daily-camp-schedular/ted/probes/2026-09-24-billing-13/access_new_fn.js:8:18)
+    at Module._compile (node:internal/modules/cjs/loader:1705:14)
+    at Object..js (node:internal/modules/cjs/loader:1838:10)
+    at Module.load (node:internal/modules/cjs/loader:1441:32)
+    at Function._load (node:internal/modules/cjs/loader:1263:12)
+    at TracingChannel.traceSync (node:diagnostics_channel:328:14)
+    at wrapModuleLoad (node:internal/modules/cjs/loader:237:24)
+    at Function.executeUserEntryPoint [as runMain] (node:internal/modules/run_main:171:5) {
+  psql: true
+}
+
+Node.js v22.22.2

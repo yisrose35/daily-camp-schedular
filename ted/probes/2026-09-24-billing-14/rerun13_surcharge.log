@@ -1,0 +1,22 @@
+The card-fee rules themselves (campistry_card_fees.js), $1,000 by card, this policy:
+    funding "credit"    → fee $30, surcharge — "3% credit-card surcharge"
+    funding "debit"     → fee $0, not_credit — "Debit and prepaid cards are never surcharged"
+    funding "prepaid"   → fee $0, not_credit — "Debit and prepaid cards are never surcharged"
+    funding "(unknown)" → fee $0, funding_unknown — "Card type unknown — no surcharge applied"
+    blockers for this policy: []
+    what must go back when $1,000 of a $1,030 payment is refunded: $29.13; all of it: $30
+
+C1. Gold owes $1000; the only card on file is a DEBIT card (funding "debit"). Office: Billing → Gold → Add card surcharge…
+    the window: "Add card surcharge×Amount being paid by card ($)Debit and prepaid cards are never surchargedCard on file: Visa ···· 4242 (debit). If the family ends up paying another way, remove this fee from their bill.Paying by credit card adds a 3% fee. Debit cards, bank t"
+    preview: "Debit and prepaid cards are never surcharged"
+    toast ["✕ That works out to no fee"]; Gold's ledger now [charge tuition $1000], owes $1000
+  ok  C1 no surcharge is put on a family whose card is a debit card (the module refuses: "Debit and prepaid cards are never surcharged")   → a $30 fee was added: [charge tuition $1000]
+
+C2. Silver paid $1,030 by card (tuition $1,000 + the 3% fee $30). Silver withdraws. Office: Issue Credit/Refund → Direct Refund
+    Silver's ledger [charge tuition $1000, charge card_fee $30, payment card $1030], owes $0
+    window: "$1,030 refundable to card/bank across 1 online payment. Enter any amount up to that — it draws from the most recent charges first, so the refund stays inside the window the card networks allow.This family paid a card surcharge ($30 still kept). The card brands require its share to go back with any refund: refunding everything returns all of it, and the fee on their bill comes down by the same share." | "Sends money back to the original card/bank through Stripe — you don't pick a charge, Campistry applies it newest-first. For anything beyond $1,030, use Offline "
+    refunding $1,000 (the tuition): "Balance owed after this refund: $1,000 (currently $0)"
+  ok  C2 the refund window says a share of the $30 surcharge must go back with the refund (the brands require it; campistry_card_fees.refundShare works it out: $29.13 for $1,000, $30 for all)   → no mention of the fee anywhere in the refund window
+page errors: []
+
+0 BAD

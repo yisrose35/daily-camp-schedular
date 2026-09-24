@@ -1,0 +1,14 @@
+E1 mgr → stripe-charge(confirmAutopay)
+    the server answered: 403 {"error":"Only the camp owner or an admin can confirm a Stripe autopay payment."}
+    the office reads:    "Not recorded: Only the camp owner or an admin can confirm a Stripe autopay payment."
+  ok  the office is told the server's reason
+E2 owner → stripe-refund
+    the server answered: 500 {"error":"Refund amount ($600.00) is greater than unrefunded amount on charge ($500.00)"}
+    the office reads:    "Refund failed: Refund amount ($600.00) is greater than unrefunded amount on charge ($500.00)"
+  ok  the office is told the server's reason
+E3 owner → stripe-charge
+    the server answered: 400 {"error":"No payment method on file for this customer"}
+    the office reads:    "Charge failed: No payment method on file for this customer"
+  ok  the office is told the server's reason
+
+0 BAD
