@@ -318,3 +318,27 @@ test('TED-101: Me tells the statement each charge\'s care year from the session 
     const ME = require('node:fs').readFileSync(require('node:path').join(__dirname, '..', 'campistry_me.js'), 'utf8');
     assert.match(ME, /var careYear=String\(\(ses&&\(ses\.startDate\|\|ses\.start\)\)\|\|e\.sessionStart\|\|''\)\.slice\(0,4\);/);
 });
+
+// ── TED-107: a December deposit refunded in March (camp cancelled) ─────────
+test('TED-107: a deposit paid last year and refunded this year is not claimable this year', () => {
+    const r = T.build({ year: 2026, entries: [charge('2025-10-01', 3000, 'e1'), pay('2025-12-15', 500), pay('2026-03-01', -500)], resolveCharge: withCareYear });
+    assert.strictEqual(r.qualifying, 0, 'a refunded deposit was reported as claimable');
+    assert.ok(!/exceed payments/.test(r.warnings.join(' ')), 'told the family an earlier return may need amending for money never claimed');
+});
+
+// ── TED-101 residue: sessions without dates, and the Total row ─────────────
+test('TED-101: an undated session charged in the autumn is taken as next summer, and says so', () => {
+    const r25 = build(2025, [charge('2025-10-01', 3000, 'e1'), pay('2025-12-15', 500)]);
+    assert.strictEqual(r25.qualifying, 0);
+    assert.strictEqual(r25.prepaid, 500);
+    assert.match(r25.warnings.join(' '), /no start date/);
+    const r26 = build(2026, [charge('2025-10-01', 3000, 'e1'), pay('2025-12-15', 500), pay('2026-04-01', 2500)]);
+    assert.strictEqual(r26.qualifying, 3000);
+});
+
+test('TED-101: the printed Total equals the sum of the child rows', () => {
+    const r = T.build({ year: 2026, entries: entries101(), resolveCharge: withCareYear });
+    assert.strictEqual(r.claimedTotal, r.byCamper.reduce((t, b) => t + b.total, 0));
+    const ME = require('node:fs').readFileSync(require('node:path').join(__dirname, '..', 'campistry_me.js'), 'utf8');
+    assert.match(ME, /fm\(rep\.claimedTotal!=null\?rep\.claimedTotal:rep\.paid\.net\)/);
+});

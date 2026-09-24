@@ -130,10 +130,17 @@
             // the caller knows it, else the charge's date. A tuition charge is
             // dated at enrolment — October for next July — so its date alone
             // would put next summer's care in this year (TED-101).
-            var careYear = String(who.careYear || '').slice(0, 4);
-            if (!/^\d{4}$/.test(careYear)) careYear = ymd(e.date).slice(0, 4);
+            var careYear = String(who.careYear || '').slice(0, 4), guessed = false;
+            if (!/^\d{4}$/.test(careYear)) {
+                careYear = ymd(e.date).slice(0, 4);
+                // A session with no dates: tuition charged in the autumn is
+                // for NEXT summer — camps enrol September to December for the
+                // coming season. Said on the statement, never silently assumed.
+                var mo = Number(ymd(e.date).slice(5, 7));
+                if (who.session && mo >= 9 && /^\d{4}$/.test(careYear)) { careYear = String(Number(careYear) + 1); guessed = true; }
+            }
             lots.push({
-                date: ymd(e.date), seq: idx, open: amt, amount: amt, careYear: careYear,
+                date: ymd(e.date), seq: idx, open: amt, amount: amt, careYear: careYear, careYearGuessed: guessed,
                 camperName: who.camperName || '', camperId: who.camperId != null ? who.camperId : null, session: who.session || '',
                 qualifies: cls.verdict, why: cls.reason,
                 label: e.desc || e.category || 'Charge', ref: e.ref || ''
@@ -303,6 +310,7 @@
             if (res.unapplied > 0.004) report.prepaid = round2(report.prepaid + res.unapplied);
         });
 
+        var carriedGross = carried.reduce(function (t, h) { return round2(t + h.amount); }, 0);
         report.paid.refunds = inYearRefunds;
         report.paid.net = round2(report.paid.gross - inYearRefunds);
 
@@ -323,13 +331,20 @@
         // Guarded separately from the proration above, which cannot run when
         // the year has no payments to prorate — and a year with refunds and no
         // payments is exactly the case that most needs saying out loud.
-        if (inYearRefunds > report.paid.gross + 0.004) {
+        if (inYearRefunds > report.paid.gross + 0.004 && inYearRefunds - report.paid.gross > carriedGross + 0.004) {
             report.warnings.push('Refunds in ' + year + ' exceed payments in ' + year + ' — the family was ' +
                 'refunded money they paid in an earlier year. Nothing is claimable for ' + year + ', and the ' +
                 'earlier year’s return may need amending.');
         }
 
         // Money paid in an earlier year for care given in this one (TED-101).
+        // Refunds this year beyond this year's own payments are refunds OF that
+        // earlier money (a cancelled, refunded booking) and come off it first
+        // (TED-107) — it cannot be claimed and refunded both.
+        var excessRefund = Math.max(0, round2(inYearRefunds - report.paid.gross));
+        var carriedKeep = carriedGross > 0.004 ? Math.max(0, (carriedGross - excessRefund) / carriedGross) : 1;
+        carried = carried.map(function (h) { return { lot: h.lot, amount: round2(h.amount * carriedKeep) }; })
+                         .filter(function (h) { return h.amount > 0.004; });
         var carriedTotal = 0;
         carried.forEach(function (h) {
             var b = bucket(h.lot.camperName, h.lot.camperId);
@@ -349,6 +364,13 @@
             }
         });
         report.paidEarlier = carriedTotal;
+        report.claimedTotal = round2(Object.keys(perCamper).reduce(function (t, k) { return t + perCamper[k].total; }, 0));
+        var guessedSessions = {};
+        lots.forEach(function (l) { if (l.careYearGuessed && l.session) guessedSessions[l.session] = l.careYear; });
+        Object.keys(guessedSessions).forEach(function (ses) {
+            report.warnings.push('Session “' + ses + '” has no start date, so its care is taken to be in ' + guessedSessions[ses] +
+                ' (charged in the autumn, for the next summer). Add its dates under Sessions to be certain.');
+        });
         if (carriedTotal > 0.004) {
             report.warnings.push('Includes ' + carriedTotal.toFixed(2) + ' paid before ' + year + ' for care given in ' + year +
                 ' — under Publication 503 it is claimed for the year the care is given, not the year it was paid.');

@@ -244,3 +244,82 @@ test('TED-105: Snacks keeps one key per refund while it is retried, and starts a
     assert.match(SN, /idempotencyKey: window\._canteenRefundKey\.key/);
     assert.match(SN, /window\._canteenRefundKey = null;/);
 });
+
+// ── TED-105 (7th pass): the same canteen refund retried, when the child topped
+// up more than once. The claim model keeps T.tables.refund_intents in step, as
+// the real table would be, since the functions read earlier parts from it.
+const CLAIM_TABLE = `
+T.tables.refund_intents = [];
+const row = (k: string) => T.tables.refund_intents.find((x: any) => x.key === k);
+T.rpc.claim_refund_intent = (a: any) => { const c = row(a.p_key); if (c) return { claimed: false, previous: c.result || {} };
+  T.tables.refund_intents.push({ camp_id: a.p_camp_id, key: a.p_key, amount: a.p_amount, result: null, settled_at: null }); return { claimed: true }; };
+T.rpc.settle_refund_intent = (a: any) => { const c = row(a.p_key); if (c) { c.result = a.p_result; c.settled_at = 'now'; } return true; };
+T.rpc.release_refund_intent = (a: any) => { T.tables.refund_intents = T.tables.refund_intents.filter((x: any) => !(x.key === a.p_key && !x.settled_at)); return true; };
+T.rpc.release_stale_refund_intent = () => false;
+T.rpc.record_processor_transaction = () => ({ success: true });`;
+
+const stripeTopups = (deps) => `
+T.env = { STRIPE_SECRET_KEY: 'sk_test', SUPABASE_URL: 'http://db', SUPABASE_ANON_KEY: 'anon', SUPABASE_SERVICE_ROLE_KEY: 'svc' };
+T.users = { owner: 'u-owner' };
+T.tables.camps = [{ id: 'camp1', owner: 'u-owner' }];
+${CLAIM_TABLE}
+const tx: any[] = ${JSON.stringify(deps.map((a, i) => ({ kind: 'deposit', method: 'stripe', stripePaymentIntentId: 'pi_top' + (i + 1), amount: a, camper: 'Avi', camperId: 7, timestamp: i + 1 })))};
+let bal = ${deps.reduce((s, a) => s + a, 0)};
+T.rpc.canteen_refund_view = () => ({ success: true, accounts: { Avi: { camperId: 7, balance: bal, balanceFloor: 0 } }, transactions: tx });
+T.rpc.refund_canteen_deposit_from_stripe = (a: any) => {
+  if (tx.some(t => t.stripeRefundId === a.p_refund_id)) return { success: true, alreadyProcessed: true };
+  tx.push({ kind: 'refund', stripePaymentIntentId: a.p_payment_intent_id, amount: a.p_amount, stripeRefundId: a.p_refund_id, camperId: 7 });
+  bal -= a.p_amount; return { success: true, balance: bal };
+};
+const seen: Record<string, any> = {}; let n = 0;
+T.fetch = (url: string, init: any) => {
+  if (init.method === 'POST' && url.endsWith('/refunds')) {
+    const k = init.headers['Idempotency-Key'];
+    if (!seen[k]) { n++; seen[k] = { id: 're_' + n, status: 'succeeded', amount: Number(new URLSearchParams(init.body).get('amount')) }; }
+    return seen[k];
+  }
+  if (url.includes('/payment_intents/')) return { id: 'pi', transfer_data: null };
+  return {};
+};
+const req = { headers: { Authorization: 'Bearer owner' }, body: { camperId: 7, camperName: 'Avi', amount: 20, idempotencyKey: 'cref_1' } };
+T.requests = [req, req];`;
+
+const byopTopups = (deps) => `
+T.env = { SUPABASE_URL: 'http://db', SUPABASE_ANON_KEY: 'anon', SUPABASE_SERVICE_ROLE_KEY: 'svc' };
+T.users = { owner: 'u-owner' };
+T.tables.camps = [{ id: 'camp1', owner: 'u-owner', payment_processor_key: 'cardknox' }];
+T.rpc._admin_get_processor_credential = () => ({ success: true, credentials: { apiKey: 'ck' } });
+${CLAIM_TABLE}
+const tx: any[] = ${JSON.stringify(deps.map((a, i) => ({ kind: 'deposit', method: 'cardknox', byopTransactionId: 'X' + (i + 1), amount: a, camper: 'Avi', camperId: 7, timestamp: i + 1 })))};
+let bal = ${deps.reduce((s, a) => s + a, 0)};
+T.rpc.canteen_refund_view = () => ({ success: true, accounts: { Avi: { camperId: 7, balance: bal, balanceFloor: 0 } }, transactions: tx });
+T.rpc.refund_canteen_deposit_from_processor = (a: any) => {
+  tx.push({ kind: 'refund', byopTransactionId: a.p_external_transaction_id, amount: a.p_amount, camperId: 7 });
+  bal -= a.p_amount; return { success: true, balance: bal };
+};
+let n = 0;
+T.fetch = (url: string, init: any) => {
+  if (String(init.body || '').includes('cc%3Arefund')) { n++; return 'xResult=A&xRefNum=R' + n + '&xStatus=Approved'; }
+  return {};
+};
+const req = { headers: { Authorization: 'Bearer owner' }, body: { camperId: 7, camperName: 'Avi', amount: 20, idempotencyKey: 'cref_1' } };
+T.requests = [req, req];`;
+
+for (const [name, deps] of Object.entries({ 'one top-up': [50], 'two top-ups': [50, 50], 'the $20 spans two': [10, 50] })) {
+    test(`TED-105: Stripe canteen refund retried with the same key (${name}) — one $20 refund`, () => {
+        const r = runEdge('stripe-canteen-refund', stripeTopups(deps));
+        const made = new Set(r.fetches.filter(f => f.method === 'POST' && f.url.endsWith('/refunds')).map(f => f.headers['Idempotency-Key']));
+        const cents = [...new Set(r.fetches.filter(f => f.method === 'POST' && f.url.endsWith('/refunds')).map(f => f.headers['Idempotency-Key'] + '=' + new URLSearchParams(f.body).get('amount')))]
+            .reduce((t, x) => t + Number(x.split('=')[1]), 0);
+        assert.strictEqual(cents, 2000, name + ': refunded ' + cents / 100 + ' across ' + JSON.stringify([...made]));
+        assert.strictEqual(r.responses[1].body.totalRefunded, 20, JSON.stringify(r.responses[1].body));
+    });
+    test(`TED-105: Cardknox canteen refund retried with the same key (${name}) — one $20 refund, reported as done`, () => {
+        const r = runEdge('payments-canteen-refund', byopTopups(deps));
+        const sent = r.fetches.filter(f => String(f.body || '').includes('cc%3Arefund'))
+            .reduce((t, f) => t + Number(new URLSearchParams(f.body).get('xAmount')), 0);
+        assert.strictEqual(sent, 20, name + ': $' + sent + ' went back to the card');
+        assert.strictEqual(r.responses[1].body.totalRefunded, 20, 'the retry said: ' + JSON.stringify(r.responses[1].body));
+        assert.ok(!r.responses[1].body.error);
+    });
+}

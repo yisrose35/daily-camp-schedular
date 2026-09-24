@@ -56,6 +56,9 @@ function query(table: string, token: string | null) {
     delete() { op = 'delete'; return b; },
     eq(c: string, v: any) { filters.push(r => r && r[c] === v); return b; },
     neq(c: string, v: any) { filters.push(r => r && r[c] !== v); return b; },
+    like(c: string, pat: string) {       // prefix% only — what the functions use
+      const p = String(pat), pre = p.endsWith('%') ? p.slice(0, -1) : null;
+      filters.push(r => r && (pre != null ? String(r[c] ?? '').startsWith(pre) : String(r[c] ?? '') === p)); return b; },
     in(c: string, vs: any[]) { filters.push(r => r && vs.includes(r[c])); return b; },
     is(c: string, v: any) { filters.push(r => r && (r[c] ?? null) === v); return b; },
     not(c: string, o: string, v: any) { if (o === 'is' && v === null) filters.push(r => r && r[c] != null); return b; },

@@ -307,5 +307,15 @@ test('TED-103: autopay waits while Billing is asking about a card deposit, and t
         depositReview: [{ ref: 'pi_dep', amount: 250, paymentId: 'pay_hand' }] }, { id: 'pi_x', status: 'succeeded' }));
     assert.strictEqual(newCharges(r).length, 0, 'autopay charged against a balance that is $250 too high');
     assert.deepStrictEqual(results(r), ['waiting_for_deposit_review']);
-    assert.ok(r.rpcs.some(x => x.name === 'flag_plan_collection' && x.args.p_reason === 'deposit_review'));
+    // told once, plainly — not through the card-failure path (TED-106)
+    assert.ok(r.writes.some(w => w.table === 'notifications' && w.op === 'insert' && /deposit_review/.test(w.payload.source_id)));
+    assert.ok(!r.rpcs.some(x => x.name === 'flag_plan_collection' && x.args.p_reason), 'the card was counted as failing');
+});
+
+test('TED-106: once the question is answered, autopay charges the same night — an old hold is cleared', () => {
+    const held = Object.assign({}, LEDGER_PLAN, { collectionBlocked: { reason: 'deposit_review', attempts: 3, escalated: true,
+        nextRetryAt: '2099-01-01', since: '2026-01-01' } });
+    const r = runEdge('charge-due-installments', shapeNight({ plans: [held] }, { id: 'pi_ok', status: 'succeeded' }));
+    assert.ok(r.rpcs.some(x => x.name === 'flag_plan_collection' && x.args.p_reason == null), 'the old hold was not cleared');
+    assert.strictEqual(newCharges(r).length, 1, 'autopay still waiting after the answer: ' + JSON.stringify(results(r)));
 });

@@ -96,7 +96,8 @@ test('the claim key is DERIVED FROM THE REQUEST, not a constant', () => {
     // The single canteen refund is claimed on every request: on the page's key
     // for this refund when it sends one (TED-105), else on the deposit and what
     // is left on it (TED-093).
-    assert.match(CANTEEN, /\? `canteen:\$\{reqKey\}:\$\{dep\.externalTransactionId\}:\$\{chunkCents\}`\s*: `canteen:\$\{dep\.externalTransactionId\}:\$\{Math\.round\(dep\.remaining \* 100\)\}:\$\{chunkCents\}`;/);
+    // (one part per top-up per refund; behaviour in tests/refund_lost_answer.test.js)
+    assert.match(CANTEEN, /\? `canteen:\$\{reqKey\}:\$\{dep\.externalTransactionId\}`\s*: `canteen:\$\{dep\.externalTransactionId\}:\$\{Math\.round\(dep\.remaining \* 100\)\}:\$\{chunkCents\}`;/);
     assert.match(CANTEEN_ALL, /typeof body\.idempotencyKey === "string" && body\.idempotencyKey\.trim\(\)/);
     // And the claim is actually gated on having one, not skipped outright.
     assert.match(REFUND, /if \(claimKey\) \{[\s\S]{0,200}claim_refund_intent/);
