@@ -169,3 +169,39 @@ test('TED-064: an office-built installments[] plan holds a clearing debit too', 
     assert.strictEqual(paid.args.p_patch.status, 'paid');
     assert.strictEqual(paid.args.p_dedupe_key, 'pi_ach');
 });
+
+// ── TED-073: the nightly retry for a counselor's tip that failed ─────────────
+function tipNight(existingTransfer) {
+    return BASE + `
+      T.rpc.camp_families_object = () => ({});
+      T.rpc.retry_failed_tip_transfers = () => [{ id: 'item1', cartId: 'cart1', staffName: 'Counselor Dina', staffAccountId: 'lsa-internal-uuid', tipCents: 2000, feeCents: 40 }];
+      T.tables.link_tip_cart_items = [{ id: 'item1', cart_id: 'cart1', camp_id: 'camp1', staff_account_id: 'lsa-internal-uuid', staff_name: 'Counselor Dina',
+          staff_role: 'counselor', stripe_account_id: 'acct_DINA', tip_cents: 2000, fee_cents: 40, processed_at: null, transfer_error: 'boom',
+          parent_user_id: 'u-p', camper_name: 'Avi', person_id: 4 }];
+      T.tables.link_tips = [];
+      T.fetch = (url: string, init: any) => {
+        if (init.method === 'GET' && url.includes('/transfers?')) return { data: ${existingTransfer ? `[{ id: 'tr_first', metadata: { cartItemId: 'item1' } }]` : '[]'} };
+        if (init.method === 'POST' && url.endsWith('/transfers')) return { id: 'tr_retry' };
+        return {};
+      };`;
+}
+const transfersMade = r => r.fetches.filter(f => f.method === 'POST' && f.url.endsWith('/transfers'));
+
+test('TED-073: the tip retry pays the whole tip to the counselor\'s Stripe account, and records it', () => {
+    const r = runEdge('charge-due-installments', tipNight(false));
+    const t = transfersMade(r);
+    assert.strictEqual(t.length, 1);
+    const p = new URLSearchParams(t[0].body);
+    assert.strictEqual(p.get('destination'), 'acct_DINA', 'sent to the internal record id, not the counselor\'s Stripe account');
+    assert.strictEqual(p.get('amount'), '2000', 'the tip was cut by the fee a second time');
+    assert.ok(t[0].headers['Idempotency-Key']);
+    assert.ok(r.writes.some(w => w.table === 'link_tips' && w.op === 'insert'), 'the tip was not recorded for the counselor');
+    assert.ok(r.rpcs.some(x => x.name === 'increment_staff_total_earned'));
+    assert.ok(r.writes.some(w => w.table === 'link_tip_cart_items' && w.op === 'update' && w.payload.stripe_transfer_id === 'tr_retry'));
+});
+
+test('TED-073: if the first transfer actually went through, the retry pays nothing and only catches up', () => {
+    const r = runEdge('charge-due-installments', tipNight(true));
+    assert.strictEqual(transfersMade(r).length, 0, 'the counselor was paid twice');
+    assert.ok(r.writes.some(w => w.table === 'link_tip_cart_items' && w.op === 'update' && w.payload.stripe_transfer_id === 'tr_first'));
+});

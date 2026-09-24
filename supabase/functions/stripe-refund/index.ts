@@ -140,13 +140,17 @@ serve(async (req) => {
       return json({ error: "That payment does not belong to your camp." }, 403);
     }
 
+    // Always an explicit, positive amount (TED-076). "No amount" means a FULL
+    // refund to Stripe, so a 0, a negative or a missing amount used to refund
+    // the whole payment. Billing always sends the amount it means.
+    const amountCents = Math.round(Number(amount) * 100);
+    if (!Number.isFinite(amountCents) || amountCents <= 0) {
+      return json({ error: "A refund needs an amount greater than zero." }, 400);
+    }
     const params: Record<string, string> = {
       payment_intent: String(paymentIntentId),
+      amount: String(amountCents),
     };
-    // Omit amount for a full refund; otherwise partial (cents).
-    if (amount != null && Number(amount) > 0) {
-      params.amount = String(Math.round(Number(amount) * 100));
-    }
     // Stripe only accepts: duplicate | fraudulent | requested_by_customer
     if (reason === "duplicate" || reason === "fraudulent" || reason === "requested_by_customer") {
       params.reason = reason;

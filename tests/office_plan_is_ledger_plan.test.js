@@ -77,3 +77,14 @@ test('the editor reopens a plan from its schedule, not from installments[] (a pa
     assert.doesNotMatch(SRC, /var startRows=existingPlan\?existingPlan\.installments\.map/);
     assert.match(SRC, /var newPlan=_mpBuildLedgerPlan\(existingPlan,insts,!!auto,total\);/);
 });
+
+test('TED-076: editing a plan keeps it paused, keeps its collection block and a debit in flight', () => {
+    const blocked = { reason: 'declined', attempts: 2, nextRetryAt: '2026-07-10' };
+    const held = { paymentIntentId: 'pi_ach', index: 0, dueDate: '2026-06-01', amount: 300 };
+    const p = ctx.build({ id: 'x', dueDates: ['2026-06-01'], nextIndex: 0, history: [], paused: true, collectionBlocked: blocked, pendingCharge: held },
+                       rows(['2026-06-01', '2026-07-01']), true, 600);
+    assert.strictEqual(p.paused, true, 'editing un-paused the plan');
+    assert.deepStrictEqual(JSON.parse(JSON.stringify(p.collectionBlocked)), blocked);
+    assert.deepStrictEqual(JSON.parse(JSON.stringify(p.pendingCharge)), held);
+    assert.strictEqual(ctx.build(null, rows(['2026-06-01']), true, 100).paused, false);
+});

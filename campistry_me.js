@@ -19384,11 +19384,17 @@ function _mpBuildLedgerPlan(existingPlan,insts,auto,total){
         nextIdx=done.length;
     }
     var future=insts.map(function(i){return i.dueDate}).sort();
-    return {id:existingPlan&&existingPlan.id?existingPlan.id:('plan_'+Date.now().toString(36)+Math.random().toString(36).slice(2,6)),
+    var plan={id:existingPlan&&existingPlan.id?existingPlan.id:('plan_'+Date.now().toString(36)+Math.random().toString(36).slice(2,6)),
         enrollmentIds:null,dueDates:done.concat(future),
         count:done.length+future.length,nextIndex:nextIdx,history:hist,
-        autopay:!!auto,paused:false,total:Math.round(total*100)/100,
+        autopay:!!auto,paused:!!(existingPlan&&existingPlan.paused),total:Math.round(total*100)/100,
         createdAt:existingPlan&&existingPlan.createdAt||new Date().toISOString(),source:existingPlan&&existingPlan.source||'office'};
+    // Editing the schedule changes neither whether the plan is paused nor what
+    // is stopping collection (TED-076): a card that was declined is still the
+    // same card, and a bank debit still clearing is still in flight.
+    if(existingPlan&&existingPlan.collectionBlocked)plan.collectionBlocked=existingPlan.collectionBlocked;
+    if(existingPlan&&existingPlan.pendingCharge)plan.pendingCharge=existingPlan.pendingCharge;
+    return plan;
 }
 function _mpSwitchTab(tab){
     var gen=document.getElementById('mpTabGenerate'), edit=document.getElementById('mpTabEdit');

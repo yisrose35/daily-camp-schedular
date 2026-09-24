@@ -1066,31 +1066,73 @@ serve(async (req) => {
     for (const t of (pending || [])) {
       if (!STRIPE_SECRET) break;
       try {
-        const amountCents = Math.max(0, Number(t.tipCents) - Number(t.feeCents || 0));
-        if (!(amountCents > 0)) continue;
-        const resp = await fetch(`${STRIPE_API}/transfers`, {
-          method: "POST",
-          headers: {
-            Authorization: `Bearer ${STRIPE_SECRET}`,
-            "Content-Type": "application/x-www-form-urlencoded",
-            // Same key every night for the same item, so a retry that actually
-            // went through on a previous run cannot pay the tip twice.
-            "Idempotency-Key": `tip_retry_${t.id}`,
-          },
-          body: new URLSearchParams({
-            amount: String(amountCents),
-            currency: "usd",
-            destination: String(t.staffAccountId),
-            description: `Campistry tip — ${t.staffName || ""} (retry)`,
-          }).toString(),
-        });
-        const tr = await resp.json();
-        if (tr.error) throw new Error(tr.error.message);
+        // The row itself: the retry must do exactly what the first attempt did
+        // (TED-073). It used to send Campistry's internal staff record id as
+        // the Stripe destination ("No such destination", every night) and the
+        // tip minus the 2% fee, which was already taken on the whole cart.
+        const { data: item } = await supabase.from("link_tip_cart_items")
+          .select("*").eq("id", t.id).maybeSingle();
+        if (!item || item.processed_at || !item.stripe_account_id || !(Number(item.tip_cents) > 0)) continue;
+        const auth = { Authorization: `Bearer ${STRIPE_SECRET}` };
+
+        // Did the first attempt actually go through? A transfer carries its
+        // cart item id; if one exists, only the bookkeeping is caught up — a
+        // second transfer would pay the counselor twice.
+        let transfer: any = null;
+        try {
+          const lr = await fetch(`${STRIPE_API}/transfers?limit=100&transfer_group=${encodeURIComponent("cart_" + item.cart_id)}`, { headers: auth });
+          const list = await lr.json();
+          transfer = (Array.isArray(list?.data) ? list.data : []).find((x: any) => x?.metadata?.cartItemId === String(item.id)) || null;
+        } catch (_) { /* could not look: fall through to the keyed create */ }
+
+        if (!transfer) {
+          const resp = await fetch(`${STRIPE_API}/transfers`, {
+            method: "POST",
+            headers: {
+              ...auth,
+              "Content-Type": "application/x-www-form-urlencoded",
+              // Same key every night for the same item, so a retry that went
+              // through on a previous run cannot pay the tip twice.
+              "Idempotency-Key": `tip_retry_${item.id}`,
+            },
+            body: new URLSearchParams({
+              amount: String(item.tip_cents),                 // the whole tip, as the first attempt sends
+              currency: "usd",
+              destination: String(item.stripe_account_id),    // the counselor's Stripe account
+              transfer_group: "cart_" + item.cart_id,
+              "metadata[cartId]": String(item.cart_id),
+              "metadata[cartItemId]": String(item.id),
+              description: `Campistry tip — ${item.staff_name || ""} (retry)`,
+            }).toString(),
+          });
+          transfer = await resp.json();
+          if (transfer.error) throw new Error(transfer.error.message);
+        }
+
+        // The same bookkeeping the webhook does on a first-time success, once.
+        const { data: known } = await supabase.from("link_tips").select("id")
+          .eq("stripe_transfer_id", transfer.id).maybeSingle();
+        if (!known) {
+          await supabase.from("link_tips").insert({
+            camp_id: item.camp_id, user_id: item.parent_user_id,
+            person_id: item.person_id ?? null, camper_name: item.camper_name,
+            parent_name: item.parent_name, parent_email: item.parent_email,
+            recipient_name: item.staff_name, recipient_role: item.staff_role,
+            staff_account_id: item.staff_account_id,
+            amount: Number(item.tip_cents) / 100,
+            payment_method: "stripe_connect",
+            stripe_transfer_id: transfer.id,
+            fee_amount: Number(item.fee_cents || 0) / 100,
+          });
+          await supabase.rpc("increment_staff_total_earned", {
+            p_account_id: item.staff_account_id, p_amount: Number(item.tip_cents) / 100,
+          });
+        }
         await supabase.from("link_tip_cart_items")
-          .update({ processed_at: new Date().toISOString(), stripe_transfer_id: tr.id, transfer_error: null })
-          .eq("id", t.id);
+          .update({ processed_at: new Date().toISOString(), stripe_transfer_id: transfer.id, transfer_error: null })
+          .eq("id", item.id);
         tipsRetried++;
-        console.log(`[autopay] retried tip ${t.id} -> ${t.staffName}: $${amountCents / 100} (${tr.id})`);
+        console.log(`[autopay] retried tip ${item.id} -> ${item.staff_name}: $${Number(item.tip_cents) / 100} (${transfer.id})`);
       } catch (e) {
         tipsStillFailing++;
         console.warn(`[autopay] tip ${t.id} for ${t.staffName} still failing: ${(e as Error).message}`);

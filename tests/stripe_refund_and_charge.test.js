@@ -121,3 +121,11 @@ test('TED-061: the retired stripe-setup refuses everything', () => {
     assert.strictEqual(r.status, 410);
     assert.strictEqual(r.fetches.length, 0);
 });
+
+test('TED-076: a refund of zero, a negative amount or no amount is refused — never a full refund', () => {
+    for (const amt of ['0', '-5', 'undefined']) {
+        const r = runEdge('stripe-refund', WORLD + `T.request = { headers: { Authorization: 'Bearer owner' }, body: { paymentIntentId: 'pi_camp1', amount: ${amt} } };`);
+        assert.strictEqual(r.status, 400, 'amount ' + amt);
+        assert.strictEqual(moneyCalls(r, '/refunds').length, 0, 'amount ' + amt + ' refunded the payment');
+    }
+});
