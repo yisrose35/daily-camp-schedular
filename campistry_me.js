@@ -3882,7 +3882,7 @@ function ff(label,id,val,type,opts){
 
 // ═══ RENDERERS ═══════════════════════════════════════════════════
 function render(p){
-    var m={campers:renderCampers,camperdetail:renderCamperDetailPage,staffdetail:renderStaffDetailPage,structure:renderStructure,bunkbuilder:renderBB,registration:renderRegistrationPage,hiring:renderHiringPage,leads:renderLeads,billing:renderBilling,familydetail:renderFamilyDetailPage,payroll:renderPayroll,analytics:renderAnalytics,finance:renderFinance,reports:renderReports,printsheets:renderPrintSheets,broadcasts:renderBroadcasts};
+    var m={campers:renderCampers,camperdetail:renderCamperDetailPage,staffdetail:renderStaffDetailPage,structure:renderStructure,bunkbuilder:renderBB,registration:renderRegistrationPage,postaccept:renderPostAcceptPage,hiring:renderHiringPage,posthire:renderPostHirePage,leads:renderLeads,billing:renderBilling,familydetail:renderFamilyDetailPage,payroll:renderPayroll,analytics:renderAnalytics,finance:renderFinance,reports:renderReports,printsheets:renderPrintSheets,broadcasts:renderBroadcasts};
     if(m[p])m[p]();else renderSoon(p);
 }
 
@@ -4498,6 +4498,22 @@ function renderHiringPage(){
     if(!c)return;
     c.innerHTML=_renderHiringPane();
 }
+// Post-Acceptance / Post-Hire — tracking-only views into the SAME
+// enrollments[id].postAccept / staffApplications[id].postHire data the
+// Registration/Hiring detail modals already read and write. These pages
+// don't duplicate the form builders or the send-link modals; they just
+// answer "who still needs to fill this out" as a list instead of only
+// per-record inside the applicant detail view.
+function renderPostAcceptPage(){
+    var c=document.getElementById('page-postaccept');
+    if(!c)return;
+    c.innerHTML=_renderPostAcceptPane();
+}
+function renderPostHirePage(){
+    var c=document.getElementById('page-posthire');
+    if(!c)return;
+    c.innerHTML=_renderPostHirePane();
+}
 
 // Family create/edit
 function openFamilyForm(id){
@@ -4606,7 +4622,9 @@ function removeCamperFromFamily(familyId,camperName){
 function _refreshPplIfActive(){
     if(curPage==='campers')renderCampers();
     else if(curPage==='registration')renderRegistrationPage();
+    else if(curPage==='postaccept')renderPostAcceptPage();
     else if(curPage==='hiring')renderHiringPage();
+    else if(curPage==='posthire')renderPostHirePage();
 }
 // Registration and Staffing used to be their own gated pages — a role could
 // have me.campers without either, or me.enrollment without me.hiring (the
@@ -5185,6 +5203,93 @@ function _renderHiredStaffTable(hiredList,editStaff){
             +'</tr>';
     });
     h+='</tbody></table></div></div>';
+    return h;
+}
+// Post-Acceptance — tracks which ACCEPTED campers (status 'accepted' or
+// 'enrolled'; declined/waitlisted/applied don't need this yet) still owe
+// the post-acceptance form (bunkmate requests, shirt size, etc — the same
+// enrollments[id].postAccept the applicant detail view already reads).
+// This page doesn't send anything new or build anything new — every action
+// here calls straight into the existing openSendPostAcceptModal()/
+// viewApplication() so there's exactly one place that logic lives.
+function _renderPostAcceptPane(){
+    var canReg=_secCan('me.enrollment');
+    if(!canReg){
+        return '<div class="me-empty"><h3>No access to Post-Acceptance</h3><p>Your account isn\'t set up to open this section.</p></div>';
+    }
+    var editReg=_pplCanEdit('me.enrollment');
+    var accepted=Object.keys(enrollments).filter(function(id){
+        var e=enrollments[id];
+        return e&&(e.status==='accepted'||e.status==='enrolled');
+    }).map(function(id){return Object.assign({id:id},enrollments[id]);})
+      .sort(function(a,b){return String(a.camperName||'').localeCompare(String(b.camperName||''));});
+    var needs=accepted.filter(function(e){return !e.postAccept;});
+    var done=accepted.filter(function(e){return !!e.postAccept;});
+    if(_ppPostFormSubTab!=='needs'&&_ppPostFormSubTab!=='done')_ppPostFormSubTab='needs';
+
+    var h='<div class="sec-hd"><div><h2 class="sec-title">Post-Acceptance</h2><p class="sec-desc">'+needs.length+' of '+accepted.length+' accepted camper'+(accepted.length!==1?'s':'')+' still need'+(needs.length===1?'s':'')+' to complete this</p></div></div>';
+
+    h+='<div style="display:flex;gap:2px;border-bottom:1px solid var(--s200);margin-bottom:16px">';
+    [{k:'needs',l:'Needs it',c:needs.length},{k:'done',l:'Completed',c:done.length}].forEach(function(s){
+        var active=_ppPostFormSubTab===s.k;
+        h+='<button onclick="CampistryMe.setPostAcceptSubTab(\''+s.k+'\')" style="padding:9px 12px;border:none;background:none;font-size:.8rem;font-weight:600;cursor:pointer;white-space:nowrap;font-family:inherit;display:flex;align-items:center;gap:6px;border-bottom:2px solid '+(active?'var(--me)':'transparent')+';color:'+(active?'var(--me)':'var(--s500)')+'">'
+            +esc(s.l)+'<span style="font-size:.68rem;font-weight:700;border-radius:9px;padding:1px 6px;background:'+(active?'var(--me)':'var(--s100)')+';color:'+(active?'#fff':'var(--s600)')+'">'+s.c+'</span></button>';
+    });
+    h+='</div>';
+
+    var rows=_ppPostFormSubTab==='done'?done:needs;
+    if(!rows.length){
+        h+='<div class="me-empty"><h3>'+(_ppPostFormSubTab==='done'?'Nothing completed yet':'All caught up')+'</h3><p>'+(_ppPostFormSubTab==='done'?'Once an accepted camper submits the form, they\'ll show up here.':'Every accepted camper has completed the post-acceptance form.')+'</p></div>';
+    }else{
+        h+='<div class="me-card"><div class="me-tw"><table class="me-t"><thead><tr><th>Camper</th><th>Parent</th><th>Status</th><th style="width:1%;white-space:nowrap"></th></tr></thead><tbody>';
+        rows.forEach(function(e){
+            h+='<tr class="click" onclick="CampistryMe.viewApplication(\''+je(e.id)+'\')"><td class="bold">'+esc(e.camperName||'—')+'</td><td style="font-size:.8rem;color:var(--s500)">'+esc(e.parentName||'—')+'</td><td>'+bdg(e.postAccept?'Completed':'Not sent',e.postAccept?'ok':'gray')+'</td>';
+            h+='<td style="text-align:right;white-space:nowrap" onclick="event.stopPropagation()">'+(editReg?'<button class="me-btn me-btn--sec me-btn--sm" onclick="CampistryMe.openSendPostAcceptModal(\''+je(e.id)+'\')">'+(e.postAccept?'✓ Sent':'Send Post-Acceptance Link')+'</button>':'')+'</td></tr>';
+        });
+        h+='</tbody></table></div></div>';
+    }
+    return h;
+}
+var _ppPostFormSubTab='needs';
+function setPostAcceptSubTab(t){_ppPostFormSubTab=t;renderPostAcceptPage();}
+var _ppPostHireSubTab='needs';
+function setPostHireSubTab(t){_ppPostHireSubTab=t;renderPostHirePage();}
+// Post-Hire — exact mirror of _renderPostAcceptPane() for hired staff and
+// staffApplications[id].postHire, reusing openSendPostHireModal()/
+// viewStaffApp() rather than duplicating either.
+function _renderPostHirePane(){
+    var canStaff=_secCan('me.hiring');
+    if(!canStaff){
+        return '<div class="me-empty"><h3>No access to Post-Hire</h3><p>Your account isn\'t set up to open this section.</p></div>';
+    }
+    var editStaff=_pplCanEdit('me.hiring');
+    var hiredList=hiredStaff();
+    var needs=hiredList.filter(function(a){return !a.postHire;});
+    var done=hiredList.filter(function(a){return !!a.postHire;});
+    if(_ppPostHireSubTab!=='needs'&&_ppPostHireSubTab!=='done')_ppPostHireSubTab='needs';
+
+    var h='<div class="sec-hd"><div><h2 class="sec-title">Post-Hire</h2><p class="sec-desc">'+needs.length+' of '+hiredList.length+' hired staff still need'+(needs.length===1?'s':'')+' to complete this</p></div></div>';
+
+    h+='<div style="display:flex;gap:2px;border-bottom:1px solid var(--s200);margin-bottom:16px">';
+    [{k:'needs',l:'Needs it',c:needs.length},{k:'done',l:'Completed',c:done.length}].forEach(function(s){
+        var active=_ppPostHireSubTab===s.k;
+        h+='<button onclick="CampistryMe.setPostHireSubTab(\''+s.k+'\')" style="padding:9px 12px;border:none;background:none;font-size:.8rem;font-weight:600;cursor:pointer;white-space:nowrap;font-family:inherit;display:flex;align-items:center;gap:6px;border-bottom:2px solid '+(active?'var(--me)':'transparent')+';color:'+(active?'var(--me)':'var(--s500)')+'">'
+            +esc(s.l)+'<span style="font-size:.68rem;font-weight:700;border-radius:9px;padding:1px 6px;background:'+(active?'var(--me)':'var(--s100)')+';color:'+(active?'#fff':'var(--s600)')+'">'+s.c+'</span></button>';
+    });
+    h+='</div>';
+
+    var rows=_ppPostHireSubTab==='done'?done:needs;
+    if(!rows.length){
+        h+='<div class="me-empty"><h3>'+(_ppPostHireSubTab==='done'?'Nothing completed yet':'All caught up')+'</h3><p>'+(_ppPostHireSubTab==='done'?'Once a hired staff member submits the form, they\'ll show up here.':'Every hired staff member has completed the post-hire form.')+'</p></div>';
+    }else{
+        h+='<div class="me-card"><div class="me-tw"><table class="me-t"><thead><tr><th>Name</th><th>Position</th><th>Status</th><th style="width:1%;white-space:nowrap"></th></tr></thead><tbody>';
+        rows.forEach(function(a){
+            var positions=(a.positions||[]);
+            h+='<tr class="click" onclick="CampistryMe.viewStaffApp(\''+je(a.id)+'\')"><td class="bold">'+esc(a.name||[a.first,a.last].filter(Boolean).join(' ')||'—')+'</td><td style="font-size:.8rem;color:var(--s500)">'+(positions.length?esc(positions.join(', ')):'—')+'</td><td>'+bdg(a.postHire?'Completed':'Not sent',a.postHire?'ok':'gray')+'</td>';
+            h+='<td style="text-align:right;white-space:nowrap" onclick="event.stopPropagation()">'+(editStaff?'<button class="me-btn me-btn--sec me-btn--sm" onclick="CampistryMe.openSendPostHireModal(\''+je(a.id)+'\')">'+(a.postHire?'✓ Sent':'Send Post-Hire Link')+'</button>':'')+'</td></tr>';
+        });
+        h+='</tbody></table></div></div>';
+    }
     return h;
 }
 // Position was previously set once, at application time, then locked —
@@ -24779,6 +24884,7 @@ window.CampistryMe={
     resolveDepositReview:resolveDepositReview,resolveUnconfirmedAutopay:resolveUnconfirmedAutopay,
     addFamily:function(){openFamilyForm(null)},editFamily:function(id){openFamilyForm(id)},deleteFamily:deleteFamily,removeCamperFromFamily:removeCamperFromFamily,
     setPplStaffSubTab:setPplStaffSubTab,viewStaffMember:viewStaffMember,openEditStaffModal:openEditStaffModal,saveStaffMember:saveStaffMember,
+    setPostAcceptSubTab:setPostAcceptSubTab,setPostHireSubTab:setPostHireSubTab,
     acceptFamilySuggestion:acceptFamilySuggestion,dismissFamilySuggestion:dismissFamilySuggestion,acceptAddToFamily:acceptAddToFamily,
     mergeFamilies:mergeFamilies,dismissMergeFamilies:dismissMergeFamilies,openMergeFamiliesTool:openMergeFamiliesTool,openActivityLog:openActivityLog,mergeCampers:mergeCampers,openMergeCampersTool:openMergeCampersTool,
     openUnmatchedPaymentsModal:openUnmatchedPaymentsModal,
