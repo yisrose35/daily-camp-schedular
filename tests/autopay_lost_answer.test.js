@@ -141,10 +141,10 @@ const ME = fs.readFileSync(path.join(__dirname, '..', 'campistry_me.js'), 'utf8'
 const RESOLVE = ME.match(/async function resolveUnconfirmedAutopay\(fk,planRef\)\{[\s\S]*?\n\}\n/)[0];
 const WARN = ME.match(/function _collectionWarning\(l\)\{[\s\S]*?\n\}\n/)[0];
 
-function billing(answers, prompt) {
+function billing(answers, prompt, processor) {
     const calls = [], toasts = [];
     const ctx = {
-        families: { gold: { name: 'Gold', plans: [{ id: 'plan_g', pendingCharge: { unconfirmed: true, processor: 'cardknox', amount: 500, since: '2026-06-01', why: 'connection reset' } }] } },
+        families: { gold: { name: 'Gold', plans: [{ id: 'plan_g', pendingCharge: { unconfirmed: true, processor: processor || 'cardknox', amount: 500, since: '2026-06-01', why: 'connection reset' } }] } },
         confirmDialog: async () => answers.shift(),
         toast: (t) => toasts.push(t), fm: (n) => '$' + n, esc: (s) => String(s), getCampId: () => 'camp1', curPage: 'billing',
         renderBilling: () => {}, renderFamilyDetailPage: () => {}, _loadFamiliesFromRows: async () => {}, _loadPaymentsFromRows: async () => {},
@@ -178,4 +178,36 @@ test('TED-113: "nothing went through" needs a second, deliberate yes; cancelling
     const d = billing([true], '');
     await d.fn('gold', 'plan_g');
     assert.strictEqual(d.calls.length, 0, '"went through" was saved with no reference');
+});
+
+test('TED-120: on Stripe the office\'s answer must be the payment\'s id (pi_), never a charge id', async () => {
+    const b = billing([true], 'ch_3Nx', 'stripe');
+    await b.fn('gold', 'plan_g');
+    assert.strictEqual(b.calls.length, 0, 'a ch_ id was sent');
+    assert.ok(b.toasts.some(t => /pi_/.test(t)), JSON.stringify(b.toasts));
+    const ok = billing([true], 'pi_3Nx', 'stripe');
+    await ok.fn('gold', 'plan_g');
+    assert.strictEqual(ok.calls[0][1].p_reference, 'pi_3Nx');
+});
+
+// ── TED-123: the run keeps inside its time and hands the rest on ───────────
+test('TED-123: out of time, the run stops between families and starts a new run after its bookmark', () => {
+    const r = runEdge('charge-due-installments', night('cardknox', 'ok', `T.env.AUTOPAY_TIME_BUDGET_MS = '-1';`));
+    assert.deepStrictEqual(r.tables.__sales, ['Gold'], 'one family per run at least, then stop');
+    assert.strictEqual(r.body.done, false);
+    assert.deepStrictEqual(r.body.resumeAfter, { camp: 'camp1', family: 'gold' });
+    const next = r.fetches.filter(f => /\/functions\/v1\/charge-due-installments$/.test(f.url));
+    assert.strictEqual(next.length, 1, 'the rest of the night was not started');
+    assert.deepStrictEqual(JSON.parse(next[0].body), { resumeAfter: { camp: 'camp1', family: 'gold' }, hop: 1 });
+    assert.strictEqual(next[0].headers['x-cron-secret'], 'cron');
+    assert.ok(!r.rpcs.some(c => c.name === 'retry_failed_tip_transfers'), 'the tip retry belongs to the last part');
+});
+
+test('TED-123: the continuing run starts after the bookmark — nobody charged or checked twice', () => {
+    const r = runEdge('charge-due-installments', night('cardknox', 'ok', `
+T.request = { headers: { 'x-cron-secret': 'cron' }, body: { resumeAfter: { camp: 'camp1', family: 'gold' }, hop: 1 } };`)
+        .replace(/T\.request = \{ headers: \{ 'x-cron-secret': 'cron' \}, body: \{\} \};$/, ''));
+    assert.deepStrictEqual(r.tables.__sales, ['Silver']);
+    assert.strictEqual(r.body.done, true);
+    assert.ok(!r.rpcs.some(c => c.name === 'flag_expiring_cards'), 'the camp\'s card check ran twice in one night');
 });

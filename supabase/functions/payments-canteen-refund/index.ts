@@ -171,12 +171,61 @@ serve(async (req) => {
     const authedCampId = await callerCampId(req);
     if (!authedCampId) return json({ error: "Only camp owners/admins can refund a canteen deposit." }, 403);
 
-    const { camperName, camperId: body_camperId, amount, reason, idempotencyKey, confirmNotRefunded, confirmHolds } = await req.json();
+    const { camperName, camperId: body_camperId, amount, reason, idempotencyKey, confirmNotRefunded, confirmHolds,
+            action, holdKey, wentThrough, reference } = await req.json();
     // The camper by ID when the page sent one: the account's key is a spelling.
     const camperIdSent = (body_camperId != null && /^\d+$/.test(String(body_camperId)) && Number(body_camperId) > 0) ? Number(body_camperId) : null;
-    if (camperIdSent == null && !camperName) return json({ error: "camperId (or camperName) is required" }, 400);
+    if (!action && camperIdSent == null && !camperName) return json({ error: "camperId (or camperName) is required" }, 400);
 
     const service = createClient(SUPABASE_URL, SUPABASE_SERVICE_KEY);
+
+    // ── refunds the card company never answered (275, TED-116) ─────────────
+    // Their money is held off the wallet. Only the office can say, from the
+    // processor's dashboard, what happened: these two actions list them and
+    // settle one either way.
+    if (action === "holds" || action === "resolveHold") {
+      const { data: view, error: vErr } = await service.rpc("canteen_refund_view", { p_camp_id: authedCampId });
+      if (vErr || !view?.success) return json({ error: "Could not read canteen refunds." }, 500);
+      const open: Record<string, any>[] = Array.isArray(view.holds) ? view.holds : [];
+      if (action === "holds") {
+        return json({ holds: open.map((h) => ({ key: h.key, camperId: h.camperId ?? null, account: h.accountKey,
+          amount: Number(h.amount), method: h.method, ageSeconds: Number(h.ageSeconds) || 0, createdAt: h.createdAt })) });
+      }
+      const h = open.find((x) => String(x.key) === String(holdKey || ""));
+      if (!h) return json({ error: "That refund was already settled." }, 409);
+      if (h.method === "stripe") {
+        return json({ error: "A Stripe refund is settled from Stripe's own records — refund this child again (or run Refund All) and it is looked up." }, 409);
+      }
+      if (wentThrough === true) {
+        const ref = String(reference ?? "").trim();
+        if (!ref) return json({ error: "The card company's reference for the refund is needed." }, 400);
+        // A reference already on a wallet's ledger belongs to another refund:
+        // taking it would put this child's money back (a refund counted once
+        // for two) — refused rather than guessed.
+        const used = (Array.isArray(view.transactions) ? view.transactions : [])
+          .some((t: Record<string, any>) => t && (String(t.byopRefundId || "") === ref || String(t.stripeRefundId || "") === ref));
+        if (used) return json({ error: "That reference is already recorded for another refund. Check it in the processor's dashboard." }, 409);
+        const { data: posted, error: pErr } = await service.rpc("settle_canteen_refund_hold", {
+          p_camp_id: authedCampId, p_hold_key: h.key, p_refund_id: ref });
+        if (pErr || !posted?.success) return json({ error: "Could not record it: " + (pErr?.message || posted?.error || "no answer") }, 500);
+        await service.rpc("settle_refund_intent", { p_camp_id: authedCampId, p_key: h.key,
+          p_result: { success: true, externalTransactionId: ref, amount: Number(h.amount), confirmedBy: "office" } });
+        return json({ settled: true, balance: posted.balance });
+      }
+      if (wentThrough === false) {
+        // Only one that has waited: never one still on its way.
+        const { data: rel } = await service.rpc("release_canteen_refund_hold", {
+          p_camp_id: authedCampId, p_hold_key: h.key, p_min_age: "3 minutes" });
+        if (!rel?.released) {
+          return json({ error: rel?.error === "too_new"
+            ? "This refund was sent a moment ago and may still be going through. Wait a few minutes, check the processor's dashboard, then answer."
+            : "That refund was already settled." }, 409);
+        }
+        await service.rpc("release_stale_refund_intent", { p_camp_id: authedCampId, p_key: h.key });
+        return json({ released: true, balance: rel.balance });
+      }
+      return json({ error: "Say whether it went through." }, 400);
+    }
 
     const { data: camp } = await service.from("camps").select("payment_processor_key").eq("id", authedCampId).maybeSingle();
     const processorKey = camp?.payment_processor_key;
@@ -278,14 +327,20 @@ serve(async (req) => {
       if (heldElsewhere <= 0) return null;
       if (staleElsewhere.length) {
         const amt = round2(staleElsewhere.reduce((t, h) => t + (Number(h.amount) || 0), 0));
-        return `An earlier refund of $${amt.toFixed(2)} of this child's money was never confirmed by the card company, so it is held off the wallet. Check the processor's dashboard: if it is not there, confirm and it goes back on the wallet and this refund is sent.`;
+        return `An earlier refund of $${amt.toFixed(2)} of this child's money was never confirmed by the card company, so it is held off the wallet. Check the processor's dashboard: if it is NOT there, confirm and it goes back on the wallet and this refund is sent. If it IS there, cancel and record it under "waiting for an answer" in this window.`;
       }
       return `A refund of $${heldElsewhere.toFixed(2)} of this child's money is being sent right now (Refund All, or another computer). Wait a moment, then check the wallet.`;
     };
 
+    // An earlier refund of this child's money the card company never answered
+    // is settled FIRST (TED-116): refunding again around it is how a parent's
+    // money ended up locked off the wallet. "Not there" (confirmHolds) gives it
+    // back and sends this one; "it went through" is answered in Refund's list.
+    if (staleElsewhere.length) {
+      return json({ uncertain: true, error: heldNote(), confirmHolds: staleElsewhere.map((h) => h.key) }, 200);
+    }
     if (walletAvailable <= 0) {
       const note = heldNote();
-      if (note && staleElsewhere.length) return json({ uncertain: true, error: note, confirmHolds: staleElsewhere.map((h) => h.key) }, 200);
       return json({ error: note || "Nothing available to refund — this balance has already been spent." }, 409);
     }
 

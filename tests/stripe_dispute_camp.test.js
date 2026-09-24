@@ -76,3 +76,29 @@ T.fetch = (url: string) => url.includes('/refunds?charge=ch_1') ? { data: [{ id:
     assert.strictEqual(posted[0].args.p_refund_id, 're_1');
     assert.strictEqual(posted[0].args.p_amount, 50);
 });
+
+// ── TED-121: Stripe cannot be asked — the event is sent again, never lost ────
+for (const [label, model] of [['a 500', `{ __status: 500, error: { message: 'api_error' } }`],
+                              ['a rate limit', `{ __status: 429, error: { message: 'rate_limit' } }`],
+                              ['a dropped connection', `(() => { throw new Error('connection reset'); })()`]]) {
+    test(`TED-121: Stripe answers the dispute lookup with ${label} — 500, so Stripe sends the event again`, () => {
+        const r = signed(dispute('charge.dispute.created', {}), `T.fetch = (url: string) => url.includes('/payment_intents/') ? ${model} : {};`);
+        assert.strictEqual(r.status, 500, 'answered ' + r.status + ' — Stripe would never send it again');
+        assert.strictEqual(r.rpcs.filter(c => c.name === 'record_chargeback').length, 0);
+    });
+}
+
+test('TED-121: a refund whose list cannot be fetched is sent again too', () => {
+    const event = { id: 'evt_3', type: 'charge.refunded', data: { object: {
+        id: 'ch_1', object: 'charge', payment_intent: 'pi_1', amount_refunded: 5000, metadata: { campId: 'camp1' } } } };
+    const r = signed(event, `T.fetch = (url: string) => url.includes('/refunds?charge=') ? { __status: 503, error: { message: 'unavailable' } } : {};`);
+    assert.strictEqual(r.status, 500);
+});
+
+test('TED-121: "no such payment" is an answer, not a hiccup — the charge is asked instead', () => {
+    const r = signed(dispute('charge.dispute.created', {}), `
+T.fetch = (url: string) => url.includes('/payment_intents/') ? { __status: 404, error: { message: 'No such payment_intent' } }
+  : url.includes('/charges/ch_1') ? { id: 'ch_1', metadata: { campId: 'camp1' } } : {};`);
+    assert.strictEqual(r.status, 200);
+    assert.strictEqual(r.rpcs.filter(c => c.name === 'record_chargeback').length, 1);
+});

@@ -27,9 +27,12 @@ const SRC = [
     cut(/function _pendingChargeClear\(famKey,amount\)\{[\s\S]*?\n\}\n/),
 ].join('\n');
 
-function page(answers) {
+function page(answers, dialogs) {
     const store = {}; const sent = []; const toasts = []; const posted = [];
+    const asked = [];
     const ctx = {
+        // the office's answers to "the same charge, or a new one?" (TED-118)
+        confirmDialog: async (o) => { asked.push(o.title); return dialogs && dialogs.length ? dialogs.shift() : true; },
         families: { gold: { name: 'Gold', stripeCustomerId: 'cus_G', stripePaymentMethodId: 'pm_G' } },
         finPayments: [], curPage: 'billing',
         toast: (t) => toasts.push(t), save: () => {}, renderBilling: () => {}, renderFamilyDetailPage: () => {},
@@ -46,7 +49,7 @@ function page(answers) {
         },
     };
     const f = new Function(...Object.keys(ctx), SRC + '; return chargeStoredCard;')(...Object.values(ctx));
-    return { charge: f, sent, toasts, posted };
+    return { charge: f, sent, toasts, posted, asked };
 }
 const lost = () => Object.assign(new Error('Failed to send a request to the Edge Function'), { status: null, noAnswer: true });
 
@@ -194,4 +197,61 @@ test('TED-111: payments-charge — a real decline releases the claim and says de
 T.fetch = (url: string, init: any) => String(init.body || '').includes('cc%3Asale') ? 'xResult=D&xStatus=Declined&xError=Insufficient funds' : {};`, `T.request = press;`));
     assert.deepStrictEqual({ declined: r.body.declined, error: r.body.error }, { declined: true, error: 'Insufficient funds' });
     assert.strictEqual(r.tables.refund_intents.length, 0);
+});
+
+// ── TED-119: one office charge, one payment row ────────────────────────────
+test('TED-119: the office charge is recorded under the id the webhook uses, and never twice in the list', async () => {
+    const p = page([{ paymentIntentId: 'pi_B', status: 'succeeded', amount: 500 }]);
+    const ctx = {};
+    // run it with a list that already holds the webhook's row for this charge
+    const src = SRC.replace('async function chargeStoredCard(', 'async function chargeStoredCard(');
+    const rows = [{ id: 'pi_pi_B', familyKey: 'gold', amount: 500, stripePaymentIntentId: 'pi_B', method: 'Credit Card (online)' }];
+    const store = {};
+    const f = new Function('families', 'finPayments', 'curPage', 'toast', 'save', 'renderBilling', 'renderFamilyDetailPage', '_postPaymentEntry', 'fm', 'esc', 'getCampId', 'localStorage', 'window', 'callEdgeFunctionAuthed',
+        src + '; return chargeStoredCard;')(
+        { gold: { name: 'Gold', stripeCustomerId: 'cus_G', stripePaymentMethodId: 'pm_G' } }, rows, 'billing', () => {}, () => {}, () => {}, () => {},
+        () => true, (n) => '$' + n, (s) => s, () => 'camp1',
+        { getItem: (k) => store[k] || null, setItem: (k, v) => { store[k] = v; } }, { confirm: () => false },
+        async () => ({ paymentIntentId: 'pi_B', status: 'succeeded', amount: 500 }));
+    const r = await f('gold', 500, 'Camp payment');
+    assert.strictEqual(r.ok, true);
+    assert.deepStrictEqual(rows.map(x => x.id), ['pi_pi_B'], 'the charge was listed twice');
+    // and on its own, the page's row carries the webhook's id
+    const alone = [];
+    const g = new Function('families', 'finPayments', 'curPage', 'toast', 'save', 'renderBilling', 'renderFamilyDetailPage', '_postPaymentEntry', 'fm', 'esc', 'getCampId', 'localStorage', 'window', 'callEdgeFunctionAuthed',
+        src + '; return chargeStoredCard;')(
+        { gold: { name: 'Gold', stripeCustomerId: 'cus_G' } }, alone, 'billing', () => {}, () => {}, () => {}, () => {},
+        () => true, (n) => '$' + n, (s) => s, () => 'camp1',
+        { getItem: () => null, setItem: () => {} }, {}, async () => ({ paymentIntentId: 'pi_C', status: 'succeeded' }));
+    await g('gold', 500, 'Camp payment');
+    assert.deepStrictEqual(alone.map(x => x.id), ['pi_pi_C']);
+    void p; void ctx;
+});
+
+// ── TED-118: after "may have gone through", the office says same or new ────
+test('TED-118: a NEW charge later that day gets a new key — never the morning\'s replayed "succeeded"', async () => {
+    const p = page([lost(), { paymentIntentId: 'pi_2', status: 'succeeded' }], [false, true]);
+    await p.charge('gold', 500, 'Camp payment');
+    const r = await p.charge('gold', 500, 'Camp payment');
+    assert.deepStrictEqual(p.asked, ['The same charge, or a new one?', 'Charge a separate $500?']);
+    assert.notStrictEqual(p.sent[0], p.sent[1], 'a new charge reused the unanswered one\'s key');
+    assert.strictEqual(r.ok, true);
+});
+
+test('TED-118: the office can back out of both, and nothing is sent', async () => {
+    const p = page([lost()], [false, false]);
+    await p.charge('gold', 500, 'Camp payment');
+    const r = await p.charge('gold', 500, 'Camp payment');
+    assert.strictEqual(r.ok, false);
+    assert.strictEqual(p.sent.length, 1);
+});
+
+test('TED-118: Batch charge never re-sends an unanswered charge on its own', async () => {
+    const p = page([lost()]);
+    await p.charge('gold', 500, 'Camp payment');
+    const r = await p.charge('gold', 500, 'Batch payment', true);
+    assert.strictEqual(r.ok, false);
+    assert.strictEqual(r.uncertain, true);
+    assert.match(r.error, /never got an answer/);
+    assert.strictEqual(p.sent.length, 1, 'the batch sent it again');
 });

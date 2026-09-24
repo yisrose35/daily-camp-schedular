@@ -687,14 +687,23 @@ const RISK_EVENT_TYPES = new Set([
 // Best-effort and never throws: a failure here must not make the webhook return
 // non-2xx, because Stripe would retry the whole event and the platform email
 // would go out again.
-// A GET against the platform's Stripe account; null when it cannot answer.
+// A GET against the platform's Stripe account. Stripe not answering (cut off,
+// its own 5xx, a rate limit) THROWS (TED-121): the event is then answered 500,
+// so Stripe sends it again — answering "OK" would lose the chargeback or the
+// refund for good. A plain "no such object" is an answer: null.
 async function stripeGetJson(path: string): Promise<Record<string, any> | null> {
   if (!STRIPE_SECRET) return null;
+  let resp: Response, out: any;
   try {
-    const resp = await fetch(`${STRIPE_API}${path}`, { headers: { "Authorization": `Bearer ${STRIPE_SECRET}` } });
-    const out = await resp.json();
-    return out && !out.error ? out : null;
-  } catch (_) { return null; }
+    resp = await fetch(`${STRIPE_API}${path}`, { headers: { "Authorization": `Bearer ${STRIPE_SECRET}` } });
+    out = await resp.json();
+  } catch (e) {
+    throw new Error(`Stripe did not answer ${path} (${(e as Error).message}) — asking Stripe to send this event again`);
+  }
+  if (resp.status >= 500 || resp.status === 429) {
+    throw new Error(`Stripe answered ${resp.status} for ${path} — asking Stripe to send this event again`);
+  }
+  return out && !out.error ? out : null;
 }
 
 // Which camp a charge, refund or dispute belongs to. Campistry stamps campId on

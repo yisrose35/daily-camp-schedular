@@ -98,6 +98,20 @@ BEGIN
         IF v_amt <= 0 THEN
             RETURN jsonb_build_object('success', false, 'error', 'no_amount');
         END IF;
+        -- Stripe: the payment's own id, and nothing else (TED-120). It is what
+        -- the webhook books the same money under, so the two meet as one
+        -- payment; a charge id (ch_…) or anything else would be counted twice.
+        IF v_proc = 'stripe' AND v_ref !~ '^pi_[A-Za-z0-9]+$' THEN
+            RETURN jsonb_build_object('success', false, 'error', 'stripe_needs_payment_id');
+        END IF;
+        -- A reference already booked for a DIFFERENT amount is another payment.
+        IF EXISTS (SELECT 1 FROM camp_payments p
+                    WHERE p.camp_id = p_camp_id AND p.deleted_at IS NULL
+                      AND (p.payload->>'stripePaymentIntentId' = v_ref OR p.payload->>'byopTransactionId' = v_ref
+                           OR p.payload->>'reference' = v_ref)
+                      AND round(COALESCE((p.payload->>'amount')::numeric, 0), 2) <> v_amt) THEN
+            RETURN jsonb_build_object('success', false, 'error', 'reference_is_another_payment');
+        END IF;
         v_pay := jsonb_build_object(
             'id', CASE WHEN v_proc = 'stripe' THEN 'auto_' ELSE 'auto_byop_' END || v_ref,
             'familyKey', p_family_key, 'amount', v_amt,

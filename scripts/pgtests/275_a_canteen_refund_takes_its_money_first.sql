@@ -106,17 +106,22 @@ SELECT public.canteen_account_save('f2750000-0000-0000-0000-000000000001', 'Bea'
 SELECT dblink_connect('other', format('dbname=%s host=%s port=%s user=postgres',
        current_database(), split_part(current_setting('unix_socket_directories'), ',', 1), current_setting('port')));
 BEGIN;
--- this connection: Refund All reaches Bea and reserves her $20, still running
-SELECT public.reserve_canteen_refund('f2750000-0000-0000-0000-000000000001', 'Bea', 'all:Y1', 20, 'cardknox', 'Y1');
--- the other: a single refund of Bea's $20, sent at the same moment
+-- this connection: Refund All reaches Bea. It has taken her wallet's lock —
+-- the first thing a reserve does — and has not yet read or written anything.
+SELECT public.canteen_account_lock('f2750000-0000-0000-0000-000000000001', 'Bea') IS NOT NULL AS locked;
+-- the other: a single refund of Bea's $20, sent at that moment. It must WAIT
+-- for the lock, not read her $20 alongside (TED-122: this fails if the lock's
+-- FOR UPDATE is removed — nothing else would make it wait here).
 SELECT dblink_send_query('other', $q$SELECT public.reserve_canteen_refund('f2750000-0000-0000-0000-000000000001', 'Bea', 'one:Y1', 20, 'cardknox', 'Y1')::text$q$);
 SELECT pg_sleep(0.5);
 DO $$
 BEGIN
     IF dblink_is_busy('other') <> 1 THEN
-        RAISE EXCEPTION 'TED-110: the second refund did not wait for the first one''s lock';
+        RAISE EXCEPTION 'TED-110: the second refund did not wait for the wallet''s lock — both would read the same $20';
     END IF;
 END $$;
+-- ...and now this one reserves her $20 and finishes
+SELECT public.reserve_canteen_refund('f2750000-0000-0000-0000-000000000001', 'Bea', 'all:Y1', 20, 'cardknox', 'Y1');
 COMMIT;
 DO $$
 DECLARE r jsonb; bal numeric;

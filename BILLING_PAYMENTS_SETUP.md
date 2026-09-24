@@ -107,10 +107,17 @@ editor — it extends `get_my_balance` to also return `familyKey`,
 autopay" prompt and current status.
 
 ### Deploy the runner + schedule it
-```bash
-supabase functions deploy charge-due-installments
-supabase secrets set INSTALLMENT_CRON_SECRET=<a-long-random-string>
-```
+1. Supabase Dashboard → **Edge Functions** → **Deploy a new function** (or open
+   `charge-due-installments` → **Edit**) → paste
+   `supabase/functions/charge-due-installments/index.ts` → **Deploy**.
+2. Edge Functions → **Secrets** → add `INSTALLMENT_CRON_SECRET` = a long random
+   string.
+3. Optional: `AUTOPAY_TIME_BUDGET_MS` (default 110000). A night with many
+   families stops itself cleanly between two families at this point and starts
+   a new run for the rest the same night, picking up after the last family it
+   started — nobody is charged twice. Keep it well under your plan's function
+   time limit (150 s on the free plan).
+
 Then schedule it once a day with pg_cron (enable the `pg_cron` and `pg_net`
 extensions first, in Database → Extensions). Run in the SQL editor, filling in
 your project ref and the same secret:

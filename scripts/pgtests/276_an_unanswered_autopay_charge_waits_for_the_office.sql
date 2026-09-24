@@ -70,6 +70,15 @@ BEGIN
         RAISE EXCEPTION 'did not go through: % %', r, fam;
     END IF;
 
+    -- TED-120: on Stripe, only the payment's own id is taken — a charge id
+    -- (ch_) would be booked beside the webhook's copy and counted twice
+    r := public.resolve_unconfirmed_autopay(c, 'blue', '#0', true, 'ch_276');
+    IF r->>'error' IS DISTINCT FROM 'stripe_needs_payment_id' THEN RAISE EXCEPTION 'TED-120: a ch_ id was taken: %', r; END IF;
+    INSERT INTO camp_payments (camp_id, payment_id, payload)
+    VALUES (c, 'pi_pi_other', '{"id":"pi_pi_other","familyKey":"blue","amount":999,"stripePaymentIntentId":"pi_other","status":"succeeded"}'::jsonb);
+    r := public.resolve_unconfirmed_autopay(c, 'blue', '#0', true, 'pi_other');
+    IF r->>'error' IS DISTINCT FROM 'reference_is_another_payment' THEN RAISE EXCEPTION 'TED-120: another payment''s id was taken: %', r; END IF;
+
     -- 3. an old-style instalment plan, by position
     r := public.resolve_unconfirmed_autopay(c, 'blue', '#0', true, 'pi_276');
     fam := public.camp_family(c, 'blue');

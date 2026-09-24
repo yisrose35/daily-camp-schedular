@@ -57,9 +57,16 @@ T.fetch = (url: string, init: any) => {
     if (${JSON.stringify(mode)} === 'partfail' && p.get('payment_intent') === 'pi_top2' && posts === 2) {
       return { __status: 402, error: { message: 'Your card was declined (refund)' } };   // no money moved, no key stored
     }
-    if (!seen[k]) { n++; seen[k] = { id: 're_' + n, status: 'succeeded', amount: Number(p.get('amount')) }; T.tables.__money.push(p.get('payment_intent') + ' $' + Number(p.get('amount')) / 100); }
+    if (!seen[k]) { n++; seen[k] = { id: 're_' + n, status: 'succeeded', amount: Number(p.get('amount')), payment_intent: p.get('payment_intent'),
+                                      metadata: { campistryHold: p.get('metadata[campistryHold]') }, created: Math.floor(Date.now() / 1000) };
+                    T.tables.__money.push(p.get('payment_intent') + ' $' + Number(p.get('amount')) / 100); }
     if (${JSON.stringify(mode)} === 'netlost' && posts === 1) throw new Error('connection reset');   // made, answer lost
     return seen[k];
+  }
+  // Stripe's list of a payment's refunds (TED-117: how a lost answer is looked up)
+  if (url.includes('/refunds?payment_intent=')) {
+    const pi = new URL(url).searchParams.get('payment_intent');
+    return { data: Object.values(seen).filter((r: any) => r.payment_intent === pi), has_more: false };
   }
   if (url.includes('/payment_intents/')) return { id: 'pi', transfer_data: null };
   return {};
@@ -144,13 +151,20 @@ const tx: any[] = [{ kind: 'deposit', method: 'stripe', stripePaymentIntentId: '
 let bal = 50;
 T.rpc.canteen_refund_view = () => ({ success: true, accounts: { Avi: { camperId: 7, balance: bal, balanceFloor: 0 } }, transactions: JSON.parse(JSON.stringify(tx)) });
 ${HOLDS}
-const seen: Record<string, any> = {}; let posts = 0, n = 0; T.tables.__money = [];
+const seen: Record<string, any> = {}; let posts = 0, n = 0, lists = 0; T.tables.__money = [];
 T.fetch = (url: string, init: any) => {
   if (init.method === 'POST' && url.endsWith('/refunds')) {
-    posts++; const k = init.headers['Idempotency-Key'];
-    if (!seen[k]) { n++; seen[k] = { id: 're_' + n, status: 'succeeded' }; T.tables.__money.push('pi_top1 $' + Number(new URLSearchParams(init.body).get('amount')) / 100); }
-    if (posts <= 2) throw new Error('connection reset');   // presses 1 and 2: made, answer lost
+    posts++; const k = init.headers['Idempotency-Key']; const p = new URLSearchParams(init.body);
+    if (!seen[k]) { n++; seen[k] = { id: 're_' + n, status: 'succeeded', amount: Number(p.get('amount')), payment_intent: p.get('payment_intent'),
+                                     metadata: { campistryHold: p.get('metadata[campistryHold]') }, created: Math.floor(Date.now() / 1000) };
+                    T.tables.__money.push('pi_top1 $' + Number(p.get('amount')) / 100); }
+    if (posts === 1) throw new Error('connection reset');   // press 1: made, answer lost
     return seen[k];
+  }
+  // press 2 asks Stripe what happened, and that call is cut off too; press 3's gets through
+  if (url.includes('/refunds?payment_intent=')) {
+    if (++lists === 1) throw new Error('connection reset');
+    return { data: Object.values(seen), has_more: false };
   }
   if (url.includes('/payment_intents/')) return { id: 'pi_top1', transfer_data: null };
   return {};

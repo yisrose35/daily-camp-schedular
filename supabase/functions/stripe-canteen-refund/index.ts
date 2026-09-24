@@ -76,8 +76,55 @@ async function stripePost(endpoint: string, body: Record<string, string>, idempo
   // A "no" Stripe stands by is a 4xx it keeps for the key. A 5xx, a 409
   // (the same key still running) or a 429 decides nothing: the refund may
   // yet be made, so it is never treated as declined.
-  if (out && typeof out === "object" && out.error) out.__definite = resp.status >= 400 && resp.status < 500 && resp.status !== 409 && resp.status !== 429;
+  // idempotency_error (a 400) says only that the key was used with other
+  // details — nothing about whether the first refund was made (TED-117).
+  if (out && typeof out === "object" && out.error) out.__definite = resp.status >= 400 && resp.status < 500 && resp.status !== 409 && resp.status !== 429
+    && out.error.type !== "idempotency_error";
   return out;
+}
+
+// The one way a canteen refund is asked of Stripe, so asking again sends the
+// very same request. The reservation's key rides along in metadata, so the
+// refund can be found among the payment's refunds later (TED-117).
+function refundParams(piId: string, cents: number, pi: any, reason: unknown, holdKey: string): Record<string, string> {
+  const p: Record<string, string> = { payment_intent: piId, amount: String(cents), "metadata[campistryHold]": holdKey };
+  if (reason === "duplicate" || reason === "fraudulent" || reason === "requested_by_customer") p.reason = String(reason);
+  if (pi?.transfer_data?.destination) p.reverse_transfer = "true";
+  return p;
+}
+
+// What became of a canteen refund sent to Stripe whose answer never came back
+// (TED-117). Stripe's own list of refunds on that payment says what really
+// happened; the refund is NEVER simply sent again after the fact — a key is
+// forgotten after 24 hours (a second refund), and a repeat with any detail
+// different is refused (a refund that went through read as a "no").
+//   made     it went through (or is on its way): refundId
+//   failed   Stripe made it and it failed, or said no: nothing moved
+//   none     Stripe has no such refund, and nothing is still running
+//   unknown  Stripe could not be asked, or it is too soon to say
+async function askStripeAbout(h: { piId: string; key: string; cents: number; ageSec: number; sinceMs: number;
+                                  stripeKey: string | null; reason?: unknown }, booked: Set<string>)
+  : Promise<{ state: "made" | "failed" | "none" | "unknown"; refundId?: string }> {
+  let list: any;
+  try { list = await stripeGet(`/refunds?payment_intent=${encodeURIComponent(h.piId)}&limit=100`); } catch (_) { return { state: "unknown" }; }
+  if (!list || list.error || !Array.isArray(list.data)) return { state: "unknown" };
+  const hit = list.data.find((r: any) => r && r.metadata && r.metadata.campistryHold === h.key)
+    // a part sent before refunds carried their key: the same amount, not already
+    // on a wallet's ledger, made after it was sent
+    || list.data.find((r: any) => r && !(r.metadata && r.metadata.campistryHold) && !booked.has(String(r.id))
+         && Number(r.amount) === h.cents && (!h.sinceMs || Number(r.created) * 1000 >= h.sinceMs - 300000));
+  if (hit) return (hit.status === "failed" || hit.status === "canceled") ? { state: "failed" } : { state: "made", refundId: String(hit.id) };
+  if (list.has_more) return { state: "unknown" };
+  if (h.ageSec >= 120) return { state: "none" };              // long enough ago: never made
+  // Moments ago, so it may still be running: asked again with the SAME key and
+  // the SAME details — only then does Stripe answer with the first refund.
+  if (!h.stripeKey) return { state: "unknown" };
+  let pi: any, again: any;
+  try { pi = await stripeGet(`/payment_intents/${h.piId}`); } catch (_) { return { state: "unknown" }; }
+  if (!pi || pi.error) return { state: "unknown" };           // the details cannot be rebuilt: don't guess
+  try { again = await stripePost("/refunds", refundParams(h.piId, h.cents, pi, h.reason, h.key), h.stripeKey); } catch (_) { return { state: "unknown" }; }
+  if (!again.error && again.id) return (again.status === "failed" || again.status === "canceled") ? { state: "failed" } : { state: "made", refundId: String(again.id) };
+  return again.__definite ? { state: "failed" } : { state: "unknown" };
 }
 
 async function stripeGet(endpoint: string) {
@@ -139,12 +186,22 @@ serve(async (req) => {
     const authedCampId = await callerCampId(req);
     if (!authedCampId) return json({ error: "Only camp owners/admins can refund a canteen deposit." }, 403);
 
-    const { camperName, camperId: body_camperId, amount, reason, idempotencyKey } = await req.json();
+    const { camperName, camperId: body_camperId, amount, reason, idempotencyKey, action } = await req.json();
     // The camper by ID when the page sent one: the account's key is a spelling.
     const camperIdSent = (body_camperId != null && /^\d+$/.test(String(body_camperId)) && Number(body_camperId) > 0) ? Number(body_camperId) : null;
-    if (camperIdSent == null && !camperName) return json({ error: "camperId (or camperName) is required" }, 400);
+    if (action !== "holds" && camperIdSent == null && !camperName) return json({ error: "camperId (or camperName) is required" }, 400);
 
     const supabase = createClient(SUPABASE_URL, SUPABASE_SERVICE_KEY);
+    // Refunds whose answer is still being looked up (275, TED-116), for the
+    // office to see. A Stripe one settles itself against Stripe's own list the
+    // next time this child is refunded or Refund All runs (TED-117).
+    if (action === "holds") {
+      const { data: view, error: vErr } = await supabase.rpc("canteen_refund_view", { p_camp_id: authedCampId });
+      if (vErr || !view?.success) return json({ error: "Could not read canteen refunds." }, 500);
+      return json({ holds: (Array.isArray(view.holds) ? view.holds : []).map((h: Record<string, any>) => ({ key: h.key,
+        camperId: h.camperId ?? null, account: h.accountKey, amount: Number(h.amount), method: h.method,
+        ageSeconds: Number(h.ageSeconds) || 0, createdAt: h.createdAt })) });
+    }
     // canteen_refund_view (migration 250), not get_canteen_accounts: that one
     // decides what to show from the signed-in caller, which the service role is
     // not — it answered not_authorized, so every refund stopped here — and its
@@ -186,31 +243,31 @@ serve(async (req) => {
     // Refunds of this child's money already on their way (275, TED-110). Each
     // took its money off the wallet before Stripe was asked. This refund's own
     // (an earlier press whose answer was lost) is still its money to send;
-    // anyone else's is not. One that has waited is re-asked with the key it
-    // was sent with: Stripe answers with the refund it made, or with the "no"
-    // it gave — so it settles itself instead of waiting on the office.
+    // anyone else's is not. One that has waited is looked up in Stripe's own
+    // list of that payment's refunds (TED-117): made — it goes on the ledger;
+    // never made — the money goes back on the wallet; Stripe cannot say — it
+    // stays on its way.
     const ownPrefix = reqKey ? `scanteen:${reqKey}:` : null;
     let holdsAll: Record<string, any>[] = Array.isArray(accountsData.holds) ? accountsData.holds : [];
     const holdIsMine = (h: Record<string, any>) => (camperId != null && h.camperId != null) ? String(h.camperId) === String(camperId) : h.accountKey === acctKey;
     const isOwn = (h: Record<string, any>) => !!ownPrefix && String(h.key).startsWith(ownPrefix);
+    const booked = new Set<string>(((accountsData.transactions || []) as Record<string, any>[])
+      .filter((t) => t && t.stripeRefundId).map((t) => String(t.stripeRefundId)));
     let releasedBack = 0;
-    for (const h of holdsAll.filter((x) => holdIsMine(x) && !isOwn(x) && x.method === "stripe" && x.stripeKey && Number(x.ageSeconds) >= 120)) {
-      try {
-        const hpi = await stripeGet(`/payment_intents/${h.paymentRef}`);
-        const hp: Record<string, string> = { payment_intent: String(h.paymentRef), amount: String(Math.round(Number(h.amount) * 100)) };
-        if (hpi?.transfer_data?.destination) hp.reverse_transfer = "true";
-        const again = await stripePost("/refunds", hp, String(h.stripeKey));
-        if (!again.error && again.id) {
-          await supabase.rpc("settle_refund_intent", { p_camp_id: authedCampId, p_key: h.key, p_result: { refundId: again.id, amount: Number(h.amount) } });
-          await book(String(h.key), String(h.paymentRef), Number(h.amount), String(again.id));
-          holdsAll = holdsAll.filter((x) => x !== h);
-        } else if (again.error && again.__definite) {
-          await supabase.rpc("release_refund_intent", { p_camp_id: authedCampId, p_key: h.key });
-          const { data: rel } = await supabase.rpc("release_canteen_refund_hold", { p_camp_id: authedCampId, p_hold_key: h.key });
-          if (rel && rel.released) releasedBack = round2(releasedBack + Number(h.amount));
-          holdsAll = holdsAll.filter((x) => x !== h);
-        }
-      } catch (_) { /* Stripe did not answer: it stays on its way */ }
+    for (const h of holdsAll.filter((x) => holdIsMine(x) && !isOwn(x) && x.method === "stripe" && Number(x.ageSeconds) >= 120)) {
+      const found = await askStripeAbout({ piId: String(h.paymentRef), key: String(h.key), cents: Math.round(Number(h.amount) * 100),
+        ageSec: Number(h.ageSeconds) || 0, sinceMs: Date.parse(String(h.createdAt || "")) || 0, stripeKey: null }, booked);
+      if (found.state === "made") {
+        await supabase.rpc("settle_refund_intent", { p_camp_id: authedCampId, p_key: h.key, p_result: { refundId: found.refundId, amount: Number(h.amount) } });
+        await book(String(h.key), String(h.paymentRef), Number(h.amount), String(found.refundId));
+        booked.add(String(found.refundId));
+        holdsAll = holdsAll.filter((x) => x !== h);
+      } else if (found.state === "failed" || found.state === "none") {
+        await supabase.rpc("release_refund_intent", { p_camp_id: authedCampId, p_key: h.key });
+        const { data: rel } = await supabase.rpc("release_canteen_refund_hold", { p_camp_id: authedCampId, p_hold_key: h.key });
+        if (rel && rel.released) releasedBack = round2(releasedBack + Number(h.amount));
+        holdsAll = holdsAll.filter((x) => x !== h);
+      }
     }
     const ownHolds = holdsAll.filter((h) => holdIsMine(h) && isOwn(h));
     const otherHolds = holdsAll.filter((h) => holdIsMine(h) && !isOwn(h));
@@ -230,34 +287,37 @@ serve(async (req) => {
     const priorPIs = new Set<string>();
     const requestedAll = amount != null && Number(amount) > 0 ? round2(Number(amount)) : null;
     if (reqKey) {
-      const { data: prior } = await supabase.from("refund_intents").select("key, result, settled_at, amount")
+      const { data: prior } = await supabase.from("refund_intents").select("key, result, settled_at, amount, created_at")
         .eq("camp_id", authedCampId).like("key", `scanteen:${reqKey}:%`);
       for (const c of (Array.isArray(prior) ? prior : [])) {
         const piId = String(c.key).slice(`scanteen:${reqKey}:`.length);
-        priorPIs.add(piId);
         let amt = c.settled_at && c.result ? Number(c.result.amount) || 0 : 0;
+        if (c.settled_at) priorPIs.add(piId);
         if (!c.settled_at) {
           const heldAmt = round2(Number(c.amount) || 0);
           const notYet = "An earlier try at this refund has not been confirmed by Stripe yet, so it may have gone through — wait a minute and check the Stripe dashboard before trying again.";
-          let again: any;
-          try {
-            const hpi = await stripeGet(`/payment_intents/${piId}`);
-            const hp: Record<string, string> = { payment_intent: piId, amount: String(Math.round(heldAmt * 100)) };
-            if (reason === "duplicate" || reason === "fraudulent" || reason === "requested_by_customer") hp.reason = reason;
-            if (hpi?.transfer_data?.destination) hp.reverse_transfer = "true";
-            again = await stripePost("/refunds", hp, `canteen_refund_${reqKey}_${piId}`);
-          } catch (_) {
-            // Cut off again (TED-115): still "may have gone through", never a raw error.
-            return json({ uncertain: true, error: notYet }, 200);
+          const sinceMs = Date.parse(String(c.created_at || "")) || 0;
+          const own = holdsAll.find((h) => String(h.key) === String(c.key));
+          const ageSec = own ? Number(own.ageSeconds) || 0 : (sinceMs ? (Date.now() - sinceMs) / 1000 : 0);
+          // Looked up, never simply sent again (TED-117); cut off while asking
+          // is still "may have gone through" (TED-115).
+          const found = await askStripeAbout({ piId, key: String(c.key), cents: Math.round(heldAmt * 100), ageSec, sinceMs,
+            stripeKey: `canteen_refund_${reqKey}_${piId}`, reason }, booked);
+          if (found.state === "unknown") return json({ uncertain: true, error: notYet }, 200);
+          if (found.state !== "made") {
+            // Never made: nothing moved. The claim and the money go back, and
+            // this refund sends it now, below.
+            await supabase.rpc("release_refund_intent", { p_camp_id: authedCampId, p_key: c.key });
+            await supabase.rpc("release_canteen_refund_hold", { p_camp_id: authedCampId, p_hold_key: c.key });
+            continue;
           }
-          if (again.error) {
-            return json({ uncertain: true, error: notYet }, 200);
-          }
+          priorPIs.add(piId);
           await supabase.rpc("settle_refund_intent", { p_camp_id: authedCampId, p_key: c.key,
-            p_result: { refundId: again.id, amount: heldAmt } });
-          await book(String(c.key), piId, heldAmt, String(again.id));
+            p_result: { refundId: found.refundId, amount: heldAmt } });
+          await book(String(c.key), piId, heldAmt, String(found.refundId));
+          booked.add(String(found.refundId));
           amt = heldAmt;
-          priorRefunds.push({ refundId: again.id, paymentIntentId: piId, amount: heldAmt });
+          priorRefunds.push({ refundId: found.refundId, paymentIntentId: piId, amount: heldAmt });
         } else if (amt > 0) {
           priorRefunds.push({ refundId: c.result.refundId, paymentIntentId: piId, amount: amt });
         }
@@ -381,12 +441,7 @@ serve(async (req) => {
             throw Object.assign(new Error("This refund is being sent right now — wait a moment and check the child's wallet before trying again."), { uncertain: true });
           }
         }
-        const params: Record<string, string> = {
-          payment_intent: dep.paymentIntentId,
-          amount: String(Math.round(chunk * 100)),
-        };
-        if (reason === "duplicate" || reason === "fraudulent" || reason === "requested_by_customer") params.reason = reason;
-        if (pi.transfer_data?.destination) params.reverse_transfer = "true";
+        const params = refundParams(dep.paymentIntentId, Math.round(chunk * 100), pi, reason, holdKey);
 
         // What is still refundable is part of the key (TED-097): a second refund of
       // the same amount later is a NEW refund, while a retry of this one after a

@@ -67,7 +67,10 @@ async function stripePost(endpoint: string, body: Record<string, string>, idempo
   // A "no" Stripe stands by is a 4xx it keeps for the key. A 5xx, a 409
   // (the same key still running) or a 429 decides nothing: the refund may
   // yet be made, so it is never treated as declined.
-  if (out && typeof out === "object" && out.error) out.__definite = resp.status >= 400 && resp.status < 500 && resp.status !== 409 && resp.status !== 429;
+  // idempotency_error (a 400) says only that the key was used with other
+  // details — nothing about whether the first refund was made (TED-117).
+  if (out && typeof out === "object" && out.error) out.__definite = resp.status >= 400 && resp.status < 500 && resp.status !== 409 && resp.status !== 429
+    && out.error.type !== "idempotency_error";
   return out;
 }
 
@@ -219,9 +222,12 @@ async function refundOneCamper(
       if (held.existing) chunk = round2(Number(held.amount) || chunk);   // its reservation decides the amount
       const holdKey = holdKeyFor(chunk);
 
+      // The reservation's key rides along, so the refund can be found among the
+      // payment's refunds if its answer is lost (TED-117).
       const params: Record<string, string> = {
         payment_intent: dep.paymentIntentId,
         amount: String(Math.round(chunk * 100)),
+        "metadata[campistryHold]": holdKey,
       };
       if (pi.transfer_data?.destination) params.reverse_transfer = "true";
 
@@ -262,28 +268,36 @@ async function refundOneCamper(
   return staleNote ? { camperId, camperName, refunded, error: staleNote } : { camperId, camperName, refunded };
 }
 
-// Refunds sent on an earlier run (or from a single refund) that Stripe never
-// answered: asked again with the key they were sent with, so Stripe answers
-// with the refund it made, or the "no" it gave (275). One not yet a couple of
-// minutes old may still be running, and is left alone.
-async function settleWaitingRefunds(supabase: ReturnType<typeof createClient>, campId: string, holds: Record<string, any>[]): Promise<boolean> {
+// Refunds sent on an earlier run (or from a single refund) whose answer never
+// came back (275). Looked up in Stripe's own list of that payment's refunds —
+// never simply sent again (TED-117): a key is forgotten after 24 hours, so a
+// repeat can be a second refund, and a repeat with any detail different is
+// refused, which is not a "no". Made: on the ledger. Never made: the money
+// goes back on the wallet. Stripe cannot say: still waiting. One not yet a
+// couple of minutes old may still be running, and is left alone.
+async function settleWaitingRefunds(supabase: ReturnType<typeof createClient>, campId: string,
+                                    holds: Record<string, any>[], transactions: Record<string, any>[]): Promise<boolean> {
   let changed = false;
-  for (const h of holds.filter((x) => x.method === "stripe" && x.stripeKey && Number(x.ageSeconds) >= 120)) {
-    try {
-      const pi = await stripeGet(`/payment_intents/${h.paymentRef}`);
-      const params: Record<string, string> = { payment_intent: String(h.paymentRef), amount: String(Math.round(Number(h.amount) * 100)) };
-      if (pi?.transfer_data?.destination) params.reverse_transfer = "true";
-      const again = await stripePost("/refunds", params, String(h.stripeKey));
-      if (!again.error && again.id) {
-        await supabase.rpc("settle_refund_intent", { p_camp_id: campId, p_key: h.key, p_result: { refundId: again.id, amount: Number(h.amount) } });
-        await supabase.rpc("settle_canteen_refund_hold", { p_camp_id: campId, p_hold_key: h.key, p_refund_id: String(again.id) });
-        changed = true;
-      } else if (again.error && again.__definite) {
-        await supabase.rpc("release_refund_intent", { p_camp_id: campId, p_key: h.key });
-        await supabase.rpc("release_canteen_refund_hold", { p_camp_id: campId, p_hold_key: h.key });
-        changed = true;
-      }
-    } catch (_) { /* Stripe did not answer: still waiting */ }
+  const booked = new Set<string>(transactions.filter((t) => t && t.stripeRefundId).map((t) => String(t.stripeRefundId)));
+  for (const h of holds.filter((x) => x.method === "stripe" && Number(x.ageSeconds) >= 120)) {
+    let list: any;
+    try { list = await stripeGet(`/refunds?payment_intent=${encodeURIComponent(String(h.paymentRef))}&limit=100`); } catch (_) { continue; }
+    if (!list || list.error || !Array.isArray(list.data)) continue;
+    const cents = Math.round(Number(h.amount) * 100);
+    const sinceMs = Date.parse(String(h.createdAt || "")) || 0;
+    const hit = list.data.find((r: any) => r && r.metadata && r.metadata.campistryHold === h.key)
+      || list.data.find((r: any) => r && !(r.metadata && r.metadata.campistryHold) && !booked.has(String(r.id))
+           && Number(r.amount) === cents && (!sinceMs || Number(r.created) * 1000 >= sinceMs - 300000));
+    if (hit && hit.status !== "failed" && hit.status !== "canceled") {
+      await supabase.rpc("settle_refund_intent", { p_camp_id: campId, p_key: h.key, p_result: { refundId: hit.id, amount: Number(h.amount) } });
+      await supabase.rpc("settle_canteen_refund_hold", { p_camp_id: campId, p_hold_key: h.key, p_refund_id: String(hit.id) });
+      booked.add(String(hit.id));
+      changed = true;
+    } else if (hit || !list.has_more) {
+      await supabase.rpc("release_refund_intent", { p_camp_id: campId, p_key: h.key });
+      await supabase.rpc("release_canteen_refund_hold", { p_camp_id: campId, p_hold_key: h.key });
+      changed = true;
+    }
   }
   return changed;
 }
@@ -317,7 +331,8 @@ serve(async (req) => {
     // ledger is a 7-day window. This has every deposit, and each account's id.
     let { data: accountsData, error: acctErr } = await supabase.rpc("canteen_refund_view", { p_camp_id: authedCampId });
     if (acctErr || !accountsData?.success) return json({ error: "Could not read canteen balances." }, 500);
-    if (await settleWaitingRefunds(supabase, authedCampId, Array.isArray(accountsData.holds) ? accountsData.holds : [])) {
+    if (await settleWaitingRefunds(supabase, authedCampId, Array.isArray(accountsData.holds) ? accountsData.holds : [],
+                                   Array.isArray(accountsData.transactions) ? accountsData.transactions : [])) {
       ({ data: accountsData, error: acctErr } = await supabase.rpc("canteen_refund_view", { p_camp_id: authedCampId }));
       if (acctErr || !accountsData?.success) return json({ error: "Could not read canteen balances." }, 500);
     }

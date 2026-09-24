@@ -1868,6 +1868,7 @@ window.refundPickCamper = async function() {
     }
     const processorKey = await _getSnacksProcessorKey();
     const gatewayLabel = processorKey === 'cardknox' ? 'Sola' : processorKey === 'stripe' ? 'Stripe' : processorKey;
+    _showCanteenHolds(document.getElementById('refundHolds'), name);      // TED-116
     const a = getAccount(name);
     const walletAvailable = Math.max(0, Math.round((a.balance - (a.balanceFloor || 0)) * 100) / 100);
     const capacity = _onlineRefundCapacity(name, processorKey);
@@ -1996,6 +1997,90 @@ window.refundCanteenDeposit = async function() {
         });
 };
 
+// ── Refunds the card company never answered (275, TED-116) ─────────────────
+// A canteen refund takes its money off the wallet before the card company is
+// asked. When the answer never comes back, that money stays held: it may be
+// with the parent. Stripe ones are looked up in Stripe's own records the next
+// time the child is refunded (or Refund All runs). A Sola/Banquest one only
+// the office can settle, from the processor's dashboard — here, either way.
+async function _loadCanteenHolds() {
+    const db = window.CampistryDB;
+    const client = db && db.client;
+    if (!client) return { holds: [], processorKey: null };
+    const processorKey = await _getSnacksProcessorKey();
+    const fnName = processorKey === 'stripe' ? 'stripe-canteen-refund' : 'payments-canteen-refund';
+    try {
+        const res = await client.functions.invoke(fnName, { body: { action: 'holds' } });
+        const d = res && res.data;
+        return { holds: (d && Array.isArray(d.holds)) ? d.holds : [], processorKey };
+    } catch (_) { return { holds: [], processorKey }; }
+}
+function _holdCamperKey(h) {
+    const roster = getRoster();
+    if (h.camperId != null) {
+        const k = Object.keys(roster).find(function(n) { return roster[n] && String(roster[n].camperId) === String(h.camperId); });
+        if (k) return k;
+    }
+    return h.account || '';
+}
+function _holdAge(sec) {
+    sec = Number(sec) || 0;
+    if (sec < 120) return 'just now';
+    if (sec < 7200) return Math.round(sec / 60) + ' min ago';
+    if (sec < 172800) return Math.round(sec / 3600) + ' hours ago';
+    return Math.round(sec / 86400) + ' days ago';
+}
+// `onlyKey` (a roster key) limits it to one child — the refund window.
+async function _showCanteenHolds(el, onlyKey) {
+    if (!el) return;
+    const got = await _loadCanteenHolds();
+    const roster = getRoster();
+    const onlyId = (onlyKey && roster[onlyKey] && roster[onlyKey].camperId != null) ? roster[onlyKey].camperId : null;   // by the camper's number
+    const holds = got.holds.filter(function(h) {
+        if (!onlyKey) return true;
+        return (onlyId != null && h.camperId != null) ? String(onlyId) === String(h.camperId) : _holdCamperKey(h) === onlyKey;
+    });
+    if (!holds.length) { el.style.display = 'none'; el.innerHTML = ''; return; }
+    const stripe = got.processorKey === 'stripe';
+    el.style.display = '';
+    el.innerHTML = '<div style="font-weight:700;margin-bottom:.3rem;">' + (holds.length === 1 ? 'A refund is' : holds.length + ' refunds are') +
+        ' waiting for an answer from the card company</div>' +
+        '<div style="color:var(--text-muted);margin-bottom:.4rem;">Its money is held off the wallet until it is settled — it may already be with the parent.</div>' +
+        holds.map(function(h) {
+            const who = _lbl(_holdCamperKey(h));
+            const line = '<strong>' + esc(who) + '</strong>: $' + Number(h.amount).toFixed(2) + ', sent ' + esc(_holdAge(h.ageSeconds));
+            if (stripe || h.method === 'stripe') {
+                return '<div style="margin:.25rem 0;">' + line + ' — looked up in Stripe the next time this child is refunded or Refund All runs.</div>';
+            }
+            const k = esc(String(h.key)).replace(/'/g, '&#39;');
+            return '<div style="margin:.35rem 0;">' + line + ' — check your processor\'s dashboard:<br>' +
+                '<button type="button" class="btn btn-sm btn-secondary" onclick="resolveCanteenRefundHold(\'' + k + '\', true)">It went through</button> ' +
+                '<button type="button" class="btn btn-sm btn-secondary" onclick="resolveCanteenRefundHold(\'' + k + '\', false)">Nothing went through</button></div>';
+        }).join('');
+}
+window.resolveCanteenRefundHold = async function(key, went) {
+    if (!_secEdit('accounts', 'Settling a refund')) return;
+    const db = window.CampistryDB;
+    const client = db && db.client;
+    if (!client) { toast('Not signed in', 1); return; }
+    const body = { action: 'resolveHold', holdKey: key, wentThrough: !!went };
+    if (went) {
+        const ref = window.prompt('The refund\'s reference number from the processor\'s dashboard:', '');
+        if (!ref || !String(ref).trim()) { toast('Nothing recorded — the reference is needed', 1); return; }
+        body.reference = String(ref).trim();
+    } else if (!window.confirm('Only if the processor\'s dashboard shows NO such refund.\n\nThe money goes back on the child\'s wallet, and can be refunded again.')) {
+        return;
+    }
+    const res = await client.functions.invoke('payments-canteen-refund', { body: body });
+    const err = await _edgeFnErrorMessage(res);
+    if (err) { toast(err, 1); return; }
+    toast(went ? 'Recorded — the refund is on the child\'s history' : 'The money is back on the wallet');
+    _refreshSnacksFromCloud();
+    _showCanteenHolds(document.getElementById('refundHolds'), (document.getElementById('refundCamper') || {}).value || '');
+    _showCanteenHolds(document.getElementById('refundAllHolds'));
+    if (document.getElementById('refundCamper') && document.getElementById('refundCamper').value) refundPickCamper();
+};
+
 // ── Refund All — every camper's leftover Stripe-paid balance in one go ─────
 // Client-side preview mirrors the edge function's own math exactly (walletAvailable
 // vs stripeCapacity) so the confirm screen shows a real number, not a guess —
@@ -2019,6 +2104,7 @@ window.openRefundAllModal = function() {
     var resultEl = document.getElementById('refundAllResult');
     if (resultEl) resultEl.style.display = 'none';
     var preview = _refundAllPreview();
+    _showCanteenHolds(document.getElementById('refundAllHolds'));      // TED-116
     if (!body) return;
     if (!preview.count) {
         body.innerHTML = '<p>No campers currently have a Stripe-paid balance to refund.</p>';
@@ -2063,8 +2149,13 @@ window.refundAllCanteenDeposits = function() {
             if (btn) btn.style.display = 'none';
             var msg = 'Refunded $' + Number(data.totalRefunded).toFixed(2) + ' across ' + data.refundedCount + ' camper' + (data.refundedCount === 1 ? '' : 's') + '.';
             if (data.skippedCount) msg += ' ' + data.skippedCount + ' skipped (no online balance to refund).';
-            if (data.failedCount) msg += ' ' + data.failedCount + ' hit an error — check with the parent or try that camper individually.';
-            if (resultEl) { resultEl.style.display = ''; resultEl.style.color = data.failedCount ? 'var(--red-600)' : '#16A34A'; resultEl.textContent = msg; }
+            if (data.failedCount) msg += ' ' + data.failedCount + ' hit an error:';
+            // Each child that hit an error, by name, with why (TED-116).
+            var failedLines = (Array.isArray(data.details) ? data.details : []).filter(function(d) { return d && d.error; })
+                .map(function(d) { return '• ' + _lbl(_holdCamperKey({ camperId: d.camperId, account: d.camperName })) + ' — ' + d.error; });
+            if (resultEl) { resultEl.style.display = ''; resultEl.style.color = data.failedCount ? 'var(--red-600)' : '#16A34A';
+                resultEl.style.whiteSpace = 'pre-line'; resultEl.textContent = msg + (failedLines.length ? '\n' + failedLines.join('\n') : ''); }
+            _showCanteenHolds(document.getElementById('refundAllHolds'));
             _refreshSnacksFromCloud();
         }, function(e) {
             if (btn) { btn.disabled = false; btn.textContent = 'Try Again'; }

@@ -358,6 +358,25 @@ serve(async (req) => {
   let charged = 0, failed = 0;
   const details: Record<string, unknown>[] = [];
 
+  // A TIME BUDGET (TED-123). The platform stops a function at its wall-clock
+  // limit, wherever it is — possibly between a card being charged and the
+  // charge being recorded. So the run stops ITSELF, cleanly, between two
+  // families, well inside the limit, and starts a new run for the rest the
+  // same night. The new run carries a bookmark (the last family this one
+  // started), so nobody is charged, flagged or notified twice. Families are
+  // taken in a fixed order (camp, then family) for the bookmark to mean
+  // anything.
+  const START = Date.now();
+  const BUDGET_MS = Number(Deno.env.get("AUTOPAY_TIME_BUDGET_MS")) || 110000;
+  let reqBody: Record<string, any> = {};
+  try { reqBody = (await req.json()) || {}; } catch (_) { reqBody = {}; }
+  const resumeAfter = (reqBody.resumeAfter && typeof reqBody.resumeAfter.camp === "string" && typeof reqBody.resumeAfter.family === "string")
+    ? { camp: String(reqBody.resumeAfter.camp), family: String(reqBody.resumeAfter.family) } : null;
+  const hop = Math.max(0, Number(reqBody.hop) || 0);
+  let startedHere = 0;
+  let lastStarted: { camp: string; family: string } | null = null;
+  let stoppedAt: { camp: string; family: string } | null = null;
+
   const { data: rows, error } = await supabase.from("camp_state_kv")
     .select("camp_id, value").eq("key", "campistryMe");
   if (error) {
@@ -599,7 +618,12 @@ serve(async (req) => {
     return true;
   }
 
-  for (const row of (rows || [])) {
+  const orderedRows = (rows || []).slice().sort((a: any, b: any) => String(a.camp_id) < String(b.camp_id) ? -1 : String(a.camp_id) > String(b.camp_id) ? 1 : 0);
+  campLoop:
+  for (const row of orderedRows) {
+    // camps the run this one continues has already done
+    if (resumeAfter && String(row.camp_id) < resumeAfter.camp) continue;
+    const resuming = !!resumeAfter && String(row.camp_id) === resumeAfter.camp;
     const me = (row.value && typeof row.value === "object") ? row.value as Record<string, any> : null;
     if (!me) continue;
 
@@ -643,7 +667,7 @@ serve(async (req) => {
     // stripe-webhook stores them; the BYOP adapters return a brand and last four
     // and no expiry, so those cards come back 'unknown' and are deliberately not
     // warned about. Best-effort: never fail a run over it.
-    try {
+    if (!resuming) try {
       const { data: exp, error: expErr } = await supabase.rpc("flag_expiring_cards", {
         p_camp_id: row.camp_id, p_as_of: today, p_days: 30,
       });
@@ -664,7 +688,13 @@ serve(async (req) => {
     // Stripe customers — same plan/installment data, different rail.
     const processorKey = campProcessors.get(String(row.camp_id)) || null;
 
-    for (const [famKey, fRaw] of Object.entries(me.families)) {
+    for (const [famKey, fRaw] of Object.entries(me.families).sort((a, b) => a[0] < b[0] ? -1 : a[0] > b[0] ? 1 : 0)) {
+      if (resuming && famKey <= resumeAfter!.family) continue;          // done by the earlier run
+      // Out of time: stop BETWEEN families, never inside one (TED-123). At
+      // least one family per run, so a continuation always gets further.
+      if (startedHere > 0 && Date.now() - START > BUDGET_MS) { stoppedAt = lastStarted; break campLoop; }
+      startedHere++;
+      lastStarted = { camp: String(row.camp_id), family: famKey };
       const f = fRaw as Record<string, any>;
       // One family's trouble — a dropped connection, an error nobody foresaw —
       // is that family's, never the whole night's (TED-113): every family
@@ -1252,6 +1282,29 @@ serve(async (req) => {
   // does: this function is already nightly and already has the Stripe key, and
   // a second cron is a second thing to deploy and a second thing to notice has
   // stopped. Best-effort — a tip retry must never fail a tuition run.
+  if (stoppedAt) {
+    // The rest of the night, in a new run that starts after the bookmark. It
+    // is this same function, called the way the schedule calls it.
+    const HOPS = 30;
+    console.warn(`[autopay] stopped for time after ${startedHere} families (${Math.round((Date.now() - START) / 1000)}s) — ` +
+      (hop + 1 < HOPS ? `continuing in a new run after camp ${stoppedAt.camp} family ${stoppedAt.family}` : `NOT continuing: ${HOPS} runs in a row — look at the logs`));
+    if (hop + 1 < HOPS) {
+      const next = fetch(`${SUPABASE_URL}/functions/v1/charge-due-installments`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json", "x-cron-secret": String(CRON_SECRET), "Authorization": `Bearer ${SUPABASE_SERVICE_KEY}` },
+        body: JSON.stringify({ resumeAfter: stoppedAt, hop: hop + 1 }),
+      }).then(() => {}, (e) => console.error(`[autopay] could not start the continuing run (${(e as Error).message}) — the rest waits for the next scheduled run`));
+      const ER = (globalThis as any).EdgeRuntime;
+      if (ER && typeof ER.waitUntil === "function") ER.waitUntil(next);
+      else await Promise.race([next, new Promise((r) => setTimeout(r, 3000))]);
+    }
+    console.log(`[autopay] done (part ${hop + 1}) — charged ${charged}, failed ${failed}; details=${JSON.stringify(details)}`);
+    return new Response(
+      JSON.stringify({ ok: true, done: false, resumeAfter: stoppedAt, charged, failed, details }),
+      { status: 200, headers: { ...corsHeaders, "Content-Type": "application/json" } }
+    );
+  }
+
   let tipsRetried = 0, tipsStillFailing = 0;
   try {
     const { data: pending } = await supabase.rpc("retry_failed_tip_transfers", { p_limit: 50 });
@@ -1349,7 +1402,7 @@ serve(async (req) => {
 
   console.log(`[autopay] done — charged ${charged}, failed ${failed}` + (details.length ? `; details=${JSON.stringify(details)}` : "; nothing due"));
   return new Response(
-    JSON.stringify({ ok: true, charged, failed, details }),
+    JSON.stringify({ ok: true, done: true, charged, failed, details }),
     { status: 200, headers: { ...corsHeaders, "Content-Type": "application/json" } }
   );
 });

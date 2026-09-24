@@ -6470,9 +6470,14 @@ async function resolveUnconfirmedAutopay(fk,planRef){
         confirmLabel:'It went through \u2014 record it'});
     var ref=null;
     if(went){
-        ref=window.prompt('The charge\u2019s reference number from '+where+' (transaction / payment id):','');
+        // On Stripe, the PAYMENT's id (pi_…) — what the webhook books the same
+        // money under — never the charge's (ch_…), or it is counted twice (TED-120).
+        ref=window.prompt(h.processor==='stripe'
+            ?'The payment\u2019s id from the Stripe dashboard \u2014 it starts with pi_ (not ch_ or py_):'
+            :'The charge\u2019s reference number from '+where+':','');
         if(!ref||!String(ref).trim())return toast('Nothing recorded — a reference is needed','error');
         ref=String(ref).trim();
+        if(h.processor==='stripe'&&!/^pi_[A-Za-z0-9]+$/.test(ref))return toast('On Stripe, use the payment\u2019s id \u2014 it starts with pi_','error');
     }else{
         var none=await confirmDialog({title:'Nothing went through?',
             message:'Only if '+where+' shows NO such charge. Autopay will then try this instalment again on its next run.',
@@ -6485,7 +6490,10 @@ async function resolveUnconfirmedAutopay(fk,planRef){
     var res=await client.rpc('resolve_unconfirmed_autopay',{p_camp_id:campId,p_family_key:fk,p_plan_ref:planRef,p_went_through:!!went,p_reference:ref});
     var d=res&&res.data;
     if(res&&res.error||!d||d.success!==true){
-        return toast('Could not save the answer: '+((res&&res.error&&res.error.message)||(d&&d.error)||'no answer'),'error');
+        var why=(res&&res.error&&res.error.message)||(d&&d.error)||'no answer';
+        if(why==='stripe_needs_payment_id')why='on Stripe, use the payment\u2019s id \u2014 it starts with pi_';
+        else if(why==='reference_is_another_payment')why='that reference belongs to another payment';
+        return toast('Could not save the answer: '+why,'error');
     }
     delete p.pendingCharge;
     toast(went?'Recorded — autopay carries on':'Autopay will try again on its next run');
@@ -19201,6 +19209,27 @@ async function chargeStoredCard(famKey,amount,description,quiet){
     // to charge again until the office has checked. A different amount, or a
     // charge that went through or was declined, starts a new key.
     var _pk=_pendingChargeGet(famKey,amount);
+    // ...but only when the office means THAT charge (TED-118). Sent again with
+    // its key, Stripe answers with the first charge — right for a retry, and a
+    // "succeeded" with nothing charged for a new, separate one. So they say.
+    if(_pk){
+        var _at=new Date(Number(_pk.at)||Date.now());
+        var _when=_at.toLocaleTimeString([],{hour:'numeric',minute:'2-digit'})+(_at.toDateString()===new Date().toDateString()?'':' on '+_at.toLocaleDateString());
+        if(quiet)return {ok:false,uncertain:true,error:'an earlier '+fm(amount)+' charge ('+_when+') never got an answer \u2014 check it in the processor, then charge this family on its own'};
+        var _same=await confirmDialog({title:'The same charge, or a new one?',
+            message:'A '+fm(amount)+' charge to '+esc(f.name)+' at '+esc(_when)+' never got an answer from the card company \u2014 it may have gone through.'
+                   +'<br><br><strong>The same charge:</strong> it is sent again and cannot be taken twice.'
+                   +'<br><strong>A new charge:</strong> a separate '+fm(amount)+' on top of that one.',
+            confirmLabel:'The same charge \u2014 try it again'});
+        if(!_same){
+            var _fresh=await confirmDialog({title:'Charge a separate '+fm(amount)+'?',
+                message:'Only if '+esc(f.name)+' owes a SEPARATE '+fm(amount)+'. Check the processor first: the earlier one may already have taken the money.',
+                confirmLabel:'Yes \u2014 a new charge',danger:true});
+            if(!_fresh)return {ok:false,error:'Cancelled'};
+            _pendingChargeClear(famKey,amount);
+            _pk=null;
+        }
+    }
     var _chargeKey=_pk?_pk.key:('chg_'+famKey+'_'+Date.now()+'_'+Math.random().toString(36).slice(2,8));
     if(_pk&&_pk.desc)description=_pk.desc;              // the same request, or Stripe refuses the key
     _pendingChargeSet(famKey,amount,{key:_chargeKey,desc:description||'',at:Date.now()});
@@ -19253,8 +19282,12 @@ async function chargeStoredCard(famKey,amount,description,quiet){
         if(isBYOP||result.status==='succeeded'){
             _pendingChargeClear(famKey,amount);                // done: the next charge is a new one
             // Record payment locally
+            // The SAME id the processor's webhook gives this payment (TED-119):
+            // whichever arrives first, the other lands on that row instead of
+            // becoming a second $500 in the payments list and the exports.
+            var _chgRef=isBYOP?result.externalTransactionId:result.paymentIntentId;
             var _chgRow={
-                id:'pay_'+Date.now(),
+                id:_chgRef?((isBYOP?'byop_':'pi_')+_chgRef):('pay_'+Date.now()),
                 family:f.name,
                 familyKey:famKey,
                 amount:amount,
@@ -19267,7 +19300,12 @@ async function chargeStoredCard(famKey,amount,description,quiet){
                 byopProcessor:isBYOP?f.byopProcessor:null,
                 timestamp:Date.now()
             };
-            finPayments.push(_chgRow);
+            // Already here (the webhook's row reached this page first): one row.
+            var _chgTwin=(finPayments||[]).filter(function(p){return p&&(p.id===_chgRow.id
+                ||(_chgRow.stripePaymentIntentId&&p.stripePaymentIntentId===_chgRow.stripePaymentIntentId)
+                ||(_chgRow.byopTransactionId&&p.byopTransactionId===_chgRow.byopTransactionId));})[0];
+            if(_chgTwin){var _twinId=_chgTwin.id;Object.assign(_chgTwin,_chgRow);_chgTwin.id=_twinId;_chgRow=_chgTwin;}
+            else finPayments.push(_chgRow);
             // The webhook posts this too, keyed on the intent/transaction id —
             // and posting is idempotent on that id, so whichever arrives second
             // does nothing rather than crediting the family twice.

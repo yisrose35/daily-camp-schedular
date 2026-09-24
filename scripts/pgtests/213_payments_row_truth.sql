@@ -300,3 +300,36 @@ BEGIN
 END $$;
 
 SELECT 'ALL 213 BEHAVIOUR CHECKS PASSED' AS result;
+
+-- ── TED-119: one office Stripe charge is one payment row ──────────────────
+-- The page records its Charge Card payment under the webhook's own id
+-- ('pi_' + the payment intent), so whichever arrives first, the other lands on
+-- the same row — never a second $500 in the list, the exports or the charts.
+DO $$
+DECLARE r jsonb; n int;
+BEGIN
+    CREATE OR REPLACE FUNCTION auth.uid() RETURNS uuid LANGUAGE sql STABLE
+      AS 'SELECT ''44444444-4444-4444-4444-444444444444''::uuid';
+    CREATE OR REPLACE FUNCTION public.user_section_level(p_camp_id uuid, p_section text)
+    RETURNS text LANGUAGE sql STABLE AS 'SELECT ''edit''::text';
+    -- the webhook first, then the page's save
+    PERFORM public.append_camp_payment('bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb',
+        '{"id":"pi_pi_T119a","familyKey":"gold","amount":500,"date":"2026-06-02","reference":"pi_T119a","stripePaymentIntentId":"pi_T119a","status":"succeeded"}'::jsonb,
+        'pi_T119a', '{"status":"succeeded","amount":500}'::jsonb);
+    r := public.sync_camp_billing('bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb', '{}'::jsonb, '[]'::jsonb,
+        '[{"id":"pi_pi_T119a","familyKey":"gold","amount":500,"date":"2026-06-02","method":"Stripe (auto)","reference":"pi_T119a","stripePaymentIntentId":"pi_T119a","status":"succeeded"}]'::jsonb, '[]'::jsonb);
+    SELECT count(*) INTO n FROM camp_payments WHERE camp_id = 'bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb'
+       AND deleted_at IS NULL AND payload->>'stripePaymentIntentId' = 'pi_T119a';
+    IF n <> 1 THEN RAISE EXCEPTION 'TED-119: webhook first, then the page — % rows for one charge', n; END IF;
+    -- the page first, then the webhook
+    r := public.sync_camp_billing('bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb', '{}'::jsonb, '[]'::jsonb,
+        '[{"id":"pi_pi_T119b","familyKey":"gold","amount":500,"date":"2026-06-02","method":"Stripe (auto)","reference":"pi_T119b","stripePaymentIntentId":"pi_T119b","status":"succeeded"}]'::jsonb, '[]'::jsonb);
+    PERFORM public.append_camp_payment('bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb',
+        '{"id":"pi_pi_T119b","familyKey":"gold","amount":500,"date":"2026-06-02","reference":"pi_T119b","stripePaymentIntentId":"pi_T119b","status":"succeeded"}'::jsonb,
+        'pi_T119b', '{"status":"succeeded","amount":500}'::jsonb);
+    SELECT count(*) INTO n FROM camp_payments WHERE camp_id = 'bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb'
+       AND deleted_at IS NULL AND payload->>'stripePaymentIntentId' = 'pi_T119b';
+    IF n <> 1 THEN RAISE EXCEPTION 'TED-119: the page first, then the webhook — % rows for one charge', n; END IF;
+    CREATE OR REPLACE FUNCTION auth.uid() RETURNS uuid LANGUAGE sql STABLE AS 'SELECT NULL::uuid';
+    RAISE NOTICE 'ok  TED-119: one office charge is one payment row, whichever arrives first';
+END $$;

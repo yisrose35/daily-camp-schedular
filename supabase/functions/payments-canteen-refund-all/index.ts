@@ -220,7 +220,7 @@ async function refundOneCamper(
   const stale = holds.filter((h) => mineHold(h) && Number(h.ageSeconds) >= 180);
   const staleAmt = round2(stale.reduce((t, h) => t + (Number(h.amount) || 0), 0));
   const staleNote = stale.length
-    ? `An earlier refund of $${staleAmt.toFixed(2)} for this child was never confirmed by the card company — check the processor's dashboard, then use Refund on this child to settle it.`
+    ? `An earlier refund of $${staleAmt.toFixed(2)} for this child was never confirmed by the card company — check the processor's dashboard, then settle it under "waiting for an answer" (in Refund All or this child's Refund).`
     : null;
 
   if (targetAmount <= 0) {
