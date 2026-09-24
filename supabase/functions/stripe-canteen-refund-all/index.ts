@@ -175,7 +175,10 @@ async function refundOneCamper(
       };
       if (pi.transfer_data?.destination) params.reverse_transfer = "true";
 
-      const refund = await stripePost("/refunds", params, `canteen_refund_${dep.paymentIntentId}_${Math.round(chunk * 100)}`);
+      // What is still refundable is part of the key (TED-097): a second refund of
+      // the same amount later is a NEW refund, while a retry of this one after a
+      // lost answer repeats the key and Stripe answers with the refund it made.
+      const refund = await stripePost("/refunds", params, `canteen_refund_${dep.paymentIntentId}_${Math.round(dep.remaining * 100)}_${Math.round(chunk * 100)}`);
       if (refund.error) throw new Error(refund.error.message);
 
       const { error: creditErr } = await supabase.rpc("refund_canteen_deposit_from_stripe", {

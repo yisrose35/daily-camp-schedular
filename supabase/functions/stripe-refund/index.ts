@@ -103,6 +103,13 @@ async function callerCampId(req: Request): Promise<string | null> {
 // families; a payment with no customer must carry the camp in Stripe's own
 // metadata (set by our checkout functions, never by the refund request).
 async function campOwnsPayment(campId: string, pi: any): Promise<boolean> {
+  // Our own functions stamp the camp on every payment they create (metadata is
+  // set with the platform's secret key, never by a browser). That decides it
+  // first: a registration deposit is made on the FORM's customer, which is
+  // often not the family's card on file (a returning family, a sibling, a
+  // hosted checkout's fresh customer) — and it is still this camp's (TED-096).
+  if (String(pi?.metadata?.campId || "") === campId) return true;
+  if (pi?.metadata?.campId) return false;              // another camp's, by its own stamp
   const customer = typeof pi?.customer === "string" ? pi.customer : pi?.customer?.id;
   if (customer) {
     const service = createClient(SUPABASE_URL, SUPABASE_SERVICE_KEY);

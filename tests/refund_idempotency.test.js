@@ -124,7 +124,9 @@ test('the canteen keys are per CHUNK, not per request', () => {
     // The camper part is their NUMBER when the account has one: two children who
     // share a name must not share a claim (the second would be skipped as
     // "already settled"). The name only for an account with no number.
-    assert.match(CANTEEN_ALL, /\$\{batchKey\}:\$\{camperId != null \? "#" \+ camperId : camperName\}:\$\{dep\.externalTransactionId\}:\$\{chunkCents\}/);
+    // Refund-all uses the SAME per-money key as the single refund (TED-093):
+    // Snacks sends no key, and a deposit id is unique however children are named.
+    assert.match(CANTEEN_ALL, /const chunkKey = `canteen:\$\{dep\.externalTransactionId\}:\$\{Math\.round\(dep\.remaining \* 100\)\}:\$\{chunkCents\}`;/);
 });
 
 test('refund-all can still be called with no body at all', () => {

@@ -122,6 +122,30 @@ BEGIN
     RAISE NOTICE 'ok  271 TED-089: owed 250 straight after applying, recorded, owed 0, processor kept';
 END $$;
 
+-- TED-098: the office absorbed an application before the parent paid, the
+-- parent pays (camp_applications), then the office's stale copy is saved
+DO $$
+DECLARE c uuid := 'f2710000-0000-0000-0000-000000000001'; r jsonb; id text := 'enr_2710bbbbccccddddeeeeffff00001111';
+BEGIN
+    PERFORM public.submit_public_application(c, 'enrollments', id,
+        '{"camperName":"Late Kid","session":"Full","status":"applied","depositRequired":250}'::jsonb);
+    UPDATE camp_state_kv SET value = jsonb_set(value, ARRAY['enrollments', id],
+        '{"camperName":"Late Kid","session":"Full","status":"accepted","depositRequired":250}'::jsonb)
+     WHERE camp_id = c AND key = 'campistryMe';                       -- the office's copy, unpaid
+    -- the parent pays through a path that finds only the table (as a webhook
+    -- that ran before the office's save would have)
+    UPDATE camp_applications SET payload = payload || '{"depositPaid":250,"depositReference":"9001","depositStatus":"paid","depositCharges":[{"ref":"9001","amount":250}]}'::jsonb
+     WHERE camp_id = c AND entry_id = id;
+    r := public._registration_deposit_owed(c, id);
+    IF (r->>'owed')::numeric <> 0 THEN RAISE EXCEPTION 'TED-098: a paid deposit reads unpaid after an old tab saved: %', r; END IF;
+    -- a second charge anyway (the office's own button): both charges are kept
+    PERFORM public._record_registration_deposit(c, id, 250, '9002');
+    IF public._deposit_charge_count(public._application_entry(c, id)) <> 2 THEN
+        RAISE EXCEPTION 'TED-098: the first charge was lost from the record: %', public._application_entry(c, id)->'depositCharges';
+    END IF;
+    RAISE NOTICE 'ok  271 TED-098: an old tab cannot make a paid deposit unpaid; no charge is dropped';
+END $$;
+
 \set verify_q `cat scripts/verify_identity_chain.sql`
 BEGIN;
 CREATE TEMP TABLE v271 AS :verify_q

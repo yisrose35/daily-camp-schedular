@@ -234,8 +234,12 @@ async function refundOneCamper(
       // skips exactly what it finished.
       // The camper part of the key is their number when the account has one:
       // two children who share a name must not share a claim.
-      const chunkKey = batchKey
-        ? `${batchKey}:${camperId != null ? "#" + camperId : camperName}:${dep.externalTransactionId}:${chunkCents}` : null;
+      // Keyed on the deposit and what is left on it — the SAME key the single
+      // canteen refund uses — never on a request key: Snacks sends none, so
+      // nothing was ever claimed and a re-run after a lost answer refunded the
+      // child again (TED-093). One key per money, whichever button spends it.
+      void batchKey;
+      const chunkKey = `canteen:${dep.externalTransactionId}:${Math.round(dep.remaining * 100)}:${chunkCents}`;
       if (chunkKey) {
         const { data: claim } = await service.rpc("claim_refund_intent", {
           p_camp_id: campId, p_key: chunkKey, p_amount: chunk,

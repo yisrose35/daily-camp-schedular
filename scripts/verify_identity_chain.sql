@@ -1,5 +1,5 @@
 -- ============================================================================
--- Confirm migrations 222-272 are in and doing their job.
+-- Confirm migrations 222-273 are in and doing their job.
 --
 -- Paste the whole thing into the Supabase SQL Editor. It is READ ONLY — one
 -- SELECT, nothing is created, changed or deleted, and the two purge functions
@@ -629,6 +629,11 @@ UNION ALL
     ('272  an old tab keeps the shop''s charges',
      CASE WHEN pg_get_functiondef(to_regprocedure('public._merge_family_from_page(jsonb,jsonb)')) !~ 'LIKE ''shop'
           THEN 'apply 272 — an office tab left open cancels shop orders billed after it opened'
+          ELSE 'ok' END),
+    -- "Nothing went through" only releases a refund that has waited (TED-093).
+    ('273  a refund is released only when it is old',
+     CASE WHEN to_regprocedure('public.release_stale_refund_intent(uuid,text,interval)') IS NULL
+          THEN 'apply 273 BEFORE redeploying payments-refund and payments-canteen-refund — a refund that was cut off cannot be retried'
           ELSE 'ok' END)
     ) AS x(item, result)
 

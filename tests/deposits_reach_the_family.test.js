@@ -96,3 +96,38 @@ test('the office\'s own deposit edit stands when the server has nothing newer', 
     M.mergePublicSubmissions(local, cloud);
     assert.strictEqual(local.enrollments.e1.depositPaid, 0);
 });
+
+// ── TED-095: a deposit the office already typed in by hand ─────────────────
+test('TED-095: a hand-typed payment carrying the card reference is the same money — counted once', () => {
+    const ctx = load(), f = family();
+    ctx.finPayments.push({ id: 'pay_hand', familyKey: 'gold', amount: 250, method: 'Card', reference: 'pi_dep', date: '2026-05-01' });
+    B.post(f, { id: 'le_pay_pay_hand', kind: 'payment', amount: 250, reason: 'card', source: { paymentId: 'pay_hand' } });
+    ctx.post(f, 'gold', { depositCharges: [{ ref: 'pi_dep', amount: 250, date: '2026-05-01', processor: 'stripe' }] }, 'e1');
+    ctx.post(f, 'gold', { depositCharges: [{ ref: 'pi_dep', amount: 250, date: '2026-05-01', processor: 'stripe' }] }, 'e1');
+    assert.strictEqual(B.balance(f), 750, 'the deposit was counted twice');
+    assert.strictEqual(ctx.finPayments.length, 1);
+    assert.strictEqual(ctx.finPayments[0].depositReference, 'pi_dep', 'the typed payment was not linked to the card charge');
+});
+
+test('TED-095: a hand-typed payment of the same amount with no reference is not doubled — Billing asks', () => {
+    const ctx = load(), f = family();
+    ctx.finPayments.push({ id: 'pay_hand', familyKey: 'gold', amount: 250, method: 'Card', date: '2026-05-03' });
+    B.post(f, { id: 'le_pay_pay_hand', kind: 'payment', amount: 250, reason: 'card', source: { paymentId: 'pay_hand' } });
+    const e = { camperName: 'Avi', depositCharges: [{ ref: 'pi_dep', amount: 250, date: '2026-05-01', processor: 'stripe' }] };
+    ctx.post(f, 'gold', e, 'e1'); ctx.post(f, 'gold', e, 'e1');
+    assert.strictEqual(B.balance(f), 750, 'the card deposit was added on top of the hand-typed one');
+    assert.strictEqual(ctx.finPayments.length, 1);
+    assert.strictEqual(f.depositReview.length, 1, 'the office was not asked');
+    assert.strictEqual(f.depositReview[0].paymentId, 'pay_hand');
+    // the office says it was different money: now it is added, once
+    f.depositReviewed = { pi_dep: 'separate' };
+    ctx.post(f, 'gold', e, 'e1'); ctx.post(f, 'gold', e, 'e1');
+    assert.strictEqual(B.balance(f), 500);
+    assert.strictEqual(ctx.finPayments.length, 2);
+});
+
+test('TED-095: Billing shows the question, and the answer is wired', () => {
+    const ME2 = require('node:fs').readFileSync(require('node:path').join(__dirname, '..', 'campistry_me.js'), 'utf8');
+    assert.match(ME2, /CampistryMe\.resolveDepositReview\(/);
+    assert.match(ME2, /resolveDepositReview:resolveDepositReview,/);
+});

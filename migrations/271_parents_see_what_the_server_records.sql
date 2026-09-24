@@ -71,6 +71,67 @@ GRANT EXECUTE ON FUNCTION public.projected_family_payments(uuid, text) TO authen
 
 
 -- ── 2. a ledger that starts takes in the money that came before it ─────────
+-- One family's catch-up, reading only that family (TED-099): the camp-wide
+-- sync_family_ledger_payments rebuilt every family and every payment of the
+-- camp for each family, so a first Billing save of 1,000 families took ~7.6 s.
+-- Same entries, same ids, same "already on the ledger?" tests.
+CREATE OR REPLACE FUNCTION public._catch_up_family_ledger(p_camp_id uuid, p_family_key text)
+RETURNS integer
+LANGUAGE plpgsql
+SECURITY DEFINER
+SET search_path = public, pg_catalog
+AS $$
+DECLARE
+    now_ts    timestamptz := now();
+    v_fam     jsonb;
+    v_entries jsonb;
+    v_entry   jsonb;
+    v_n       integer := 0;
+    e         jsonb;
+    d         record;
+BEGIN
+    v_fam := public.camp_family_for_update(p_camp_id, p_family_key);
+    IF v_fam IS NULL OR jsonb_typeof(v_fam) <> 'object' THEN RETURN 0; END IF;
+    v_entries := CASE WHEN jsonb_typeof(v_fam->'entries') = 'array' THEN v_fam->'entries' ELSE '[]'::jsonb END;
+
+    FOR e IN SELECT p.payload FROM public.camp_payments p
+              WHERE p.camp_id = p_camp_id AND p.deleted_at IS NULL
+                AND (p.family_key = p_family_key OR p.payload->>'familyKey' = p_family_key)
+              ORDER BY p.ordinal LOOP
+        IF COALESCE(e->>'familyKey', '') <> p_family_key THEN CONTINUE; END IF;
+        IF public.family_covers_payment(jsonb_build_object('entries', v_entries), e) THEN CONTINUE; END IF;
+        v_entry := public.payment_ledger_entry(e);
+        IF v_entry IS NULL THEN CONTINUE; END IF;
+        v_entries := v_entries || jsonb_build_array(v_entry);
+        v_n := v_n + 1;
+    END LOOP;
+
+    FOR d IN SELECT id, amount_cents, is_reversal, to_char(created_at, 'YYYY-MM-DD') AS on_date
+               FROM bank_deposits
+              WHERE camp_id = p_camp_id AND status = 'posted' AND family_key = p_family_key LOOP
+        IF public.family_covers_deposit(jsonb_build_object('entries', v_entries), d.id,
+               ABS(d.amount_cents::numeric / 100), d.on_date) THEN
+            CONTINUE;
+        END IF;
+        v_entries := v_entries || jsonb_build_array(jsonb_build_object(
+            'id', 'le_dep_' || d.id::text,
+            'kind', CASE WHEN d.is_reversal THEN 'refund' ELSE 'payment' END,
+            'amount', ROUND(ABS(d.amount_cents::numeric / 100), 2),
+            'reason', 'zelle', 'date', d.on_date,
+            'postedAt', to_char(now_ts, 'YYYY-MM-DD"T"HH24:MI:SS"Z"'),
+            'note', CASE WHEN d.is_reversal THEN 'Bank deposit reversed' ELSE 'Bank deposit' END,
+            'by', 'system', 'source', jsonb_build_object('depositId', d.id::text)));
+        v_n := v_n + 1;
+    END LOOP;
+
+    IF v_n > 0 THEN
+        PERFORM public.camp_family_save(p_camp_id, p_family_key, jsonb_set(v_fam, '{entries}', v_entries, true));
+    END IF;
+    RETURN v_n;
+END;
+$$;
+REVOKE ALL ON FUNCTION public._catch_up_family_ledger(uuid, text) FROM public, anon, authenticated;
+
 CREATE OR REPLACE FUNCTION public._ledger_started_catch_up()
 RETURNS trigger
 LANGUAGE plpgsql
@@ -85,8 +146,8 @@ BEGIN
             OR COALESCE(jsonb_typeof(OLD.payload->'entries'), '') <> 'array'
             OR jsonb_array_length(OLD.payload->'entries') = 0
             OR OLD.deleted_at IS NOT NULL)
-       AND EXISTS (SELECT 1 FROM camp_state_kv WHERE camp_id = NEW.camp_id AND key = 'campistryMe') THEN
-        PERFORM public.sync_family_ledger_payments(NEW.camp_id, NEW.family_key, false);
+       THEN
+        PERFORM public._catch_up_family_ledger(NEW.camp_id, NEW.family_key);
     END IF;
     RETURN NULL;
 END;
@@ -112,6 +173,17 @@ END $$;
 
 
 -- ── 3. an application is wherever it is ────────────────────────────────────
+-- How many card deposit charges an application copy records (NULL-safe).
+CREATE OR REPLACE FUNCTION public._deposit_charge_count(p_enr jsonb)
+RETURNS integer
+LANGUAGE sql
+IMMUTABLE
+SET search_path = public, pg_catalog
+AS $$
+    SELECT CASE WHEN jsonb_typeof(p_enr->'depositCharges') = 'array' THEN jsonb_array_length(p_enr->'depositCharges')
+                WHEN COALESCE(p_enr->>'depositReference', '') <> '' THEN 1 ELSE 0 END;
+$$;
+
 CREATE OR REPLACE FUNCTION public._application_entry(p_camp_id uuid, p_enroll_id text)
 RETURNS jsonb
 LANGUAGE sql
@@ -119,11 +191,19 @@ STABLE
 SECURITY DEFINER
 SET search_path = public, pg_catalog
 AS $$
-    SELECT COALESCE(
-        (SELECT value #> ARRAY['enrollments', p_enroll_id] FROM camp_state_kv
-          WHERE camp_id = p_camp_id AND key = 'campistryMe'),
-        (SELECT payload FROM camp_applications
-          WHERE camp_id = p_camp_id AND kind = 'enrollments' AND entry_id = p_enroll_id));
+    -- Both copies can exist. The one holding MORE card deposit charges wins
+    -- (TED-098): an office tab that absorbed the application before the parent
+    -- paid saves the document copy without the payment, and must not make the
+    -- deposit read unpaid again. Otherwise the office's copy, as before.
+    WITH d AS (SELECT value #> ARRAY['enrollments', p_enroll_id] AS e FROM camp_state_kv
+                WHERE camp_id = p_camp_id AND key = 'campistryMe'),
+         a AS (SELECT payload AS e FROM camp_applications
+                WHERE camp_id = p_camp_id AND kind = 'enrollments' AND entry_id = p_enroll_id)
+    SELECT CASE
+        WHEN (SELECT e FROM a) IS NOT NULL
+             AND public._deposit_charge_count((SELECT e FROM a)) > public._deposit_charge_count((SELECT e FROM d))
+            THEN (SELECT e FROM a)
+        ELSE COALESCE((SELECT e FROM d), (SELECT e FROM a)) END;
 $$;
 REVOKE ALL ON FUNCTION public._application_entry(uuid, text) FROM public, anon, authenticated;
 
@@ -151,6 +231,36 @@ BEGIN
 END;
 $$;
 REVOKE ALL ON FUNCTION public._application_patch(uuid, text, jsonb) FROM public, anon, authenticated;
+
+-- Every card deposit charge the document copy and the camp_applications copy
+-- record, once each (by reference).
+CREATE OR REPLACE FUNCTION public._deposit_charges_union(p_camp_id uuid, p_enroll_id text)
+RETURNS jsonb
+LANGUAGE sql
+STABLE
+SECURITY DEFINER
+SET search_path = public, pg_catalog
+AS $$
+    SELECT COALESCE(jsonb_agg(c ORDER BY first_seen), '[]'::jsonb) FROM (
+        SELECT DISTINCT ON (c->>'ref') c, ord AS first_seen
+          FROM (
+            SELECT x.c, x.o AS ord FROM camp_state_kv k,
+                   jsonb_array_elements(CASE WHEN jsonb_typeof(k.value #> ARRAY['enrollments', p_enroll_id, 'depositCharges']) = 'array'
+                                             THEN k.value #> ARRAY['enrollments', p_enroll_id, 'depositCharges'] ELSE '[]'::jsonb END)
+                   WITH ORDINALITY AS x(c, o)
+             WHERE k.camp_id = p_camp_id AND k.key = 'campistryMe'
+            UNION ALL
+            SELECT x.c, 1000 + x.o FROM camp_applications ap,
+                   jsonb_array_elements(CASE WHEN jsonb_typeof(ap.payload->'depositCharges') = 'array'
+                                             THEN ap.payload->'depositCharges' ELSE '[]'::jsonb END)
+                   WITH ORDINALITY AS x(c, o)
+             WHERE ap.camp_id = p_camp_id AND ap.kind = 'enrollments' AND ap.entry_id = p_enroll_id
+          ) u
+         WHERE COALESCE(c->>'ref', '') <> ''
+         ORDER BY c->>'ref', ord
+    ) q;
+$$;
+REVOKE ALL ON FUNCTION public._deposit_charges_union(uuid, text) FROM public, anon, authenticated;
 
 -- 190's, reading either place.
 CREATE OR REPLACE FUNCTION public._registration_deposit_owed(
@@ -213,7 +323,10 @@ BEGIN
                    WHERE x->>'ref' = p_reference)) THEN
         RETURN jsonb_build_object('success', true, 'duplicate', true);
     END IF;
-    v_paid := COALESCE(NULLIF(v_enr->>'depositPaid', '')::numeric, 0) + GREATEST(p_amount, 0);
+    v_paid := GREATEST(COALESCE(NULLIF(v_enr->>'depositPaid', '')::numeric, 0),
+                       (SELECT COALESCE(sum((c->>'amount')::numeric), 0)
+                          FROM jsonb_array_elements(public._deposit_charges_union(p_camp_id, p_enroll_id)) c))
+              + GREATEST(p_amount, 0);
     SELECT CASE WHEN p_reference LIKE 'pi\_%' THEN 'stripe'
                 ELSE COALESCE(NULLIF(c.payment_processor_key, ''), 'stripe') END
       INTO v_proc FROM camps c WHERE c.id = p_camp_id;
@@ -225,8 +338,8 @@ BEGIN
         'depositStatus', 'paid',
         -- Each card charge, so Billing can make each one a refundable payment
         -- on the family, once (TED-090).
-        'depositCharges', (CASE WHEN jsonb_typeof(v_enr->'depositCharges') = 'array'
-                                THEN v_enr->'depositCharges' ELSE '[]'::jsonb END)
+        -- every charge either copy knows of, never a shorter list (TED-098)
+        'depositCharges', public._deposit_charges_union(p_camp_id, p_enroll_id)
                           || jsonb_build_array(jsonb_build_object(
                                'ref', p_reference, 'amount', ROUND(GREATEST(p_amount, 0), 2),
                                'date', to_char(now(), 'YYYY-MM-DD'), 'processor', COALESCE(v_proc, '')))));

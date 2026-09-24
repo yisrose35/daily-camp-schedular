@@ -206,6 +206,7 @@ const MIGRATIONS = [
     '270_money_notices_for_billing_only',
     '271_parents_see_what_the_server_records',
     '272_an_old_tab_keeps_the_shops_charges',
+    '273_a_refund_is_released_only_when_it_is_old',
 ];
 
 // The one thing the stubs deliberately get wrong for our purposes: they define

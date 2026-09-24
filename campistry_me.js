@@ -6357,6 +6357,36 @@ function _postCardDepositsFor(f,fk,e,eid){
         var row=(finPayments||[]).filter(function(p){
             return p&&(p.depositReference===ref||p.stripePaymentIntentId===ref||p.byopTransactionId===ref);
         })[0];
+        // Typed in by hand with the card reference in its Reference box: the
+        // same money (TED-095). Linked, never added a second time.
+        if(!row){
+            row=(finPayments||[]).filter(function(p){
+                return p&&p.familyKey===fk&&(Number(p.amount)||0)>0&&String(p.reference||'').trim()===ref;
+            })[0];
+            if(row){row.depositReference=ref;n++;}
+        }
+        // Typed in by hand WITHOUT a reference, for the same amount around the
+        // same time: probably the same money — the office was told to record
+        // card deposits in Billing by hand before this existed. Not guessed
+        // either way: Billing asks the office (TED-095).
+        var decided=(f.depositReviewed&&f.depositReviewed[ref])||'';
+        if(!row&&decided!=='separate'){
+            var dAt=Date.parse(c.date||e.depositPaidDate||'')||0;
+            var twin=(finPayments||[]).filter(function(p){
+                if(!p||p.familyKey!==fk||p.depositReference||p.stripePaymentIntentId||p.byopTransactionId)return false;
+                if(Math.abs((Number(p.amount)||0)-amt)>0.005)return false;
+                var pAt=Date.parse(p.date||'')||0;
+                return !dAt||!pAt||Math.abs(pAt-dAt)<=45*86400000;
+            })[0];
+            if(twin){
+                if(!Array.isArray(f.depositReview))f.depositReview=[];
+                if(!f.depositReview.some(function(r){return r&&r.ref===ref})){
+                    f.depositReview.push({ref:ref,amount:amt,paymentId:twin.id,date:c.date||e.depositPaidDate||'',camperName:e.camperName||'',camperId:e.camperId!=null?e.camperId:_camperIdOf(e.camperName)});
+                    n++;
+                }
+                return;
+            }
+        }
         if(!row){
             row={id:'dep_'+ref,family:f.name||'',familyKey:fk,
                  camperName:e.camperName||'',camperId:e.camperId!=null?e.camperId:_camperIdOf(e.camperName),
@@ -6372,6 +6402,34 @@ function _postCardDepositsFor(f,fk,e,eid){
         if(_postPaymentEntry(f,row))n++;
     });
     return n;
+}
+
+/** The office's answer to a card deposit that may already be recorded (TED-095). */
+async function resolveDepositReview(fk,ref){
+    var f=families[fk]; if(!f||!Array.isArray(f.depositReview))return;
+    var r=f.depositReview.filter(function(x){return x&&x.ref===ref})[0]; if(!r)return;
+    var twin=(finPayments||[]).filter(function(p){return p&&String(p.id)===String(r.paymentId)})[0];
+    var same=await confirmDialog({title:'Is this the same money?',
+        message:(r.camperName?esc(r.camperName)+'\u2019s ':'')+'registration deposit of '+fm(r.amount)+' was paid by card'
+               +(r.date?' on '+esc(r.date):'')+'. '+(twin?'A payment of '+fm(twin.amount)+(twin.date?' on '+esc(twin.date):'')
+               +(twin.method?' ('+esc(twin.method)+')':'')+' was recorded by hand.':'')
+               +'<br><br>If they are the same money, it is linked to the card charge (so it can be refunded to the card) and counted once.',
+        confirmLabel:'Same money \u2014 link them'});
+    if(same){
+        if(twin){twin.depositReference=ref;
+            if(/^pi_/.test(ref)){if(!twin.stripePaymentIntentId)twin.stripePaymentIntentId=ref;}
+            else if(!twin.byopTransactionId){twin.byopTransactionId=ref;}}
+    }else{
+        var sep=await confirmDialog({title:'Count the card deposit as well?',
+            message:'Only if the hand-recorded '+fm(r.amount)+' was a DIFFERENT payment. The card deposit is then added to the family as its own payment.',
+            confirmLabel:'Different money \u2014 add it',danger:true});
+        if(!sep)return;
+        if(!f.depositReviewed)f.depositReviewed={};
+        f.depositReviewed[ref]='separate';
+    }
+    f.depositReview=f.depositReview.filter(function(x){return x&&x.ref!==ref});
+    save();
+    try{if(curPage==='familydetail')renderFamilyDetailPage();else renderBilling()}catch(_){}
 }
 
 function _postTuitionFor(f,eid){
@@ -17629,6 +17687,14 @@ function _collectionWarning(l){
         if(b.nextRetryAt)label+=' · retries '+esc(b.nextRetryAt);
         out.push(_flatStatus(label,b.escalated?'err':'warn'));
     });
+    // A card deposit that may already have been typed in by hand (TED-095):
+    // nothing was posted for it; the office says which it is.
+    ((l.family&&l.family.depositReview)||[]).forEach(function(r){
+        if(!r||!r.ref)return;
+        out.push('<span style="font-size:.78rem;font-weight:700;color:var(--warn);cursor:pointer;text-decoration:underline" '
+            +'onclick="event.stopPropagation();CampistryMe.resolveDepositReview(\''+je(l.famKey)+'\',\''+je(r.ref)+'\')">'
+            +esc('Card deposit '+fm(r.amount)+' — already recorded by hand?')+'</span>');
+    });
     if(l.cardExpiry&&l.cardExpiry.status==='expired')
         out.push(_flatStatus('Card expired'+(l.cardExpiry.label?' ('+l.cardExpiry.label+')':''),'err'));
     else if(l.cardExpiry&&l.cardExpiry.status==='expiring')
@@ -23501,6 +23567,7 @@ window.CampistryMe={
     // timer; exposed so the office can nudge it, and for the browser test.
     runCamperErases:_runCamperErases,
     viewCamper:viewCamper,editCamper:editCamper,deleteCamper:deleteCamper,unenrollCamper:unenrollCamper,reenrollCamper:reenrollCamper,ceToggleSummer:ceToggleSummer,ceMaritalChanged:ceMaritalChanged,ceToggleOtherParentSummer:ceToggleOtherParentSummer,
+    resolveDepositReview:resolveDepositReview,
     addFamily:function(){openFamilyForm(null)},editFamily:function(id){openFamilyForm(id)},deleteFamily:deleteFamily,removeCamperFromFamily:removeCamperFromFamily,
     setPplStaffSubTab:setPplStaffSubTab,viewStaffMember:viewStaffMember,openEditStaffModal:openEditStaffModal,saveStaffMember:saveStaffMember,
     acceptFamilySuggestion:acceptFamilySuggestion,dismissFamilySuggestion:dismissFamilySuggestion,acceptAddToFamily:acceptAddToFamily,

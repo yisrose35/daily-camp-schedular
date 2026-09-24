@@ -13,6 +13,7 @@ INSERT INTO camp_users (camp_id, user_id, role, accepted_at) VALUES
 INSERT INTO notifications (camp_id, source, source_id, title, body) VALUES
   ('f2700000-0000-0000-0000-000000000001', 'payment_unmatched', 'sola:1', 'A card payment needs matching', '$412.00 · card ending 4242'),
   ('f2700000-0000-0000-0000-000000000001', 'autopay_blocked', 'gold:p1:declined', 'Autopay cannot collect', 'Gold — their card was declined'),
+  ('f2700000-0000-0000-0000-000000000001', 'autopay_setup', 'as1', 'Payment plan set up', 'Gold — Visa ending 4242'),
   ('f2700000-0000-0000-0000-000000000001', 'notes_reminder', 'n1', 'Reminder', 'Check the bunk list');
 
 -- the database's own read rule, as production has it (the test stubs leave
@@ -35,7 +36,7 @@ CREATE TEMP TABLE seen_sched ON COMMIT DROP AS SELECT source FROM notifications;
 RESET ROLE;
 DO $$
 BEGIN
-    IF EXISTS (SELECT 1 FROM seen_sched WHERE source IN ('payment_unmatched', 'autopay_blocked')) THEN
+    IF EXISTS (SELECT 1 FROM seen_sched WHERE source IN ('payment_unmatched', 'autopay_blocked', 'autopay_setup')) THEN
         RAISE EXCEPTION 'TED-087: a scheduler without Billing sees money notices: %', (SELECT array_agg(source) FROM seen_sched);
     END IF;
     IF NOT EXISTS (SELECT 1 FROM seen_sched WHERE source = 'notes_reminder') THEN
@@ -51,8 +52,8 @@ CREATE TEMP TABLE seen_owner ON COMMIT DROP AS SELECT source FROM notifications;
 RESET ROLE;
 DO $$
 BEGIN
-    IF (SELECT count(*) FROM seen_owner) <> 3 THEN
-        RAISE EXCEPTION 'the owner should see all 3 notices, sees %', (SELECT array_agg(source) FROM seen_owner);
+    IF (SELECT count(*) FROM seen_owner) <> 4 THEN
+        RAISE EXCEPTION 'the owner should see all 4 notices, sees %', (SELECT array_agg(source) FROM seen_owner);
     END IF;
     RAISE NOTICE 'ok  270: money notices only to Billing; the owner sees all, the scheduler only theirs';
 END $$;

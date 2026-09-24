@@ -282,7 +282,9 @@ serve(async (req) => {
             // Asked before and never confirmed (TED-093): stop here rather than
             // refund it again or move on to the next deposit.
             if (confirmNotRefunded !== true) throw Object.assign(new Error("An earlier refund of this canteen money was never confirmed by the card company. Check the processor's dashboard: if it is not there, confirm and it will be sent."), { uncertain: true });
-            await service.rpc("release_refund_intent", { p_camp_id: authedCampId, p_key: chunkKey });
+            // Only a claim that has waited a few minutes (273), never one still running.
+            const { data: freed } = await service.rpc("release_stale_refund_intent", { p_camp_id: authedCampId, p_key: chunkKey });
+            if (freed !== true) throw Object.assign(new Error("This refund was sent a moment ago and may still be going through. Wait a few minutes, check the processor's dashboard, and try again only if it is not there."), { uncertain: true });
             const { data: again } = await service.rpc("claim_refund_intent", {
               p_camp_id: authedCampId, p_key: chunkKey, p_amount: chunk, p_payment_ref: String(dep.externalTransactionId),
             });

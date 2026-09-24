@@ -210,7 +210,12 @@ serve(async (req) => {
         if (confirmNotRefunded !== true) {
           return json({ uncertain: true, error: "An earlier try at this refund was never confirmed by the card company. Check the processor's dashboard: if it is not there, confirm and it will be sent." }, 200);
         }
-        await service.rpc("release_refund_intent", { p_camp_id: campId, p_key: claimKey });
+        // Only a claim that has waited a few minutes (273): a younger one may be a
+        // refund still running — a double-click — not one that was cut off.
+        const { data: freed } = await service.rpc("release_stale_refund_intent", { p_camp_id: campId, p_key: claimKey });
+        if (freed !== true) {
+          return json({ uncertain: true, error: "This refund was sent a moment ago and may still be going through. Wait a few minutes, check the processor's dashboard, and try again only if it is not there." }, 200);
+        }
         const { data: again } = await service.rpc("claim_refund_intent", {
           p_camp_id: campId, p_key: claimKey,
           p_amount: Number((amountCents / 100).toFixed(2)),
