@@ -1,0 +1,26 @@
+TAP version 13
+# \# A night 1: runner answered HTTP 200 (threw: []) | card sales made ["Gold $500.00","Silver $500.00"] | booked ["silver:500"]
+# \# B night 2 (Gold still unbooked): card sales made ["Gold $500.00","Silver $500.00"] | booked ["gold:500","silver:500"]
+# \#   Gold paid twice for one $500 instalment if night 1's sale went through; Silver waited a night.
+# \# C: runner answered HTTP 200 | sales ["Gold $500 (Banquest)","Silver $500 (Banquest)"] | booked ["silver:500"] | flag ["null: null"]
+# Subtest: A+B: Cardknox answer lost for the first family
+ok 1 - A+B: Cardknox answer lost for the first family
+  ---
+  duration_ms: 367.256265
+  type: 'test'
+  ...
+# Subtest: C: Banquest 504 with no body
+ok 2 - C: Banquest 504 with no body
+  ---
+  duration_ms: 175.779864
+  type: 'test'
+  ...
+1..2
+# tests 2
+# suites 0
+# pass 2
+# fail 0
+# cancelled 0
+# skipped 0
+# todo 0
+# duration_ms 625.757342

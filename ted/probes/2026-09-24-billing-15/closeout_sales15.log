@@ -1,0 +1,15 @@
+SETUP: Avi Katz (#1): $50 deposited in cash; today a $3 snack and $10 cash out from the till; wallet $37
+
+Z1a. Snacks before the close-out
+    Dashboard: Sales today "$3", Cash out "$10"; Analytics: Revenue "$3.00", 1 txns, avg $3.00; weekly bars [$0 $0 $0 $0 $0 $0 $3]
+
+Z1b. Me → Billing → Katz → Close out… → canteen $37 "Hand back in cash" → Apply
+    toast: ["✓ 1 close-out step applied"]; wallet $0.00; lines today: purchase $3, cash_out $10, closeout $37.00
+
+Z2. Snacks after the close-out
+    Dashboard: Sales today "$40", Cash out "$10"; Analytics: Revenue "$40.00", 2 txns, avg $20.00; weekly bars [$0 $0 $0 $0 $0 $0 $40]
+    today's list: ["09:56 AMAvi KatzSeason close-out: Hand back in cash — Avi Katz’s canteen moneyPurchase−$37.00","10:00 AMAvi KatzCash out — trip moneyCash out−$10.00","10:00 AMAvi KatzChipsPurchase−$3.00"]
+  BAD Z2 the $37 handed back at close-out is not counted as a canteen sale (Sales today and Revenue stay at the $3 snack)   → Sales today $3 → $40; Revenue $3.00 → $40.00; the close-out row is labelled "Purchase"
+page errors: []
+
+1 BAD

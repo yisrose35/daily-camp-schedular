@@ -1,0 +1,4 @@
+before: ledger balance 1000.00 | autopay due 1 Jun: {"index": 0, "amount": 500.00, "dueDate": "2026-06-01", "remaining": 2}
+_deposit_record: {"id": "cbfb7cef-ef1f-4cca-9dd4-895053259e38", "status": "posted", "success": true, "duplicate": false}
+bank_deposits row: posted gold 40000
+after: ledger balance 600.00 | autopay due 1 Jun: {"index": 0, "amount": 300.00, "dueDate": "2026-06-01", "remaining": 2}

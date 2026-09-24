@@ -1,0 +1,13 @@
+A1. Computer A: Iron owes $1000 and pays by bank (default method). Billing → Iron → Charge Card
+    the window: "Charge Card×Charge the card on file for IronBalance due: $1,000 · Card on file ✓Amount to Charge ($)DescriptionCancelSave"
+    toast: ["✕ Charge failed: Could not check with Stripe whether an earlier bank debit for this family is still on its way, so nothing was charged. Try again in a minute."]; debits started: none
+
+A2. Stripe: payment_intent.processing for pi_1 → the real webhook
+    webhook HTTP 200; payment rows: pi_pi_1 $1000 pending; Iron owes $1000
+
+A3. Computer B (another staff member — or A after a day): Billing
+    Iron's row: "IronAri IronPending—$1,000View"
+  BAD the run finished   → page.waitForSelector: Timeout 10000ms exceeded.
+page errors: []
+
+1 BAD

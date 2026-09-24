@@ -1,0 +1,50 @@
+postgres up with 128 migrations applied
+SETUP: Avi Katz added on Me; $40 cash deposit in Snacks; $25 paid through Sola (XREF-25)
+  wallet in the database $65, on the page $65
+
+S1. Sola camp: the office refunds Avi $20; Sola makes it but the answer is lost; the office cancels the "never confirmed" question
+  after the press: wallet $45, holds [open $20.00], Sola made RN1 $20.0000000000000000; the window says: "The card company did not answer, so a canteen refund may or may not have gone through. Check the processor's dashboard before trying again."
+  REFUND ALL window: "This will refund 1 camper, totaling approximately $5.00 through Sola — sent back to whatever each parent originally paid with.Only deposits paid through Sola are included. A balance that came from a cash/manual deposit ("
+     waiting list: "A refund is waiting for an answer from the card companyIts money is held off the wallet until it is settled — it may already be with the parent.Avi Katz: $20.00, sent 10 min ago — check your processor's dashboard:It went"
+     button: "Refund All ($5.00)"
+  ok  Refund All opens with no page error, and lists the waiting $20 with both answers   → []
+  (the window's preview vs the server: the $25 Sola top-up has $20 held on its way, so the server can refund at most $5 of it)
+  "It went through" (RN1) → holds [posted $20.00], wallet $45, page balance $45, toasts ["Recorded — the refund is on the child's history"], waiting list now: ""
+  ok  "It went through" records it once: hold posted, wallet unchanged at $45, told so, list cleared
+
+S1b. Another $20 Sola refund, answer lost; the office answers "Nothing went through" from the child's Refund window
+  Refund window before the answer: box "Available to refund via Sola: $30.00$40.00 of this balance came from a cash/manual deposit (or a different processor) — ", waiting "A refund is waiting for an answer from the card companyIts money is held off the wallet until it is settled — it may alr", wallet $70
+  "Nothing went through" → wallet $75 (page $75), holds [posted $20.00, released $5.00], toasts ["The money is back on the wallet"]
+     the Refund window 3 s later: box "Available to refund via Sola: $35.00$40.00 of this balance came from a cash/manual deposit (or a different processor) — ", amount field "35.00", waiting ""
+  ok  "Nothing went through" puts the held $5 back once (wallet $70 → $75) with no page error   → []
+  ok  the Refund window's figure follows the new wallet (Sola-refundable now $35 = $5 + $30)   → box says "Available to refund via Sola: $35.00$40.00 of this balance came from a cash/manu"; page wallet 75
+
+S2. Take Out Cash: $5 to Avi
+  wallet $70, cash-out rows 1, toasts ["Paid out $5.00 cash to Avi Katz"], amount box ""
+  ok  one $5 payout, "Paid out $5.00 cash to Avi Katz", the box cleared, no page error   → []
+
+S3. The camp moves to Stripe. Avi tops up $20 by card (pi_A). The office runs Refund All
+  S3a. The $20 Stripe top-up is dated 2026-09-14 (10 days ago). Wallet $90.
+     Avi's Refund window: "Available to refund via Stripe: $20.00$70.00 of this balance came from a cash/manual deposit (or a different processor) — refund that portion separately, it can't go through Stripe." | amount "20.00" | Refund button disabled: false
+     REFUND ALL window: "This will refund 1 camper, totaling approximately $20.00 through Stripe — sent back to whatever each parent originally paid with.Only deposits paid through Stri" | button "Refund All ($20.00)"
+     what the page loads (get_canteen_accounts, window {"from":"2026-09-17","rows":5,"truncated":false}) holds the pi_A top-up: false; the server's refund view (what the refund functions read) holds it: true
+  ok  a 10-day-old Stripe top-up can be refunded from Snacks (Refund window or Refund All)   → Refund window "Available to refund via Stripe: $20.00$70.00 of this balance", Refund All "This will refund 1 camper, totaling approximately $20.00 thr"
+  S3b. The same top-up dated today (2026-09-24) instead:
+     Avi's Refund window: "Available to refund via Stripe: $20.00$70.00 of this balance came from a cash/manual deposit (or a different processor) " | amount "20.00"
+  window: "This will refund 1 camper, totaling approximately $20.00 through Stripe — sent back to whatever each parent originally paid with.Only deposits paid through Stripe are included. A balance that came fro" | button "Refund All ($20.00)"
+  result: "Refunded $20.00 across 1 camper." → wallet $70, Stripe refunds [re_1 $20.0000000000000000 succeeded]
+  …three days later Stripe fails the refund (the card was closed) and sends refund.failed
+  webhook → HTTP 200; wallet $90; notice: 1
+  the page after a reload: balance $90; "Refund failed" text anywhere on the Accounts page: ["Refund failed at the card company — the money is back on the wallet","Refund failed"]
+  REFUND ALL window again: "This will refund 1 camper, totaling approximately $20.00 through Stripe — sent back to whatever each parent originally paid with.Only deposits paid through Stripe are included. A balance that came fro" | button "Refund All ($20.00)"
+  result: "Refunded $20.00 across 1 camper." → wallet $70, Stripe refunds [re_1 $20.0000000000000000 failed, re_2 $20.0000000000000000 succeeded]
+  ok  after the failed $20 is put back, Refund All sends it again (or says why not)   → the office sees "Refunded $20.00 across 1 camper.", wallet still $70
+
+S4. Avi's own Refund: $20 by Stripe, answer lost (office cancels the question). Everything else paid out in cash → wallet $0
+  Refund window: "Available to refund via Stripe: $0.00$70.00 of this balance came from a cash/manual deposit (or a different processor) —"
+  BAD the run finished   → page.click: Timeout 30000ms exceeded.
+
+edge calls: payments-canteen-refund(holds)→200, payments-canteen-refund→200, payments-canteen-refund(holds)→200, payments-canteen-refund(resolveHold)→200, payments-canteen-refund(holds)→200, payments-canteen-refund(holds)→200, payments-canteen-refund(holds)→200, payments-canteen-refund(holds)→200, payments-canteen-refund→200, payments-canteen-refund(holds)→200, payments-canteen-refund(resolveHold)→200, payments-canteen-refund(holds)→200, payments-canteen-refund(holds)→200, payments-canteen-refund(holds)→200, stripe-canteen-refund(holds)→200, stripe-canteen-refund(holds)→200, stripe-canteen-refund(holds)→200, stripe-canteen-refund(holds)→200, stripe-canteen-refund(holds)→200, stripe-canteen-refund-all→200, stripe-canteen-refund(holds)→200, stripe-webhook→200, stripe-canteen-refund(holds)→200, stripe-canteen-refund-all→200, stripe-canteen-refund(holds)→200, stripe-canteen-refund(holds)→200
+page errors: []
+
+1 BAD

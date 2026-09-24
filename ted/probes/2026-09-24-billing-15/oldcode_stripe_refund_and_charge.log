@@ -1,0 +1,70 @@
+TAP version 13
+# Subtest: TED-052: a refund with no login is refused and nothing reaches Stripe
+ok 1 - TED-052: a refund with no login is refused and nothing reaches Stripe
+  ---
+  duration_ms: 182.419609
+  type: 'test'
+  ...
+# Subtest: TED-052: a staff member who is not owner/admin cannot refund
+ok 2 - TED-052: a staff member who is not owner/admin cannot refund
+  ---
+  duration_ms: 170.346194
+  type: 'test'
+  ...
+# Subtest: TED-052: an owner cannot refund another camp's payment
+ok 3 - TED-052: an owner cannot refund another camp's payment
+  ---
+  duration_ms: 369.149193
+  type: 'test'
+  ...
+# Subtest: TED-052: the owner refunds their own camp's payment once, even when the click is sent twice
+ok 4 - TED-052: the owner refunds their own camp's payment once, even when the click is sent twice
+  ---
+  duration_ms: 167.144538
+  type: 'test'
+  ...
+# Subtest: TED-058: an owner cannot charge another camp's family's card
+ok 5 - TED-058: an owner cannot charge another camp's family's card
+  ---
+  duration_ms: 161.772828
+  type: 'test'
+  ...
+# Subtest: TED-058: a payment method that is not that family's is refused
+ok 6 - TED-058: a payment method that is not that family's is refused
+  ---
+  duration_ms: 161.202974
+  type: 'test'
+  ...
+# Subtest: TED-058: the camp's own family is charged, with an Idempotency-Key and the camp from the server
+ok 7 - TED-058: the camp's own family is charged, with an Idempotency-Key and the camp from the server
+  ---
+  duration_ms: 165.00257
+  type: 'test'
+  ...
+# Subtest: TED-058: no login, or a counselor, cannot charge
+ok 8 - TED-058: no login, or a counselor, cannot charge
+  ---
+  duration_ms: 341.246281
+  type: 'test'
+  ...
+# Subtest: TED-061: the retired stripe-setup refuses everything
+ok 9 - TED-061: the retired stripe-setup refuses everything
+  ---
+  duration_ms: 154.928923
+  type: 'test'
+  ...
+# Subtest: TED-076: a refund of zero, a negative amount or no amount is refused — never a full refund
+ok 10 - TED-076: a refund of zero, a negative amount or no amount is refused — never a full refund
+  ---
+  duration_ms: 514.353161
+  type: 'test'
+  ...
+1..10
+# tests 10
+# suites 0
+# pass 10
+# fail 0
+# cancelled 0
+# skipped 0
+# todo 0
+# duration_ms 2478.532731

@@ -1,0 +1,9 @@
+file:///tmp/rall-78bRDh/fn.ts:12
+  const idx = ledgerIndex(transactions, holds, "stripe", "stripePaymentIntentId");
+              ^
+
+ReferenceError: ledgerIndex is not defined
+    at depositsFor (file:///tmp/rall-78bRDh/fn.ts:12:15)
+    at file:///home/user/daily-camp-schedular/ted/probes/2026-09-24-billing-13/refundall_cpu.mts:22:37
+
+Node.js v22.22.2

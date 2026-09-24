@@ -1,0 +1,301 @@
+TAP version 13
+# Subtest: TED-144: a second Charge Card from ANOTHER computer while the first debit is processing starts nothing
+not ok 1 - TED-144: a second Charge Card from ANOTHER computer while the first debit is processing starts nothing
+  ---
+  duration_ms: 168.341067
+  type: 'test'
+  location: '/tmp/claude-0/-home-user-daily-camp-schedular/39278441-0cf3-5f6a-bf8e-a51bef67e95d/scratchpad/old114/tests/ach_on_its_way.test.js:52:1'
+  failureType: 'testCodeFailure'
+  error: |-
+    {"paymentIntentId":"pi_2","status":"processing","amount":1000}
+    + actual - expected
+    
+    + undefined
+    - true
+    
+  code: 'ERR_ASSERTION'
+  name: 'AssertionError'
+  expected: true
+  operator: 'strictEqual'
+  stack: |-
+    TestContext.<anonymous> (/tmp/claude-0/-home-user-daily-camp-schedular/39278441-0cf3-5f6a-bf8e-a51bef67e95d/scratchpad/old114/tests/ach_on_its_way.test.js:55:12)
+    Test.runInAsyncScope (node:async_hooks:214:14)
+    Test.run (node:internal/test_runner/test:1047:25)
+    Test.start (node:internal/test_runner/test:944:17)
+    startSubtestAfterBootstrap (node:internal/test_runner/harness:296:17)
+  ...
+# Subtest: TED-144: with nothing on its way the charge goes ahead as before (and comes back "processing")
+ok 2 - TED-144: with nothing on its way the charge goes ahead as before (and comes back "processing")
+  ---
+  duration_ms: 164.335146
+  type: 'test'
+  ...
+# Subtest: TED-144: a canteen top-up, a photo purchase or another camp's payment still processing does not block the bill
+ok 3 - TED-144: a canteen top-up, a photo purchase or another camp's payment still processing does not block the bill
+  ---
+  duration_ms: 169.669753
+  type: 'test'
+  ...
+# Subtest: TED-144: an autopay instalment still processing blocks an office charge too
+not ok 4 - TED-144: an autopay instalment still processing blocks an office charge too
+  ---
+  duration_ms: 164.211004
+  type: 'test'
+  location: '/tmp/claude-0/-home-user-daily-camp-schedular/39278441-0cf3-5f6a-bf8e-a51bef67e95d/scratchpad/old114/tests/ach_on_its_way.test.js:78:1'
+  failureType: 'testCodeFailure'
+  error: |-
+    Expected values to be strictly equal:
+    + actual - expected
+    
+    + undefined
+    - true
+    
+  code: 'ERR_ASSERTION'
+  name: 'AssertionError'
+  expected: true
+  operator: 'strictEqual'
+  stack: |-
+    TestContext.<anonymous> (/tmp/claude-0/-home-user-daily-camp-schedular/39278441-0cf3-5f6a-bf8e-a51bef67e95d/scratchpad/old114/tests/ach_on_its_way.test.js:80:12)
+    Test.runInAsyncScope (node:async_hooks:214:14)
+    Test.run (node:internal/test_runner/test:1047:25)
+    Test.processPendingSubtests (node:internal/test_runner/test:744:18)
+    Test.postRun (node:internal/test_runner/test:1173:19)
+    Test.run (node:internal/test_runner/test:1101:12)
+    async Test.processPendingSubtests (node:internal/test_runner/test:744:7)
+  ...
+# Subtest: TED-144: when Stripe cannot be asked, nothing is charged — and it says so
+not ok 5 - TED-144: when Stripe cannot be asked, nothing is charged — and it says so
+  ---
+  duration_ms: 175.584477
+  type: 'test'
+  location: '/tmp/claude-0/-home-user-daily-camp-schedular/39278441-0cf3-5f6a-bf8e-a51bef67e95d/scratchpad/old114/tests/ach_on_its_way.test.js:84:1'
+  failureType: 'testCodeFailure'
+  error: |-
+    {"paymentIntentId":"pi_2","status":"processing","amount":1000}
+    + actual - expected
+    
+    + undefined
+    - true
+    
+  code: 'ERR_ASSERTION'
+  name: 'AssertionError'
+  expected: true
+  operator: 'strictEqual'
+  stack: |-
+    TestContext.<anonymous> (/tmp/claude-0/-home-user-daily-camp-schedular/39278441-0cf3-5f6a-bf8e-a51bef67e95d/scratchpad/old114/tests/ach_on_its_way.test.js:86:12)
+    Test.runInAsyncScope (node:async_hooks:214:14)
+    Test.run (node:internal/test_runner/test:1047:25)
+    Test.processPendingSubtests (node:internal/test_runner/test:744:18)
+    Test.postRun (node:internal/test_runner/test:1173:19)
+    Test.run (node:internal/test_runner/test:1101:12)
+    async Test.processPendingSubtests (node:internal/test_runner/test:744:7)
+  ...
+# Subtest: TED-144: computer A — the debit starts: "on its way", not a red failure; a second press charges nothing
+not ok 6 - TED-144: computer A — the debit starts: "on its way", not a red failure; a second press charges nothing
+  ---
+  duration_ms: 5.786773
+  type: 'test'
+  location: '/tmp/claude-0/-home-user-daily-camp-schedular/39278441-0cf3-5f6a-bf8e-a51bef67e95d/scratchpad/old114/tests/ach_on_its_way.test.js:129:1'
+  failureType: 'testCodeFailure'
+  error: '_familyOnItsWay is missing'
+  code: 'ERR_ASSERTION'
+  name: 'AssertionError'
+  expected: true
+  actual: false
+  operator: '=='
+  stack: |-
+    cut (/tmp/claude-0/-home-user-daily-camp-schedular/39278441-0cf3-5f6a-bf8e-a51bef67e95d/scratchpad/old114/tests/ach_on_its_way.test.js:95:12)
+    Array.map (<anonymous>)
+    billing (/tmp/claude-0/-home-user-daily-camp-schedular/39278441-0cf3-5f6a-bf8e-a51bef67e95d/scratchpad/old114/tests/ach_on_its_way.test.js:123:57)
+    TestContext.<anonymous> (/tmp/claude-0/-home-user-daily-camp-schedular/39278441-0cf3-5f6a-bf8e-a51bef67e95d/scratchpad/old114/tests/ach_on_its_way.test.js:130:15)
+    Test.runInAsyncScope (node:async_hooks:214:14)
+    Test.run (node:internal/test_runner/test:1047:25)
+    Test.processPendingSubtests (node:internal/test_runner/test:744:18)
+    Test.postRun (node:internal/test_runner/test:1173:19)
+    Test.run (node:internal/test_runner/test:1101:12)
+    async Test.processPendingSubtests (node:internal/test_runner/test:744:7)
+  ...
+# Subtest: TED-144: computer B, the next day, with the webhook's pending row — refused before anything is sent
+not ok 7 - TED-144: computer B, the next day, with the webhook's pending row — refused before anything is sent
+  ---
+  duration_ms: 4.293767
+  type: 'test'
+  location: '/tmp/claude-0/-home-user-daily-camp-schedular/39278441-0cf3-5f6a-bf8e-a51bef67e95d/scratchpad/old114/tests/ach_on_its_way.test.js:149:1'
+  failureType: 'testCodeFailure'
+  error: '_familyOnItsWay is missing'
+  code: 'ERR_ASSERTION'
+  name: 'AssertionError'
+  expected: true
+  actual: false
+  operator: '=='
+  stack: |-
+    cut (/tmp/claude-0/-home-user-daily-camp-schedular/39278441-0cf3-5f6a-bf8e-a51bef67e95d/scratchpad/old114/tests/ach_on_its_way.test.js:95:12)
+    Array.map (<anonymous>)
+    billing (/tmp/claude-0/-home-user-daily-camp-schedular/39278441-0cf3-5f6a-bf8e-a51bef67e95d/scratchpad/old114/tests/ach_on_its_way.test.js:123:57)
+    TestContext.<anonymous> (/tmp/claude-0/-home-user-daily-camp-schedular/39278441-0cf3-5f6a-bf8e-a51bef67e95d/scratchpad/old114/tests/ach_on_its_way.test.js:150:15)
+    Test.runInAsyncScope (node:async_hooks:214:14)
+    Test.run (node:internal/test_runner/test:1047:25)
+    Test.processPendingSubtests (node:internal/test_runner/test:744:18)
+    Test.postRun (node:internal/test_runner/test:1173:19)
+    Test.run (node:internal/test_runner/test:1101:12)
+    async Test.processPendingSubtests (node:internal/test_runner/test:744:7)
+  ...
+# Subtest: TED-144: computer B before the webhook arrived — Stripe says so; shown as on its way, not "Charge failed"
+not ok 8 - TED-144: computer B before the webhook arrived — Stripe says so; shown as on its way, not "Charge failed"
+  ---
+  duration_ms: 4.45615
+  type: 'test'
+  location: '/tmp/claude-0/-home-user-daily-camp-schedular/39278441-0cf3-5f6a-bf8e-a51bef67e95d/scratchpad/old114/tests/ach_on_its_way.test.js:157:1'
+  failureType: 'testCodeFailure'
+  error: '_familyOnItsWay is missing'
+  code: 'ERR_ASSERTION'
+  name: 'AssertionError'
+  expected: true
+  actual: false
+  operator: '=='
+  stack: |-
+    cut (/tmp/claude-0/-home-user-daily-camp-schedular/39278441-0cf3-5f6a-bf8e-a51bef67e95d/scratchpad/old114/tests/ach_on_its_way.test.js:95:12)
+    Array.map (<anonymous>)
+    billing (/tmp/claude-0/-home-user-daily-camp-schedular/39278441-0cf3-5f6a-bf8e-a51bef67e95d/scratchpad/old114/tests/ach_on_its_way.test.js:123:57)
+    TestContext.<anonymous> (/tmp/claude-0/-home-user-daily-camp-schedular/39278441-0cf3-5f6a-bf8e-a51bef67e95d/scratchpad/old114/tests/ach_on_its_way.test.js:158:15)
+    Test.runInAsyncScope (node:async_hooks:214:14)
+    Test.run (node:internal/test_runner/test:1047:25)
+    Test.processPendingSubtests (node:internal/test_runner/test:744:18)
+    Test.postRun (node:internal/test_runner/test:1173:19)
+    Test.run (node:internal/test_runner/test:1101:12)
+    async Test.processPendingSubtests (node:internal/test_runner/test:744:7)
+  ...
+# Subtest: TED-144: an old pending row (over a fortnight) or a failed one does not block
+not ok 9 - TED-144: an old pending row (over a fortnight) or a failed one does not block
+  ---
+  duration_ms: 4.412513
+  type: 'test'
+  location: '/tmp/claude-0/-home-user-daily-camp-schedular/39278441-0cf3-5f6a-bf8e-a51bef67e95d/scratchpad/old114/tests/ach_on_its_way.test.js:167:1'
+  failureType: 'testCodeFailure'
+  error: '_familyOnItsWay is missing'
+  code: 'ERR_ASSERTION'
+  name: 'AssertionError'
+  expected: true
+  actual: false
+  operator: '=='
+  stack: |-
+    cut (/tmp/claude-0/-home-user-daily-camp-schedular/39278441-0cf3-5f6a-bf8e-a51bef67e95d/scratchpad/old114/tests/ach_on_its_way.test.js:95:12)
+    Array.map (<anonymous>)
+    billing (/tmp/claude-0/-home-user-daily-camp-schedular/39278441-0cf3-5f6a-bf8e-a51bef67e95d/scratchpad/old114/tests/ach_on_its_way.test.js:123:57)
+    TestContext.<anonymous> (/tmp/claude-0/-home-user-daily-camp-schedular/39278441-0cf3-5f6a-bf8e-a51bef67e95d/scratchpad/old114/tests/ach_on_its_way.test.js:170:15)
+    Test.runInAsyncScope (node:async_hooks:214:14)
+    Test.run (node:internal/test_runner/test:1047:25)
+    Test.processPendingSubtests (node:internal/test_runner/test:744:18)
+    Test.postRun (node:internal/test_runner/test:1173:19)
+    Test.run (node:internal/test_runner/test:1101:12)
+    async Test.processPendingSubtests (node:internal/test_runner/test:744:7)
+  ...
+# Subtest: TED-144: Batch charge leaves out a family with a debit on its way, and names it
+not ok 10 - TED-144: Batch charge leaves out a family with a debit on its way, and names it
+  ---
+  duration_ms: 4.517038
+  type: 'test'
+  location: '/tmp/claude-0/-home-user-daily-camp-schedular/39278441-0cf3-5f6a-bf8e-a51bef67e95d/scratchpad/old114/tests/ach_on_its_way.test.js:176:1'
+  failureType: 'testCodeFailure'
+  error: '_familyOnItsWay is missing'
+  code: 'ERR_ASSERTION'
+  name: 'AssertionError'
+  expected: true
+  actual: false
+  operator: '=='
+  stack: |-
+    cut (/tmp/claude-0/-home-user-daily-camp-schedular/39278441-0cf3-5f6a-bf8e-a51bef67e95d/scratchpad/old114/tests/ach_on_its_way.test.js:95:12)
+    Array.map (<anonymous>)
+    billing (/tmp/claude-0/-home-user-daily-camp-schedular/39278441-0cf3-5f6a-bf8e-a51bef67e95d/scratchpad/old114/tests/ach_on_its_way.test.js:123:57)
+    TestContext.<anonymous> (/tmp/claude-0/-home-user-daily-camp-schedular/39278441-0cf3-5f6a-bf8e-a51bef67e95d/scratchpad/old114/tests/ach_on_its_way.test.js:177:15)
+    Test.runInAsyncScope (node:async_hooks:214:14)
+    Test.run (node:internal/test_runner/test:1047:25)
+    Test.processPendingSubtests (node:internal/test_runner/test:744:18)
+    Test.postRun (node:internal/test_runner/test:1173:19)
+    Test.run (node:internal/test_runner/test:1101:12)
+    async Test.processPendingSubtests (node:internal/test_runner/test:744:7)
+  ...
+# Subtest: TED-144: autopay does not charge a family whose office bank debit is still on its way
+not ok 11 - TED-144: autopay does not charge a family whose office bank debit is still on its way
+  ---
+  duration_ms: 171.349483
+  type: 'test'
+  location: '/tmp/claude-0/-home-user-daily-camp-schedular/39278441-0cf3-5f6a-bf8e-a51bef67e95d/scratchpad/old114/tests/ach_on_its_way.test.js:218:1'
+  failureType: 'testCodeFailure'
+  error: |-
+    autopay debited the same bill again
+    + actual - expected
+    
+    + [
+    +   'https://api.stripe.com/v1/payment_intents'
+    + ]
+    - []
+    
+  code: 'ERR_ASSERTION'
+  name: 'AssertionError'
+  expected:
+  actual:
+    0: 'https://api.stripe.com/v1/payment_intents'
+  operator: 'deepStrictEqual'
+  stack: |-
+    TestContext.<anonymous> (/tmp/claude-0/-home-user-daily-camp-schedular/39278441-0cf3-5f6a-bf8e-a51bef67e95d/scratchpad/old114/tests/ach_on_its_way.test.js:221:12)
+    Test.runInAsyncScope (node:async_hooks:214:14)
+    Test.run (node:internal/test_runner/test:1047:25)
+    Test.processPendingSubtests (node:internal/test_runner/test:744:18)
+    Test.postRun (node:internal/test_runner/test:1173:19)
+    Test.run (node:internal/test_runner/test:1101:12)
+    async Test.processPendingSubtests (node:internal/test_runner/test:744:7)
+  ...
+# Subtest: TED-144: once it settles (or with none on its way) autopay charges as before
+ok 12 - TED-144: once it settles (or with none on its way) autopay charges as before
+  ---
+  duration_ms: 171.219763
+  type: 'test'
+  ...
+# Subtest: TED-144: autopay's OWN debit on its way is still handled by its own hold, not this rule
+ok 13 - TED-144: autopay's OWN debit on its way is still handled by its own hold, not this rule
+  ---
+  duration_ms: 176.11957
+  type: 'test'
+  ...
+# Subtest: TED-144: a "processing" event arriving AFTER "succeeded" leaves the payment paid
+not ok 14 - TED-144: a "processing" event arriving AFTER "succeeded" leaves the payment paid
+  ---
+  duration_ms: 174.623474
+  type: 'test'
+  location: '/tmp/claude-0/-home-user-daily-camp-schedular/39278441-0cf3-5f6a-bf8e-a51bef67e95d/scratchpad/old114/tests/ach_on_its_way.test.js:256:1'
+  failureType: 'testCodeFailure'
+  error: |-
+    the paid row was patched back to pending
+    
+    1 !== 0
+    
+  code: 'ERR_ASSERTION'
+  name: 'AssertionError'
+  expected: 0
+  actual: 1
+  operator: 'strictEqual'
+  stack: |-
+    TestContext.<anonymous> (/tmp/claude-0/-home-user-daily-camp-schedular/39278441-0cf3-5f6a-bf8e-a51bef67e95d/scratchpad/old114/tests/ach_on_its_way.test.js:259:12)
+    Test.runInAsyncScope (node:async_hooks:214:14)
+    Test.run (node:internal/test_runner/test:1047:25)
+    Test.processPendingSubtests (node:internal/test_runner/test:744:18)
+    Test.postRun (node:internal/test_runner/test:1173:19)
+    Test.run (node:internal/test_runner/test:1101:12)
+    async Test.processPendingSubtests (node:internal/test_runner/test:744:7)
+  ...
+# Subtest: TED-144: a "processing" event in its place is recorded as on its way, as before
+ok 15 - TED-144: a "processing" event in its place is recorded as on its way, as before
+  ---
+  duration_ms: 371.894728
+  type: 'test'
+  ...
+1..15
+# tests 15
+# suites 0
+# pass 5
+# fail 10
+# cancelled 0
+# skipped 0
+# todo 0
+# duration_ms 2057.706422
