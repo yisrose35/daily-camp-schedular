@@ -205,3 +205,32 @@ test('TED-073: if the first transfer actually went through, the retry pays nothi
     assert.strictEqual(transfersMade(r).length, 0, 'the counselor was paid twice');
     assert.ok(r.writes.some(w => w.table === 'link_tip_cart_items' && w.op === 'update' && w.payload.stripe_transfer_id === 'tr_first'));
 });
+
+// ── TED-079: a declined instalment on a plan with the office's own amounts ───
+test('TED-079: a declined fixed-amount instalment is not skipped — the counter stays, the office is told', () => {
+    const r = runEdge('charge-due-installments', BASE + `
+      T.rpc.camp_families_object = () => ({
+        famF: { name: 'Fixed plan', camperIds: ['D'], cardOnFile: true, stripeCustomerId: 'cus_F',
+                plans: [{ id: 'plan_f', dueDates: [TODAY, '2099-07-01', '2099-08-01'], amounts: [1000, 200, 200], count: 3, nextIndex: 0, history: [], autopay: true }] },
+      });
+      T.rpc.plan_due_for = () => ({ index: 0, dueDate: TODAY, amount: 1000 });
+      T.fetch = (url: string) => url.endsWith('/payment_intents') ? { error: { message: 'Your card was declined.' } } : {};
+    `);
+    assert.ok(!r.rpcs.some(x => x.name === 'record_autopay_charge'), 'the declined $1,000 instalment was recorded and skipped');
+    const flag = r.rpcs.find(x => x.name === 'flag_plan_collection');
+    assert.strictEqual(flag.args.p_reason, 'declined');
+});
+
+test('an even-split plan still records the decline and moves on (later payments absorb it)', () => {
+    const r = runEdge('charge-due-installments', BASE + `
+      T.rpc.camp_families_object = () => ({
+        famE: { name: 'Even plan', camperIds: ['E'], cardOnFile: true, stripeCustomerId: 'cus_E',
+                plans: [{ id: 'plan_e', dueDates: [TODAY, '2099-07-01'], count: 2, nextIndex: 0, history: [], autopay: true }] },
+      });
+      T.rpc.plan_due_for = () => ({ index: 0, dueDate: TODAY, amount: 500 });
+      T.fetch = (url: string) => url.endsWith('/payment_intents') ? { error: { message: 'Your card was declined.' } } : {};
+    `);
+    const rec = r.rpcs.find(x => x.name === 'record_autopay_charge');
+    assert.ok(rec);
+    assert.strictEqual(rec.args.p_amount, 0);
+});

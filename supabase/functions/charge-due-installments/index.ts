@@ -144,6 +144,11 @@ async function stripePaymentIntent(id: string) {
     return await resp.json();
   } catch (_) { return null; }
 }
+// Does this instalment carry an amount the office set (migration 264)?
+function fixedAmountAt(plan: Record<string, any>, index: number): boolean {
+  return Array.isArray(plan?.amounts) && typeof plan.amounts[index] === "number" && plan.amounts[index] > 0;
+}
+
 // Stripe's words for "this one is not going to be paid".
 function piFailed(pi: any): boolean {
   return !!pi && !pi.error && (pi.status === "canceled" || pi.status === "requires_payment_method");
@@ -654,11 +659,13 @@ serve(async (req) => {
                            result: (recH.error || !recH.data?.success) ? "charged_not_recorded" : "cleared" });
           } else if (piFailed(hpi)) {
             const why = hpi.last_payment_error?.message || "bank debit failed";
-            await supabase.rpc("record_autopay_charge", {
-              p_camp_id: row.camp_id, p_family_key: famKey,
-              p_plan_id: String(plan.id || ""), p_index: heldP.index,
-              p_due_date: heldP.dueDate, p_amount: 0, p_reason: "declined: " + why,
-            });
+            if (!fixedAmountAt(plan, Number(heldP.index))) {        // TED-079, as below
+              await supabase.rpc("record_autopay_charge", {
+                p_camp_id: row.camp_id, p_family_key: famKey,
+                p_plan_id: String(plan.id || ""), p_index: heldP.index,
+                p_due_date: heldP.dueDate, p_amount: 0, p_reason: "declined: " + why,
+              });
+            }
             await holdCharge(String(row.camp_id), famKey, String(plan.id || ""), null);
             await flagPlan(String(row.camp_id), famKey, String(plan.id || ""), "declined", why);
             failed++;
@@ -762,12 +769,20 @@ serve(async (req) => {
         if (!ok) {
           // A decline advances the counter with charged:0 and the reason, so the
           // office can see it happened and the plan does not stall for ever on
-          // one bad card. Nothing is recorded as paid.
-          await supabase.rpc("record_autopay_charge", {
-            p_camp_id: row.camp_id, p_family_key: famKey,
-            p_plan_id: String(plan.id || ""), p_index: due.index,
-            p_due_date: due.dueDate, p_amount: 0, p_reason: "declined: " + failWhy,
-          });
+          // one bad card. Nothing is recorded as paid. On an even-split plan the
+          // later instalments absorb what this one missed.
+          //
+          // A plan with the office's own amounts (264) has no such catch-up —
+          // July is $200 whatever June's $1,000 did — so there the counter must
+          // NOT move (TED-079): the same instalment is retried on the decline
+          // schedule the flag below sets, and the later ones wait for it.
+          if (!fixedAmountAt(plan, due.index)) {
+            await supabase.rpc("record_autopay_charge", {
+              p_camp_id: row.camp_id, p_family_key: famKey,
+              p_plan_id: String(plan.id || ""), p_index: due.index,
+              p_due_date: due.dueDate, p_amount: 0, p_reason: "declined: " + failWhy,
+            });
+          }
           await flagPlan(String(row.camp_id), famKey, String(plan.id || ""), "declined", failWhy);
           failed++;
           details.push({ camp: row.camp_id, family: f.name, amount, result: "failed", reason: failWhy });

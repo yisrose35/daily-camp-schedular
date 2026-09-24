@@ -4080,6 +4080,15 @@ function mergeFamiliesReconciled(keyA,keyB,reconciled){
     if(Array.isArray(b.plans)&&b.plans.length){
         a.plans=(Array.isArray(a.plans)?a.plans:[]).concat(b.plans);
     }
+    // B's extra charges and credits come with its entries (TED-081). The
+    // ledger is kept equal to charges[] by _postExistingCharges: leave a
+    // charge behind and its posted entry is reversed on the next save — the
+    // merged family would be quietly let off everything B was billed.
+    ['charges','credits'].forEach(function(k){
+        if(Array.isArray(b[k])&&b[k].length){
+            a[k]=(Array.isArray(a[k])?a[k]:[]).concat(b[k]);
+        }
+    });
     ['byopProcessor','byopCustomerRef','stripeCustomerId','stripePaymentMethodId',
      'cardOnFile','cardSavedDate','paymentMethodType','paymentMethodLabel'].forEach(function(k){
         if(a[k]==null&&b[k]!=null)a[k]=b[k];
