@@ -1,0 +1,29 @@
+
+> daily-camp-schedular@0.0.0 test:lite
+> node tests/lite_health_numbers.e2e.js
+
+postgres up with 121 migrations applied
+
+1. Campistry Lite loads, and its calls can find a camper's number
+  ok   Lite's lookup gives the second Rivka her own number   → 702
+
+2. Lite Health: "Give" for the second Rivka saves a record with #702
+  ok   Lite shows the name without the internal number
+  ok   the medication record carries the camper's number   → {"date":"2026-09-24","time":"3:07 AM","nurse":"Staff","status":"Given","camperId":702,"timestamp":"2026-09-24T03:07:50.330Z","camperName":"Rivka Stern #702","medication":"Tylenol"}
+
+3. a Lite message about the second Rivka is filed on #702
+  ok   the insert went through   → ok
+  ok   the message row carries person_id 702   → [{"person_id":702}]
+
+4. the Health page logs a medication for the second Rivka with #702
+  ok   the Health page's record carries the camper's number   → [702,702]
+  ok   Health shows the name without the internal number
+  ok   a name two campers share is not saved as a visit   → []
+  ok   the box shows the plain name, not the internal key   → Rivka Stern
+  ok   the visit carries the picked camper's number (#702)   → {"bunk":"G1","date":"2026-09-24","time":"3:07 AM","nurse":"Nurse","camperId":702,"complaint":"","timestamp":"2026-09-24T03:07:54.305Z","treatment":"","camperName":"Rivka Stern #702","disposition":"Returned to activity"}
+
+5. Me → Billing lists the family's children without the internal number
+  ok   Billing shows both children, and no internal number
+  ok   no uncaught page errors
+
+All 12 checks passed.

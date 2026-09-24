@@ -298,6 +298,17 @@ async function handleTipCartSucceeded(supabase: ReturnType<typeof createClient>,
 
   const chargeId = pi.latest_charge || null;
 
+  // The parent's payment on every line of the cart (migration 270), so a
+  // nightly retry of a failed transfer records its tip against the same
+  // payment — and a redelivery of this event then sees it (TED-087).
+  // Best-effort: before 270 the column is not there, and nothing else changes.
+  {
+    const { error: piErr } = await supabase.from("link_tip_cart_items")
+      .update({ stripe_payment_intent_id: pi.id })
+      .eq("cart_id", cartId).is("stripe_payment_intent_id", null);
+    if (piErr) console.warn(`[stripe-connect-webhook] cart ${cartId}: could not note the payment on its lines (${piErr.message}) — is migration 270 applied?`);
+  }
+
   for (const item of items) {
     try {
       // The REAL idempotency check — link_tips' (stripe_payment_intent_id,

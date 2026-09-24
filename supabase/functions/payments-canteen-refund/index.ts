@@ -38,7 +38,7 @@ async function cardknoxRefund(
   credentials: Record<string, string>,
   externalTransactionId: string,
   amountCents: number,
-): Promise<{ success: boolean; externalTransactionId?: string; status?: string; error?: string; raw?: unknown }> {
+): Promise<{ success: boolean; uncertain?: boolean; externalTransactionId?: string; status?: string; error?: string; raw?: unknown }> {
   const apiKey = credentials.apiKey;
   if (!apiKey) return { success: false, error: "Missing apiKey" };
   try {
@@ -53,10 +53,12 @@ async function cardknoxRefund(
     const text = await resp.text();
     const r: Record<string, string> = {};
     new URLSearchParams(text).forEach((v, k) => { r[k] = v; });
+    // No result at all is not a "no" (TED-093): the gateway may have refunded.
+    if (!r.xResult) return { success: false, uncertain: true, error: "No answer from the card company (HTTP " + resp.status + ")", raw: r };
     if (r.xResult !== "A") return { success: false, status: r.xStatus, error: r.xError || "Refund failed", raw: r };
     return { success: true, externalTransactionId: r.xRefNum, status: r.xStatus, raw: r };
   } catch (err) {
-    return { success: false, error: (err as Error).message };
+    return { success: false, uncertain: true, error: (err as Error).message };   // cut off: may have moved money (TED-093)
   }
 }
 
@@ -83,7 +85,7 @@ async function banquestRefund(
   credentials: Record<string, string>,
   externalTransactionId: string,
   amountCents: number,
-): Promise<{ success: boolean; externalTransactionId?: string; status?: string; error?: string; raw?: unknown }> {
+): Promise<{ success: boolean; uncertain?: boolean; externalTransactionId?: string; status?: string; error?: string; raw?: unknown }> {
   if (!credentials.sourceKey || !credentials.pin) return { success: false, error: "Missing sourceKey/pin" };
   const refNum = Number(externalTransactionId);
   if (!Number.isFinite(refNum)) return { success: false, error: "Original transaction reference is not a valid Banquest reference_number." };
@@ -101,13 +103,16 @@ async function banquestRefund(
     const st = String(data?.status || "").toLowerCase();
     const ok = code === "A" || /approv|void|refund/.test(st);
     const newRef = data?.reference_number != null ? String(data.reference_number) : (data?.transaction?.id ? String(data.transaction.id) : "");
+    if (resp.status >= 500 && !newRef) {
+      return { success: false, uncertain: true, error: `No answer from the card company (HTTP ${resp.status})`, raw: data };
+    }
     if (resp.status < 200 || resp.status >= 300 || !ok || !newRef) {
       const errMsg = data?.error_message || (Array.isArray(data?.error_messages) && data.error_messages[0]) || data?.error_details || data?.error || data?.message || data?.status || `Refund failed (HTTP ${resp.status})`;
       return { success: false, status: data?.status, error: errMsg, raw: data };
     }
     return { success: true, externalTransactionId: newRef, status: data?.status, raw: data };
   } catch (err) {
-    return { success: false, error: (err as Error).message };
+    return { success: false, uncertain: true, error: (err as Error).message };   // cut off: may have moved money (TED-093)
   }
 }
 
@@ -166,7 +171,7 @@ serve(async (req) => {
     const authedCampId = await callerCampId(req);
     if (!authedCampId) return json({ error: "Only camp owners/admins can refund a canteen deposit." }, 403);
 
-    const { camperName, camperId: body_camperId, amount, reason, idempotencyKey } = await req.json();
+    const { camperName, camperId: body_camperId, amount, reason, idempotencyKey, confirmNotRefunded } = await req.json();
     // The camper by ID when the page sent one: the account's key is a spelling.
     const camperIdSent = (body_camperId != null && /^\d+$/.test(String(body_camperId)) && Number(body_camperId) > 0) ? Number(body_camperId) : null;
     if (camperIdSent == null && !camperName) return json({ error: "camperId (or camperName) is required" }, 400);
@@ -243,6 +248,7 @@ serve(async (req) => {
     let totalRefunded = 0;
     const refunds: Record<string, unknown>[] = [];
     let chunkError: string | null = null;
+    let chunkUncertain = false;
 
     for (const dep of deposits) {
       if (remainingToRefund <= 0) break;
@@ -255,8 +261,18 @@ serve(async (req) => {
         // ledger's idempotency keys on the processor's refund id, which does not
         // exist until money has already moved. Per CHUNK, because each chunk is a
         // separate processor call and a retry may resume partway through.
-        const chunkKey = (typeof idempotencyKey === "string" && idempotencyKey.trim())
-          ? `${idempotencyKey.trim()}:${dep.externalTransactionId}:${chunkCents}` : null;
+        // Keyed on the deposit and what is left on it, not on the click (TED-093):
+        // a second click after an answer was lost must meet the same claim, not
+        // start a second refund. A refund that was recorded changes what is left,
+        // so a deliberate later refund gets a new key.
+        // With the page's key for this refund (TED-105), the retry of a refund
+        // whose answer was lost meets its first attempt, while a deliberate
+        // second refund (a new key) is its own. Without one, the deposit and
+        // what is left on it.
+        const reqKey = (typeof idempotencyKey === "string" && idempotencyKey.trim()) ? idempotencyKey.trim() : "";
+        const chunkKey = reqKey
+          ? `canteen:${reqKey}:${dep.externalTransactionId}:${chunkCents}`
+          : `canteen:${dep.externalTransactionId}:${Math.round(dep.remaining * 100)}:${chunkCents}`;
         if (chunkKey) {
           const { data: claim } = await service.rpc("claim_refund_intent", {
             p_camp_id: authedCampId, p_key: chunkKey, p_amount: chunk,
@@ -265,13 +281,29 @@ serve(async (req) => {
           // Already done. Skip the processor and move to the next deposit rather
           // than refunding this one twice.
           if (claim && claim.claimed === false) {
-            console.log(`[canteen-refund] chunk already settled, skipping: ${chunkKey}`);
-            continue;
+            if (claim.previous && claim.previous.externalTransactionId) {
+              console.log(`[canteen-refund] chunk already settled, skipping: ${chunkKey}`);
+              continue;
+            }
+            // Asked before and never confirmed (TED-093): stop here rather than
+            // refund it again or move on to the next deposit.
+            if (confirmNotRefunded !== true) throw Object.assign(new Error("An earlier refund of this canteen money was never confirmed by the card company. Check the processor's dashboard: if it is not there, confirm and it will be sent."), { uncertain: true });
+            // Only a claim that has waited a few minutes (273), never one still running.
+            const { data: freed } = await service.rpc("release_stale_refund_intent", { p_camp_id: authedCampId, p_key: chunkKey });
+            if (freed !== true) throw Object.assign(new Error("This refund was sent a moment ago and may still be going through. Wait a few minutes, check the processor's dashboard, and try again only if it is not there."), { uncertain: true });
+            const { data: again } = await service.rpc("claim_refund_intent", {
+              p_camp_id: authedCampId, p_key: chunkKey, p_amount: chunk, p_payment_ref: String(dep.externalTransactionId),
+            });
+            if (again && again.claimed === false) throw Object.assign(new Error("This refund is being sent right now by someone else."), { uncertain: true });
           }
         }
         const refundResult = processorKey === "cardknox"
           ? await cardknoxRefund(credResult.credentials, dep.externalTransactionId, chunkCents)
           : await banquestRefund(credResult.credentials, dep.externalTransactionId, chunkCents);
+        if (!refundResult.success && refundResult.uncertain) {
+          // Maybe it moved money: keep the claim and stop (TED-093).
+          throw Object.assign(new Error("The card company did not answer, so a canteen refund may or may not have gone through. Check the processor's dashboard before trying again."), { uncertain: true });
+        }
         if (!refundResult.success) {
           // No money moved, so give the claim back or this chunk is locked out.
           if (chunkKey) {
@@ -312,11 +344,13 @@ serve(async (req) => {
         remainingToRefund = round2(remainingToRefund - chunk);
       } catch (chunkErr) {
         chunkError = (chunkErr as Error).message;
+        if ((chunkErr as any).uncertain) chunkUncertain = true;
         break;
       }
     }
 
     if (totalRefunded <= 0) {
+      if (chunkUncertain) return json({ uncertain: true, error: chunkError }, 200);
       throw new Error(chunkError || "Refund failed.");
     }
 
@@ -332,7 +366,7 @@ serve(async (req) => {
 
     console.log(`[payments-canteen-refund] Refunded $${totalRefunded} for ${camperName} (camp ${authedCampId}) across ${refunds.length} deposit(s)${capped ? " (capped)" : ""}`);
 
-    return json({ totalRefunded, requested: round2(requested), capped, cappedReason, refunds });
+    return json({ totalRefunded, requested: round2(requested), capped, cappedReason, refunds, uncertain: chunkUncertain || undefined });
   } catch (err) {
     console.error("[payments-canteen-refund] Error:", (err as Error).message);
     return json({ error: (err as Error).message }, 500);

@@ -205,3 +205,107 @@ test('TED-073: if the first transfer actually went through, the retry pays nothi
     assert.strictEqual(transfersMade(r).length, 0, 'the counselor was paid twice');
     assert.ok(r.writes.some(w => w.table === 'link_tip_cart_items' && w.op === 'update' && w.payload.stripe_transfer_id === 'tr_first'));
 });
+
+// ── TED-079: a declined instalment on a plan with the office's own amounts ───
+test('TED-079: a declined fixed-amount instalment is not skipped — the counter stays, the office is told', () => {
+    const r = runEdge('charge-due-installments', BASE + `
+      T.rpc.camp_families_object = () => ({
+        famF: { name: 'Fixed plan', camperIds: ['D'], cardOnFile: true, stripeCustomerId: 'cus_F',
+                plans: [{ id: 'plan_f', dueDates: [TODAY, '2099-07-01', '2099-08-01'], amounts: [1000, 200, 200], count: 3, nextIndex: 0, history: [], autopay: true }] },
+      });
+      T.rpc.plan_due_for = () => ({ index: 0, dueDate: TODAY, amount: 1000 });
+      T.fetch = (url: string) => url.endsWith('/payment_intents') ? { error: { message: 'Your card was declined.' } } : {};
+    `);
+    assert.ok(!r.rpcs.some(x => x.name === 'record_autopay_charge'), 'the declined $1,000 instalment was recorded and skipped');
+    const flag = r.rpcs.find(x => x.name === 'flag_plan_collection');
+    assert.strictEqual(flag.args.p_reason, 'declined');
+});
+
+test('an even-split plan still records the decline and moves on (later payments absorb it)', () => {
+    const r = runEdge('charge-due-installments', BASE + `
+      T.rpc.camp_families_object = () => ({
+        famE: { name: 'Even plan', camperIds: ['E'], cardOnFile: true, stripeCustomerId: 'cus_E',
+                plans: [{ id: 'plan_e', dueDates: [TODAY, '2099-07-01'], count: 2, nextIndex: 0, history: [], autopay: true }] },
+      });
+      T.rpc.plan_due_for = () => ({ index: 0, dueDate: TODAY, amount: 500 });
+      T.fetch = (url: string) => url.endsWith('/payment_intents') ? { error: { message: 'Your card was declined.' } } : {};
+    `);
+    const rec = r.rpcs.find(x => x.name === 'record_autopay_charge');
+    assert.ok(rec);
+    assert.strictEqual(rec.args.p_amount, 0);
+});
+
+// TED-084: the hold works for every shape of plan, and is never claimed when
+// it did not save.
+function shapeNight(famPlans, piAnswer, opts = {}) {
+    return BASE + `
+      T.tables.camps = [{ id: 'camp1', name: 'Camp One', payment_processor_key: ${opts.processor ? `'${opts.processor}'` : 'null'} }];
+      T.rpc.camp_families_object = () => ({
+        famA: Object.assign({ name: 'Bank family', camperIds: ['C'], cardOnFile: true, stripeCustomerId: 'cus_A',
+                              byopCustomerRef: 'tok_A', charges: [{ amount: 1000 }] }, ${JSON.stringify(famPlans)}),
+      });
+      T.rpc.plan_due_for = () => ({ index: 0, dueDate: TODAY, amount: 500 });
+      T.rpc._admin_get_processor_credential = () => ({ success: true, credentials: { apiKey: 'ck' } });
+      T.rpc.hold_autopay_charge = () => (${JSON.stringify(opts.holdAnswer || { success: true })});
+      T.fetch = (url: string, init: any) => {
+        if (init.method === 'POST' && url.endsWith('/payment_intents')) return ${JSON.stringify(piAnswer)};
+        if (url.includes('/payment_intents/pi_ach')) return { id: 'pi_ach', status: '${opts.heldStatus || 'processing'}' };
+        return {};
+      };`;
+}
+const LEGACY = { autopay: true, total: 1000, installments: [{ n: 1, amount: 500, dueDate: TODAY, status: 'pending' }, { n: 2, amount: 500, dueDate: '2099-01-01', status: 'pending' }] };
+const results = r => (r.body.details || []).map(d => d.result);
+
+test('TED-084: the old single plan (no id) holds its bank debit — by position #0', () => {
+    const r = runEdge('charge-due-installments', shapeNight({ plan: LEGACY }, { id: 'pi_ach', status: 'processing' }));
+    const hold = r.rpcs.find(x => x.name === 'hold_autopay_charge');
+    assert.ok(hold, 'no hold was even asked for');
+    assert.strictEqual(hold.args.p_plan_id, '#0');
+    assert.deepStrictEqual(results(r), ['processing_held']);
+});
+
+test('TED-084: a plan in the list without an id holds by its position', () => {
+    const r = runEdge('charge-due-installments', shapeNight({ plans: [{ id: 'p0', autopay: false, installments: [] }, LEGACY] }, { id: 'pi_ach', status: 'processing' }));
+    assert.strictEqual(r.rpcs.find(x => x.name === 'hold_autopay_charge').args.p_plan_id, '#1');
+});
+
+test('TED-084: a hold that did not save is never reported as held — the office is told', () => {
+    const r = runEdge('charge-due-installments', shapeNight({ plan: LEGACY }, { id: 'pi_ach', status: 'processing' },
+        { holdAnswer: { success: false, error: 'plan_not_found' } }));
+    assert.ok(!results(r).includes('processing_held'), 'reported processing_held: ' + JSON.stringify(results(r)));
+    assert.ok(results(r).includes('processing_hold_failed'));
+    const flag = r.rpcs.find(x => x.name === 'flag_plan_collection' && x.args.p_reason === 'bank_debit_unheld');
+    assert.ok(flag, 'the office was not told');
+    assert.strictEqual(flag.args.p_plan_id, '#0');
+});
+
+test('TED-084: night 2 — the old single plan\'s held debit is asked about, not debited again', () => {
+    const held = Object.assign({}, LEGACY, { pendingCharge: { paymentIntentId: 'pi_ach', dueDate: TODAY, amount: 500, since: TODAY } });
+    const r = runEdge('charge-due-installments', shapeNight({ plan: held }, { id: 'pi_NEW', status: 'processing' }));
+    assert.strictEqual(newCharges(r).length, 0, 'debited again');
+    assert.deepStrictEqual(results(r), ['waiting_for_bank_debit']);
+});
+
+test('TED-084: a camp that moved off Stripe still clears the Stripe debit it left in flight', () => {
+    const held = Object.assign({}, LEDGER_PLAN, { pendingCharge: { paymentIntentId: 'pi_ach', index: 0, dueDate: TODAY, amount: 500, since: TODAY } });
+    const r = runEdge('charge-due-installments', shapeNight({ plans: [held] }, { id: 'pi_NEW', status: 'succeeded' },
+        { processor: 'cardknox', heldStatus: 'succeeded' }));
+    assert.ok(r.rpcs.some(x => x.name === 'record_autopay_charge' && x.args.p_dedupe_key === 'pi_ach'), 'the cleared debit was never recorded: ' + JSON.stringify(results(r)));
+    assert.strictEqual(r.fetches.filter(f => f.method === 'POST').length, 0, 'charged again');
+});
+
+test('TED-084: a debit still clearing after ten days is put in front of the office', () => {
+    const since = new Date(Date.now() - 20 * 86400000).toISOString().split('T')[0];
+    const held = Object.assign({}, LEDGER_PLAN, { pendingCharge: { paymentIntentId: 'pi_ach', index: 0, dueDate: since, amount: 500, since } });
+    const r = runEdge('charge-due-installments', shapeNight({ plans: [held] }, { id: 'pi_NEW', status: 'processing' }));
+    assert.strictEqual(newCharges(r).length, 0);
+    assert.ok(r.rpcs.some(x => x.name === 'flag_plan_collection' && x.args.p_reason === 'bank_debit_stuck'));
+});
+
+test('TED-103: autopay waits while Billing is asking about a card deposit, and the office is told', () => {
+    const r = runEdge('charge-due-installments', shapeNight({ plans: [LEDGER_PLAN],
+        depositReview: [{ ref: 'pi_dep', amount: 250, paymentId: 'pay_hand' }] }, { id: 'pi_x', status: 'succeeded' }));
+    assert.strictEqual(newCharges(r).length, 0, 'autopay charged against a balance that is $250 too high');
+    assert.deepStrictEqual(results(r), ['waiting_for_deposit_review']);
+    assert.ok(r.rpcs.some(x => x.name === 'flag_plan_collection' && x.args.p_reason === 'deposit_review'));
+});

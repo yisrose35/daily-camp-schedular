@@ -93,7 +93,10 @@ test('the claim key is DERIVED FROM THE REQUEST, not a constant', () => {
     // stays green on a version where claimKey is hardcoded null and the claim never
     // runs at all. Pin where the key comes from too.
     assert.match(REFUND, /const claimKey = typeof idempotencyKey === "string" && idempotencyKey\.trim\(\)/);
-    assert.match(CANTEEN, /\(typeof idempotencyKey === "string" && idempotencyKey\.trim\(\)\)/);
+    // The single canteen refund is claimed on every request: on the page's key
+    // for this refund when it sends one (TED-105), else on the deposit and what
+    // is left on it (TED-093).
+    assert.match(CANTEEN, /\? `canteen:\$\{reqKey\}:\$\{dep\.externalTransactionId\}:\$\{chunkCents\}`\s*: `canteen:\$\{dep\.externalTransactionId\}:\$\{Math\.round\(dep\.remaining \* 100\)\}:\$\{chunkCents\}`;/);
     assert.match(CANTEEN_ALL, /typeof body\.idempotencyKey === "string" && body\.idempotencyKey\.trim\(\)/);
     // And the claim is actually gated on having one, not skipped outright.
     assert.match(REFUND, /if \(claimKey\) \{[\s\S]{0,200}claim_refund_intent/);
@@ -104,8 +107,9 @@ test('a claim that loses replays the first answer instead of refunding again', (
     assert.match(REFUND, /replayed: true/);
     // The canteen loops skip the chunk rather than returning, because the other
     // chunks in the batch may still need doing.
-    assert.match(CANTEEN, /if \(claim && claim\.claimed === false\) \{[\s\S]{0,220}continue;/);
-    assert.match(CANTEEN_ALL, /if \(claim && claim\.claimed === false\) \{[\s\S]{0,220}continue;/);
+    // ...but only a SETTLED one (TED-093); one never confirmed stops instead.
+    assert.match(CANTEEN, /if \(claim && claim\.claimed === false\) \{\s*if \(claim\.previous && claim\.previous\.externalTransactionId\) \{[\s\S]{0,160}continue;/);
+    assert.match(CANTEEN_ALL, /if \(claim && claim\.claimed === false\) \{[\s\S]{0,700}continue;/);
 });
 
 test('the claim records the answer so a retry has something to replay', () => {
@@ -117,11 +121,13 @@ test('the claim records the answer so a retry has something to replay', () => {
 test('the canteen keys are per CHUNK, not per request', () => {
     // Each chunk is its own processor call against its own deposit, so a resumed
     // run has to be able to skip exactly what it finished.
-    assert.match(CANTEEN, /\$\{idempotencyKey\.trim\(\)\}:\$\{dep\.externalTransactionId\}:\$\{chunkCents\}/);
+    assert.match(CANTEEN, /\$\{dep\.externalTransactionId\}:\$\{Math\.round\(dep\.remaining \* 100\)\}:\$\{chunkCents\}/);
     // The camper part is their NUMBER when the account has one: two children who
     // share a name must not share a claim (the second would be skipped as
     // "already settled"). The name only for an account with no number.
-    assert.match(CANTEEN_ALL, /\$\{batchKey\}:\$\{camperId != null \? "#" \+ camperId : camperName\}:\$\{dep\.externalTransactionId\}:\$\{chunkCents\}/);
+    // Refund-all uses the SAME per-money key as the single refund (TED-093):
+    // Snacks sends no key, and a deposit id is unique however children are named.
+    assert.match(CANTEEN_ALL, /const chunkKey = `canteen:\$\{dep\.externalTransactionId\}:\$\{Math\.round\(dep\.remaining \* 100\)\}:\$\{chunkCents\}`;/);
 });
 
 test('refund-all can still be called with no body at all', () => {
@@ -132,14 +138,13 @@ test('refund-all can still be called with no body at all', () => {
 
 // ── the client half ────────────────────────────────────────────────────────
 
-test('the browser sends ONE key per click, distinct per chunk', () => {
+test('the browser keys each chunk on its payment, what is left on it and the amount (TED-093)', () => {
     const ME = read('campistry_me.js');
-    assert.match(ME, /var _refundKey='rfnd_'\+fk\+'_'\+Date\.now\(\)/);
-    assert.match(ME, /idempotencyKey:_refundKey\+':'\+ci/,
-        'per chunk, or two chunks of one click share a claim and one is skipped');
-    // Declared before the loop, or each chunk invents its own key and nothing is
-    // deduplicated across a retry.
-    assert.ok(ME.indexOf("var _refundKey='rfnd_'") < ME.indexOf('idempotencyKey:_refundKey'));
+    // The same refund on a later click meets its first attempt; a refund that
+    // was recorded changes what is left, so a deliberate second refund differs.
+    assert.match(ME, /var _chunkKey=function\(p,left,amt\)\{/);
+    assert.match(ME, /idempotencyKey:_chunkKey\(p,chunks\[ci\]\.remaining,chunk\)/);
+    assert.ok(!/_refundKey\+'_'\+Date\.now\(\)|'rfnd_'\+fk\+'_'\+Date\.now\(\)/.test(ME), 'a per-click key is back');
 });
 
 // ── the recurring charge's crash window ────────────────────────────────────

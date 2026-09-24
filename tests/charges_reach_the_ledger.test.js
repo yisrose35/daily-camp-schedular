@@ -78,15 +78,100 @@ test('a zero or negative charge never posts', () => {
     assert.strictEqual(B.balance(f), 600);
 });
 
-test('all five places that add a charge post it, and Billing posts old ones on load', () => {
-    const n = (ME.match(/f\.charges\.push\([\s\S]{0,600}?_postLedgerCharge\(f,/g) || []).length;
-    assert.strictEqual(n, 5, 'expected 5 charge writers to post to the ledger, found ' + n);
+// The save button of a modal, found by a marker inside its showModal() call.
+function callbackAt(marker) {
+    const at = ME.indexOf(marker);
+    assert.ok(at >= 0, marker + ' is missing');
+    const fnAt = ME.indexOf('function(', at);
+    let i = ME.indexOf('{', fnAt), d = 0;
+    for (; i < ME.length; i++) { if (ME[i] === '{') d++; else if (ME[i] === '}' && --d === 0) break; }
+    return ME.slice(fnAt, i + 1);
+}
+function runCallback(marker, extra) {
+    const f = family();
+    const c = Object.assign({ _billingCore: () => B, B, families: { fg: f }, curPage: 'billing',
+        toast() {}, save() {}, closeModal() {}, renderBilling() {}, renderFamilyDetailPage() {},
+        fm: (n) => '$' + n, today: () => '2026-07-10', _camperIdOf: () => null }, extra(f));
+    vm.createContext(c);
+    vm.runInContext(cut('_postLedgerCharge') + '\n' + cut('_postLedgerCredit') +
+        '\nthis.cb=' + callbackAt(marker) + ';', c);
+    c.cb();
+    return f;
+}
+
+test('TED-053/076: Charge several accounts posts each charge to the ledger', () => {
+    const f = runCallback("showModal(kind==='charge'?'Charge several accounts'", () => ({ kind: 'charge',
+        _baPlan: () => ({ ok: true, count: 1, total: 30, entries: [{ key: 'fg', amount: 30, reason: 'Trip' }] }) }));
+    assert.strictEqual(B.balance(f), 630);
+});
+
+test('TED-053/076: a card surcharge reaches the ledger', () => {
+    const f = runCallback("showModal('Add card surcharge'", (fam) => ({ f: fam, pol: {},
+        document: { getElementById: () => ({ value: '100' }) },
+        F: { quote: () => ({ permitted: true, fee: 3, mode: 'surcharge', reason: '' }), disclosure: () => '3% card fee' } }));
+    assert.strictEqual(B.balance(f), 603);
+});
+
+test('TED-053/076: Charge late fees posts each fee to the ledger, once', () => {
+    const f = runCallback("showModal('Charge late fees'", () => ({ asOf: '2026-07-10', applied: {}, billingRules: {},
+        toCharge: [{ famKey: 'fg', plan: { toApply: [{ key: 'lf_a', amount: 25, note: 'Late' }, { key: 'lf_a', amount: 25 }] } }],
+        B: Object.assign({}, B, { recordLateFees: (x) => x }) }));
+    assert.strictEqual(B.balance(f), 625);
+});
+
+test('close-out and Add Charge post through _postLedgerCharge; Billing posts old ones on load', () => {
+    // close-out's writer runs inside a larger forEach, not a callback of its own
+    assert.match(ME, /category:'Close-out'[\s\S]{0,300}?_postLedgerCharge\(f,f\.charges\[f\.charges\.length-1\]\)/);
     assert.match(ME, /_posted\+=_postExistingCharges\(f\);/);
 });
 
-test('TED-062: Issue Credit and Add Charge refuse zero and negative amounts', () => {
-    assert.match(ME, /var amt=Math\.round\(\(parseFloat\(document\.getElementById\('crAmount'\)\.value\)\|\|0\)\*100\)\/100;\s*\/\/[^\n]*\n[^\n]*\n\s*if\(!\(amt>0\)\)/);
-    assert.match(ME, /var amt=Math\.round\(\(parseFloat\(document\.getElementById\('chgAmount'\)\.value\)\|\|0\)\*100\)\/100;\s*\/\/[^\n]*\n\s*if\(!\(amt>0\)\)/);
+// The real Add Charge / Issue Credit save buttons (the callbacks handed to
+// showModal), run against a stub form — TED-076: behaviour, not source text.
+function modalCallback(title) {
+    const at = ME.indexOf("showModal('" + title + "',h,");
+    assert.ok(at >= 0, title + ' modal is missing');
+    const fnAt = ME.indexOf('function(', at);
+    const start = ME.lastIndexOf(ME.slice(fnAt - 6, fnAt) === 'async ' ? 'async ' : 'function(', fnAt);
+    let i = ME.indexOf('{', fnAt), d = 0;
+    for (; i < ME.length; i++) { if (ME[i] === '{') d++; else if (ME[i] === '}' && --d === 0) break; }
+    return ME.slice(start, i + 1);
+}
+function runForm(title, fields) {
+    const f = family();
+    const toasts = [];
+    const c = { _billingCore: () => B, families: { fg: f }, curPage: 'billing', finPayments: [],
+        document: { getElementById: (id) => ({ value: fields[id] != null ? fields[id] : '' }) },
+        toast: (m, k) => toasts.push([m, k]), save() {}, closeModal() {}, renderBilling() {},
+        renderFamilyDetailPage() {}, fm: (n) => '$' + n, _payersAPI: () => null,
+        _payerSharesFromForm: () => [], _camperIdOf: () => null };
+    vm.createContext(c);
+    vm.runInContext(cut('_postLedgerCharge') + '\n' + cut('_postLedgerCredit') +
+        '\nthis.cb=' + modalCallback(title) + ';', c);
+    return Promise.resolve(c.cb()).then(() => ({ f, toasts }));
+}
+
+test('TED-062: Add Charge refuses zero and negative amounts, and posts a real one', async () => {
+    for (const v of ['0', '-50', '', 'abc']) {
+        const { f, toasts } = await runForm('Add Charge', { chgFamKey: 'fg', chgAmount: v, chgCategory: 'Trip' });
+        assert.strictEqual(B.balance(f), 600, 'Add Charge of "' + v + '" changed the balance');
+        assert.ok(!f.charges || !f.charges.length, 'Add Charge of "' + v + '" was recorded');
+        assert.strictEqual(toasts[0][1], 'error');
+    }
+    const { f } = await runForm('Add Charge', { chgFamKey: 'fg', chgAmount: '50', chgCategory: 'Trip', chgDesc: 'Zoo' });
+    assert.strictEqual(B.balance(f), 650, 'a $50 Add Charge must reach the ledger');
+    assert.strictEqual(f.charges.length, 1);
+});
+
+test('TED-062: Issue Credit refuses zero and negative amounts, and posts a real one', async () => {
+    for (const v of ['0', '-50', '']) {
+        const { f, toasts } = await runForm('Issue Credit/Refund', { crFamKey: 'fg', crType: 'credit', crAmount: v, crReason: 'x' });
+        assert.strictEqual(B.balance(f), 600, 'Issue Credit of "' + v + '" changed the balance');
+        assert.ok(!f.credits || !f.credits.length, 'Issue Credit of "' + v + '" was recorded');
+        assert.strictEqual(toasts[0][1], 'error');
+    }
+    const { f } = await runForm('Issue Credit/Refund', { crFamKey: 'fg', crType: 'credit', crAmount: '75', crReason: 'Sibling' });
+    assert.strictEqual(B.balance(f), 525, 'a $75 credit must reach the ledger');
+    assert.strictEqual(f.credits.length, 1);
 });
 
 test('TED-065: on a camp that ran the ledger conversion, opening Billing does not post old charges twice', () => {
@@ -119,9 +204,9 @@ test('TED-065: two same-amount charges against one converted entry — only one 
     assert.strictEqual(B.balance(f), 50);
 });
 
-test('TED-066: a charge that disappears (a cancelled shop order) comes off the ledger, once', () => {
+test('TED-066: a charge that disappears comes off the ledger, once', () => {
     const f = family();
-    f.charges = [{ id: 'shop_o1', category: 'Camp Shop', amount: 40 }];
+    f.charges = [{ id: 'chg_o1', category: 'Trip', amount: 40 }];
     ctx.catchUp(f);
     assert.strictEqual(B.balance(f), 640);
     f.charges = [];                        // cancelled
@@ -151,4 +236,63 @@ test('TED-066: the database already took a cancelled charge off — the Me page 
     f.charges = [];
     assert.strictEqual(ctx.catchUp(f), 0);
     assert.strictEqual(B.balance(f), 600);
+});
+
+test('TED-081: merging two families keeps every charge the second one was billed', () => {
+    const mctx = { _billingCore: () => B, families: {}, curPage: 'billing',
+        _meAudit() {}, save() {}, render() {}, toast() {} };
+    vm.createContext(mctx);
+    vm.runInContext(cut('_postLedgerCharge') + '\n' + cut('_postExistingCharges') + '\n' +
+        cut('mergeFamiliesReconciled') + '\nthis.merge=mergeFamiliesReconciled;this.catchUp=_postExistingCharges;', mctx);
+    const a = family();                                   // owes $600
+    const b = family();                                   // owes $600 ...
+    b.name = 'Gold (dup)';
+    b.charges = [{ id: 'lf_b', category: 'Late Fee', amount: 25, date: '2026-07-01' }];
+    b.credits = [{ id: 'cr_b', reason: 'Sibling', amount: 10, date: '2026-07-02' }];
+    mctx.catchUp(b);                                      // ... + the $25 fee = $625
+    b.entries.forEach((e, i) => { if (!e.id.startsWith('le_chg_')) e.id = e.id + '_b' + i; });
+    assert.strictEqual(B.balance(b), 625);
+    mctx.families.fa = a; mctx.families.fb = b;
+    mctx.merge('fa', 'fb', null);
+    const m = mctx.families.fa;
+    assert.ok(!mctx.families.fb);
+    assert.strictEqual(B.balance(m), 1225);
+    assert.strictEqual(mctx.catchUp(m), 0, 'the catch-up posted something after a merge');
+    assert.strictEqual(B.balance(m), 1225, 'the merged family was let off B\'s fee');
+    assert.deepStrictEqual(Array.from(m.charges, c => c.id), ['lf_b']);
+    assert.deepStrictEqual(Array.from(m.credits, c => c.id), ['cr_b']);
+});
+
+test('TED-082: a charge the conversion posted is linked, so re-pricing and cancelling it follow', () => {
+    const f = { name: 'Conv', entries: [
+        { id: 'le_conv_g_1', kind: 'charge', amount: 1000, reason: 'tuition', source: { enrollmentId: 'e1' } },
+        { id: 'le_conv_g_2', kind: 'charge', amount: 40, reason: 'fee', date: '2026-07-01', source: {} },
+        { id: 'le_conv_g_3', kind: 'payment', amount: 1000, reason: 'card' }],
+      charges: [{ id: 'chg_o1', category: 'Trip', amount: 40, date: '2026-07-01' }] };
+    assert.strictEqual(ctx.catchUp(f), 0);
+    assert.strictEqual(f.entries[1].source.chargeId, 'chg_o1', 'the converted entry was not linked');
+    assert.strictEqual(B.balance(f), 40);
+    f.charges[0].amount = 55;                             // re-priced
+    ctx.catchUp(f); ctx.catchUp(f);
+    assert.strictEqual(B.balance(f), 55, 'a re-priced converted charge was counted twice');
+    f.charges = [];                                       // cancelled
+    ctx.catchUp(f); ctx.catchUp(f);
+    assert.strictEqual(B.balance(f), 0, 'a cancelled converted charge is still billed');
+});
+
+test('TED-082: a converted fee migration 267 already linked is not handed to another charge', () => {
+    const f = { name: 'Linked', entries: [
+        { id: 'le_conv_l_1', kind: 'charge', amount: 25, reason: 'fee', date: '2026-07-01', source: { chargeId: 'lf_a' } }],
+      charges: [{ id: 'lf_a', amount: 25, date: '2026-07-01' }, { id: 'lf_b', amount: 25, date: '2026-07-01' }] };
+    assert.strictEqual(ctx.catchUp(f), 1, 'the second $25 fee must be posted — the converted one is lf_a\'s');
+    assert.strictEqual(B.balance(f), 50);
+});
+
+test('TED-091: a shop charge a stale tab never saw is NOT taken off by its Billing load', () => {
+    const f = family();
+    // what settle_shop_order posted after this tab loaded (the tab's charges[] lacks it)
+    f.entries.push({ id: 'le_chg_shop_o9', kind: 'charge', amount: 40, reason: 'fee', source: { chargeId: 'shop_o9' } });
+    f.charges = [{ id: 'chg_10', category: 'Other', amount: 10 }];
+    ctx.catchUp(f); ctx.catchUp(f);
+    assert.strictEqual(B.balance(f), 650, 'the shop order was cancelled by an old tab');
 });

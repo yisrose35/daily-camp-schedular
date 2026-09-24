@@ -188,7 +188,8 @@ test('the runner flags every way collection stops, and clears on success', () =>
         assert.ok(src.includes(reason), 'the runner no longer flags ' + reason);
     }
     // Cleared on a successful charge, with the same call.
-    assert.match(src, /await flagPlan\(String\(row\.camp_id\), famKey, String\(plan\.id \|\| ""\), null\);/,
+    // (the plan is named by id or, without one, by position — TED-084)
+    assert.match(src, /await flagPlan\(String\(row\.camp_id\), famKey, refOf\(plan\), null\);/,
         'a successful charge no longer clears the block');
     // The no-card case is flagged BEFORE the skip, or nothing in the run ever
     // mentions that family again.

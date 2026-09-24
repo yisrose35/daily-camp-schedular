@@ -285,3 +285,36 @@ test('the tax statement prints the EIN whatever the on-statements toggle says', 
     assert.ok(!/showCampTaxId\s*&&\s*campTaxId/.test(body),
         'the tax statement must not hide the EIN behind show_tax_id_on_statements');
 });
+
+// ── TED-101: the year the care is given, not the year the charge was dated ──
+const withCareYear = (e) => { const w = resolveCharge(e); return Object.assign({}, w, { careYear: '2026' }); };
+const entries101 = () => [
+    charge('2025-10-01', 3000, 'e1'),     // enrolled in October for summer 2026 — dated at enrolment
+    pay('2025-12-15', 500),               // the December deposit
+    pay('2026-04-01', 2500)
+];
+
+test('TED-101: a December deposit for next summer is prepaid in its own year, not claimable', () => {
+    const r = T.build({ year: 2025, entries: entries101(), resolveCharge: withCareYear });
+    assert.strictEqual(r.qualifying, 0, 'next summer\'s deposit was put on this year\'s return');
+    assert.strictEqual(r.prepaid, 500);
+});
+
+test('TED-101: ...and all of it is claimable in the year the care is given', () => {
+    const r = T.build({ year: 2026, entries: entries101(), resolveCharge: withCareYear });
+    assert.strictEqual(r.qualifying, 3000, 'the December deposit never reached a statement');
+    assert.strictEqual(r.paidEarlier, 500);
+    assert.match(r.warnings.join(' '), /paid before 2026 for care given in 2026/);
+});
+
+test('TED-101: arrears still count in the year they are paid', () => {
+    const late = (e) => Object.assign({}, resolveCharge(e), { careYear: '2025' });
+    const r = T.build({ year: 2026, entries: [charge('2025-04-01', 2000, 'e1'), pay('2026-03-01', 2000)], resolveCharge: late });
+    assert.strictEqual(r.qualifying, 2000);
+    assert.strictEqual(T.build({ year: 2025, entries: [charge('2025-04-01', 2000, 'e1'), pay('2026-03-01', 2000)], resolveCharge: late }).qualifying, 0);
+});
+
+test('TED-101: Me tells the statement each charge\'s care year from the session start', () => {
+    const ME = require('node:fs').readFileSync(require('node:path').join(__dirname, '..', 'campistry_me.js'), 'utf8');
+    assert.match(ME, /var careYear=String\(\(ses&&\(ses\.startDate\|\|ses\.start\)\)\|\|e\.sessionStart\|\|''\)\.slice\(0,4\);/);
+});

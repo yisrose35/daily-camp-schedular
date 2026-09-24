@@ -134,7 +134,7 @@ serve(async (req) => {
     const authedCampId = await callerCampId(req);
     if (!authedCampId) return json({ error: "Only camp owners/admins can refund a canteen deposit." }, 403);
 
-    const { camperName, camperId: body_camperId, amount, reason } = await req.json();
+    const { camperName, camperId: body_camperId, amount, reason, idempotencyKey } = await req.json();
     // The camper by ID when the page sent one: the account's key is a spelling.
     const camperIdSent = (body_camperId != null && /^\d+$/.test(String(body_camperId)) && Number(body_camperId) > 0) ? Number(body_camperId) : null;
     if (camperIdSent == null && !camperName) return json({ error: "camperId (or camperName) is required" }, 400);
@@ -221,7 +221,15 @@ serve(async (req) => {
         if (reason === "duplicate" || reason === "fraudulent" || reason === "requested_by_customer") params.reason = reason;
         if (pi.transfer_data?.destination) params.reverse_transfer = "true";
 
-        const refund = await stripePost("/refunds", params, `canteen_refund_${dep.paymentIntentId}_${Math.round(chunk * 100)}`);
+        // What is still refundable is part of the key (TED-097): a second refund of
+      // the same amount later is a NEW refund, while a retry of this one after a
+      // lost answer repeats the key and Stripe answers with the refund it made.
+      // The page's key for this refund when it sends one (TED-105): a retry of
+      // the same refund repeats it, so Stripe answers with the refund it made.
+      const reqKey = (typeof idempotencyKey === "string" && idempotencyKey.trim()) ? idempotencyKey.trim() : "";
+      const refund = await stripePost("/refunds", params, reqKey
+        ? `canteen_refund_${reqKey}_${dep.paymentIntentId}_${Math.round(chunk * 100)}`
+        : `canteen_refund_${dep.paymentIntentId}_${Math.round(dep.remaining * 100)}_${Math.round(chunk * 100)}`);
         if (refund.error) throw new Error(refund.error.message);
 
         const { error: creditErr } = await supabase.rpc("refund_canteen_deposit_from_stripe", {

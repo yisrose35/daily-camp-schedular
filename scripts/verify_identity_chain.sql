@@ -1,5 +1,5 @@
 -- ============================================================================
--- Confirm migrations 222-264 are in and doing their job.
+-- Confirm migrations 222-273 are in and doing their job.
 --
 -- Paste the whole thing into the Supabase SQL Editor. It is READ ONLY — one
 -- SELECT, nothing is created, changed or deleted, and the two purge functions
@@ -572,6 +572,78 @@ UNION ALL
     ('264  a plan charges the amounts the office set',
      CASE WHEN pg_get_functiondef(to_regprocedure('public.plan_due(jsonb,jsonb,text)')) !~ 'amounts'
           THEN 'apply 264 — autopay ignores the amounts typed into a payment plan and splits the whole balance evenly'
+          ELSE 'ok' END),
+    -- A Zelle / bank-transfer payment reaches the family's ledger (TED-077).
+    ('265  a bank deposit reaches the ledger',
+     CASE WHEN NOT EXISTS (SELECT 1 FROM pg_trigger WHERE tgname = 'trg_bank_deposit_to_ledger' AND NOT tgisinternal)
+          THEN 'apply 265 — a Zelle or bank-transfer payment never lowers a family''s balance, and autopay collects it again'
+          ELSE 'ok' END),
+    -- An office tab left open cannot undo what the server wrote (TED-078).
+    ('266  an old tab cannot undo the server',
+     CASE WHEN to_regprocedure('public._merge_family_from_page(jsonb,jsonb)') IS NULL
+               OR pg_get_functiondef(to_regprocedure('public.sync_camp_billing(uuid,jsonb,jsonb,jsonb,jsonb)')) !~ '_merge_family_from_page'
+               OR pg_get_functiondef(to_regprocedure('public.project_camp_families()')) !~ '_merge_family_from_page'
+          THEN 'apply 266 — a Billing tab left open can undo autopay''s work and the family is debited again'
+          ELSE 'ok' END),
+    -- A charge the ledger conversion posted knows which charge it is (TED-082).
+    ('267  a converted charge knows its charge',
+     CASE WHEN to_regprocedure('public._link_converted_charges(jsonb)') IS NULL
+               OR pg_get_functiondef(to_regprocedure('public.convert_family_ledgers(uuid,boolean)')) !~ 'chargeId'
+               OR pg_get_functiondef(to_regprocedure('public._merge_family_from_page(jsonb,jsonb)')) !~ '_keep_charge_links'
+          THEN 'apply 267 — on a converted camp, re-pricing a shop order bills it twice and cancelling it takes nothing off'
+          ELSE 'ok' END),
+    -- A card charge that was cut off can be tried again (TED-083/085/086).
+    ('268  a cut-off charge can be tried again',
+     CASE WHEN to_regprocedure('public.claim_charge_intent(uuid,text,numeric,text,boolean)') IS NULL
+               -- this round's copy: a stuck charge tells the office, and a takeover counts as asked now
+               OR pg_get_functiondef(to_regprocedure('public.claim_charge_intent(uuid,text,numeric,text,boolean)')) !~ 'charge_unconfirmed'
+               OR EXISTS (SELECT 1 FROM pg_constraint WHERE conrelid = 'public.processor_transactions'::regclass
+                           AND contype = 'c' AND pg_get_constraintdef(oid) ~ 'refund''')
+          THEN 'apply 268 BEFORE redeploying registration-deposit-checkout — a deposit charge that is cut off tells the parent "already paid" for ever'
+          ELSE 'ok' END),
+    -- Every kind of payment plan can hold a bank debit (TED-084).
+    ('269  every plan can hold a bank debit',
+     CASE WHEN to_regprocedure('public._plan_path(jsonb,text)') IS NULL
+               OR pg_get_functiondef(to_regprocedure('public.hold_autopay_charge(uuid,text,text,jsonb)')) !~ '_plan_path'
+               OR pg_get_functiondef(to_regprocedure('public.flag_plan_collection(uuid,text,text,text,text)')) !~ '_plan_path'
+               OR pg_get_functiondef(to_regprocedure('public._merge_family_from_page(jsonb,jsonb)')) !~ '_merge_plan_state'
+          THEN 'apply 269 BEFORE redeploying charge-due-installments — families on an old-style plan who pay by bank are debited every night'
+          ELSE 'ok' END),
+    -- Money notices go only to people who can see Billing (TED-087).
+    ('270  money notices for Billing only',
+     CASE WHEN to_regprocedure('public.is_money_notice(text)') IS NULL
+               -- this round's copy (TED-104): the full list of money notices
+               OR NOT public.is_money_notice('autopay_setup') OR NOT public.is_money_notice('charge_unconfirmed')
+               OR NOT EXISTS (SELECT 1 FROM pg_policies WHERE tablename = 'notifications' AND policyname = 'notifications_select'
+                               AND qual ~ 'is_money_notice')
+               OR (to_regclass('public.link_tip_cart_items') IS NOT NULL
+                   AND NOT EXISTS (SELECT 1 FROM information_schema.columns
+                                    WHERE table_name = 'link_tip_cart_items' AND column_name = 'stripe_payment_intent_id'))
+          THEN 'apply 270 — every staff member sees unmatched card payments, declines and chargebacks with amounts and cards'
+          ELSE 'ok' END),
+    -- Parents see what the server records; early money reaches the ledger;
+    -- a deposit can be paid straight after applying (TED-088/077/089).
+    ('271  parents see what the server records',
+     CASE WHEN pg_get_functiondef(to_regprocedure('public.projected_family_ledger(uuid,text)')) !~ 'camp_families'
+               -- this round's copy (TED-104): one family per catch-up, and a paid deposit cannot be unpaid by an old tab
+               OR to_regprocedure('public._catch_up_family_ledger(uuid,text)') IS NULL
+               OR pg_get_functiondef(to_regprocedure('public._ledger_started_catch_up()')) !~ '_catch_up_family_ledger'
+               OR to_regprocedure('public._deposit_charges_union(uuid,text)') IS NULL
+               OR NOT EXISTS (SELECT 1 FROM pg_trigger WHERE tgname = 'trg_ledger_started_catch_up' AND NOT tgisinternal)
+               OR pg_get_functiondef(to_regprocedure('public._registration_deposit_owed(uuid,text)')) !~ '_application_entry'
+          THEN 'apply 271 BEFORE redeploying registration-deposit-checkout — parents see stale balances in Link and cannot pay a deposit right after applying'
+          ELSE 'ok' END),
+    -- A Billing tab left open keeps the shop's charges (TED-091).
+    ('272  an old tab keeps the shop''s charges',
+     CASE WHEN pg_get_functiondef(to_regprocedure('public._merge_family_from_page(jsonb,jsonb)')) !~ 'LIKE ''shop'
+               -- this round's copy: id-less plans matched by schedule, not position
+               OR pg_get_functiondef(to_regprocedure('public._merge_family_from_page(jsonb,jsonb)')) !~ '_plan_fingerprint'
+          THEN 'apply 272 — an office tab left open cancels shop orders billed after it opened'
+          ELSE 'ok' END),
+    -- "Nothing went through" only releases a refund that has waited (TED-093).
+    ('273  a refund is released only when it is old',
+     CASE WHEN to_regprocedure('public.release_stale_refund_intent(uuid,text,interval)') IS NULL
+          THEN 'apply 273 BEFORE redeploying payments-refund and payments-canteen-refund — a refund that was cut off cannot be retried'
           ELSE 'ok' END)
     ) AS x(item, result)
 

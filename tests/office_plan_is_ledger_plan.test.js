@@ -119,3 +119,17 @@ test('TED-074: an application asking for a payment plan always gives the office 
     // the switch says what it really does: offers the choice on the registration form
     assert.match(SRC, /Let parents ask for a payment plan on the registration form/);
 });
+
+test('TED-080: the parent portal shows the amounts autopay will charge', () => {
+    const LINK = fs.readFileSync(path.join(__dirname, '..', 'campistry_link_parent.html'), 'utf8');
+    const at = LINK.indexOf('function _lkPlanSchedule(');
+    let i = LINK.indexOf('{', at), d = 0;
+    for (; i < LINK.length; i++) { if (LINK[i] === '{') d++; else if (LINK[i] === '}' && --d === 0) break; }
+    const lctx = {}; vm.createContext(lctx);
+    vm.runInContext(LINK.slice(at, i + 1) + '\nthis.s=_lkPlanSchedule;', lctx);
+    const plan = { dueDates: ['2026-06-01', '2026-07-01', '2026-08-01'], amounts: [1000, 200, 200], nextIndex: 0 };
+    assert.deepStrictEqual(Array.from(lctx.s(plan, 1400), x => x.amount), [1000, 200, 200]);
+    // and exactly what the office sees
+    assert.deepStrictEqual(Array.from(lctx.s(plan, 1400), x => x.amount), Array.from(ctx.sched(plan, 1400), x => x.amount));
+    assert.deepStrictEqual(Array.from(lctx.s({ dueDates: ['2026-06-01', '2026-07-01'], nextIndex: 0 }, 600), x => x.amount), [300, 300]);
+});

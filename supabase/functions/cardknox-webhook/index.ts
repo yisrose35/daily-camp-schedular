@@ -157,8 +157,11 @@ serve(async (req) => {
     }
     const webhookPin = credResult.credentials?.webhookPin;
     if (!webhookPin) {
-      console.error(`[cardknox-webhook] Camp ${campId} has no webhookPin on file — cannot verify`);
-      return text("Not configured", 200);
+      // NOT 2xx (TED-087): a 200 tells Sola the notice was delivered, and the
+      // payment would never be recorded. An error keeps Sola retrying until
+      // the camp's PIN is on file.
+      console.error(`[cardknox-webhook] Camp ${campId} has no webhookPin on file — cannot verify; asking Sola to retry`);
+      return text("Not configured", 503);
     }
     if (!verifySignature(rawBody, webhookPin, signature)) {
       console.error(`[cardknox-webhook] Signature mismatch for camp ${campId}`);

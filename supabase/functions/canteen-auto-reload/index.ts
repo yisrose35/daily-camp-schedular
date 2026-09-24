@@ -128,12 +128,27 @@ async function stripeCharge(customerId: string, pmId: string | null, amount: num
   }
   const headers: Record<string, string> = { "Authorization": `Bearer ${STRIPE_SECRET}`, "Content-Type": "application/x-www-form-urlencoded" };
   if (idempotencyKey) headers["Idempotency-Key"] = idempotencyKey;
-  const resp = await fetch(`${STRIPE_API}/payment_intents`, {
-    method: "POST",
-    headers,
-    body: new URLSearchParams(params).toString(),
-  });
-  return resp.json();
+  let resp: Response;
+  try {
+    resp = await fetch(`${STRIPE_API}/payment_intents`, {
+      method: "POST",
+      headers,
+      body: new URLSearchParams(params).toString(),
+    });
+  } catch (e) {
+    // Cut off: whether Stripe charged is unknown — NOT a decline (TED-094).
+    return { error: { message: (e as Error).message }, unknownOutcome: true };
+  }
+  let body: any = {};
+  try { body = await resp.json(); } catch { /* not JSON */ }
+  // A Stripe server error (or a concurrent try with the same key) is not a
+  // decline either: the retry must repeat THIS key so Stripe answers with what
+  // it did, instead of starting a second charge under a new one.
+  if (resp.status >= 500 || resp.status === 409 || body?.error?.type === "api_error"
+      || body?.error?.type === "idempotency_error") {
+    return Object.assign({ error: { message: `Stripe ${resp.status}` } }, body, { unknownOutcome: true });
+  }
+  return body;
 }
 
 // Inlined rather than imported — same "no shared module between Edge
@@ -533,9 +548,20 @@ serve(async (req) => {
         `${campNames.get(String(row.camp_id)) || "Camp"} — canteen auto-reload (${due.kind}), ${displayName(camperName)}`,
         { campId: String(row.camp_id), camperName, camperId: camperId != null ? String(camperId) : "", source: "campistry-canteen-deposit", auto: "true" },
         campDestinations.get(String(row.camp_id)) || null,
-        `${row.camp_id}:${reloadKey}`,
+        // The failure count makes a retry after a decline a NEW request
+        // (TED-085): Stripe replays a key's first answer — the decline — for
+        // 24 hours, and three replays would switch auto-reload off for a
+        // parent who had already fixed their card.
+        `${row.camp_id}:${reloadKey}:f${Number(ar.consecutiveFailures) || 0}`,
       );
 
+      if (pi.unknownOutcome) {
+        // Neither a charge nor a decline: give the slot back WITHOUT counting a
+        // failure, so the next check repeats this same Stripe key (TED-094).
+        await releaseReload();
+        details.push({ camp: row.camp_id, camper: camperName, camperId, amount: due.amount, kind: due.kind, result: "retry_same_key", reason: pi.error?.message });
+        continue;
+      }
       if (pi.error || pi.status === "requires_action") {
         await releaseReload();
         const reason = pi.error?.message || "requires_authentication";
@@ -560,7 +586,14 @@ serve(async (req) => {
         details.push({ camp: row.camp_id, camper: camperName, camperId, amount: due.amount, kind: due.kind, result: "charged", stripeStatus: pi.status });
         await persistAr(String(row.camp_id), camperName, ar, camperId);
       } else {
-        details.push({ camp: row.camp_id, camper: camperName, camperId, amount: due.amount, kind: due.kind, result: pi.status });
+        // requires_payment_method, canceled, …: no money moved. Give the slot
+        // back rather than holding it until tomorrow, and count it as the
+        // failure it is.
+        await releaseReload();
+        markFailure(ar, today, String(pi.status || "not_charged"));
+        failed++;
+        details.push({ camp: row.camp_id, camper: camperName, camperId, amount: due.amount, kind: due.kind, result: "failed", reason: pi.status });
+        await persistAr(String(row.camp_id), camperName, ar, camperId);
       }
     }
   }

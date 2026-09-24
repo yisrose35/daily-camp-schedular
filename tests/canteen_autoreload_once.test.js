@@ -40,3 +40,46 @@ test('a declined reload gives the claim back, so a later check can try again', (
     const r = runEdge('canteen-auto-reload', TWICE({ error: { message: 'Your card was declined.' } }));
     assert.ok(r.rpcs.some(x => x.name === 'release_refund_intent'), 'a declined reload kept its claim');
 });
+
+test('TED-085: a retry after a declined reload is a new Stripe request, not a replay of the decline', () => {
+    const r = runEdge('canteen-auto-reload', `
+T.env = { STRIPE_SECRET_KEY: 'sk_test', SUPABASE_URL: 'http://db', SUPABASE_ANON_KEY: 'anon', SUPABASE_SERVICE_ROLE_KEY: 'svc', CANTEEN_AUTORELOAD_CRON_SECRET: 'c' };
+T.tables.camps = [{ id: 'camp1', owner: 'u-owner', payment_processor_key: null }];
+let state: any = { enabled: true, cardOnFile: true, stripeCustomerId: 'cus_P', thresholdEnabled: true, thresholdAmount: 5, thresholdReloadAmount: 50 };
+T.rpc.canteen_autoreload_accounts = () => [{ camp_id: 'camp1', resolvable: true, person_id: 7, camper_name: 'Avi', account: { balance: 3, autoReload: JSON.parse(JSON.stringify(state)) } }];
+T.rpc.update_canteen_autoreload_state = (a: any) => { state = a.p_autoreload; return { success: true }; };
+const claims: Record<string, any> = {};
+T.rpc.claim_refund_intent = (a: any) => { if (claims[a.p_key]) return { claimed: false, previous: {} }; claims[a.p_key] = 1; return { claimed: true }; };
+T.rpc.release_refund_intent = (a: any) => { delete claims[a.p_key]; return true; };
+let n = 0;
+T.fetch = (url: string) => url.endsWith('/payment_intents') ? (n++ === 0 ? { __status: 402, error: { message: 'Your card was declined.' } } : { id: 'pi_2', status: 'succeeded' }) : {};
+const req = { headers: { 'x-cron-secret': 'c' }, body: {} };
+T.requests = [req, req];`);
+    const k = charges(r).map(c => c.headers['Idempotency-Key']);
+    assert.strictEqual(k.length, 2, 'the retry did not reach Stripe');
+    assert.notStrictEqual(k[0], k[1], 'Stripe would replay the decline for 24 hours');
+});
+
+test('TED-085: a reload Stripe left unfinished gives its slot back and counts as a failure', () => {
+    const r = runEdge('canteen-auto-reload', TWICE({ id: 'pi_x', status: 'requires_payment_method' }));
+    assert.ok(r.rpcs.some(x => x.name === 'release_refund_intent'), 'the slot was held for the rest of the day');
+});
+
+test('TED-094: a Stripe server error is not a decline — the retry repeats the same key', () => {
+    const r = runEdge('canteen-auto-reload', `
+T.env = { STRIPE_SECRET_KEY: 'sk_test', SUPABASE_URL: 'http://db', SUPABASE_ANON_KEY: 'anon', SUPABASE_SERVICE_ROLE_KEY: 'svc', CANTEEN_AUTORELOAD_CRON_SECRET: 'c' };
+T.tables.camps = [{ id: 'camp1', owner: 'u-owner', payment_processor_key: null }];
+let state: any = { enabled: true, cardOnFile: true, stripeCustomerId: 'cus_P', thresholdEnabled: true, thresholdAmount: 5, thresholdReloadAmount: 50 };
+T.rpc.canteen_autoreload_accounts = () => [{ camp_id: 'camp1', resolvable: true, person_id: 7, camper_name: 'Avi', account: { balance: 3, autoReload: JSON.parse(JSON.stringify(state)) } }];
+T.rpc.update_canteen_autoreload_state = (a: any) => { state = a.p_autoreload; return { success: true }; };
+const claims: Record<string, any> = {};
+T.rpc.claim_refund_intent = (a: any) => { if (claims[a.p_key]) return { claimed: false, previous: {} }; claims[a.p_key] = 1; return { claimed: true }; };
+T.rpc.release_refund_intent = (a: any) => { delete claims[a.p_key]; return true; };
+let n = 0;
+T.fetch = (url: string, init: any) => url.endsWith('/payment_intents') ? (n++ === 0 ? { __status: 500, error: { type: 'api_error', message: 'boom' } } : { id: 'pi_2', status: 'succeeded' }) : {};
+const req = { headers: { 'x-cron-secret': 'c' }, body: {} };
+T.requests = [req, req];`);
+    const k = charges(r).map(c => c.headers['Idempotency-Key']);
+    assert.strictEqual(k.length, 2);
+    assert.strictEqual(k[0], k[1], 'a new key after a server error could charge the parent twice');
+});

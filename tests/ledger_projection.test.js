@@ -226,7 +226,8 @@ test('a missing projection row reads as an empty ledger, which is 171\'s own def
     // blob gave — not-converted, fall back to derived.
     assert.match(CAT.projected_family_ledger.body, /jsonb_build_object\('entries', COALESCE\(/);
     assert.match(CAT.projected_family_ledger.body, /'\[\]'::jsonb\)\);/);
-    assert.match(CAT.projected_family_payments.body, /'\[\]'::jsonb\);/);
+    // (271: the payments come from their rows; an empty result is still [])
+    assert.match(CAT.projected_family_payments.body, /COALESCE\(jsonb_agg\([\s\S]*'\[\]'::jsonb\)/);
 });
 
 test('the projected reads are plain functions gated by the tables\' RLS', () => {

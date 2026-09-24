@@ -1486,11 +1486,15 @@ function _lkPlanSchedule(plan,balance){
     if(!dates.length)return [];
     var next=Number(plan.nextIndex)||0;
     var owed=Math.max(0,Number(balance)||0);
+    var fixed=Array.isArray(plan.amounts)?plan.amounts:[];
     var out=[];
     for(var i=0;i<dates.length;i++){
         if(i<next){ out.push({dueDate:dates[i],amount:null,status:'paid'}); continue; }
         var left=dates.length-i;
-        var amt=left<=1?owed:Math.round((owed/left)*100)/100;
+        // The amount the office set, when it set one — exactly what autopay
+        // charges (migration 264, TED-080); otherwise what is owed split evenly.
+        var amt=(typeof fixed[i]==='number'&&fixed[i]>0)?Math.min(Math.round(fixed[i]*100)/100,owed)
+               :(left<=1?owed:Math.round((owed/left)*100)/100);
         out.push({dueDate:dates[i],amount:amt,status:'pending'});
         owed=Math.round((owed-amt)*100)/100;
     }
@@ -1578,7 +1582,10 @@ function _autopaySectionHtml(cid,d,plan){
         body+='<div style="font-size:.75rem;color:var(--text-muted);margin-bottom:2px;">Next payment</div>';
         body+='<div style="font-size:1.1rem;font-weight:700;margin-bottom:10px;">'+(next.amount==null?'':_lkMoney(next.amount)+' ')+'due '+String(next.dueDate||'').replace(/[<>&]/g,'')+'</div>';
         if(plan&&Array.isArray(plan.dueDates))
-            body+='<div style="font-size:.68rem;color:var(--text-muted);margin:-8px 0 10px;">Worked out from what is still owed, so it stays right if you pay extra.</div>';
+            body+='<div style="font-size:.68rem;color:var(--text-muted);margin:-8px 0 10px;">'
+                +(Array.isArray(plan.amounts)&&plan.amounts.some(function(a){return typeof a==='number'&&a>0})
+                    ?'The amount the camp set for this payment — never more than you still owe.'
+                    :'Worked out from what is still owed, so it stays right if you pay extra.')+'</div>';
     }
     if(onFile){
         body+='<div style="font-size:.78rem;color:#0E7C4A;font-weight:600;display:flex;align-items:center;gap:6px;">✓ Autopay is on — charging '+String(methodTxt).replace(/[<>&]/g,'')+' automatically</div>';

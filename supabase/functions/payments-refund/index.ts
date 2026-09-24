@@ -31,7 +31,7 @@ async function cardknoxRefund(
   credentials: Record<string, string>,
   externalTransactionId: string,
   amountCents: number,
-): Promise<{ success: boolean; externalTransactionId?: string; status?: string; error?: string; raw?: unknown }> {
+): Promise<{ success: boolean; uncertain?: boolean; externalTransactionId?: string; status?: string; error?: string; raw?: unknown }> {
   const apiKey = credentials.apiKey;
   if (!apiKey) return { success: false, error: "Missing apiKey" };
   try {
@@ -46,10 +46,12 @@ async function cardknoxRefund(
     const text = await resp.text();
     const r: Record<string, string> = {};
     new URLSearchParams(text).forEach((v, k) => { r[k] = v; });
+    // No result at all is not a "no" (TED-093): the gateway may have refunded.
+    if (!r.xResult) return { success: false, uncertain: true, error: "No answer from the card company (HTTP " + resp.status + ")", raw: r };
     if (r.xResult !== "A") return { success: false, status: r.xStatus, error: r.xError || "Refund failed", raw: r };
     return { success: true, externalTransactionId: r.xRefNum, status: r.xStatus, raw: r };
   } catch (err) {
-    return { success: false, error: (err as Error).message };
+    return { success: false, uncertain: true, error: (err as Error).message };   // cut off: may have moved money (TED-093)
   }
 }
 
@@ -76,7 +78,7 @@ async function banquestRefund(
   credentials: Record<string, string>,
   externalTransactionId: string,
   amountCents: number,
-): Promise<{ success: boolean; externalTransactionId?: string; status?: string; error?: string; raw?: unknown }> {
+): Promise<{ success: boolean; uncertain?: boolean; externalTransactionId?: string; status?: string; error?: string; raw?: unknown }> {
   if (!credentials.sourceKey || !credentials.pin) return { success: false, error: "Missing sourceKey/pin" };
   const refNum = Number(externalTransactionId);
   if (!Number.isFinite(refNum)) return { success: false, error: "Original transaction reference is not a valid Banquest reference_number." };
@@ -94,13 +96,16 @@ async function banquestRefund(
     const st = String(data?.status || "").toLowerCase();
     const ok = code === "A" || /approv|void|refund/.test(st);
     const newRef = data?.reference_number != null ? String(data.reference_number) : (data?.transaction?.id ? String(data.transaction.id) : "");
+    if (resp.status >= 500 && !newRef) {
+      return { success: false, uncertain: true, error: `No answer from the card company (HTTP ${resp.status})`, raw: data };
+    }
     if (resp.status < 200 || resp.status >= 300 || !ok || !newRef) {
       const errMsg = data?.error_message || (Array.isArray(data?.error_messages) && data.error_messages[0]) || data?.error_details || data?.error || data?.message || data?.status || `Refund failed (HTTP ${resp.status})`;
       return { success: false, status: data?.status, error: errMsg, raw: data };
     }
     return { success: true, externalTransactionId: newRef, status: data?.status, raw: data };
   } catch (err) {
-    return { success: false, error: (err as Error).message };
+    return { success: false, uncertain: true, error: (err as Error).message };   // cut off: may have moved money (TED-093)
   }
 }
 
@@ -154,8 +159,8 @@ serve(async (req) => {
     const campId = await callerCampId(req);
     if (!campId) return json({ error: "Only camp owners/admins can issue a refund." }, 403);
 
-    const { externalTransactionId, amount, idempotencyKey } = await req.json();
-    if (!externalTransactionId || !amount) {
+    const { externalTransactionId, amount, idempotencyKey, confirmNotRefunded } = await req.json();
+    if (!externalTransactionId || !amount || !(Number(amount) > 0)) {
       return json({ error: "externalTransactionId and amount are required (see this file's header re: full refunds)." }, 400);
     }
 
@@ -192,10 +197,33 @@ serve(async (req) => {
         p_payment_ref: String(externalTransactionId),
       });
       if (claim && claim.claimed === false) {
-        // Somebody already did this. Replay their answer rather than refunding
-        // again — a retry should look like the success it is repeating.
-        console.log(`[payments-refund] replaying settled refund for key ${claimKey}`);
-        return json(Object.assign({ replayed: true }, claim.previous || {}), 200);
+        if (claim.previous && claim.previous.externalTransactionId) {
+          // Somebody already did this. Replay their answer rather than refunding
+          // again — a retry should look like the success it is repeating.
+          console.log(`[payments-refund] replaying settled refund for key ${claimKey}`);
+          return json(Object.assign({ replayed: true }, claim.previous), 200);
+        }
+        // Held, never confirmed: an earlier try was cut off after the card
+        // company was asked, or is still running (TED-093). Not a success to
+        // replay and not a reason to refund again — unless the office has looked
+        // at the processor and says nothing went through.
+        if (confirmNotRefunded !== true) {
+          return json({ uncertain: true, error: "An earlier try at this refund was never confirmed by the card company. Check the processor's dashboard: if it is not there, confirm and it will be sent." }, 200);
+        }
+        // Only a claim that has waited a few minutes (273): a younger one may be a
+        // refund still running — a double-click — not one that was cut off.
+        const { data: freed } = await service.rpc("release_stale_refund_intent", { p_camp_id: campId, p_key: claimKey });
+        if (freed !== true) {
+          return json({ uncertain: true, error: "This refund was sent a moment ago and may still be going through. Wait a few minutes, check the processor's dashboard, and try again only if it is not there." }, 200);
+        }
+        const { data: again } = await service.rpc("claim_refund_intent", {
+          p_camp_id: campId, p_key: claimKey,
+          p_amount: Number((amountCents / 100).toFixed(2)),
+          p_payment_ref: String(externalTransactionId),
+        });
+        if (again && again.claimed === false) {
+          return json({ uncertain: true, error: "This refund is being sent right now by someone else." }, 200);
+        }
       }
     }
 
@@ -203,6 +231,12 @@ serve(async (req) => {
       ? await cardknoxRefund(credResult.credentials, String(externalTransactionId), amountCents)
       : await banquestRefund(credResult.credentials, String(externalTransactionId), amountCents);
 
+    if (!result.success && result.uncertain) {
+      // Maybe it moved money (TED-093). Keep the claim: a retry is told to check
+      // the processor instead of sending a second refund.
+      console.error(`[payments-refund] ${processorKey} refund of ${externalTransactionId} unconfirmed: ${result.error}`);
+      return json({ uncertain: true, error: "The card company did not answer, so this refund may or may not have gone through. Check the processor's dashboard before trying again." }, 200);
+    }
     if (!result.success) {
       // The processor did NOT move money, so hand the claim back — otherwise a
       // dropped connection locks this refund out for good: the office retries, is

@@ -1778,6 +1778,14 @@ window._regPayDeposit=async function(campId,enrollId){
             if(msg){msg.textContent='Paid '+fm(d.amount||0)+(d.last4?' · card ending '+d.last4:'')+' — thank you.';msg.style.color='var(--ok)';}
             return;
         }
+        // Someone is already paying this deposit, or a charge was cut off and
+        // the office is checking it (TED-083). Not paid, and not a failure of
+        // this card: keep it, say what is happening, and do not offer to pay.
+        if(d&&(d.inProgress||d.reason==='needs_check')){
+            if(btn)btn.style.display='none';
+            if(msg){msg.textContent=d.error||'A payment for this deposit is already in progress.';msg.style.color='';}
+            return;
+        }
         if(!d||!d.success||!d.url){
             // The captured card is spent or gone. Clear the tick so a parent
             // is not staring at a green badge next to a failed payment.

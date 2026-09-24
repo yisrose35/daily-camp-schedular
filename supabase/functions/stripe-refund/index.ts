@@ -103,6 +103,19 @@ async function callerCampId(req: Request): Promise<string | null> {
 // families; a payment with no customer must carry the camp in Stripe's own
 // metadata (set by our checkout functions, never by the refund request).
 async function campOwnsPayment(campId: string, pi: any): Promise<boolean> {
+  // Our own functions stamp the camp on every payment they create (metadata is
+  // set with the platform's secret key, never by a browser). That decides it
+  // first: a registration deposit is made on the FORM's customer, which is
+  // often not the family's card on file (a returning family, a sibling, a
+  // hosted checkout's fresh customer) — and it is still this camp's (TED-096).
+  //
+  // But only for a family's money (TED-100): Campistry's own charges TO the camp
+  // — the SMS number and monthly SMS fees — carry the same camp stamp, and a
+  // camp must never be able to refund those to itself.
+  const meta = pi?.metadata || {};
+  if (/telnyx/i.test(String(meta.purpose || "")) || /telnyx/i.test(String(meta.source || ""))) return false;
+  if (meta.campId && String(meta.campId) !== campId) return false;   // another camp's, by its own stamp
+  if (String(meta.campId || "") === campId && String(meta.source || "") === "registration_deposit") return true;
   const customer = typeof pi?.customer === "string" ? pi.customer : pi?.customer?.id;
   if (customer) {
     const service = createClient(SUPABASE_URL, SUPABASE_SERVICE_KEY);
@@ -181,15 +194,22 @@ serve(async (req) => {
         p_amount: params.amount ? Number(params.amount) / 100 : null,
         p_payment_ref: String(paymentIntentId),
       });
-      if (claim && claim.claimed === false) {
+      if (claim && claim.claimed === false && claim.previous && claim.previous.refundId) {
         console.log(`[stripe-refund] replaying settled refund for key ${claimKey}`);
-        return json(Object.assign({ replayed: true }, claim.previous || {}), 200);
+        return json(Object.assign({ replayed: true }, claim.previous), 200);
       }
+      // Held but never confirmed: an earlier try was cut off after Stripe was
+      // asked (TED-093). Asking again with the SAME Stripe key is safe — Stripe
+      // answers with the refund it made, or makes it now — so fall through.
     }
 
     const refund = await stripePost("/refunds", params, claimKey ? `refund:${campId}:${claimKey}` : undefined);
 
     if (refund.error) {
+      // Still running at Stripe (a concurrent try with this key): not a "no".
+      if (refund.error.type === "idempotency_error" || refund.error.type === "api_error") {
+        return json({ uncertain: true, error: "Stripe is still working on this refund — wait a minute and check before trying again." }, 200);
+      }
       if (claimKey) await service.rpc("release_refund_intent", { p_camp_id: campId, p_key: claimKey });
       throw new Error(refund.error.message);
     }

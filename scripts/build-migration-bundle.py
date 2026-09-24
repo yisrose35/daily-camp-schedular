@@ -182,10 +182,16 @@ HEADER = """-- ═════════════════════�
 -- GENERATED FILE — do not edit by hand.
 -- Rebuild with:  python3 scripts/build-migration-bundle.py
 --
--- Run this whole file in the Supabase SQL Editor. SAFE TO RE-RUN as often as
--- you like: every statement is CREATE OR REPLACE, IF NOT EXISTS, ON CONFLICT DO
+-- !! RETIRED for any database that has migration 262 or later (TED-087). It
+-- carries OLDER versions of plan_due, settle_shop_order and
+-- record_autopay_charge, so running it now would undo 263/264 and more. The
+-- first statement below checks, and stops the whole file — changing nothing —
+-- when the database is newer than this bundle. Apply the numbered migrations
+-- newer than your last one instead.
+--
+-- On a database from before 262 only: run this whole file in the Supabase SQL
+-- Editor. Every statement is CREATE OR REPLACE, IF NOT EXISTS, ON CONFLICT DO
 -- NOTHING, or an UPDATE whose WHERE clause matches nothing once applied.
--- Running it a second time changes nothing.
 --
 -- WHY A BUNDLE: there is no migration runner here — migrations are pasted in by
 -- hand — and numbers 146-151 were each used TWICE in this repo (once by the
@@ -593,8 +599,22 @@ UNION ALL SELECT 'lost-charge reconciliation report',
 """
 
 
+# Stops the file (the SQL Editor runs it as one transaction) on a database that
+# already has what came after the bundle.
+GUARD = """
+DO $bundle_guard$
+BEGIN
+    IF to_regprocedure('public.hold_autopay_charge(uuid,text,text,jsonb)') IS NOT NULL
+       OR to_regprocedure('public._sync_charge_to_ledger(jsonb,text)') IS NOT NULL THEN
+        RAISE EXCEPTION 'APPLY_BUNDLE.sql is retired: this database already has migration 262 or later, and this file would put back older billing functions. Nothing was changed. Run only the numbered migrations newer than your last one.';
+    END IF;
+END $bundle_guard$;
+"""
+
+
 def main():
-    parts = [HEADER]
+    assert "DO $preflight$" in HEADER
+    parts = [HEADER.replace("DO $preflight$", GUARD.strip() + "\n\nDO $preflight$", 1)]
     missing = []
     for name, desc in MANIFEST:
         path = os.path.join(MIG, name + ".sql")

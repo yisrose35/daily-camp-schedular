@@ -84,7 +84,7 @@ test('collecting clears the block, the count and the schedule together', () => {
     assert.match(body, /IF COALESCE\(p_reason, ''\) = '' THEN[\s\S]{0,400}v_plan := v_plan - 'collectionBlocked';/,
         'clearing no longer removes the whole block');
     // The runner still clears on a successful charge.
-    assert.match(RUNNER, /flagPlan\(String\(row\.camp_id\), famKey, String\(plan\.id \|\| ""\), null\)/);
+    assert.match(RUNNER, /flagPlan\(String\(row\.camp_id\), famKey, refOf\(plan\), null\)/);
 });
 
 test('`since` still survives a repeat so the office sees how long', () => {

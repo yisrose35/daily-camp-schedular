@@ -4080,6 +4080,15 @@ function mergeFamiliesReconciled(keyA,keyB,reconciled){
     if(Array.isArray(b.plans)&&b.plans.length){
         a.plans=(Array.isArray(a.plans)?a.plans:[]).concat(b.plans);
     }
+    // B's extra charges and credits come with its entries (TED-081). The
+    // ledger is kept equal to charges[] by _postExistingCharges: leave a
+    // charge behind and its posted entry is reversed on the next save — the
+    // merged family would be quietly let off everything B was billed.
+    ['charges','credits'].forEach(function(k){
+        if(Array.isArray(b[k])&&b[k].length){
+            a[k]=(Array.isArray(a[k])?a[k]:[]).concat(b[k]);
+        }
+    });
     ['byopProcessor','byopCustomerRef','stripeCustomerId','stripePaymentMethodId',
      'cardOnFile','cardSavedDate','paymentMethodType','paymentMethodLabel'].forEach(function(k){
         if(a[k]==null&&b[k]!=null)a[k]=b[k];
@@ -6322,6 +6331,128 @@ function _planSchedule(plan,balance){
     return out;
 }
 
+/**
+ * A registration deposit charged by card is a PAYMENT on the family (TED-090).
+ *
+ * The deposit function records each card charge on the application
+ * (depositCharges — migration 271; older ones only depositReference). Nothing
+ * turned that into money on the family's account, so once enrolled the family
+ * was billed full tuition. Each charge becomes one payment row, keyed on the
+ * processor's reference — so it can be refunded like any other card payment,
+ * and it can never be counted twice — and is posted to the ledger.
+ * The office's "Mark deposit received" sets no reference and is untouched:
+ * that money is recorded in Billing by hand, as the button says.
+ */
+/** A typed payment found to BE a card charge becomes refundable to that card (TED-102). */
+function _markCardPayment(row,ref,proc,isStripe){
+    if(!row||!ref)return;
+    if(isStripe||/^pi_/.test(ref)){if(!row.stripePaymentIntentId)row.stripePaymentIntentId=ref;}
+    else{
+        if(!row.byopTransactionId)row.byopTransactionId=ref;
+        if(!row.byopProcessor&&proc)row.byopProcessor=proc;
+    }
+}
+function _postCardDepositsFor(f,fk,e,eid){
+    if(!f||!e)return 0;
+    var list=Array.isArray(e.depositCharges)?e.depositCharges.slice():[];
+    if(!list.length&&e.depositReference&&Number(e.depositPaid)>0){
+        list=[{ref:e.depositReference,amount:Number(e.depositPaid),date:e.depositPaidDate,processor:e.depositProcessor}];
+    }
+    var n=0;
+    list.forEach(function(c){
+        var ref=String((c&&c.ref)||''), amt=Math.round((Number(c&&c.amount)||0)*100)/100;
+        if(!ref||!(amt>0))return;
+        var proc=String(c.processor||''), isStripe=/^pi_/.test(ref)||proc==='stripe';
+        var row=(finPayments||[]).filter(function(p){
+            return p&&(p.depositReference===ref||p.stripePaymentIntentId===ref||p.byopTransactionId===ref);
+        })[0];
+        // Typed in by hand with the card reference in its Reference box: the
+        // same money (TED-095). Linked, never added a second time.
+        if(!row){
+            row=(finPayments||[]).filter(function(p){
+                return p&&p.familyKey===fk&&(Number(p.amount)||0)>0&&String(p.reference||'').trim()===ref;
+            })[0];
+            if(row){row.depositReference=ref;_markCardPayment(row,ref,proc,isStripe);n++;}
+        }
+        // Typed in by hand WITHOUT a reference, for the same amount around the
+        // same time: probably the same money — the office was told to record
+        // card deposits in Billing by hand before this existed. Not guessed
+        // either way: Billing asks the office (TED-095).
+        var decided=(f.depositReviewed&&f.depositReviewed[ref])||'';
+        if(!row&&decided!=='separate'){
+            var dAt=Date.parse(c.date||e.depositPaidDate||'')||0;
+            // A typed payment another open question already points at is not a
+            // candidate for this one too — two siblings' deposits must not both
+            // ask about the same typed payment (TED-102).
+            var asked={};
+            (Array.isArray(f.depositReview)?f.depositReview:[]).forEach(function(r){if(r&&r.ref!==ref&&r.paymentId!=null)asked[String(r.paymentId)]=1;});
+            var twin=(finPayments||[]).filter(function(p){
+                if(!p||p.familyKey!==fk||p.depositReference||p.stripePaymentIntentId||p.byopTransactionId)return false;
+                if(asked[String(p.id)])return false;
+                if(Math.abs((Number(p.amount)||0)-amt)>0.005)return false;
+                var pAt=Date.parse(p.date||'')||0;
+                return !dAt||!pAt||Math.abs(pAt-dAt)<=45*86400000;
+            })[0];
+            if(twin){
+                if(!Array.isArray(f.depositReview))f.depositReview=[];
+                if(!f.depositReview.some(function(r){return r&&r.ref===ref})){
+                    f.depositReview.push({ref:ref,amount:amt,paymentId:twin.id,processor:proc,date:c.date||e.depositPaidDate||'',camperName:e.camperName||'',camperId:e.camperId!=null?e.camperId:_camperIdOf(e.camperName)});
+                    n++;
+                }
+                return;
+            }
+        }
+        if(!row){
+            row={id:'dep_'+ref,family:f.name||'',familyKey:fk,
+                 camperName:e.camperName||'',camperId:e.camperId!=null?e.camperId:_camperIdOf(e.camperName),
+                 enrollmentId:eid,amount:amt,date:c.date||e.depositPaidDate||today(),
+                 method:(isStripe?'Card':(proc||'Card'))+' (registration deposit)',
+                 reference:ref,notes:'Registration deposit, charged to the card given when applying',
+                 stripePaymentIntentId:isStripe?ref:null,byopTransactionId:isStripe?null:ref,
+                 byopProcessor:isStripe?null:(proc||null),depositReference:ref,
+                 status:'succeeded',timestamp:Date.now()};
+            finPayments.push(row);
+            n++;
+        }
+        if(_postPaymentEntry(f,row))n++;
+    });
+    return n;
+}
+
+/** The office's answer to a card deposit that may already be recorded (TED-095). */
+async function resolveDepositReview(fk,ref){
+    var f=families[fk]; if(!f||!Array.isArray(f.depositReview))return;
+    var r=f.depositReview.filter(function(x){return x&&x.ref===ref})[0]; if(!r)return;
+    var twin=(finPayments||[]).filter(function(p){return p&&String(p.id)===String(r.paymentId)})[0];
+    // Settled meanwhile (the deposit was posted, or that typed payment was linked
+    // to another card charge): the question is out of date — drop it (TED-102).
+    var posted=(finPayments||[]).some(function(p){return p&&p!==twin&&p.depositReference===ref;});
+    if(posted||!twin||(twin.depositReference&&twin.depositReference!==ref)){
+        f.depositReview=f.depositReview.filter(function(x){return x&&x.ref!==ref});
+        save();try{if(curPage==='familydetail')renderFamilyDetailPage();else renderBilling()}catch(_){}
+        return toast('That question was already settled');
+    }
+    var same=await confirmDialog({title:'Is this the same money?',
+        message:(r.camperName?esc(r.camperName)+'\u2019s ':'')+'registration deposit of '+fm(r.amount)+' was paid by card'
+               +(r.date?' on '+esc(r.date):'')+'. '+(twin?'A payment of '+fm(twin.amount)+(twin.date?' on '+esc(twin.date):'')
+               +(twin.method?' ('+esc(twin.method)+')':'')+' was recorded by hand.':'')
+               +'<br><br>If they are the same money, it is linked to the card charge (so it can be refunded to the card) and counted once.',
+        confirmLabel:'Same money \u2014 link them'});
+    if(same){
+        if(twin){twin.depositReference=ref;_markCardPayment(twin,ref,r.processor||'',/^pi_/.test(ref));}
+    }else{
+        var sep=await confirmDialog({title:'Count the card deposit as well?',
+            message:'Only if the hand-recorded '+fm(r.amount)+' was a DIFFERENT payment. The card deposit is then added to the family as its own payment.',
+            confirmLabel:'Different money \u2014 add it',danger:true});
+        if(!sep)return;
+        if(!f.depositReviewed)f.depositReviewed={};
+        f.depositReviewed[ref]='separate';
+    }
+    f.depositReview=f.depositReview.filter(function(x){return x&&x.ref!==ref});
+    save();
+    try{if(curPage==='familydetail')renderFamilyDetailPage();else renderBilling()}catch(_){}
+}
+
 function _postTuitionFor(f,eid){
     var B=_billingCore();
     if(!B||!f)return false;
@@ -6431,9 +6562,12 @@ function _postExistingCharges(f){
     var B=_billingCore(); if(!B)return 0;
     var charges=Array.isArray(f.charges)?f.charges:[];
     var cents=function(v){return Math.round((Number(v)||0)*100)};
+    // A converted fee already linked to its charge (migration 267, or an
+    // earlier pass here) is counted under that charge below, never pooled.
     var pool=f.entries.filter(function(e){
-        return e&&e.kind==='charge'&&e.reason==='fee'&&/^le_conv_/.test(String(e.id||''));
-    }).map(function(e){return {cents:cents(e.amount),date:String(e.date||''),used:false}});
+        return e&&e.kind==='charge'&&e.reason==='fee'&&/^le_conv_/.test(String(e.id||''))
+            &&!(e.source&&e.source.chargeId!=null&&e.source.chargeId!=='');
+    }).map(function(e){return {e:e,cents:cents(e.amount),date:String(e.date||''),used:false}});
     // What the ledger already holds for each charge id (TED-066): charges
     // posted, less anything taken back.
     var net={},count={};
@@ -6462,11 +6596,20 @@ function _postExistingCharges(f){
         var cc=cents(c.amount), cd=String(c.date||'');
         var hit=pool.filter(function(p){return !p.used&&p.cents===cc&&p.date===cd})[0]
               ||pool.filter(function(p){return !p.used&&p.cents===cc})[0];
-        if(hit){hit.used=true;return}                                           // the conversion posted it
+        if(hit){                                                                // the conversion posted it:
+            hit.used=true;                                                      // link it, so a later re-price
+            hit.e.source=Object.assign({},hit.e.source||{},{chargeId:cid});     // or cancel is seen (TED-082)
+            count[cid]=1; net[cid]=hit.cents;
+            return;
+        }
         if(_postLedgerCharge(f,c))n++;
     });
-    // A charge that is gone from charges[] (a cancelled shop order) comes off.
-    Object.keys(net).forEach(function(cid){ if(!seen[cid]&&net[cid])adjust(cid,-net[cid],'charge'); });
+    // A charge that is gone from charges[] comes off — except the shop's
+    // (shop_<order>): only the server bills, re-prices and cancels those, and it
+    // syncs the ledger itself as it does (263). One missing HERE is a tab that
+    // loaded before the shop billed it, and taking it off would let the family
+    // off the order (TED-091).
+    Object.keys(net).forEach(function(cid){ if(!seen[cid]&&net[cid]&&!/^shop_/.test(cid))adjust(cid,-net[cid],'charge'); });
     return n;
 }
 
@@ -16173,6 +16316,8 @@ function buildFamilyLedgers(){
                     _famItemRaw(e.camperName,e.street,e.city,e.state,e.zip,e.parentName,e.parentEmail));
             }
             if(fk&&families[fk]&&_postTuitionFor(families[fk],eid))_posted++;
+            // ...and a deposit the parent paid by card when applying (TED-090)
+            if(fk&&families[fk])_posted+=_postCardDepositsFor(families[fk],fk,e,eid);
         });
         // buildFamilyLedgers is a READ — search, analytics, finance and Billing
         // all call it — so posting here and not saving left the charge in memory
@@ -16430,6 +16575,10 @@ function buildFamilyLedgers(){
                 if(e.kind==='charge'&&e.reason==='tuition'&&src.enrollmentId)key='t:'+src.enrollmentId;
                 else if(e.kind==='credit'&&(e.reason==='discount'||e.reason==='sibling')&&src.enrollmentId)key='d:'+src.enrollmentId;
                 else if((e.kind==='payment'||e.kind==='refund')&&src.paymentId)key='p:'+src.paymentId;
+                // A bank deposit posted to the ledger (migration 265) is the row
+                // 3b already shows for it — but only THAT row: a deposit moved to
+                // another family leaves a payment and its reversal here, both shown.
+                else if((e.kind==='payment'||e.kind==='refund')&&src.depositId)key='p:'+src.depositId;
                 else if(e.kind==='credit'&&src.creditId)key='x:'+src.creditId;
                 else if(e.kind==='charge'&&src.chargeId)key='c:'+src.chargeId;
                 if(key&&l._seen[key])return;
@@ -16451,7 +16600,7 @@ function buildFamilyLedgers(){
                     l.entries.push({type:'payment',category:label||'Payment',desc:e.note||'Payment received',amount:amt,date:e.date||'',ref:e.id,status:''});
                     l.totalPayments+=amt;l.totalGrossPayments+=amt;
                 }
-                if(key)l._seen[key]=1;
+                if(key&&!src.depositId)l._seen[key]=1;
             });
         });
     }
@@ -16484,7 +16633,8 @@ function buildFamilyLedgers(){
         // card, or a disconnected processor. Surfaced on the ledger so Billing can
         // show it — a notification alone is missed, and the plan otherwise still
         // reads as active while nothing is being taken.
-        l.collectionBlocked=(Array.isArray(l.family.plans)?l.family.plans:[])
+        // The old single plan too (TED-084): the nightly run flags it now.
+        l.collectionBlocked=(Array.isArray(l.family.plans)?l.family.plans:(l.family.plan&&typeof l.family.plan==='object'?[l.family.plan]:[]))
             .map(function(p){return p&&p.collectionBlocked?
                 Object.assign({planId:p.id},p.collectionBlocked):null})
             .filter(Boolean);
@@ -17549,11 +17699,23 @@ function _collectionWarning(l){
         var label=b.reason==='no_card'?'No card on file'
                  :b.reason==='declined'?'Card declined'
                  :b.reason==='no_processor'?'Processor not connected'
+                 :b.reason==='bank_debit_unheld'?'Bank debit not recorded — may be debited again'
+                 :b.reason==='bank_debit_stuck'?'Bank debit not cleared after 10 days'
+                 :b.reason==='bank_debit_unverified'?'Bank debit cannot be checked'
+                 :b.reason==='deposit_review'?'Autopay waiting — answer the card deposit question'
                  :String(b.reason||'Cannot collect');
         if(n>1)label+=' ×'+n;
         if(b.escalated)label='Not collecting — '+label;
         if(b.nextRetryAt)label+=' · retries '+esc(b.nextRetryAt);
         out.push(_flatStatus(label,b.escalated?'err':'warn'));
+    });
+    // A card deposit that may already have been typed in by hand (TED-095):
+    // nothing was posted for it; the office says which it is.
+    ((l.family&&l.family.depositReview)||[]).forEach(function(r){
+        if(!r||!r.ref)return;
+        out.push('<span style="font-size:.78rem;font-weight:700;color:var(--warn);cursor:pointer;text-decoration:underline" '
+            +'onclick="event.stopPropagation();CampistryMe.resolveDepositReview(\''+je(l.famKey)+'\',\''+je(r.ref)+'\')">'
+            +esc('Card deposit '+fm(r.amount)+' — already recorded by hand?')+'</span>');
     });
     if(l.cardExpiry&&l.cardExpiry.status==='expired')
         out.push(_flatStatus('Card expired'+(l.cardExpiry.label?' ('+l.cardExpiry.label+')':''),'err'));
@@ -18420,8 +18582,16 @@ function issueCreditForFamily(famKey){
             // (migration 198), so a retry of this same action resumes instead of
             // refunding twice. A second, deliberate refund is a second click and
             // gets its own key, which is the distinction only the client can make.
-            var _refundKey='rfnd_'+fk+'_'+Date.now()+'_'
-                          +Math.random().toString(36).slice(2,8);
+            // ...and the SAME key for the same refund on a later click (TED-093):
+            // keyed on the payment, what is still refundable on it and the
+            // amount, so a retry after a lost answer meets its first attempt
+            // instead of refunding twice, while a refund that was recorded changes
+            // what is left and so gives a deliberate second refund its own key.
+            var _refundKey='rfnd_'+fk;
+            var _chunkKey=function(p,left,amt){
+                return _refundKey+':'+String(p.id||p.stripePaymentIntentId||p.byopTransactionId)
+                    +':'+Math.round((Number(left)||0)*100)+':'+Math.round((Number(amt)||0)*100);
+            };
             var remaining=refundAmt, done=0, failMsg=null;
             toast('Processing refund…');
             for(var ci=0; ci<chunks.length && remaining>0.001; ci++){
@@ -18435,11 +18605,26 @@ function issueCreditForFamily(famKey){
                         var stripeReason=(reasonSel==='requested_by_customer'||reasonSel==='duplicate'||reasonSel==='fraudulent')?reasonSel:'requested_by_customer';
                         // Signed in (owner/admin only, TED-052), with this click's key so a retry
                         // replays instead of refunding twice.
-                        var res=await callEdgeFunctionAuthed('stripe-refund',{paymentIntentId:p.stripePaymentIntentId,amount:chunk,reason:stripeReason,metadata:{family:p.family||''},idempotencyKey:_refundKey+':'+ci});
+                        var res=await callEdgeFunctionAuthed('stripe-refund',{paymentIntentId:p.stripePaymentIntentId,amount:chunk,reason:stripeReason,metadata:{family:p.family||''},idempotencyKey:_chunkKey(p,chunks[ci].remaining,chunk)});
                         if(res&&res.replayed)console.log('[Me] refund chunk replayed:',ci);
                         refId=res.refundId;
                     } else {
-                        var byopRes=await callEdgeFunctionAuthed('payments-refund',{externalTransactionId:p.byopTransactionId,amount:chunk,idempotencyKey:_refundKey+':'+ci});
+                        var _bBody={externalTransactionId:p.byopTransactionId,amount:chunk,idempotencyKey:_chunkKey(p,chunks[ci].remaining,chunk)};
+                        var byopRes;
+                        try{ byopRes=await callEdgeFunctionAuthed('payments-refund',_bBody); }
+                        catch(uErr){
+                            // An earlier try was cut off after the card company was
+                            // asked (TED-093). Only the processor's dashboard can say
+                            // whether it went through; never send it again on a guess.
+                            if(!(uErr&&uErr.data&&uErr.data.uncertain))throw uErr;
+                            var _sure=await confirmDialog({title:'Did the earlier refund go through?',
+                                message:esc(uErr.message)+'<br><br>Only continue if the processor\u2019s dashboard shows NO refund of '
+                                       +fm(chunk)+' on this payment.',
+                                confirmLabel:'Nothing went through \u2014 refund '+fm(chunk)});
+                            if(!_sure)throw uErr;
+                            _bBody.confirmNotRefunded=true;
+                            byopRes=await callEdgeFunctionAuthed('payments-refund',_bBody);
+                        }
                         // A replayed claim means this chunk already moved money on
                         // an earlier attempt. Treat it as the success it repeats.
                         if(byopRes&&byopRes.replayed)console.log('[Me] refund chunk replayed:',ci);
@@ -18634,7 +18819,10 @@ async function printTaxStatement(famKey,year){
         var e=(enrollments||{})[eid];
         if(!e)return{};
         var ses=(sessions||[]).find(function(x){return x.name===e.session});
-        return{camperName:e.camperName||'',camperId:e.camperId!=null?e.camperId:_camperIdOf(e.camperName),session:e.session||'',overnight:!!(ses&&ses.overnight)};
+        // The year the care is given — the session's start (TED-101) — not the
+        // date the tuition was charged, which is the enrolment date.
+        var careYear=String((ses&&(ses.startDate||ses.start))||e.sessionStart||'').slice(0,4);
+        return{camperName:e.camperName||'',camperId:e.camperId!=null?e.camperId:_camperIdOf(e.camperName),session:e.session||'',overnight:!!(ses&&ses.overnight),careYear:careYear};
     }
     var camperDobs={};
     ((l.family.camperIds)||[]).concat(l.pendingCamperIds||[]).forEach(function(n){
@@ -18763,7 +18951,7 @@ async function callEdgeFunctionAuthed(fnName,body){
     var res=await client.functions.invoke(fnName,{body:body});
     if(res.error) throw new Error(res.error.message||'Edge function error');
     var data=res.data;
-    if(data&&data.error) throw new Error(data.error);
+    if(data&&data.error){var _e=new Error(data.error);_e.data=data;throw _e;}
     return data;
 }
 
@@ -19664,12 +19852,26 @@ async function chargeDepositNow(id){
 
     toast('Charging…');
     try{
-        var r=await client.functions.invoke('registration-deposit-checkout',{
-            body:{campId:campId,enrollmentId:id,
+        var body={campId:campId,enrollmentId:id,
                   returnUrl:window.location.origin+window.location.pathname,
-                  officeCharge:true}
-        });
+                  officeCharge:true};
+        var r=await client.functions.invoke('registration-deposit-checkout',{body:body});
         var d=r&&r.data;
+        // An earlier charge was cut off after the card company was asked, and
+        // nobody knows if it went through (TED-083). Only the office can say —
+        // by looking at the processor's dashboard — and only then charge.
+        if(d&&d.reason==='needs_check'){
+            var sure=await confirmDialog({
+                title:'Did the earlier charge go through?',
+                message:esc(d.error||'')+'<br><br>Only continue if the processor\u2019s dashboard shows NO charge of '
+                       +fm(owed)+' for '+esc(e.camperName||'this family')+(d.since?' since '+esc(String(d.since).slice(0,16).replace('T',' ')):'')+'.',
+                confirmLabel:'Nothing went through \u2014 charge '+fm(owed)
+            });
+            if(!sure)return toast('Not charged');
+            body.confirmNotCharged=true;
+            r=await client.functions.invoke('registration-deposit-checkout',{body:body});
+            d=r&&r.data;
+        }
         if(d&&d.success&&(d.paid||d.alreadyPaid)){
             // The function already recorded it server-side; re-reading is what
             // makes this page agree with the database rather than guessing.
@@ -23390,6 +23592,7 @@ window.CampistryMe={
     // timer; exposed so the office can nudge it, and for the browser test.
     runCamperErases:_runCamperErases,
     viewCamper:viewCamper,editCamper:editCamper,deleteCamper:deleteCamper,unenrollCamper:unenrollCamper,reenrollCamper:reenrollCamper,ceToggleSummer:ceToggleSummer,ceMaritalChanged:ceMaritalChanged,ceToggleOtherParentSummer:ceToggleOtherParentSummer,
+    resolveDepositReview:resolveDepositReview,
     addFamily:function(){openFamilyForm(null)},editFamily:function(id){openFamilyForm(id)},deleteFamily:deleteFamily,removeCamperFromFamily:removeCamperFromFamily,
     setPplStaffSubTab:setPplStaffSubTab,viewStaffMember:viewStaffMember,openEditStaffModal:openEditStaffModal,saveStaffMember:saveStaffMember,
     acceptFamilySuggestion:acceptFamilySuggestion,dismissFamilySuggestion:dismissFamilySuggestion,acceptAddToFamily:acceptAddToFamily,

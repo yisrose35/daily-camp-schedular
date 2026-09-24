@@ -198,6 +198,15 @@ const MIGRATIONS = [
     '262_autopay_waits_for_a_bank_debit',
     '263_a_cancelled_charge_leaves_the_ledger',
     '264_a_plan_charges_the_amounts_the_office_set',
+    '265_a_bank_deposit_reaches_the_ledger',
+    '266_an_old_tab_cannot_undo_the_server',
+    '267_a_converted_charge_knows_its_charge',
+    '268_a_cut_off_charge_can_be_tried_again',
+    '269_every_plan_can_hold_a_bank_debit',
+    '270_money_notices_for_billing_only',
+    '271_parents_see_what_the_server_records',
+    '272_an_old_tab_keeps_the_shops_charges',
+    '273_a_refund_is_released_only_when_it_is_old',
 ];
 
 // The one thing the stubs deliberately get wrong for our purposes: they define
