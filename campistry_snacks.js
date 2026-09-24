@@ -140,15 +140,18 @@ function _snacksPresenceGate() {
     return !!(P && P.hasDates());
 }
 
-function getCamperList() {
-
 // ── Camper display name ────────────────────────────────────────────────────
 // Roster keys are unique but are not always the camper's name: a second camper
 // sharing a name is keyed "Malky Stein #102" (their camperId) — see
 // campistry_camper_identity.js. The suffix is always exactly " #<id>" appended to
 // the plain name, so stripping it needs no roster lookup. Identity — lookups,
 // accounts, ledgers, selection — keeps using the KEY; only humans see this.
+// Top level: it used to sit inside getCamperList, where nothing else could
+// reach it (TED-116/TED-125 — the cash-out toast and the held-refund list
+// crashed on it).
 function _lbl(key) { return String(key == null ? '' : key).replace(/\s#\d+$/, ''); }
+
+function getCamperList() {
     const roster = getRoster();
     const structure = getStructure();
     const campers = [];
@@ -1867,7 +1870,7 @@ window.refundPickCamper = async function() {
         return;
     }
     const processorKey = await _getSnacksProcessorKey();
-    const gatewayLabel = processorKey === 'cardknox' ? 'Sola' : processorKey === 'stripe' ? 'Stripe' : processorKey;
+    const gatewayLabel = _processorLabel(processorKey);
     _showCanteenHolds(document.getElementById('refundHolds'), name);      // TED-116
     const a = getAccount(name);
     const walletAvailable = Math.max(0, Math.round((a.balance - (a.balanceFloor || 0)) * 100) / 100);
@@ -1984,7 +1987,7 @@ window.refundCanteenDeposit = async function() {
             window._canteenRefundKey = null;                  // done: the next refund is a new one
             closeM('refund');
             var acrossN = (data.refunds || []).length;
-            toast('Refunded $' + Number(data.totalRefunded).toFixed(2) + ' to ' + name +
+            toast('Refunded $' + Number(data.totalRefunded).toFixed(2) + ' to ' + _lbl(name) +
                 (acrossN > 1 ? ' (across ' + acrossN + ' deposits)' : '') +
                 (data.capped && data.cappedReason ? ' — ' + data.cappedReason : ''));
             _refreshSnacksFromCloud();
@@ -2040,7 +2043,7 @@ async function _showCanteenHolds(el, onlyKey) {
         if (!onlyKey) return true;
         return (onlyId != null && h.camperId != null) ? String(onlyId) === String(h.camperId) : _holdCamperKey(h) === onlyKey;
     });
-    if (!holds.length) { el.style.display = 'none'; el.innerHTML = ''; return; }
+    if (!holds.length) { el.style.display = 'none'; el.innerHTML = ''; return holds; }
     const stripe = got.processorKey === 'stripe';
     el.style.display = '';
     el.innerHTML = '<div style="font-weight:700;margin-bottom:.3rem;">' + (holds.length === 1 ? 'A refund is' : holds.length + ' refunds are') +
@@ -2057,6 +2060,7 @@ async function _showCanteenHolds(el, onlyKey) {
                 '<button type="button" class="btn btn-sm btn-secondary" onclick="resolveCanteenRefundHold(\'' + k + '\', true)">It went through</button> ' +
                 '<button type="button" class="btn btn-sm btn-secondary" onclick="resolveCanteenRefundHold(\'' + k + '\', false)">Nothing went through</button></div>';
         }).join('');
+    return holds;
 }
 window.resolveCanteenRefundHold = async function(key, went) {
     if (!_secEdit('accounts', 'Settling a refund')) return;
@@ -2081,43 +2085,69 @@ window.resolveCanteenRefundHold = async function(key, went) {
     if (document.getElementById('refundCamper') && document.getElementById('refundCamper').value) refundPickCamper();
 };
 
-// ── Refund All — every camper's leftover Stripe-paid balance in one go ─────
-// Client-side preview mirrors the edge function's own math exactly (walletAvailable
-// vs stripeCapacity) so the confirm screen shows a real number, not a guess —
-// the server is still the one that actually decides/executes it.
-function _refundAllPreview() {
+// ── Refund All — every camper's leftover card-paid balance in one go ───────
+// Client-side preview mirrors the edge function's own math exactly (wallet
+// available vs what the camp's processor can still refund) so the confirm
+// screen shows a real number, not a guess — the server is still the one that
+// actually decides/executes it.
+function _refundAllPreview(processorKey) {
     var total = 0, count = 0;
     (camperList || []).forEach(function(c) {
         var a = getAccount(c.name);
         var walletAvailable = Math.max(0, Math.round((a.balance - (a.balanceFloor || 0)) * 100) / 100);
-        var capacity = _stripeRefundCapacity(c.name);
+        var capacity = _onlineRefundCapacity(c.name, processorKey);
         var amt = Math.round(Math.min(walletAvailable, capacity) * 100) / 100;
         if (amt > 0) { total = Math.round((total + amt) * 100) / 100; count++; }
     });
     return { total: total, count: count };
 }
 
-window.openRefundAllModal = function() {
+function _processorLabel(processorKey) {
+    return processorKey === 'stripe' ? 'Stripe' : processorKey === 'cardknox' ? 'Sola'
+         : processorKey === 'banquest' ? 'Banquest' : String(processorKey || '');
+}
+
+window.openRefundAllModal = async function() {
     if (!_secEdit('accounts', 'Refunding all canteen balances')) return;
     var body = document.getElementById('refundAllBody');
     var btn = document.getElementById('refundAllBtn');
     var resultEl = document.getElementById('refundAllResult');
     if (resultEl) resultEl.style.display = 'none';
-    var preview = _refundAllPreview();
-    _showCanteenHolds(document.getElementById('refundAllHolds'));      // TED-116
+    if (btn) { btn.style.display = 'none'; btn.disabled = true; }
+    if (body) body.innerHTML = '<p style="color:var(--text-muted);">Working out what can be refunded…</p>';
+    // It used to call a helper that never existed (TED-124), so the window
+    // never opened. It now asks which processor the camp is on — the same one
+    // the refund itself goes through — before it counts anything.
+    openM('refundall');
+    var processorKey = await _getSnacksProcessorKey();
+    var holdsShown = _showCanteenHolds(document.getElementById('refundAllHolds'));      // TED-116
     if (!body) return;
+    if (processorKey !== 'stripe' && processorKey !== 'cardknox' && processorKey !== 'banquest') {
+        body.innerHTML = '<p>This camp has no card processor connected, so there is nothing to refund to a card. Refund balances by hand (Take Out Cash).</p>';
+        return;
+    }
+    var gw = _processorLabel(processorKey);
+    var preview = _refundAllPreview(processorKey);
     if (!preview.count) {
-        body.innerHTML = '<p>No campers currently have a Stripe-paid balance to refund.</p>';
-        if (btn) btn.style.display = 'none';
+        body.innerHTML = '<p>No campers currently have a ' + esc(gw) + '-paid balance to refund.</p>';
+        // A Stripe refund still waiting for its answer is looked up when Refund
+        // All runs — even when nobody has money left to refund, which is exactly
+        // when a child's wallet is $0 and their own Refund button is off.
+        if (processorKey === 'stripe') {
+            var waiting = await holdsShown;
+            if ((waiting || []).some(function(h) { return h && h.method === 'stripe'; }) && btn) {
+                btn.style.display = ''; btn.disabled = false; btn.textContent = 'Look up the waiting refunds in Stripe';
+            }
+        }
     } else {
         body.innerHTML =
             '<p>This will refund <strong>' + preview.count + ' camper' + (preview.count === 1 ? '' : 's') +
-            '</strong>, totaling approximately <strong>$' + preview.total.toFixed(2) + '</strong> — sent back to whatever each parent originally paid with.</p>' +
-            '<p style="color:var(--text-muted);">Only Stripe-paid deposits are included. A balance that came entirely from a cash/manual deposit is skipped — refund that by hand.</p>' +
+            '</strong>, totaling approximately <strong>$' + preview.total.toFixed(2) + '</strong> through ' + esc(gw) +
+            ' — sent back to whatever each parent originally paid with.</p>' +
+            '<p style="color:var(--text-muted);">Only deposits paid through ' + esc(gw) + ' are included. A balance that came from a cash/manual deposit (or a different processor) is skipped — refund that by hand.</p>' +
             '<p style="color:var(--red-600);font-weight:600;">This cannot be undone.</p>';
         if (btn) { btn.style.display = ''; btn.disabled = false; btn.textContent = 'Refund All ($' + preview.total.toFixed(2) + ')'; }
     }
-    openM('refundall');
 };
 
 window.refundAllCanteenDeposits = function() {
@@ -2185,11 +2215,20 @@ function _refreshSnacksFromCloud() {
             .then(function(res) {
                 var cloud = res && res.data && res.data.value;
                 if (!cloud || typeof cloud !== 'object') return;
-                snacks = cloud;
                 // ★ 219: the document's own accounts/transactions are stale by
-                // design. Overlay the rows BEFORE rendering, or the POS shows
-                // balances frozen at the moment the writers moved.
-                _overlayCanteenRows(snacks, function () {
+                // design (and a saved document has none at all). Overlay the
+                // rows onto it BEFORE it becomes the page's copy: swapping it in
+                // first left `snacks.accounts` undefined for the length of the
+                // round trip, and anything that read an account meanwhile — the
+                // Refund window redrawing after an answer — threw.
+                _overlayCanteenRows(cloud, function (gotRows) {
+                    if (!gotRows) {                       // keep the balances we have
+                        cloud.accounts = snacks.accounts || {};
+                        cloud.transactions = snacks.transactions || [];
+                    }
+                    if (!cloud.accounts || typeof cloud.accounts !== 'object') cloud.accounts = {};
+                    if (!Array.isArray(cloud.transactions)) cloud.transactions = [];
+                    snacks = cloud;
                     try { var g = JSON.parse(localStorage.getItem(STORE_KEY) || '{}'); g.campistrySnacks = snacks; localStorage.setItem(STORE_KEY, JSON.stringify(g)); } catch (_) {}
                     renderStats(); rAccounts(); rAnalytics(); rSettings();
                 });

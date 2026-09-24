@@ -114,6 +114,19 @@ function cut(name) {
     return SN.slice(at, i + 1);
 }
 
+// This file pulls single functions out of the page, so it cannot see whether
+// the page itself can reach them — the test below passed while the real page
+// crashed on _lbl, declared inside getCamperList (TED-116). The real proof is
+// tests/snacks_refund_windows.e2e.js (npm run test:smoke), which clicks the
+// windows in a browser; this only keeps the two known traps shut.
+test('TED-116/124: the helpers the refund windows call are reachable from the page', () => {
+    const lbl = SN.indexOf('function _lbl(');
+    const gcl = SN.indexOf('function getCamperList(');
+    assert.ok(lbl >= 0 && gcl >= 0 && lbl < gcl, '_lbl must be declared at the top level, not inside getCamperList');
+    assert.doesNotMatch(SN, /_stripeRefundCapacity\s*\(/, 'Refund All must not call a helper that does not exist');
+    assert.match(cut('_refundAllPreview'), /_onlineRefundCapacity\(c\.name, processorKey\)/);
+});
+
 test('TED-116: Snacks shows the held refund with both answers, and sends the office\'s answer', async () => {
     const el = { style: {}, innerHTML: '' };
     const sent = [];
