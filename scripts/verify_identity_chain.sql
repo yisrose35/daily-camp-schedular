@@ -1,5 +1,5 @@
 -- ============================================================================
--- Confirm migrations 222-261 are in and doing their job.
+-- Confirm migrations 222-262 are in and doing their job.
 --
 -- Paste the whole thing into the Supabase SQL Editor. It is READ ONLY — one
 -- SELECT, nothing is created, changed or deleted, and the two purge functions
@@ -555,6 +555,11 @@ UNION ALL
           WHEN EXISTS (SELECT 1 FROM link_parent_invites WHERE user_id IS NOT NULL AND camper_names IS NULL)
             THEN (SELECT count(*) FROM link_parent_invites WHERE user_id IS NOT NULL AND camper_names IS NULL)
                  || ' claimed invitation(s) cover a WHOLE camp — look at them: SELECT camp_id, parent_email, created_at FROM link_parent_invites WHERE user_id IS NOT NULL AND camper_names IS NULL;'
+          ELSE 'ok' END),
+    -- Autopay waits for a bank debit to clear instead of debiting again (TED-064).
+    ('262  autopay waits for a bank debit',
+     CASE WHEN to_regprocedure('public.hold_autopay_charge(uuid,text,text,jsonb)') IS NULL
+          THEN 'apply 262 — a family paying by bank account on autopay can be debited again every night until the first debit clears'
           ELSE 'ok' END)
     ) AS x(item, result)
 
