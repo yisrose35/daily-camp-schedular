@@ -204,9 +204,9 @@ test('TED-065: two same-amount charges against one converted entry — only one 
     assert.strictEqual(B.balance(f), 50);
 });
 
-test('TED-066: a charge that disappears (a cancelled shop order) comes off the ledger, once', () => {
+test('TED-066: a charge that disappears comes off the ledger, once', () => {
     const f = family();
-    f.charges = [{ id: 'shop_o1', category: 'Camp Shop', amount: 40 }];
+    f.charges = [{ id: 'chg_o1', category: 'Trip', amount: 40 }];
     ctx.catchUp(f);
     assert.strictEqual(B.balance(f), 640);
     f.charges = [];                        // cancelled
@@ -268,9 +268,9 @@ test('TED-082: a charge the conversion posted is linked, so re-pricing and cance
         { id: 'le_conv_g_1', kind: 'charge', amount: 1000, reason: 'tuition', source: { enrollmentId: 'e1' } },
         { id: 'le_conv_g_2', kind: 'charge', amount: 40, reason: 'fee', date: '2026-07-01', source: {} },
         { id: 'le_conv_g_3', kind: 'payment', amount: 1000, reason: 'card' }],
-      charges: [{ id: 'shop_o1', category: 'Camp Shop', amount: 40, date: '2026-07-01' }] };
+      charges: [{ id: 'chg_o1', category: 'Trip', amount: 40, date: '2026-07-01' }] };
     assert.strictEqual(ctx.catchUp(f), 0);
-    assert.strictEqual(f.entries[1].source.chargeId, 'shop_o1', 'the converted entry was not linked');
+    assert.strictEqual(f.entries[1].source.chargeId, 'chg_o1', 'the converted entry was not linked');
     assert.strictEqual(B.balance(f), 40);
     f.charges[0].amount = 55;                             // re-priced
     ctx.catchUp(f); ctx.catchUp(f);
@@ -286,4 +286,13 @@ test('TED-082: a converted fee migration 267 already linked is not handed to ano
       charges: [{ id: 'lf_a', amount: 25, date: '2026-07-01' }, { id: 'lf_b', amount: 25, date: '2026-07-01' }] };
     assert.strictEqual(ctx.catchUp(f), 1, 'the second $25 fee must be posted — the converted one is lf_a\'s');
     assert.strictEqual(B.balance(f), 50);
+});
+
+test('TED-091: a shop charge a stale tab never saw is NOT taken off by its Billing load', () => {
+    const f = family();
+    // what settle_shop_order posted after this tab loaded (the tab's charges[] lacks it)
+    f.entries.push({ id: 'le_chg_shop_o9', kind: 'charge', amount: 40, reason: 'fee', source: { chargeId: 'shop_o9' } });
+    f.charges = [{ id: 'chg_10', category: 'Other', amount: 10 }];
+    ctx.catchUp(f); ctx.catchUp(f);
+    assert.strictEqual(B.balance(f), 650, 'the shop order was cancelled by an old tab');
 });

@@ -214,7 +214,14 @@ serve(async (req) => {
       }
       const { data: kv } = await service.from("camp_state_kv").select("value")
         .eq("camp_id", campId).eq("key", "campistryMe").maybeSingle();
-      const enr = (kv?.value as Record<string, any> | null)?.enrollments?.[String(enrollmentId)];
+      let enr = (kv?.value as Record<string, any> | null)?.enrollments?.[String(enrollmentId)];
+      // Not yet absorbed into the document: it is still in camp_applications
+      // (migration 200) — the office sees it there too (TED-089).
+      if (!enr) {
+        const { data: row } = await service.from("camp_applications").select("payload")
+          .eq("camp_id", campId).eq("kind", "enrollments").eq("entry_id", String(enrollmentId)).maybeSingle();
+        enr = (row?.payload as Record<string, any> | null) || undefined;
+      }
       if (!enr) return json({ success: false, error: "We could not find that application." }, 404);
       if (!enr.savedCardCustomer) {
         return json({ success: false, error: "There is no card on file for this application." }, 200);

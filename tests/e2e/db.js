@@ -204,6 +204,8 @@ const MIGRATIONS = [
     '268_a_cut_off_charge_can_be_tried_again',
     '269_every_plan_can_hold_a_bank_debit',
     '270_money_notices_for_billing_only',
+    '271_parents_see_what_the_server_records',
+    '272_an_old_tab_keeps_the_shops_charges',
 ];
 
 // The one thing the stubs deliberately get wrong for our purposes: they define

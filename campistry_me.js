@@ -6331,6 +6331,49 @@ function _planSchedule(plan,balance){
     return out;
 }
 
+/**
+ * A registration deposit charged by card is a PAYMENT on the family (TED-090).
+ *
+ * The deposit function records each card charge on the application
+ * (depositCharges — migration 271; older ones only depositReference). Nothing
+ * turned that into money on the family's account, so once enrolled the family
+ * was billed full tuition. Each charge becomes one payment row, keyed on the
+ * processor's reference — so it can be refunded like any other card payment,
+ * and it can never be counted twice — and is posted to the ledger.
+ * The office's "Mark deposit received" sets no reference and is untouched:
+ * that money is recorded in Billing by hand, as the button says.
+ */
+function _postCardDepositsFor(f,fk,e,eid){
+    if(!f||!e)return 0;
+    var list=Array.isArray(e.depositCharges)?e.depositCharges.slice():[];
+    if(!list.length&&e.depositReference&&Number(e.depositPaid)>0){
+        list=[{ref:e.depositReference,amount:Number(e.depositPaid),date:e.depositPaidDate,processor:e.depositProcessor}];
+    }
+    var n=0;
+    list.forEach(function(c){
+        var ref=String((c&&c.ref)||''), amt=Math.round((Number(c&&c.amount)||0)*100)/100;
+        if(!ref||!(amt>0))return;
+        var proc=String(c.processor||''), isStripe=/^pi_/.test(ref)||proc==='stripe';
+        var row=(finPayments||[]).filter(function(p){
+            return p&&(p.depositReference===ref||p.stripePaymentIntentId===ref||p.byopTransactionId===ref);
+        })[0];
+        if(!row){
+            row={id:'dep_'+ref,family:f.name||'',familyKey:fk,
+                 camperName:e.camperName||'',camperId:e.camperId!=null?e.camperId:_camperIdOf(e.camperName),
+                 enrollmentId:eid,amount:amt,date:c.date||e.depositPaidDate||today(),
+                 method:(isStripe?'Card':(proc||'Card'))+' (registration deposit)',
+                 reference:ref,notes:'Registration deposit, charged to the card given when applying',
+                 stripePaymentIntentId:isStripe?ref:null,byopTransactionId:isStripe?null:ref,
+                 byopProcessor:isStripe?null:(proc||null),depositReference:ref,
+                 status:'succeeded',timestamp:Date.now()};
+            finPayments.push(row);
+            n++;
+        }
+        if(_postPaymentEntry(f,row))n++;
+    });
+    return n;
+}
+
 function _postTuitionFor(f,eid){
     var B=_billingCore();
     if(!B||!f)return false;
@@ -6482,8 +6525,12 @@ function _postExistingCharges(f){
         }
         if(_postLedgerCharge(f,c))n++;
     });
-    // A charge that is gone from charges[] (a cancelled shop order) comes off.
-    Object.keys(net).forEach(function(cid){ if(!seen[cid]&&net[cid])adjust(cid,-net[cid],'charge'); });
+    // A charge that is gone from charges[] comes off — except the shop's
+    // (shop_<order>): only the server bills, re-prices and cancels those, and it
+    // syncs the ledger itself as it does (263). One missing HERE is a tab that
+    // loaded before the shop billed it, and taking it off would let the family
+    // off the order (TED-091).
+    Object.keys(net).forEach(function(cid){ if(!seen[cid]&&net[cid]&&!/^shop_/.test(cid))adjust(cid,-net[cid],'charge'); });
     return n;
 }
 
@@ -16190,6 +16237,8 @@ function buildFamilyLedgers(){
                     _famItemRaw(e.camperName,e.street,e.city,e.state,e.zip,e.parentName,e.parentEmail));
             }
             if(fk&&families[fk]&&_postTuitionFor(families[fk],eid))_posted++;
+            // ...and a deposit the parent paid by card when applying (TED-090)
+            if(fk&&families[fk])_posted+=_postCardDepositsFor(families[fk],fk,e,eid);
         });
         // buildFamilyLedgers is a READ — search, analytics, finance and Billing
         // all call it — so posting here and not saving left the charge in memory

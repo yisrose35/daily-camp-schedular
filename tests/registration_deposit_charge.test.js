@@ -162,3 +162,14 @@ test('TED-083: a charge still running is "in progress", never "already paid"', (
     assert.ok(!r.body.alreadyPaid);
     assert.strictEqual(charges(r).length, 0);
 });
+
+test('TED-089: "charge deposit now" finds an application still in camp_applications', () => {
+    const r = runEdge('registration-deposit-checkout', W(null) + `
+      T.tables.camp_state_kv = [{ camp_id: 'camp1', key: 'campistryMe', value: { enrollments: {} } }];
+      T.tables.camp_applications = [{ camp_id: 'camp1', kind: 'enrollments', entry_id: 'enr_1', payload: { camperName: 'Avi',
+         savedCardCustomer: 'cus_parent', savedCardMethod: 'pm_parent', savedCardProcessor: 'stripe', savedCardLast4: '4242' } }];
+      ${OFFICE_REQ}
+      T.requests = [req];`);
+    assert.strictEqual(r.body.paid, true, JSON.stringify(r.body));
+    assert.strictEqual(charges(r).length, 1);
+});

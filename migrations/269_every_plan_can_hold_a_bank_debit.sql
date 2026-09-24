@@ -194,6 +194,13 @@ REVOKE ALL ON FUNCTION public._merge_plan_state(jsonb, jsonb) FROM public, anon,
 
 -- 266's merge, with plans matched by id OR (both without one) by position, and
 -- the old single plan kept too. Entries and charge links as 266/267 had them.
+-- Only when nothing newer is in place: re-running this file on its own must
+-- not put back an older merge over a later migration's (TED-094).
+DO $guard$
+BEGIN
+    IF to_regprocedure('public._merge_family_from_page(jsonb,jsonb)') IS NULL
+       OR pg_get_functiondef(to_regprocedure('public._merge_family_from_page(jsonb,jsonb)')) !~ 'LIKE ''shop' THEN
+        EXECUTE $fn$
 CREATE OR REPLACE FUNCTION public._merge_family_from_page(p_server jsonb, p_page jsonb)
 RETURNS jsonb
 LANGUAGE plpgsql
@@ -253,4 +260,9 @@ BEGIN
     RETURN public._keep_charge_links(p_server, v_out);
 END;
 $$;
+$fn$;
+    ELSE
+        RAISE NOTICE '269: a newer _merge_family_from_page is in place — left as it is';
+    END IF;
+END $guard$;
 REVOKE ALL ON FUNCTION public._merge_family_from_page(jsonb, jsonb) FROM public, anon, authenticated;

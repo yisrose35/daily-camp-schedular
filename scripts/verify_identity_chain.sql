@@ -1,5 +1,5 @@
 -- ============================================================================
--- Confirm migrations 222-270 are in and doing their job.
+-- Confirm migrations 222-272 are in and doing their job.
 --
 -- Paste the whole thing into the Supabase SQL Editor. It is READ ONLY — one
 -- SELECT, nothing is created, changed or deleted, and the two purge functions
@@ -616,6 +616,19 @@ UNION ALL
                    AND NOT EXISTS (SELECT 1 FROM information_schema.columns
                                     WHERE table_name = 'link_tip_cart_items' AND column_name = 'stripe_payment_intent_id'))
           THEN 'apply 270 — every staff member sees unmatched card payments, declines and chargebacks with amounts and cards'
+          ELSE 'ok' END),
+    -- Parents see what the server records; early money reaches the ledger;
+    -- a deposit can be paid straight after applying (TED-088/077/089).
+    ('271  parents see what the server records',
+     CASE WHEN pg_get_functiondef(to_regprocedure('public.projected_family_ledger(uuid,text)')) !~ 'camp_families'
+               OR NOT EXISTS (SELECT 1 FROM pg_trigger WHERE tgname = 'trg_ledger_started_catch_up' AND NOT tgisinternal)
+               OR pg_get_functiondef(to_regprocedure('public._registration_deposit_owed(uuid,text)')) !~ '_application_entry'
+          THEN 'apply 271 BEFORE redeploying registration-deposit-checkout — parents see stale balances in Link and cannot pay a deposit right after applying'
+          ELSE 'ok' END),
+    -- A Billing tab left open keeps the shop's charges (TED-091).
+    ('272  an old tab keeps the shop''s charges',
+     CASE WHEN pg_get_functiondef(to_regprocedure('public._merge_family_from_page(jsonb,jsonb)')) !~ 'LIKE ''shop'
+          THEN 'apply 272 — an office tab left open cancels shop orders billed after it opened'
           ELSE 'ok' END)
     ) AS x(item, result)
 

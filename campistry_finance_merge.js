@@ -261,6 +261,33 @@
      * Returns { restored, pruned }. Local always wins on an id it also holds: the
      * office legitimately accepts, declines and edits applications it can see.
      */
+    // What only the server writes on an application: the deposit a parent paid
+    // by card, and the card kept for it (185/186/271). A tab that loaded the
+    // application before the payment must not save it back unpaid — the family
+    // would be asked again and the payment never reach Billing (TED-089/090).
+    // Carried only when the server holds a card charge this copy does not.
+    M.SERVER_APPLICATION_FIELDS = ['depositPaid', 'depositPaidDate', 'depositReference',
+        'depositProcessor', 'depositStatus', 'depositCharges',
+        'savedCardProcessor', 'savedCardCustomer', 'savedCardMethod', 'savedCardLast4'];
+    M.carryServerApplicationFields = function (mine, theirs) {
+        if (!isObj(mine) || !isObj(theirs)) return false;
+        var refs = function (a) {
+            var out = {};
+            (Array.isArray(a.depositCharges) ? a.depositCharges : []).forEach(function (c) { if (c && c.ref) out[c.ref] = 1; });
+            if (a.depositReference) out[a.depositReference] = 1;
+            return out;
+        };
+        var have = refs(mine), theirRefs = refs(theirs), newer = false;
+        Object.keys(theirRefs).forEach(function (r) { if (!have[r]) newer = true; });
+        if (!newer && !(theirs.savedCardCustomer && !mine.savedCardCustomer)) return false;
+        M.SERVER_APPLICATION_FIELDS.forEach(function (k) {
+            if (theirs[k] === undefined) return;
+            if (/^savedCard/.test(k) && mine.savedCardCustomer && !newer) return;
+            mine[k] = theirs[k];
+        });
+        return true;
+    };
+
     M.mergePublicSubmissions = function (local, cloud) {
         var out = { restored: 0, pruned: 0 };
         if (!isObj(local) || !isObj(cloud)) return out;
@@ -275,7 +302,10 @@
             var graves = M.tombstonesOf(local, kind);
 
             Object.keys(cloudSide).forEach(function (id) {
-                if (local[kind][id] !== undefined) return;   // we have it; we win
+                if (local[kind][id] !== undefined) {         // we have it; we win —
+                    M.carryServerApplicationFields(local[kind][id], cloudSide[id]);
+                    return;                                  // except what only the server writes
+                }
                 if (graves[id]) return;                      // we deleted it; honour
                 local[kind][id] = cloudSide[id];
                 out.restored++;
