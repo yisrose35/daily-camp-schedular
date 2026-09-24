@@ -1,4 +1,4 @@
-// campistry_me.js — Campistry Me Engine (Premium Rebuild)
+// campistry_me.js — Campistry Me Engine (Premium Rebuild) test
 (function(){
 'use strict';
 console.log('📋 Campistry Me loading...');
