@@ -1866,11 +1866,14 @@ function managePayers(){
                  +esc([p.contact,p.email,p.phone].filter(Boolean).join(' \u00b7 '))+'</div>':'')
               // what it owes, inside the name column (TED-179: an extra closing
               // tag here pushed the buttons, and Save/Cancel, out of their boxes)
-              +(function(){var ac=_payerAccount(id);return ac.charged>0?'<div style="font-size:.76rem;color:var(--s600)">Owes '+fm(ac.balance)+' (shares '+fm(ac.charged)+', paid '+fm(ac.paid)+')</div>':''})()
+              +(function(){var ac=_payerAccount(id);if(!ac.lines.length)return '';
+                  return '<div style="font-size:.76rem;color:var(--s600)">'+_payerStanding(ac)+' (shares '+fm(ac.charged)+', paid '+fm(ac.paid)+')</div>'})()
               +'</div>'
               +(_payerAccount(id).charged>0?'<button type="button" class="me-btn me-btn--sec me-btn--sm" '
-                +'onclick="CampistryMe.recordPayerPayment(\''+je(id)+'\')">Record payment</button>'
-                +'<button type="button" class="me-btn me-btn--ghost me-btn--sm" '
+                +'onclick="CampistryMe.recordPayerPayment(\''+je(id)+'\')">Record payment</button>':'')
+              // the account stays reachable whenever it has any line (TED-198) —
+              // a cheque left after its share was cancelled most of all
+              +(_payerAccount(id).lines.length?'<button type="button" class="me-btn me-btn--ghost me-btn--sm" '
                 +'onclick="CampistryMe.payerLines(\''+je(id)+'\')">Account</button>':'')
               +'<button type="button" class="me-btn me-btn--ghost me-btn--sm" '
               +'onclick="CampistryMe.togglePayerArchived(\''+je(id)+'\')">'
@@ -18677,6 +18680,13 @@ function _payerLines(pid){
     });
     return out;
 }
+// "Owes $500", or, when a payer has paid more than its shares, what to do with
+// the difference (TED-198) — never "owes $-300".
+function _payerStanding(a){
+    return a.balance>0?'Owes '+fm(a.balance)
+         : a.balance<0?'Credit '+fm(-a.balance)+' \u2014 return it to them, or keep it for a later share'
+         : 'Settled';
+}
 function _payerAccount(pid){
     var lines=_payerLines(pid), voided={}, ch=0, pd=0;
     lines.forEach(function(e){ if(e.kind==='void'&&e.voidOf)voided[e.voidOf]=1; });
@@ -18791,7 +18801,7 @@ function recordPayerPayment(id){
             method:(document.getElementById('ppMethod')||{}).value||'',
             reference:((document.getElementById('ppRef')||{}).value||'').trim()});
         save();closeModal('dynModal');
-        toast(fm(amt)+' from '+(py.name||id)+' recorded \u2014 it owes '+fm(_payerAccount(id).balance)+' now');
+        toast(fm(amt)+' from '+(py.name||id)+' recorded \u2014 '+_payerStanding(_payerAccount(id)));
         if(curPage==='familydetail')renderFamilyDetailPage();
     },'Record payment');
 }
@@ -18803,7 +18813,7 @@ function payerLines(id){
     var py=payers[id]; if(!py){toast('Payer not found','error');return}
     var a=_payerAccount(id), seenPay={};
     var h='<div class="me-modal-form"><p style="font-size:.84rem;color:var(--s600);margin:0 0 10px">'+esc(py.name||id)
-        +' \u2014 shares '+fm(a.charged)+', paid '+fm(a.paid)+', owes <strong>'+fm(a.balance)+'</strong></p>';
+        +' \u2014 shares '+fm(a.charged)+', paid '+fm(a.paid)+' \u2014 <strong>'+esc(_payerStanding(a))+'</strong></p>';
     var rows=a.lines.filter(function(e){return e.kind!=='void'}).map(function(e){
         var off=!!a.voided[e.id];
         if(e.kind==='payment'){ var k=e.paymentId||e.id; if(seenPay[k])return ''; seenPay[k]=1;
@@ -18830,6 +18840,7 @@ function voidPayerLine(pid,lineId,mode){
     var tot=targets.reduce(function(t,e){return t+(Number(e.amount)||0)},0);
     var msg=isPay?'Remove this '+fm(tot)+' payment from '+name+'? Use this for a payment entered by mistake, or one you gave back. '+name+' will owe it again.'
                  :cancel?'Cancel this '+fm(tot)+' share? Nobody will owe it \u2014 not '+name+', not the '+targets[0].family+' family. Use this when the charge was a mistake or is waived.'
+                    +(a.paid>0?' '+name+' has paid '+fm(a.paid)+' so far; whatever that leaves over its other shares stays on its account as a credit, to return to them or keep for a later share.':'')
                  :'Move this '+fm(tot)+' share back to the '+targets[0].family+' family\u2019s own bill? '+name+' will no longer owe it.';
     confirmDialog({title:isPay?'Remove payment?':cancel?'Cancel share?':'Move share back?',message:msg,confirmLabel:isPay?'Remove':cancel?'Cancel share':'Move back',danger:isPay||cancel}).then(function(ok){
         if(!ok)return;
@@ -18846,8 +18857,8 @@ function voidPayerLine(pid,lineId,mode){
             }
         });
         save(); closeModal('dynModal');
-        toast(isPay?fm(tot)+' payment removed \u2014 '+name+' owes '+fm(_payerAccount(pid).balance)
-            :cancel?fm(tot)+' share cancelled \u2014 '+name+' owes '+fm(_payerAccount(pid).balance)
+        toast(isPay?fm(tot)+' payment removed \u2014 '+name+': '+_payerStanding(_payerAccount(pid))
+            :cancel?fm(tot)+' share cancelled \u2014 '+name+': '+_payerStanding(_payerAccount(pid))
             :fm(tot)+' moved back to '+targets[0].family+'\u2019s bill');
         if(curPage==='familydetail')renderFamilyDetailPage(); else if(typeof renderBilling==='function')renderBilling();
     });
@@ -19969,6 +19980,13 @@ function _methodTypeCharged(f){
 // the processor has started and not yet answered, in the last fortnight, is
 // money on its way: shown, taken off what is offered, and no second charge is
 // started while it is there (stripe-charge refuses one too, asking Stripe).
+// A payment of this family's is charged back and the bank is still deciding
+// (TED-186/195, migration 288): its plans carry the dispute pause.
+function _familyDisputed(famKey){
+    var f=families[famKey]; if(!f)return false;
+    var plans=Array.isArray(f.plans)?f.plans:(f.plan&&typeof f.plan==='object'?[f.plan]:[]);
+    return plans.some(function(p){return p&&p.collectionBlocked&&p.collectionBlocked.reason==='chargeback'});
+}
 function _familyOnItsWay(famKey){
     var out={amount:0,items:[]};
     (finPayments||[]).forEach(function(p){
@@ -20007,6 +20025,13 @@ async function chargeStoredCard(famKey,amount,description,quiet){
     var f=families[famKey];
     if(!f||(!f.stripeCustomerId&&!f.byopCustomerRef)){if(!quiet)toast('No payment method on file yet','error');return {ok:false,error:'No payment method on file'}}
 
+    // A family disputing a payment with their bank is not charged from here
+    // either (TED-195): resume autopay once the dispute is settled, then charge.
+    if(_familyDisputed(famKey)){
+        var _dw=f.name+' is disputing a payment with their bank \u2014 nothing is charged until that is settled. Once it is, click \u201cAutopay paused\u201d on their row to resume.';
+        if(!quiet)toast(_dw,'error');
+        return {ok:false,disputed:true,error:_dw};
+    }
     var _way=_familyOnItsWay(famKey);
     if(!amount&&_way.amount>0){
         showModal('Charge Card','<div class="me-modal-form"><p style="font-size:.85rem;color:var(--s600);margin-bottom:12px"><strong>'+esc(f.name)+'</strong>: '+esc(_onItsWayWords(_way))+'.</p>'
@@ -20219,6 +20244,11 @@ async function batchCharge(){
     // A family with a bank debit still on its way is not charged again (TED-144).
     var onWay=eligible.filter(function([fk]){return _familyOnItsWay(fk).amount>0});
     eligible=eligible.filter(function([fk]){return !(_familyOnItsWay(fk).amount>0)});
+    // Nor a family whose payment is disputed with their bank (TED-195): charging
+    // the card they are disputing is the one thing that must not happen.
+    var disputed=eligible.filter(function([fk]){return _familyDisputed(fk)});
+    eligible=eligible.filter(function([fk]){return !_familyDisputed(fk)});
+    if(!eligible.length&&disputed.length){toast('Nothing to charge \u2014 '+disputed.map(function([fk,l]){return l.family.name}).join(', ')+': a payment is disputed with the bank','error');return}
     if(!eligible.length){toast(onWay.length?'Nothing to charge \u2014 '+onWay.length+' famil'+(onWay.length!==1?'ies have':'y has')+' a bank debit still on its way':'No families with card on file and outstanding balance','error');return}
 
     var total=eligible.reduce(function(s,[,l]){return s+l.balance},0);
@@ -20229,6 +20259,7 @@ async function batchCharge(){
         h+='<div style="display:flex;justify-content:space-between;padding:8px 12px;border-bottom:1px solid var(--s100);font-size:.8rem"><span class="bold">'+esc(l.family.name)+'</span><span style="font-weight:700;color:var(--err)">'+fm(l.balance)+'</span></div>';
     });
     h+='</div>';
+    if(disputed.length)h+='<p style="font-size:.78rem;color:var(--err);margin-bottom:10px">Not charged \u2014 a payment is disputed: '+disputed.map(function([fk,l]){return esc(l.family.name)}).join(', ')+'. Autopay is paused for them too; resume it from their row once the dispute is settled.</p>';
     if(onWay.length)h+='<p style="font-size:.78rem;color:var(--s600);margin-bottom:10px">Not charged: '+onWay.map(function([fk,l]){return esc(l.family.name)}).join(', ')+' \u2014 a bank debit is still on its way (bank debits take a few business days).</p>';
     h+='<p style="font-size:.75rem;color:var(--warn);font-weight:600">⚠ This action will charge real credit cards. Proceed with caution.</p>';
     h+='</div>';

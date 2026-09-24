@@ -103,3 +103,29 @@ T.request = { headers: { 'x-cron-secret': 'cron' }, body: {} };`);
     assert.strictEqual(charges.length, 0, 'autopay charged a family whose payment is disputed');
     assert.ok(/held_for_dispute/.test(JSON.stringify(r.body)), JSON.stringify(r.body).slice(0, 400));
 });
+
+test('TED-199 (M8): the autopay pause fails to save — 500, so Stripe sends the chargeback again', () => {
+    const r = deliver([dispute('charge.dispute.created', 'needs_response')], `T.rpc.hold_autopay_for_dispute = () => { throw new Error('statement timeout'); };`);
+    assert.strictEqual(r.status, 500);
+});
+
+test('TED-199 (M9/M10): in the same night a family NOT in dispute is charged — the held family is held by its pause, not by chance', () => {
+    const plansFor = (blocked) => [{ id: 'p1', autopay: true, dueDates: ['2020-01-01'], count: 1, nextIndex: 0, history: [], ...(blocked ? { collectionBlocked: { reason: 'chargeback', disputeIds: ['dp_1'] } } : {}) }];
+    const r = runEdge('charge-due-installments', `
+T.env = { STRIPE_SECRET_KEY: 'sk_test_x', SUPABASE_URL: 'http://db', SUPABASE_SERVICE_ROLE_KEY: 'svc', INSTALLMENT_CRON_SECRET: 'cron' };
+T.tables.camps = [{ id: 'camp1', name: 'Camp One', payment_processor_key: null }];
+T.tables.camp_state_kv = [{ camp_id: 'camp1', key: 'campistryMe', value: { enrollments: {}, sessions: [] } }];
+T.rpc.camp_payments_array = () => [];
+T.rpc.flag_expiring_cards = () => ({ expired: 0, expiringSoon: 0 });
+T.rpc.retry_failed_tip_transfers = () => [];
+T.rpc.record_autopay_charge = () => ({ success: true, balance: 0 });
+T.rpc.hold_autopay_charge = () => ({ success: true });
+T.rpc.plan_due_for = () => ({ index: 0, dueDate: '2020-01-01', amount: 250 });
+T.rpc.camp_families_object = () => ({
+  teal: { name: 'Teal', cardOnFile: true, stripeCustomerId: 'cus_teal', stripePaymentMethodId: 'pm_1', entries: [{ id: 'e', kind: 'charge', amount: 250 }], plans: ${JSON.stringify(plansFor(true))} },
+  olive: { name: 'Olive', cardOnFile: true, stripeCustomerId: 'cus_olive', stripePaymentMethodId: 'pm_2', entries: [{ id: 'e', kind: 'charge', amount: 250 }], plans: ${JSON.stringify(plansFor(false))} } });
+T.tables.__charged = [];
+T.fetch = (url: string, init: any) => { if (init.method === 'POST' && url.endsWith('/payment_intents')) { T.tables.__charged.push(new URLSearchParams(init.body).get('customer')); return { id: 'pi_n', status: 'succeeded', amount: 25000 }; } return {}; };
+T.request = { headers: { 'x-cron-secret': 'cron' }, body: {} };`);
+    assert.deepStrictEqual(r.tables.__charged, ['cus_olive'], 'charged: ' + JSON.stringify(r.tables.__charged) + ' ' + JSON.stringify(r.body).slice(0, 300));
+});

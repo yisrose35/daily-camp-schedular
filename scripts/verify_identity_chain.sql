@@ -765,6 +765,10 @@ UNION ALL
           THEN 'apply 288 BEFORE deploying stripe-webhook and charge-due-installments — autopay charges a family again for a payment their bank is disputing'
           WHEN has_function_privilege('authenticated', 'public.hold_autopay_for_dispute(uuid,text,text,boolean,text)', 'EXECUTE')
           THEN 'apply 288 again — a signed-in browser can pause or resume autopay'
+          WHEN pg_get_functiondef(to_regprocedure('public.flag_plan_collection(uuid,text,text,text,text)')) !~ 'v_cb'
+               OR pg_get_functiondef(to_regprocedure('public.hold_autopay_for_dispute(uuid,text,text,boolean,text)')) !~ 'le_cbwon_'
+               OR pg_get_functiondef(to_regprocedure('public._mark_plans_for_dispute(jsonb,text,boolean,text)')) !~ 'disputeIds'
+          THEN 'apply 288 again — an earlier copy is in place: a second dispute, a replaced card or a late message can restart autopay mid-dispute'
           ELSE 'ok' END),
     -- A register sale keeps what it sold, by item id (TED-192).
     ('289  a register sale keeps what it sold',

@@ -785,6 +785,14 @@ serve(async (req) => {
           delete p.collectionBlocked;
         }
       }
+      // A payment of this family's is disputed with the bank (TED-186/194,
+      // migration 288): nothing is charged, and — before the card check — the
+      // pause is not touched by a "no card" mark while the card is replaced.
+      if (plans.some((p: any) => p && p.collectionBlocked && p.collectionBlocked.reason === "chargeback")) {
+        details.push({ camp: row.camp_id, family: f.name, result: "held_for_dispute",
+                       reason: "a payment is disputed with the bank" });
+        continue;
+      }
       if (!f.cardOnFile || (processorKey ? !f.byopCustomerRef : !f.stripeCustomerId)) {
         const why = !f.cardOnFile ? "no card on file"
           : (processorKey ? "no vaulted card token (byopCustomerRef) — the card was never saved to the processor" : "no Stripe customer");

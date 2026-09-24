@@ -1007,8 +1007,10 @@ async function handleDisputeLedger(
   // Money taken: the first of created / updated / funds_withdrawn in a real
   // dispute status posts it (each writer is keyed on the dispute, so the
   // others change nothing). Closed: won puts it back; lost leaves it.
-  const taking = event.type === "charge.dispute.created" || event.type === "charge.dispute.updated"
-              || event.type === "charge.dispute.funds_withdrawn";
+  // A decided dispute (won / lost) takes nothing more (TED-196): a late
+  // "updated" carrying the outcome must not pause autopay again.
+  const taking = (event.type === "charge.dispute.created" || event.type === "charge.dispute.updated"
+              || event.type === "charge.dispute.funds_withdrawn") && status !== "won" && status !== "lost";
   const closed = event.type === "charge.dispute.closed";
   if (!taking && !closed) return;
 

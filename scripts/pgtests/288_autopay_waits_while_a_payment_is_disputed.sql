@@ -61,6 +61,50 @@ BEGIN
     f := public.camp_family(c, 'teal');
     IF (r->>'success')::boolean IS NOT TRUE OR f->'plans'->0 ? 'collectionBlocked' THEN RAISE EXCEPTION 'resume: % / %', r, f->'plans'; END IF;
 
+    -- TED-193: two disputes — winning one keeps the pause until the other closes
+    r := public.hold_autopay_for_dispute(c, 'teal', 'dp_A', true, NULL);
+    r := public.hold_autopay_for_dispute(c, 'teal', 'dp_B', true, NULL);
+    r := public.hold_autopay_for_dispute(c, 'teal', 'dp_A', false);
+    f := public.camp_family(c, 'teal');
+    IF f->'plans'->0->'collectionBlocked'->>'reason' IS DISTINCT FROM 'chargeback'
+       OR NOT (f->'plans'->0->'collectionBlocked'->'disputeIds') ? 'dp_B' THEN
+        RAISE EXCEPTION 'TED-193: winning one of two disputes restarted autopay: %', f->'plans'->0;
+    END IF;
+    r := public.hold_autopay_for_dispute(c, 'teal', 'dp_B', false);
+    f := public.camp_family(c, 'teal');
+    IF f->'plans'->0 ? 'collectionBlocked' THEN RAISE EXCEPTION 'both closed, still paused: %', f->'plans'->0; END IF;
+
+    -- TED-197: a declined card's wait is kept under the pause and comes back
+    PERFORM public.flag_plan_collection(c, 'teal', 'p1', 'declined', 'card declined');
+    f := public.camp_family(c, 'teal');
+    n := 0;
+    r := public.hold_autopay_for_dispute(c, 'teal', 'dp_C', true, NULL);
+    -- TED-194: the runner's "no card" while paused goes under the pause, never over it
+    PERFORM public.flag_plan_collection(c, 'teal', 'p1', 'no_card', 'no card on file');
+    f := public.camp_family(c, 'teal');
+    IF f->'plans'->0->'collectionBlocked'->>'reason' IS DISTINCT FROM 'chargeback'
+       OR f->'plans'->0->'collectionBlocked'->'under'->>'reason' IS DISTINCT FROM 'no_card' THEN
+        RAISE EXCEPTION 'TED-194: a no-card mark replaced the dispute pause: %', f->'plans'->0;
+    END IF;
+    PERFORM public.flag_plan_collection(c, 'teal', 'p1', 'declined', 'card declined');
+    r := public.hold_autopay_for_dispute(c, 'teal', 'dp_C', false);
+    f := public.camp_family(c, 'teal');
+    IF f->'plans'->0->'collectionBlocked'->>'reason' IS DISTINCT FROM 'declined'
+       OR f->'plans'->0->'collectionBlocked'->>'nextRetryAt' IS NULL THEN
+        RAISE EXCEPTION 'TED-197: the decline wait did not come back after the dispute: %', f->'plans'->0;
+    END IF;
+    PERFORM public.flag_plan_collection(c, 'teal', 'p1', NULL, NULL);
+
+    -- TED-196: a late message for a dispute already won pauses nothing
+    f := public.camp_family_for_update(c, 'teal');
+    PERFORM public.camp_family_save(c, 'teal', f || jsonb_build_object('entries',
+        COALESCE(f->'entries', '[]'::jsonb) || '[{"id":"le_cbwon_dp_W","kind":"payment","amount":0,"reason":"chargeback"}]'::jsonb));
+    r := public.hold_autopay_for_dispute(c, 'teal', 'dp_W', true, NULL);
+    f := public.camp_family(c, 'teal');
+    IF (r->>'alreadyWon')::boolean IS NOT TRUE OR f->'plans'->0 ? 'collectionBlocked' THEN
+        RAISE EXCEPTION 'TED-196: a late message after a win paused autopay: % / %', r, f->'plans'->0;
+    END IF;
+
     -- 5. grants
     IF has_function_privilege('authenticated', 'public.hold_autopay_for_dispute(uuid,text,text,boolean,text)', 'EXECUTE') THEN
         RAISE EXCEPTION 'a browser can pause or resume autopay by dispute';
@@ -68,8 +112,26 @@ BEGIN
     RAISE NOTICE 'ok  288: a chargeback pauses autopay; stale tabs keep it; won resumes; the office resumes after a loss';
 END $$;
 
--- a stranger cannot resume
+-- a stranger cannot resume; nor can camp staff without Billing edit (TED-199 M12)
+INSERT INTO auth.users (id, email) VALUES ('f2880000-0000-0000-0000-0000000000c1', 'c@288.test');
+INSERT INTO camp_users (camp_id, user_id, role, accepted_at) VALUES ('f2880000-0000-0000-0000-000000000001', 'f2880000-0000-0000-0000-0000000000c1', 'counselor', now());
+SELECT set_config('t288.uid', 'f2880000-0000-0000-0000-0000000000c1', false);
+SELECT set_config('request.jwt.claims', '{"sub":"f2880000-0000-0000-0000-0000000000c1"}', false);
+-- The section resolver here is a stub answering 'edit' to everyone (pgstubs);
+-- swapped for one answering 'view' to test 288's own gate (as pgtest 240 does).
+CREATE OR REPLACE FUNCTION public.user_section_level(p_camp_id uuid, p_section text)
+RETURNS text LANGUAGE sql STABLE SECURITY DEFINER
+SET search_path = public, pg_catalog AS $fn$ SELECT 'view'::text $fn$;
+DO $$
+DECLARE r jsonb;
+BEGIN
+    PERFORM public.hold_autopay_for_dispute('f2880000-0000-0000-0000-000000000001', 'teal', 'dp_v', true, NULL);
+    r := public.resume_autopay_after_dispute('f2880000-0000-0000-0000-000000000001', 'teal');
+    IF r->>'error' IS DISTINCT FROM 'not_authorized' THEN RAISE EXCEPTION 'TED-199: staff without Billing edit resumed autopay: %', r; END IF;
+    PERFORM public.hold_autopay_for_dispute('f2880000-0000-0000-0000-000000000001', 'teal', 'dp_v', false);
+END $$;
 SELECT set_config('t288.uid', 'f2880000-0000-0000-0000-0000000000b1', false);
+SELECT set_config('request.jwt.claims', '{"sub":"f2880000-0000-0000-0000-0000000000b1"}', false);
 DO $$
 DECLARE r jsonb;
 BEGIN

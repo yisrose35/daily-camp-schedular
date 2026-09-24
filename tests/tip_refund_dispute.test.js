@@ -171,3 +171,10 @@ test('TED-182: an "opened" message arriving after the dispute was won takes noth
     assert.strictEqual(r.status, 200);
     assert.strictEqual(reversals(r).length, 0, 'a late "opened" took the tip after the dispute was won');
 });
+
+test('TED-199 (M15): a tip dispute seen first as funds_withdrawn takes the tip back too', () => {
+    const r = deliver([{ id: 'evt_fw', type: 'charge.dispute.funds_withdrawn', data: { object: { id: 'dp_fw', charge: 'ch_1', amount: 2100, status: 'needs_response' } } }],
+        { charges: { ch_1: { id: 'ch_1', amount: 2100, amount_refunded: 0, transfer: 'tr_1', payment_intent: 'pi_tip' } } });
+    assert.strictEqual(r.status, 200);
+    assert.strictEqual(reversals(r).length, 1, 'funds_withdrawn was not handled for tips');
+});

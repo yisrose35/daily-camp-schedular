@@ -141,3 +141,12 @@ test('TED-192: a sale that kept its items by id offers exactly those back — na
     // an older sale with no ids still goes by its line
     assert.deepStrictEqual(JSON.parse(JSON.stringify(P.restock('Ices ×2').map(x => [x.id, x.qty]))), [[1, 2]]);
 });
+
+test('TED-199 (M24): the Void window itself offers the items the sale kept by id', () => {
+    const P = page();
+    P.snacks.inventory.push({ id: 3, name: 'Chips, BBQ', price: 1, stock: 4 });
+    const t = { sig: 's9', date: '2026-08-20', type: 'debit', amount: 1, items: 'Chips, BBQ', camper: 'Avi', soldItems: [{ id: 3, qty: 1 }] };
+    P.row(t);
+    P.open(P.rows().length - 1);
+    assert.match(P.els.voidItems.innerHTML, /Put 1 × Chips, BBQ back in stock/);
+});

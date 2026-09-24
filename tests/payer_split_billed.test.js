@@ -49,7 +49,7 @@ function billing(shares) {
         document: { getElementById: (id) => els[id] || null, querySelectorAll: () => [] },
     };
     const names = ['addChargeForFamily', '_splitToPayers', '_familyOtherPayers', 'recordPayerPayment', '_postLedgerCharge',
-        '_payerLedgerOf', '_migratePayerLedgers', '_payerLines', '_payerAccount', '_payerTotals', '_placePayerPayment', 'payerLines', 'voidPayerLine'];
+        '_payerLedgerOf', '_migratePayerLedgers', '_payerLines', '_payerStanding', '_payerAccount', '_payerTotals', '_placePayerPayment', 'payerLines', 'voidPayerLine'];
     const fns = new Function(...Object.keys(ctx), names.map(cut).join('\n') + '\nreturn { ' + names.join(', ') + ' };')(...Object.values(ctx));
     return { fam, reg, fns, els, toasts, val, payOpts: ctx_payOpts, families: ctx.families, press: () => onOk && onOk() };
 }
@@ -206,4 +206,35 @@ test('TED-189: "Cancel share" — the fund no longer owes it, and neither does t
     assert.ok(!b.fam.charges.some(c => /^prback_/.test(c.id)));
     // and the credit window points the office to it
     assert.match(ME, /A credit here comes off <strong>/);
+});
+
+test('TED-198: a fund that paid $300 before its share was cancelled shows a credit, not "owes $-300", and keeps its Account button', async () => {
+    const b = billing([{ payerId: 'org_fund', amount: 800 }]);
+    split(b, 1000);
+    b.fns.recordPayerPayment('org_fund');
+    b.val('ppAmt', '300'); b.val('ppDate', '2026-08-25'); b.val('ppMethod', 'check'); b.val('ppRef', '#9');
+    b.press();
+    const share = b.fam.payerLedger.find(e => e.kind === 'charge');
+    b.fns.voidPayerLine('org_fund', share.id, 'cancel');
+    await tick();
+    const last = b.toasts[b.toasts.length - 1];
+    assert.match(last, /Credit \$300\.00 — return it to them, or keep it for a later share/);
+    assert.doesNotMatch(last, /\$-/);
+    // Manage payers: Account whenever the payer has any line, not only while it owes
+    assert.match(ME, /\+\(_payerAccount\(id\)\.lines\.length\?'<button[^\n]*\n[^\n]*payerLines/);
+});
+
+test('TED-199 (M17): a cheque that was split across two families is not placed again by an old page', () => {
+    const b = billing([]);
+    const oak = { name: 'Oak', balance: 0, charges: [], credits: [], entries: [],
+        payerLedger: [{ id: 'prc_o_org_fund', payerId: 'org_fund', kind: 'charge', amount: 400 }] };
+    b.families.oak = oak;
+    b.fam.payerLedger = [{ id: 'prc_p_org_fund', payerId: 'org_fund', kind: 'charge', amount: 600 }];
+    // the cheque, moved earlier as two pieces (prp_old_0 / prp_old_1)
+    b.fam.payerLedger.push({ id: 'prp_old_0', payerId: 'org_fund', kind: 'payment', paymentId: 'prp_old', amount: 600 });
+    oak.payerLedger.push({ id: 'prp_old_1', payerId: 'org_fund', kind: 'payment', paymentId: 'prp_old', amount: 400 });
+    // an old page writes the old list back
+    b.reg.org_fund.ledger = [{ id: 'prp_old', kind: 'payment', amount: 1000 }];
+    const acc = b.fns._payerAccount('org_fund');
+    assert.deepStrictEqual([acc.charged, acc.paid, acc.balance], [1000, 1000, 0], 'the split cheque was placed again');
 });
