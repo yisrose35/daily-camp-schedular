@@ -2243,7 +2243,7 @@ function _applyCloseout(famKey,plan){
     var f=families[famKey];
     var C=_closeoutAPI();
     if(!f||!C||!plan)return;
-    var stamp=Date.now(), applied=0, deferred=[];
+    var stamp=Date.now(), applied=0, deferred=[], canteenJobs=[];
 
     plan.steps.forEach(function(st,i){
         var amt=Math.round((Number(st.amount)||0)*100)/100;
@@ -2252,9 +2252,11 @@ function _applyCloseout(famKey,plan){
                                      :'Account credit';
         var id='co_'+stamp+'_'+i;
 
-        if(st.do==='bill'||st.do==='hold'){
-            // Nothing to do, and that IS the disposition: the credit stays where it
-            // already is. Writing an entry here would move money for no reason.
+        // bill / hold / roll_forward LEAVE THE MONEY WHERE IT IS (TED-067). A
+        // family's account and a child's canteen account both carry into next
+        // season, so "roll into next season" is exactly "keep it". It used to
+        // post a charge that consumed the credit — the opposite of rolling it on.
+        if(st.do==='bill'||st.do==='hold'||st.do==='roll_forward'){
             applied++;
             return;
         }
@@ -2262,17 +2264,25 @@ function _applyCloseout(famKey,plan){
             deferred.push(amt);
             return;
         }
-        // donate / cash / check / roll_forward all CONSUME the credit, so each is a
-        // charge against the account with the reason attached. Crediting would double
-        // the family's credit; editing the balance would bypass the ledger entirely.
-        var reason=(st.do==='donate')?'donation'
-                  :(st.do==='roll_forward')?'carried_forward':'disbursement';
-        var note=C.labelFor(st.do)+' \u2014 '+who
-                +(st.do==='roll_forward'?' (opening credit next season)':'');
+        var note=C.labelFor(st.do)+' \u2014 '+who;
+        // A CHILD'S CANTEEN MONEY comes off the child's canteen account (TED-067),
+        // through the same call the Canteen page's cash-out uses. It used to be
+        // charged to the family's tuition account, leaving the canteen untouched
+        // — a paid-in-full family suddenly owed their child's snack money.
+        if(st.kind==='canteen'){
+            canteenJobs.push({camper:st.camper||'',camperId:(st.camperId!=null?st.camperId:(typeof _camperIdOf==='function'?_camperIdOf(st.camper):null)),
+                              amount:amt,note:note});
+            return;
+        }
+        // Account credit that is donated / paid out in cash or by check is
+        // CONSUMED, so it is a charge against the account with the reason
+        // attached. Crediting would double it; editing the balance would bypass
+        // the ledger entirely.
+        var reason=(st.do==='donate')?'donation':'disbursement';
         if(!f.charges)f.charges=[];
         f.charges.push({id:id,category:'Close-out',description:note,amount:amt,
                         date:today(),timestamp:stamp,closeout:{disposition:st.do,
-                        reason:reason,kind:st.kind||'family',camper:st.camper||'',camperId:st.camperId!=null?st.camperId:null}});
+                        reason:reason,kind:'family'}});
         _postLedgerCharge(f,f.charges[f.charges.length-1]);
         f.balance=(f.balance||0)+amt;
         applied++;
@@ -2281,13 +2291,35 @@ function _applyCloseout(famKey,plan){
     save();closeModal('dynModal');
     if(curPage==='familydetail')renderFamilyDetailPage();else renderBilling();
 
-    var msg=applied?(applied+' close-out step'+(applied===1?'':'s')+' applied'):'';
-    if(deferred.length){
-        var total=deferred.reduce(function(n,x){return n+x},0);
-        msg+=(msg?'. ':'')+fm(Math.round(total*100)/100)+' is set to go back to a card '
-            +'\u2014 use Issue Credit/Refund so it goes through the refund checks';
+    function finish(canteenDone,canteenFailed){
+        var n=applied+canteenDone;
+        var msg=n?(n+' close-out step'+(n===1?'':'s')+' applied'):'';
+        if(canteenFailed.length){
+            msg+=(msg?'. ':'')+'Could not take canteen money off: '+canteenFailed.join('; ')
+                +' \u2014 do it from the Canteen page';
+        }
+        if(deferred.length){
+            var total=deferred.reduce(function(n,x){return n+x},0);
+            msg+=(msg?'. ':'')+fm(Math.round(total*100)/100)+' is set to go back to a card '
+                +'\u2014 use Issue Credit/Refund so it goes through the refund checks';
+        }
+        toast(msg||'Nothing to apply',canteenFailed.length?'error':undefined);
     }
-    toast(msg||'Nothing to apply');
+    if(!canteenJobs.length){finish(0,[]);return}
+    var client=window.CampistryDB&&window.CampistryDB.getClient?window.CampistryDB.getClient():null;
+    var campId=window.CampistryDB&&window.CampistryDB.getCampId?window.CampistryDB.getCampId():null;
+    if(!client||!campId){finish(0,canteenJobs.map(function(j){return _camperLabel(j.camper)+' (not connected)'}));return}
+    var done=0,failed=[];
+    Promise.all(canteenJobs.map(function(j){
+        return client.rpc('canteen_office_cash_out',{
+            p_camp_id:campId,p_camper_name:j.camper,p_camper_id:j.camperId,p_amount:j.amount,
+            p_note:'Season close-out: '+j.note,p_by:'office (close-out)',p_date:today()
+        }).then(function(res){
+            var d=res&&res.data;
+            if(res&&res.error||!d||!d.success)failed.push(_camperLabel(j.camper)+' ('+((d&&d.error)||(res&&res.error&&res.error.message)||'refused')+')');
+            else done++;
+        },function(e){failed.push(_camperLabel(j.camper)+' ('+((e&&e.message)||'error')+')')});
+    })).then(function(){finish(done,failed)});
 }
 
 /** Live arithmetic under the form, so a partial card refund is visible first. */
