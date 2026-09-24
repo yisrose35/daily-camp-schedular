@@ -1,29 +1,43 @@
 # Ted's ledger
 
 ## Last commit checked
-`32c9f59` (2026-09-23)
+`10e0758` (2026-09-24)
 
 ## Open findings
 | ID | Severity | Description | Found | Status |
 |----|----------|-------------|-------|--------|
-| TED-051 | 🔴 | Autopay never charges a payment plan a parent built (runner skips plans with dueDates and no installments) | 2026-09-23 | Open |
-| TED-052 | 🔴 | `stripe-refund` has no caller check: anyone with a payment id (printed on receipts) can refund it | 2026-09-23 | Open |
-| TED-053 | 🔴 | Late fees, card surcharges, Add Charge, bulk charges, close-out never posted to the ledger, so neither balance includes them | 2026-09-23 | Open |
-| TED-054 | 🔴 | Office "Charge card" on Banquest/Cardknox calls `payments-charge`, which imports a file that doesn't exist | 2026-09-23 | Open |
-| TED-055 | 🟠 | Declined instalment on an office-built (installments[]) plan is dropped for good, never flagged | 2026-09-23 | Open |
-| TED-056 | 🟠 | Two plan models not reconciled; office still creates old plans and editing a parent plan converts it back | 2026-09-23 | Open |
-| TED-057 | 🟠 | `stripe-webhook` accepts unsigned events when its secret is not set; no timestamp check | 2026-09-23 | Open (owner to check secret) |
-| TED-058 | 🟠 | `stripe-charge` charges another camp's customer (to the platform) instead of refusing; no idempotency key | 2026-09-23 | Open |
-| TED-059 | 🟠 | Batch charge always reports 0 failed | 2026-09-23 | Open |
-| TED-060 | 🟡 | Billing tests can't catch these: test DB chain lacks most billing migrations and two balance helpers; many tests text-only | 2026-09-23 | Open |
-| TED-061 | 🟡 | Unused `stripe-setup` function has no caller check | 2026-09-23 | Open |
-| TED-062 | 🟡 | Negative credit accepted and only half-recorded | 2026-09-23 | Open |
-| TED-050 | 🟡 | No automated test checks that the Me page sends camper numbers (`p_roster_ids`) to the family switch-off, or that it falls back only on PGRST202; a regression would silently return to by-name | 2026-09-23 | Open |
-| TED-005 | 🟠 | 14 auto-scheduler tests fail (`auto_full_day.test.js`); still 14 at 32c9f59. Owner deferred. | 2026-09-23 | Open (deferred by owner) |
+| TED-063 | 🔴 | Link Stripe "Pay Now" sends no familyKey: payment never reaches the family ledger (parent still sees full balance) and settles in the platform's Stripe account | 2026-09-24 | Open |
+| TED-064 | 🔴 | Autopay by bank account (ACH): a "processing" debit records nothing, so the runner debits again every night; no Idempotency-Key on autopay charges | 2026-09-24 | Open |
+| TED-065 | 🔴 | Me-page charge backfill (TED-053 fix) double-posts charges that convert_family_ledgers already posted as le_conv_* (625 → 650) | 2026-09-24 | Open (owner to check if any camp converted) |
+| TED-066 | 🟠 | A shop order billed to the family and then cancelled/re-priced keeps its posted ledger charge | 2026-09-24 | Open |
+| TED-067 | 🟠 | Close-out of a camper's canteen money posts a charge to the family's tuition ledger (default roll_forward); roll_forward creates no opening credit anywhere | 2026-09-24 | Open |
+| TED-068 | 🟠 | Office plan editor's per-row amounts are discarded; autopay splits the whole balance evenly, even when only part was scheduled | 2026-09-24 | Open |
+| TED-069 | 🟠 | registration-deposit-checkout `officeCharge` needs no login and has no claim: anyone with camp+application id can trigger it; concurrent calls double-charge | 2026-09-24 | Open |
+| TED-070 | 🟠 | Banquest deposit hosted page reads `credRes.credential` (never set) so it always fails; bqBase ignores gatewayUrl | 2026-09-24 | Open |
+| TED-071 | 🟠 | Cardknox webhook amount-matching: two pending same-amount deposits → paid one never recorded, no alert; an unknown xInvoice still falls through to amount matching | 2026-09-24 | Open |
+| TED-072 | 🟠 | payments-hosted-complete falls back to the newest transaction on the whole account when none matches the link key | 2026-09-24 | Open |
+| TED-073 | 🟠 | Nightly tip-transfer retry sends the internal staff id as Stripe destination (always fails) and pays tip − fee | 2026-09-24 | Open |
+| TED-074 | 🟠 | "Parents set up their own plan" setting points to a Link builder that was removed; office loses the Set Up button | 2026-09-24 | Open |
+| TED-075 | 🟡 | Canteen auto-reload has no claim/idempotency: two simultaneous triggers charge twice | 2026-09-24 | Open |
+| TED-076 | 🟡 | Loose ends: refund amount ≤0 = full refund; deposit Stripe charge lacks on_behalf_of/idempotency; plan edit clears paused/collectionBlocked; some billing tests text-only | 2026-09-24 | Open |
+| TED-005 | 🟠 | 14 auto-scheduler tests fail (`auto_full_day.test.js`); still 14 at 10e0758. Owner deferred. | 2026-09-23 | Open (deferred by owner) |
 
 ## Closed findings
 | ID | What it was | Closed | Proof |
 |----|-------------|--------|-------|
+| TED-051 | Autopay skipped parent-built (dueDates) plans | 2026-09-24 | At 10e0758: autopay_runner.test.js test 1 passes; all 3 runner tests fail against 32c9f59's runner (scratch worktree) |
+| TED-052 | stripe-refund had no caller check | 2026-09-24 | At 10e0758: 4 refund tests in stripe_refund_and_charge.test.js pass, fail on old code (8/9 of file fail on old); code read stripe-refund/index.ts:129-199. Residual in TED-076 |
+| TED-053 | Late fees/surcharges/charges never reached the ledger | 2026-09-24 | At 10e0758: charges_reach_the_ledger.test.js passes (fails on old); pgtest 215 billing block 600→625. Side effects filed as TED-065/066/067 |
+| TED-054 | payments-charge imported a missing file | 2026-09-24 | At 10e0758: byop_charge.test.js 7/7 pass, 7/7 fail on old; no local imports |
+| TED-055 | Declined installments[] instalment dropped | 2026-09-24 | At 10e0758: runner tests 2-3 pass (fail on old); pgtest 215: pending + flagged + notified, retry pays and clears |
+| TED-056 | Two plan models; office wrote old plans | 2026-09-24 | At 10e0758: office_plan_is_ledger_plan.test.js passes (fails on old). Amount side effect filed as TED-068 |
+| TED-057 | stripe-webhook accepted unsigned events / no age check | 2026-09-24 | At 10e0758: stripe_webhooks_fail_closed.test.js 6/6 (3 fail on old); connect webhook checks age too. Owner must set secrets |
+| TED-058 | stripe-charge charged another camp's customer; no idempotency | 2026-09-24 | At 10e0758: 3 charge tests pass, fail on old |
+| TED-059 | Batch charge always reported 0 failed | 2026-09-24 | At 10e0758: batch_charge_counts_failures.test.js 3/3, fail on old |
+| TED-060 | Test DB lacked billing migrations | 2026-09-24 | At 10e0758: chain 109 migrations, pg 50/50; my scratch DBs from the chain ran convert_family_ledgers, settle_shop_order, get_my_balance |
+| TED-061 | stripe-setup open to anyone | 2026-09-24 | At 10e0758: harness → HTTP 410, 0 outside calls |
+| TED-062 | Negative credit accepted | 2026-09-24 | At 10e0758: campistry_me.js:17999 and :18412 refuse ≤0 (code read; its test is text-only) |
+| TED-050 | No test for camper numbers in the family sweep | 2026-09-24 | At 10e0758: sweep_sends_camper_numbers.test.js fails with p_roster_ids dropped (1 fail) and with fallback-on-any-error (1 fail); passes unchanged |
 | TED-048 | Verify script said "261 ok" on an earlier copy of 261 | 2026-09-23 | At 4ce2489, scratch DB: real 261 from d049454 and from b92dcdc → "run 261 again", then ok after re-running today's 261; today's 261 twice more → ok; pgtest 261 fails with d049454's verify script and with only the camp_people half removed. |
 | TED-049 | By-number family switch-off could cut off a family with an enrolled child (null sibling slot, stale page number, `[null]` list) | 2026-09-23 | At 4ce2489: pgtest 261 fails with each of the 3 fixes undone (no DB roster / no null-slot rule / item count), passes unchanged; my real-save scenario (`v16/real.sql`): removed + unenrolled children's families off, TED-047 case off, wrong page number (99 for #4) stays on. |
 | TED-047 | Family "still at camp" switch compared names, not numbers | 2026-09-23 | At d049454, scratch DB: my t047 scenario (departed Avi #1, new Avi Katz #3) → `revoked: 1`, Katz invite off (old 2-arg by name: 0); pgtest 261 fails with the number branch disabled, passes with it; page probe sends `p_roster_ids` and falls back only on PGRST202. |
@@ -83,10 +97,10 @@
 | Auto Builder (solver, layers, grid) | never (only test results seen) |
 | Manual Builder | never |
 | Cloud sync / schedules / rotation | never |
-| Billing & payments (edge functions, autopay runner, refunds, late fees/surcharges/credits, plans, parent balance) | 2026-09-23 (first deep pass; not browser, not live processors) |
+| Billing & payments (edge functions, autopay runner, refunds, late fees/surcharges/credits, plans, parent balance) | 2026-09-24 (second pass: registration deposits, Link pay/saved card/plans, hosted pages + return, Connect routing + tips, close-out, canteen auto-reload; not browser, not live processors) |
 | Payroll | never |
-| Bank deposit matching | never |
-| Canteen / Snacks / Shop / POS | never (touched only through camper numbers) |
+| Bank deposit matching (`deposit-inbox`) | never |
+| Canteen / Snacks / Shop / POS | canteen auto-reload + shop bill-to-family settlement 2026-09-24; POS maths never |
 | Parent portal (Link) | never in a browser (database-level invite ownership checked 2026-09-23; Parents-page refusal wording run in isolation 2026-09-23) |
 | Health, Go, Live, Lite | never (touched only through camper numbers) |
 | Access control / roles / sections | never |
@@ -113,3 +127,4 @@
 | 2026-09-23 | Check my work: TED-047 fix | d049454 | unit 3277/14 · pg 50/0 · keys 42/0 · lite 12/0 · smoke 32/0 · scale 24/0 | 🟡 | [report](reports/2026-09-23-camper-id-fifteenth-recheck.md) |
 | 2026-09-23 | Check my work: TED-048, 049 fixes + Parents page wording | 4ce2489 | unit 3280/14 · pg 50/0 · keys 42/0 · lite 12/0 · smoke 32/0 · scale 24/0 | 🟢 | [report](reports/2026-09-23-camper-id-sixteenth-recheck.md) |
 | 2026-09-23 | Audit: billing | 32c9f59 | unit 3280/14 · pg 50/0 · smoke 32/0 · own harness 5 runs | 🔴 | [report](reports/2026-09-23-billing-audit.md) |
+| 2026-09-24 | Check my work + billing deep pass | 10e0758 | unit 3323/14 · pg 50/0 · keys 42/0 · lite 12/0 · smoke 32/0 · scale 24/0 · old-code runs of 8 new tests · 3 scratch DB + 8 harness probes | 🔴 | [report](reports/2026-09-24-billing-recheck.md) |
