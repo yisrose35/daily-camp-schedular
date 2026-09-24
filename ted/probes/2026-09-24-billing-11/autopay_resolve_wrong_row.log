@@ -1,0 +1,20 @@
+W1 Gold went through (pi_GOLD booked); office pastes Silver's pi_SILVER for Gold
+  office → {"success": true, "recorded": true}
+  after gold  : ledger payments [le_pay_pi_GOLD $500, le_ap_plan_gold_0 $500] | balance owed 0.00 | hold none | next night due {"index": 1, "amount": 0, "reason": "nothing_owed", "dueDate": "2026-07-01", "remaining": 1}
+  after silver: ledger payments [le_pay_pi_SILVER $500] | balance owed 500.00 | hold none | next night due {"index": 0, "amount": 250.00, "dueDate": "2026-06-01", "remaining": 2}
+  after payment rows: auto_pi_SILVER→gold $500.00, pi_pi_GOLD→gold $500, pi_pi_SILVER→silver $500
+W2 Gold did NOT go through; office pastes pi_SILVER for Gold
+  office → {"success": true, "recorded": true}
+  after gold  : ledger payments [le_ap_plan_gold_0 $500] | balance owed 500.00 | hold none | next night due {"index": 1, "amount": 500.00, "dueDate": "2026-07-01", "remaining": 1}
+  after silver: ledger payments [le_pay_pi_SILVER $500] | balance owed 500.00 | hold none | next night due {"index": 0, "amount": 250.00, "dueDate": "2026-06-01", "remaining": 2}
+  after payment rows: auto_pi_SILVER→gold $500.00, pi_pi_SILVER→silver $500
+W3 control: Gold went through, office pastes pi_GOLD
+  office → {"success": true, "recorded": true}
+  after gold  : ledger payments [le_pay_pi_GOLD $500] | balance owed 500.00 | hold none | next night due {"index": 1, "amount": 500.00, "dueDate": "2026-07-01", "remaining": 1}
+  after silver: ledger payments [le_pay_pi_SILVER $500] | balance owed 500.00 | hold none | next night due {"index": 0, "amount": 250.00, "dueDate": "2026-06-01", "remaining": 2}
+  after payment rows: pi_pi_GOLD→gold $500, pi_pi_SILVER→silver $500
+W4 a typo pi_GOLDX, Gold's webhook (pi_GOLD) arrives after
+  office → {"success": true, "recorded": true}
+  after gold  : ledger payments [le_ap_plan_gold_0 $500, le_pay_pi_GOLD $500] | balance owed 0.00 | hold none | next night due {"index": 1, "amount": 0, "reason": "nothing_owed", "dueDate": "2026-07-01", "remaining": 1}
+  after silver: ledger payments [le_pay_pi_SILVER $500] | balance owed 500.00 | hold none | next night due {"index": 0, "amount": 250.00, "dueDate": "2026-06-01", "remaining": 2}
+  after payment rows: auto_pi_GOLDX→gold $500.00, pi_pi_GOLD→gold $500, pi_pi_SILVER→silver $500

@@ -1,0 +1,6 @@
+settle bill $40: {"amount": 40.00, "method": "bill", "balance": null, "success": true, "camperId": 1, "familyKey": "gold", "previousAmount": 0, "previousMethod": "none"}
+charges[]: ["shop_o1 $40"]  ledger balance: 40.00
+after Me page backfill + save, ledger balance: 40.00
+cancel order: {"amount": 0, "method": "none", "balance": null, "success": true, "camperId": 1, "familyKey": "gold", "previousAmount": 40.00, "previousMethod": "bill"}
+charges[] now: []  ledger entries: le_t $1000, le_p $1000, le_chg_shop_o1 $40, le_chgadj_shop_o1_1 $40
+ledger balance after cancel: 0.00

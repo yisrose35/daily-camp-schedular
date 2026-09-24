@@ -1,0 +1,28 @@
+postgres up with 124 migrations applied
+camp processor set to cardknox
+setup: camper "Avi Katz" has a $40 wallet; campers in Snacks = 1
+
+REFUND ALL button pressed:
+  page errors from the click: ["ReferenceError: _stripeRefundCapacity is not defined"]
+  Refund All window open: false | class = "modal-overlay"
+  window text: ""
+  "waiting for an answer" list shown: false | edge calls made: []
+  typeof _stripeRefundCapacity in the page: undefined
+
+REFUND (one child) row button onclick: "openMFor('refund','refundCamper','Avi Katz')"
+  Refund window open: true | camper picked: "Avi Katz"
+  page errors: ["ReferenceError: _lbl is not defined"]
+  refund box: "Available to refund via Sola: $0.00$40.00 of this balance came from a cash/manual deposit (or a different processor) — refund that portion separately, it can't go through Sola."
+  "waiting for an answer" list shown: false | buttons: []
+  list text: ""
+  edge calls: [["payments-canteen-refund","{\"action\":\"holds\"}"]]
+
+  before Pay Out: {"disabled":false,"warn":""}
+  calls after Pay Out: [["get_camp_cache_epoch",0],["canteen_office_cash_out","{\"amount\":5,\"camper\":\"Avi Katz\",\"balance\":35,\"success\":true,\"camperId\":1,\"takenToday\":5}"],["get_camp_cache_epoch",0],["get_canteen_history","{\"success\":true,\"transactions\":[{\"by\":\"\",\"date\":\"2026-09-24\",\"kind\":\"cash_out\",\"note\":\"bus money\",\"time\":\"05:47 AM\",\"type\":\"debit\",\"items\":\"Cash out — bus money"],["get_camp_pos_login_status","{\"locked\":false,\"pinSet\":false,\"success\":true,\"lockedAt\":null,\"pinSetAt\":null}"],["get_camp_cache_epoch",0]]
+
+TAKE OUT CASH $5:
+  database: balance now $35, cash-out rows = [{"amount":5,"kind":"cash_out"}]
+  page errors from the payout: ["ReferenceError: _lbl is not defined"]
+  toasts on screen: ["Added $40.00 to Avi Katz (Cash)"] | amount field still holds: "5" | cash window open: false
+
+all page errors: ["ReferenceError: _stripeRefundCapacity is not defined","ReferenceError: _lbl is not defined","ReferenceError: _lbl is not defined"]
