@@ -6372,6 +6372,37 @@ function _postLedgerCharge(f,c){
     return !!(res&&res.ok);
 }
 
+/**
+ * Post the family's EXISTING charges to its ledger — the catch-up Billing runs
+ * on load (TED-053) — without posting any charge twice (TED-065).
+ *
+ * A camp that ran convert_family_ledgers (171/215) already has every charge
+ * that existed then on the ledger, as `le_conv_<family>_<n>` entries with
+ * reason 'fee' and nothing linking them to the charge's id. So each such
+ * converted charge "covers" one charge of the same amount (and date, when the
+ * conversion kept it), matched one to one; only a charge nothing covers is
+ * posted. Returns how many were posted.
+ */
+function _postExistingCharges(f){
+    if(!f||!Array.isArray(f.charges)||!f.charges.length)return 0;
+    if(!Array.isArray(f.entries)||!f.entries.length)return 0;
+    var cents=function(v){return Math.round((Number(v)||0)*100)};
+    var pool=f.entries.filter(function(e){
+        return e&&e.kind==='charge'&&e.reason==='fee'&&/^le_conv_/.test(String(e.id||''));
+    }).map(function(e){return {cents:cents(e.amount),date:String(e.date||''),used:false}});
+    var n=0;
+    f.charges.forEach(function(c){
+        if(!c||c.id==null)return;
+        if(f.entries.some(function(e){return e&&e.id==='le_chg_'+String(c.id)}))return;   // already posted
+        var cc=cents(c.amount), cd=String(c.date||'');
+        var hit=pool.filter(function(p){return !p.used&&p.cents===cc&&p.date===cd})[0]
+              ||pool.filter(function(p){return !p.used&&p.cents===cc})[0];
+        if(hit){hit.used=true;return}                                                       // the conversion posted it
+        if(_postLedgerCharge(f,c))n++;
+    });
+    return n;
+}
+
 /** Money helpers for the removal warnings. Read-only. */
 function _fmtMoney(n){return '$'+(Math.round((Number(n)||0)*100)/100).toLocaleString('en-US',{minimumFractionDigits:2,maximumFractionDigits:2})}
 function _famNameForCamper(n){
@@ -16085,7 +16116,7 @@ function buildFamilyLedgers(){
         // Keyed on the charge's id, so this posts each one once, ever.
         Object.keys(families||{}).forEach(function(fk){
             var f=families[fk];
-            (f&&Array.isArray(f.charges)?f.charges:[]).forEach(function(c){ if(_postLedgerCharge(f,c))_posted++; });
+            _posted+=_postExistingCharges(f);
         });
         if(_posted){try{setTimeout(function(){try{save()}catch(_){}} ,0)}catch(_){}}
     }
