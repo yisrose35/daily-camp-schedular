@@ -2273,6 +2273,7 @@ function _applyCloseout(famKey,plan){
         f.charges.push({id:id,category:'Close-out',description:note,amount:amt,
                         date:today(),timestamp:stamp,closeout:{disposition:st.do,
                         reason:reason,kind:st.kind||'family',camper:st.camper||'',camperId:st.camperId!=null?st.camperId:null}});
+        _postLedgerCharge(f,f.charges[f.charges.length-1]);
         f.balance=(f.balance||0)+amt;
         applied++;
     });
@@ -2384,6 +2385,7 @@ function addCardSurcharge(famKey){
             description:F.disclosure(pol,{fmt:fm})||'Card fee',
             amount:Math.round(q.fee*100)/100,date:today(),timestamp:Date.now(),
             cardFee:{mode:q.mode,base:Math.round(base*100)/100,reason:q.reason}});
+        _postLedgerCharge(f,f.charges[f.charges.length-1]);
         f.balance=(f.balance||0)+Math.round(q.fee*100)/100;
         save();closeModal('dynModal');
         if(curPage==='familydetail')renderFamilyDetailPage();else renderBilling();
@@ -3154,6 +3156,7 @@ function bulkAdjust(kind){
                 if(!f.charges)f.charges=[];
                 f.charges.push({id:id,category:'Other',description:en.reason,
                                 amount:en.amount,date:today,timestamp:stamp});
+                _postLedgerCharge(f,f.charges[f.charges.length-1]);
                 f.balance=(f.balance||0)+en.amount;
             }else{
                 if(!f.credits)f.credits=[];
@@ -3451,6 +3454,7 @@ function assessLateFees(){
                 if(f.charges.some(function(c){return c&&c.id===id}))return;
                 f.charges.push({id:id,category:'Late Fee',description:p.note||'Late fee',
                                 amount:p.amount,date:asOf,timestamp:stamp});
+                _postLedgerCharge(f,f.charges[f.charges.length-1]);
                 f.balance=(f.balance||0)+p.amount;
                 n++;total+=p.amount;
             });
@@ -6334,6 +6338,36 @@ function _postLedgerCredit(f,o){
         date:o.date||undefined,note:o.note||'',
         by:'office',
         source:{creditId:String(o.id||''),camperName:o.camperName||'',camperId:o.camperId!=null?o.camperId:_camperIdOf(o.camperName)}
+    });
+    return !!(res&&res.ok);
+}
+
+/**
+ * Post a charge to the family's LEDGER, once, keyed on the charge's own id
+ * (TED-053). Late fees, card surcharges, Add Charge, bulk charges and close-out
+ * entries used to go only onto `families[fk].charges[]`; once a family has a
+ * posted ledger both balances (the office's and the parent's) come from the
+ * ledger, so none of them was ever owed. Same pattern as _postLedgerCredit.
+ *
+ * A family with no ledger yet is left alone: its balance is still worked out
+ * from charges[] directly, and posting just this one entry would start a
+ * ledger holding nothing else.
+ */
+function _postLedgerCharge(f,c){
+    var B=_billingCore();
+    if(!B||!f||!c||c.id==null)return false;
+    if(!Array.isArray(f.entries)||!f.entries.length)return false;
+    var amt=Math.round((Number(c.amount)||0)*100)/100;
+    if(!(amt>0))return false;
+    var id='le_chg_'+String(c.id);
+    if(B.find(f,id))return false;
+    var cat=String(c.category||'').toLowerCase();
+    var res=B.post(f,{
+        id:id,kind:'charge',amount:amt,
+        reason:(cat.indexOf('fee')>=0)?'fee':'other',
+        date:c.date||undefined,note:c.description||c.category||'Charge',
+        by:'office',
+        source:{chargeId:String(c.id),category:c.category||''}
     });
     return !!(res&&res.ok);
 }
@@ -16046,6 +16080,13 @@ function buildFamilyLedgers(){
         // only, where the next hydration dropped it. Save once, out of band, if
         // anything was genuinely new. postTuition is idempotent, so the save's
         // own re-render posts nothing and cannot loop.
+        // ...and every family charge (late fee, card fee, Add Charge, bulk
+        // charge, close-out), including ones added before they were posted.
+        // Keyed on the charge's id, so this posts each one once, ever.
+        Object.keys(families||{}).forEach(function(fk){
+            var f=families[fk];
+            (f&&Array.isArray(f.charges)?f.charges:[]).forEach(function(c){ if(_postLedgerCharge(f,c))_posted++; });
+        });
         if(_posted){try{setTimeout(function(){try{save()}catch(_){}} ,0)}catch(_){}}
     }
 
@@ -17953,8 +17994,9 @@ function addChargeForFamily(famKey){
         var fk=document.getElementById('chgFamKey').value;
         var f=families[fk];
         if(!fk||!f){toast('Select a family','error');return}
-        var amt=parseFloat(document.getElementById('chgAmount').value)||0;
-        if(!amt){toast('Enter an amount','error');return}
+        var amt=Math.round((parseFloat(document.getElementById('chgAmount').value)||0)*100)/100;
+        // A charge is money owed; taking some off is a credit (TED-062's twin).
+        if(!(amt>0)){toast('Enter an amount above zero — to take money off, use Issue Credit','error');return}
         // The split, if one was entered. REFUSED rather than clamped when it
         // over-allocates: a household shown a negative balance and an organization
         // billed for money nobody owes is worse than being made to fix the figures.
@@ -17969,6 +18011,7 @@ function addChargeForFamily(famKey){
         // to one written before this feature existed.
         if(_shares.length)_chg.payers=_shares;
         f.charges.push(_chg);
+        _postLedgerCharge(f,_chg);
         f.balance=(f.balance||0)+amt;
         save();closeModal('dynModal');if(curPage==='familydetail')renderFamilyDetailPage();else renderBilling();toast('Charge of '+fm(amt)+' added to '+f.name);
     });
@@ -18363,8 +18406,10 @@ function issueCreditForFamily(famKey){
             toast('Recorded offline refund of '+fm(offAmt)+' for '+(f.name||'family'));
             return;
         }
-        var amt=parseFloat(document.getElementById('crAmount').value)||0;
-        if(!amt){toast('Enter an amount','error');return}
+        var amt=Math.round((parseFloat(document.getElementById('crAmount').value)||0)*100)/100;
+        // A credit takes money OFF (TED-062). A negative one used to show in the
+        // credit list while the ledger silently skipped it, so the two disagreed.
+        if(!(amt>0)){toast('Enter an amount above zero — to add money owed, use Add Charge','error');return}
         if(!f.credits) f.credits=[];
         var _crId='cr_'+Date.now();
         var _crReason=document.getElementById('crReason').value.trim();
