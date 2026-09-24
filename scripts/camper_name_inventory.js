@@ -65,7 +65,7 @@ const KINDS = [
 
 // Superseded edge functions: they import ../_shared, cannot be deployed from
 // the Dashboard, and nothing calls them.
-const SUPERSEDED_EDGE = new Set(['payments-checkout', 'payments-canteen-checkout', 'payments-charge']);
+const SUPERSEDED_EDGE = new Set(['payments-checkout', 'payments-canteen-checkout']);
 
 function edgeFiles() {
     const root = path.join(REPO, 'supabase', 'functions');

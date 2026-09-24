@@ -198,8 +198,8 @@ test('the staff pages and the portal both cover edge-function requests', () => {
 
 // Superseded: they import ../_shared, so they cannot be deployed from the
 // Dashboard, and nothing calls them (payments-charge-nonce / -hosted-link / the
-// card flows replaced them).
-const SUPERSEDED = new Set(['payments-canteen-checkout', 'payments-checkout', 'payments-charge']);
+// card flows replaced them). payments-charge was made self-contained (TED-054) and is checked like the rest.
+const SUPERSEDED = new Set(['payments-canteen-checkout', 'payments-checkout']);
 
 function edgeSources() {
     const root = path.join(REPO, 'supabase', 'functions');
