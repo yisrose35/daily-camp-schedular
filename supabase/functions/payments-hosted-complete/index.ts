@@ -100,8 +100,19 @@ serve(async (req) => {
       return json({ success: false, error: `Could not verify the payment (HTTP ${listResp.status}).` }, 200);
     }
     const txns: Record<string, any>[] = Array.isArray(list) ? list : (Array.isArray(list?.transactions) ? list.transactions : []);
-    // Prefer a transaction whose recorded key matches; fall back to the newest.
-    const tx = txns.find((t) => String(t?.transaction_details?.key || "") === String(key)) || txns[0];
+    // Only THIS link's transaction (TED-072). It used to fall back to the
+    // newest transaction on the camp's whole account, so a family could be
+    // credited with another family's payment. A transaction that names a
+    // different key is never taken. One that names no key at all is taken only
+    // when it is the single answer to this key's own lookup AND is for exactly
+    // this link's amount; anything less certain waits as "pending".
+    const keyOf = (t: Record<string, any>) => String(t?.transaction_details?.key || t?.key || "");
+    let tx = txns.find((t) => keyOf(t) === String(key));
+    if (!tx && txns.length === 1 && !keyOf(txns[0])) {
+      const only = txns[0];
+      const amt = Number(only?.amount_details?.amount ?? only?.amount ?? NaN);
+      if (pending.amount != null && Math.abs(amt - Number(pending.amount)) < 0.005) tx = only;
+    }
 
     if (!tx) {
       // No transaction yet — the parent may have abandoned the page, or Banquest

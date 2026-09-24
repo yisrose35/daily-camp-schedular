@@ -169,6 +169,10 @@ serve(async (req) => {
     // Mutable: the amount-fallback branch below fills this in from the
     // matched intent's own reference when Sola's payload doesn't carry one.
     let xInvoice = fields.get("xInvoice") || fields.get("xinvoice") || "";
+    // Whether Sola named a reference at all. Only a payload WITHOUT one may be
+    // matched by amount (TED-071): one that names a reference we do not have
+    // is somebody else's transaction, not a guess to be made.
+    const sentReference = !!xInvoice;
     const xRefNum = fields.get("xRefNum") || fields.get("xrefnum") || "";
     const xResult = fields.get("xResponseResult") || fields.get("xresponseresult") || "";
     const xAmount = fields.get("xAmount") || fields.get("xamount") || "";
@@ -193,7 +197,17 @@ serve(async (req) => {
       }
     }
 
-    if (!intent) {
+    // A transaction Campistry itself already recorded — the office's "Charge
+    // card", autopay, a deposit — is never a checkout to be matched (TED-071):
+    // matching it by amount would credit a pending checkout of the same size.
+    let alreadyOurs = false;
+    if (!intent && xRefNum) {
+      const { data: known } = await service.from("processor_transactions")
+        .select("id").eq("processor_key", "cardknox").eq("external_transaction_id", xRefNum).limit(1);
+      alreadyOurs = Array.isArray(known) && known.length > 0;
+    }
+
+    if (!intent && !sentReference && !alreadyOurs) {
       // Sola's hosted-checkout webhook (confirmed via live testing,
       // 2026-09-08) never echoes xInvoice back at all — its payload is a
       // fixed small set of fields (xAmount/xEnteredDate/xMaskedCardNumber/
@@ -248,6 +262,20 @@ serve(async (req) => {
         };
       } else if (candidates && candidates.length > 1) {
         console.error(`[cardknox-webhook] Ambiguous match for camp ${campId}: ${candidates.length} pending intents at $${xAmount}, xRefNum=${xRefNum} — refusing to guess, needs manual reconciliation`);
+        // Still refuse to guess — but put it in front of the office, not only
+        // in a log nobody reads (TED-071): a family paid and is not credited.
+        try {
+          await service.from("notifications").upsert({
+            camp_id: campId, source: "payment_unmatched", source_id: "sola:" + (xRefNum || xAmount),
+            title: "A card payment needs matching to a family",
+            body: `Sola reported an approved payment of $${xAmount}` + (xMaskedCardNumber ? ` (card ${xMaskedCardNumber})` : "")
+              + ` (transaction ${xRefNum || "unknown"}), but ${candidates.length} families have a checkout open for that amount,`
+              + " so it was not credited automatically. Look it up in Sola and record it on the right family in Billing.",
+            link_target: "campistry_me.html",
+          }, { onConflict: "camp_id,source,source_id", ignoreDuplicates: true });
+        } catch (e) {
+          console.error(`[cardknox-webhook] could not raise the unmatched-payment notice: ${(e as Error).message}`);
+        }
         return text("ok", 200);
       }
     }
