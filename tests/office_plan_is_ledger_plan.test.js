@@ -108,3 +108,14 @@ test('TED-076: editing a plan keeps it paused, keeps its collection block and a 
     assert.deepStrictEqual(JSON.parse(JSON.stringify(p.pendingCharge)), held);
     assert.strictEqual(ctx.build(null, rows(['2026-06-01']), true, 100).paused, false);
 });
+
+test('TED-074: an application asking for a payment plan always gives the office the Set Up button', () => {
+    const at = SRC.indexOf("if(e.paymentMethod==='payment_plan'){");
+    assert.ok(at > 0);
+    const branch = SRC.slice(at, SRC.indexOf("}else if(e.paymentMethod==='credit_card'", at));
+    assert.doesNotMatch(branch, /allowParentPaymentPlans/, 'the setting still hides the office\'s button');
+    assert.match(branch, /CampistryMe\.monthlyPlan\(/);
+    assert.doesNotMatch(SRC, /build their own plan from their Link portal/, 'the office is still told a builder exists that does not');
+    // the switch says what it really does: offers the choice on the registration form
+    assert.match(SRC, /Let parents ask for a payment plan on the registration form/);
+});

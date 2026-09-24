@@ -1985,6 +1985,11 @@ function managePaymentMethods(){
  * (set_my_payment_plan RPC, migration 115) instead of the office building one
  * manually via Billing -> Monthly Plan.
  */
+// TED-074: what this switch actually does is offer "Payment Plan" as a choice
+// on the registration form (campistry_register.html). It used to be described
+// as parents building their own plan in Link — a builder Link no longer has —
+// and it hid the office's own Set Up Payment Plan button, so nobody set the
+// plan up. The office always sets it up now; the words say so.
 function manageParentPaymentPlanSetting(){
     if(!_secEdit('billing','Changing payment plan settings'))return;
     var on=!!enrollSettings.allowParentPaymentPlans;
@@ -1992,16 +1997,16 @@ function manageParentPaymentPlanSetting(){
     h+='<label class="ops-check" style="display:flex;align-items:flex-start;gap:9px;font-size:.85rem;'
       +'font-weight:500;color:var(--s700);cursor:pointer">'
       +'<input type="checkbox" id="ppAllowChk" style="margin-top:2px"'+(on?' checked':'')+'> '
-      +'<span>Let parents set up their own payment plan in Link'
+      +'<span>Let parents ask for a payment plan on the registration form'
       +'<span style="display:block;font-weight:400;margin-top:3px;font-size:.78rem;color:var(--s500)">'
-      +'Once accepted. When off, an application asking for a payment plan flags the office to '
-      +'set one up instead.</span></span></label>';
+      +'When a family picks it, their application shows a Set Up Payment Plan button, and '
+      +'the office sets the plan up from Billing. When off, the option is not offered.</span></span></label>';
     h+='</div>';
     showModal('Parent payment plans',h,function(){
         var checked=!!(document.getElementById('ppAllowChk')||{}).checked;
         enrollSettings.allowParentPaymentPlans=checked;
         save();closeModal('dynModal');
-        toast('Parent payment plans '+(checked?'enabled':'disabled'));
+        toast('Payment plan '+(checked?'offered':'no longer offered')+' on the registration form');
     },'Save');
 }
 
@@ -13168,9 +13173,10 @@ function viewApplication(id){
             // remember what to do about it.
             var famKeyForApp=_resolveFamilyKey(e.camperName,_famItemRaw(e.camperName,e.street,e.city,e.state,e.zip,e.parentName,e.parentEmail));
             if(e.paymentMethod==='payment_plan'){
-                if(enrollSettings.allowParentPaymentPlans){
-                    b+='<div style="font-size:.8rem;color:var(--s500);margin-top:6px;">Self-serve payment plans are on — once accepted, this family can build their own plan from their Link portal.</div>';
-                }else if(famKeyForApp){
+                // The office sets the plan up (TED-074). A "parents build their
+                // own plan in Link" setting used to hide this button and promise
+                // a builder that Link no longer has, so nobody set the plan up.
+                if(famKeyForApp){
                     b+='<button class="me-btn me-btn--sec me-btn--sm" style="margin-top:6px;" onclick="CampistryMe.monthlyPlan(\''+je(famKeyForApp)+'\')">Set Up Payment Plan</button>';
                 }else{
                     b+='<div style="font-size:.8rem;color:var(--s500);margin-top:6px;">Accept &amp; enroll this application, then set up a payment plan from Billing.</div>';
