@@ -1997,14 +1997,23 @@
         }
     }
 
+    // "Team & Access" is the roster of people who log into the Campistry
+    // website directly (owner/admin/manager/scheduler/viewer). 'counselor' is
+    // never that — it's the role Campistry Lite invites hard-code (see
+    // ROLES.COUNSELOR above and the "Invite to Lite" actions in
+    // campistry_me.js), a read-only bunk-level mobile account, not a website
+    // team member. Excluded here at the source so every page that calls this
+    // (Team & Access's member list, the "by person" access picker) doesn't
+    // have to remember to filter it out itself.
     async function getTeamMembers() {
         const campId = getCampId();
-        
+
         try {
             const { data, error } = await window.supabase
                 .from('camp_users')
                 .select('*')
                 .eq('camp_id', campId)
+                .neq('role', 'counselor')
                 .order('role');
 
             if (error) throw error;

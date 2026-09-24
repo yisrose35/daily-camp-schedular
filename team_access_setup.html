@@ -55,28 +55,16 @@
                     <p>Invite staff, create Roles, and set what a whole job or one person can open — all in one place.</p>
                 </div>
 
+                <!-- Exactly two sections: Roles (reusable permission templates an
+                     owner defines up front) and Team Members (invite people, assign
+                     one of those Roles, then customize the specifics for any one
+                     person from within their own Edit screen). Website team members
+                     only — Campistry Lite counselor accounts don't belong here, see
+                     access_control.js's getTeamMembers(). -->
                 <div class="tas-section">
                     <div id="access-groups-card" class="dashboard-card">
                         <div class="card-header"><h2>Roles</h2></div>
-                        <p class="card-desc">Named, reusable permission sets — which apps and sections a role can open. Assign one to any Manager, Scheduler, Viewer, or Counselor.</p>
-                        <div style="text-align:center;color:var(--slate-400);padding:20px;">Loading…</div>
-                    </div>
-                </div>
-
-                <div class="tas-section">
-                    <div id="role-defaults-card" class="dashboard-card">
-                        <div class="card-header"><h2>By Job / By Person</h2></div>
-                        <p class="card-desc">No custom role fits? Set a default for a whole job title, or make an exception for one person, section by section.</p>
-                        <div id="role-defaults-root" class="wrap" style="padding:0;max-width:none;">
-                            <p style="text-align:center;color:var(--slate-400);padding:20px;">Loading…</p>
-                        </div>
-                    </div>
-                </div>
-
-                <div class="tas-section">
-                    <div id="subdivisions-card" class="dashboard-card">
-                        <div class="card-header"><h2>Divisions</h2></div>
-                        <p class="card-desc">Divisions are synced from Campistry Me.</p>
+                        <p class="card-desc">Named, reusable permission sets — which apps and sections a role can open. Assign one to any Admin, Manager, Scheduler, or Viewer when you invite them, then customize any one person from Team Members below.</p>
                         <div style="text-align:center;color:var(--slate-400);padding:20px;">Loading…</div>
                     </div>
                 </div>
@@ -84,7 +72,15 @@
                 <div class="tas-section">
                     <div id="team-card" class="dashboard-card">
                         <div class="card-header"><h2>Team Members</h2></div>
-                        <p class="card-desc">Manage who can access and edit your camp schedules.</p>
+                        <p class="card-desc">People who log into the Campistry website — invite them, assign a Role, and edit any one person's specifics from here.</p>
+                        <div style="text-align:center;color:var(--slate-400);padding:20px;">Loading…</div>
+                    </div>
+                </div>
+
+                <div class="tas-section">
+                    <div id="subdivisions-card" class="dashboard-card">
+                        <div class="card-header"><h2>Divisions</h2></div>
+                        <p class="card-desc">Divisions are synced from Campistry Me.</p>
                         <div style="text-align:center;color:var(--slate-400);padding:20px;">Loading…</div>
                     </div>
                 </div>
@@ -154,11 +150,10 @@
     <script src="supabase_client.js?v=20260923-08"></script>
     <script src="campistry_utils.js?v=20260903-03"></script>
     <script src="campistry_security.js?v=20260903-03"></script>
-    <script src="access_control.js?v=20260903-03"></script>
+    <script src="access_control.js?v=20260924-02"></script>
     <script src="campistry_capabilities.js?v=20260907-01"></script>
     <script src="campistry_access_settings.js?v=20260924-01"></script>
-    <script src="team_subdivisions_ui.js?v=20260924-01"></script>
-    <script src="team_role_defaults_ui.js?v=20260924-01"></script>
+    <script src="team_subdivisions_ui.js?v=20260924-02"></script>
     <script src="plan_limits.js?v=20260903-03"></script>
     <script src="trial_guard.js?v=20260903-03"></script>
     <script src="parent_lockout_guard.js?v=20260903-03"></script>
@@ -200,7 +195,6 @@
             window.TeamSubdivisionsUI.renderAccessGroupsCard(document.getElementById('access-groups-card'));
             window.TeamSubdivisionsUI.renderSubdivisionsCard(document.getElementById('subdivisions-card'));
             window.TeamSubdivisionsUI.renderTeamCard(document.getElementById('team-card'));
-            if (window.TeamRoleDefaults) window.TeamRoleDefaults.mount('role-defaults-root', { embedded: true });
         }
 
         document.addEventListener('DOMContentLoaded', function() {

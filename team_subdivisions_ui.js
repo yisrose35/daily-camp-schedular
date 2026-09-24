@@ -466,15 +466,18 @@ function _wsK(key) {
                         <label for="invite-email">Email Address *</label>
                         <input type="email" id="invite-email" placeholder="colleague@example.com" required>
                     </div>
+                    <!-- Website team members only — Campistry Lite (bunk-level counselor
+                         access) is invited from campistry_me.js's "Invite to Lite" actions
+                         instead, not here, so this list never mixes Lite accounts in with
+                         people who actually log into the Campistry website. -->
                     <div class="form-group">
-                        <label for="invite-role">Role *</label>
+                        <label for="invite-role">Account type *</label>
                         <select id="invite-role" required>
-                            <option value="">Select a role...</option>
+                            <option value="">Select an account type...</option>
                             <option value="admin">Admin - Full access to everything</option>
                             <option value="manager">Manager - Configurable access to specific apps and sections</option>
                             <option value="scheduler">Scheduler - Access to assigned divisions</option>
                             <option value="viewer">Viewer - View only, no editing</option>
-                            <option value="counselor">Counselor - Campistry Lite mobile app only</option>
                         </select>
                     </div>
                     <div class="form-group" id="invite-access-group-field">
@@ -584,13 +587,12 @@ function _wsK(key) {
                 <p style="color: var(--slate-600); margin-bottom: 16px;">${member.email}</p>
                 <form id="edit-member-form">
                     <div class="form-group">
-                        <label for="edit-role">Role</label>
+                        <label for="edit-role">Account type</label>
                         <select id="edit-role">
                             <option value="admin" ${member.role === 'admin' ? 'selected' : ''}>Admin</option>
                             <option value="manager" ${member.role === 'manager' ? 'selected' : ''}>Manager</option>
                             <option value="scheduler" ${member.role === 'scheduler' ? 'selected' : ''}>Scheduler</option>
                             <option value="viewer" ${member.role === 'viewer' ? 'selected' : ''}>Viewer</option>
-                            <option value="counselor" ${member.role === 'counselor' ? 'selected' : ''}>Counselor</option>
                         </select>
                     </div>
                     <div class="form-group" id="edit-subdivisions-group" style="display: ${member.role === 'scheduler' ? 'block' : 'none'};">
@@ -627,7 +629,7 @@ function _wsK(key) {
                             ${accessGroups.map(g => `<option value="${g.id}" ${member.access_group_id === g.id ? 'selected' : ''}>${_tsuEsc(g.name)}</option>`).join('')}
                         </select>
                     </div>
-                    <div id="edit-individual-access" style="display:${hasGroup ? 'none' : 'block'};">
+                    <div id="edit-individual-access-products" style="display:${hasGroup ? 'none' : 'block'};">
                         <div class="form-group">
                             <label>Access to (the parts of Campistry this person can open)</label>
                             <div class="subdivision-checkboxes">
@@ -644,15 +646,22 @@ function _wsK(key) {
                                 ].map(p => `<label class="checkbox-item"><input type="checkbox" name="product" value="${p.key}" ${(member.product_access || []).includes(p.key) ? 'checked' : ''}> <span>${p.label}</span></label>`).join('')}
                             </div>
                         </div>
-                        <div class="form-group">
-                            <label>Sections within those apps</label>
-                            <div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap;padding:9px 12px;background:var(--slate-50,#F8FAFC);border:1px solid var(--slate-200,#E2E8F0);border-radius:9px;">
-                                <div style="flex:1;min-width:180px;">
-                                    <div style="font-size:.8rem;color:var(--slate-700);font-weight:500;" id="edit-access-summary">${_tsuEsc(_accessSummary(member))}</div>
-                                    <div style="font-size:.71rem;color:var(--slate-400);margin-top:1px;">Limit them to parts of an app — e.g. the roster but not billing.</div>
-                                </div>
-                                <button type="button" class="btn-edit" id="edit-open-access">Configure</button>
+                    </div>
+                    <div class="form-group">
+                        <!-- Available whether or not a Role is assigned above — a Role is a
+                             starting point, not a ceiling on what an owner can do for one
+                             person. Customizing here while a Role is assigned detaches this
+                             member from it (see the Configure click handler below): resolve()
+                             uses either the Role or this person's own settings, never both, so
+                             "customize on top of the Role" has to mean "freeze what the Role
+                             currently gives them, then let the owner tweak it from there." -->
+                        <label>Sections within those apps</label>
+                        <div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap;padding:9px 12px;background:var(--slate-50,#F8FAFC);border:1px solid var(--slate-200,#E2E8F0);border-radius:9px;">
+                            <div style="flex:1;min-width:180px;">
+                                <div style="font-size:.8rem;color:var(--slate-700);font-weight:500;" id="edit-access-summary">${_tsuEsc(_accessSummary(member))}</div>
+                                <div style="font-size:.71rem;color:var(--slate-400);margin-top:1px;" id="edit-access-hint">${hasGroup ? 'Customizing will detach this person from their Role — future changes to the Role won\'t apply to them anymore.' : 'Limit them to parts of an app — e.g. the roster but not billing.'}</div>
                             </div>
+                            <button type="button" class="btn-edit" id="edit-open-access">Configure</button>
                         </div>
                     </div>
                     <div id="edit-member-error" class="form-error"></div>
@@ -664,14 +673,49 @@ function _wsK(key) {
         const _accessBtn = document.getElementById('edit-open-access');
         if (_accessBtn) _accessBtn.addEventListener('click', () => {
             if (!window.CampistryAccessSettings) { alert('Access settings not loaded'); return; }
-            window.CampistryAccessSettings.open(member, (updated) => {
+            const groupSel = document.getElementById('edit-access-group');
+            const currentGroupId = groupSel ? (groupSel.value || null) : null;
+            const currentGroup = currentGroupId ? _accessGroups.find(g => g.id === currentGroupId) : null;
+            // Seed the fine-tune matrix from the ASSIGNED ROLE's own grants when
+            // this person has no bespoke overrides of their own yet — otherwise
+            // "Configure" on a grouped person would open to a blank slate instead
+            // of showing what they actually currently get.
+            const seedMember = currentGroup && !member.access_preset && !(member.section_access && Object.keys(member.section_access).length)
+                ? Object.assign({}, member, { access_preset: currentGroup.access_preset, section_access: currentGroup.section_access || {} })
+                : member;
+            window.CampistryAccessSettings.open(seedMember, async (updated) => {
+                member.access_preset = updated.access_preset;
+                member.section_access = updated.section_access;
+                if (currentGroupId && window.supabase) {
+                    // The save above only wrote this person's OWN preset/overrides —
+                    // get_my_access() still resolves from the group while
+                    // access_group_id is set, so without this the customization
+                    // would silently do nothing, the exact bug this flow exists to
+                    // avoid. Detach them so their own settings actually take effect.
+                    const { data, error } = await window.supabase.rpc('assign_member_access_group', {
+                        p_member_id: member.id, p_group_id: null
+                    });
+                    if (!error && data && data.success) {
+                        member.access_group_id = null;
+                        if (groupSel) groupSel.value = '';
+                        const prodBlock = document.getElementById('edit-individual-access-products');
+                        if (prodBlock) prodBlock.style.display = 'block';
+                        const hint = document.getElementById('edit-access-hint');
+                        if (hint) hint.textContent = 'Limit them to parts of an app — e.g. the roster but not billing.';
+                        showToast(`Customized — ${member.display_name || member.email} is no longer linked to that Role`);
+                    }
+                }
                 const sum = document.getElementById('edit-access-summary');
-                if (sum) sum.textContent = _accessSummary(updated);
+                if (sum) sum.textContent = _accessSummary(member);
             });
         });
         document.getElementById('edit-role').addEventListener('change', () => { document.getElementById('edit-subdivisions-group').style.display = document.getElementById('edit-role').value === 'scheduler' ? 'block' : 'none'; });
         document.getElementById('edit-access-group').addEventListener('change', (e) => {
-            document.getElementById('edit-individual-access').style.display = e.target.value ? 'none' : 'block';
+            document.getElementById('edit-individual-access-products').style.display = e.target.value ? 'none' : 'block';
+            const hint = document.getElementById('edit-access-hint');
+            if (hint) hint.textContent = e.target.value
+                ? 'Customizing will detach this person from their Role — future changes to the Role won\'t apply to them anymore.'
+                : 'Limit them to parts of an app — e.g. the roster but not billing.';
         });
         const closeModal = () => modal.remove();
         document.getElementById('modal-close').addEventListener('click', closeModal);
@@ -853,7 +897,7 @@ function _wsK(key) {
                 </button>
             </div>
             <p style="color: var(--slate-500); font-size: 0.9rem; margin-bottom: 1rem;">
-                Named, reusable permission sets — assign one to any Manager, Scheduler, Viewer, or Counselor. Editing a role updates everyone assigned to it.
+                Named, reusable permission sets — assign one to any Admin, Manager, Scheduler, or Viewer. Editing a role updates everyone assigned to it.
             </p>
             <div id="access-groups-list">
                 ${_accessGroups.length === 0 ? `
