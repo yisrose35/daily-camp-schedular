@@ -1,0 +1,6 @@
+2025 paid.net 500 | qualifying 0 | prepaid 500 | warnings: $500.00 was paid in 2025 toward camp that had not been billed yet. Under IRS Publication 503 that belongs on the return for the year the care is actually given,
+2026 paid.net 2500 | qualifying 3000 | prepaid 0 | warnings: Includes 500.00 paid before 2026 for care given in 2026 — under Publication 503 it is claimed for the year the care is given, not the year it was paid.
+care given in 2026 cost 3000; the parent can claim at most (2025 statement 0) + (2026 statement) — should be 3000
+enrolled Oct 2025 for summer 2026: 2025 statement → claimable 500 | prepaid (not claimable yet) 0
+enrolled Oct 2025 for summer 2026: 2026 statement → claimable 2500 | prepaid (not claimable yet) 0
+Pub 503 (quoted in the module): all 3000 belongs on the 2026 return, 0 on 2025

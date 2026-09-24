@@ -1,18 +1,24 @@
 # Ted's ledger
 
 ## Last commit checked
-`031534e` (2026-09-24, billing eighth pass)
+`dfe322c` (2026-09-24, billing ninth pass)
 
 ## Open findings
 | ID | Severity | Description | Found | Status |
 |----|----------|-------------|-------|--------|
-| TED-109 | 🟡 | Two same-key canteen refund requests at the same moment (Snacks button re-enables when the amount is retyped) refund twice for a child with 2 top-ups ($50+$50 → $40), both processors; other shapes answer "Refund failed." though it went. New on Stripe (was merged by Stripe's key) | 2026-09-24 | Open |
-| TED-101 | 🟡 | Tax year, undated session: Sept–Dec charges now guessed as next year with a warning; July/Aug re-enrolment for next summer still counted in the charge year, silently | 2026-09-24 | Open (narrowed again at 031534e) |
-| TED-005 | 🟠 | 14 auto-scheduler tests fail (`auto_full_day.test.js`); still 14 at 031534e. Owner deferred. | 2026-09-23 | Open (deferred by owner) |
+| TED-110 | 🟠 | A single canteen refund during Refund All (or two staff/tabs refunding one child) both go through: $20 left → $40 back, wallet −$20, both processors. Refund All uses balances read at its start; no wallet reservation before the card company. Same-amount case regressed at 66a65df (was protected by a shared key at 3390aba) | 2026-09-24 | Open |
+| TED-111 | 🟠 | Me → Charge Card: new key every press, so a retry after a lost answer ("Charge failed") charges again (Stripe and Cardknox); Banquest 504 reported as "Declined" and claim released | 2026-09-24 | Open |
+| TED-113 | 🟠 | Autopay runner: one thrown processor call stops the whole night for every later family/camp (HTTP 500); the dropped BYOP sale is unbooked and charged again next night; Banquest 504 booked as a decline | 2026-09-24 | Open |
+| TED-114 | 🟠 | (Suspected) stripe-webhook reads campId from the dispute's own metadata, which Stripe probably leaves empty → chargebacks never reach the ledger (200, no retry). Needs owner's Stripe check | 2026-09-24 | Open (suspected) |
+| TED-112 | 🟡 | Tax statement, year with only a deposit for next summer: prints "could not be matched to any charge… split by hand", "had not been billed yet", and office box "Not ready to send. Missing:" (blank). Numbers right ($0) | 2026-09-24 | Open |
+| TED-115 | 🟡 | stripe-canteen-refund: a cut-off Stripe call while re-asking an unconfirmed earlier part answers raw 500 "connection reset", not "uncertain" (money safe) | 2026-09-24 | Open |
+| TED-005 | 🟠 | 14 auto-scheduler tests fail (`auto_full_day.test.js`); still 14 at dfe322c. Owner deferred. | 2026-09-23 | Open (deferred by owner) |
 
 ## Closed findings
 | ID | What it was | Closed | Proof |
 |----|-------------|--------|-------|
+| TED-109 | Two same-key canteen refund presses at once refunded twice / said "Refund failed." | 2026-09-24 | At dfe322c: probes/…-9/canteen_race_timings 30/30 runs (second press at 5 moments × [50],[50,50],[10,50] × both processors) moved exactly $20, second answer $20 or uncertain; probes/…-8 race rows MONEY MOVED 1; snacks_busy_button (real Snacks code) 1 request for double-click/retype/third press (old: 3); new test 9/20 fail on 031534e |
+| TED-101 | Tax year for undated sessions (Aug re-enrolment silent) | 2026-09-24 | At dfe322c: unchanged probes/…-8/tax_edges J → 2026 claimable 0 / prepaid 500, 2027 3000, with warning (was 500, silent); F/G unchanged 0/2200; 2 new tests fail on 031534e. Wording side issue → TED-112 |
 | TED-105 | Canteen refund retry after a lost answer sent twice with several top-ups; Cardknox said "Refund failed." | 2026-09-24 | At 031534e: probes/…-8/canteen_retry_realistic (shared claims table) lost/netlost/partfail × one/two/small → money moved once, answers $20 (66a65df: Cardknox 2/3 refunds, Stripe 3); refund_lost_answer 4/18 fail on old. Race residual → TED-109 |
 | TED-106 | deposit_review hold rode the card-decline path | 2026-09-24 | At 031534e: unchanged probes/…-7/after_answer_night → 1 charge (was 0); probes/…-8/deposit_hold_db: old flag cleared (attempts 0), notice 1 row (nights 2–3 refused by unique key), money notice; autopay_runner 2/20 fail on old |
 | TED-107 | Refunded cancellation shown as claimable | 2026-09-24 | At 031534e: probes/…-7/tax_care_year C → 0 (was 500); probes/…-8/tax_edges F → 0, G → 2200; tax_statement 3/36 fail on old |
@@ -130,11 +136,11 @@
 | Auto Builder (solver, layers, grid) | never (only test results seen) |
 | Manual Builder | never |
 | Cloud sync / schedules / rotation | never |
-| Billing & payments (edge functions, autopay runner, refunds, late fees/surcharges/credits, plans, parent balance) | 2026-09-24 (eighth pass: TED-101/105..108 re-checked; canteen refund retries with a shared claims table incl. lost answer / no answer / part-declined / same-key race; deposit hold notice + old-flag clear on real DB; every typed money-in path's sign; not browser, not live processors) |
+| Billing & payments (edge functions, autopay runner, refunds, late fees/surcharges/credits, plans, parent balance) | 2026-09-24 (ninth pass: TED-109/101 closed; all 60 earlier billing probes re-run; new: same-key race at 5 timings, Refund All vs single refund (two functions in one process), office Charge Card lost answer, autopay runner lost answer / thrown call, Stripe dispute campId; not browser, not live processors; surcharge refunds, photos, tips, payroll never) |
 | Payroll | never |
-| Tax statement (`campistry_tax_statement.js`) | 2026-09-24 (8th pass): care-year logic with Me's real resolveCharge, dated/undated sessions (Aug re-enrolment, fall programme), full/partial refunds after a carried deposit, printed Total (TED-101/107); classification rules never |
+| Tax statement (`campistry_tax_statement.js`) | 2026-09-24 (9th pass): TED-101 closed; real printTaxStatement run for a deposit-only year (TED-112); classification rules never |
 | Bank deposit matching (`deposit-inbox`) | 2026-09-24: only what happens after a match (TED-077); parser/matcher never |
-| Canteen / Snacks / Shop / POS | canteen auto-reload, shop bill-to-family, canteen refunds (single/all, Stripe/BYOP) 2026-09-24; POS maths never |
+| Canteen / Snacks / Shop / POS | canteen auto-reload, shop bill-to-family, canteen refunds (single/all, Stripe/BYOP; same-key races at 5 timings; single vs Refund All race) 2026-09-24 9th pass; POS maths never |
 | Parent portal (Link) | balance RPC (get_my_balance) re-traced 2026-09-24 fifth pass (TED-088 closed); never in a browser (database-level invite ownership checked 2026-09-23; Parents-page refusal wording run in isolation 2026-09-23) |
 | Health, Go, Live, Lite | never (touched only through camper numbers) |
 | Access control / roles / sections | never (open question from 2026-09-24: a custom Role now always sets the 'manager' account type underneath — does that widen Billing access?) |
@@ -168,3 +174,4 @@
 | 2026-09-24 | Check my work: TED-093..099 fixes + billing hunt (6th pass) | 3390aba | unit 3415/14 · pg 62/0 · keys 42/0 · lite 12/0 · smoke 32/0 · scale 24/0 · old-code runs of 3 test files · 9 5th-pass probes re-run · 8 new probes | 🟡 | [report](reports/2026-09-24-billing-sixth-pass.md) |
 | 2026-09-24 | Check my work: TED-100..105 fixes + billing hunt (7th pass) | 66a65df | unit 3426/14 · pg 62/0 · keys 42/0 · lite 12/0 · smoke 32/0 · scale 24/0 · old-code runs of 5 test files · 6th-pass probes re-run · 8 new probes | 🟡 | [report](reports/2026-09-24-billing-seventh-pass.md) |
 | 2026-09-24 | Check my work: TED-101, 105..108 fixes + billing hunt (8th pass) | 031534e | unit 3437/14 · pg 62/0 · keys 42/0 · lite 12/0 · smoke 32/0 · scale 24/0 · old-code runs of 5 test files · 7th-pass probes re-run · 4 new probes | 🟡 | [report](reports/2026-09-24-billing-eighth-pass.md) |
+| 2026-09-24 | Check my work: TED-109, 101 fixes + billing hunt (9th pass) | dfe322c | unit 3459/14 · pg 62/0 · keys 42/0 · lite 12/0 · smoke 32/0 · scale 24/0 · old-code runs of 2 test files · 60 earlier probes re-run · 9 new probes | 🟡 | [report](reports/2026-09-24-billing-ninth-pass.md) |
