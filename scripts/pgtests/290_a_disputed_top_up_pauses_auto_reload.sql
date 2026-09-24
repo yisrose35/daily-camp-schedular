@@ -79,6 +79,41 @@ BEGIN
 END $$;
 RESET test.uid;
 
+-- 5. TED-211/210: a Cardknox/Banquest top-up, found by its transaction number,
+--    comes off the wallet; the child's family is found; a win puts it back and
+--    a late message after the win pauses nothing (auto-reload or family).
+DO $$
+DECLARE c uuid := 'f2900000-0000-0000-0000-000000000901'; r jsonb; bal numeric; f jsonb;
+BEGIN
+    r := public.credit_canteen_balance_from_processor(c, 'Eli', 20.00, 'cardknox', 'tx_eli', 'parent');
+    IF (r->>'success')::boolean IS NOT TRUE THEN RAISE EXCEPTION 'processor credit: %', r; END IF;
+    PERFORM public.camp_family_save(c, 'elifam', '{"name":"Eli Fam","camperIds":["Eli"]}'::jsonb);
+    r := public.record_canteen_stripe_reversal(c, 'tx_eli', 'cb_eli', 999999, 'dispute', NULL);
+    SELECT balance INTO bal FROM camp_canteen_accounts WHERE camp_id = c AND account_key = 'Eli';
+    IF (r->>'success')::boolean IS NOT TRUE OR bal <> 0 THEN RAISE EXCEPTION 'TED-211: a Cardknox top-up dispute left the wallet: % / %', r, bal; END IF;
+    r := public.canteen_dispute_family(c, 'tx_eli');
+    IF r->>'familyKey' IS DISTINCT FROM 'elifam' THEN RAISE EXCEPTION 'TED-210: the child''s family was not found: %', r; END IF;
+    r := public.hold_autopay_for_dispute(c, 'elifam', 'cb_eli', true, 'canteen top-up');
+    f := public.camp_family(c, 'elifam');
+    IF NOT COALESCE((f->'disputeHold'->'disputeIds') ? 'cb_eli', false) THEN RAISE EXCEPTION 'TED-210: the family was not paused: %', f; END IF;
+    -- won
+    r := public.record_canteen_stripe_reversal(c, 'tx_eli', 'cb_eli', 20, 'dispute_won', NULL);
+    SELECT balance INTO bal FROM camp_canteen_accounts WHERE camp_id = c AND account_key = 'Eli';
+    IF bal <> 20 THEN RAISE EXCEPTION 'won: wallet %', bal; END IF;
+    r := public.hold_autopay_for_dispute(c, 'elifam', 'cb_eli', false);
+    -- a late message after the win
+    r := public.hold_autopay_for_dispute(c, 'elifam', 'cb_eli', true, NULL);
+    IF (r->>'alreadyWon')::boolean IS NOT TRUE THEN RAISE EXCEPTION 'TED-210: a late message after a canteen win re-paused the family: %', r; END IF;
+    r := public.pause_canteen_autoreload_for_dispute(c, 'tx_eli', 'cb_eli');
+    IF (r->>'alreadyWon')::boolean IS NOT TRUE THEN RAISE EXCEPTION 'a late message after a win paused auto-reload: %', r; END IF;
+    IF NOT has_function_privilege('service_role', 'public.camp_family_key_for_person(uuid,bigint,text)', 'EXECUTE') THEN
+        RAISE EXCEPTION 'TED-213: the nightly run cannot ask a child''s family by number';
+    END IF;
+    IF has_function_privilege('authenticated', 'public.canteen_dispute_family(uuid,text)', 'EXECUTE') THEN
+        RAISE EXCEPTION 'a browser can look up a family by a payment';
+    END IF;
+END $$;
+
 \i migrations/290_a_disputed_top_up_pauses_auto_reload.sql
 
 \set verify_q `cat scripts/verify_identity_chain.sql`
@@ -90,4 +125,19 @@ BEGIN
     SELECT result INTO r FROM v290 WHERE item LIKE '290%';
     IF r IS DISTINCT FROM 'ok' THEN RAISE EXCEPTION 'the checking script''s 290 row says: %', r; END IF;
 END $$;
+ROLLBACK;
+
+-- TED-214 (Q10): each piece the checking script's 290 row checks
+BEGIN;
+DO $x$ BEGIN EXECUTE replace(pg_get_functiondef('public.set_canteen_auto_reload(uuid,text,jsonb,bigint)'::regprocedure),
+    $a$(((v_ar - 'disabledReason') - 'disabledAt') - 'disputePausedAt') - 'disputeId'$a$, $b$(v_ar - 'disabledReason') - 'disabledAt'$b$); END $x$;
+CREATE TEMP TABLE v290a AS :verify_q
+DO $$ DECLARE r text; BEGIN SELECT result INTO r FROM v290a WHERE item LIKE '290%';
+    IF r NOT LIKE 'apply 290 again%' THEN RAISE EXCEPTION 'TED-214: the checking script missed a parent save that keeps the pause: %', r; END IF; END $$;
+ROLLBACK;
+BEGIN;
+DROP FUNCTION public.canteen_dispute_family(uuid, text);
+CREATE TEMP TABLE v290b AS :verify_q
+DO $$ DECLARE r text; BEGIN SELECT result INTO r FROM v290b WHERE item LIKE '290%';
+    IF r NOT LIKE 'apply 290 again%' THEN RAISE EXCEPTION 'the checking script missed an earlier 290: %', r; END IF; END $$;
 ROLLBACK;

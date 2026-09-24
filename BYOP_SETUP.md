@@ -479,6 +479,20 @@ https://<your-project>.supabase.co/functions/v1/byop-dispute-webhook?processor=b
      **OFF** (the processor calls it without a Supabase login; the secret is
      what keeps strangers out).
 
+* **Only chargeback messages are booked.** A message counts as a chargeback
+  only when it says so: a chargeback/dispute/case id field, or "chargeback",
+  "dispute" or "retrieval" in its status, command or event. Anything else — an
+  ordinary "Approved" sale, a refund, a void — is logged ("not a chargeback
+  message … ignored") and left alone. "Chargeback Reversal" (or "reversed" /
+  "won") is read as the camp winning: the payment goes back on the family's
+  bill and their card pause lifts. So point **the processor's chargeback /
+  dispute notification** here — not its general transaction postback (that is
+  `cardknox-webhook`'s). If a processor only has the one transaction postback,
+  leave the dispute address unset and tell the builder.
+* A disputed **canteen top-up** is handled too: it comes off the child's
+  wallet (back on if the camp wins), that child's auto-reload switches off,
+  and the family's card is paused like any other disputed payment.
+
 **Send one real test dispute from the processor's dashboard after wiring it
 up.** The function logs the entire body when it can't find a reference; read
 that log line once and tighten the mapping in `normalise()` to what actually

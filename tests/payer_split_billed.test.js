@@ -310,7 +310,14 @@ test('TED-209: a share the fund has paid in full offers no Move back, and pressi
     const pay = b.fam.payerLedger.find(e => e.kind === 'payment');
     b.fns.voidPayerLine('org_fund', pay.paymentId);       // the cheque removed: the kept part is owed again
     await tick();
+    // a new $100 cheque: moving the kept line back keeps $100 of it (TED-214 Q23)
+    b.fns.recordPayerPayment('org_fund');
+    b.val('ppAmt', '100'); b.val('ppDate', '2026-08-26'); b.val('ppMethod', 'check'); b.val('ppRef', '');
+    b.press();
     b.fns.voidPayerLine('org_fund', kept.id);
     await tick();
-    assert.ok(!b.fam.payerLedger.some(e => /the part Scholarship Fund paid — the part/.test(e.description || '')));
+    const again = b.fam.payerLedger.find(e => e.id === 'prkeep_' + kept.id);
+    assert.ok(again && again.amount === 100, JSON.stringify(b.fam.payerLedger.map(e => [e.id, e.amount])));
+    assert.ok(!b.fam.payerLedger.some(e => /the part Scholarship Fund paid — the part/.test(e.description || '')),
+        'the title doubled: ' + again.description);
 });

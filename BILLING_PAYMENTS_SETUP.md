@@ -85,7 +85,9 @@ Dashboard → Developers → Webhooks → Add endpoint:
     a dispute the office already resumed does not pause them again. Canteen
     auto-reload does not charge that family's card either, and a disputed
     canteen top-up switches that child's auto-reload off until the parent
-    switches it back on in Link (migration 290). Cardknox and Banquest disputes
+    switches it back on in Link, and pauses the child's family (so a
+    brother's or sister's auto-reload, tuition autopay and Charge Card on
+    that card wait too) until the dispute is settled (migration 290). Cardknox and Banquest disputes
     (byop-dispute-webhook) pause the card the same way — that needs the
     `BYOP_DISPUTE_SECRET` secret (see BYOP_SETUP.md).
   - `radar.early_fraud_warning.created`, `review.opened`, `payout.failed`

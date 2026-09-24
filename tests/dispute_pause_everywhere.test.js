@@ -190,6 +190,8 @@ T.rpc.canteen_autoreload_accounts = () => [
   { camp_id: 'camp1', resolvable: true, person_id: 3, camper_name: 'Cy', account: { balance: 0, autoReload: ar('cus_cy') } },
   { camp_id: 'camp1', resolvable: true, person_id: 4, camper_name: 'Eli Cousin', account: { balance: 0, autoReload: ar('cus_gold') } }];
 T.rpc.camp_families_object = ${families};
+// the family of each child, by camper number
+T.rpc.camp_family_key_for_person = (a: any) => (({ 1: 'gold', 2: 'gold', 3: 'cy' } as any)[a.p_person_id] ?? null);
 T.rpc.claim_refund_intent = () => ({ claimed: true });
 T.tables.__charged = [];
 T.fetch = (url: string, init: any) => { if (init.method === 'POST' && url.endsWith('/payment_intents')) { T.tables.__charged.push(new URLSearchParams(init.body).get('customer')); return { id: 'pi_r', status: 'succeeded' }; } return {}; };
@@ -197,13 +199,13 @@ T.request = { headers: { 'x-cron-secret': 'c' }, body: {} };`);
 }
 
 test('TED-205: auto-reload does not charge the card of a family whose payment is disputed, nor its children\'s other cards; a control child is charged', () => {
-    const r = reloadNight(`() => ({ gold: { name: 'Gold', stripeCustomerId: 'cus_gold', camperIds: ['Bea Gold', 'Dan Gold'],
+    const r = reloadNight(`() => ({ gold: { name: 'Gold', stripeCustomerId: 'cus_gold', camperIds: ['Bea Gold', 'Dan Gold #2'],
         disputeHold: { disputeIds: ['dp_gold'], lostIds: [] } }, cy: { name: 'Cy', stripeCustomerId: 'cus_cy', camperIds: ['Cy'] } })`);
     assert.deepStrictEqual(r.tables.__charged, ['cus_cy'], 'charged: ' + JSON.stringify(r.tables.__charged));
     // Bea and Dan (the family's children, whichever card) and Eli (another family, the disputed card)
     assert.strictEqual((JSON.stringify(r.body).match(/held_for_dispute/g) || []).length, 3, JSON.stringify(r.body).slice(0, 500));
     // with no dispute, all three are charged
-    const none = reloadNight(`() => ({ gold: { name: 'Gold', stripeCustomerId: 'cus_gold', camperIds: ['Bea Gold', 'Dan Gold'] } })`);
+    const none = reloadNight(`() => ({ gold: { name: 'Gold', stripeCustomerId: 'cus_gold', camperIds: ['Bea Gold', 'Dan Gold #2'] } })`);
     assert.deepStrictEqual(none.tables.__charged.sort(), ['cus_cy', 'cus_gold', 'cus_gold', 'cus_grandma']);
 });
 
@@ -314,4 +316,138 @@ test('TED-208 (P18): a page that loaded before the dispute is asked again with t
     await cancel.fn('wren');
     assert.strictEqual(cancel.sent.length, 1);
     assert.strictEqual(cancel.toasts.length, 0);
+});
+
+test('TED-213: a child who only shares a NAME with a paused family\'s child is still reloaded', () => {
+    // the paused Roe family's child is "Dan Gold" (no number); ours is "Dan Gold #2", on grandma's card
+    const r = reloadNight(`() => ({ roe: { name: 'Roe', stripeCustomerId: 'cus_roe', camperIds: ['Dan Gold'], disputeHold: { disputeIds: ['dp_roe'] } } })`);
+    assert.ok(r.tables.__charged.includes('cus_grandma'), 'charged: ' + JSON.stringify(r.tables.__charged));
+});
+
+test('TED-214 (Q4): a pause written only on a plan (the older form) holds the family\'s children too', () => {
+    const r = reloadNight(`() => ({ gold: { name: 'Gold', stripeCustomerId: 'cus_gold', camperIds: ['Bea Gold', 'Dan Gold #2'],
+        plans: [{ id: 'p1', collectionBlocked: { reason: 'chargeback', disputeIds: ['dp_old'] } }] } })`);
+    assert.deepStrictEqual(r.tables.__charged, ['cus_cy']);
+});
+
+test('TED-210: a card with one child\'s top-up disputed is not charged for a brother or sister', () => {
+    const r = runEdge('canteen-auto-reload', `
+T.env = { STRIPE_SECRET_KEY: 'sk_test', SUPABASE_URL: 'http://db', SUPABASE_ANON_KEY: 'anon', SUPABASE_SERVICE_ROLE_KEY: 'svc', CANTEEN_AUTORELOAD_CRON_SECRET: 'c' };
+T.tables.camps = [{ id: 'camp1', owner: 'u-owner', payment_processor_key: null }];
+T.tables.camp_state_kv = [{ camp_id: 'camp1', key: 'campistryMe', value: { sessions: [{ name: 'Summer', startDate: '2000-01-01', endDate: '2999-12-31' }] } }];
+const ar = (cus: string, extra: any) => Object.assign({ enabled: true, cardOnFile: true, stripeCustomerId: cus, thresholdEnabled: true, thresholdAmount: 5, thresholdReloadAmount: 25 }, extra || {});
+T.rpc.canteen_autoreload_accounts = () => [
+  { camp_id: 'camp1', resolvable: true, person_id: 1, camper_name: 'Dov Katz', account: { balance: 0, autoReload: ar('cus_katz', { enabled: false, disputePausedAt: '2026-09-24T10:00:00Z', disputeId: 'dp_dov' }) } },
+  { camp_id: 'camp1', resolvable: true, person_id: 2, camper_name: 'Eve Katz', account: { balance: 0, autoReload: ar('cus_katz') } },
+  { camp_id: 'camp1', resolvable: true, person_id: 3, camper_name: 'Cy', account: { balance: 0, autoReload: ar('cus_cy') } }];
+T.rpc.camp_families_object = () => ({});
+T.rpc.claim_refund_intent = () => ({ claimed: true });
+T.tables.__charged = [];
+T.fetch = (url: string, init: any) => { if (init.method === 'POST' && url.endsWith('/payment_intents')) { T.tables.__charged.push(new URLSearchParams(init.body).get('customer')); return { id: 'pi_r', status: 'succeeded' }; } return {}; };
+T.request = { headers: { 'x-cron-secret': 'c' }, body: {} };`);
+    assert.deepStrictEqual(r.tables.__charged, ['cus_cy'], 'charged: ' + JSON.stringify(r.tables.__charged));
+    assert.match(JSON.stringify(r.body), /Eve Katz[^}]*held_for_dispute/);
+});
+
+// ── canteen disputes pause the FAMILY (TED-210), lost-first (TED-207) ────────
+const CANTEEN_WORLD = `
+T.fetch = (url: string) => {
+  if (url.includes('/payment_intents/pi_dov')) return { id: 'pi_dov', metadata: { campId: 'camp1', camperName: 'Dov Katz', source: 'campistry-canteen-deposit' } };
+  if (url.includes('/charges/ch_dov')) return { id: 'ch_dov', payment_intent: 'pi_dov', metadata: {} };
+  if (url.includes('/payment_intents/pi_hazel')) return { id: 'pi_hazel', metadata: { campId: 'camp1', familyKey: 'hazel' } };
+  if (url.includes('/charges/ch_hazel')) return { id: 'ch_hazel', payment_intent: 'pi_hazel', metadata: {} };
+  return {};
+};
+T.rpc.record_canteen_stripe_reversal = () => ({ success: true, amount: 20 });
+T.rpc.pause_canteen_autoreload_for_dispute = () => ({ success: true, changed: true, familyKey: 'katz' });
+T.rpc.canteen_dispute_family = () => ({ success: true, familyKey: 'katz' });`;
+const dovDispute = (type, status) => ({ id: 'evt_dov' + type + status, type, data: { object: { id: 'dp_dov', charge: 'ch_dov', payment_intent: 'pi_dov', amount: 2000, status, reason: 'fraudulent' } } });
+
+test('TED-210: a disputed canteen top-up pauses the child\'s FAMILY; won lifts it; lost marks it lost', () => {
+    const taking = deliver([dovDispute('charge.dispute.created', 'needs_response')], CANTEEN_WORLD);
+    assert.strictEqual(taking.status, 200, JSON.stringify(taking.body));
+    assert.deepStrictEqual(calls(taking, 'hold_autopay_for_dispute').map(h => [h.p_family_key, h.p_dispute_id, h.p_hold]), [['katz', 'dp_dov', true]]);
+    const won = deliver([dovDispute('charge.dispute.closed', 'won')], CANTEEN_WORLD);
+    assert.deepStrictEqual(calls(won, 'record_canteen_stripe_reversal').map(a => a.p_kind), ['dispute_won']);
+    assert.deepStrictEqual(calls(won, 'hold_autopay_for_dispute').map(h => h.p_hold), [false]);
+    const lost = deliver([dovDispute('charge.dispute.closed', 'lost')], CANTEEN_WORLD);
+    assert.deepStrictEqual(calls(lost, 'note_dispute_lost').map(a => a.p_family_key), ['katz']);
+    // a late message after a win pauses nothing
+    const late = deliver([dovDispute('charge.dispute.updated', 'under_review')], CANTEEN_WORLD +
+        `\nT.rpc.pause_canteen_autoreload_for_dispute = () => ({ success: true, changed: false, alreadyWon: true, familyKey: 'katz' });`);
+    assert.strictEqual(calls(late, 'hold_autopay_for_dispute').length, 0);
+    // the family pause fails: 500, so Stripe sends it again
+    const bad = deliver([dovDispute('charge.dispute.created', 'needs_response')], CANTEEN_WORLD +
+        `\nT.rpc.hold_autopay_for_dispute = () => { throw new Error('statement timeout'); };`);
+    assert.strictEqual(bad.status, 500);
+});
+
+test('TED-207 (D7): "closed: lost" before "created" — the family comes from the payment and the loss is remembered', () => {
+    const r = deliver([{ id: 'evt_l', type: 'charge.dispute.closed', data: { object: { id: 'dp_l', charge: 'ch_hazel', payment_intent: 'pi_hazel', amount: 100000, status: 'lost' } } }],
+        CANTEEN_WORLD + `\nT.rpc.resolve_chargeback = () => ({ success: false, error: 'chargeback_not_found' });`);
+    assert.strictEqual(r.status, 200);
+    assert.deepStrictEqual(calls(r, 'note_dispute_lost'), [{ p_camp_id: 'camp1', p_family_key: 'hazel', p_dispute_id: 'dp_l' }]);
+});
+
+// ── Cardknox/Banquest: only chargebacks are booked (TED-212); canteen (TED-211) ──
+function ck(body, extra) {
+    return runEdge('byop-dispute-webhook', `
+T.env = { SUPABASE_URL: 'http://db', SUPABASE_SERVICE_ROLE_KEY: 'svc', BYOP_DISPUTE_SECRET: 'sek' };
+T.rpc.record_chargeback = () => ({ success: true, familyKey: 'birch' });
+T.rpc.resolve_chargeback = (a: any) => ({ success: true, familyKey: 'birch', outcome: a.p_won ? 'won' : 'lost' });
+${extra || ''}
+T.request = { url: 'http://edge.test/byop-dispute-webhook?processor=cardknox&camp=camp1&key=sek', headers: { 'content-type': 'application/json' }, rawBody: ${JSON.stringify(JSON.stringify(body))} };`);
+}
+
+test('TED-212: an ordinary "Approved" sale, a refund or a void sent to the dispute address books nothing', () => {
+    for (const body of [
+        { xResponseRefnum: '9001', xStatus: 'Approved', xCommand: 'cc:sale' },
+        { xResponseRefnum: '9002', xStatus: 'Approved', xCommand: 'cc:refund' },
+        { xResponseRefnum: '9003', xStatus: 'Reversed', xCommand: 'cc:void' },
+    ]) {
+        const r = ck(body);
+        assert.strictEqual(r.status, 200);
+        assert.strictEqual(r.body.ignored, 'not_a_chargeback', JSON.stringify(r.body));
+        assert.strictEqual(r.rpcs.length, 0, 'wrote: ' + r.rpcs.map(x => x.name).join(','));
+    }
+    // a real chargeback still posts and pauses
+    const cb = ck({ xResponseRefnum: '9001', xStatus: 'Chargeback', xStatusReason: 'Fraud' });
+    assert.strictEqual(calls(cb, 'record_chargeback').length, 1);
+    assert.deepStrictEqual(calls(cb, 'hold_autopay_for_dispute').map(h => h.p_hold), [true]);
+});
+
+test('TED-212: "Chargeback Reversal" is a win — the payment goes back and the pause lifts', () => {
+    const r = ck({ xResponseRefnum: '9001', xStatus: 'Chargeback Reversal' });
+    assert.deepStrictEqual(calls(r, 'resolve_chargeback').map(a => a.p_won), [true]);
+    assert.deepStrictEqual(calls(r, 'hold_autopay_for_dispute').map(h => h.p_hold), [false]);
+    const bq = runEdge('byop-dispute-webhook', `
+T.env = { SUPABASE_URL: 'http://db', SUPABASE_SERVICE_ROLE_KEY: 'svc', BYOP_DISPUTE_SECRET: 'sek' };
+T.rpc.resolve_chargeback = (a: any) => ({ success: true, familyKey: 'birch' });
+T.request = { url: 'http://edge.test/byop-dispute-webhook?processor=banquest&camp=camp1&key=sek', headers: { 'content-type': 'application/json' },
+  rawBody: ${JSON.stringify(JSON.stringify({ chargeback_id: 'cb_7', reference_number: 'r1', event_type: 'chargeback.reversed' }))} };`);
+    assert.deepStrictEqual(calls(bq, 'resolve_chargeback').map(a => a.p_won), [true]);
+});
+
+test('TED-211: a Cardknox/Banquest dispute of a canteen top-up comes off the wallet, stops auto-reload and pauses the family; won puts it back', () => {
+    const world = `T.rpc.record_chargeback = () => ({ success: false, error: 'payment_not_found' });
+T.rpc.canteen_dispute_family = (a: any) => (a.p_ref === '7001' ? { success: true, familyKey: 'eli_fam' } : { success: false, error: 'deposit_not_found' });
+T.rpc.record_canteen_stripe_reversal = () => ({ success: true, amount: 20 });
+T.rpc.pause_canteen_autoreload_for_dispute = () => ({ success: true, changed: true, familyKey: 'eli_fam' });`;
+    const r = ck({ xResponseRefnum: '7001', xStatus: 'Chargeback' }, world);
+    assert.strictEqual(r.status, 200, JSON.stringify(r.body));
+    assert.deepStrictEqual(calls(r, 'record_canteen_stripe_reversal').map(a => [a.p_payment_intent_id, a.p_kind]), [['7001', 'dispute']]);
+    assert.deepStrictEqual(calls(r, 'pause_canteen_autoreload_for_dispute').map(a => a.p_payment_intent_id), ['7001']);
+    assert.deepStrictEqual(calls(r, 'hold_autopay_for_dispute').map(h => [h.p_family_key, h.p_hold]), [['eli_fam', true]]);
+    const won = ck({ xResponseRefnum: '7001', xStatus: 'Chargeback Reversal' }, world +
+        `\nT.rpc.resolve_chargeback = () => ({ success: false, error: 'chargeback_not_found' });`);
+    assert.deepStrictEqual(calls(won, 'record_canteen_stripe_reversal').map(a => a.p_kind), ['dispute_won']);
+    assert.deepStrictEqual(calls(won, 'hold_autopay_for_dispute').map(h => h.p_hold), [false]);
+});
+
+test('TED-214 (Q14): a Cardknox/Banquest call that throws answers 500, so the processor sends it again', () => {
+    const r = ck({ xResponseRefnum: '9001', xStatus: 'Chargeback' }, `T.rpc.record_chargeback = () => { throw new Error('boom'); };`);
+    assert.strictEqual(r.status, 500);
+    const r2 = ck({ xResponseRefnum: '7001', xStatus: 'Chargeback' },
+        `T.rpc.record_chargeback = () => ({ success: false, error: 'payment_not_found' });\nT.rpc.canteen_dispute_family = () => { throw new Error('boom'); };`);
+    assert.strictEqual(r2.status, 500);
 });

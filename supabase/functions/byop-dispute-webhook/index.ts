@@ -89,7 +89,17 @@ type Dispute = {
   status: string | null;
   closed: boolean;       // a resolution rather than a new dispute
   won: boolean;          // only meaningful when closed
+  isDispute: boolean;    // the message says it is a chargeback (TED-212)
 };
+
+// A message is a chargeback only when it SAYS so (TED-212): a chargeback id
+// field, or chargeback / dispute / retrieval in its status, command or event.
+// An ordinary "Approved" sale, a refund or a void sent to this address carries
+// a transaction number too — booking those as chargebacks billed the family
+// again and paused their card.
+const DISPUTE_WORDS = /charge\s*-?\s*back|dispute|retrieval/i;
+// A reversal in the camp's favour ("Chargeback Reversal", "reversed", "won").
+const WON_WORDS = /revers|won|in favou?r of (the )?merchant/i;
 
 const num = (v: unknown) => {
   const n = Number(v);
@@ -136,8 +146,11 @@ function normalise(processor: string, b: Record<string, any>): Dispute | null {
                           b.disputeId || b.id) || ("ck_" + refs[0]);
     const status = str(b.xStatus || b.xStatusReason || b.status ||
                        b.chargebackStatus || b.xGatewayResult) || null;
-    const closed = /reversed|won|lost|closed|resolved/i.test(status || "") ||
-                   /chargeback[_.]?(reversal|closed|resolved)/i.test(str(b.xCommand || b.event || b.type));
+    const said = [status, b.xStatusReason, b.xCommand, b.event, b.type, b.chargebackStatus].map(str).join(" ");
+    const isDispute = !!str(b.xChargebackId || b.chargebackId || b.caseId || b.disputeId || b.chargebackStatus)
+                      || DISPUTE_WORDS.test(said);
+    const closed = /revers|won|lost|closed|resolved/i.test(status || "") ||
+                   /chargeback[_. ]?(revers|closed|resolved)/i.test(said);
     return {
       disputeId, refs,
       // 0 when absent, which record_chargeback reads as "use the payment's own
@@ -145,8 +158,8 @@ function normalise(processor: string, b: Record<string, any>): Dispute | null {
       amount: Math.abs(num(b.xAmount ?? b.amount ?? b.chargebackAmount)),
       reason: str(b.xStatusReason || b.xChargebackReason || b.reason ||
                   b.reasonCode || b.xResponseError) || null,
-      status, closed,
-      won: /reversed|won/i.test(status || ""),
+      status, closed, isDispute,
+      won: WON_WORDS.test(status || "") || /chargeback[_. ]?revers/i.test(said),
     };
   }
 
@@ -160,14 +173,17 @@ function normalise(processor: string, b: Record<string, any>): Dispute | null {
                           b.id) || ("bq_" + refs[0]);
     if (!refs.length) return null;
     const status = str(b.status || b.chargeback_status || b.state) || null;
-    const closed = /won|lost|closed|resolved|reversed/i.test(status || "") ||
-                   /closed|resolved/i.test(str(b.event_type || b.event || b.type));
+    const said = [status, b.event_type, b.event, b.type, b.chargeback_status].map(str).join(" ");
+    const isDispute = !!str(b.chargeback_id || b.dispute_id || b.case_number || b.chargeback_status)
+                      || DISPUTE_WORDS.test(said);
+    const closed = /won|lost|closed|resolved|revers/i.test(status || "") ||
+                   /closed|resolved|revers/i.test(str(b.event_type || b.event || b.type));
     return {
       disputeId, refs,
       amount: Math.abs(num(b.amount ?? b.chargeback_amount ?? b.disputed_amount)),
       reason: str(b.reason || b.reason_code || b.reason_description) || null,
-      status, closed,
-      won: /won|reversed/i.test(status || ""),
+      status, closed, isDispute,
+      won: WON_WORDS.test(status || "") || /revers/i.test(str(b.event_type || b.event || b.type)),
     };
   }
 
@@ -234,7 +250,45 @@ serve(async (req) => {
     });
   }
 
+  // Not a chargeback (TED-212): logged and left alone — never booked.
+  if (!d.isDispute) {
+    console.warn(`[byop-dispute] ${processor}: not a chargeback message (status "${d.status || ""}") — ignored. ` +
+      `If this address receives every transaction, point the processor's TRANSACTION postback elsewhere ` +
+      `(see BYOP_SETUP.md). Body: ${JSON.stringify(body).slice(0, 500)}`);
+    return new Response(JSON.stringify({ received: true, ignored: "not_a_chargeback" }), {
+      status: 200, headers: { ...corsHeaders, "Content-Type": "application/json" },
+    });
+  }
+
   const supabase = createClient(SUPABASE_URL, SUPABASE_SERVICE_KEY);
+
+  // A canteen top-up by one of the message's transaction numbers (290,
+  // TED-211): its child and family, or null.
+  async function canteenFor(camp: string): Promise<{ ref: string; familyKey: string | null } | null> {
+    for (const ref of d!.refs) {
+      const f = await supabase.rpc("canteen_dispute_family", { p_camp_id: camp, p_ref: ref });
+      if (f.error) throw new Error(`canteen lookup for ${ref}: ${f.error.message} — is migration 290 applied?`);
+      if (f.data?.success) return { ref, familyKey: f.data.familyKey || null };
+    }
+    return null;
+  }
+  async function familyPause(camp: string, familyKey: string, outcome: "taking" | "won" | "lost") {
+    const r = outcome === "lost"
+      ? await supabase.rpc("note_dispute_lost", { p_camp_id: camp, p_family_key: familyKey, p_dispute_id: d!.disputeId })
+      : await supabase.rpc("hold_autopay_for_dispute", { p_camp_id: camp, p_family_key: familyKey, p_dispute_id: d!.disputeId,
+          p_hold: outcome === "taking", ...(outcome === "taking" ? { p_detail: d!.reason || null } : {}) });
+    if (r.error) throw new Error(`the family's card pause was not updated: ${r.error.message} — is migration 288 applied?`);
+  }
+  async function canteenReversal(camp: string, ref: string, kind: "dispute" | "dispute_won") {
+    const r = await supabase.rpc("record_canteen_stripe_reversal", {
+      p_camp_id: camp, p_payment_intent_id: ref, p_ref_id: d!.disputeId,
+      // no amount on the message: the whole top-up (287 never takes more than it had)
+      p_amount: d!.amount > 0 ? d!.amount : 999999, p_kind: kind,
+      p_note: kind === "dispute" ? `Disputed with ${processor}${d!.reason ? " — " + d!.reason : ""}` : null });
+    if (r.error || (!r.data?.success && r.data?.error !== "deposit_not_found")) {
+      throw new Error(`canteen ${kind} ${d!.disputeId} not recorded: ${r.error?.message || r.data?.error}`);
+    }
+  }
 
   // Which camp? These processors are per-camp, so the credential row is the
   // authoritative answer; the query parameter is only a fallback for a processor
@@ -274,6 +328,15 @@ serve(async (req) => {
         p_won: d.won, p_status: d.status,
       });
       if (error) writeFailed = `dispute ${d.disputeId} close not recorded yet: ${error.message}`;
+      // A canteen top-up's dispute (TED-211): won puts it back on the wallet;
+      // either way the family's pause is updated.
+      if (!error && !data?.familyKey) {
+        const c = await canteenFor(camp);
+        if (c) {
+          if (d.won) await canteenReversal(camp, c.ref, "dispute_won");
+          if (c.familyKey) await familyPause(camp, c.familyKey, d.won ? "won" : "lost");
+        }
+      }
       // The family's card pause (288, TED-200): won lifts this dispute from
       // it; lost marks it lost, so the office may resume from Billing.
       if (!error && data?.familyKey) {
@@ -300,7 +363,17 @@ serve(async (req) => {
       // A database error is sent again (TED-206): every writer here is keyed
       // on the dispute. An ANSWER (no such payment) would answer the same.
       if (error) writeFailed = `chargeback ${d.disputeId} not posted yet: ${error.message}`;
-      else if (!data?.success) {
+      // Not a family payment — a canteen top-up? (TED-211): off the child's
+      // wallet, that child's auto-reload off, the family's card paused (TED-210).
+      const c = !error && !data?.success ? await canteenFor(camp) : null;
+      if (c) {
+        await canteenReversal(camp, c.ref, "dispute");
+        const pause = await supabase.rpc("pause_canteen_autoreload_for_dispute", {
+          p_camp_id: camp, p_payment_intent_id: c.ref, p_dispute_id: d.disputeId });
+        if (pause.error) throw new Error(`auto-reload not paused: ${pause.error.message} — is migration 290 applied?`);
+        const fk = pause.data?.familyKey || c.familyKey;
+        if (!pause.data?.alreadyWon && fk) await familyPause(camp, String(fk), "taking");
+      } else if (!error && !data?.success) {
         console.error(`[byop-dispute] ${processor}: chargeback ${d.disputeId} NOT posted ` +
           `(${error?.message || data?.error || "unknown"}) — the camp's books now overstate ` +
           `collected cash until this is reconciled by hand. refs=${d.refs.join(",")}`);

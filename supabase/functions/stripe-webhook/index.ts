@@ -771,6 +771,17 @@ async function stripeGetJson(path: string): Promise<Record<string, any> | null> 
 // the PaymentIntent (and so the charge made from it). A DISPUTE is its own
 // object and Stripe does not copy that metadata onto it (TED-114): read it
 // from the payment the dispute is about.
+// The family a payment was for, from its metadata (TED-207).
+async function familyKeyFor(obj: Record<string, any>): Promise<string | null> {
+  if (obj?.metadata?.familyKey) return String(obj.metadata.familyKey);
+  const piId = typeof obj?.payment_intent === "string" ? obj.payment_intent : obj?.payment_intent?.id;
+  if (piId) {
+    const pi = await stripeGetJson(`/payment_intents/${encodeURIComponent(piId)}`);
+    if (pi?.metadata?.familyKey) return String(pi.metadata.familyKey);
+  }
+  return null;
+}
+
 async function campIdFor(obj: Record<string, any>): Promise<string | null> {
   if (obj?.metadata?.campId) return String(obj.metadata.campId);
   const piId = typeof obj?.payment_intent === "string" ? obj.payment_intent : obj?.payment_intent?.id;
@@ -816,6 +827,35 @@ async function canteenReversal(supabase: ReturnType<typeof createClient>, campId
     throw new Error(`canteen ${kind} ${ref} on ${pi} not recorded: ${error?.message || data?.error || "unknown"} — is migration 287 applied?`);
   }
   console.log(`[stripe-webhook] canteen ${kind} ${ref} on ${pi}: ${JSON.stringify(data)}`);
+}
+
+// A disputed canteen top-up (TED-181/205/210): off the child's wallet while the
+// bank decides, that child's auto-reload off (290) — and the child's FAMILY
+// paused as for a tuition dispute (288), so a brother's or sister's
+// auto-reload, tuition autopay and Charge Card on that card wait too. Won: the
+// money back and the family's pause lifted; lost: marked lost, for the office.
+async function canteenDispute(supabase: ReturnType<typeof createClient>, campId: string, pi: string, disputeId: string,
+                              amount: number, outcome: "taking" | "won" | "lost", reason: string | null) {
+  let familyKey: string | null = null;
+  if (outcome === "taking") {
+    await canteenReversal(supabase, campId, pi, disputeId, amount, "dispute", reason ? `Disputed — ${reason}` : null);
+    const pause = await supabase.rpc("pause_canteen_autoreload_for_dispute", {
+      p_camp_id: campId, p_payment_intent_id: pi, p_dispute_id: disputeId });
+    if (pause.error) throw new Error(`canteen dispute ${disputeId}: auto-reload not paused yet: ${pause.error.message} — is migration 290 applied?`);
+    if (pause.data?.alreadyWon) return;
+    familyKey = pause.data?.familyKey || null;
+  } else {
+    if (outcome === "won") await canteenReversal(supabase, campId, pi, disputeId, amount, "dispute_won", null);
+    const fam = await supabase.rpc("canteen_dispute_family", { p_camp_id: campId, p_ref: pi });
+    if (fam.error) throw new Error(`canteen dispute ${disputeId} closed: family not found yet: ${fam.error.message} — is migration 290 applied?`);
+    familyKey = fam.data?.familyKey || null;
+  }
+  if (!familyKey) return;
+  const r = outcome === "lost"
+    ? await supabase.rpc("note_dispute_lost", { p_camp_id: campId, p_family_key: familyKey, p_dispute_id: disputeId })
+    : await supabase.rpc("hold_autopay_for_dispute", { p_camp_id: campId, p_family_key: familyKey, p_dispute_id: disputeId,
+        p_hold: outcome === "taking", p_detail: reason ? `canteen top-up: ${reason}` : "canteen top-up" });
+  if (r.error) throw new Error(`canteen dispute ${disputeId}: the family's card pause not updated yet: ${r.error.message} — is migration 288 applied?`);
 }
 
 async function handleChargeRefunded(
@@ -1019,16 +1059,8 @@ async function handleDisputeLedger(
   const canteen = await canteenPaymentOf(obj);
   if (canteen) {
     const amount = Number(((obj.amount || 0) / 100).toFixed(2));
-    if (taking) {
-      await canteenReversal(supabase, canteen.campId, canteen.pi, disputeId, amount, "dispute", obj.reason ? `Disputed — ${String(obj.reason).replace(/_/g, " ")}` : null);
-      // ...and that child's auto-reload stops charging the disputed card
-      // (290, TED-205) until the parent switches it back on.
-      const pause = await supabase.rpc("pause_canteen_autoreload_for_dispute", {
-        p_camp_id: canteen.campId, p_payment_intent_id: canteen.pi, p_dispute_id: disputeId });
-      if (pause.error) throw new Error(`canteen dispute ${disputeId}: auto-reload not paused yet: ${pause.error.message} — is migration 290 applied?`);
-    } else if (status === "won") {
-      await canteenReversal(supabase, canteen.campId, canteen.pi, disputeId, amount, "dispute_won", null);
-    }
+    await canteenDispute(supabase, canteen.campId, canteen.pi, disputeId, amount, taking ? "taking" : status === "won" ? "won" : "lost",
+                         obj.reason ? String(obj.reason).replace(/_/g, " ") : null);
     return;
   }
 
@@ -1080,12 +1112,17 @@ async function handleDisputeLedger(
       const rel = await supabase.rpc("hold_autopay_for_dispute", {
         p_camp_id: campId, p_family_key: String(data.familyKey), p_dispute_id: disputeId, p_hold: false });
       if (rel.error) throw new Error(`dispute ${disputeId} won: autopay could not be resumed yet: ${rel.error.message}`);
-    } else if (!won && data?.familyKey) {
+    } else if (!won) {
       // Lost (TED-202): the pause stays, marked lost — the office may resume
-      // once no other dispute of the family's is still open.
-      const lost = await supabase.rpc("note_dispute_lost", {
-        p_camp_id: campId, p_family_key: String(data.familyKey), p_dispute_id: disputeId });
-      if (lost.error) throw new Error(`dispute ${disputeId} lost: not marked yet: ${lost.error.message} — is migration 288 applied?`);
+      // once no other dispute of the family's is still open. A loss that
+      // arrives before the dispute itself (TED-207) has no chargeback to find
+      // yet: the family comes from the payment, and the loss is remembered.
+      const famKey = data?.familyKey ? String(data.familyKey) : await familyKeyFor(obj);
+      if (famKey) {
+        const lost = await supabase.rpc("note_dispute_lost", {
+          p_camp_id: campId, p_family_key: famKey, p_dispute_id: disputeId });
+        if (lost.error) throw new Error(`dispute ${disputeId} lost: not marked yet: ${lost.error.message} — is migration 288 applied?`);
+      }
     }
   }
 }

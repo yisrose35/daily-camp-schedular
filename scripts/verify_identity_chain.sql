@@ -794,6 +794,9 @@ UNION ALL
                                            to_regprocedure('public.update_canteen_autoreload_state(uuid,text,jsonb)'))) !~ 'disputePausedAt'
                OR pg_get_functiondef(to_regprocedure('public.set_canteen_auto_reload(uuid,text,jsonb,bigint)')) !~ 'disputePausedAt'
           THEN 'apply 290 again — the nightly run can switch a dispute pause back on, or the parent cannot'
+          WHEN to_regprocedure('public.canteen_dispute_family(uuid,text)') IS NULL
+               OR pg_get_functiondef(to_regprocedure('public.record_canteen_stripe_reversal(uuid,text,text,numeric,text,text)')) !~ 'byopTransactionId'
+          THEN 'apply 290 again — an earlier copy is in place: a Cardknox/Banquest top-up dispute is ignored, and a sibling on the same card is still charged'
           ELSE 'ok' END)
     ) AS x(item, result)
 

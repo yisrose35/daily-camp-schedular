@@ -177,7 +177,9 @@ BEGIN
     IF COALESCE(p_hold, false) AND EXISTS (
             SELECT 1 FROM jsonb_array_elements(CASE WHEN jsonb_typeof(v_fam -> 'entries') = 'array'
                                                     THEN v_fam -> 'entries' ELSE '[]'::jsonb END) e
-             WHERE e ->> 'id' = 'le_cbwon_' || p_dispute_id) THEN
+             WHERE e ->> 'id' = 'le_cbwon_' || p_dispute_id)
+       -- ...or a canteen top-up's dispute the camp won (290, TED-210)
+       OR EXISTS (SELECT 1 FROM canteen_transactions WHERE camp_id = p_camp_id AND sig = 'xref_won:' || p_dispute_id) THEN
         RETURN jsonb_build_object('success', true, 'changed', false, 'alreadyWon', true);
     END IF;
     -- ...nor one the office already resumed (TED-207): a late or routine

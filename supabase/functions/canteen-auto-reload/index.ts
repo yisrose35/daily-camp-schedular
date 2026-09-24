@@ -505,20 +505,20 @@ serve(async (req) => {
   // card is not charged again — by auto-reload either — while the bank decides.
   // Asked once per camp; a camp whose families cannot be read reloads nothing
   // this run (the next run asks again).
-  const disputedOf = new Map<string, { cards: Set<string>; campers: Set<string> } | null>();
+  const disputedOf = new Map<string, { cards: Set<string>; families: Set<string> } | null>();
   async function disputedAt(campId: string) {
     if (disputedOf.has(campId)) return disputedOf.get(campId) || null;
     const { data, error } = await supabase.rpc("camp_families_object", { p_camp_id: campId });
-    let out: { cards: Set<string>; campers: Set<string> } | null = null;
+    let out: { cards: Set<string>; families: Set<string> } | null = null;
     if (!error && data && typeof data === "object") {
-      out = { cards: new Set(), campers: new Set() };
-      for (const f of Object.values(data as Record<string, any>)) {
+      out = { cards: new Set(), families: new Set() };
+      for (const [fk, f] of Object.entries(data as Record<string, any>)) {
         if (!f || typeof f !== "object") continue;
         const held = (f.disputeHold && Array.isArray(f.disputeHold.disputeIds) && f.disputeHold.disputeIds.length > 0)
           || [...(Array.isArray(f.plans) ? f.plans : []), f.plan].some((p: any) => p && p.collectionBlocked && p.collectionBlocked.reason === "chargeback");
         if (!held) continue;
         for (const c of [f.stripeCustomerId, f.byopCustomerRef]) if (c) out.cards.add(String(c));
-        for (const c of (Array.isArray(f.camperIds) ? f.camperIds : [])) if (c != null) out.campers.add(displayName(c));
+        out.families.add(fk);
       }
     } else {
       console.warn(`[canteen-auto-reload] camp ${campId}: families could not be read (${error?.message || "no answer"}) — no auto-reload this run`);
@@ -535,6 +535,13 @@ serve(async (req) => {
       details.push({ camp: row.camp_id, result: "skipped_" + offWhy });
       continue;
     }
+    // A card one of whose top-ups is disputed (290): no child is reloaded on
+    // it — a brother's or sister's auto-reload waits too (TED-210).
+    const pausedCards = new Set<string>();
+    for (const { acct } of row.accounts) {
+      const p = acct && acct.autoReload;
+      if (p && p.disputePausedAt) for (const c of [p.stripeCustomerId, p.byopCustomerRef]) if (c) pausedCards.add(String(c));
+    }
     for (const { camperName, camperId, acct } of row.accounts) {
       // The number decides; a name-only caller (no number sent) matches by name.
       if (camperIdScope != null ? camperId !== camperIdScope : (scopeCamperName && camperName !== scopeCamperName)) continue;
@@ -550,9 +557,23 @@ serve(async (req) => {
         details.push({ camp: row.camp_id, camper: camperName, camperId, amount: due.amount, kind: due.kind, result: "skipped_family_read_failed" });
         continue;
       }
+      // The child's family, by camper number (TED-213: never by a name two
+      // children can share) — asked only when some family is paused.
+      let famKey: string | null = null;
+      if (disputed.families.size > 0) {
+        const fam = await supabase.rpc("camp_family_key_for_person", {
+          p_camp_id: row.camp_id, p_person_id: camperId, p_name: camperName });
+        if (fam.error) {
+          details.push({ camp: row.camp_id, camper: camperName, camperId, amount: due.amount, kind: due.kind, result: "skipped_family_read_failed" });
+          continue;
+        }
+        famKey = typeof fam.data === "string" ? fam.data : null;
+      }
       if ((ar.stripeCustomerId && disputed.cards.has(String(ar.stripeCustomerId)))
           || (ar.byopCustomerRef && disputed.cards.has(String(ar.byopCustomerRef)))
-          || disputed.campers.has(displayName(camperName))) {
+          || (famKey && disputed.families.has(famKey))
+          || (ar.stripeCustomerId && pausedCards.has(String(ar.stripeCustomerId)))
+          || (ar.byopCustomerRef && pausedCards.has(String(ar.byopCustomerRef)))) {
         details.push({ camp: row.camp_id, camper: camperName, camperId, amount: due.amount, kind: due.kind, result: "held_for_dispute",
                        reason: "a payment of this family's is disputed with the bank" });
         continue;
