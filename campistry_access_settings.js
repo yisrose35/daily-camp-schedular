@@ -295,22 +295,26 @@
                  '<input id="agName" type="text" value="' + esc(_group.name || '') + '" placeholder="e.g. Office Admin" ' +
                  'style="width:100%;padding:9px 12px;border-radius:9px;border:1.5px solid #E2E8F0;font:inherit;font-size:.88rem;box-sizing:border-box;"></div>';
 
-            // Which apps this role opens is no longer a separate choice — it's
-            // whatever the preset/fine-tune matrix below actually grants
-            // something in, shown here read-only so it's still visible at a
-            // glance without being a second, independently-editable field
-            // that could disagree with the matrix.
+            // Which apps this role opens is no longer a separately-EDITED
+            // choice — that was the bug (see the comment on computeProducts
+            // above) — but it's still shown as checkboxes, per request,
+            // rather than plain text: just DISABLED ones, always checked
+            // exactly where computeProducts() says, so there's a clear
+            // checkbox-shaped answer to "does this role open Me?" without
+            // reopening the door to it disagreeing with the fine-tune matrix.
             var liveProducts = computeProducts();
             h += '<div style="margin-bottom:16px;"><div style="font-size:.68rem;font-weight:700;color:#94A3B8;' +
-                 'text-transform:uppercase;letter-spacing:.05em;margin-bottom:6px;">Apps this role opens</div>';
-            h += '<div style="font-size:.82rem;color:#334155;">' +
-                 (liveProducts.length
-                     ? liveProducts.map(function (k) {
-                           var app = Cc.APPS.filter(function (a) { return a.key === k; })[0];
-                           return esc(app ? app.label : k);
-                       }).join(', ')
-                     : '<span style="color:#94A3B8;">Nothing yet — pick a role below or turn on a section.</span>') +
-                 '</div></div>';
+                 'text-transform:uppercase;letter-spacing:.05em;margin-bottom:6px;">Apps this role opens ' +
+                 '<span style="font-weight:400;text-transform:none;letter-spacing:0;">— set automatically by the sections below</span></div>';
+            h += '<div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(150px,1fr));gap:7px;">';
+            Cc.APPS.forEach(function (app) {
+                var on = liveProducts.indexOf(app.key) >= 0;
+                h += '<label style="display:flex;align-items:center;gap:7px;font-size:.82rem;color:' + (on ? '#334155' : '#94A3B8') + ';' +
+                     'padding:7px 10px;border-radius:9px;border:1.5px solid ' + (on ? '#4F46E5' : '#E2E8F0') +
+                     ';background:' + (on ? '#EEF2FF' : '#fff') + ';">' +
+                     '<input type="checkbox" disabled' + (on ? ' checked' : '') + '> ' + esc(app.label) + '</label>';
+            });
+            h += '</div></div>';
         }
 
         // ── simple: the preset picker ──
@@ -321,6 +325,15 @@
         h += presetCard('__none__', 'Full access to their apps',
             'No section limits. This is how every account worked before section access existed.',
             unconfigured);
+        // A truly blank slate: every section explicitly off rather than
+        // "unconfigured" (which resolves to FULL access, the opposite of
+        // what "start from scratch" should mean) — so turning sections on
+        // one at a time from nothing is its own starting point, not a side
+        // effect of stumbling into "Custom" by clicking the wrong preset.
+        var isBlankSlate = !_preset && !!Object.keys(_overrides).length &&
+            Cc.all().every(function (c) { return (_overrides[c.key] || 'none') === 'none'; });
+        h += presetCard('__blank__', 'Start from scratch',
+            'Nothing on. Build it section by section below.', isBlankSlate);
         Cc.PRESETS.filter(function (p) { return p.key !== 'full'; }).forEach(function (p) {
             // A role is only as good as the plan behind it. 'Nurse' grants
             // health.* — pick it at a camp without Health and the person gets
@@ -339,7 +352,7 @@
             }
             h += presetCard(p.key, p.label, p.desc + note, !unconfigured && matched === p.key);
         });
-        if (!unconfigured && !matched) {
+        if (!unconfigured && !matched && !isBlankSlate) {
             h += presetCard('__custom__', 'Custom', 'Your own combination, set below.', true);
         }
         h += '</div>';
@@ -480,6 +493,17 @@
                 var k = b.getAttribute('data-preset');
                 if (k === '__none__') { _preset = null; _overrides = {}; }
                 else if (k === '__custom__') { /* already custom — no-op */ }
+                else if (k === '__blank__') {
+                    // Explicitly off everywhere, not "unconfigured" (which
+                    // resolve() treats as FULL access) — the opposite of what
+                    // "start from scratch" should mean. Auto-expand the
+                    // matrix too: the whole point is to build it section by
+                    // section, so it should already be open to do that in.
+                    _preset = null;
+                    _overrides = {};
+                    C().all().forEach(function (c) { _overrides[c.key] = 'none'; });
+                    _advanced = true;
+                }
                 else {
                     // Picking a preset clears overrides: it's a fresh starting
                     // point, and silently keeping stale overrides on top is how
