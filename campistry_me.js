@@ -16505,7 +16505,8 @@ function buildFamilyLedgers(){
         // card, or a disconnected processor. Surfaced on the ledger so Billing can
         // show it — a notification alone is missed, and the plan otherwise still
         // reads as active while nothing is being taken.
-        l.collectionBlocked=(Array.isArray(l.family.plans)?l.family.plans:[])
+        // The old single plan too (TED-084): the nightly run flags it now.
+        l.collectionBlocked=(Array.isArray(l.family.plans)?l.family.plans:(l.family.plan&&typeof l.family.plan==='object'?[l.family.plan]:[]))
             .map(function(p){return p&&p.collectionBlocked?
                 Object.assign({planId:p.id},p.collectionBlocked):null})
             .filter(Boolean);
@@ -17570,6 +17571,9 @@ function _collectionWarning(l){
         var label=b.reason==='no_card'?'No card on file'
                  :b.reason==='declined'?'Card declined'
                  :b.reason==='no_processor'?'Processor not connected'
+                 :b.reason==='bank_debit_unheld'?'Bank debit not recorded — may be debited again'
+                 :b.reason==='bank_debit_stuck'?'Bank debit not cleared after 10 days'
+                 :b.reason==='bank_debit_unverified'?'Bank debit cannot be checked'
                  :String(b.reason||'Cannot collect');
         if(n>1)label+=' ×'+n;
         if(b.escalated)label='Not collecting — '+label;

@@ -1,5 +1,5 @@
 -- ============================================================================
--- Confirm migrations 222-268 are in and doing their job.
+-- Confirm migrations 222-269 are in and doing their job.
 --
 -- Paste the whole thing into the Supabase SQL Editor. It is READ ONLY — one
 -- SELECT, nothing is created, changed or deleted, and the two purge functions
@@ -598,6 +598,14 @@ UNION ALL
                OR EXISTS (SELECT 1 FROM pg_constraint WHERE conrelid = 'public.processor_transactions'::regclass
                            AND contype = 'c' AND pg_get_constraintdef(oid) ~ 'refund''')
           THEN 'apply 268 BEFORE redeploying registration-deposit-checkout — a deposit charge that is cut off tells the parent "already paid" for ever'
+          ELSE 'ok' END),
+    -- Every kind of payment plan can hold a bank debit (TED-084).
+    ('269  every plan can hold a bank debit',
+     CASE WHEN to_regprocedure('public._plan_path(jsonb,text)') IS NULL
+               OR pg_get_functiondef(to_regprocedure('public.hold_autopay_charge(uuid,text,text,jsonb)')) !~ '_plan_path'
+               OR pg_get_functiondef(to_regprocedure('public.flag_plan_collection(uuid,text,text,text,text)')) !~ '_plan_path'
+               OR pg_get_functiondef(to_regprocedure('public._merge_family_from_page(jsonb,jsonb)')) !~ '_merge_plan_state'
+          THEN 'apply 269 BEFORE redeploying charge-due-installments — families on an old-style plan who pay by bank are debited every night'
           ELSE 'ok' END)
     ) AS x(item, result)
 
