@@ -153,3 +153,21 @@ test('TED-176: Link admin counts a refunded or disputed tip at what the staff me
     assert.deepStrictEqual(JSON.parse(JSON.stringify(by)), { a: [0, 'Refunded'], b: [0, 'Disputed'], c: [10, ''], d: [6, 'Part refunded'], e: [5, ''] });
     assert.match(src, /\.from\('link_tips'\)\s*\n\s*\/\/[^\n]*\n\s*\.select\('\*'\)/);
 });
+
+test('TED-182: a bank inquiry (no money moved) takes nothing from the staff member and records nothing', () => {
+    const r = deliver([{ id: 'evt_i', type: 'charge.dispute.created', data: { object: { id: 'dp_i', charge: 'ch_1', amount: 2100, status: 'warning_needs_response' } } }],
+        { charges: { ch_1: { id: 'ch_1', amount: 2100, amount_refunded: 0, transfer: 'tr_1', payment_intent: 'pi_tip' } } });
+    assert.strictEqual(r.status, 200);
+    assert.strictEqual(reversals(r).length, 0, 'the tip was taken back for a question');
+    assert.strictEqual(r.rpcs.filter(c => c.name === 'record_tip_reversal').length, 0);
+    assert.strictEqual(r.tables.__emails.length, 0);
+});
+
+test('TED-182: an "opened" message arriving after the dispute was won takes nothing', () => {
+    const tip = { id: 'tip1', amount: 20, staff_account_id: 'lsa1', stripe_transfer_id: null, recipient_name: 'Moshe', camp_id: 'camp1',
+                  stripe_payment_intent_id: 'pi_tip', dispute_status: 'won' };
+    const r = deliver([{ id: 'evt_late', type: 'charge.dispute.created', data: { object: { id: 'dp_1', charge: 'ch_1', amount: 2100, status: 'needs_response' } } }],
+        { tips: [tip], charges: { ch_1: { id: 'ch_1', amount: 2100, amount_refunded: 0, transfer: 'tr_1', payment_intent: 'pi_tip' } } });
+    assert.strictEqual(r.status, 200);
+    assert.strictEqual(reversals(r).length, 0, 'a late "opened" took the tip after the dispute was won');
+});

@@ -109,6 +109,16 @@ BEGIN
     r := public.canteen_void_sale('f2840000-0000-0000-0000-00000000ffff', s, '[]'::jsonb, NULL);
     IF r->>'error' IS DISTINCT FROM 'not_authorized' THEN RAISE EXCEPTION 'another camp: %', r; END IF;
 
+    -- TED-184: never more back in stock than the sale had — Bina's $1 Chips
+    -- sale with a list of 200 Ices and 5 Chips puts back 1 Chips, no Ices
+    SELECT sig INTO s FROM canteen_transactions WHERE camp_id = c AND camper_id = '8402' AND tx_type = 'debit' AND amount = 1;
+    UPDATE camp_state_kv SET value = jsonb_set(value, '{inventory,1,stock}', '4'::jsonb) WHERE camp_id = c AND key = 'campistrySnacks';
+    r := public.canteen_void_sale(c, s, '[{"id":1,"qty":100},{"id":1,"qty":100},{"id":2,"qty":5}]'::jsonb, NULL);
+    SELECT value->'inventory' INTO inv FROM camp_state_kv WHERE camp_id = c AND key = 'campistrySnacks';
+    IF (r->>'restocked')::int <> 1 OR (inv->0->>'stock')::numeric <> 12 OR (inv->1->>'stock')::numeric <> 5 THEN
+        RAISE EXCEPTION 'TED-184: the restock was not capped at the sale: % / %', r, inv;
+    END IF;
+
     -- 6. the history carries sigs
     r := public.get_canteen_history(c, 'Avi', NULL, 50);
     SELECT count(*) INTO n FROM jsonb_array_elements(r->'transactions') x WHERE NULLIF(x->>'sig', '') IS NULL;
@@ -136,6 +146,19 @@ RESET "request.jwt.claims";
 \i migrations/284_a_register_sale_can_be_voided.sql
 
 \set verify_q `cat scripts/verify_identity_chain.sql`
+-- TED-184: an earlier copy (no cap on the restock) is caught
+BEGIN;
+DO $$
+DECLARE d text := pg_get_functiondef('public.canteen_void_sale(uuid,text,jsonb,text)'::regprocedure);
+BEGIN EXECUTE replace(d, 'sale_items', 'sold_items'); END $$;
+CREATE TEMP TABLE v284old AS :verify_q
+DO $$
+DECLARE r text;
+BEGIN
+    SELECT result INTO r FROM v284old WHERE item LIKE '284%';
+    IF r NOT LIKE 'apply 284 again%' THEN RAISE EXCEPTION 'TED-184: an earlier 284 passed the checking script: %', r; END IF;
+END $$;
+ROLLBACK;
 BEGIN;
 CREATE TEMP TABLE v284 AS :verify_q
 DO $$

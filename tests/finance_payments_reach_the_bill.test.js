@@ -152,7 +152,8 @@ test('TED-163: a refund that went through Stripe or Sola, or a failed refund\'s 
     // an offline refund the office typed in can still be taken back
     assert.strictEqual(o_fns_throughProcessor({ id: 'ref_5', amount: -50, method: 'Refund', offline: true }), false);
     // and the Payment Log shows no ✕ on processor rows
-    assert.match(ME, /var _acts=_throughProcessor\(p\)\?'':'<button/);
+    // (a fund's cheque gets an "Account" button instead, TED-178)
+    assert.match(ME, /:_throughProcessor\(p\)\?'':'<button class="me-btn me-btn--ghost me-btn--sm" style="color:var\(--err\)" title="Remove this payment you recorded"/);
 });
 function o_fns_throughProcessor(p) { return office().fns._throughProcessor(p); }
 

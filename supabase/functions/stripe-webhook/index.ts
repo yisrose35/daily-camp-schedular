@@ -153,6 +153,23 @@ async function verifySignature(payload: string, signature: string, secret: strin
 
 // Read-modify-write the campistryMe blob, upserting one payment. Retries a few
 // times to shrink the (small) race window between two concurrent webhooks.
+// ── A payment Campistry can never record (TED-183) ─────────────────────────
+// Most refusals pass (a busy database): the delivery is answered 500 and
+// Stripe sends it again. Some never will — the child's number is no longer
+// anyone, the application was deleted, the camp is gone. Retrying those for
+// Stripe's three days ends in silence: the parent paid and nobody knows. So a
+// refusal of that kind is told to the platform once (with what to do) and the
+// delivery answered 200.
+const NEVER_RECORDED = new Set([
+  "unknown_camper", "missing_camper", "no_canteen_account", "camp_not_found", "family_not_found",
+  "application_not_found", "enrollment_not_found", "not_found", "invalid_amount", "missing_argument",
+]);
+class NeverRecorded extends Error { code: string; constructor(m: string, c: string) { super(m); this.code = c; } }
+function notRecorded(message: string, code: unknown): Error {
+  const c = String(code || "");
+  return NEVER_RECORDED.has(c) ? new NeverRecorded(message, c) : new Error(message);
+}
+
 async function upsertPayment(
   supabase: ReturnType<typeof createClient>,
   campId: string,
@@ -239,7 +256,7 @@ async function upsertPayment(
     // Not recorded (TED-164): the delivery is answered 500 so Stripe sends it
     // again (the write is keyed on the payment, so a retry cannot book it
     // twice) — and no receipt goes out for a payment Campistry has no record of.
-    throw new Error(`could not record ${pi.id}: ${res.error?.message || res.data?.error || "unknown"}`);
+    throw notRecorded(`could not record ${pi.id}: ${res.error?.message || res.data?.error || "unknown"}`, !res.error && res.data?.error);
   }
   return true;
 }
@@ -276,7 +293,7 @@ async function handleCanteenDeposit(
   console.log(`[stripe-webhook] canteen deposit $${(pi.amount || 0) / 100} for ${camperName} (camp ${campId}): ${error ? "FAILED " + error.message : JSON.stringify(data)}`);
   // Not credited (TED-164): 500, so Stripe sends it again (keyed on the payment).
   if (error || !(data as any)?.success) {
-    throw new Error(`canteen deposit ${pi.id} not credited: ${error?.message || (data as any)?.error || "unknown"}`);
+    throw notRecorded(`canteen deposit ${pi.id} not credited: ${error?.message || (data as any)?.error || "unknown"}`, !error && (data as any)?.error);
   }
 }
 
@@ -321,7 +338,7 @@ async function handleRegistrationDeposit(
     // family into a list of unpaid ones.
     console.error(`[stripe-webhook] could not mark registration deposit for camp ${campId} enrollment ${enrollmentId}: ${error?.message || (data as any)?.error}`);
     // TED-164: 500, so Stripe sends it again.
-    throw new Error(`registration deposit ${pi.id} not recorded: ${error?.message || (data as any)?.error || "unknown"}`);
+    throw notRecorded(`registration deposit ${pi.id} not recorded: ${error?.message || (data as any)?.error || "unknown"}`, !error && (data as any)?.error);
   }
   console.log(`[stripe-webhook] registration deposit $${(pi.amount || 0) / 100} marked on ${enrollmentId}${(data as any)?.duplicate ? " (already recorded)" : ""}`);
 
@@ -387,7 +404,7 @@ async function handleLinkPhotoPurchase(
       });
       console.log(`[stripe-webhook] link photo purchase (facial_recognition) for ${name}, camp ${campId}: ${error ? "FAILED " + error.message : JSON.stringify(data)}`);
       if (error || !(data as any)?.success) {
-        throw new Error(`photo purchase ${pi.id} for ${name} not recorded: ${error?.message || (data as any)?.error || "unknown"}`);
+        throw notRecorded(`photo purchase ${pi.id} for ${name} not recorded: ${error?.message || (data as any)?.error || "unknown"}`, !error && (data as any)?.error);
       }
     }
     return;
@@ -405,7 +422,7 @@ async function handleLinkPhotoPurchase(
   console.log(`[stripe-webhook] link photo purchase (${meta.kind}) $${(pi.amount || 0) / 100} camp ${campId}: ${error ? "FAILED " + error.message : JSON.stringify(data)}`);
   // Not recorded (TED-164): 500, so Stripe sends it again (once per payment).
   if (error || !(data as any)?.success) {
-    throw new Error(`photo purchase ${pi.id} not recorded: ${error?.message || (data as any)?.error || "unknown"}`);
+    throw notRecorded(`photo purchase ${pi.id} not recorded: ${error?.message || (data as any)?.error || "unknown"}`, !error && (data as any)?.error);
   }
 }
 
@@ -769,6 +786,38 @@ async function campIdFor(obj: Record<string, any>): Promise<string | null> {
   return null;
 }
 
+// ── A canteen top-up refunded or disputed outside Campistry (TED-181) ──────
+// The payment's metadata says it was a canteen top-up; then the money comes
+// off that child's wallet (migration 287), once, and the camp is told. The
+// payment is asked of Stripe when the event itself does not carry it.
+async function canteenPaymentOf(obj: Record<string, any>): Promise<{ campId: string; pi: string } | null> {
+  let meta = obj?.metadata || {};
+  let piId = typeof obj?.payment_intent === "string" ? obj.payment_intent : obj?.payment_intent?.id;
+  if (!piId) {
+    const chId = typeof obj?.charge === "string" ? obj.charge : obj?.charge?.id;
+    if (chId) { const ch = await stripeGetJson(`/charges/${encodeURIComponent(chId)}`); piId = ch?.payment_intent || null; }
+  }
+  if (!piId) return null;
+  if (meta.source !== "campistry-canteen-deposit") {
+    const pi = await stripeGetJson(`/payment_intents/${encodeURIComponent(String(piId))}`);
+    meta = pi?.metadata || {};
+  }
+  if (meta.source !== "campistry-canteen-deposit" || !meta.campId) return null;
+  return { campId: String(meta.campId), pi: String(piId) };
+}
+async function canteenReversal(supabase: ReturnType<typeof createClient>, campId: string, pi: string,
+                               ref: string, amount: number, kind: "refund" | "dispute" | "dispute_won", note: string | null) {
+  const { data, error } = await supabase.rpc("record_canteen_stripe_reversal", {
+    p_camp_id: campId, p_payment_intent_id: pi, p_ref_id: ref, p_amount: amount, p_kind: kind, p_note: note });
+  // Not recorded: 500, so Stripe sends it again (the write is keyed on the
+  // refund or dispute id). A top-up Campistry never credited has nothing to
+  // take back — said, not retried.
+  if (error || (!data?.success && data?.error !== "deposit_not_found")) {
+    throw new Error(`canteen ${kind} ${ref} on ${pi} not recorded: ${error?.message || data?.error || "unknown"} — is migration 287 applied?`);
+  }
+  console.log(`[stripe-webhook] canteen ${kind} ${ref} on ${pi}: ${JSON.stringify(data)}`);
+}
+
 async function handleChargeRefunded(
   supabase: ReturnType<typeof createClient>,
   event: Record<string, any>,
@@ -787,6 +836,23 @@ async function handleChargeRefunded(
     refunds = Array.isArray(list?.data) ? list.data : [];
   }
   if (!refunds.length) return;
+
+  // A canteen top-up (TED-181): off the child's wallet, not the family's bill.
+  const canteen = await canteenPaymentOf({ metadata: charge.metadata, payment_intent: charge.payment_intent, charge: charge.id });
+  if (canteen) {
+    for (const r of refunds) {
+      const refundId = String(r.id || "");
+      const amount = Number((((r.amount || 0) / 100)).toFixed(2));
+      if (!refundId || !(amount > 0)) continue;
+      // Campistry's own canteen refund (Snacks) is already on the wallet.
+      if (r.metadata && r.metadata.campistryHold) continue;
+      const now = await stripeGetJson(`/refunds/${encodeURIComponent(refundId)}`);
+      const status = String((now && now.status) || r.status || "");
+      if (status === "failed" || status === "canceled") continue;
+      await canteenReversal(supabase, canteen.campId, canteen.pi, refundId, amount, "refund", r.reason ? `Refunded in Stripe — ${r.reason}` : null);
+    }
+    return;
+  }
 
   if (!campId) {
     console.error(`[stripe-webhook] charge.refunded ${charge.id} has no campId in metadata — ` +
@@ -926,6 +992,22 @@ async function handleDisputeLedger(
   // to find its own payment.
   const refs = [obj.payment_intent, obj.charge, obj.id]
     .filter(Boolean).map(String);
+
+  // A canteen top-up (TED-181): the disputed money off the child's wallet
+  // while the bank decides; back on if the camp wins. An inquiry (warning_*)
+  // moves no money.
+  if (!String(obj.status || "").startsWith("warning_")) {
+    const canteen = await canteenPaymentOf(obj);
+    if (canteen) {
+      const amount = Number(((obj.amount || 0) / 100).toFixed(2));
+      if (event.type === "charge.dispute.created") {
+        await canteenReversal(supabase, canteen.campId, canteen.pi, disputeId, amount, "dispute", obj.reason ? `Disputed — ${String(obj.reason).replace(/_/g, " ")}` : null);
+      } else if (event.type === "charge.dispute.closed" && String(obj.status || "") === "won") {
+        await canteenReversal(supabase, canteen.campId, canteen.pi, disputeId, amount, "dispute_won", null);
+      }
+      return;
+    }
+  }
 
   // Which camp? The PAYMENT's metadata carries campId on every path that takes
   // money; the dispute's own metadata is empty (TED-114), so the payment is
@@ -1068,6 +1150,8 @@ serve(async (req) => {
     if (statusFor[event.type]) {
       const pi = event.data.object;
       const campId = pi.metadata?.campId;
+      let neverRecorded: NeverRecorded | null = null;
+      try {
       if (!campId) {
         console.log("[stripe-webhook] No campId in metadata — skipping ledger write");
       } else if (pi.metadata?.source === "campistry-canteen-deposit") {
@@ -1085,6 +1169,40 @@ serve(async (req) => {
       } else {
         await upsertPayment(supabase, campId, pi, statusFor[event.type]);   // throws when not recorded
         console.log(`[stripe-webhook] ledger ${statusFor[event.type]} $${(pi.amount || 0) / 100} camp ${campId}: ok`);
+      }
+      } catch (e) {
+        if (!(e instanceof NeverRecorded)) throw e;
+        neverRecorded = e;
+      }
+      if (neverRecorded) {
+        // Told once (the claim is keyed on the payment, and given back when the
+        // email did not go, so Stripe's next delivery sends it), then 200.
+        const key = `unrecorded:${pi.id}:${statusFor[event.type]}`;
+        const { data: first, error: claimErr } = await supabase.rpc("claim_refund_failure_alert", { p_refund_id: key });
+        if (claimErr) throw new Error(`${neverRecorded.message} — and the platform could not be told (${claimErr.message})`);
+        if (first !== false) {
+          const amt = ((Number(pi.amount_received ?? pi.amount) || 0) / 100).toFixed(2);
+          const sent = await sendRiskAlertEmail(`Stripe: a $${amt} payment could not be recorded in Campistry`, `
+            <div style="font-family:sans-serif;max-width:600px;">
+              <h2 style="color:#B91C1C;">A payment Campistry cannot record</h2>
+              <p><strong>Payment:</strong> ${pi.id} (${statusFor[event.type]}) · <strong>Amount:</strong> $${amt}</p>
+              <p><strong>Camp:</strong> ${campId || "—"} · <strong>What it was for:</strong> ${pi.metadata?.source || "a family payment"}
+                 ${pi.metadata?.camperName ? " · child " + pi.metadata.camperName : ""}${pi.metadata?.camperId ? " (#" + pi.metadata.camperId + ")" : ""}
+                 ${pi.metadata?.enrollmentId ? " · application " + pi.metadata.enrollmentId : ""}</p>
+              <p><strong>Why:</strong> ${neverRecorded.code.replace(/_/g, " ")} — this will not change by trying again.</p>
+              <p>The money was taken. Tell the camp: they record it by hand (the child's new number, or the family it belongs to),
+                 or refund it in Stripe.</p>
+              <p style="margin-top:20px;color:#64748B;font-size:13px;">Event: ${event.type} (${event.id})</p>
+            </div>`);
+          if (sent === "failed") {
+            await supabase.rpc("release_refund_failure_alert", { p_refund_id: key });
+            throw new Error(`${neverRecorded.message} — and the platform alert did not send; Stripe will send it again`);
+          }
+        }
+        console.error(`[stripe-webhook] ${neverRecorded.message} — it never will be; the platform has been told`);
+        return new Response(JSON.stringify({ received: true, recorded: false, reason: neverRecorded.code }), {
+          status: 200, headers: { ...corsHeaders, "Content-Type": "application/json" },
+        });
       }
 
       // Only reached once the payment is recorded (every writer above throws

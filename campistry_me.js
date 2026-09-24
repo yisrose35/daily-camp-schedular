@@ -842,6 +842,7 @@ function _syncCampTimezone(){
     }catch(e){}
 }
 function save(){
+    try{_migratePayerLedgers();}catch(_){}
     try{
         _saveLockUntil=Date.now()+5000;
         // Read current state from the in-memory cache (IDB-backed via
@@ -1863,11 +1864,14 @@ function managePayers(){
               +(p.note?'<div style="font-size:.76rem;color:var(--s500)">'+esc(p.note)+'</div>':'')
               +(p.contact||p.email||p.phone?'<div style="font-size:.74rem;color:var(--s400)">'
                  +esc([p.contact,p.email,p.phone].filter(Boolean).join(' \u00b7 '))+'</div>':'')
+              // what it owes, inside the name column (TED-179: an extra closing
+              // tag here pushed the buttons, and Save/Cancel, out of their boxes)
+              +(function(){var ac=_payerAccount(id);return ac.charged>0?'<div style="font-size:.76rem;color:var(--s600)">Owes '+fm(ac.balance)+' (shares '+fm(ac.charged)+', paid '+fm(ac.paid)+')</div>':''})()
               +'</div>'
-              +(function(){var ac=P.account(p);return ac.charged>0?'<div style="font-size:.76rem;color:var(--s600)">Owes '+fm(ac.balance)+' (shares '+fm(ac.charged)+', paid '+fm(ac.paid)+')</div>':''})()
-              +'</div>'
-              +(P.account(p).charged>0?'<button type="button" class="me-btn me-btn--sec me-btn--sm" '
-                +'onclick="CampistryMe.recordPayerPayment(\''+je(id)+'\')">Record payment</button>':'')
+              +(_payerAccount(id).charged>0?'<button type="button" class="me-btn me-btn--sec me-btn--sm" '
+                +'onclick="CampistryMe.recordPayerPayment(\''+je(id)+'\')">Record payment</button>'
+                +'<button type="button" class="me-btn me-btn--ghost me-btn--sm" '
+                +'onclick="CampistryMe.payerLines(\''+je(id)+'\')">Account</button>':'')
               +'<button type="button" class="me-btn me-btn--ghost me-btn--sm" '
               +'onclick="CampistryMe.togglePayerArchived(\''+je(id)+'\')">'
               +(p.archived?'Restore':'Archive')+'</button>'
@@ -15576,6 +15580,9 @@ function renderAnalytics(){
     var _charged=_anList.reduce(function(s,l){return s+(l.totalCharges||0)},0);
     var _collected=_anList.reduce(function(s,l){return s+(l.totalPayments||0)},0);
     var _outstanding=_anList.reduce(function(s,l){return s+Math.max(l.balance||0,0)},0);
+    // plus what funds owe and have paid on their shares of split charges (TED-178)
+    var _anPay=_payerTotals();
+    _charged+=_anPay.charged; _collected+=_anPay.paid; _outstanding+=_anPay.outstanding;
     var _rate=_charged>0?Math.round(_collected/_charged*100):0;
     var _overdue=_anList.filter(function(l){return l.status==='overdue'}).length;
 
@@ -15696,6 +15703,10 @@ function renderFinance(){
     var _finLedgers=buildFamilyLedgers();
     var totalCollected=Object.values(_finLedgers).reduce(function(s,l){return s+(l.totalPayments||0)},0);
     var totalOutstanding=Object.values(_finLedgers).reduce(function(s,l){return s+Math.max(l.balance||0,0)},0);
+    // Funds' shares of split charges and their cheques are the camp's money
+    // too, kept on the funds' own accounts, not on the families' (TED-178).
+    var _finPayers=_payerTotals();
+    totalCollected+=_finPayers.paid; totalOutstanding+=_finPayers.outstanding;
     var paidCount=autoInvoices.filter(function(inv){return inv.status==='paid'}).length;
     var partialCount=autoInvoices.filter(function(inv){return inv.status==='partial'}).length;
     var overdueCount=autoInvoices.filter(function(inv){return inv.status==='overdue'}).length;
@@ -15854,8 +15865,12 @@ function renderFinance(){
         h+='</tbody></table>'+_pagerHtml(autoInvoices.length,PAGE_SIZE,_analyticsInvoicePage,'setAnalyticsInvoicePage')+'</div></div>';
 
         // Manual payment log (supplementary)
-        if(finPayments.length){
-            var sortedPayments=finPayments.slice().sort(function(a,b){return(b.date||'').localeCompare(a.date||'')});
+        // with the funds' payments (TED-178), corrected in Manage payers → Account
+        var _logRows=finPayments.concat(_finPayers.payments.map(function(fp){
+            return {id:'payer:'+fp.paymentId,_payer:fp,family:fp.name+' (fund)',amount:fp.amount,date:fp.date,method:fp.method};
+        }));
+        if(_logRows.length){
+            var sortedPayments=_logRows.slice().sort(function(a,b){return(b.date||'').localeCompare(a.date||'')});
             var payPaged=_paginate(sortedPayments,PAGE_SIZE,_analyticsPaymentPage);
             h+='<div class="me-card" style="margin-top:14px"><div class="me-card-head"><h3>Payment Log</h3></div><div class="me-tw"><table class="me-t"><thead><tr><th>Date</th><th>Family/Camper</th><th>Amount</th><th>Method</th><th></th></tr></thead><tbody>';
             payPaged.items.forEach(function(p,i){
@@ -15869,7 +15884,8 @@ function renderFinance(){
                 // Only what the office typed in can be removed (TED-163); money a
                 // processor moved — a payment, a refund, a failed refund's put-back —
                 // was really moved, and is corrected with a refund, not a ✕.
-                var _acts=_throughProcessor(p)?'':'<button class="me-btn me-btn--ghost me-btn--sm" style="color:var(--err)" title="Remove this payment you recorded" onclick="CampistryMe.finRemovePayment(\''+je(String(p.id))+'\')">✕</button>';
+                var _acts=p._payer?'<button class="me-btn me-btn--ghost me-btn--sm" title="This fund\u2019s account" onclick="CampistryMe.payerLines(\''+je(String(p._payer.payerId))+'\')">Account</button>'
+                    :_throughProcessor(p)?'':'<button class="me-btn me-btn--ghost me-btn--sm" style="color:var(--err)" title="Remove this payment you recorded" onclick="CampistryMe.finRemovePayment(\''+je(String(p.id))+'\')">✕</button>';
                 h+='<tr><td style="font-size:.75rem;color:var(--s400)">'+esc(p.date||'—')+'</td><td class="bold">'+esc(p.family)+(_isRef&&p.notes?' <span style="font-size:.7rem;font-weight:400;color:var(--s400)">'+esc(p.notes)+'</span>':'')+'</td><td style="font-weight:700;color:'+_amtCol+'">'+_amtTxt+'</td><td>'+bdg((_payLabel(p.method)||p.method||'—'),_isRef?'err':_st==='failed'?'err':_st==='pending'?'warn':'ok')+_stBadge+'</td><td style="text-align:right;white-space:nowrap">'+_acts+'</td></tr>';
             });
             h+='</tbody></table>'+_pagerHtml(sortedPayments.length,PAGE_SIZE,_analyticsPaymentPage,'setAnalyticsPaymentPage')+'</div></div>';
@@ -18593,19 +18609,85 @@ function addChargeForFamily(famKey){
     });
 }
 
-// A split charge's shares that are not the household's, onto each payer's own
-// account (TED-165). Returns [{payerId,name,amount}].
+// ── A payer's own account (TED-165, TED-177) ────────────────────────────────
+// A payer that is not the household — a fund — owes its share of each split
+// charge and pays it with its own cheques. Those lines live on the HOUSEHOLD's
+// family record (f.payerLedger), each naming its payer: a family is saved as
+// its own row and merged by entry id on the server (migration 286), so an
+// office computer left open from before cannot drop them, as it could when
+// they sat on the payer in the settings document. The list only grows: a
+// correction is a 'void' line naming the line it cancels.
+function _payerLedgerOf(f){ if(!Array.isArray(f.payerLedger))f.payerLedger=[]; return f.payerLedger; }
+// Lines kept on a payer before 286's layout, moved onto the families once.
+function _migratePayerLedgers(){
+    Object.keys(payers||{}).forEach(function(pid){
+        var py=payers[pid]; if(!py||!Array.isArray(py.ledger)||!py.ledger.length)return;
+        var pays=[];
+        py.ledger.forEach(function(e){
+            if(!e||!e.id)return;
+            if(e.kind==='charge'&&e.familyKey&&families[e.familyKey]){
+                var L=_payerLedgerOf(families[e.familyKey]);
+                if(!L.some(function(x){return x&&x.id===e.id}))L.push(Object.assign({},e,{payerId:pid}));
+            } else if(e.kind==='payment') pays.push(e);
+        });
+        delete py.ledger;   // first: placing a payment reads the accounts again
+        pays.forEach(function(e){ _placePayerPayment(pid,e.amount,{date:e.date,method:e.method,reference:e.reference,paymentId:e.id}); });
+    });
+}
+// Every line for one payer, across the families it pays for.
+function _payerLines(pid){
+    _migratePayerLedgers();
+    var out=[];
+    Object.keys(families||{}).forEach(function(fk){
+        var f=families[fk]; if(!f||!Array.isArray(f.payerLedger))return;
+        f.payerLedger.forEach(function(e){ if(e&&e.payerId===pid) out.push(Object.assign({familyKey:fk,family:f.name},e)); });
+    });
+    return out;
+}
+function _payerAccount(pid){
+    var lines=_payerLines(pid), voided={}, ch=0, pd=0;
+    lines.forEach(function(e){ if(e.kind==='void'&&e.voidOf)voided[e.voidOf]=1; });
+    lines.forEach(function(e){
+        if(voided[e.id])return;
+        var c=Math.round((Number(e.amount)||0)*100);
+        if(e.kind==='charge')ch+=c; else if(e.kind==='payment')pd+=c;
+    });
+    return {charged:ch/100,paid:pd/100,balance:(ch-pd)/100,lines:lines,voided:voided};
+}
+// Every payer's money together, for Finance and Analytics (TED-178).
+function _payerTotals(){
+    var ids={};
+    Object.keys(families||{}).forEach(function(fk){ var f=families[fk];
+        (f&&Array.isArray(f.payerLedger)?f.payerLedger:[]).forEach(function(e){ if(e&&e.payerId)ids[e.payerId]=1; }); });
+    Object.keys(payers||{}).forEach(function(pid){ if(payers[pid]&&Array.isArray(payers[pid].ledger)&&payers[pid].ledger.length)ids[pid]=1; });
+    var t={charged:0,paid:0,outstanding:0,payments:[]};
+    Object.keys(ids).forEach(function(pid){
+        var a=_payerAccount(pid);
+        t.charged+=a.charged; t.paid+=a.paid; t.outstanding+=Math.max(a.balance,0);
+        var byPay={};
+        a.lines.forEach(function(e){
+            if(e.kind!=='payment'||a.voided[e.id])return;
+            var k=e.paymentId||e.id;
+            if(!byPay[k])byPay[k]={payerId:pid,name:(payers[pid]&&payers[pid].name)||pid,paymentId:k,amount:0,date:e.date||'',method:e.method||'',reference:e.reference||''};
+            byPay[k].amount=Math.round((byPay[k].amount+(Number(e.amount)||0))*100)/100;
+        });
+        Object.keys(byPay).forEach(function(k){t.payments.push(byPay[k])});
+    });
+    t.charged=Math.round(t.charged*100)/100; t.paid=Math.round(t.paid*100)/100; t.outstanding=Math.round(t.outstanding*100)/100;
+    return t;
+}
+// A split charge's shares that are not the household's, onto the household's
+// record as that payer's lines. Returns [{payerId,name,amount}].
 function _splitToPayers(chg,fk,f){
     var P=_payersAPI(); if(!P)return [];
-    var out=[];
+    var out=[], L=_payerLedgerOf(f);
     P.allocate(chg.amount,chg.payers,'__family__').forEach(function(a){
         if(a.payerId==='__family__'||!(a.cents>0))return;
         var py=payers[a.payerId];
         if(!py){py=payers[a.payerId]={id:a.payerId,name:a.payerId,kind:'organization'};}
-        if(!Array.isArray(py.ledger))py.ledger=[];
         var id='prc_'+chg.id+'_'+a.payerId;
-        if(py.ledger.some(function(e){return e&&e.id===id}))return;
-        py.ledger.push({id:id,kind:'charge',amount:a.amount,familyKey:fk,family:f.name,chargeId:chg.id,
+        if(L.some(function(e){return e&&e.id===id}))return;
+        L.push({id:id,payerId:a.payerId,kind:'charge',amount:a.amount,chargeId:chg.id,
             description:(chg.description||chg.category||'Charge')+' \u2014 share for '+f.name+(a.note?' ('+a.note+')':''),
             date:chg.date||today(),timestamp:Date.now()});
         out.push({payerId:a.payerId,name:py.name||a.payerId,amount:a.amount});
@@ -18614,24 +18696,50 @@ function _splitToPayers(chg,fk,f){
 }
 // What the other payers owe on this family's split charges, for its page.
 function _familyOtherPayers(fk){
-    var P=_payersAPI(); if(!P)return [];
-    var out=[];
-    Object.keys(payers||{}).forEach(function(id){
-        var py=payers[id]; if(!py||!Array.isArray(py.ledger))return;
-        var mine=py.ledger.filter(function(e){return e&&e.kind==='charge'&&e.familyKey===fk});
-        if(!mine.length)return;
-        var share=mine.reduce(function(t,e){return t+(Number(e.amount)||0)},0);
-        out.push({payerId:id,name:py.name||id,share:Math.round(share*100)/100,owes:P.account(py).balance});
+    var f=families[fk]; if(!f||!Array.isArray(f.payerLedger))return [];
+    var voided={}, share={};
+    f.payerLedger.forEach(function(e){ if(e&&e.kind==='void'&&e.voidOf)voided[e.voidOf]=1; });
+    f.payerLedger.forEach(function(e){
+        if(!e||e.kind!=='charge'||voided[e.id])return;
+        share[e.payerId]=(share[e.payerId]||0)+Math.round((Number(e.amount)||0)*100);
     });
-    return out;
+    return Object.keys(share).filter(function(pid){return share[pid]>0}).map(function(pid){
+        return {payerId:pid,name:(payers[pid]&&payers[pid].name)||pid,share:share[pid]/100,owes:_payerAccount(pid).balance};
+    });
+}
+// A payer's payment, onto the families whose shares it pays (oldest share
+// first); anything over what it owes stays with the last family it pays for.
+function _placePayerPayment(pid,amount,o){
+    o=o||{};
+    var cents=Math.round((Number(amount)||0)*100); if(!(cents>0))return 0;
+    var a=_payerAccount(pid);
+    var owed={}, order=[];
+    a.lines.forEach(function(e){ if(a.voided[e.id]||e.kind==='void')return;
+        var c=Math.round((Number(e.amount)||0)*100);
+        if(!(e.familyKey in owed)){owed[e.familyKey]=0;order.push(e.familyKey);}
+        owed[e.familyKey]+=e.kind==='charge'?c:-c; });
+    if(!order.length)return 0;
+    var base=o.paymentId||('prp_'+Date.now()+'_'+Math.random().toString(36).slice(2,7));
+    var left=cents, pieces=[];
+    order.forEach(function(fk){ if(left<=0)return; var take=Math.min(left,Math.max(owed[fk],0)); if(take>0){pieces.push([fk,take]);left-=take;} });
+    if(left>0){ if(pieces.length)pieces[pieces.length-1][1]+=left; else pieces.push([order[order.length-1],left]); }
+    pieces.forEach(function(pc,i){
+        var L=_payerLedgerOf(families[pc[0]]);
+        var id=base+(pieces.length>1?'_'+i:'');
+        if(L.some(function(e){return e&&e.id===id}))return;
+        L.push({id:id,payerId:pid,kind:'payment',paymentId:base,amount:pc[1]/100,date:o.date||today(),
+            method:o.method||'',reference:o.reference||'',timestamp:Date.now()});
+    });
+    return pieces.length;
 }
 // A payment from a payer that is not the household — the fund's cheque — on
 // the payer's own account, never on the family's (TED-165).
 function recordPayerPayment(id){
     if(!_secEdit('billing','Recording a payment'))return;
-    var P=_payersAPI(); var py=payers[id];
-    if(!P||!py){toast('Payer not found','error');return}
-    var acct=P.account(py);
+    var py=payers[id];
+    if(!py){toast('Payer not found','error');return}
+    var acct=_payerAccount(id);
+    if(!(acct.charged>0)){toast((py.name||id)+' has no share of any charge to pay','error');return}
     var h='<div class="me-modal-form">';
     h+='<p style="font-size:.84rem;color:var(--s600);margin:0 0 10px">'+esc(py.name||id)+' owes <strong>'+fm(acct.balance)+'</strong> on the charges it shares.</p>';
     h+='<div style="display:grid;grid-template-columns:1fr 1fr;gap:10px">';
@@ -18639,20 +18747,70 @@ function recordPayerPayment(id){
     h+='<div class="me-field"><label>Date</label><input type="date" id="ppDate" class="me-input" value="'+today()+'"></div>';
     h+='</div>';
     h+='<div style="display:grid;grid-template-columns:1fr 1fr;gap:10px">';
-    h+='<div class="me-field"><label>Method</label><select id="ppMethod" class="me-input">'+_payOptions('tuition')+'</select></div>';
+    // A fund pays by cheque (TED-178): the method starts there.
+    h+='<div class="me-field"><label>Method</label><select id="ppMethod" class="me-input">'+_payOptions('tuition','check')+'</select></div>';
     h+='<div class="me-field"><label>Reference #</label><input type="text" id="ppRef" class="me-input" placeholder="Check #, grant ref"></div>';
     h+='</div></div>';
     showModal('Payment from '+(py.name||id),h,function(){
         var amt=Math.round((parseFloat((document.getElementById('ppAmt')||{}).value)||0)*100)/100;
         if(!(amt>0)){toast('Enter an amount above zero','error');return}
-        if(!Array.isArray(py.ledger))py.ledger=[];
-        py.ledger.push({id:'prp_'+Date.now()+'_'+Math.random().toString(36).slice(2,7),kind:'payment',amount:amt,
-            date:(document.getElementById('ppDate')||{}).value||today(),method:(document.getElementById('ppMethod')||{}).value||'',
-            reference:((document.getElementById('ppRef')||{}).value||'').trim(),timestamp:Date.now()});
+        _placePayerPayment(id,amt,{date:(document.getElementById('ppDate')||{}).value||today(),
+            method:(document.getElementById('ppMethod')||{}).value||'',
+            reference:((document.getElementById('ppRef')||{}).value||'').trim()});
         save();closeModal('dynModal');
-        toast(fm(amt)+' from '+(py.name||id)+' recorded \u2014 it owes '+fm(P.account(py).balance)+' now');
+        toast(fm(amt)+' from '+(py.name||id)+' recorded \u2014 it owes '+fm(_payerAccount(id).balance)+' now');
         if(curPage==='familydetail')renderFamilyDetailPage();
     },'Record payment');
+}
+// A payer's lines, and taking one back (TED-178): a share billed by mistake
+// goes back onto the household's bill; a payment entered by mistake (or given
+// back to the payer) comes off, and the payer owes it again.
+function payerLines(id){
+    if(!_secEdit('billing','Correcting a payer\u2019s account'))return;
+    var py=payers[id]; if(!py){toast('Payer not found','error');return}
+    var a=_payerAccount(id), seenPay={};
+    var h='<div class="me-modal-form"><p style="font-size:.84rem;color:var(--s600);margin:0 0 10px">'+esc(py.name||id)
+        +' \u2014 shares '+fm(a.charged)+', paid '+fm(a.paid)+', owes <strong>'+fm(a.balance)+'</strong></p>';
+    var rows=a.lines.filter(function(e){return e.kind!=='void'}).map(function(e){
+        var off=!!a.voided[e.id];
+        if(e.kind==='payment'){ var k=e.paymentId||e.id; if(seenPay[k])return ''; seenPay[k]=1;
+            var tot=a.lines.filter(function(x){return x.kind==='payment'&&(x.paymentId||x.id)===k}).reduce(function(t,x){return t+(Number(x.amount)||0)},0);
+            return '<tr><td>'+esc(e.date||'')+'</td><td>Payment'+(e.method?' ('+esc(_payLabel(e.method)||e.method)+')':'')+(e.reference?' #'+esc(e.reference):'')+'</td><td style="text-align:right">'+fm(tot)+'</td><td style="text-align:right">'
+                +(off?'<span style="color:var(--s400)">removed</span>':'<button class="me-btn me-btn--ghost me-btn--sm" style="color:var(--err)" onclick="CampistryMe.voidPayerLine(\''+je(id)+'\',\''+je(k)+'\')">Remove</button>')+'</td></tr>'; }
+        return '<tr><td>'+esc(e.date||'')+'</td><td>'+esc(e.description||'Share')+'</td><td style="text-align:right">'+fm(e.amount)+'</td><td style="text-align:right">'
+            +(off?'<span style="color:var(--s400)">moved back</span>':'<button class="me-btn me-btn--ghost me-btn--sm" style="color:var(--err)" onclick="CampistryMe.voidPayerLine(\''+je(id)+'\',\''+je(e.id)+'\')">Move back to family</button>')+'</td></tr>';
+    }).join('');
+    h+=rows?'<table class="me-t"><tbody>'+rows+'</tbody></table>':'<p style="color:var(--s500)">Nothing on this account yet.</p>';
+    h+='</div>';
+    showModal(py.name||id,h,null);
+}
+function voidPayerLine(pid,lineId){
+    if(!_secEdit('billing','Correcting a payer\u2019s account'))return;
+    var a=_payerAccount(pid);
+    var targets=a.lines.filter(function(e){return !a.voided[e.id]&&e.kind!=='void'&&(e.id===lineId||(e.kind==='payment'&&(e.paymentId||e.id)===lineId))});
+    if(!targets.length){toast('Already taken back','error');return}
+    var isPay=targets[0].kind==='payment', name=(payers[pid]&&payers[pid].name)||pid;
+    var tot=targets.reduce(function(t,e){return t+(Number(e.amount)||0)},0);
+    var msg=isPay?'Remove this '+fm(tot)+' payment from '+name+'? Use this for a payment entered by mistake, or one you gave back. '+name+' will owe it again.'
+                 :'Move this '+fm(tot)+' share back to the '+targets[0].family+' family\u2019s own bill? '+name+' will no longer owe it.';
+    confirmDialog({title:isPay?'Remove payment?':'Move share back?',message:msg,confirmLabel:isPay?'Remove':'Move back',danger:isPay}).then(function(ok){
+        if(!ok)return;
+        targets.forEach(function(e){
+            var f=families[e.familyKey]; if(!f)return;
+            var L=_payerLedgerOf(f), vid='prv_'+e.id;
+            if(L.some(function(x){return x&&x.id===vid}))return;
+            L.push({id:vid,payerId:pid,kind:'void',voidOf:e.id,amount:e.amount,date:today(),timestamp:Date.now()});
+            if(e.kind==='charge'){
+                if(!Array.isArray(f.charges))f.charges=[];
+                var chg={id:'prback_'+e.id,category:'Share moved back',description:(e.description||'Share')+' \u2014 moved back from '+name,
+                    amount:Number(e.amount)||0,date:today(),timestamp:Date.now()};
+                f.charges.push(chg); _postLedgerCharge(f,chg); f.balance=(f.balance||0)+chg.amount;
+            }
+        });
+        save(); closeModal('dynModal');
+        toast(isPay?fm(tot)+' payment removed \u2014 '+name+' owes '+fm(_payerAccount(pid).balance):fm(tot)+' moved back to '+targets[0].family+'\u2019s bill');
+        if(curPage==='familydetail')renderFamilyDetailPage(); else if(typeof renderBilling==='function')renderBilling();
+    });
 }
 
 // Every payment (amount > 0) belonging to this family that still has
@@ -24524,7 +24682,7 @@ window.CampistryMe={
     ptDownloadTemplate:ptDownloadTemplate,ptUploadTemplate:ptUploadTemplate,
     finSetTab:finSetTab,finAddStaff:finAddStaff,finEditStaff:finEditStaff,finStaffModal:finStaffModal,_staffPhotoPick:_staffPhotoPick,_staffPhotoClear:_staffPhotoClear,finRemoveStaff:finRemoveStaff,
     finAddExpense:finAddExpense,finRemoveExpense:finRemoveExpense,
-    finAddPayment:finAddPayment,finRemovePayment:finRemovePayment,recordPayerPayment:recordPayerPayment,
+    finAddPayment:finAddPayment,finRemovePayment:finRemovePayment,recordPayerPayment:recordPayerPayment,payerLines:payerLines,voidPayerLine:voidPayerLine,
     sendPayLink:sendPayLink,copyPayLink:copyPayLink,toggleBillingAccess:toggleBillingAccess,
     monthlyPlan:monthlyPlan,toggleFamilyAutopay:toggleFamilyAutopay,cancelMonthlyPlan:cancelMonthlyPlan,
     _mpGenerate:_mpGenerate,_mpBasis:_mpBasis,_mpPreview:_mpPreview,_mpAddRow:_mpAddRow,_mpUpdateTotal:_mpUpdateTotal,_mpSwitchTab:_mpSwitchTab,

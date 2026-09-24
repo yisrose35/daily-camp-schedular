@@ -878,7 +878,16 @@ window.openVoidSale = function(idx) {
     }
     const note = document.getElementById('voidNote'); if (note) note.value = '';
     const btn = document.getElementById('voidBtn'); if (btn) { btn.disabled = false; btn.textContent = 'Void sale'; }
+    // The history window closes first (TED-180): both are page-wide windows,
+    // and the void's opened underneath it, so pressing Void seemed to do
+    // nothing. Cancel, or a finished void, brings the history back.
+    closeM('history');
     openM('void');
+};
+window.cancelVoidSale = function() {
+    closeM('void');
+    _voidTarget = null;
+    if (_histCamper) { try { viewAccountHistory(_histCamper); } catch (_) {} }
 };
 window.confirmVoidSale = function() {
     const t = _voidTarget;
@@ -931,7 +940,7 @@ function _histRowHtml(t) {
     let label = t.items || (credit ? 'Deposit' : 'Purchase');
     if (auto) label = 'Auto-reload top-up';
     else if (isRefund) label = 'Refund';
-    else if (t.kind === 'refund_failed') label = 'Refund failed — money back on the wallet';
+    else if (t.kind === 'refund_failed') label = t.disputeWon ? (t.items || 'Dispute won — money back on the wallet') : 'Refund failed — money back on the wallet';
     else if (t.kind === 'closeout') label = t.items || 'Season close-out';
     else if (t.kind === 'void') label = t.items || 'Sale voided';
     else if (isCashOut) label = 'Cash out';
@@ -1425,15 +1434,24 @@ function buildOfflineExportData(data) {
     };
 }
 
+// The offline register this page hands out (TED-185): the same build as
+// OFFLINE_POS_BUILD inside campistry_snacks_pos_offline.html — bump both
+// together. The download asks for it by that version and never from the
+// browser's cache, so a stored older copy is never what a tablet gets.
+var OFFLINE_POS_BUILD = '20260924-02';
+
 window.downloadOfflinePOS = async function() {
     if (!_secEdit('offline-pos', 'Downloading offline POS data')) return;
     var statusEl = document.getElementById('offlinePosStatus');
     if (statusEl) statusEl.textContent = 'Preparing download...';
 
     try {
-        var resp = await fetch('campistry_snacks_pos_offline.html');
+        var resp = await fetch('campistry_snacks_pos_offline.html?v=' + OFFLINE_POS_BUILD, { cache: 'no-store' });
         if (!resp.ok) throw new Error('Could not load offline POS template');
         var html = resp.text ? await resp.text() : '';
+        if (html.indexOf("OFFLINE_POS_BUILD = '" + OFFLINE_POS_BUILD + "'") < 0) {
+            throw new Error('The offline register on the server is not the version this page expects — reload Snacks and try again');
+        }
 
         var live = await _withLiveCanteenRows();
         if (!live) throw new Error(OFFLINE_EXPORT_NEEDS_ROWS);

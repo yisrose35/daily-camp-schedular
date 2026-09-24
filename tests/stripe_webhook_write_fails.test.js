@@ -50,7 +50,50 @@ for (const [what, meta, rpc] of [
 
 test('TED-164: the database ANSWERS "not recorded" — also 500, as the Sola webhook does', () => {
     const r = deliver({ familyKey: 'gold' }, 'append_camp_payment',
-        `T.rpc.append_camp_payment = () => { if (++n === 1) return { success: false, error: 'camp_not_found' }; return { success: true }; };`);
+        `T.rpc.append_camp_payment = () => { if (++n === 1) return { success: false, error: 'lock_not_available' }; return { success: true }; };`);
     assert.deepStrictEqual(r.responses.map(x => x.status), [500, 200]);
     assert.strictEqual(r.tables.__receipts.length, 1);
+});
+
+// ── TED-183: a refusal that will never pass ─────────────────────────────────
+function never(meta, rpcName, code, extra) {
+    const event = { id: 'evt_p', type: 'payment_intent.succeeded', data: { object: {
+        id: 'pi_p1', amount: 2000, amount_received: 2000, payment_method_types: ['card'], metadata: Object.assign({ campId: 'camp1' }, meta) } } };
+    const body = JSON.stringify(event);
+    const t = Math.floor(Date.now() / 1000);
+    const sig = crypto.createHmac('sha256', 'whsec_test').update(`${t}.${body}`).digest('hex');
+    return runEdge('stripe-webhook', `
+T.env = { STRIPE_SECRET_KEY: 'sk_test', STRIPE_WEBHOOK_SECRET: 'whsec_test', SUPABASE_URL: 'http://db', SUPABASE_SERVICE_ROLE_KEY: 'svc', RESEND_API_KEY: 're_x' };
+T.tables.__receipts = [];
+T.fetch = (url: string) => { if (url.includes('/functions/v1/send-payment-receipt')) T.tables.__receipts.push(url); return {}; };
+T.rpc.${rpcName} = () => ({ success: false, error: '${code}' });
+const claimed: any = {};
+T.rpc.claim_refund_failure_alert = (a: any) => { if (claimed[a.p_refund_id]) return false; claimed[a.p_refund_id] = 1; return true; };
+T.rpc.release_refund_failure_alert = (a: any) => { delete claimed[a.p_refund_id]; return true; };
+${extra || ''}
+Object.defineProperty(T, 'requests', { get: () => [T.request, T.request] });
+T.request = { headers: { 'stripe-signature': 't=${t},v1=${sig}' }, rawBody: ${JSON.stringify(body)} };`);
+}
+
+test('TED-183: a top-up for a child number that is no longer anyone — the platform is told once, Stripe gets 200, no receipt', () => {
+    const r = never({ source: 'campistry-canteen-deposit', camperName: 'Avi', camperId: '7' }, 'credit_canteen_balance_from_stripe', 'unknown_camper');
+    assert.deepStrictEqual(r.responses.map(x => x.status), [200, 200], 'Stripe would retry for three days and then give up in silence');
+    assert.strictEqual(r.emails.length, 1, 'the platform was not told (or told twice)');
+    assert.match(r.emails[0].subject, /\$20\.00 payment could not be recorded/);
+    assert.match(r.emails[0].html, /unknown camper — this will not change/);
+    assert.strictEqual(r.tables.__receipts.length, 0, 'a receipt for a payment Campistry has no record of');
+});
+
+test('TED-183: a deposit for a deleted application — the same', () => {
+    const r = never({ source: 'registration_deposit', enrollmentId: 'app9' }, '_record_registration_deposit', 'application_not_found');
+    assert.deepStrictEqual(r.responses.map(x => x.status), [200, 200]);
+    assert.strictEqual(r.emails.length, 1);
+    assert.match(r.emails[0].html, /application app9/);
+});
+
+test('TED-183: the email does not go — 500 and the claim given back, so the next delivery tells the platform', () => {
+    const r = never({ source: 'campistry-canteen-deposit', camperName: 'Avi', camperId: '7' }, 'credit_canteen_balance_from_stripe', 'unknown_camper',
+        `let tries = 0; T.emailFails = () => ++tries === 1;`);
+    assert.deepStrictEqual(r.responses.map(x => x.status), [500, 200]);
+    assert.strictEqual(r.emails.length, 1);
 });

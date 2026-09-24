@@ -1280,6 +1280,7 @@ function renderSettingsBody() {
             '<div class="settings-row"><span class="label">Total Transactions</span><span class="value">' + transactions.length + '</span></div>' +
             '<div class="settings-row"><span class="label">Un-synced</span><span class="value' + (unsyncedCount > 0 ? ' warn' : '') + '">' + unsyncedCount + '</span></div>' +
             '<div class="settings-row"><span class="label">Exported</span><span class="value">' + exportedCount + '</span></div>' +
+            '<div class="settings-row"><span class="label">Register version</span><span class="value">' + OFFLINE_POS_BUILD + '</span></div>' +
         '</div>' +
         '<div class="settings-section">' +
             '<h4>Data</h4>' +
@@ -1672,6 +1673,9 @@ function updateChargeBtn() {
 // One sale at a time (TED-170): a double tap on a slow tablet used to record
 // two sales for one item — the charge waits on the tablet's storage before it
 // clears the cart, and nothing stopped a second tap in between.
+// This register's build (TED-185), shown under Settings — the office's
+// Download offline POS hands out the same one (campistry_snacks.js).
+var OFFLINE_POS_BUILD = '20260924-02';
 var _offlineCharging = false;
 POS.charge = async function() {
     if (!sel || !cart.length) return;

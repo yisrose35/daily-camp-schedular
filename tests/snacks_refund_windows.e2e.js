@@ -342,6 +342,46 @@ T.request = { headers: { Authorization: 'Bearer owner' }, body: { action: 'holds
         await waitFor('Refund All sent', () => page.evaluate(() => window.__fnCalls.some(c => c.fn === 'stripe-canteen-refund-all')), 10000).catch(() => {});
         check('pressing it runs Refund All, which looks the refund up in Stripe',
               await page.evaluate(() => window.__fnCalls.some(c => c.fn === 'stripe-canteen-refund-all')));
+
+        step(5, 'A $2 sale charged by mistake: Void it from the child\'s history (TED-175, TED-180)');
+        db.sql(`INSERT INTO camp_state_kv (camp_id, key, value) VALUES ('${CAMP}', 'campistrySnacks', '{}'::jsonb) ON CONFLICT DO NOTHING;
+                UPDATE camp_state_kv SET value = jsonb_set(value, '{inventory}', '[{"id":7,"name":"Ices","price":2,"stock":10,"soldToday":0,"totalSold":0}]'::jsonb)
+                 WHERE camp_id = '${CAMP}' AND key = 'campistrySnacks';`);
+        const sale = await page.evaluate(([n, id]) => window.CampistryDB.client.rpc('submit_canteen_purchase_once',
+            { p_camp_id: window.CampistryDB.getCampId(), p_sale_key: 'sale_e2e_void', p_camper_name: n, p_amount: 2, p_items: 'Ices', p_camper_id: id })
+            .then(r => r.data), [CAMPER, camperId]);
+        check('the sale went through', sale && sale.success, JSON.stringify(sale));
+        const balBefore = Number(db.json(`SELECT balance FROM camp_canteen_accounts WHERE camp_id='${CAMP}' AND account_key=${lit(CAMPER)}`)[0].balance);
+        await open('campistry_snacks.html', () => !!window.CampistrySnacks);
+        await page.waitForFunction((n) => (window.CampistrySnacks.getCamperList() || []).some(c => c.name === n), CAMPER, { timeout: 30000 });
+        await snacksNav('accounts');
+        errs = pageErrors.length;
+        await page.evaluate((n) => viewAccountHistory(n), CAMPER);
+        await page.waitForSelector('#m-history.open', { timeout: 10000 });
+        const voidBtn = await page.$('#histBody button[onclick^="openVoidSale("]');
+        check('the sale in the history has a Void button', !!voidBtn);
+        if (voidBtn) await voidBtn.click();
+        await page.waitForSelector('#m-void.open', { timeout: 10000 }).catch(() => {});
+        const onTop = await page.evaluate(() => {
+            const m = document.querySelector('#m-void .modal'); if (!m) return { ok: false };
+            const r = m.getBoundingClientRect();
+            const hit = document.elementFromPoint(r.left + r.width / 2, r.top + 20);
+            return { ok: !!hit && !!hit.closest('#m-void'), historyOpen: document.getElementById('m-history').classList.contains('open'),
+                     text: (document.getElementById('voidSummary') || {}).textContent || '' };
+        });
+        check('TED-180: the Void window is the one you see (on top, the history closed)', onTop.ok && !onTop.historyOpen, JSON.stringify(onTop));
+        check('it says the money goes back, not as a deposit', /not as a deposit/.test(onTop.text), JSON.stringify(onTop.text.slice(0, 160)));
+        await page.click('#voidBtn');
+        await waitFor('the void on the ledger', () => db.json(`SELECT count(*)::int AS n FROM canteen_transactions WHERE camp_id='${CAMP}' AND payload->>'kind'='void'`)[0].n === 1, 20000).catch(() => {});
+        const balAfter = Number(db.json(`SELECT balance FROM camp_canteen_accounts WHERE camp_id='${CAMP}' AND account_key=${lit(CAMPER)}`)[0].balance);
+        const stock = db.json(`SELECT value->'inventory'->0->>'stock' AS s FROM camp_state_kv WHERE camp_id='${CAMP}' AND key='campistrySnacks'`)[0].s;
+        check('the $2 is back on the balance, once', Math.abs(balAfter - balBefore - 2) < 0.001, balBefore + ' -> ' + balAfter);
+        check('the ices are back in stock (the register\'s own stock count is kept by record_canteen_sale_inventory, not called here)', Number(stock) === 11, String(stock));
+        await waitFor('the history back, with the sale marked voided', () => page.evaluate(() =>
+            document.getElementById('m-history').classList.contains('open') && /Voided/.test(document.getElementById('histBody').textContent)), 15000).catch(() => {});
+        check('the history comes back with the sale marked Voided', await page.evaluate(() =>
+            document.getElementById('m-history').classList.contains('open') && /Voided/.test(document.getElementById('histBody').textContent)));
+        check('no page error', pageErrors.length === errs, JSON.stringify(pageErrors.slice(errs)));
     } catch (e) {
         check('the run finished', false, e.message);
     } finally {

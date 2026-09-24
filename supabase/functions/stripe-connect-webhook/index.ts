@@ -454,6 +454,14 @@ const money = (cents: number) => `$${(cents / 100).toFixed(2)}`;
 async function handleTipReversal(supabase: ReturnType<typeof createClient>, event: Record<string, any>) {
   const obj = event.data.object || {};
   const isDispute = String(event.type).startsWith("charge.dispute.");
+  // An inquiry (warning_needs_response, warning_under_review, warning_closed)
+  // is the bank asking a question: no money has moved, so nothing is taken
+  // from the staff member (TED-182). If it becomes a real dispute, Stripe
+  // sends that as its own event.
+  if (isDispute && String(obj.status || "").startsWith("warning_")) {
+    console.log(`[stripe-connect-webhook] ${event.type} ${obj.id}: an inquiry (${obj.status}) — no money moved, the tip is left alone`);
+    return;
+  }
   const chargeId = String((isDispute ? obj.charge : obj.id) || "");
   let piId = String(obj.payment_intent || "");
   // The charge: its amount, what was refunded, and (for a single tip) the
@@ -500,7 +508,10 @@ async function handleTipReversal(supabase: ReturnType<typeof createClient>, even
         // the parent's bank has the money (a dispute is paid from the
         // platform's balance at once). A won dispute takes nothing more.
         const { data: prev } = await supabase.from("link_tips").select("dispute_status").eq("id", tip.id).maybeSingle();
-        const dispNow = disputeStatus || prev?.dispute_status || null;
+        // A dispute already decided stays decided: an "opened" or "updated"
+        // message that arrives after the "closed" one takes nothing (TED-182).
+        const decided = prev?.dispute_status === "won" || prev?.dispute_status === "lost";
+        const dispNow = (decided && disputeStatus === "open") ? prev.dispute_status : (disputeStatus || prev?.dispute_status || null);
         const want = Math.min(Number(tr.amount) || tipCents,
           Math.max(refundCents, dispNow === "open" || dispNow === "lost" ? tipCents : 0));
         if (want > reversed) {

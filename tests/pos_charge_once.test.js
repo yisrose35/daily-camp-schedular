@@ -37,7 +37,7 @@ function chargeCode(src) {
 // answering on a later tick. `lose` = which request numbers lose their answer
 // after the server has done its work.
 function register({ lose = [], noOnce = false, refuse = false } = {}) {
-    const db = { balance: 10, debits: 0, keys: {}, calls: [] };
+    const db = { balance: 10, debits: 0, keys: {}, calls: [], sold: [] };
     const toasts = [];
     const btn = { disabled: false, textContent: '' };
     const ctx = {
@@ -60,6 +60,7 @@ function register({ lose = [], noOnce = false, refuse = false } = {}) {
         rpc: (fn, args) => new Promise((resolve) => setTimeout(() => {
             const i = ++n;
             db.calls.push(fn);
+            if (fn === 'record_canteen_sale_inventory') db.sold.push(JSON.parse(JSON.stringify(args.p_items)));
             let out;
             if (fn === 'submit_canteen_purchase_once' && noOnce) out = { data: null, error: { code: 'PGRST202', message: 'Could not find the function' } };
             else if (fn === 'submit_canteen_purchase_once') {
@@ -161,4 +162,6 @@ test('TED-169: starting the next child\'s sale while "Charging…" — that cart
     await settle();
     assert.deepStrictEqual(JSON.parse(JSON.stringify(r.state())), { sel: 'Bina', cart: 2 }, 'Bina\'s cart was wiped');
     assert.deepStrictEqual(r.stock(), [[1, 9, 1], [2, 50, 0]], 'Chips were counted as sold');
+    // TED-184: and the server is told what THIS sale sold, not the new cart
+    assert.deepStrictEqual(r.db.sold, [[{ id: 1, qty: 1 }]], 'the server was told the wrong items were sold');
 });

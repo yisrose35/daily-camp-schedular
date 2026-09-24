@@ -86,3 +86,14 @@ test('TED-171: Clear All Data says what would be lost', () => {
     assert.match(HTML, /Check the office imported the exported file/);
     assert.match(HTML, /onclick="POS\.exportAllTransactions\(\)"/);
 });
+
+test('TED-185: the office hands out this register\'s build, never a stored older copy, and the tablet shows it', () => {
+    const SN = fs.readFileSync(path.join(__dirname, '..', 'campistry_snacks.js'), 'utf8');
+    const office = SN.match(/var OFFLINE_POS_BUILD = '([^']+)'/);
+    const tablet = HTML.match(/var OFFLINE_POS_BUILD = '([^']+)'/);
+    assert.ok(office && tablet, 'a build number is missing');
+    assert.strictEqual(office[1], tablet[1], 'Snacks and the offline register must be bumped together');
+    assert.match(SN, /fetch\('campistry_snacks_pos_offline\.html\?v=' \+ OFFLINE_POS_BUILD, \{ cache: 'no-store' \}\)/);
+    assert.match(SN, /is not the version this page expects/);
+    assert.match(HTML, /Register version<\/span><span class="value">' \+ OFFLINE_POS_BUILD/);
+});

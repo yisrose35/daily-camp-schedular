@@ -1,5 +1,5 @@
 -- ============================================================================
--- Confirm migrations 222-285 are in and doing their job.
+-- Confirm migrations 222-287 are in and doing their job.
 --
 -- Paste the whole thing into the Supabase SQL Editor. It is READ ONLY — one
 -- SELECT, nothing is created, changed or deleted, and the two purge functions
@@ -731,6 +731,8 @@ UNION ALL
           WHEN pg_get_functiondef(COALESCE(to_regprocedure('public._get_canteen_history__by_name(uuid,text,text,integer)'),
                                            to_regprocedure('public.get_canteen_history(uuid,text,text,integer)'))) !~ 'x\.sig'
           THEN 'apply 284 again — older sales in a child''s history cannot be voided'
+          WHEN pg_get_functiondef(to_regprocedure('public.canteen_void_sale(uuid,text,jsonb,text)')) !~ 'sale_items'
+          THEN 'apply 284 again — an earlier copy is in place: a void can put back in stock more than the sale had'
           ELSE 'ok' END),
     -- A refunded or disputed staff tip is marked and taken back (TED-176).
     ('285  a refunded or disputed tip is taken back',
@@ -739,6 +741,19 @@ UNION ALL
           THEN 'apply 285 BEFORE deploying stripe-connect-webhook — a refunded or disputed tip stays with the staff member and the webhook answers 500'
           WHEN has_function_privilege('authenticated', 'public.record_tip_reversal(uuid,numeric,text,numeric,text)', 'EXECUTE')
           THEN 'apply 285 again — a signed-in browser can change a tip''s refund record'
+          ELSE 'ok' END),
+    -- A fund's share of a split bill survives an old office computer (TED-177).
+    ('286  an old computer keeps a fund''s share',
+     CASE WHEN pg_get_functiondef(to_regprocedure('public._merge_family_from_page(jsonb,jsonb)')) !~ '_keep_payer_ledger'
+          THEN 'apply 286 BEFORE reloading Me — an office computer left open wipes a fund''s share of a split bill and its cheques'
+          ELSE 'ok' END),
+    -- A canteen top-up refunded in Stripe or disputed comes off the wallet (TED-181).
+    ('287  a top-up refunded outside Campistry comes off the wallet',
+     CASE WHEN to_regprocedure('public.record_canteen_stripe_reversal(uuid,text,text,numeric,text,text)') IS NULL
+               OR NOT public.is_money_notice('canteen_reversed')
+          THEN 'apply 287 BEFORE deploying stripe-webhook — a top-up refunded in Stripe or disputed stays on the child''s wallet, and the webhook answers 500'
+          WHEN has_function_privilege('authenticated', 'public.record_canteen_stripe_reversal(uuid,text,text,numeric,text,text)', 'EXECUTE')
+          THEN 'apply 287 again — a signed-in browser can take money off a wallet'
           ELSE 'ok' END)
     ) AS x(item, result)
 
