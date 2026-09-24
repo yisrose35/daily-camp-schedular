@@ -12,6 +12,7 @@
 const test = require('node:test');
 const assert = require('node:assert');
 const { runEdge } = require('./edge_harness');
+const { HOLDS } = require('./canteen_wallet_model');
 
 const CASES = { one: [50], two: [50, 50], small: [10, 50] };
 
@@ -45,6 +46,7 @@ T.rpc.refund_canteen_deposit_from_stripe = (a: any) => {
   tx.push({ kind: 'refund', stripePaymentIntentId: a.p_payment_intent_id, amount: a.p_amount, stripeRefundId: a.p_refund_id, camperId: 7 });
   bal -= a.p_amount; return { success: true, balance: bal };
 };
+${HOLDS}
 const seen: Record<string, any> = {}; let n = 0; let posts = 0;
 T.tables.__money = [];
 T.fetch = (url: string, init: any) => {
@@ -84,6 +86,7 @@ T.rpc.refund_canteen_deposit_from_processor = (a: any) => {
   tx.push({ kind: 'refund', byopTransactionId: a.p_external_transaction_id, amount: a.p_amount, camperId: 7 });
   bal -= a.p_amount; return { success: true, balance: bal };
 };
+${HOLDS}
 let n = 0; T.tables.__money = [];
 T.fetch = (url: string, init: any) => {
   if (String(init.body || '').includes('cc%3Arefund')) {
@@ -116,6 +119,12 @@ for (const mode of ['lost', 'netlost', 'partfail', 'race']) {
                 assert.ok(m <= 20.0001, `$${m} went back to the card: ${JSON.stringify(r.tables.__money)} — answers ${JSON.stringify(answers(r))}`);
                 const known = mode !== 'netlost' || fn === 'stripe-canteen-refund';   // Stripe answers a re-ask; Cardknox leaves it to the office
                 if (known) assert.strictEqual(m, 20, `$${m} refunded, not 20: ${JSON.stringify(answers(r))}`);
+                // the wallet (275): down by exactly what went back to the card —
+                // including a refund made whose answer never came back, which
+                // stays off the wallet until the office has checked
+                const start = deps.reduce((t, a) => t + a, 0);
+                const want = Math.round((start - m) * 100) / 100;
+                assert.strictEqual(r.tables.__bal, want, `the wallet ended at $${r.tables.__bal}, not $${want}: ${JSON.stringify(answers(r))}`);
                 for (const a of answers(r)) {
                     assert.ok(!(a.error && !a.uncertain && m >= 20), 'told "' + a.error + '" though the refund went through');
                 }
@@ -123,3 +132,36 @@ for (const mode of ['lost', 'netlost', 'partfail', 'race']) {
         }
     }
 }
+
+// ── TED-115: Stripe cut off again while re-asking an unconfirmed part ──────
+test('TED-115: a second lost Stripe answer on the re-ask says "may have gone through", and $20 moves once', () => {
+    const r = runEdge('stripe-canteen-refund', `
+T.env = { STRIPE_SECRET_KEY: 'sk_test', SUPABASE_URL: 'http://db', SUPABASE_ANON_KEY: 'anon', SUPABASE_SERVICE_ROLE_KEY: 'svc' };
+T.users = { owner: 'u-owner' };
+T.tables.camps = [{ id: 'camp1', owner: 'u-owner' }];
+${CLAIMS}
+const tx: any[] = [{ kind: 'deposit', method: 'stripe', stripePaymentIntentId: 'pi_top1', amount: 50, camper: 'Avi', camperId: 7, timestamp: 1 }];
+let bal = 50;
+T.rpc.canteen_refund_view = () => ({ success: true, accounts: { Avi: { camperId: 7, balance: bal, balanceFloor: 0 } }, transactions: JSON.parse(JSON.stringify(tx)) });
+${HOLDS}
+const seen: Record<string, any> = {}; let posts = 0, n = 0; T.tables.__money = [];
+T.fetch = (url: string, init: any) => {
+  if (init.method === 'POST' && url.endsWith('/refunds')) {
+    posts++; const k = init.headers['Idempotency-Key'];
+    if (!seen[k]) { n++; seen[k] = { id: 're_' + n, status: 'succeeded' }; T.tables.__money.push('pi_top1 $' + Number(new URLSearchParams(init.body).get('amount')) / 100); }
+    if (posts <= 2) throw new Error('connection reset');   // presses 1 and 2: made, answer lost
+    return seen[k];
+  }
+  if (url.includes('/payment_intents/')) return { id: 'pi_top1', transfer_data: null };
+  return {};
+};
+const req = { headers: { Authorization: 'Bearer owner' }, body: { camperId: 7, camperName: 'Avi', amount: 20, idempotencyKey: 'cref_1' } };
+T.requests = [req, req, req];`);
+    const [a, b, c] = r.responses.map(x => x.body);
+    assert.strictEqual(a.uncertain, true, 'press 1: ' + JSON.stringify(a));
+    assert.strictEqual(b.uncertain, true, 'press 2 showed a raw error: ' + JSON.stringify(b));
+    assert.ok(!/connection reset/.test(String(b.error)), 'press 2: ' + b.error);
+    assert.strictEqual(c.totalRefunded, 20, 'press 3: ' + JSON.stringify(c));
+    assert.deepStrictEqual(r.tables.__money, ['pi_top1 $20']);
+    assert.strictEqual(r.tables.__bal, 30);
+});

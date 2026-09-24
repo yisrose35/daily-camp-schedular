@@ -97,7 +97,9 @@ test('the claim key is DERIVED FROM THE REQUEST, not a constant', () => {
     // for this refund when it sends one (TED-105), else on the deposit and what
     // is left on it (TED-093).
     // (one part per top-up per refund; behaviour in tests/refund_lost_answer.test.js)
-    assert.match(CANTEEN, /\? `canteen:\$\{reqKey\}:\$\{dep\.externalTransactionId\}`\s*: `canteen:\$\{dep\.externalTransactionId\}:\$\{Math\.round\(dep\.remaining \* 100\)\}:\$\{chunkCents\}`;/);
+    // (the amount part is the reserved amount, 275)
+    assert.match(CANTEEN, /\? `canteen:\$\{reqKey\}:\$\{dep\.externalTransactionId\}`\s*: `canteen:\$\{dep\.externalTransactionId\}:\$\{Math\.round\(dep\.remaining \* 100\)\}:\$\{Math\.round\(amt \* 100\)\}`;/);
+    assert.match(CANTEEN, /const chunkKey = holdKey;/);
     assert.match(CANTEEN_ALL, /typeof body\.idempotencyKey === "string" && body\.idempotencyKey\.trim\(\)/);
     // And the claim is actually gated on having one, not skipped outright.
     assert.match(REFUND, /if \(claimKey\) \{[\s\S]{0,200}claim_refund_intent/);
@@ -111,7 +113,7 @@ test('a claim that loses replays the first answer instead of refunding again', (
     // ...but only a SETTLED one (TED-093); one never confirmed stops instead.
     // The settled one is COUNTED toward this refund first (TED-109), so the
     // loop never goes on to refund the same money from the next top-up.
-    assert.match(CANTEEN, /if \(claim && claim\.claimed === false\) \{\s*if \(claim\.previous && claim\.previous\.externalTransactionId\) \{[\s\S]{0,700}remainingToRefund = round2\(remainingToRefund - doneAmt\);\s*continue;/);
+    assert.match(CANTEEN, /if \(claim && claim\.claimed === false\) \{\s*if \(claim\.previous && claim\.previous\.externalTransactionId\) \{[\s\S]{0,1000}remainingToRefund = round2\(remainingToRefund - doneAmt\);\s*continue;/);
     assert.match(CANTEEN_ALL, /if \(claim && claim\.claimed === false\) \{[\s\S]{0,700}continue;/);
 });
 
@@ -124,13 +126,14 @@ test('the claim records the answer so a retry has something to replay', () => {
 test('the canteen keys are per CHUNK, not per request', () => {
     // Each chunk is its own processor call against its own deposit, so a resumed
     // run has to be able to skip exactly what it finished.
-    assert.match(CANTEEN, /\$\{dep\.externalTransactionId\}:\$\{Math\.round\(dep\.remaining \* 100\)\}:\$\{chunkCents\}/);
+    assert.match(CANTEEN, /\$\{dep\.externalTransactionId\}:\$\{Math\.round\(dep\.remaining \* 100\)\}:\$\{Math\.round\(amt \* 100\)\}/);
     // The camper part is their NUMBER when the account has one: two children who
     // share a name must not share a claim (the second would be skipped as
     // "already settled"). The name only for an account with no number.
     // Refund-all uses the SAME per-money key as the single refund (TED-093):
     // Snacks sends no key, and a deposit id is unique however children are named.
-    assert.match(CANTEEN_ALL, /const chunkKey = `canteen:\$\{dep\.externalTransactionId\}:\$\{Math\.round\(dep\.remaining \* 100\)\}:\$\{chunkCents\}`;/);
+    assert.match(CANTEEN_ALL, /const keyFor = \(amt: number\) => `canteen:\$\{dep\.externalTransactionId\}:\$\{Math\.round\(dep\.remaining \* 100\)\}:\$\{Math\.round\(amt \* 100\)\}`;/);
+    assert.match(CANTEEN_ALL, /const chunkKey = holdKey;/);
 });
 
 test('refund-all can still be called with no body at all', () => {

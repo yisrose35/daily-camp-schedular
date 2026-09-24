@@ -687,18 +687,52 @@ const RISK_EVENT_TYPES = new Set([
 // Best-effort and never throws: a failure here must not make the webhook return
 // non-2xx, because Stripe would retry the whole event and the platform email
 // would go out again.
+// A GET against the platform's Stripe account; null when it cannot answer.
+async function stripeGetJson(path: string): Promise<Record<string, any> | null> {
+  if (!STRIPE_SECRET) return null;
+  try {
+    const resp = await fetch(`${STRIPE_API}${path}`, { headers: { "Authorization": `Bearer ${STRIPE_SECRET}` } });
+    const out = await resp.json();
+    return out && !out.error ? out : null;
+  } catch (_) { return null; }
+}
+
+// Which camp a charge, refund or dispute belongs to. Campistry stamps campId on
+// the PaymentIntent (and so the charge made from it). A DISPUTE is its own
+// object and Stripe does not copy that metadata onto it (TED-114): read it
+// from the payment the dispute is about.
+async function campIdFor(obj: Record<string, any>): Promise<string | null> {
+  if (obj?.metadata?.campId) return String(obj.metadata.campId);
+  const piId = typeof obj?.payment_intent === "string" ? obj.payment_intent : obj?.payment_intent?.id;
+  if (piId) {
+    const pi = await stripeGetJson(`/payment_intents/${encodeURIComponent(piId)}`);
+    if (pi?.metadata?.campId) return String(pi.metadata.campId);
+  }
+  const chId = typeof obj?.charge === "string" ? obj.charge : obj?.charge?.id;
+  if (chId) {
+    const ch = await stripeGetJson(`/charges/${encodeURIComponent(chId)}`);
+    if (ch?.metadata?.campId) return String(ch.metadata.campId);
+  }
+  return null;
+}
+
 async function handleChargeRefunded(
   supabase: ReturnType<typeof createClient>,
   event: Record<string, any>,
 ) {
   const charge = event.data.object || {};
-  const campId = charge.metadata?.campId || null;
+  const campId = await campIdFor({ metadata: charge.metadata, payment_intent: charge.payment_intent });
 
   // Stripe sends the whole charge with its refunds list, and re-sends it on
   // every subsequent partial refund. So post each refund individually, keyed on
   // its own id — otherwise a second partial refund would either be missed or
-  // would re-post the first.
-  const refunds: Record<string, any>[] = charge.refunds?.data || [];
+  // would re-post the first. Newer API versions leave the list off the charge,
+  // so it is then asked for.
+  let refunds: Record<string, any>[] = Array.isArray(charge.refunds?.data) ? charge.refunds.data : [];
+  if (!refunds.length && charge.id) {
+    const list = await stripeGetJson(`/refunds?charge=${encodeURIComponent(String(charge.id))}&limit=100`);
+    refunds = Array.isArray(list?.data) ? list.data : [];
+  }
   if (!refunds.length) return;
 
   if (!campId) {
@@ -748,10 +782,11 @@ async function handleDisputeLedger(
   const refs = [obj.payment_intent, obj.charge, obj.id]
     .filter(Boolean).map(String);
 
-  // Which camp? The charge's metadata carries campId on every path that takes
-  // money. Without it there is nothing to post against and guessing would put a
+  // Which camp? The PAYMENT's metadata carries campId on every path that takes
+  // money; the dispute's own metadata is empty (TED-114), so the payment is
+  // asked. Without it there is nothing to post against and guessing would put a
   // chargeback on the wrong camp's books.
-  const campId = obj.metadata?.campId || event.data.object?.metadata?.campId || null;
+  const campId = await campIdFor(obj);
   if (!campId) {
     console.error(`[stripe-webhook] dispute ${disputeId} has no campId in metadata — ` +
       `cannot post it to a ledger; reconcile by hand (refs: ${refs.join(", ")})`);

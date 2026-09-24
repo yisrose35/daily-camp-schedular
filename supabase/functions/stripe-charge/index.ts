@@ -152,7 +152,12 @@ async function stripePost(endpoint: string, body: Record<string, string>, idempo
     headers,
     body: new URLSearchParams(body).toString(),
   });
-  return resp.json();
+  const out = await resp.json();
+  // A "no" Stripe stands by (a 4xx it keeps for the key: a decline, a bad
+  // request) is definite. A 5xx, a 409 (the same key still running) or a 429
+  // decides nothing — the charge may yet be made.
+  if (out && typeof out === "object" && out.error) out.__definite = resp.status >= 400 && resp.status < 500 && resp.status !== 409 && resp.status !== 429;
+  return out;
 }
 
 async function stripeGet(endpoint: string) {
@@ -268,9 +273,19 @@ serve(async (req) => {
     }
 
     const claimKey = typeof idempotencyKey === "string" && idempotencyKey.trim() ? idempotencyKey.trim() : "";
-    const paymentIntent = await stripePost("/payment_intents", params,
-      claimKey ? `charge:${authedCampId}:${claimKey}` : undefined);
+    const unsure = (why: string) => new Response(JSON.stringify({ uncertain: true,
+      error: `Stripe did not give a final answer (${why}), so this charge may have gone through. Check the family's payments or the Stripe dashboard before charging again — pressing Charge Card again for the same amount is safe: Stripe answers with the first charge instead of making a second.` }),
+      { status: 200, headers: { ...corsHeaders, "Content-Type": "application/json" } });
+    let paymentIntent: any;
+    try {
+      paymentIntent = await stripePost("/payment_intents", params,
+        claimKey ? `charge:${authedCampId}:${claimKey}` : undefined);
+    } catch (e) {
+      // Cut off after Stripe may have charged (TED-111): never "failed".
+      return unsure((e as Error).message || "no answer");
+    }
 
+    if (paymentIntent.error && !paymentIntent.__definite) return unsure(paymentIntent.error.message || "no answer");
     if (paymentIntent.error) {
       // If card requires authentication, return the client secret
       // so frontend can handle 3D Secure
@@ -285,7 +300,10 @@ serve(async (req) => {
           { status: 200, headers: { ...corsHeaders, "Content-Type": "application/json" } }
         );
       }
-      throw new Error(paymentIntent.error.message);
+      // A definite decline: nothing was charged. Said as such (TED-111), so
+      // the page starts a fresh charge next time instead of replaying this one.
+      return new Response(JSON.stringify({ declined: true, error: paymentIntent.error.message || "Declined" }),
+        { status: 200, headers: { ...corsHeaders, "Content-Type": "application/json" } });
     }
 
     console.log(`[stripe-charge] PaymentIntent ${paymentIntent.id}: ${paymentIntent.status} — $${amount}`);

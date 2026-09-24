@@ -172,6 +172,7 @@ function depositsFor(
   who: { camperId: number | null; camperName: string },
   transactions: Record<string, any>[],
   processorKey: string,
+  holds: Record<string, any>[] = [],
 ): DepositRemainder[] {
   // By camper ID when the account has one (250): the account's key is the
   // spelling at the time, and a renamed or same-named child shares spellings.
@@ -180,9 +181,12 @@ function depositsFor(
   return transactions
     .filter((t) => t && mine(t) && t.kind === "deposit" && t.method === processorKey && t.byopTransactionId)
     .map((dep) => {
+      // what is already refunded from it, and what another refund has on its way from it (275)
       const refundedSoFar = transactions
         .filter((t) => t && t.kind === "refund" && t.byopTransactionId === dep.byopTransactionId)
-        .reduce((sum, t) => sum + (Number(t.amount) || 0), 0);
+        .reduce((sum, t) => sum + (Number(t.amount) || 0), 0)
+        + holds.filter((h) => h.method === processorKey && h.paymentRef === dep.byopTransactionId)
+            .reduce((sum, h) => sum + (Number(h.amount) || 0), 0);
       return {
         externalTransactionId: dep.byopTransactionId as string,
         remaining: round2((Number(dep.amount) || 0) - refundedSoFar),
@@ -202,13 +206,25 @@ async function refundOneCamper(
   walletAvailable: number,
   transactions: Record<string, any>[],
   batchKey: string | null,
+  holds: Record<string, any>[] = [],
 ): Promise<{ camperId: number | null; camperName: string; refunded: number; skipped?: string; error?: string }> {
   const { camperId, camperName } = who;
-  const deposits = depositsFor(who, transactions, processorKey);
+  const deposits = depositsFor(who, transactions, processorKey, holds);
   const processorCapacity = round2(deposits.reduce((sum, d) => sum + d.remaining, 0));
   const targetAmount = round2(Math.min(walletAvailable, processorCapacity));
 
+  // An earlier refund of this child's money that the card company never
+  // confirmed (275): its money stays off the wallet — it may be with the
+  // parent — and the office is told, every run, until someone has looked.
+  const mineHold = (h: Record<string, any>) => (camperId != null && h.camperId != null) ? String(h.camperId) === String(camperId) : h.accountKey === camperName;
+  const stale = holds.filter((h) => mineHold(h) && Number(h.ageSeconds) >= 180);
+  const staleAmt = round2(stale.reduce((t, h) => t + (Number(h.amount) || 0), 0));
+  const staleNote = stale.length
+    ? `An earlier refund of $${staleAmt.toFixed(2)} for this child was never confirmed by the card company — check the processor's dashboard, then use Refund on this child to settle it.`
+    : null;
+
   if (targetAmount <= 0) {
+    if (staleNote) return { camperId, camperName, refunded: 0, error: staleNote };
     return {
       camperId, camperName,
       refunded: 0,
@@ -222,24 +238,51 @@ async function refundOneCamper(
   let refunded = 0;
   for (const dep of deposits) {
     if (remainingToRefund <= 0) break;
-    const chunk = round2(Math.min(dep.remaining, remainingToRefund));
+    let chunk = round2(Math.min(dep.remaining, remainingToRefund));
     if (chunk <= 0) continue;
 
     try {
+      const keyFor = (amt: number) => `canteen:${dep.externalTransactionId}:${Math.round(dep.remaining * 100)}:${Math.round(amt * 100)}`;
+      // TAKE THE MONEY OFF THE WALLET FIRST (275, TED-110), at this child's
+      // turn and in one locked step — not from the balances read when the run
+      // started. A refund of this child from another computer, or a sale, since
+      // then is seen here; whichever reserves first has the money.
+      const reserve = (amt: number) => service.rpc("reserve_canteen_refund", {
+        p_camp_id: campId, p_camper_id: camperId, p_camper_name: camperName,
+        p_hold_key: keyFor(amt), p_amount: amt, p_method: processorKey, p_payment_ref: String(dep.externalTransactionId) });
+      let { data: held, error: holdErr } = await reserve(chunk);
+      if (!holdErr && held && held.success === false && held.error === "insufficient") {
+        const avail = round2(Number(held.available) || 0);
+        if (avail <= 0) {
+          if (refunded > 0 || staleNote) break;
+          return { camperId, camperName, refunded, skipped: "the balance changed during the run (another refund or a sale took it)" };
+        }
+        chunk = round2(Math.min(chunk, avail));
+        ({ data: held, error: holdErr } = await reserve(chunk));
+      }
+      if (holdErr || !held || held.success !== true) {
+        throw new Error("Could not set this child's refund money aside, so nothing was sent: " + (holdErr?.message || held?.error || "no answer"));
+      }
+      if (held.existing && held.state === "posted") {
+        console.log(`[canteen-refund-all] already refunded, skipping: ${keyFor(chunk)}`);
+        continue;
+      }
+      if (held.existing) chunk = round2(Number(held.amount) || chunk);   // its reservation decides the amount
+      const holdKey = keyFor(chunk);
       const chunkCents = Math.round(chunk * 100);
       // CLAIM BEFORE THE PROCESSOR. This function refunds a whole camp's wallets
       // in one invocation, so a timeout partway through is the likeliest way it
       // gets run twice — and without a claim the campers it already reached would
       // be refunded again. Keyed per camper AND per deposit chunk so a resumed run
       // skips exactly what it finished.
-      // The camper part of the key is their number when the account has one:
-      // two children who share a name must not share a claim.
-      // Keyed on the deposit and what is left on it — the SAME key the single
-      // canteen refund uses — never on a request key: Snacks sends none, so
-      // nothing was ever claimed and a re-run after a lost answer refunded the
-      // child again (TED-093). One key per money, whichever button spends it.
+      // Keyed on the deposit and what is left on it, never on a request key:
+      // Snacks sends none, so nothing was ever claimed and a re-run after a
+      // lost answer refunded the child again (TED-093). A single refund of the
+      // same child uses its own page key; what keeps the two from both
+      // spending the same money is the wallet reservation above (275, TED-110),
+      // not a shared key.
       void batchKey;
-      const chunkKey = `canteen:${dep.externalTransactionId}:${Math.round(dep.remaining * 100)}:${chunkCents}`;
+      const chunkKey = holdKey;
       if (chunkKey) {
         const { data: claim } = await service.rpc("claim_refund_intent", {
           p_camp_id: campId, p_key: chunkKey, p_amount: chunk,
@@ -252,6 +295,8 @@ async function refundOneCamper(
             return { camperId, camperName, refunded, error: "An earlier refund for this camper was never confirmed by the card company — check the processor's dashboard." };
           }
           console.log(`[canteen-refund-all] already settled, skipping: ${chunkKey}`);
+          await service.rpc("settle_canteen_refund_hold", { p_camp_id: campId, p_hold_key: holdKey,
+            p_refund_id: String(claim.previous.externalTransactionId) });
           continue;
         }
       }
@@ -264,9 +309,11 @@ async function refundOneCamper(
         throw new Error("The card company did not answer, so this camper's refund may or may not have gone through — check the processor's dashboard.");
       }
       if (!refundResult.success) {
+        // A definite "no": nothing moved. The claim and the money go back.
         if (chunkKey) {
           await service.rpc("release_refund_intent", { p_camp_id: campId, p_key: chunkKey });
         }
+        await service.rpc("release_canteen_refund_hold", { p_camp_id: campId, p_hold_key: holdKey });
         throw new Error(refundResult.error || "Refund failed");
       }
       if (chunkKey) {
@@ -287,14 +334,11 @@ async function refundOneCamper(
         p_raw_response: refundResult.raw ? JSON.parse(JSON.stringify(refundResult.raw)) : null,
       });
 
-      const { error: creditErr } = await service.rpc("refund_canteen_deposit_from_processor", {
-        p_camp_id: campId,
-        p_camper_id: camperId, p_camper_name: camperName,
-        p_amount: chunk,
-        p_processor_key: processorKey,
-        p_external_transaction_id: dep.externalTransactionId,
-        p_refund_external_id: refundResult.externalTransactionId,
-      });
+      // The refund line goes on the wallet's ledger; the money came off when
+      // it was reserved, so the balance does not move again (275).
+      const { data: posted, error: postErr } = await service.rpc("settle_canteen_refund_hold", {
+        p_camp_id: campId, p_hold_key: holdKey, p_refund_id: String(refundResult.externalTransactionId) });
+      const creditErr = postErr || (posted && posted.success === true ? null : { message: String(posted?.error || "no answer") });
       if (creditErr) {
         console.error(`[payments-canteen-refund-all] refund ${refundResult.externalTransactionId} succeeded ` +
           `but the canteen ledger was not updated for camper ${camperId ?? "(no number)"} ${camperName}: ${creditErr.message}`);
@@ -310,7 +354,7 @@ async function refundOneCamper(
     }
   }
 
-  return { camperId, camperName, refunded };
+  return staleNote ? { camperId, camperName, refunded, error: staleNote } : { camperId, camperName, refunded };
 }
 
 async function mapWithConcurrency<T, R>(items: T[], limit: number, fn: (item: T) => Promise<R>): Promise<R[]> {
@@ -364,16 +408,22 @@ serve(async (req) => {
 
     const accounts: Record<string, any> = accountsData.accounts || {};
     const transactions: Record<string, any>[] = accountsData.transactions || [];
+    const holds: Record<string, any>[] = Array.isArray(accountsData.holds) ? accountsData.holds : [];
 
     // Each account with its camper number (250); the account key rides along
-    // as the name, for the fallback of an account with no number.
+    // as the name, for the fallback of an account with no number. A child
+    // whose earlier refund was never confirmed is listed too, so the office
+    // hears about it (275).
     const candidates = Object.entries(accounts)
       .map(([accountKey, acct]) => {
         const a = acct || {};
         const walletAvailable = Math.max(0, round2((Number(a.balance) || 0) - (Number(a.balanceFloor) || 0)));
-        return { who: { camperId: a.camperId != null ? Number(a.camperId) : null, camperName: accountKey }, walletAvailable };
+        const who = { camperId: a.camperId != null ? Number(a.camperId) : null, camperName: accountKey };
+        const staleHold = holds.some((h) => Number(h.ageSeconds) >= 180 &&
+          ((who.camperId != null && h.camperId != null) ? String(h.camperId) === String(who.camperId) : h.accountKey === accountKey));
+        return { who, walletAvailable, staleHold };
       })
-      .filter((c) => c.walletAvailable > 0);
+      .filter((c) => c.walletAvailable > 0 || c.staleHold);
 
     if (!candidates.length) {
       return json({ totalRefunded: 0, refundedCount: 0, skippedCount: 0, failedCount: 0, details: [] });
@@ -387,7 +437,7 @@ serve(async (req) => {
 
     const results = await mapWithConcurrency(candidates, CONCURRENCY, (c) =>
       refundOneCamper(service, authedCampId, processorKey, credResult.credentials,
-                      c.who, c.walletAvailable, transactions, batchKey)
+                      c.who, c.walletAvailable, transactions, batchKey, holds)
     );
 
     let totalRefunded = 0, refundedCount = 0, skippedCount = 0, failedCount = 0;

@@ -207,6 +207,9 @@ const MIGRATIONS = [
     '271_parents_see_what_the_server_records',
     '272_an_old_tab_keeps_the_shops_charges',
     '273_a_refund_is_released_only_when_it_is_old',
+    '275_a_canteen_refund_takes_its_money_first',
+    '276_an_unanswered_autopay_charge_waits_for_the_office',
+    '277_billing_answers_only_its_own_camp',
 ];
 
 // The one thing the stubs deliberately get wrong for our purposes: they define

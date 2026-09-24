@@ -38,6 +38,8 @@ function world(answers) {
         showModal: (_t, _h, cb) => { ctx._modalDone = cb(); },
         closeModal() {}, renderBilling() {}, renderFamilyDetailPage() {}, save() {}, _postPaymentEntry() { return true; },
         getCampId: () => 'camp1',
+        // the charge being made, kept in this browser until it settles (TED-111)
+        localStorage: (() => { const m = {}; return { getItem: (k) => (k in m ? m[k] : null), setItem: (k, v) => { m[k] = String(v); } }; })(),
         callEdgeFunctionAuthed: async (fn, body) => {
             calls.push({ fn, body });
             const a = answers[body.customerId];
@@ -46,14 +48,16 @@ function world(answers) {
         },
     };
     vm.createContext(ctx);
-    vm.runInContext(cut('chargeStoredCard') + '\n' + cut('batchCharge') + '\nthis.chargeStoredCard=chargeStoredCard;this.batchCharge=batchCharge;', ctx);
+    const pending = ['_pendingChargeStoreKey', '_pendingChargeAll', '_pendingChargeGet', '_pendingChargeSet', '_pendingChargeClear'].map(cut).join('\n');
+    vm.runInContext(cut('chargeStoredCard') + '\n' + cut('batchCharge') + '\n' + pending + '\nthis.chargeStoredCard=chargeStoredCard;this.batchCharge=batchCharge;', ctx);
     return ctx;
 }
 
 test('TED-059: a declined card is counted as failed and named', async () => {
     const ctx = world({
         cus_A: { status: 'succeeded', paymentIntentId: 'pi_A' },
-        cus_B: new Error('Your card was declined.'),
+        // a decline as stripe-charge answers it (TED-111): a definite "no"
+        cus_B: Object.assign(new Error('Your card was declined.'), { data: { declined: true, error: 'Your card was declined.' } }),
         cus_C: { status: 'requires_action' },
     });
     await ctx.batchCharge();

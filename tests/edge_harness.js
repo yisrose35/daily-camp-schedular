@@ -36,7 +36,7 @@ const ROOT = path.join(__dirname, '..');
 
 const FAKE_SERVE = `
 export let handler: any = null;
-export function serve(h: any) { handler = h; (globalThis as any).__T.handler = h; }
+export function serve(h: any) { handler = h; const T = (globalThis as any).__T; (T.handlers = T.handlers || []).push(h); T.handler = h; }
 `;
 
 // A tiny supabase-js: auth.getUser from the bearer token, table reads that
@@ -118,17 +118,29 @@ export class Resend { emails = { send: async (m: any) => { (globalThis as any)._
  * { status, body, responses, fetches, rpcs, writes, emails, invokes, logs }.
  */
 function runEdge(name, scenario, opts) {
+    return runEdges([name], scenario, opts);
+}
+
+/**
+ * Several real edge functions in ONE process, so they can race each other:
+ * T.handlers[k] is function k (in the order given); T.requests go to the LAST
+ * one loaded. A scenario starts the others from inside a pretend database or
+ * processor call — exactly the moment a second office's request would land.
+ */
+function runEdges(names, scenario, opts) {
     opts = opts || {};
-    const src = fs.readFileSync(path.join(ROOT, 'supabase/functions', name, 'index.ts'), 'utf8');
-    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'edge-' + name + '-'));
-    let fn = src
-        .replace(/from\s+["']https:\/\/deno\.land\/std@[^"']+\/http\/server\.ts["']/g, 'from "./fake_serve.mts"')
-        .replace(/from\s+["']https:\/\/esm\.sh\/@supabase\/supabase-js@[^"']+["']/g, 'from "./fake_db.mts"')
-        .replace(/from\s+["']npm:resend@[^"']+["']/g, 'from "./fake_resend.mts"')
-        // md5 from esm.sh (the Sola signature) -> Node's own, same answers.
-        .replace(/import md5 from ["']https:\/\/esm\.sh\/js-md5@[^"']+["'];/, 'import { createHash as __ch } from "node:crypto"; const md5 = (x: string) => __ch("md5").update(x).digest("hex");');
-    if (typeof opts.transform === 'function') fn = opts.transform(fn);
-    fs.writeFileSync(path.join(dir, 'fn.mts'), fn);
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'edge-' + names[0] + '-'));
+    names.forEach(function (name, k) {
+        const src = fs.readFileSync(path.join(ROOT, 'supabase/functions', name, 'index.ts'), 'utf8');
+        let fn = src
+            .replace(/from\s+["']https:\/\/deno\.land\/std@[^"']+\/http\/server\.ts["']/g, 'from "./fake_serve.mts"')
+            .replace(/from\s+["']https:\/\/esm\.sh\/@supabase\/supabase-js@[^"']+["']/g, 'from "./fake_db.mts"')
+            .replace(/from\s+["']npm:resend@[^"']+["']/g, 'from "./fake_resend.mts"')
+            // md5 from esm.sh (the Sola signature) -> Node's own, same answers.
+            .replace(/import md5 from ["']https:\/\/esm\.sh\/js-md5@[^"']+["'];/, 'import { createHash as __ch } from "node:crypto"; const md5 = (x: string) => __ch("md5").update(x).digest("hex");');
+        if (typeof opts.transform === 'function') fn = opts.transform(fn, name);
+        fs.writeFileSync(path.join(dir, 'fn' + k + '.mts'), fn);
+    });
     fs.writeFileSync(path.join(dir, 'fake_serve.mts'), FAKE_SERVE);
     fs.writeFileSync(path.join(dir, 'fake_db.mts'), FAKE_DB);
     fs.writeFileSync(path.join(dir, 'fake_resend.mts'), FAKE_RESEND);
@@ -153,7 +165,7 @@ ${scenario}
 const _log = console.log, _err = console.error, _warn = console.warn;
 console.log = (...a: any[]) => { T.logs.push(a.join(' ')); };
 console.error = console.log; console.warn = console.log;
-await import('./fn.mts');
+for (let k = 0; k < ${names.length}; k++) await import('./fn' + k + '.mts');
 async function call(r: any) {
   const req = new Request(r.url || 'http://edge.test/fn', {
     method: r.method || 'POST',
@@ -185,4 +197,4 @@ _log('@@' + JSON.stringify({ status: responses[0].status, body: responses[0].bod
     }
 }
 
-module.exports = { runEdge };
+module.exports = { runEdge, runEdges };

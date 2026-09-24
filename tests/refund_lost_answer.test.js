@@ -12,6 +12,7 @@
 const test = require('node:test');
 const assert = require('node:assert');
 const { runEdge } = require('./edge_harness');
+const { HOLDS } = require('./canteen_wallet_model');
 
 // migration 198's claim, as a model (pgtests cover the SQL)
 const CLAIMS = `
@@ -137,9 +138,10 @@ T.users = { owner: 'u-owner' };
 T.tables.camps = [{ id: 'camp1', owner: 'u-owner', payment_processor_key: 'cardknox' }];
 T.rpc._admin_get_processor_credential = () => ({ success: true, credentials: { apiKey: 'ck' } });
 const tx: any[] = [{ kind: 'deposit', method: 'cardknox', byopTransactionId: 'D1', amount: 50, camper: 'Avi', camperId: 7, timestamp: 1 }];
-T.rpc.canteen_refund_view = () => ({ success: true, accounts: { Avi: { camperId: 7, balance: 50, balanceFloor: 0 } }, transactions: tx });
+let bal = 50;
+T.rpc.canteen_refund_view = () => ({ success: true, accounts: { Avi: { camperId: 7, balance: bal, balanceFloor: 0 } }, transactions: tx });
 ${CLAIMS}
-T.rpc.refund_canteen_deposit_from_processor = () => ({ success: true });
+${HOLDS}
 let n = 0;
 T.fetch = (url: string, init: any) => {
   if (String(init.body || '').includes('cc%3Arefund')) {
@@ -167,6 +169,7 @@ T.rpc.refund_canteen_deposit_from_stripe = (a: any) => {
   tx.push({ kind: 'refund', stripePaymentIntentId: a.p_payment_intent_id, amount: a.p_amount, stripeRefundId: a.p_refund_id, camperId: 7 });
   bal -= a.p_amount; return { success: true, balance: bal };
 };
+${HOLDS}
 const seen: Record<string, any> = {}; let n = 0;       // Stripe: same key within 24 h = the first answer
 T.fetch = (url: string, init: any) => {
   if (init.method === 'POST' && url.endsWith('/refunds')) {
@@ -222,6 +225,7 @@ T.rpc.refund_canteen_deposit_from_stripe = (a: any) => {
   tx.push({ kind: 'refund', stripePaymentIntentId: a.p_payment_intent_id, amount: a.p_amount, stripeRefundId: a.p_refund_id, camperId: 7 });
   bal -= a.p_amount; return { success: true, balance: bal };
 };
+${HOLDS}
 const seen: Record<string, any> = {}; let n = 0;
 T.fetch = (url: string, init: any) => {
   if (init.method === 'POST' && url.endsWith('/refunds')) {
@@ -271,6 +275,7 @@ T.rpc.refund_canteen_deposit_from_stripe = (a: any) => {
   tx.push({ kind: 'refund', stripePaymentIntentId: a.p_payment_intent_id, amount: a.p_amount, stripeRefundId: a.p_refund_id, camperId: 7 });
   bal -= a.p_amount; return { success: true, balance: bal };
 };
+${HOLDS}
 const seen: Record<string, any> = {}; let n = 0;
 T.fetch = (url: string, init: any) => {
   if (init.method === 'POST' && url.endsWith('/refunds')) {
@@ -297,6 +302,7 @@ T.rpc.refund_canteen_deposit_from_processor = (a: any) => {
   tx.push({ kind: 'refund', byopTransactionId: a.p_external_transaction_id, amount: a.p_amount, camperId: 7 });
   bal -= a.p_amount; return { success: true, balance: bal };
 };
+${HOLDS}
 let n = 0;
 T.fetch = (url: string, init: any) => {
   if (String(init.body || '').includes('cc%3Arefund')) { n++; return 'xResult=A&xRefNum=R' + n + '&xStatus=Approved'; }

@@ -4,6 +4,11 @@
 
 INSERT INTO public.camps (id, owner, name)
 VALUES ('33333333-3333-3333-3333-333333333333', NULL, 'Read Swap Camp');
+-- The office caller these tests sign in as ('4444…') is an accepted member of
+-- the camp: since 277 a signed-in NON-member is refused whatever the section
+-- resolver answers (it answers "edit" for a caller it cannot place).
+INSERT INTO auth.users (id, email) VALUES ('44444444-4444-4444-4444-444444444444', 'office@rows.test') ON CONFLICT DO NOTHING;
+INSERT INTO camp_users (camp_id, user_id, role, accepted_at) VALUES ('33333333-3333-3333-3333-333333333333', '44444444-4444-4444-4444-444444444444', 'admin', now());
 
 -- Two families, four payments, one pending, and one payment matched only by
 -- enrollmentId (the autopay path) so all four match predicates are exercised.
@@ -141,6 +146,7 @@ BEGIN
       AS 'SELECT ''44444444-4444-4444-4444-444444444444''::uuid';
     INSERT INTO public.camps (id, owner, name)
     VALUES ('55555555-5555-5555-5555-555555555555', NULL, 'No Payments');
+    INSERT INTO camp_users (camp_id, user_id, role, accepted_at) VALUES ('55555555-5555-5555-5555-555555555555', '44444444-4444-4444-4444-444444444444', 'admin', now());
     r := public.get_camp_payments('55555555-5555-5555-5555-555555555555');
     IF (r ->> 'success') <> 'true' THEN RAISE EXCEPTION 'empty camp failed: %', r; END IF;
     IF (r -> 'payments') <> '[]'::jsonb THEN

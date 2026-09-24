@@ -1966,6 +1966,8 @@ window.refundCanteenDeposit = async function() {
                 window.confirm((data.error || 'An earlier refund was never confirmed.') +
                     '\n\nOnly press OK if the processor\'s dashboard shows NO such refund.')) {
                 _body.confirmNotRefunded = true;
+                // exactly the earlier refunds the server asked about (TED-110)
+                if (Array.isArray(data.confirmHolds)) _body.confirmHolds = data.confirmHolds;
                 res = await _send();
                 data = res && res.data;
             }

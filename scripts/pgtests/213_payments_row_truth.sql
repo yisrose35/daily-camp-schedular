@@ -5,6 +5,11 @@
 
 INSERT INTO public.camps (id, owner, name)
 VALUES ('bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb', NULL, 'Writer Camp');
+-- The office caller these tests sign in as ('4444…') is an accepted member of
+-- the camp: since 277 a signed-in NON-member is refused whatever the section
+-- resolver answers (it answers "edit" for a caller it cannot place).
+INSERT INTO auth.users (id, email) VALUES ('44444444-4444-4444-4444-444444444444', 'office@rows.test') ON CONFLICT DO NOTHING;
+INSERT INTO camp_users (camp_id, user_id, role, accepted_at) VALUES ('bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb', '44444444-4444-4444-4444-444444444444', 'admin', now());
 INSERT INTO public.camp_state_kv (camp_id, key, value) VALUES
 ('bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb', 'campistryMe', jsonb_build_object(
   'families', jsonb_build_object(

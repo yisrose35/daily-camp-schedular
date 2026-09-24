@@ -127,12 +127,29 @@ async function stripeCharge(customerId: string, pmId: string | null, amount: num
   // instead of making another.
   const headers: Record<string, string> = { "Authorization": `Bearer ${STRIPE_SECRET}`, "Content-Type": "application/x-www-form-urlencoded" };
   if (idempotencyKey) headers["Idempotency-Key"] = idempotencyKey;
-  const resp = await fetch(`${STRIPE_API}/payment_intents`, {
-    method: "POST",
-    headers,
-    body: new URLSearchParams(params).toString(),
-  });
-  return resp.json();
+  // No final answer (cut off, Stripe's own 5xx, the same key still running, a
+  // rate limit) is asked again with the SAME key a moment later — Stripe then
+  // answers with the charge it made, or makes it once. Still nothing: the
+  // caller holds it for the office (TED-113), never books it as declined.
+  let why = "";
+  for (let attempt = 0; attempt < 3; attempt++) {
+    if (attempt) await new Promise((r) => setTimeout(r, 1500 * attempt));
+    try {
+      const resp = await fetch(`${STRIPE_API}/payment_intents`, {
+        method: "POST",
+        headers,
+        body: new URLSearchParams(params).toString(),
+      });
+      const out = await resp.json();
+      const undecided = out && out.error && (resp.status >= 500 || resp.status === 409 || resp.status === 429);
+      if (!undecided) return out;
+      why = out.error.message || ("HTTP " + resp.status);
+    } catch (e) {
+      why = (e as Error).message || "no answer";
+    }
+    if (!idempotencyKey) break;           // without a key, asking again could charge twice
+  }
+  return { uncertain: true, error: { message: why || "no answer" } };
 }
 
 // How is a debit we already started doing? (TED-064)
@@ -166,8 +183,10 @@ function piFailed(pi: any): boolean {
 // Key+Card+Amount+Invoice match another within 10 minutes, which is exactly
 // what two same-amount installments charged back to back would look like.
 const CARDKNOX_GATEWAY = "https://x1.cardknox.com/gateway";
-async function cardknoxCharge(apiKey: string, amountCents: number, cardToken: string) {
-  const resp = await fetch(CARDKNOX_GATEWAY, {
+async function cardknoxCharge(apiKey: string, amountCents: number, cardToken: string): Promise<Record<string, any>> {
+  let resp: Response;
+  try {
+  resp = await fetch(CARDKNOX_GATEWAY, {
     method: "POST",
     headers: { "Content-Type": "application/x-www-form-urlencoded" },
     body: new URLSearchParams({
@@ -181,8 +200,13 @@ async function cardknoxCharge(apiKey: string, amountCents: number, cardToken: st
       xInvoice: "CI-" + Date.now().toString(36) + Math.random().toString(36).slice(2, 6),
     }).toString(),
   });
+  } catch (e) {
+    // Cut off: the gateway may have charged (TED-113). Never a decline.
+    return { success: false, uncertain: true, error: (e as Error).message || "no answer" };
+  }
   const parsed: Record<string, string> = {};
-  new URLSearchParams(await resp.text()).forEach((v, k) => { parsed[k] = v; });
+  try { new URLSearchParams(await resp.text()).forEach((v, k) => { parsed[k] = v; }); } catch (_) { /* no body */ }
+  if (!parsed.xResult) return { success: false, uncertain: true, error: "No answer from the card company (HTTP " + resp.status + ")", raw: parsed };
   if (parsed.xResult !== "A") {
     return { success: false, error: parsed.xError || "Declined", status: parsed.xStatus, raw: parsed };
   }
@@ -207,8 +231,10 @@ function bqBase(c: Record<string, string>): string {
   if (!/\/(api\/)?v\d+$/i.test(b)) b += "/api/v2";
   return b;
 }
-async function banquestCharge(creds: Record<string, string>, amountCents: number, cardRef: string) {
-  const resp = await fetch(`${bqBase(creds)}/transactions/charge`, {
+async function banquestCharge(creds: Record<string, string>, amountCents: number, cardRef: string): Promise<Record<string, any>> {
+  let resp: Response;
+  try {
+  resp = await fetch(`${bqBase(creds)}/transactions/charge`, {
     method: "POST",
     headers: { "Content-Type": "application/json", "Authorization": "Basic " + btoa(`${creds.sourceKey}:${creds.pin}`) },
     // A saved card is either a verify card_ref (charged "tkn-<ref>") or a
@@ -216,11 +242,18 @@ async function banquestCharge(creds: Record<string, string>, amountCents: number
     // "pm-<id>" prefix). Pass an already-prefixed ref through untouched.
     body: JSON.stringify({ amount: Number((amountCents / 100).toFixed(2)), source: /^(tkn-|pm-|ref-|nonce-)/.test(cardRef) ? cardRef : "tkn-" + cardRef }),
   });
+  } catch (e) {
+    return { success: false, uncertain: true, error: (e as Error).message || "no answer" };   // cut off: may have charged
+  }
   let data: Record<string, any> = {};
   try { data = await resp.json(); } catch { /* non-JSON error body */ }
   const approved = String(data?.status_code || "").toUpperCase() === "A"
                 || String(data?.status || "").toLowerCase() === "approved";
   const ref = data?.reference_number != null ? String(data.reference_number) : "";
+  // A gateway timeout (5xx) with no reference is not a decline (TED-113).
+  if (resp.status >= 500 && !ref) {
+    return { success: false, uncertain: true, error: `No answer from the card company (HTTP ${resp.status})`, raw: data };
+  }
   if (resp.status < 200 || resp.status >= 300 || !approved || !ref) {
     const errMsg = data?.error_message || (Array.isArray(data?.error_messages) && data.error_messages[0]) || data?.error_details || data?.error || data?.message || data?.status || `Declined (HTTP ${resp.status})`;
     return { success: false, error: errMsg, status: data?.status, raw: data };
@@ -479,6 +512,33 @@ serve(async (req) => {
     return { camp: campId, family: f.name, amount, result: "waiting_for_bank_debit" };
   }
 
+  // A charge the card company never answered (TED-113): it may have gone
+  // through. Held ON THE PLAN, so no later night charges it again, and put in
+  // front of the office (a Billing notice) — never booked as declined, never
+  // retried by itself. The office answers it on the family in Billing.
+  async function holdUnconfirmed(campId: string, famKey: string, f: Record<string, any>,
+                                 plan: Record<string, any>, ref: string,
+                                 h: { amount: number; dueDate: string; index?: number | null; planIndex?: number | null; processor: string; why: string }) {
+    const held = await holdCharge(campId, famKey, ref, {
+      unconfirmed: true, processor: h.processor, amount: h.amount, dueDate: h.dueDate,
+      index: h.index ?? null, planIndex: h.planIndex ?? null, planId: plan && plan.id ? String(plan.id) : "",
+      since: today, why: h.why,
+    });
+    console.error(`[autopay] camp ${campId} family ${famKey}: ${h.processor} never answered a $${h.amount.toFixed(2)} charge (${h.why}) — ${held ? "held for the office" : "COULD NOT BE HELD, it may be charged again"}`);
+    try {
+      await supabase.from("notifications").insert({
+        camp_id: campId, source: "charge_unconfirmed", source_id: `autopay:${famKey}:${ref}:${h.dueDate}`,
+        title: "An autopay charge needs checking",
+        body: `${f.name || famKey}: an autopay charge of $${h.amount.toFixed(2)} (instalment due ${h.dueDate}) was sent to ${h.processor} and it never answered, so it may have gone through. `
+            + (held
+              ? `Check the processor's dashboard, then answer it on this family in Billing. Autopay will not charge this plan again until you do.`
+              : `It could not be marked on the plan, so it MAY BE CHARGED AGAIN on the next run — check the processor's dashboard now.`),
+        link_target: "campistry_me.html",
+      });
+    } catch (_) { /* already told */ }
+    return { camp: campId, family: f.name, amount: h.amount, result: held ? "unconfirmed_held" : "unconfirmed_hold_failed", reason: h.why };
+  }
+
   // A declined LEGACY instalment (TED-055). It used to be written
   // status:'failed', and the loop only charges 'pending' — so one decline lost
   // that month for good, with no alert. Now it stays 'pending' with the reason
@@ -606,6 +666,10 @@ serve(async (req) => {
 
     for (const [famKey, fRaw] of Object.entries(me.families)) {
       const f = fRaw as Record<string, any>;
+      // One family's trouble — a dropped connection, an error nobody foresaw —
+      // is that family's, never the whole night's (TED-113): every family
+      // after it, at every camp, is still charged tonight.
+      try {
       // A family can have MULTIPLE plans (migration 116) — normalize the
       // legacy singular f.plan into a one-item list so a pre-116 family
       // charges exactly as it always did.
@@ -709,6 +773,13 @@ serve(async (req) => {
         // A bank debit from an earlier night still clearing (TED-064): ask
         // Stripe about THAT debit; never start another for the plan meanwhile.
         const heldP = plan.pendingCharge;
+        // A charge the card company never answered (TED-113): the office says
+        // whether it went through; until then nothing more is charged.
+        if (heldP && heldP.unconfirmed) {
+          details.push({ camp: row.camp_id, family: f.name, amount: Number(heldP.amount) || 0, result: "waiting_for_office",
+                         reason: "an autopay charge from " + (heldP.since || "an earlier night") + " was never answered by the card company" });
+          continue;
+        }
         if (heldP && heldP.paymentIntentId) {
           const hpi = STRIPE_SECRET ? await stripePaymentIntent(String(heldP.paymentIntentId)) : null;
           if (hpi && !hpi.error && hpi.status === "succeeded") {
@@ -797,6 +868,11 @@ serve(async (req) => {
           const res = processorKey === "cardknox"
             ? await cardknoxCharge(String(creds.apiKey), Math.round(amount * 100), String(f.byopCustomerRef))
             : await banquestCharge(creds, Math.round(amount * 100), String(f.byopCustomerRef));
+          if (!res.success && res.uncertain) {
+            details.push(await holdUnconfirmed(String(row.camp_id), famKey, f, plan, refOf(plan),
+              { amount, dueDate: String(due.dueDate), index: due.index, processor: processorKey, why: String(res.error || "no answer") }));
+            continue;
+          }
           ok = !!(res.success && res.externalTransactionId);
           txnId = String(res.externalTransactionId || "");
           failWhy = res.error || "Declined";
@@ -823,6 +899,11 @@ serve(async (req) => {
             campDestinations.get(String(row.camp_id)) || null,
             `autopay:${row.camp_id}:${famKey}:${plan.id || ""}:${due.index}:${today}`,
           );
+          if (pi.uncertain) {
+            details.push(await holdUnconfirmed(String(row.camp_id), famKey, f, plan, refOf(plan),
+              { amount, dueDate: String(due.dueDate), index: due.index, processor: "stripe", why: String(pi.error?.message || "no answer") }));
+            continue;
+          }
           if (pi.error || pi.status === "requires_action") {
             failWhy = pi.error?.message || "requires_authentication";
           } else if (pi.status === "succeeded") {
@@ -945,6 +1026,11 @@ serve(async (req) => {
         // The same for an installments[] plan: a debit still clearing is asked
         // about, never started again (TED-064).
         const heldL = plan.pendingCharge;
+        if (heldL && heldL.unconfirmed) {                        // TED-113, as above
+          details.push({ camp: row.camp_id, family: f.name, amount: Number(heldL.amount) || 0, result: "waiting_for_office",
+                         reason: "an autopay charge from " + (heldL.since || "an earlier night") + " was never answered by the card company" });
+          continue;
+        }
         if (heldL && heldL.paymentIntentId) {
           const hpi = STRIPE_SECRET ? await stripePaymentIntent(String(heldL.paymentIntentId)) : null;
           const hinst = plan.installments.find((x: any) => x && x.dueDate === heldL.dueDate && x.status === "pending");
@@ -1037,6 +1123,11 @@ serve(async (req) => {
             const res = processorKey === "cardknox"
               ? await cardknoxCharge(String(creds.apiKey), Math.round(amount * 100), String(f.byopCustomerRef))
               : await banquestCharge(creds, Math.round(amount * 100), String(f.byopCustomerRef));
+            if (!res.success && res.uncertain) {
+              details.push(await holdUnconfirmed(String(row.camp_id), famKey, f, plan, refOf(plan),
+                { amount, dueDate: String(inst.dueDate), planIndex, processor: processorKey, why: String(res.error || "no answer") }));
+              break;   // the rest of this plan waits for the office
+            }
             if (!res.success || !res.externalTransactionId) {
               await legacyDeclined(String(row.camp_id), famKey, plan, planIndex, inst, res.error || "Declined");
               failed++;
@@ -1098,6 +1189,11 @@ serve(async (req) => {
             `autopay:${row.camp_id}:${famKey}:${plan.id || planIndex}:${inst.dueDate}:${today}`,
           );
 
+          if (pi.uncertain) {
+            details.push(await holdUnconfirmed(String(row.camp_id), famKey, f, plan, refOf(plan),
+              { amount, dueDate: String(inst.dueDate), planIndex, processor: "stripe", why: String(pi.error?.message || "no answer") }));
+            break;   // the rest of this plan waits for the office
+          }
           if (pi.error || pi.status === "requires_action") {
             await legacyDeclined(String(row.camp_id), famKey, plan, planIndex, inst, pi.error?.message || "requires_authentication");
             failed++;
@@ -1136,6 +1232,11 @@ serve(async (req) => {
             break;   // the rest of this plan waits for it
           }
         }
+      }
+      } catch (famErr) {
+        failed++;
+        console.error(`[autopay] camp ${row.camp_id} family ${famKey}: stopped on an error (${(famErr as Error).message}) — the rest of the run goes on`);
+        details.push({ camp: row.camp_id, family: f && f.name, result: "error", reason: (famErr as Error).message });
       }
     }
   }

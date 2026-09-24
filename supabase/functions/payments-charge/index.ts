@@ -32,8 +32,10 @@ import { serve } from "https://deno.land/std@0.168.0/http/server.ts";
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
 
 const CARDKNOX_GATEWAY = "https://x1.cardknox.com/gateway";
-async function cardknoxCharge(apiKey: string, amountCents: number, cardToken: string) {
-  const resp = await fetch(CARDKNOX_GATEWAY, {
+async function cardknoxCharge(apiKey: string, amountCents: number, cardToken: string): Promise<Record<string, any>> {
+  let resp: Response;
+  try {
+  resp = await fetch(CARDKNOX_GATEWAY, {
     method: "POST",
     headers: { "Content-Type": "application/x-www-form-urlencoded" },
     body: new URLSearchParams({
@@ -47,8 +49,14 @@ async function cardknoxCharge(apiKey: string, amountCents: number, cardToken: st
       xInvoice: "CI-" + Date.now().toString(36) + Math.random().toString(36).slice(2, 6),
     }).toString(),
   });
+  } catch (e) {
+    // Cut off: the gateway may have charged (TED-111).
+    return { success: false, uncertain: true, error: (e as Error).message || "no answer" };
+  }
   const parsed: Record<string, string> = {};
-  new URLSearchParams(await resp.text()).forEach((v, k) => { parsed[k] = v; });
+  try { new URLSearchParams(await resp.text()).forEach((v, k) => { parsed[k] = v; }); } catch (_) { /* no body */ }
+  // No result at all is not a "no": the gateway may have charged.
+  if (!parsed.xResult) return { success: false, uncertain: true, error: "No answer from the card company (HTTP " + resp.status + ")", raw: parsed };
   if (parsed.xResult !== "A") {
     return { success: false, error: parsed.xError || "Declined", status: parsed.xStatus, raw: parsed };
   }
@@ -73,8 +81,10 @@ function bqBase(c: Record<string, string>): string {
   if (!/\/(api\/)?v\d+$/i.test(b)) b += "/api/v2";
   return b;
 }
-async function banquestCharge(creds: Record<string, string>, amountCents: number, cardRef: string) {
-  const resp = await fetch(`${bqBase(creds)}/transactions/charge`, {
+async function banquestCharge(creds: Record<string, string>, amountCents: number, cardRef: string): Promise<Record<string, any>> {
+  let resp: Response;
+  try {
+  resp = await fetch(`${bqBase(creds)}/transactions/charge`, {
     method: "POST",
     headers: { "Content-Type": "application/json", "Authorization": "Basic " + btoa(`${creds.sourceKey}:${creds.pin}`) },
     // A saved card is either a verify card_ref (charged "tkn-<ref>") or a
@@ -82,11 +92,19 @@ async function banquestCharge(creds: Record<string, string>, amountCents: number
     // "pm-<id>" prefix). Pass an already-prefixed ref through untouched.
     body: JSON.stringify({ amount: Number((amountCents / 100).toFixed(2)), source: /^(tkn-|pm-|ref-|nonce-)/.test(cardRef) ? cardRef : "tkn-" + cardRef }),
   });
+  } catch (e) {
+    return { success: false, uncertain: true, error: (e as Error).message || "no answer" };   // cut off: may have charged
+  }
   let data: Record<string, any> = {};
   try { data = await resp.json(); } catch { /* non-JSON error body */ }
   const approved = String(data?.status_code || "").toUpperCase() === "A"
                 || String(data?.status || "").toLowerCase() === "approved";
   const ref = data?.reference_number != null ? String(data.reference_number) : "";
+  // A gateway timeout (5xx) with no reference is not a decline (TED-111): the
+  // sale may have gone through.
+  if (resp.status >= 500 && !ref) {
+    return { success: false, uncertain: true, error: `No answer from the card company (HTTP ${resp.status})`, raw: data };
+  }
   if (resp.status < 200 || resp.status >= 300 || !approved || !ref) {
     const errMsg = data?.error_message || (Array.isArray(data?.error_messages) && data.error_messages[0]) || data?.error_details || data?.error || data?.message || data?.status || `Declined (HTTP ${resp.status})`;
     return { success: false, error: errMsg, status: data?.status, raw: data };
@@ -146,7 +164,7 @@ serve(async (req) => {
     const campId = await callerCampId(req);
     if (!campId) return json({ error: "Only camp owners/admins can charge a stored payment method." }, 403);
 
-    const { customerRef, amount, idempotencyKey } = await req.json();
+    const { customerRef, amount, idempotencyKey, confirmNotCharged } = await req.json();
     if (!customerRef || !(Number(amount) > 0)) return json({ error: "customerRef and a positive amount required" }, 400);
 
     const service = createClient(SUPABASE_URL, SUPABASE_SERVICE_KEY);
@@ -174,12 +192,27 @@ serve(async (req) => {
 
     // Claim before the gateway (the same claim table refunds use, migration 198).
     const claimKey = typeof idempotencyKey === "string" && idempotencyKey.trim() ? "charge:" + idempotencyKey.trim() : null;
+    const notConfirmed = "An earlier try at this charge was never confirmed by the card company, so it may have gone through. Check the processor's dashboard: if it is not there, confirm and it will be charged.";
     if (claimKey) {
-      const { data: claim } = await service.rpc("claim_refund_intent", {
+      const claimIt = () => service.rpc("claim_refund_intent", {
         p_camp_id: campId, p_key: claimKey, p_amount: amountCents / 100, p_payment_ref: String(customerRef),
       });
+      let { data: claim } = await claimIt();
       if (claim && claim.claimed === false) {
-        return json(Object.assign({ replayed: true }, claim.previous || {}), 200);
+        // Done before: the same answer again.
+        if (claim.previous && claim.previous.externalTransactionId) {
+          return json(Object.assign({ replayed: true }, claim.previous), 200);
+        }
+        // Sent before and never answered (TED-111). Never "paid", never charged
+        // again unless the office has checked and says nothing went through —
+        // and then only once the first try has had time to finish (273).
+        if (confirmNotCharged !== true) return json({ uncertain: true, canConfirm: true, error: notConfirmed }, 200);
+        const { data: freed } = await service.rpc("release_stale_refund_intent", { p_camp_id: campId, p_key: claimKey });
+        if (freed !== true) {
+          return json({ uncertain: true, error: "This charge was sent a moment ago and may still be going through. Wait a few minutes, check the processor's dashboard, and try again only if it is not there." }, 200);
+        }
+        ({ data: claim } = await claimIt());
+        if (claim && claim.claimed === false) return json({ uncertain: true, error: "This charge is being sent right now by someone else." }, 200);
       }
     }
 
@@ -187,9 +220,14 @@ serve(async (req) => {
       ? await cardknoxCharge(String(creds.apiKey || ""), amountCents, String(customerRef))
       : await banquestCharge(creds, amountCents, String(customerRef));
 
+    if (!result.success && result.uncertain) {
+      // Maybe it charged: the claim is kept, so pressing again cannot charge
+      // twice; the office checks the processor first (TED-111).
+      return json({ uncertain: true, canConfirm: !!claimKey, error: `The card company did not answer (${result.error}), so this charge may have gone through. Check the processor's dashboard before charging again.` }, 200);
+    }
     if (!result.success) {
       if (claimKey) await service.rpc("release_refund_intent", { p_camp_id: campId, p_key: claimKey });
-      return json({ error: result.error || "Charge declined", status: result.status }, 200);
+      return json({ declined: true, error: result.error || "Charge declined", status: result.status }, 200);
     }
     if (claimKey) {
       await service.rpc("settle_refund_intent", {

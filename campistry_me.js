@@ -6453,6 +6453,46 @@ async function resolveDepositReview(fk,ref){
     try{if(curPage==='familydetail')renderFamilyDetailPage();else renderBilling()}catch(_){}
 }
 
+// The office answers an autopay charge the card company never confirmed
+// (TED-113). The server holds it on the plan; only the office can say, from
+// the processor's dashboard, whether the money moved — and autopay waits.
+async function resolveUnconfirmedAutopay(fk,planRef){
+    var f=families[fk]; if(!f)return;
+    var plans=Array.isArray(f.plans)?f.plans:[];
+    var p=plans.filter(function(x,i){return x&&((x.id&&String(x.id)===planRef)||(!x.id&&('#'+i)===planRef));})[0];
+    var h=p&&p.pendingCharge;
+    if(!h||!h.unconfirmed)return toast('That charge was already answered');
+    var where=h.processor==='stripe'?'the Stripe dashboard':'your processor\u2019s dashboard';
+    var went=await confirmDialog({title:'Did this autopay charge go through?',
+        message:'Autopay sent '+fm(Number(h.amount)||0)+' for '+esc(f.name||fk)+(h.since?' on '+esc(h.since):'')+' to the card company'
+               +', and it never answered'+(h.why?' ('+esc(h.why)+')':'')+'.<br><br>Look for it in '+where+'. '
+               +'If it is there, record it; autopay then carries on with the plan.',
+        confirmLabel:'It went through \u2014 record it'});
+    var ref=null;
+    if(went){
+        ref=window.prompt('The charge\u2019s reference number from '+where+' (transaction / payment id):','');
+        if(!ref||!String(ref).trim())return toast('Nothing recorded — a reference is needed','error');
+        ref=String(ref).trim();
+    }else{
+        var none=await confirmDialog({title:'Nothing went through?',
+            message:'Only if '+where+' shows NO such charge. Autopay will then try this instalment again on its next run.',
+            confirmLabel:'Nothing went through \u2014 try again',danger:true});
+        if(!none)return;
+    }
+    var client=window.CampistryDB&&window.CampistryDB.getClient?window.CampistryDB.getClient():null;
+    var campId=getCampId();
+    if(!client||!campId)return toast('Not signed in','error');
+    var res=await client.rpc('resolve_unconfirmed_autopay',{p_camp_id:campId,p_family_key:fk,p_plan_ref:planRef,p_went_through:!!went,p_reference:ref});
+    var d=res&&res.data;
+    if(res&&res.error||!d||d.success!==true){
+        return toast('Could not save the answer: '+((res&&res.error&&res.error.message)||(d&&d.error)||'no answer'),'error');
+    }
+    delete p.pendingCharge;
+    toast(went?'Recorded — autopay carries on':'Autopay will try again on its next run');
+    try{ await _loadFamiliesFromRows(); await _loadPaymentsFromRows(); }catch(_){}
+    try{if(curPage==='familydetail')renderFamilyDetailPage();else renderBilling()}catch(_){}
+}
+
 function _postTuitionFor(f,eid){
     var B=_billingCore();
     if(!B||!f)return false;
@@ -17716,6 +17756,17 @@ function _collectionWarning(l){
         if(b.nextRetryAt)label+=' · retries '+esc(b.nextRetryAt);
         out.push(_flatStatus(label,b.escalated?'err':'warn'));
     });
+    // An autopay charge the card company never answered (TED-113): held on the
+    // plan, and nothing more is charged there until the office says whether it
+    // went through.
+    ((l.family&&Array.isArray(l.family.plans)?l.family.plans:[])).forEach(function(p,i){
+        var h=p&&p.pendingCharge;
+        if(!h||!h.unconfirmed)return;
+        var ref=p.id?String(p.id):('#'+i);
+        out.push('<span style="font-size:.78rem;font-weight:700;color:var(--err);cursor:pointer;text-decoration:underline" '
+            +'onclick="event.stopPropagation();CampistryMe.resolveUnconfirmedAutopay(\''+je(l.famKey)+'\',\''+je(ref)+'\')">'
+            +esc('Autopay '+fm(Number(h.amount)||0)+(h.since?' ('+h.since+')':'')+' never confirmed — did it go through?')+'</span>');
+    });
     // A card deposit that may already have been typed in by hand (TED-095):
     // nothing was posted for it; the office says which it is.
     ((l.family&&l.family.depositReview)||[]).forEach(function(r){
@@ -18856,7 +18907,7 @@ async function printTaxStatement(famKey,year){
 
     h+='<table><thead><tr><th>Child</th><th class="right">Qualifying care paid</th><th class="right">Not qualifying</th><th class="right">Total paid</th></tr></thead><tbody>';
     if(!rep.byCamper.length){
-        h+='<tr><td colspan="4" class="muted">No payments were applied to charges in '+year+'.</td></tr>';
+        h+='<tr><td colspan="4" class="muted">'+((rep.prepaid||0)>0.004?'Nothing paid in '+year+' was for camp given in '+year+'.':'No payments were applied to charges in '+year+'.')+'</td></tr>';
     }
     rep.byCamper.forEach(function(b){
         h+='<tr><td>'+esc(_lbl(b.camperName))+(b.notes.length?'<br><span class="muted">'+esc(b.notes.join(' · '))+'</span>':'')+
@@ -18957,7 +19008,15 @@ async function callEdgeFunctionAuthed(fnName,body){
     var client=window.CampistryDB&&window.CampistryDB.getClient?window.CampistryDB.getClient():null;
     if(!client) throw new Error('Not signed in');
     var res=await client.functions.invoke(fnName,{body:body});
-    if(res.error) throw new Error(res.error.message||'Edge function error');
+    if(res.error){
+        // Whether the request got an answer at all (TED-111): a network failure
+        // or a 5xx from the platform says nothing about what the function did.
+        var _he=new Error(res.error.message||'Edge function error');
+        var _ctx=res.error.context;
+        _he.status=_ctx&&typeof _ctx.status==='number'?_ctx.status:null;
+        _he.noAnswer=_he.status==null||_he.status>=500;
+        throw _he;
+    }
     var data=res.data;
     if(data&&data.error){var _e=new Error(data.error);_e.data=data;throw _e;}
     return data;
@@ -19134,20 +19193,31 @@ async function chargeStoredCard(famKey,amount,description,quiet){
     }
 
     var isBYOP=!f.stripeCustomerId&&!!f.byopCustomerRef;
-    // One key per charge attempt: a network retry of this same request is
-    // answered by the processor's first result instead of charging twice.
-    var _chargeKey='chg_'+famKey+'_'+Date.now()+'_'+Math.random().toString(36).slice(2,8);
+    // One key per charge the office MEANS to make (TED-111). It is kept — on
+    // this computer, across a reload — until that charge succeeds or is
+    // definitely declined, so pressing Charge Card again after an answer was
+    // lost meets the first attempt instead of charging the parent twice: Stripe
+    // answers with the charge it made, and the other processors' claim refuses
+    // to charge again until the office has checked. A different amount, or a
+    // charge that went through or was declined, starts a new key.
+    var _pk=_pendingChargeGet(famKey,amount);
+    var _chargeKey=_pk?_pk.key:('chg_'+famKey+'_'+Date.now()+'_'+Math.random().toString(36).slice(2,8));
+    if(_pk&&_pk.desc)description=_pk.desc;              // the same request, or Stripe refuses the key
+    _pendingChargeSet(famKey,amount,{key:_chargeKey,desc:description||'',at:Date.now()});
 
     if(!quiet)toast('Charging '+fm(amount)+' to '+f.name+'...');
     try{
-        var result=isBYOP
-            ? await callEdgeFunctionAuthed('payments-charge',{
+        var _byopBody={
                 customerRef:f.byopCustomerRef,
                 amount:amount,
                 description:description||'Campistry payment',
                 familyKey:famKey,
                 idempotencyKey:_chargeKey
-            })
+            };
+        var result;
+        try{
+            result=isBYOP
+            ? await callEdgeFunctionAuthed('payments-charge',_byopBody)
             : await callEdgeFunctionAuthed('stripe-charge',{
                 customerId:f.stripeCustomerId,
                 paymentMethodId:f.stripePaymentMethodId||null,
@@ -19157,8 +19227,19 @@ async function chargeStoredCard(famKey,amount,description,quiet){
                 metadata:{familyName:f.name,familyKey:famKey},
                 idempotencyKey:_chargeKey
             });
+        }catch(err0){
+            // An earlier try the card company never confirmed: only the office
+            // can say whether it went through. Sent again only when they say it
+            // did not (the claim is released only once it has waited).
+            if(isBYOP&&!quiet&&err0.data&&err0.data.uncertain&&err0.data.canConfirm&&
+               window.confirm(err0.message+'\n\nOnly press OK if the processor\'s dashboard shows NO such charge.')){
+                _byopBody.confirmNotCharged=true;
+                result=await callEdgeFunctionAuthed('payments-charge',_byopBody);
+            }else throw err0;
+        }
 
         if(!isBYOP&&result.status==='requires_action'){
+            _pendingChargeClear(famKey,amount);
             if(!quiet)toast('Card requires authentication — parent must approve','error');
             return {ok:false,error:'Card requires the parent to approve it'};
         }
@@ -19170,6 +19251,7 @@ async function chargeStoredCard(famKey,amount,description,quiet){
         // (Stripe's off-session PaymentIntents can resolve into other
         // states like requires_action, handled above).
         if(isBYOP||result.status==='succeeded'){
+            _pendingChargeClear(famKey,amount);                // done: the next charge is a new one
             // Record payment locally
             var _chgRow={
                 id:'pay_'+Date.now(),
@@ -19201,9 +19283,35 @@ async function chargeStoredCard(famKey,amount,description,quiet){
         }
     }catch(err){
         console.error('[Me] Charge error:',err);
-        if(!quiet)toast('Charge failed: '+err.message,'error');
-        return {ok:false,error:err.message};
+        // A definite "no" (a decline, a refused request) starts fresh next time.
+        // No answer at all may have charged the card: never "failed" (TED-111).
+        var _unsure=(err.data&&err.data.uncertain)||(!err.data&&err.noAnswer!==false);
+        if(!_unsure)_pendingChargeClear(famKey,amount);
+        var _msg=_unsure
+            ? (err.data&&err.data.uncertain?err.message:'No answer from the card company ('+err.message+'), so this charge may have gone through. Check the family\'s payments or the processor\'s dashboard before charging again — pressing Charge Card again for the same amount will not charge twice.')
+            : 'Charge failed: '+err.message;
+        if(!quiet)toast(_msg,'error');
+        return {ok:false,error:_unsure?_msg:err.message,uncertain:!!_unsure};
     }
+}
+
+// The charge the office is part-way through, per family and amount (TED-111):
+// kept in this browser until it succeeds or is declined, for up to 23 hours
+// (Stripe remembers a key for 24).
+function _pendingChargeStoreKey(){return 'campistry_pending_charges_'+(typeof getCampId==='function'?(getCampId()||''):'')}
+function _pendingChargeAll(){try{return JSON.parse(localStorage.getItem(_pendingChargeStoreKey())||'{}')||{}}catch(_){return {}}}
+function _pendingChargeGet(famKey,amount){
+    var p=_pendingChargeAll()[famKey+':'+Math.round((Number(amount)||0)*100)];
+    return p&&p.key&&(Date.now()-(Number(p.at)||0))<23*3600*1000?p:null;
+}
+function _pendingChargeSet(famKey,amount,v){
+    try{var all=_pendingChargeAll();var k=famKey+':'+Math.round((Number(amount)||0)*100);
+        if(all[k]&&all[k].key===v.key)v.at=all[k].at;          // the first try's time decides how long it is kept
+        all[k]=v;localStorage.setItem(_pendingChargeStoreKey(),JSON.stringify(all));}catch(_){}
+}
+function _pendingChargeClear(famKey,amount){
+    try{var all=_pendingChargeAll();delete all[famKey+':'+Math.round((Number(amount)||0)*100)];
+        localStorage.setItem(_pendingChargeStoreKey(),JSON.stringify(all));}catch(_){}
 }
 
 // Batch charge all families with outstanding balance
@@ -23607,7 +23715,7 @@ window.CampistryMe={
     // timer; exposed so the office can nudge it, and for the browser test.
     runCamperErases:_runCamperErases,
     viewCamper:viewCamper,editCamper:editCamper,deleteCamper:deleteCamper,unenrollCamper:unenrollCamper,reenrollCamper:reenrollCamper,ceToggleSummer:ceToggleSummer,ceMaritalChanged:ceMaritalChanged,ceToggleOtherParentSummer:ceToggleOtherParentSummer,
-    resolveDepositReview:resolveDepositReview,
+    resolveDepositReview:resolveDepositReview,resolveUnconfirmedAutopay:resolveUnconfirmedAutopay,
     addFamily:function(){openFamilyForm(null)},editFamily:function(id){openFamilyForm(id)},deleteFamily:deleteFamily,removeCamperFromFamily:removeCamperFromFamily,
     setPplStaffSubTab:setPplStaffSubTab,viewStaffMember:viewStaffMember,openEditStaffModal:openEditStaffModal,saveStaffMember:saveStaffMember,
     acceptFamilySuggestion:acceptFamilySuggestion,dismissFamilySuggestion:dismissFamilySuggestion,acceptAddToFamily:acceptAddToFamily,

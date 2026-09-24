@@ -247,6 +247,7 @@
 
         var inYearRefunds = 0;
         var carried = [];
+        var prepaidFor = {}, unbilled = 0;         // paid ahead: by the later year it is for; and on nothing billed
         reducers.forEach(function (r) {
             var e = r.e, amt = num(e.amount);
             var isPayment = e.type === 'payment';
@@ -293,6 +294,12 @@
 
             report.paid.gross = round2(report.paid.gross + amt);
             report.prepaid = round2(report.prepaid + ahead);
+            // ...and which later year each such part is for (TED-112), so the
+            // statement can say where it will be claimed.
+            res.hits.forEach(function (h) {
+                var cy = h.lot.careYear || payYear;
+                if (inYear && cy > year) prepaidFor[cy] = round2((prepaidFor[cy] || 0) + h.amount);
+            });
             counts.forEach(function (h) {
                 var b = bucket(h.lot.camperName, h.lot.camperId);
                 b.total = round2(b.total + h.amount);
@@ -312,7 +319,10 @@
                 }
             });
             // Whatever found no charge to land on is care not yet given.
-            if (res.unapplied > 0.004) report.prepaid = round2(report.prepaid + res.unapplied);
+            if (res.unapplied > 0.004) {
+                report.prepaid = round2(report.prepaid + res.unapplied);
+                unbilled = round2(unbilled + res.unapplied);
+            }
         });
 
         var carriedGross = carried.reduce(function (t, h) { return round2(t + h.amount); }, 0);
@@ -325,6 +335,8 @@
             ['qualifying', 'notQualifying', 'needsReview', 'prepaid'].forEach(function (k) {
                 report[k] = round2(report[k] * keep);
             });
+            Object.keys(prepaidFor).forEach(function (cy) { prepaidFor[cy] = round2(prepaidFor[cy] * keep); });
+            unbilled = round2(unbilled * keep);
             Object.keys(perCamper).forEach(function (k) {
                 var b = perCamper[k];
                 b.qualifying = round2(b.qualifying * keep);
@@ -402,8 +414,17 @@
         report.excluded = Object.keys(excludedLines).map(function (k) { return excludedLines[k]; })
             .filter(function (r) { return Math.abs(r.amount) > 0.004; });
 
-        if (report.prepaid > 0.004) {
-            report.warnings.push('$' + report.prepaid.toFixed(2) + ' was paid in ' + year +
+        // Paid this year for a later year's camp (TED-112): said as what it is —
+        // billed, and claimed on that year's return — not as "not billed yet".
+        report.prepaidFor = prepaidFor;
+        Object.keys(prepaidFor).sort().forEach(function (cy) {
+            if (prepaidFor[cy] <= 0.004) return;
+            report.warnings.push('$' + prepaidFor[cy].toFixed(2) + ' paid in ' + year + ' is for camp in ' + cy +
+                '. Under IRS Publication 503 it is claimed on the ' + cy + ' return, and it is on the ' + cy +
+                ' statement, so it is not included above.');
+        });
+        if (unbilled > 0.004) {
+            report.warnings.push('$' + unbilled.toFixed(2) + ' was paid in ' + year +
                 ' toward camp that had not been billed yet. Under IRS Publication 503 that belongs on the ' +
                 'return for the year the care is actually given, so it is not included above.');
         }
@@ -421,7 +442,11 @@
                 ' totalling $' + Math.abs(report.uncollected.amount).toFixed(2) + ' are pending or failed and are ' +
                 'not counted — a payment that never cleared is not an expense.');
         }
-        if (!report.byCamper.length && report.paid.net > 0.004) {
+        // Only money that belongs to THIS year, or to no known year, and still
+        // found no child. A year whose only payment was toward next year's
+        // (billed) camp has nothing to split (TED-112).
+        var billedAhead = Object.keys(prepaidFor).reduce(function (t, cy) { return round2(t + prepaidFor[cy]); }, 0);
+        if (!report.byCamper.length && report.paid.net - billedAhead > 0.004) {
             report.allocated = false;
             report.warnings.push('Payments in ' + year + ' could not be matched to any charge, so they cannot be ' +
                 'split per child. Form 2441 is filled in one child at a time, so this has to be split by hand.');
@@ -452,7 +477,10 @@
         if (!provider.taxId) missing.push('the camp’s Tax ID / EIN — a parent cannot file Form 2441 without it');
         if (!provider.name) missing.push('the camp’s legal name');
         if (!provider.address) missing.push('the camp’s address');
-        return { ready: !missing.length && !!report && report.allocated, missing: missing };
+        // Never "not ready" with nothing listed (TED-112): the split per child
+        // is named when it is what is missing.
+        if (report && !report.allocated) missing.push('the payments split per child — see the note on this statement');
+        return { ready: !missing.length && !!report, missing: missing };
     };
 
     if (typeof root !== 'undefined' && root) root.CampistryTaxStatement = T;

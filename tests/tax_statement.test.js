@@ -357,3 +357,31 @@ test('TED-101: every undated session is named on the statement, whatever month i
     const r = build(2026, [charge('2026-08-01', 3000, 'e1'), pay('2026-08-01', 500)]);
     assert.match(r.warnings.join(' '), /no start date/, 'an August charge on an undated session was assumed silently');
 });
+
+// ── TED-112: a year whose only payment was a deposit for next summer ───────
+test('TED-112: a December deposit for next summer is described as next year\'s, and the statement is ready', () => {
+    const dated = (e) => Object.assign({}, resolveCharge(e), { careYear: '2026' });   // Summer 2026, dated
+    const entries = [charge('2025-10-01', 3000, 'e1'), pay('2025-12-10', 500)];
+    const r = T.build({ year: 2025, entries, resolveCharge: dated });
+    assert.strictEqual(r.qualifying, 0);
+    const w = r.warnings.join(' | ');
+    assert.match(w, /\$500\.00 paid in 2025 is for camp in 2026/, w);
+    assert.doesNotMatch(w, /could not be matched|split by hand/, 'a deposit for next summer was called unmatched: ' + w);
+    assert.doesNotMatch(w, /had not been billed yet/, 'it was billed in October: ' + w);
+    assert.strictEqual(r.allocated, true);
+    const ready = T.readiness(r, { name: 'Camp', address: '1 Lake Rd', taxId: '12-3456789' });
+    assert.deepStrictEqual(ready, { ready: true, missing: [] });
+    // and it is on the 2026 statement
+    assert.strictEqual(T.build({ year: 2026, entries, resolveCharge: dated }).qualifying, 500);
+});
+
+test('TED-112: money paid with nothing billed is still said as not billed yet', () => {
+    const r = build(2025, [pay('2025-12-10', 500)]);
+    assert.match(r.warnings.join(' '), /toward camp that had not been billed yet/);
+});
+
+test('TED-112: "not ready" always says what is missing', () => {
+    const ready = T.readiness({ allocated: false, byCamper: [] }, { name: 'Camp', address: 'a', taxId: 't' });
+    assert.strictEqual(ready.ready, false);
+    assert.ok(ready.missing.length > 0, 'not ready, with nothing listed');
+});

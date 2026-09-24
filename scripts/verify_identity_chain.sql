@@ -1,5 +1,5 @@
 -- ============================================================================
--- Confirm migrations 222-273 are in and doing their job.
+-- Confirm migrations 222-277 are in and doing their job.
 --
 -- Paste the whole thing into the Supabase SQL Editor. It is READ ONLY — one
 -- SELECT, nothing is created, changed or deleted, and the two purge functions
@@ -644,6 +644,29 @@ UNION ALL
     ('273  a refund is released only when it is old',
      CASE WHEN to_regprocedure('public.release_stale_refund_intent(uuid,text,interval)') IS NULL
           THEN 'apply 273 BEFORE redeploying payments-refund and payments-canteen-refund — a refund that was cut off cannot be retried'
+          ELSE 'ok' END),
+    -- A canteen refund takes its money off the wallet first (TED-110).
+    ('275  a canteen refund takes its money first',
+     CASE WHEN to_regclass('public.canteen_refund_holds') IS NULL
+               OR to_regprocedure('public.reserve_canteen_refund(uuid,text,text,numeric,text,text,text,bigint)') IS NULL
+               OR to_regprocedure('public.settle_canteen_refund_hold(uuid,text,text)') IS NULL
+               OR to_regprocedure('public.release_canteen_refund_hold(uuid,text,interval)') IS NULL
+               OR pg_get_functiondef(to_regprocedure('public.canteen_refund_view(uuid)')) !~ 'canteen_refund_holds'
+          THEN 'apply 275 BEFORE redeploying the four canteen refund functions — every canteen refund fails without it'
+          ELSE 'ok' END),
+    -- An autopay charge the card company never answered waits for the office (TED-113).
+    ('276  an unanswered autopay charge waits for the office',
+     CASE WHEN to_regprocedure('public.resolve_unconfirmed_autopay(uuid,text,text,boolean,text)') IS NULL
+          THEN 'apply 276 — Billing cannot answer an autopay charge the card company never confirmed, so that plan stays on hold'
+          ELSE 'ok' END),
+    -- A camp's billing answers only its own office.
+    ('277  billing answers only its own camp',
+     CASE WHEN pg_get_functiondef(to_regprocedure('public.sync_camp_billing(uuid,jsonb,jsonb,jsonb,jsonb)')) !~ 'camp_staff_member'
+               OR pg_get_functiondef(to_regprocedure('public.get_camp_families(uuid)')) !~ 'camp_staff_member'
+               OR pg_get_functiondef(to_regprocedure('public.get_camp_payments(uuid)')) !~ 'camp_staff_member'
+               OR has_function_privilege('authenticated', 'public.append_camp_payment(uuid,jsonb,text,jsonb)', 'EXECUTE')
+               OR has_function_privilege('authenticated', 'public.record_autopay_installment(uuid,text,text,integer,text,jsonb,jsonb,text)', 'EXECUTE')
+          THEN 'apply 277 NOW — anyone with a Campistry login can read and change this camp''s billing'
           ELSE 'ok' END)
     ) AS x(item, result)
 

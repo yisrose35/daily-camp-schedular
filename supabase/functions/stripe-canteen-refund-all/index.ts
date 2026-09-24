@@ -63,7 +63,12 @@ async function stripePost(endpoint: string, body: Record<string, string>, idempo
   };
   if (idempotencyKey) headers["Idempotency-Key"] = idempotencyKey;
   const resp = await fetch(`${STRIPE_API}${endpoint}`, { method: "POST", headers, body: new URLSearchParams(body).toString() });
-  return resp.json();
+  const out = await resp.json();
+  // A "no" Stripe stands by is a 4xx it keeps for the key. A 5xx, a 409
+  // (the same key still running) or a 429 decides nothing: the refund may
+  // yet be made, so it is never treated as declined.
+  if (out && typeof out === "object" && out.error) out.__definite = resp.status >= 400 && resp.status < 500 && resp.status !== 409 && resp.status !== 429;
+  return out;
 }
 
 async function stripeGet(endpoint: string) {
@@ -121,7 +126,7 @@ type DepositRemainder = { paymentIntentId: string; remaining: number; timestamp:
 
 // Everything this camper's Stripe deposits can still be refunded from,
 // oldest first — same math as stripe-canteen-refund's per-request version.
-function depositsFor(who: { camperId: number | null; camperName: string }, transactions: Record<string, any>[]): DepositRemainder[] {
+function depositsFor(who: { camperId: number | null; camperName: string }, transactions: Record<string, any>[], holds: Record<string, any>[] = []): DepositRemainder[] {
   // By camper ID when the account has one (250): the account's key is the
   // spelling at the time, and a renamed or same-named child shares spellings.
   // The name is compared only when the account or the ledger row has no number.
@@ -129,9 +134,12 @@ function depositsFor(who: { camperId: number | null; camperName: string }, trans
   return transactions
     .filter((t) => t && mine(t) && t.kind === "deposit" && t.method === "stripe" && t.stripePaymentIntentId)
     .map((dep) => {
+      // what is already refunded from it, and what another refund has on its way from it (275)
       const refundedSoFar = transactions
         .filter((t) => t && t.kind === "refund" && t.stripePaymentIntentId === dep.stripePaymentIntentId)
-        .reduce((sum, t) => sum + (Number(t.amount) || 0), 0);
+        .reduce((sum, t) => sum + (Number(t.amount) || 0), 0)
+        + holds.filter((h) => h.method === "stripe" && h.paymentRef === dep.stripePaymentIntentId)
+            .reduce((sum, h) => sum + (Number(h.amount) || 0), 0);
       return { paymentIntentId: dep.stripePaymentIntentId as string, remaining: round2((Number(dep.amount) || 0) - refundedSoFar), timestamp: Number(dep.timestamp) || 0 };
     })
     .filter((d) => d.remaining > 0)
@@ -144,13 +152,25 @@ async function refundOneCamper(
   who: { camperId: number | null; camperName: string },
   walletAvailable: number,
   transactions: Record<string, any>[],
+  holds: Record<string, any>[] = [],
 ): Promise<{ camperId: number | null; camperName: string; refunded: number; skipped?: string; error?: string }> {
   const { camperId, camperName } = who;
-  const deposits = depositsFor(who, transactions);
+  const deposits = depositsFor(who, transactions, holds);
   const stripeCapacity = round2(deposits.reduce((sum, d) => sum + d.remaining, 0));
   const targetAmount = round2(Math.min(walletAvailable, stripeCapacity));
 
+  // An earlier refund of this child's money Stripe has still not answered,
+  // even when asked again at the start of this run (275): its money stays off
+  // the wallet, and the office is told.
+  const mineHold = (h: Record<string, any>) => (camperId != null && h.camperId != null) ? String(h.camperId) === String(camperId) : h.accountKey === camperName;
+  const stale = holds.filter((h) => mineHold(h) && Number(h.ageSeconds) >= 180);
+  const staleAmt = round2(stale.reduce((t, h) => t + (Number(h.amount) || 0), 0));
+  const staleNote = stale.length
+    ? `An earlier refund of $${staleAmt.toFixed(2)} for this child has not been confirmed by Stripe yet — check the Stripe dashboard; it is asked again on the next run.`
+    : null;
+
   if (targetAmount <= 0) {
+    if (staleNote) return { camperId, camperName, refunded: 0, error: staleNote };
     return {
       camperId, camperName,
       refunded: 0,
@@ -162,12 +182,42 @@ async function refundOneCamper(
   let refunded = 0;
   for (const dep of deposits) {
     if (remainingToRefund <= 0) break;
-    const chunk = round2(Math.min(dep.remaining, remainingToRefund));
+    let chunk = round2(Math.min(dep.remaining, remainingToRefund));
     if (chunk <= 0) continue;
 
     try {
       const pi = await stripeGet(`/payment_intents/${dep.paymentIntentId}`);
       if (pi.error) throw new Error(pi.error.message);
+
+      // What is still refundable is part of the key (TED-097): a second refund of
+      // the same amount later is a NEW refund, while a retry of this one after a
+      // lost answer repeats the key and Stripe answers with the refund it made.
+      const stripeKeyFor = (amt: number) => `canteen_refund_${dep.paymentIntentId}_${Math.round(dep.remaining * 100)}_${Math.round(amt * 100)}`;
+      const holdKeyFor = (amt: number) => `scanteen:${dep.paymentIntentId}:${Math.round(dep.remaining * 100)}:${Math.round(amt * 100)}`;
+      // TAKE THE MONEY OFF THE WALLET FIRST (275, TED-110), at this child's
+      // turn and in one locked step — not from the balances read when the run
+      // started. A refund of this child from another computer, or a sale, since
+      // then is seen here; whichever reserves first has the money.
+      const reserve = (amt: number) => supabase.rpc("reserve_canteen_refund", {
+        p_camp_id: campId, p_camper_id: camperId, p_camper_name: camperName,
+        p_hold_key: holdKeyFor(amt), p_amount: amt, p_method: "stripe", p_payment_ref: dep.paymentIntentId,
+        p_stripe_key: stripeKeyFor(amt) });
+      let { data: held, error: holdErr } = await reserve(chunk);
+      if (!holdErr && held && held.success === false && held.error === "insufficient") {
+        const avail = round2(Number(held.available) || 0);
+        if (avail <= 0) {
+          if (refunded > 0 || staleNote) break;
+          return { camperId, camperName, refunded, skipped: "the balance changed during the run (another refund or a sale took it)" };
+        }
+        chunk = round2(Math.min(chunk, avail));
+        ({ data: held, error: holdErr } = await reserve(chunk));
+      }
+      if (holdErr || !held || held.success !== true) {
+        throw new Error("Could not set this child's refund money aside, so nothing was sent: " + (holdErr?.message || held?.error || "no answer"));
+      }
+      if (held.existing && held.state === "posted") continue;          // this exact refund is already done
+      if (held.existing) chunk = round2(Number(held.amount) || chunk);   // its reservation decides the amount
+      const holdKey = holdKeyFor(chunk);
 
       const params: Record<string, string> = {
         payment_intent: dep.paymentIntentId,
@@ -175,20 +225,29 @@ async function refundOneCamper(
       };
       if (pi.transfer_data?.destination) params.reverse_transfer = "true";
 
-      // What is still refundable is part of the key (TED-097): a second refund of
-      // the same amount later is a NEW refund, while a retry of this one after a
-      // lost answer repeats the key and Stripe answers with the refund it made.
-      const refund = await stripePost("/refunds", params, `canteen_refund_${dep.paymentIntentId}_${Math.round(dep.remaining * 100)}_${Math.round(chunk * 100)}`);
-      if (refund.error) throw new Error(refund.error.message);
+      let refund: any;
+      try {
+        refund = await stripePost("/refunds", params, stripeKeyFor(chunk));
+      } catch (_) {
+        // Cut off: Stripe may have made it. The money stays off the wallet, and
+        // the next run (or a single refund of this child) asks Stripe again
+        // with the same key.
+        throw new Error("Stripe did not answer, so this child's refund may have gone through — check the Stripe dashboard; it is asked again on the next run.");
+      }
+      if (refund.error && !refund.__definite) {
+        throw new Error("Stripe did not give a final answer, so this child's refund may have gone through — check the Stripe dashboard; it is asked again on the next run.");
+      }
+      if (refund.error) {
+        // A definite "no": nothing moved, and the money goes back on the wallet.
+        await supabase.rpc("release_canteen_refund_hold", { p_camp_id: campId, p_hold_key: holdKey });
+        throw new Error(refund.error.message);
+      }
 
-      const { error: creditErr } = await supabase.rpc("refund_canteen_deposit_from_stripe", {
-        p_camp_id: campId,
-        p_camper_id: camperId, p_camper_name: camperName,
-        p_amount: chunk,
-        p_payment_intent_id: dep.paymentIntentId,
-        p_refund_id: refund.id,
-      });
-      if (creditErr) console.error(`[stripe-canteen-refund-all] Stripe refund ${refund.id} succeeded but ledger update failed for ${camperName}: ${creditErr.message}`);
+      // The refund line goes on the wallet's ledger; the money came off when
+      // it was reserved, so the balance does not move again (275).
+      const { data: posted, error: postErr } = await supabase.rpc("settle_canteen_refund_hold", {
+        p_camp_id: campId, p_hold_key: holdKey, p_refund_id: String(refund.id) });
+      if (postErr || !posted || posted.success !== true) console.error(`[stripe-canteen-refund-all] Stripe refund ${refund.id} succeeded but ledger update failed for ${camperName}: ${postErr?.message || posted?.error}`);
 
       refunded = round2(refunded + chunk);
       remainingToRefund = round2(remainingToRefund - chunk);
@@ -200,7 +259,33 @@ async function refundOneCamper(
     }
   }
 
-  return { camperId, camperName, refunded };
+  return staleNote ? { camperId, camperName, refunded, error: staleNote } : { camperId, camperName, refunded };
+}
+
+// Refunds sent on an earlier run (or from a single refund) that Stripe never
+// answered: asked again with the key they were sent with, so Stripe answers
+// with the refund it made, or the "no" it gave (275). One not yet a couple of
+// minutes old may still be running, and is left alone.
+async function settleWaitingRefunds(supabase: ReturnType<typeof createClient>, campId: string, holds: Record<string, any>[]): Promise<boolean> {
+  let changed = false;
+  for (const h of holds.filter((x) => x.method === "stripe" && x.stripeKey && Number(x.ageSeconds) >= 120)) {
+    try {
+      const pi = await stripeGet(`/payment_intents/${h.paymentRef}`);
+      const params: Record<string, string> = { payment_intent: String(h.paymentRef), amount: String(Math.round(Number(h.amount) * 100)) };
+      if (pi?.transfer_data?.destination) params.reverse_transfer = "true";
+      const again = await stripePost("/refunds", params, String(h.stripeKey));
+      if (!again.error && again.id) {
+        await supabase.rpc("settle_refund_intent", { p_camp_id: campId, p_key: h.key, p_result: { refundId: again.id, amount: Number(h.amount) } });
+        await supabase.rpc("settle_canteen_refund_hold", { p_camp_id: campId, p_hold_key: h.key, p_refund_id: String(again.id) });
+        changed = true;
+      } else if (again.error && again.__definite) {
+        await supabase.rpc("release_refund_intent", { p_camp_id: campId, p_key: h.key });
+        await supabase.rpc("release_canteen_refund_hold", { p_camp_id: campId, p_hold_key: h.key });
+        changed = true;
+      }
+    } catch (_) { /* Stripe did not answer: still waiting */ }
+  }
+  return changed;
 }
 
 async function mapWithConcurrency<T, R>(items: T[], limit: number, fn: (item: T) => Promise<R>): Promise<R[]> {
@@ -230,28 +315,38 @@ serve(async (req) => {
     // decides what to show from the signed-in caller, which the service role is
     // not — it answered not_authorized, so every refund stopped here — and its
     // ledger is a 7-day window. This has every deposit, and each account's id.
-    const { data: accountsData, error: acctErr } = await supabase.rpc("canteen_refund_view", { p_camp_id: authedCampId });
+    let { data: accountsData, error: acctErr } = await supabase.rpc("canteen_refund_view", { p_camp_id: authedCampId });
     if (acctErr || !accountsData?.success) return json({ error: "Could not read canteen balances." }, 500);
+    if (await settleWaitingRefunds(supabase, authedCampId, Array.isArray(accountsData.holds) ? accountsData.holds : [])) {
+      ({ data: accountsData, error: acctErr } = await supabase.rpc("canteen_refund_view", { p_camp_id: authedCampId }));
+      if (acctErr || !accountsData?.success) return json({ error: "Could not read canteen balances." }, 500);
+    }
 
     const accounts: Record<string, any> = accountsData.accounts || {};
     const transactions: Record<string, any>[] = accountsData.transactions || [];
+    const holds: Record<string, any>[] = Array.isArray(accountsData.holds) ? accountsData.holds : [];
 
     // Each account with its camper number (250); the account key rides along
-    // as the name, for the fallback of an account with no number.
+    // as the name, for the fallback of an account with no number. A child
+    // whose earlier refund Stripe still has not answered is listed too, so the
+    // office hears about it (275).
     const candidates = Object.entries(accounts)
       .map(([accountKey, acct]) => {
         const a = acct || {};
         const walletAvailable = Math.max(0, round2((Number(a.balance) || 0) - (Number(a.balanceFloor) || 0)));
-        return { who: { camperId: a.camperId != null ? Number(a.camperId) : null, camperName: accountKey }, walletAvailable };
+        const who = { camperId: a.camperId != null ? Number(a.camperId) : null, camperName: accountKey };
+        const staleHold = holds.some((h) => Number(h.ageSeconds) >= 180 &&
+          ((who.camperId != null && h.camperId != null) ? String(h.camperId) === String(who.camperId) : h.accountKey === accountKey));
+        return { who, walletAvailable, staleHold };
       })
-      .filter((c) => c.walletAvailable > 0);
+      .filter((c) => c.walletAvailable > 0 || c.staleHold);
 
     if (!candidates.length) {
       return json({ totalRefunded: 0, refundedCount: 0, skippedCount: 0, failedCount: 0, details: [] });
     }
 
     const results = await mapWithConcurrency(candidates, CONCURRENCY, (c) =>
-      refundOneCamper(supabase, authedCampId, c.who, c.walletAvailable, transactions)
+      refundOneCamper(supabase, authedCampId, c.who, c.walletAvailable, transactions, holds)
     );
 
     let totalRefunded = 0, refundedCount = 0, skippedCount = 0, failedCount = 0;

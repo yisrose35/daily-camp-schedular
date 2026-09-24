@@ -185,6 +185,9 @@ const FUNCTIONS_ON_NAMES = [
     'record_link_photo_purchase',
     'refund_canteen_deposit_from_processor',
     'refund_canteen_deposit_from_stripe',
+    // 275's refund reservation. Takes p_camper_id first, the name only for an
+    // account with no number — the same shape as the refund writers it replaces.
+    'reserve_canteen_refund',
     'resolve_photo_tag',
     'set_camper_face_consent',
     'set_canteen_auto_reload',
@@ -278,6 +281,7 @@ const WHY_THE_NAME_IS_SAFE = {
     merge_canteen_autoreload_card: 'takes an id',
     refund_canteen_deposit_from_processor: 'takes an id',
     refund_canteen_deposit_from_stripe: 'takes an id',
+    reserve_canteen_refund: 'takes an id',             // 275
     submit_canteen_purchase: 'takes an id',
     update_canteen_autoreload_state: 'takes an id',
 
