@@ -1,0 +1,18 @@
+H1/H2/H3/K1. each paid $1,000 by card; each payment disputed (needs_response)
+    hazel: owes $2000.00, pause none, chargeback notices 0
+    fern: owes $2000.00, pause none, chargeback notices 0
+    ash: owes $2000.00, pause none, chargeback notices 0
+    kiwi: owes $2000.00, pause {"reason":"chargeback","disputeIds":["dp_kiwi"]}, chargeback notices 1
+  ok  K1 control: an autopay family is paused   → {"reason":"chargeback","disputeIds":["dp_kiwi"]}
+  BAD H3 the older single-plan family is paused too   → none
+    night: ["Ash:charged","Fern:charged","Hazel:charged","Kiwi:held_for_dispute","Rose2:charged"]; charges: cus_ash $500.00, cus_fern $1000.00, cus_hazel $1000.00, cus_rose2 $500.00
+  BAD H1 autopay switched on mid-dispute does not charge the disputed card   → cus_ash $500.00, cus_fern $1000.00, cus_hazel $1000.00, cus_rose2 $500.00
+  BAD H2 a new autopay plan mid-dispute does not charge the disputed card   → cus_ash $500.00, cus_fern $1000.00, cus_hazel $1000.00, cus_rose2 $500.00
+  BAD H3 the older single-plan family is not charged mid-dispute   → cus_ash $500.00, cus_fern $1000.00, cus_hazel $1000.00, cus_rose2 $500.00
+  ok  K1 control not charged   → cus_ash $500.00, cus_fern $1000.00, cus_hazel $1000.00, cus_rose2 $500.00
+
+H4. Rose2: two disputes (A on pi_rose2, B on a second $500); A lost; owner resumes
+    after A lost: {"reason":"chargeback","disputeIds":["dp_r2A","dp_r2B"]}; resume → {"changed": true, "success": true}; pause now none (dispute B still open)
+  ok  H4 (recorded; the owner resumed by hand)   → none
+
+4 BAD

@@ -1,0 +1,6 @@
+1 Jun due: {"index": 0, "amount": 1000.00, "dueDate": "2026-06-01", "remaining": 3}
+card declines -> record_autopay_charge(charged 0): {"index": 0, "balance": 1400.00, "charged": 0.00, "entryId": null, "success": true, "alreadyRecorded": false}
+1 Jul due: {"index": 1, "amount": 200.00, "dueDate": "2026-07-01", "remaining": 2}
+1 Aug due: {"index": 2, "amount": 200.00, "dueDate": "2026-08-01", "remaining": 1}
+after the last date, due:   balance still owed: 1000.00
+even-split plan, 1 Jul due after the same decline: {"index": 1, "amount": 700.00, "dueDate": "2026-07-01", "remaining": 2}

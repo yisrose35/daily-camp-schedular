@@ -1,0 +1,27 @@
+B1  Billing: Teal's autopay is paused for a dispute
+  Billing list shows the pause: true; after opening Teal: true
+  ok  B1 Billing names the dispute pause   → shown
+B2  click it → confirm → Resume
+  confirm said: "Resume autopay?Teal disputed a payment with their bank, so autopay stopped charging them. Resume it only if the dispute is over and you have agreed with the family — their card will be charged on the next due date.CancelResume autopay"
+  toast "✓ Autopay resumed for Teal"; cloud mark now none; list still shows it: false
+  ok  B2 resumed: the pause is gone in the cloud and on the page   → none
+B3  the stale computer (opened before the resume) adds a $10 charge to Teal
+  Teal owes $1010; mark none
+  ok  B3 a stale computer does not bring the pause back   → none
+S1  Pine: Add Charge $1,000, Scholarship Fund $800; the fund pays $300
+  Pine owes $200; fund {"charged":800,"paid":300,"owes":500,"lines":2}
+S2  Issue Credit for Pine
+  note: "Part of this bill is paid by Scholarship Fund ($800). A credit here comes off Pine’s own share only. To cancel a fund’s share, use that payer’s account → Cancel share"
+  ok  S2 the credit window names the fund's share and points to Cancel share   → Part of this bill is paid by Scholarship Fund ($800). A credit here comes off Pine’s own share only. To cancel a fund’s share, use that payer’s account → Cancel share
+S3  the fund's account → Move back to family (after the fund paid $300)
+  account rows: ["2026-09-24Tuition 2027 — share for Pine$800Cancel shareMove back to family","2026-09-24Payment (Check) #chk 1$300Remove"]
+  confirm said: "Move share back?Move this $800 share back to the Pine family’s own bill? Scholarship Fund will no longer owe it.CancelMove back"
+  toast "✓ $800 moved back to Pine’s bill"; Pine owes $1000; fund {"charged":0,"paid":300,"owes":-300,"lines":3}; plan_due_for {"index": 0, "amount": 1000.00, "dueDate": "2026-09-24", "remaining": 1}
+  BAD S3 share cancelled: fund charged $0, Pine still $200, autopay asks $200   → fund {"charged":0,"paid":300,"owes":-300,"lines":3}, Pine $1000
+S4  what the office sees for the fund's $300 cheque now
+  Manage payers: "Scholarship Fund organizationCredit $300 — return it to them, or keep it for a later share (shares $0, paid $300)AccountArchiveAdd a payerNameKindOrganizationHouseholdContact /"
+  Finance: {"collected":"$400","outstanding":"$2,000"}
+  ok  S4 the office is told the fund has $300 of cheque with no share to pay (a credit / money to return)   → Scholarship Fund organizationCredit $300 — return it to them, or keep it for a later share (shares $0, paid $300)AccountArchiveAdd a payerNameKindOrganizationHouseholdContact /
+page errors: []
+
+1 BAD

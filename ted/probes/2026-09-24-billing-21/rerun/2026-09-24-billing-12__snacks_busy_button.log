@@ -1,0 +1,9 @@
+after a double-click: requests sent = 1 | button disabled = true | label = Refunding…
+after retyping the amount mid-refund: button disabled = true
+a third press mid-refund: requests sent = 1
+after an error answer: button disabled = false | label = Refund | warning = "Failed to send a request to the Edge Function"
+requests in order:
+  stripe-canteen-refund key=cref_mufozw0cq43vo0 amount=20
+  stripe-canteen-refund key=cref_mufozw0cq43vo0 amount=20
+  stripe-canteen-refund key=cref_mufozw1bi2xzon amount=20
+Expected: 1 request for the double-click and the third press; retry after the error has the SAME key; the next refund after success a NEW key.

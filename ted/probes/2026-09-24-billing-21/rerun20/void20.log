@@ -1,0 +1,15 @@
+V1. the register: Avi buys 2 × Trail Mix 2 and 1 × Chips, BBQ
+    sent [{"fn":"submit_canteen_purchase_once","p_sold":[{"id":11,"qty":2},{"id":12,"qty":1}],"p_items":"Trail Mix 2 ×2, Chips, BBQ"}]
+    sale line: Trail Mix 2 ×2, Chips, BBQ | 5 | [{"id": 11, "qty": 2}, {"id": 12, "qty": 1}]; Avi $15.00; stock Trail Mix 2 8 left; Chips, BBQ 9 left
+  ok  V1 the sale keeps what it sold by id   → Trail Mix 2 ×2, Chips, BBQ | 5 | [{"id": 11, "qty": 2}, {"id": 12, "qty": 1}]
+
+V2. Snacks → Avi's history → Void
+    offered: ["Put 2 × Trail Mix 2 back in stock","Put 1 × Chips, BBQ back in stock","Untick an item the child kept or ate."]
+  ok  V2 both items offered back with the sold quantities   → ["Put 2 × Trail Mix 2 back in stock","Put 1 × Chips, BBQ back in stock","Untick an item the child kept or ate."]
+
+V3. Void it
+    Avi $20.00; stock Trail Mix 2 10 left; Chips, BBQ 10 left
+  ok  V3 $5 back; stock back to 10 / 10   → Avi $20.00, Trail Mix 2 10 left; Chips, BBQ 10 left
+page errors: []
+
+0 BAD
