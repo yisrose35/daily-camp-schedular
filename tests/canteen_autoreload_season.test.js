@@ -17,15 +17,15 @@ const assert = require('node:assert');
 const { runEdge } = require('./edge_harness');
 const { HOLDS } = require('./canteen_wallet_model');
 
-const today = new Date().toISOString().slice(0, 10);
-const yesterday = new Date(Date.now() - 86400000).toISOString().slice(0, 10);
-const nextMonth = new Date(Date.now() + 30 * 86400000).toISOString().slice(0, 10);
+const day = (n) => new Date(Date.now() + n * 86400000).toISOString().slice(0, 10);
+const today = day(0);
 
-function nightly({ campDates, snacksSettings }) {
+function nightly({ sessions, campDates, snacksSettings }) {
     return runEdge('canteen-auto-reload', `
 T.env = { STRIPE_SECRET_KEY: 'sk_test', SUPABASE_URL: 'http://db', SUPABASE_ANON_KEY: 'anon', SUPABASE_SERVICE_ROLE_KEY: 'svc', CANTEEN_AUTORELOAD_CRON_SECRET: 'c' };
 T.tables.camps = [{ id: 'camp1', owner: 'u-owner', payment_processor_key: null }];
 T.tables.camp_state_kv = [
+  ${sessions ? `{ camp_id: 'camp1', key: 'campistryMe', value: { sessions: ${JSON.stringify(sessions)} } },` : ''}
   ${campDates ? `{ camp_id: 'camp1', key: 'campDates', value: ${JSON.stringify(campDates)} },` : ''}
   ${snacksSettings ? `{ camp_id: 'camp1', key: 'campistrySnacks', value: { settings: ${JSON.stringify(snacksSettings)} } },` : ''}
 ];
@@ -38,23 +38,45 @@ T.fetch = (url: string) => url.endsWith('/payment_intents') ? { id: 'pi_1', stat
 T.request = { headers: { 'x-cron-secret': 'c' }, body: {} };`);
 }
 const charges = (r) => r.fetches.filter(f => f.method === 'POST' && f.url.endsWith('/payment_intents'));
+const skipped = (r, why) => r.body.details.some(d => d.result === 'skipped_' + why);
+const S = (a, b) => ({ name: 'S', startDate: day(a), endDate: day(b) });
 
-test('TED-143: after the camp\'s end date the nightly run charges nobody', () => {
-    const r = nightly({ campDates: { startDate: '2026-06-20', endDate: yesterday } });
+test('TED-143: after the last session the nightly run charges nobody', () => {
+    const r = nightly({ sessions: [S(-60, -30), S(-29, -1)] });
     assert.strictEqual(charges(r).length, 0, 'a parent was charged after the season');
-    assert.ok(r.body.details.some(d => d.result === 'skipped_season_over'), JSON.stringify(r.body));
+    assert.ok(skipped(r, 'season_over'), JSON.stringify(r.body));
+});
+
+test('TED-143: next summer\'s sessions entered in spring — nobody is charged before camp starts', () => {
+    // last summer and next summer both listed: today falls between them
+    const r = nightly({ sessions: [S(-200, -150), S(90, 150)], campDates: { startDate: day(-200), endDate: day(150) } });
+    assert.strictEqual(charges(r).length, 0, 'charged months before camp');
+    assert.ok(skipped(r, 'not_in_session'), JSON.stringify(r.body));
+    // and between two sessions of the same summer
+    assert.strictEqual(charges(nightly({ sessions: [S(-20, -2), S(3, 20)] })).length, 0);
 });
 
 test('TED-143: the office\'s switch (Snacks → Settings) stops every auto-reload at the camp', () => {
-    const r = nightly({ campDates: { endDate: nextMonth }, snacksSettings: { autoReloadOff: true } });
+    const r = nightly({ sessions: [S(-5, 5)], snacksSettings: { autoReloadOff: true } });
     assert.strictEqual(charges(r).length, 0);
-    assert.ok(r.body.details.some(d => d.result === 'skipped_switched_off_by_camp'), JSON.stringify(r.body));
+    assert.ok(skipped(r, 'switched_off_by_camp'), JSON.stringify(r.body));
 });
 
-test('TED-143: during the season (or with no dates set) it still tops up as before', () => {
-    assert.strictEqual(charges(nightly({ campDates: { endDate: nextMonth } })).length, 1);
-    assert.strictEqual(charges(nightly({ campDates: { endDate: today } })).length, 1, 'the last day is still camp');
-    assert.strictEqual(charges(nightly({})).length, 1);
+test('TED-143: on a day camp is in session it tops up as before — the first and the last day included', () => {
+    assert.strictEqual(charges(nightly({ sessions: [S(-5, 5)] })).length, 1);
+    assert.strictEqual(charges(nightly({ sessions: [S(-5, 0)] })).length, 1, 'the last day is still camp');
+    assert.strictEqual(charges(nightly({ sessions: [S(0, 5)] })).length, 1, 'the first day is camp');
+    // no dated sessions: the camp's overall dates, when it has them
+    assert.strictEqual(charges(nightly({ campDates: { startDate: day(-5), endDate: day(5) } })).length, 1);
+    assert.strictEqual(charges(nightly({ campDates: { startDate: day(3), endDate: day(30) } })).length, 0);
+});
+
+test('TED-143: a camp with no dates at all has no season — nobody is charged automatically', () => {
+    const r = nightly({});
+    assert.strictEqual(charges(r).length, 0);
+    assert.ok(skipped(r, 'no_session_dates'), JSON.stringify(r.body));
+    // sessions without dates are not a season either
+    assert.strictEqual(charges(nightly({ sessions: [{ name: 'Summer' }] })).length, 0);
 });
 
 // ── a refund that empties the wallet switches that child's auto-reload off ──

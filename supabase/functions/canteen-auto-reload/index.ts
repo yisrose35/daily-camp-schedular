@@ -424,25 +424,56 @@ serve(async (req) => {
   for (const c of (allCamps || [])) {
     if (c.payment_processor_key && c.payment_processor_key !== "stripe") campProcessors.set(c.id, c.payment_processor_key);
   }
-  // The camp's own say, per camp (TED-143): the office can switch auto-reload
-  // off for the whole camp (Snacks → Settings), and once the camp's season is
-  // over (campDates.endDate) nothing is charged — a parent who left the dates
-  // blank was otherwise charged after the end-of-season Refund All, the next
-  // day, and every week after.
+  // The camp's own say, per camp (TED-143): auto-reload charges only on days
+  // the camp is IN SESSION — within one of its sessions' dates (Dashboard →
+  // Dates & Pricing). Before the season (next summer's sessions entered in
+  // spring), between sessions and after the last one, nobody is charged; a
+  // camp with no session dates at all has no season to charge in, so it
+  // charges nobody either. The office can also switch it off for the whole
+  // camp (Snacks → Settings). A parent who left the dates blank was otherwise
+  // charged after the end-of-season Refund All, every week, into next spring.
   const campIdsHere = [...byCamp.keys()];
   const campOff = new Map<string, string>();   // camp -> why it is off
   if (campIdsHere.length) {
+    const isDay = (d: unknown) => typeof d === "string" && /^\d{4}-\d{2}-\d{2}$/.test(d);
     const { data: kvRows } = await supabase.from("camp_state_kv").select("camp_id, key, value")
       .in("camp_id", campIdsHere).in("key", ["campDates", "campistrySnacks"]);
+    // Only the sessions of each camp's Me document, not the whole of it.
+    const { data: meRows } = await supabase.from("camp_state_kv").select("camp_id, key, sessions:value->sessions")
+      .in("camp_id", campIdsHere).eq("key", "campistryMe");
+    const ranges = new Map<string, Array<[string, string]>>();
+    for (const r of (meRows || []) as Record<string, any>[]) {
+      const ss = Array.isArray(r.sessions) ? r.sessions : (Array.isArray(r.value?.sessions) ? r.value.sessions : []);
+      const list = ss.filter((x: any) => x && isDay(x.startDate) && isDay(x.endDate) && x.startDate <= x.endDate)
+        .map((x: any) => [String(x.startDate), String(x.endDate)] as [string, string]);
+      if (list.length) ranges.set(String(r.camp_id), list);
+    }
+    const datesOf = new Map<string, Record<string, any>>();
     for (const kv of (kvRows || []) as Record<string, any>[]) {
       const v = kv.value || {};
       if (kv.key === "campistrySnacks" && v.settings && v.settings.autoReloadOff === true) {
         campOff.set(String(kv.camp_id), "switched_off_by_camp");
       }
-      if (kv.key === "campDates" && typeof v.endDate === "string" && /^\d{4}-\d{2}-\d{2}$/.test(v.endDate) && today > v.endDate
-          && !campOff.has(String(kv.camp_id))) {
-        campOff.set(String(kv.camp_id), "season_over");
+      if (kv.key === "campDates" && isDay(v.startDate) && isDay(v.endDate)) datesOf.set(String(kv.camp_id), v);
+    }
+    for (const id of campIdsHere.map(String)) {
+      if (campOff.has(id)) continue;
+      const rs = ranges.get(id);
+      if (rs) {
+        if (!rs.some(([a, b]) => today >= a && today <= b)) {
+          const last = rs.reduce((m, [, b]) => (b > m ? b : m), "");
+          campOff.set(id, today > last ? "season_over" : "not_in_session");
+        }
+        continue;
       }
+      // No dated sessions: the overall camp dates, if the camp has them.
+      const cd = datesOf.get(id);
+      if (cd) {
+        if (today > cd.endDate) campOff.set(id, "season_over");
+        else if (today < cd.startDate) campOff.set(id, "not_in_session");
+        continue;
+      }
+      campOff.set(id, "no_session_dates");
     }
   }
   const credCache = new Map<string, Record<string, string> | null>();

@@ -1,5 +1,5 @@
 -- ============================================================================
--- Confirm migrations 222-281 are in and doing their job.
+-- Confirm migrations 222-282 are in and doing their job.
 --
 -- Paste the whole thing into the Supabase SQL Editor. It is READ ONLY — one
 -- SELECT, nothing is created, changed or deleted, and the two purge functions
@@ -702,6 +702,12 @@ UNION ALL
           WHEN has_function_privilege('authenticated', 'public.undo_card_fee_return(uuid,text,text)', 'EXECUTE')
                OR has_function_privilege('authenticated', 'public.release_refund_failure_alert(text)', 'EXECUTE')
           THEN 'apply 281 again — a signed-in browser can call the webhook''s own functions'
+          ELSE 'ok' END),
+    -- A parent's own auto-reload save clears the camp's pause note (TED-156).
+    ('282  a parent''s save clears the camp''s pause note',
+     CASE WHEN to_regprocedure('public.set_canteen_auto_reload(uuid,text,jsonb,bigint)') IS NULL
+               OR pg_get_functiondef(to_regprocedure('public.set_canteen_auto_reload(uuid,text,jsonb,bigint)')) !~ 'disabledReason'
+          THEN 'apply 282 — Link keeps telling a parent the camp switched auto-reload off after they switched it back on'
           ELSE 'ok' END)
     ) AS x(item, result)
 

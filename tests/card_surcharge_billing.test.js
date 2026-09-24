@@ -28,11 +28,11 @@ function cut(name) {
 }
 const LIVE = { mode: 'surcharge', surchargePct: 3, state: 'NY', processorNotifiedOn: '2026-01-01' };
 
-function billing(family) {
+function billing(family, policy) {
     const toasts = [], saved = [];
     let onOk = null;
     const ctx = {
-        families: { gold: family }, enrollSettings: { cardFeePolicy: LIVE },
+        families: { gold: family }, enrollSettings: { cardFeePolicy: policy || LIVE }, _giveCashDiscount: () => 'discount-tool',
         _cfAPI: () => F, _secEdit: () => true, esc: (s) => String(s), fm: (n) => '$' + Number(n).toFixed(2),
         today: () => '2026-08-01', save: () => saved.push(1), closeModal() {}, renderBilling() {}, renderFamilyDetailPage() {},
         curPage: 'billing', _postLedgerCharge: () => true, toast: (t, k) => toasts.push([t, k]),
@@ -182,4 +182,19 @@ test('TED-146: the office\'s charge row records whether a card or a bank account
     assert.strictEqual(fn({ stripePaymentMethodId: 'pm_bank', savedPaymentMethods: [{ token: 'pm_bank', type: 'us_bank_account' }] }), 'us_bank_account');
     assert.strictEqual(fn({ stripePaymentMethodId: 'pm_c', savedPaymentMethods: [{ token: 'pm_c', type: 'card' }] }), 'card');
     assert.strictEqual(fn({}), 'card', 'no default: stripe-charge picks a card');
+});
+
+test('TED-155: a flat online payment fee is allowed for a family paying by bank (it is not a card rule)', () => {
+    const b = billing({ name: 'Iron', balance: 1000, charges: [], stripePaymentMethodId: 'pm_bank',
+        savedPaymentMethods: [{ token: 'pm_bank', type: 'us_bank_account' }] }, { mode: 'convenience', convenienceFlat: 5 });
+    b.fn.addCardSurcharge('gold');
+    b.press();
+    assert.strictEqual(b.family.charges.length, 1, 'the $5 online payment fee was refused: ' + JSON.stringify(b.toasts));
+    assert.strictEqual(b.family.charges[0].amount, 5);
+    assert.ok(!b.toasts.some(([t]) => /card brands forbid/.test(t)));
+});
+
+test('TED-153: in cash-discount mode the family tool gives the discount instead of "no fee"', () => {
+    const b = billing({ name: 'Iron', balance: 1000, charges: [] }, { mode: 'cash_discount', cashDiscountPct: 3 });
+    assert.strictEqual(b.fn.addCardSurcharge('gold'), 'discount-tool');
 });

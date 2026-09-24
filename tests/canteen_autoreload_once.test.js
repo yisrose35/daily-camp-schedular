@@ -14,6 +14,8 @@ const TWICE = (piAnswer) => `
 T.env = { STRIPE_SECRET_KEY: 'sk_test', SUPABASE_URL: 'http://db', SUPABASE_ANON_KEY: 'anon', SUPABASE_SERVICE_ROLE_KEY: 'svc', CANTEEN_AUTORELOAD_CRON_SECRET: 'c' };
 T.users = { pos: 'u-counselor' };
 T.tables.camps = [{ id: 'camp1', owner: 'u-owner', payment_processor_key: null }];
+// camp is in session today (TED-143: auto-reload charges only then)
+T.tables.camp_state_kv = [{ camp_id: 'camp1', key: 'campistryMe', value: { sessions: [{ name: 'Summer', startDate: '2000-01-01', endDate: '2999-12-31' }] } }];
 T.tables.camp_users = [{ camp_id: 'camp1', user_id: 'u-counselor' }];
 let state: any = { enabled: true, cardOnFile: true, stripeCustomerId: 'cus_P', thresholdEnabled: true, thresholdAmount: 5, thresholdReloadAmount: 50 };
 T.rpc.canteen_autoreload_accounts = () => [{ camp_id: 'camp1', resolvable: true, person_id: 7, camper_name: 'Avi', account: { balance: 3, autoReload: JSON.parse(JSON.stringify(state)) } }];
@@ -45,6 +47,8 @@ test('TED-085: a retry after a declined reload is a new Stripe request, not a re
     const r = runEdge('canteen-auto-reload', `
 T.env = { STRIPE_SECRET_KEY: 'sk_test', SUPABASE_URL: 'http://db', SUPABASE_ANON_KEY: 'anon', SUPABASE_SERVICE_ROLE_KEY: 'svc', CANTEEN_AUTORELOAD_CRON_SECRET: 'c' };
 T.tables.camps = [{ id: 'camp1', owner: 'u-owner', payment_processor_key: null }];
+// camp is in session today (TED-143: auto-reload charges only then)
+T.tables.camp_state_kv = [{ camp_id: 'camp1', key: 'campistryMe', value: { sessions: [{ name: 'Summer', startDate: '2000-01-01', endDate: '2999-12-31' }] } }];
 let state: any = { enabled: true, cardOnFile: true, stripeCustomerId: 'cus_P', thresholdEnabled: true, thresholdAmount: 5, thresholdReloadAmount: 50 };
 T.rpc.canteen_autoreload_accounts = () => [{ camp_id: 'camp1', resolvable: true, person_id: 7, camper_name: 'Avi', account: { balance: 3, autoReload: JSON.parse(JSON.stringify(state)) } }];
 T.rpc.update_canteen_autoreload_state = (a: any) => { state = a.p_autoreload; return { success: true }; };
@@ -69,6 +73,8 @@ test('TED-094: a Stripe server error is not a decline — the retry repeats the 
     const r = runEdge('canteen-auto-reload', `
 T.env = { STRIPE_SECRET_KEY: 'sk_test', SUPABASE_URL: 'http://db', SUPABASE_ANON_KEY: 'anon', SUPABASE_SERVICE_ROLE_KEY: 'svc', CANTEEN_AUTORELOAD_CRON_SECRET: 'c' };
 T.tables.camps = [{ id: 'camp1', owner: 'u-owner', payment_processor_key: null }];
+// camp is in session today (TED-143: auto-reload charges only then)
+T.tables.camp_state_kv = [{ camp_id: 'camp1', key: 'campistryMe', value: { sessions: [{ name: 'Summer', startDate: '2000-01-01', endDate: '2999-12-31' }] } }];
 let state: any = { enabled: true, cardOnFile: true, stripeCustomerId: 'cus_P', thresholdEnabled: true, thresholdAmount: 5, thresholdReloadAmount: 50 };
 T.rpc.canteen_autoreload_accounts = () => [{ camp_id: 'camp1', resolvable: true, person_id: 7, camper_name: 'Avi', account: { balance: 3, autoReload: JSON.parse(JSON.stringify(state)) } }];
 T.rpc.update_canteen_autoreload_state = (a: any) => { state = a.p_autoreload; return { success: true }; };

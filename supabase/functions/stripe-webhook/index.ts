@@ -183,20 +183,27 @@ async function upsertPayment(
   // Stripe does not promise the order of its events. A "processing" event that
   // lands AFTER "succeeded" (a retried delivery, a slow queue) used to patch
   // the paid row back to pending — the family owed the money again, and
-  // Charge Card offered to debit them a second time (TED-144). So a processing
-  // event is checked against the payment as it stands now, and does nothing
-  // once the payment has a final answer.
+  // Charge Card offered to debit them a second time (TED-144); one landing
+  // after "payment_failed" turned a returned debit back into "on its way" for
+  // two weeks, blocking Charge Card and autopay (TED-154). So a processing
+  // event is checked against the payment as it stands NOW, and recorded only
+  // while Stripe still says processing. If Stripe cannot be asked, the
+  // delivery is answered 500 and Stripe sends it again.
   if (status === "pending" && STRIPE_SECRET && pi.id) {
+    let now: any = null;
     try {
       const resp = await fetch(`${STRIPE_API}/payment_intents/${encodeURIComponent(String(pi.id))}`, {
         headers: { "Authorization": `Bearer ${STRIPE_SECRET}` },
       });
-      const now = resp.ok ? await resp.json() : null;
-      if (now && (now.status === "succeeded" || now.status === "canceled")) {
-        console.log(`[stripe-webhook] ${pi.id} is ${now.status} already — the late 'processing' event changes nothing`);
-        return true;
-      }
-    } catch (_) { /* not asked: recorded as before */ }
+      now = resp.ok ? await resp.json() : null;
+    } catch (_) { now = null; }
+    if (!now || typeof now.status !== "string") {
+      throw new Error(`${pi.id}: Stripe could not be asked how the payment stands — the 'processing' event will come again`);
+    }
+    if (now.status !== "processing") {
+      console.log(`[stripe-webhook] ${pi.id} is ${now.status} now — the late 'processing' event changes nothing`);
+      return true;
+    }
   }
   const patch: Record<string, any> = {
     status: status,

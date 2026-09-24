@@ -260,11 +260,23 @@ test('TED-144: a "processing" event arriving AFTER "succeeded" leaves the paymen
 });
 
 test('TED-144: a "processing" event in its place is recorded as on its way, as before', () => {
-    for (const now of ['processing', null]) {
+    const r = hook('processing');
+    const a = appended(r);
+    assert.strictEqual(a.length, 1);
+    assert.strictEqual(a[0].args.p_payment.status, 'pending');
+    assert.strictEqual(a[0].args.p_update_on_match.status, 'pending');
+});
+
+test('TED-154: a "processing" event arriving after the bank RETURNED the debit does not make it "on its way" again', () => {
+    for (const now of ['requires_payment_method', 'canceled', 'succeeded']) {
         const r = hook(now);
-        const a = appended(r);
-        assert.strictEqual(a.length, 1, String(now));
-        assert.strictEqual(a[0].args.p_payment.status, 'pending');
-        assert.strictEqual(a[0].args.p_update_on_match.status, 'pending');
+        assert.strictEqual(r.status, 200, now);
+        assert.strictEqual(appended(r).length, 0, 'a ' + now + ' debit was turned back into "on its way"');
     }
+});
+
+test('TED-154: Stripe cannot be asked — 500, so the event comes again (never recorded on a guess)', () => {
+    const r = hook(null);
+    assert.strictEqual(r.status, 500);
+    assert.strictEqual(appended(r).length, 0);
 });

@@ -21,13 +21,17 @@ INSERT INTO camp_state_kv (camp_id, key, value) VALUES ('f2810000-0000-0000-0000
                              'cardFee', jsonb_build_object('mode', 'surcharge', 'base', 1000))),
        'credits', jsonb_build_array(
           jsonb_build_object('id', 'cfr_1', 'amount', 29.13, 'reason', 'correction', 'cardFeeReturn', true,
-                             'refundId', 're_s1', 'refundOf', 'pi_pi_s')),
+                             'refundId', 're_s1', 'refundOf', 'pi_pi_s'),
+          -- another refund's surcharge credit, which went through: never touched
+          jsonb_build_object('id', 'cfr_2', 'amount', 10, 'reason', 'correction', 'cardFeeReturn', true,
+                             'refundId', 're_ok', 'refundOf', 'pi_pi_s')),
        'entries', jsonb_build_array(
           jsonb_build_object('id', 'le_chg_t1', 'kind', 'charge', 'amount', 1000, 'reason', 'tuition', 'source', jsonb_build_object('chargeId', 't1')),
           jsonb_build_object('id', 'le_chg_sur_1', 'kind', 'charge', 'amount', 30, 'reason', 'fee', 'source', jsonb_build_object('chargeId', 'sur_1')),
           jsonb_build_object('id', 'le_pay_pi_s', 'kind', 'payment', 'amount', 1030, 'reason', 'card', 'source', jsonb_build_object('paymentId', 'pi_s')),
           jsonb_build_object('id', 'le_pay_re_s1', 'kind', 'refund', 'amount', 1000, 'reason', 'refund', 'source', jsonb_build_object('paymentId', 're_s1')),
-          jsonb_build_object('id', 'le_cfr_1', 'kind', 'credit', 'amount', 29.13, 'reason', 'correction', 'source', jsonb_build_object('creditId', 'cfr_1')))))));
+          jsonb_build_object('id', 'le_cfr_1', 'kind', 'credit', 'amount', 29.13, 'reason', 'correction', 'source', jsonb_build_object('creditId', 'cfr_1')),
+          jsonb_build_object('id', 'le_cfr_2', 'kind', 'credit', 'amount', 10, 'reason', 'correction', 'source', jsonb_build_object('creditId', 'cfr_2')))))));
 
 DO $$
 DECLARE
@@ -38,24 +42,29 @@ DECLARE
     b   boolean;
 BEGIN
     fam := public.camp_family_for_update(c, 'slate');
-    IF public.family_ledger_balance(fam) <> 970.87 THEN
-        RAISE EXCEPTION 'setup: Slate should owe $970.87 after the refund, owes %', public.family_ledger_balance(fam);
+    IF public.family_ledger_balance(fam) <> 960.87 THEN
+        RAISE EXCEPTION 'setup: Slate should owe $960.87 after the refunds, owes %', public.family_ledger_balance(fam);
     END IF;
 
     -- 1. the refund fails: the $1,000 back (278), and the $29.13 back (281)
     r := public.reverse_failed_stripe_refund(c, 're_s1', 'expired or canceled card');
     IF (r->>'success')::boolean IS NOT TRUE OR r->>'familyKey' <> 'slate' THEN RAISE EXCEPTION 'put-back: %', r; END IF;
     fam := public.camp_family_for_update(c, 'slate');
-    IF public.family_ledger_balance(fam) <> -29.13 THEN
-        RAISE EXCEPTION 'setup: after the put-back alone Slate should hold the $29.13 credit, balance %', public.family_ledger_balance(fam);
+    IF public.family_ledger_balance(fam) <> -39.13 THEN
+        RAISE EXCEPTION 'setup: after the put-back alone Slate should hold $39.13 of credit, balance %', public.family_ledger_balance(fam);
     END IF;
     r := public.undo_card_fee_return(c, 'slate', 're_s1');
     IF (r->>'success')::boolean IS NOT TRUE OR (r->>'undone')::int <> 1 OR (r->>'amount')::numeric <> 29.13 THEN
         RAISE EXCEPTION 'undo: %', r;
     END IF;
     fam := public.camp_family_for_update(c, 'slate');
-    IF public.family_ledger_balance(fam) <> 0 THEN
-        RAISE EXCEPTION 'TED-148: Slate keeps a surcharge credit for a refund that failed — balance %', public.family_ledger_balance(fam);
+    IF public.family_ledger_balance(fam) <> -10 THEN
+        RAISE EXCEPTION 'TED-148: after the undo Slate should keep only the other refund''s $10 — balance %', public.family_ledger_balance(fam);
+    END IF;
+    -- only the failed refund's credit came back, not every surcharge credit
+    SELECT count(*) INTO n FROM jsonb_array_elements(fam->'charges') x WHERE x->>'id' LIKE 'cfr_undo_%';
+    IF n <> 1 OR EXISTS (SELECT 1 FROM jsonb_array_elements(fam->'charges') x WHERE x->>'id' = 'cfr_undo_cfr_2') THEN
+        RAISE EXCEPTION 'another refund''s surcharge credit was taken back too: %', fam->'charges';
     END IF;
     SELECT count(*) INTO n FROM jsonb_array_elements(fam->'charges') x
      WHERE x->>'id' = 'cfr_undo_cfr_1' AND (x->>'amount')::numeric = 29.13 AND (x->>'cardFeeUndo')::boolean;
@@ -70,7 +79,7 @@ BEGIN
     r := public.undo_card_fee_return(c, 'slate', 're_other');
     IF (r->>'undone')::int <> 0 THEN RAISE EXCEPTION 'another refund''s failure took this surcharge back: %', r; END IF;
     fam := public.camp_family_for_update(c, 'slate');
-    IF public.family_ledger_balance(fam) <> 0 THEN RAISE EXCEPTION 'balance moved on a repeat: %', public.family_ledger_balance(fam); END IF;
+    IF public.family_ledger_balance(fam) <> -10 THEN RAISE EXCEPTION 'balance moved on a repeat: %', public.family_ledger_balance(fam); END IF;
     r := public.undo_card_fee_return(c, 'nobody', 're_s1');
     IF r->>'error' IS DISTINCT FROM 'family_not_found' THEN RAISE EXCEPTION 'unknown family: %', r; END IF;
 

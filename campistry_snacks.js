@@ -697,7 +697,7 @@ function renderStats() {
     // without selling anything, and a deposit refund reverses money that was
     // never a sale in the first place — neither should count as revenue.
     const salesToday = (snacks.transactions || [])
-        .filter(t => t.date === todayStr() && t.type !== 'credit' && t.kind !== 'cash_out' && t.kind !== 'refund')
+        .filter(t => t.date === todayStr() && _isSale(t))
         .reduce((s, t) => s + (parseFloat(t.amount) || 0), 0);
     document.getElementById('sS').textContent = '$' + salesToday.toFixed(0);
     const cashEl = document.getElementById('sC');
@@ -804,6 +804,16 @@ function _renderHistoryBody() {
     body.innerHTML = txs.map(_histRowHtml).join('') + _archivedHistoryHtml();
 }
 
+/**
+ * Is this line a SALE? Only purchases are. Deposits (credits), cash taken
+ * out, deposit refunds and the office's end-of-season close-out (TED-152)
+ * all move money without selling anything, so none of them is revenue —
+ * one rule, for the sales tile, the day's revenue and the week's chart.
+ */
+function _isSale(t) {
+    return !!t && t.type !== 'credit' && t.kind !== 'cash_out' && t.kind !== 'refund' && t.kind !== 'closeout';
+}
+
 function _histRowHtml(t) {
     const credit = t.type === 'credit';
     const auto = credit && (t.kind === 'autoreload' || /auto[- ]?(reload|pay)/i.test(t.items || ''));
@@ -813,6 +823,7 @@ function _histRowHtml(t) {
     if (auto) label = 'Auto-reload top-up';
     else if (isRefund) label = 'Refund';
     else if (t.kind === 'refund_failed') label = 'Refund failed — money back on the wallet';
+    else if (t.kind === 'closeout') label = t.items || 'Season close-out';
     else if (isCashOut) label = 'Cash out';
     const tag = auto ? '<span class="hist-tag">Auto-Pay</span>' : '';
     const when = (t.date || '') + (t.time ? ' · ' + t.time : '');
@@ -873,7 +884,7 @@ function rAnalytics() {
     // sell nothing — a refund is a debit (money leaving the camp's ledger
     // back to the parent, same sign as a purchase) but it's the opposite of
     // a sale, so it has to be excluded here just like credits/cash-outs are.
-    const saleTx = todayTx.filter(t => t.type !== 'credit' && t.kind !== 'cash_out' && t.kind !== 'refund');
+    const saleTx = todayTx.filter(_isSale);
     const sal = saleTx.reduce((s, t) => s + (parseFloat(t.amount) || 0), 0);
     const tc = saleTx.length;
     const I = snacks.inventory;
@@ -989,7 +1000,7 @@ function rAnalytics() {
         d.setDate(d.getDate() - i);
         const key = d.getFullYear() + '-' + String(d.getMonth() + 1).padStart(2, '0') + '-' + String(d.getDate()).padStart(2, '0');
         const amt = (snacks.transactions || [])
-            .filter(t => t.date === key && t.type !== 'credit' && t.kind !== 'cash_out' && t.kind !== 'refund')
+            .filter(t => t.date === key && _isSale(t))
             .reduce((s, t) => s + (parseFloat(t.amount) || 0), 0);
         WK.push({ day: DOW[d.getDay()], amount: Math.round(amt * 100) / 100 });
     }
@@ -1009,8 +1020,9 @@ function rAnalytics() {
         const amt = Math.abs(parseFloat(t.amount) || 0);
         const credit = t.type === 'credit';
         const cashOut = t.kind === 'cash_out';
-        const refund = t.kind === 'refund';
-        const kind = refund  ? '<span class="badge badge-amber">Refund</span>'
+        const refund = t.kind === 'refund' || t.kind === 'closeout';
+        const kind = t.kind === 'closeout' ? '<span class="badge badge-amber">Season close-out</span>'
+                   : refund  ? '<span class="badge badge-amber">Refund</span>'
                    : t.kind === 'refund_failed' ? '<span class="badge badge-amber">Refund failed</span>'
                    : cashOut ? '<span class="badge badge-amber">Cash out</span>'
                    : credit  ? '<span class="badge badge-green">Deposit</span>'

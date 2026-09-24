@@ -457,7 +457,7 @@
                         <input type="date" class="lk-input" id="arStopDate">
                     </div>
                 </div>
-                <p class="ar-hint">The end date starts at the last day of camp. Auto-reload only charges within this window — and the camp stops it after the season either way.</p>
+                <p class="ar-hint">The end date starts at the last day of camp. Auto-reload only charges within this window, and only on days camp is in session.</p>
             </div>
         </div>
         <div class="ar-option" id="arFreqOption">
@@ -479,6 +479,7 @@
         <div class="ar-actions">
             <button class="btn btn-secondary btn-sm" id="arCardBtn" onclick="startCanteenAutoReloadSetup()" style="display:none;">Update card</button>
             <button class="btn btn-ghost btn-sm" id="arOffBtn" onclick="turnOffAutoReload()" style="display:none;">Turn off</button>
+            <button class="btn btn-primary btn-sm" id="arOnBtn" onclick="saveAutoReload()" style="display:none;">Switch it back on</button>
         </div>
     </div>
     <div class="lk-card lk-collapsible collapsed"><div class="lk-card-head lk-card-toggle" onclick="_lkToggleCard(this)"><div class="lk-head-main"><h2>Recent Transactions</h2><div class="lk-card-summary" id="txSummary"></div></div><span class="lk-card-chevron">&#9662;</span></div><div id="txList"></div></div>
@@ -2570,6 +2571,7 @@ function _renderAutoReload(c){
     _arRenderSessionPicker(c);
 
     var msg=document.getElementById('arStatusMsg'), cardBtn=document.getElementById('arCardBtn'), offBtn=document.getElementById('arOffBtn');
+    var onBtn=document.getElementById('arOnBtn'); if(onBtn) onBtn.style.display='none';
     if(!msg) return;
     // Charges only land inside [startDate,stopDate] (either end optional) —
     // the cron enforces this server-side too (canteen-auto-reload/index.ts),
@@ -2598,10 +2600,13 @@ function _renderAutoReload(c){
         cardBtn.style.display=''; cardBtn.textContent='Add a card';
         offBtn.style.display='';
     } else if(!ar.enabled && ar.disabledReason && (Number(ar.consecutiveFailures)||0)<3){
-        // switched off by the camp — at the end-of-season refund, say (TED-143)
+        // switched off by the camp — at the end-of-season refund, say (TED-143).
+        // The triggers are still ticked, so ticking one saves nothing: a plain
+        // button switches it back on with the settings shown (TED-156).
         _arStatus('paused','<strong>Auto-reload was switched off</strong> — '+_escHtml(ar.disabledReason)+'.');
         cardBtn.style.display='none';
         offBtn.style.display='none';
+        if(onBtn) onBtn.style.display='';
     } else if(!ar.enabled && (Number(ar.consecutiveFailures)||0)>=3){
         _arStatus('paused','<strong>Auto-reload paused</strong> — your card was declined ('+_escHtml(ar.lastFailureReason||'payment failed')+'). Update your card to resume.');
         cardBtn.style.display=''; cardBtn.textContent='Update card';

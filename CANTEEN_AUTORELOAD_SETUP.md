@@ -136,19 +136,26 @@ select cron.schedule(
 );
 ```
 
-## At the end of the season
+## When it charges — only while camp is in session
 
-Auto-reload must not keep charging parents after camp (TED-143). Three things
-stop it:
+Auto-reload must not charge parents outside camp (TED-143). The runner charges
+a parent only on a day that falls inside one of the camp's **sessions**:
 
-1. **The camp's end date.** Dashboard → **Camp dates** → set the end date.
-   The day after it, the runner charges nobody at this camp.
+1. **The session dates.** Dashboard → **Dates & Pricing** → each session's
+   start and end date. Before the first session starts (for example after you
+   enter next summer's sessions in the spring), between two sessions, and
+   after the last one ends, the runner charges nobody at this camp. A camp
+   with **no session dates at all** has no season, so nobody is charged
+   automatically until you add them.
 2. **The office's switch.** Snacks → **Settings** → *Parents' auto-reload* →
-   **Off** → Save. Do this on the last day, before Refund All — it stops every
-   parent's auto-reload at once, whatever dates they chose.
+   **Off** → Save. It stops every parent's auto-reload at once, whatever dates
+   they chose. Use it at the end of the season, before Refund All, or any time.
 3. **Refunds.** Refund All (and a child's own Refund that empties the wallet)
    switches that child's auto-reload off; the parent sees "Auto-reload was
    switched off" in Link and can switch it back on.
+
+To test the runner outside the season (step below), add a test session that
+covers today, and delete it afterwards.
 
 ## How to verify it's working
 

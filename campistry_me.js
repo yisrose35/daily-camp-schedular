@@ -2389,6 +2389,10 @@ function addCardSurcharge(famKey){
             +'rules, which is why this will not guess one for you.</p>');
         return;
     }
+    // Cash-discount mode has no fee to add: its tool gives the discount for a
+    // bank payment made ONLINE (a pay link, a bank debit), which Record
+    // Payment never sees (TED-153).
+    if(pol.mode==='cash_discount')return _giveCashDiscount(famKey);
     var x=F.explain(pol);
     if(x&&x.blockers&&x.blockers.length){
         showModal('Not chargeable yet',
@@ -2419,8 +2423,10 @@ function addCardSurcharge(famKey){
         // The family's OWN card decides it (TED-140): a surcharge on a debit or
         // prepaid card is what the brands forbid, and a card whose type is not
         // on file is treated the same — never assumed to be credit.
-        // ...and only when that card is what will be charged (TED-147).
-        if(_familyDefaultIsBank(f)){
+        // ...and only when that card is what will be charged (TED-147). A flat
+        // convenience fee is for the channel, not the card, and bank payments
+        // may carry it (TED-155) — this is about the percentage surcharge.
+        if(pol.mode==='surcharge'&&_familyDefaultIsBank(f)){
             toast('Not added: '+(f.name||'this family')+'\u2019s default payment method is a bank account, so Charge Card and autopay would take a card fee by bank debit \u2014 which the card brands forbid. Make their credit card the default first.','error');return;
         }
         var q=F.quote(pol,{amount:base,method:'card',funding:_familyCardFunding(f),channel:'online'});
@@ -2443,6 +2449,29 @@ function addCardSurcharge(famKey){
         toast('Card fee of '+fm(q.fee)+' added to '+(f.name||'the account'));
     },'Add fee');
     _surchargePreview();
+}
+
+function _giveCashDiscount(famKey){
+    var f=families[famKey];
+    if(!f){toast('Family not found','error');return}
+    var owed=Math.max(0,(buildFamilyLedgers()[famKey]||{}).balance||0);
+    var h='<div class="me-modal-form">';
+    h+='<p style="font-size:.84rem;color:var(--s600);margin:0 0 10px;line-height:1.6">Cheques, cash and bank transfers you record with <strong>Record Payment</strong> get the discount automatically. '
+      +'Use this for a bank payment the family made <strong>online</strong> (a pay link or a bank debit) \u2014 enter what they paid, before the discount.</p>';
+    h+='<div class="me-field"><label>Paid by bank ($)</label><input type="number" id="cdAmt" class="me-input" step="0.01" min="0"></div>';
+    h+='<p style="font-size:.78rem;color:var(--s500);margin:6px 0 0">They owe '+fm(owed)+' now.</p>';
+    h+='</div>';
+    showModal('Discount for not paying by card',h,function(){
+        var amt=parseFloat((document.getElementById('cdAmt')||{}).value)||0;
+        if(!(amt>0)){toast('Enter what they paid by bank','error');return}
+        // What they owed before that payment is what it settled against.
+        var cd=_cashDiscountFor(owed+amt,amt,'ach');
+        if(!(cd.discount>0)){toast('That works out to no discount','error');return}
+        var n=_postCashDiscount(f,{id:'manual_'+Date.now(),date:today()},cd);
+        save();closeModal('dynModal');
+        if(curPage==='familydetail')renderFamilyDetailPage();else renderBilling();
+        toast(fm(n)+' off '+(f.name||'the account')+' for not paying by card');
+    },'Give discount');
 }
 
 /**
@@ -18142,7 +18171,9 @@ function renderFamilyDetailPage(){
     else if(l.balance>0.005) moreItems+='<button onclick="CampistryMe.monthlyPlan(\''+je(l.famKey)+'\')">Set up Payment Plan</button>';
     moreItems+=hasCard?'<button onclick="CampistryMe.requestCardSetup(\''+je(l.famKey)+'\')">Replace payment method</button>':'<button onclick="CampistryMe.requestCardSetup(\''+je(l.famKey)+'\')">Set up payment method</button>';
     moreItems+='<button onclick="CampistryMe.addChargeForFamily(\''+je(l.famKey)+'\')">Add Charge</button>';
-    moreItems+='<button onclick="CampistryMe.addCardSurcharge(\''+je(l.famKey)+'\')">Add card surcharge\u2026</button>';
+    var _cfMode=(function(){try{var F=_cfAPI();return F?F.normalize(enrollSettings.cardFeePolicy).mode:'off'}catch(_){return 'off'}})();
+    moreItems+='<button onclick="CampistryMe.addCardSurcharge(\''+je(l.famKey)+'\')">'
+        +(_cfMode==='cash_discount'?'Discount for not paying by card\u2026':_cfMode==='convenience'?'Add online payment fee\u2026':'Add card surcharge\u2026')+'</button>';
     moreItems+='<button onclick="CampistryMe.closeOutFamily(\''+je(l.famKey)+'\')">Close out\u2026</button>';
     moreItems+='<button onclick="CampistryMe.issueCreditForFamily(\''+je(l.famKey)+'\')">Issue Credit/Refund</button>';
     moreItems+='<button onclick="CampistryMe.printStatement(\''+je(l.famKey)+'\')">Print Statement</button>';
@@ -18282,6 +18313,58 @@ function setBillSearch(q){
     if(el){ el.focus(); var p=el.value.length; el.setSelectionRange(p,p); }
 }
 
+// ── The "discount for not paying by card" (TED-153) ──────────────────────
+// In that card-fee mode the card price is the posted price and a family paying
+// by cheque, cash or bank transfer is promised X% off (the registration form
+// says so). It was never given: a family paying $970 by cheque against $1,000
+// still owed $30. Now a payment the office records by one of those methods
+// carries its discount, as its own credit line on the bill.
+//
+// The discount is on the part of the bill the payment settles: $970 at 3%
+// settles $1,000 (970 is 97% of it) and earns $30; a payment of the full
+// posted $1,000 settles the $1,000 owed and earns the same $30 back as credit.
+var _CASH_DISCOUNT_METHODS={cash:'cash',check:'check',ach:'ach',zelle:'ach',wire:'ach'};
+function _cashDiscountFor(owedBefore,amount,method){
+    var F=_cfAPI(); if(!F)return {discount:0};
+    var pol=F.normalize(enrollSettings.cardFeePolicy);
+    if(pol.mode!=='cash_discount')return {discount:0};
+    var m=_CASH_DISCOUNT_METHODS[String(method||'').toLowerCase()];
+    var amt=Math.round((Number(amount)||0)*100)/100;
+    var owed=Math.max(0,Math.round((Number(owedBefore)||0)*100)/100);
+    if(!m||!(amt>0)||!(owed>0))return {discount:0};
+    var pct=Math.min(99.99,pol.cashDiscountPct)/100;
+    var settles=Math.min(owed,(amt+pol.cashDiscountFlat)/(1-pct));
+    var q=F.quote(pol,{amount:settles,method:m,channel:'office'});
+    var d=Math.max(0,Math.round((Number(q.discount)||0)*100)/100);
+    return {discount:d,settles:Math.round(settles*100)/100,pct:pol.cashDiscountPct,flat:pol.cashDiscountFlat};
+}
+// Posted with the payment it belongs to, once (keyed on the payment's id).
+function _postCashDiscount(f,payRow,cd){
+    if(!f||!payRow||!cd||!(cd.discount>0))return 0;
+    if(!Array.isArray(f.credits))f.credits=[];
+    var id='cdisc_'+String(payRow.id);
+    if(f.credits.some(function(c){return c&&c.id===id}))return 0;
+    var bits=[];
+    if(cd.pct>0)bits.push(cd.pct+'%');
+    if(cd.flat>0)bits.push(fm(cd.flat));
+    var cr={id:id,amount:cd.discount,date:payRow.date||today(),reason:'discount',cashDiscount:true,paymentId:payRow.id,
+        note:'Discount for not paying by card ('+bits.join(' + ')+' on '+fm(cd.settles)+')',timestamp:Date.now()};
+    f.credits.push(cr);
+    _postLedgerCredit(f,cr);
+    f.balance=Math.round(((f.balance||0)-cd.discount)*100)/100;
+    return cd.discount;
+}
+function _payDiscountPreview(){
+    var box=document.getElementById('payDiscount'); if(!box)return;
+    var fk=(document.getElementById('payFamKey')||{}).value;
+    var amt=parseFloat((document.getElementById('payAmount')||{}).value)||0;
+    var method=(document.getElementById('payMethod')||{}).value;
+    var cd=fk&&families[fk]?_cashDiscountFor((buildFamilyLedgers()[fk]||{}).balance||0,amt,method):{discount:0};
+    box.innerHTML=cd.discount>0
+        ?'<div style="font-size:.8rem;color:var(--ok);margin:4px 0 8px">Discount for not paying by card: <strong>'+fm(cd.discount)+'</strong> \u2014 also taken off their bill with this payment.</div>'
+        :'';
+}
+
 function openPaymentModal(){openPaymentForFamily(null)}
 
 function openPaymentForFamily(famKey){
@@ -18314,6 +18397,7 @@ function openPaymentForFamily(famKey){
     // Reference # neighbor, which is what made the row look broken rather
     // than just informative.
     h+=_payBlockedNote('tuition');
+    h+='<div id="payDiscount"></div>';
     h+='<div class="me-field"><label>Notes (optional)</label><input type="text" id="payNotes" class="me-input" placeholder="e.g., June installment"></div>';
     h+='</div>';
     showModal('Record Payment',h,function(){
@@ -18330,13 +18414,22 @@ function openPaymentForFamily(famKey){
         if(!_payAllowed(method,'tuition')){toast('That payment method isn\'t accepted for tuition.','error');return}
         var ref=document.getElementById('payRef').value.trim();
         var notes=document.getElementById('payNotes').value.trim();
-        var _payRow={id:'pay_'+Date.now(),family:f.name,familyKey:fk,amount:amt,date:date,method:method,reference:ref,notes:notes,timestamp:Date.now()};
+        var _payRow={id:'pay_'+Date.now()+'_'+Math.random().toString(36).slice(2,7),family:f.name,familyKey:fk,amount:amt,date:date,method:method,reference:ref,notes:notes,timestamp:Date.now()};
+        // What the family owed before this payment decides its discount (TED-153).
+        var _cd=_cashDiscountFor((buildFamilyLedgers()[fk]||{}).balance||0,amt,method);
         finPayments.push(_payRow);
         _postPaymentEntry(f,_payRow);   // the balance, not just the receipt
         f.totalPaid=(f.totalPaid||0)+amt;
         f.balance=Math.max(0,(f.balance||0)-amt);
-        save();closeModal('dynModal');if(curPage==='familydetail')renderFamilyDetailPage();else renderBilling();toast('Payment of '+fm(amt)+' recorded for '+f.name);
+        var _disc=_postCashDiscount(f,_payRow,_cd);
+        save();closeModal('dynModal');if(curPage==='familydetail')renderFamilyDetailPage();else renderBilling();
+        toast('Payment of '+fm(amt)+' recorded for '+f.name+(_disc>0?' \u2014 with '+fm(_disc)+' off for not paying by card':''));
     });
+    ['payFamKey','payAmount','payMethod'].forEach(function(id){
+        var el=document.getElementById(id);
+        if(el){el.addEventListener('input',_payDiscountPreview);el.addEventListener('change',_payDiscountPreview);}
+    });
+    _payDiscountPreview();
 }
 
 function addCharge(){
@@ -20486,7 +20579,7 @@ function _cfCardHtml(pol){
         ['off','Nothing passed on','The camp absorbs the processing cost.'],
         ['surcharge','Credit-card surcharge (%)','A percentage on credit cards only. Capped at 3%. Never on debit.'],
         ['convenience','Online payment fee (flat)','A fixed amount per online payment. Applies to debit and bank transfers too.'],
-        ['cash_discount','Discount for not paying by card','The card price is the posted price. Safest of the three.']
+        ['cash_discount','Discount for not paying by card','The card price is the posted price. Safest of the three. Taken off automatically when you record a cheque, cash or bank-transfer payment in Billing; for a bank payment made online, give it from the family\u2019s More menu.']
     ];
     h+='<div style="margin-bottom:14px">';
     MODES.forEach(function(m){
