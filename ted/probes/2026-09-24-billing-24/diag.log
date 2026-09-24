@@ -1,0 +1,7 @@
+cron result: {"ok":true,"charged":1,"failed":0,"details":[{"camp":"0ed23b00-0000-0000-0000-000000000001","camper":"Eli","camperId":11,"amount":20,"kind":"threshold","result":"charged","processor":"cardknox"}]}
+
+canteen_transactions payloads:
+credit | autoreload | byop=7001 | stripe=(none) | {"date": "2026-09-24", "kind": "autoreload", "time": "07:35 PM", "type": "credit", "items": "Auto-reload top-up", "amount": 20, "camper": "Eli", "method": "cardknox", "timestamp": 1790278502521, "byopTransactionId": "7001"}
+
+canteen_dispute_family(7001): {"error": "deposit_not_found", "success": false}
+_canteen_deposit_of(7001) camper: (null)

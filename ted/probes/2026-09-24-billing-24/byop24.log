@@ -1,0 +1,33 @@
+K1. TED-212: Birch paid $500 by Cardknox (ref 9001). Cardknox sends its ORDINARY transaction postback (Approved cc:sale) to the dispute URL
+  HTTP 200 {"received":true,"ignored":"not_a_chargeback"}; chargeback lines: none; Birch owes $500; pause none
+  ok  K1 an ordinary Approved sale posts NO chargeback and pauses nobody   → cb none, pause no, body {"received":true,"ignored":"not_a_chargeback"}
+
+K1b. TED-212: a refund and a void sent to the dispute URL are also ignored
+  ok  K1b refund/void ignored   → {"received":true,"ignored":"not_a_chargeback"} / {"received":true,"ignored":"not_a_chargeback"}
+
+K2. TED-211/210: Eli auto-reload on tok_eli; Ezra (same family) auto-reload on tok_ezra; wallets Eli $0 Ezra $0
+  run today: Eli $20 → charged; Ezra $20 → charged
+  after run: Eli $20.00 (tok_eli sales: 2026-09-24 $20), Ezra $20.00 (tok_ezra sales: 2026-09-24 $20)
+  parent disputes Eli's $20 top-up (ref 7001): HTTP 200 {"received":true}
+  log: [byop-dispute] cardknox: chargeback ck_7001 NOT posted (family_not_found) — the camp's books now overstate collected cash until this is reconciled by hand. refs=7001,7001
+  Eli wallet now $20.00; Eli auto-reload: true / -; family pause: none
+  BAD K2a disputed top-up comes off Eli's wallet   → wallet $20.00
+  BAD K2b Eli's auto-reload switched off   → true / -
+  BAD K2c the FAMILY is paused (TED-210)   → none
+
+  Next day (2026-09-25): Eli spent it (wallet 0), Ezra spent it (wallet 0). Run again:
+    run: Eli $20 → charged; Ezra $20 → charged
+  tok_eli sales: 2026-09-24 $20, 2026-09-25 $20; tok_ezra sales: 2026-09-24 $20, 2026-09-25 $20
+  BAD K2d Eli's card (disputed top-up) not charged again   → 2026-09-24 $20, 2026-09-25 $20
+  BAD K2e Ezra (SIBLING, family paused) not charged again next day (TED-210)   → 2026-09-24 $20, 2026-09-25 $20
+
+K4. TED-212 win: Eli's canteen chargeback (ck_7001) reversed in the camp's favour ("Chargeback Reversal")
+  HTTP 200 {"received":true}; Eli wallet $20.00; family pause now none
+  BAD K4a a "Chargeback Reversal" puts the $20 back on the wallet   → wallet $20.00
+  ok  K4b family pause lifted on the win   → none
+
+K3. TED-206 retry rule (canteen dispute path)
+  reversal DB error → HTTP 200; unknown ref → HTTP 200 {"received":true}
+  BAD K3 DB error 500; genuinely unknown ref 200   → 200/200
+
+7 BAD

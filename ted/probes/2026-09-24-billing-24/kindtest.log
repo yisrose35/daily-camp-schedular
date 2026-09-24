@@ -1,0 +1,2 @@
+manual deposit (5001): {"camper": "Eli", "success": true, "familyKey": null}
+autoreload    (7001): {"error": "deposit_not_found", "success": false}
