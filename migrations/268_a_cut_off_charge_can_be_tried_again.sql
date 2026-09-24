@@ -143,6 +143,7 @@ BEGIN
                 AND pg_get_constraintdef(oid) ~ 'kind' LOOP
         EXECUTE format('ALTER TABLE public.processor_transactions DROP CONSTRAINT %I', c);
     END LOOP;
+    ALTER TABLE public.processor_transactions DROP CONSTRAINT IF EXISTS processor_transactions_kind_check;
     ALTER TABLE public.processor_transactions
         ADD CONSTRAINT processor_transactions_kind_check CHECK (kind ~ '^[a-z][a-z_]{0,39}$');
 END $$;

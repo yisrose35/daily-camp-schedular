@@ -1,5 +1,5 @@
 -- ============================================================================
--- Confirm migrations 222-269 are in and doing their job.
+-- Confirm migrations 222-270 are in and doing their job.
 --
 -- Paste the whole thing into the Supabase SQL Editor. It is READ ONLY — one
 -- SELECT, nothing is created, changed or deleted, and the two purge functions
@@ -606,6 +606,16 @@ UNION ALL
                OR pg_get_functiondef(to_regprocedure('public.flag_plan_collection(uuid,text,text,text,text)')) !~ '_plan_path'
                OR pg_get_functiondef(to_regprocedure('public._merge_family_from_page(jsonb,jsonb)')) !~ '_merge_plan_state'
           THEN 'apply 269 BEFORE redeploying charge-due-installments — families on an old-style plan who pay by bank are debited every night'
+          ELSE 'ok' END),
+    -- Money notices go only to people who can see Billing (TED-087).
+    ('270  money notices for Billing only',
+     CASE WHEN to_regprocedure('public.is_money_notice(text)') IS NULL
+               OR NOT EXISTS (SELECT 1 FROM pg_policies WHERE tablename = 'notifications' AND policyname = 'notifications_select'
+                               AND qual ~ 'is_money_notice')
+               OR (to_regclass('public.link_tip_cart_items') IS NOT NULL
+                   AND NOT EXISTS (SELECT 1 FROM information_schema.columns
+                                    WHERE table_name = 'link_tip_cart_items' AND column_name = 'stripe_payment_intent_id'))
+          THEN 'apply 270 — every staff member sees unmatched card payments, declines and chargebacks with amounts and cards'
           ELSE 'ok' END)
     ) AS x(item, result)
 

@@ -1169,8 +1169,15 @@ serve(async (req) => {
         }
 
         // The same bookkeeping the webhook does on a first-time success, once.
-        const { data: known } = await supabase.from("link_tips").select("id")
+        // Recorded already — by this transfer, or by the webhook under the
+        // parent's payment (the same pair its own duplicate check uses).
+        const piId = item.stripe_payment_intent_id || null;
+        let { data: known } = await supabase.from("link_tips").select("id")
           .eq("stripe_transfer_id", transfer.id).maybeSingle();
+        if (!known && piId) {
+          ({ data: known } = await supabase.from("link_tips").select("id")
+            .eq("stripe_payment_intent_id", piId).eq("staff_account_id", item.staff_account_id).maybeSingle());
+        }
         if (!known) {
           await supabase.from("link_tips").insert({
             camp_id: item.camp_id, user_id: item.parent_user_id,
@@ -1181,6 +1188,9 @@ serve(async (req) => {
             amount: Number(item.tip_cents) / 100,
             payment_method: "stripe_connect",
             stripe_transfer_id: transfer.id,
+            // The parent's payment, so a dispute or refund looked up by payment
+            // finds this tip (TED-087).
+            stripe_payment_intent_id: piId,
             fee_amount: Number(item.fee_cents || 0) / 100,
           });
           await supabase.rpc("increment_staff_total_earned", {
