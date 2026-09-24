@@ -175,3 +175,87 @@ BEGIN
 END $$;
 
 SELECT 'ALL 215 BEHAVIOUR CHECKS PASSED' AS result;
+
+-- ════════════════════════════════════════════════════════════════════════════
+-- (TED-060) Billing, in the real database — the pieces the TED-051..062 fixes
+-- rest on, run through the functions themselves.
+-- ════════════════════════════════════════════════════════════════════════════
+INSERT INTO public.camps (id, owner, name)
+VALUES ('f2f2f2f2-f2f2-f2f2-f2f2-f2f2f2f2f2f2', NULL, 'Billing Camp');
+INSERT INTO public.camp_state_kv (camp_id, key, value) VALUES
+('f2f2f2f2-f2f2-f2f2-f2f2-f2f2f2f2f2f2', 'campistryMe', jsonb_build_object('families', jsonb_build_object(
+  -- $1,000 tuition, $400 paid, and a $25 late fee posted the way the Me page
+  -- now posts it (TED-053: le_chg_<charge id>).
+  'bf1', jsonb_build_object('name','Gold','camperIds', jsonb_build_array('Avi Gold'),
+     'charges', jsonb_build_array(jsonb_build_object('id','lf_1','category','Late Fee','amount',25)),
+     'entries', jsonb_build_array(
+        jsonb_build_object('id','le_t1','kind','charge','amount',1000,'reason','tuition'),
+        jsonb_build_object('id','le_p1','kind','payment','amount',400,'reason','card'),
+        jsonb_build_object('id','le_chg_lf_1','kind','charge','amount',25,'reason','fee',
+                           'source', jsonb_build_object('chargeId','lf_1')))),
+  -- an office-built installments[] plan, first instalment due
+  'bf2', jsonb_build_object('name','Stone','camperIds', jsonb_build_array('Rina Stone'),
+     'plans', jsonb_build_array(jsonb_build_object('id','plan_o','autopay',true,
+        'installments', jsonb_build_array(
+           jsonb_build_object('n',1,'amount',500,'dueDate','2026-06-01','status','pending'),
+           jsonb_build_object('n',2,'amount',500,'dueDate','2026-07-01','status','pending'))))),
+  -- a parent-built (ledger) plan
+  'bf3', jsonb_build_object('name','Katz','camperIds', jsonb_build_array('Dov Katz'),
+     'entries', jsonb_build_array(jsonb_build_object('id','le_t3','kind','charge','amount',900,'reason','tuition')),
+     'plans', jsonb_build_array(jsonb_build_object('id','plan_p','autopay',true,'paused',false,
+        'dueDates', jsonb_build_array('2026-06-01','2026-07-01','2026-08-01'),'count',3,'nextIndex',0,
+        'history','[]'::jsonb))))));
+
+DO $$
+DECLARE c uuid := 'f2f2f2f2-f2f2-f2f2-f2f2-f2f2f2f2f2f2'; fam jsonb; r jsonb; inst jsonb; d jsonb;
+BEGIN
+    -- TED-053: the parent's balance counts the late fee
+    fam := public.camp_families_object(c) -> 'bf1';
+    IF fam IS NULL THEN RAISE EXCEPTION 'the family did not reach its row'; END IF;
+    IF public.family_ledger_balance(fam) <> 625 THEN
+        RAISE EXCEPTION 'TED-053: the balance with a $25 late fee is %, not 625', public.family_ledger_balance(fam);
+    END IF;
+    IF (public.family_ledger_summary(fam) ->> 'billed')::numeric <> 1025 THEN
+        RAISE EXCEPTION 'TED-053: billed is %, not 1025', public.family_ledger_summary(fam);
+    END IF;
+    RAISE NOTICE 'ok  TED-053: a posted $25 late fee takes the parent balance from 600 to 625';
+
+    -- TED-055: a declined legacy instalment stays PENDING with its reason...
+    r := public.record_autopay_installment(c, 'bf2', 'plan_o', 0, '2026-06-01',
+            jsonb_build_object('failReason','Your card was declined.','attempts',1), NULL, NULL);
+    IF NOT (r ->> 'success')::boolean OR NOT (r ->> 'patched')::boolean THEN
+        RAISE EXCEPTION 'TED-055: the decline was not written: %', r;
+    END IF;
+    inst := public.camp_families_object(c) #> '{bf2,plans,0,installments,0}';
+    IF inst ->> 'status' <> 'pending' OR inst ->> 'failReason' IS NULL THEN
+        RAISE EXCEPTION 'TED-055: a declined instalment must stay pending with its reason: %', inst;
+    END IF;
+    -- ...the plan is flagged (the office is told, a retry date is set)...
+    r := public.flag_plan_collection(c, 'bf2', 'plan_o', 'declined', 'Your card was declined.');
+    IF NOT (r ->> 'success')::boolean THEN RAISE EXCEPTION 'TED-055: flagging an installments[] plan failed: %', r; END IF;
+    IF (public.camp_families_object(c) #>> '{bf2,plans,0,collectionBlocked,nextRetryAt}') IS NULL THEN
+        RAISE EXCEPTION 'TED-055: the plan has no retry date';
+    END IF;
+    IF NOT EXISTS (SELECT 1 FROM notifications WHERE camp_id = c AND source = 'autopay_blocked') THEN
+        RAISE EXCEPTION 'TED-055: the office was not notified';
+    END IF;
+    -- ...and the retry can mark it PAID, recording the payment with it.
+    r := public.record_autopay_installment(c, 'bf2', 'plan_o', 0, '2026-06-01',
+            jsonb_build_object('status','paid','paidDate','2026-06-04'),
+            jsonb_build_object('id','auto_pi_2','familyKey','bf2','amount',500,'status','succeeded','date','2026-06-04',
+                               'stripePaymentIntentId','pi_2'), 'pi_2');
+    inst := public.camp_families_object(c) #> '{bf2,plans,0,installments,0}';
+    IF inst ->> 'status' <> 'paid' THEN RAISE EXCEPTION 'TED-055: the retry could not mark it paid: %', inst; END IF;
+    r := public.flag_plan_collection(c, 'bf2', 'plan_o', NULL, NULL);
+    IF (public.camp_families_object(c) #> '{bf2,plans,0}') ? 'collectionBlocked' THEN
+        RAISE EXCEPTION 'TED-055: collecting did not clear the flag';
+    END IF;
+    RAISE NOTICE 'ok  TED-055: decline stays pending + flagged + notified; the retry pays it and clears the flag';
+
+    -- TED-051: a parent-built plan has an amount due, worked out from what is owed
+    d := public.plan_due_for(c, 'bf3', 'plan_p', '2026-06-02');
+    IF d IS NULL OR (d ->> 'amount')::numeric <> 300 THEN
+        RAISE EXCEPTION 'TED-051: the parent plan should have $300 due (900 over 3): %', d;
+    END IF;
+    RAISE NOTICE 'ok  TED-051: a parent-built plan has $300 due on its first date';
+END $$;

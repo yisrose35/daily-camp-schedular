@@ -436,3 +436,27 @@ CREATE TABLE IF NOT EXISTS storage.objects (
 ALTER TABLE storage.objects ENABLE ROW LEVEL SECURITY;
 CREATE OR REPLACE FUNCTION storage.foldername(name text) RETURNS text[]
 LANGUAGE sql IMMUTABLE AS $$ SELECT (string_to_array(name, '/'))[1:array_length(string_to_array(name, '/'), 1) - 1] $$;
+
+-- Supabase Vault (126 and the processor migrations after it store each camp's
+-- processor keys there). The shape the migrations use — vault.secrets,
+-- vault.decrypted_secrets, vault.create_secret — WITHOUT the encryption: a test
+-- database holds no real keys. `CREATE EXTENSION IF NOT EXISTS supabase_vault`
+-- in 126 must then be a no-op, so the extension is recorded as installed.
+CREATE SCHEMA IF NOT EXISTS vault;
+CREATE TABLE IF NOT EXISTS vault.secrets (
+    id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+    name text, description text DEFAULT '', secret text NOT NULL,
+    created_at timestamptz NOT NULL DEFAULT now());
+CREATE OR REPLACE VIEW vault.decrypted_secrets AS
+    SELECT id, name, description, secret, secret AS decrypted_secret, created_at FROM vault.secrets;
+CREATE OR REPLACE FUNCTION vault.create_secret(new_secret text, new_name text DEFAULT NULL, new_description text DEFAULT '')
+    RETURNS uuid LANGUAGE sql AS $$
+    INSERT INTO vault.secrets (secret, name, description) VALUES (new_secret, new_name, new_description) RETURNING id $$;
+DO $$ BEGIN
+  IF NOT EXISTS (SELECT 1 FROM pg_extension WHERE extname = 'supabase_vault') THEN
+    INSERT INTO pg_extension (oid, extname, extowner, extnamespace, extrelocatable, extversion)
+    VALUES ((SELECT max(oid::int8) + 1000 FROM pg_extension)::oid, 'supabase_vault',
+            (SELECT oid FROM pg_roles WHERE rolname = current_user),
+            (SELECT oid FROM pg_namespace WHERE nspname = 'vault'), false, 'stub');
+  END IF;
+END $$;

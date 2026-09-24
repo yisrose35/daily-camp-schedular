@@ -87,6 +87,9 @@ const MIGRATIONS = [
     '100_pos_pin_login',
     '101_pos_pin_manual_unlock',
     '104_pos_roster_read',
+    // 126: the processor catalogue and credentials the billing migrations
+    // (176, 187, 198) and the processor-side functions are built on.
+    '126_byop_processor_framework',
     '142_canteen_pos_inventory_only_save',
     // The Me page's billing view reads the deposit inbox once families exist —
     // found by tests/scale_600.e2e.js, whose camp has 300 of them (the smoke
@@ -96,17 +99,40 @@ const MIGRATIONS = [
     '146_deposit_unparsed',
     '147_bank_templates',
     '148_template_self_learning',
+    // 149 (Banquest): the hosted pay/card pages 185-187 extend.
+    '149_banquest_hosted_payment_pages',
     '149_camp_number',
     '167_settle_shop_orders',
+    // TED-060: the billing migrations, so tests run the database's real money
+    // logic — autopay's writes, the plan counter, the parent's balance, card
+    // fees, chargebacks and the refund claim — not a guess at it.
+    '168_atomic_payment_writes',
+    '169_atomic_autopay_installment',
+    '170_atomic_card_on_file_writes',
     // 171 before 178, and it is not optional: 178 puts record_chargeback on the
     // posted ledger, whose family_ledger_balance() 171 defines. 178 without 171
     // is a chargeback that raises 42883 on the way out — the 233 shape again,
     // found by 215's own pgtest once 178 was in the chain.
     '171_posted_ledger',
+    '172_autopay_posts_to_ledger',
+    '173_parent_balance_from_ledger',
+    '174_ledger_must_be_complete',
+    '175_chargebacks_and_collection_blocks',
+    '176_processor_conformance',
+    '177_chargeback_amount_from_payment',
     '178_every_payment_posts_to_the_ledger',
+    '179_dunning_and_card_expiry',
+    '180_canteen_autoreload_and_payout_alerts',
+    '181_new_plans_are_ledger_plans',
+    '185_registration_deposit',
+    '186_registration_saved_card',
+    '187_cardknox_registration_deposit',
     '188_payment_receipts',
+    '189_registration_card_capture',
     '190_session_capacity',
+    '192_card_fee_policy',
     '193_session_workspaces',
+    '198_refund_intents',
     '200_applications_out_of_the_blob',
     '202_ledger_projection',
     '203_canteen_archive',
