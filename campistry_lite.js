@@ -331,27 +331,31 @@
     function isHeadStaff() { return HEAD_ROLES.includes(role); }
     function isCounselor() { return role === 'counselor'; }
 
-    // campistry.org's Lite (dashboard tile, Ctrl+Shift+T) is the office
-    // control panel — Flow/Me/Go/Health/Live/Link/Notes/Guard, HEAD_ROLES
-    // only. lite.campistry.org, and the native app (which bundles this same
-    // page into its own www/), is the on-the-go counselor experience — the
-    // single 'counselor' app. Neither role belongs in the other's context, so
-    // gate on whichever domain this page is actually running on. Only
-    // enforced on the real production domains/native build — localhost and
-    // Vercel preview deploys stay open for testing regardless of host, since
-    // those never carry the campistry.org apex or lite subdomain.
+    // Two things are true at once here, and they're not the same split:
+    //   1. Which UI you see is always role-based (unchanged) — HEAD_ROLES
+    //      (owner/admin/scheduler, plus division-head-ish manager roles) get
+    //      the office control panel (Flow/Me/Go/Health/Live/Link/Notes/Guard);
+    //      counselors get the single 'counselor' app (My Camp). Both roles
+    //      use this same page and get their own UI on EITHER domain —
+    //      lite.campistry.org and the native app are not counselor-exclusive,
+    //      an admin who wants on-the-go access sees their own office tiles
+    //      there too.
+    //   2. Which DOMAIN you're allowed to reach it from is role-based in only
+    //      one direction: a counselor has no reason to use campistry.org's
+    //      desktop-context Lite (dashboard tile / Ctrl+Shift+T) — they're
+    //      pushed to the app / lite.campistry.org instead. Nothing pushes an
+    //      admin off of campistry.org's Lite; they're just also welcome on
+    //      lite.campistry.org if they want it on their phone.
+    // Only enforced on the real production apex domain/native build —
+    // localhost and Vercel preview deploys stay open for testing regardless
+    // of host, since those never carry the campistry.org apex.
     function enforceLiteSplit() {
         var host = (window.location && window.location.hostname) || '';
         var isNative = !!(window.Capacitor && window.Capacitor.isNativePlatform && window.Capacitor.isNativePlatform());
         var onLiteDomain = /(^|\.)lite\.campistry\.org$/i.test(host);
         var onMainDomain = /(^|\.)campistry\.org$/i.test(host) && !onLiteDomain;
         if (!isNative && !onLiteDomain && !onMainDomain) return false; // dev/preview — no gate
-        var onTheGo = isNative || onLiteDomain;
-        if (onTheGo && !isCounselor()) {
-            setSplash('This is the on-the-go app for counselors. Head office staff should use Lite from campistry.org instead.', true);
-            return true;
-        }
-        if (!onTheGo && isCounselor()) {
+        if (onMainDomain && isCounselor()) {
             setSplash('Please continue in the Campistry Lite app, or visit lite.campistry.org.', true);
             return true;
         }
