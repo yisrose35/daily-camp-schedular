@@ -2182,6 +2182,17 @@
                 try { localStorage.removeItem('campistry_snacks_data'); } catch (_) {}
                 try { localStorage.removeItem('campistry_pos_bunks'); } catch (_) {}
                 try { localStorage.removeItem('campistry_link_v1'); } catch (_) {}
+                // Snacks/POS/Shop (and Link's own getGlobalState fallback)
+                // treat these two as a full mirror of CONFIG.LOCAL_STORAGE_KEY
+                // whenever that key is missing — clearing only the key above
+                // left this pair to serve a previous camp's cached products/
+                // sales/global-state to a brand-new camp that never even set
+                // up Snacks. CAMPISTRY_LOCAL_CACHE is also documented above
+                // (~line 674) as a "write-only cross-tab beacon nothing reads
+                // back" — that's true for THIS module, but not for those
+                // other modules, which is exactly how this got missed.
+                try { localStorage.removeItem('CAMPISTRY_LOCAL_CACHE'); } catch (_) {}
+                try { localStorage.removeItem('CAMPISTRY_UNIFIED_STATE'); } catch (_) {}
                 _localCache = {};
                 return true;
             }

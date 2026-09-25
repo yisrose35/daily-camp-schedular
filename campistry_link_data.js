@@ -587,13 +587,24 @@
         } catch(e) { return {}; }
     };
 
-    /** Get camp name — checks Go setup, then Me/app1 */
+    /**
+     * Get camp name. Dashboard > Profile is the one place a camp's name is
+     * actually edited (writes gs.app1.campName and its own top-level campName
+     * key), so that's checked first. Go's own cached copy (go.setup.campName)
+     * used to be checked FIRST here, which meant a name change on Dashboard
+     * never reached outgoing emails' {{campName}} tag or this admin page's
+     * compose preview — Go's copy only refreshes when someone reopens Go, so
+     * it can be stale indefinitely, unlike app1.campName which is what every
+     * other surface (renderDash, _linkCampName in campistry_link_admin.html)
+     * already treats as authoritative.
+     */
     data.getCampName = function() {
-        var go = data.getGoState();
-        if (go.setup && go.setup.campName) return go.setup.campName;
         var g = data.getGlobalState();
+        if (g.campName) return g.campName;
         if (g.app1 && g.app1.campName) return g.app1.campName;
         if (g.campistryMe && g.campistryMe.campName) return g.campistryMe.campName;
+        var go = data.getGoState();
+        if (go.setup && go.setup.campName) return go.setup.campName;
         return 'Camp';
     };
 

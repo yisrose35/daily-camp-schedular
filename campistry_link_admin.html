@@ -227,11 +227,33 @@
     </div>
     <script>
     (function() {
+        // Was a flat 2.2s timer with zero connection to whether the page's
+        // own data was actually ready — the whole point of a splash is that
+        // the real thing is already loaded by the time it lifts, but on a
+        // slow connection this could (and did) hide well before renderDash()
+        // and cloud hydration finished, revealing a blank/stale page for a
+        // beat. Now waits for the real "data ready" signal
+        // (campistry-cloud-hydrated), with a minimum so the logo animation
+        // (finishes ~0.95s in) always gets to play even on a fast connection,
+        // and a maximum so it can't hang forever if hydration never fires
+        // (offline, an error, a camp with nothing to hydrate).
         var ov = document.getElementById('link-splash');
-        setTimeout(function() {
+        var MIN_MS = 1200, MAX_MS = 4500;
+        var start = Date.now();
+        var hidden = false;
+        function doHide() {
+            if (hidden || !ov) return;
+            hidden = true;
             ov.classList.add('hide');
             setTimeout(function() { if (ov) ov.style.display = 'none'; }, 500);
-        }, 2200);
+        }
+        function tryHide() {
+            var elapsed = Date.now() - start;
+            if (elapsed >= MIN_MS) doHide();
+            else setTimeout(doHide, MIN_MS - elapsed);
+        }
+        window.addEventListener('campistry-cloud-hydrated', tryHide, { once: true });
+        setTimeout(doHide, MAX_MS);
     })();
     </script>
 </div>
@@ -1171,13 +1193,13 @@
 <script src="supabase_client.js?v=20260923-08"></script>
 <script src="campistry_security.js?v=20260903-03"></script>
 <script src="campistry_finance_merge.js?v=20260924-01"></script>
-<script src="integration_hooks.js?v=20260923-22"></script>
+<script src="integration_hooks.js?v=20260925-01"></script>
 <script src="campistry_cloud_bootstrap.js?v=20260903-03"></script>
 <script src="campistry_broadcast_core.js?v=20260903-03"></script>
 <!-- Branding/watermark renderer — must load BEFORE link_data, which seeds and
      normalizes settings.branding through it on store load. -->
 <script src="campistry_link_branding.js?v=20260925-01"></script>
-<script src="campistry_link_data.js?v=20260925-01"></script>
+<script src="campistry_link_data.js?v=20260925-02"></script>
 <script src="face_match_core.js?v=20260923-20"></script>
 <script src="campistry_face_shared.js?v=20260903-03"></script>
 <script src="campistry_face_engine_v2.js?v=20260903-03"></script>

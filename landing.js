@@ -180,6 +180,13 @@ function handleLogout() {
     localStorage.removeItem('campistry_snacks_data');
     localStorage.removeItem('campistry_pos_bunks');
     localStorage.removeItem('campistry_link_v1');
+    // Snacks/POS/Shop (and this file's own getGlobalState-style fallbacks
+    // elsewhere) also read CAMPISTRY_LOCAL_CACHE/CAMPISTRY_UNIFIED_STATE as
+    // a full mirror of campGlobalSettings_v1 when that key is missing —
+    // clearing only campGlobalSettings_v1 above left this pair to serve the
+    // previous camp's products/sales to a brand-new camp that never even
+    // set up Snacks.
+    localStorage.removeItem('CAMPISTRY_UNIFIED_STATE');
     try { window.LocalCacheIDB && window.LocalCacheIDB.clear && window.LocalCacheIDB.clear(); } catch (e) {}
 
     const supabase = getSupabase();
