@@ -10,7 +10,7 @@
     <link href="https://fonts.googleapis.com/css2?family=DM+Sans:opsz,wght@9..40,300;9..40,400;9..40,500;9..40,600;9..40,700;9..40,800&family=Fraunces:opsz,wght@9..144,500;9..144,600;9..144,700&display=swap" rel="stylesheet">
     <style>html:not(.css-ready) body{opacity:0}html.css-ready body{transition:opacity .15s ease}</style>
     <link rel="stylesheet" href="campistry-unified.css?v=20260918-25">
-    <link rel="stylesheet" href="campistry_lite_admin.css?v=20260925-01" onload="document.documentElement.classList.add('css-ready')">
+    <link rel="stylesheet" href="campistry_lite_admin.css?v=20260925-02" onload="document.documentElement.classList.add('css-ready')">
     <noscript><style>html body{opacity:1!important}</style></noscript>
 </head>
 <body>
@@ -31,9 +31,10 @@
         <script src="campistry_app_switcher.js?v=20260925-02"></script>
     </div>
     <div class="header-right">
-        <div class="sync-badge"><span class="sync-dot"></span> Synced</div>
-        <span class="nav-user" id="navUserEmail"></span>
-        <div style="width:34px;height:34px;border-radius:50%;background:linear-gradient(135deg,rgba(238,106,83,.12),rgba(238,106,83,.22));color:var(--lite);font-size:.75rem;font-weight:700;display:flex;align-items:center;justify-content:center;" id="liteAdmAvatar">·</div>
+        <div class="search-bar" style="margin:0;">
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg>
+            <input type="text" id="laHeaderSearch" placeholder="Search counselors...">
+        </div>
     </div>
 </header>
 
@@ -59,10 +60,6 @@
         <div class="stat-card"><div class="stat-icon green"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="20 6 9 17 4 12"/></svg></div><div><div class="stat-value" id="laStatJoined">0</div><div class="stat-label">Signed up</div></div></div>
         <div class="stat-card"><div class="stat-icon amber"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/></svg></div><div><div class="stat-value" id="laStatPending">0</div><div class="stat-label">Invited, not yet joined</div></div></div>
     </div>
-    <div class="search-bar">
-        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg>
-        <input type="text" id="laTeamSearch" placeholder="Search counselors...">
-    </div>
     <div class="card"><div id="laTeamBody"></div></div>
 </div>
 
@@ -72,10 +69,20 @@
         <div class="page-hero-icon"><svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/><circle cx="12" cy="12" r="3"/></svg></div>
         <div><h1>What Counselors See</h1><p>Applies to every counselor in Campistry Lite. Name, bunk, grade and division are always visible.</p></div>
     </div>
-    <div class="card">
-        <div class="card-header"><h2 id="laVisCount"></h2></div>
-        <div class="card-body"><div id="laVisBody"></div></div>
+    <div class="page-header">
+        <div><div class="page-subtitle" id="laVisCount"></div></div>
+        <div class="page-actions">
+            <button class="btn btn-secondary btn-sm" id="laVisAllOn">Turn all on</button>
+            <button class="btn btn-secondary btn-sm" id="laVisAllOff">Turn all off</button>
+        </div>
     </div>
+    <div id="laVisBody"></div>
+
+    <div class="page-hero" style="margin-top:8px;">
+        <div class="page-hero-icon"><svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="3" width="7" height="7" rx="1.5"/><rect x="14" y="3" width="7" height="7" rx="1.5"/><rect x="3" y="14" width="7" height="7" rx="1.5"/><rect x="14" y="14" width="7" height="7" rx="1.5"/></svg></div>
+        <div><h1>Counselor App Features</h1><p>Turn off any tab a counselor doesn't need — it disappears from their app entirely.</p></div>
+    </div>
+    <div class="card"><div class="card-body"><div id="laTabsBody"></div></div></div>
 </div>
 
 </div><!-- /app-content -->
@@ -137,7 +144,7 @@
 <script src="campistry_session_scope.js?v=20260918-09"></script>
 <script src="access_control.js?v=20260924-03"></script>
 <script src="campistry_visibility.js?v=20260903-03"></script>
-<script src="campistry_lite_admin.js?v=20260925-01"></script>
+<script src="campistry_lite_admin.js?v=20260925-02"></script>
 <script>
 window.showLiteAdmPage = function(pageId){
     document.querySelectorAll('.lite-adm-page').forEach(function(x){x.classList.remove('active')});
@@ -145,9 +152,10 @@ window.showLiteAdmPage = function(pageId){
 };
 (function(){
     var h=document.getElementById('hamburgerBtn'),sb=document.getElementById('sidebar'),bd=document.getElementById('sidebarBackdrop'),sy=0;
+    if(!h||!sb||!bd){ console.warn('[LiteAdmin] sidebar chrome missing — menu button not wired'); return; }
     function open(){sy=window.scrollY;document.body.style.top=-sy+'px';document.body.classList.add('sidebar-open')}
     function close(){document.body.classList.remove('sidebar-open');document.body.style.top='';window.scrollTo(0,sy)}
-    h.addEventListener('click',function(){document.body.classList.contains('sidebar-open')?close():open()});
+    h.addEventListener('click',function(e){e.preventDefault();document.body.classList.contains('sidebar-open')?close():open()});
     bd.addEventListener('click',close);
     sb.querySelectorAll('.sidebar-item').forEach(function(b){
         b.addEventListener('click',function(){
@@ -156,6 +164,7 @@ window.showLiteAdmPage = function(pageId){
             b.classList.add('active');
             showLiteAdmPage(p);
             close();
+            if (window.CampistryLiteAdmin) window.CampistryLiteAdmin.onPageChange(p);
         });
     });
 })();

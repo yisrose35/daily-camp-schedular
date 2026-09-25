@@ -1,6 +1,24 @@
 <!DOCTYPE html>
 <html lang="en" data-product="lite">
 <head>
+    <!-- Instant office-panel redirect — before ANY paint, so a head-staff
+         visit to this file on campistry.org never flashes the mobile splash
+         (dark theme, sync/avatar header, etc.) even for a moment. Uses the
+         cached role/host synchronously; the real gate (enforceLiteSplit in
+         campistry_lite.js) still runs after login for a session with no
+         cache yet. campistry.org and lite.campistry.org/the native app are
+         two completely separate experiences — this is the seam between them. -->
+    <script>(function(){
+        try {
+            var host = window.location.hostname || '';
+            var onMain = /(^|\.)campistry\.org$/i.test(host) && !/(^|\.)lite\.campistry\.org$/i.test(host);
+            if (!onMain) return;
+            var role = localStorage.getItem('campistry_role');
+            if (role && role !== 'counselor' && role !== 'viewer') {
+                window.location.replace('campistry_lite_admin.html');
+            }
+        } catch (e) {}
+    })();</script>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
     <title>Campistry Lite</title>

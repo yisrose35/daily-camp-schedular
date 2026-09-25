@@ -1323,7 +1323,7 @@
         const single = !counselorApp && apps.length === 1;
 
         const tiles = counselorApp
-            ? counselorApp.tabs.map(t => counselorTileHTML(counselorApp, t)).join('')
+            ? counselorTabs().map(t => counselorTileHTML(counselorApp, t)).join('')
             : apps.map(a => tileHTML(a)).join('');
         view.innerHTML = heroCardHTML()
             + `<div class="lite-launch-grid${single ? ' single' : ''}">${tiles}</div>`;
@@ -1489,11 +1489,14 @@
         setHeader('', '');   // no title bar in-app — just back + avatar
         document.getElementById('liteApp').setAttribute('data-screen', 'app');
         haptic();
-        buildTabs(app.tabs);
+        // A counselor's own tabs are owner-configurable (see counselorTabs())
+        // — every other app's tab list is fixed.
+        const tabs = id === 'counselor' ? counselorTabs() : app.tabs;
+        buildTabs(tabs);
         // startTab: which dashboard tile was tapped (e.g. counselorTileHTML
         // passes its own tab id) — falls back to the app's first tab exactly
         // like before when nothing more specific was asked for.
-        const tab = (startTab && app.tabs.some(t => t.id === startTab)) ? startTab : app.tabs[0].id;
+        const tab = (startTab && tabs.some(t => t.id === startTab)) ? startTab : tabs[0].id;
         switchTab(tab, 'push');
     }
 
@@ -1685,6 +1688,18 @@
         await saveKV('campistryMe', camp.me);
     }
 
+    // Which of the counselor's own tabs (My Day/My Bunk/League/Tips/
+    // Messages/Transport) the owner has left on. Lives in the same policy
+    // object as the camper-field toggles above (pol.tabs), so both are one
+    // save. Missing/undefined = on — an owner who never opens this screen
+    // keeps every tab, same "default open" rule the field toggles use.
+    function counselorTabs() {
+        const app = LITE_APPS.find(a => a.id === 'counselor');
+        const tp = (_liteVisPolicy().tabs) || {};
+        const tabs = app.tabs.filter(t => tp[t.id] !== false);
+        return tabs.length ? tabs : app.tabs;   // never leave a counselor with nothing
+    }
+
     async function renderSettings() {
         const v = document.getElementById('view-settings');
         const Bio = window.CampistryLiteBio;
@@ -1779,6 +1794,22 @@
                     </div>`;
             })() : ''}
 
+            ${isHeadStaff() ? (function(){
+                const app = LITE_APPS.find(a => a.id === 'counselor');
+                const tp = (_liteVisPolicy().tabs) || {};
+                const rows = app.tabs.map((t, i) => `
+                    <div class="lite-set-row" data-tab-key="${esc(t.id)}">
+                        <div class="lite-set-row-main"><div class="lite-set-row-title">${esc(t.label)}</div></div>
+                        <span class="lite-toggle${tp[t.id] !== false ? ' on' : ''}" data-tab-toggle="${esc(t.id)}"></span>
+                    </div>${i < app.tabs.length - 1 ? '<div class="lite-set-divider"></div>' : ''}`).join('');
+                return `
+                    <div class="lite-set-section-label">Counselor app features</div>
+                    <div class="lite-card">
+                        <div class="lite-set-row-sub" style="padding-bottom:10px;">Turn off any tab a counselor doesn't need — it disappears from their app entirely.</div>
+                        ${rows}
+                    </div>`;
+            })() : ''}
+
             ${isHeadStaff() ? '<a href="dashboard.html" class="lite-link-row">Open full Campistry ↗</a>' : ''}
             <button class="lite-link-row danger" id="liteSettingsSignout">Sign out</button>
             <div class="lite-set-version">Campistry Lite${camp ? ' · ' + camp : ''}${otaVersion ? ' · build ' + esc(otaVersion) : ''}</div>`;
@@ -1853,6 +1884,23 @@
                         await _liteSaveVisibility(pol);
                     } catch (e) {
                         console.warn('[Lite] visibility save failed:', e?.message || e);
+                        toast('Could not save');
+                    }
+                    renderSettings();
+                });
+            });
+            v.querySelectorAll('[data-tab-toggle]').forEach(t => {
+                t.addEventListener('click', async () => {
+                    haptic();
+                    const key = t.getAttribute('data-tab-toggle');
+                    const pol = Object.assign({}, _liteVisPolicy());
+                    const tp = Object.assign({}, pol.tabs || {});
+                    tp[key] = !(tp[key] !== false);
+                    pol.tabs = tp;
+                    try {
+                        await _liteSaveVisibility(pol);
+                    } catch (e) {
+                        console.warn('[Lite] tab visibility save failed:', e?.message || e);
                         toast('Could not save');
                     }
                     renderSettings();
