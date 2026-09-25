@@ -318,8 +318,6 @@
                 await _tipsHandleStripeReturn(stripeReturnAccountId);
                 openApp(role === 'counselor' ? 'counselor' : 'link');
                 switchTab('tips');
-            } else if (controlPanelOnly) {
-                openSettings();
             } else {
                 goHome();
             }
@@ -332,15 +330,6 @@
 
     function isHeadStaff() { return HEAD_ROLES.includes(role); }
     function isCounselor() { return role === 'counselor'; }
-
-    // True only for a head-staff user on campistry.org itself (not
-    // lite.campistry.org, not the native app). campistry.org already has
-    // every app as its own full page (campistry_me.html, flow.html, …), so
-    // duplicating the tile launcher there just adds a second, watered-down
-    // way to reach the same apps. On this one surface Lite is instead just
-    // the control panel FOR the on-the-go experience — Settings (account,
-    // preferences, "what counselors can see") is the whole page.
-    let controlPanelOnly = false;
 
     // Two things are true at once here, and they're not the same split:
     //   1. Which UI you see is always role-based (unchanged) — HEAD_ROLES
@@ -370,7 +359,14 @@
             setSplash('Please continue in the Campistry Lite app, or visit lite.campistry.org.', true);
             return true;
         }
-        controlPanelOnly = onMainDomain && isHeadStaff();
+        // campistry.org's Lite for head staff is the desktop control panel
+        // (campistry_lite_admin.html) — same header/sidebar/search chrome as
+        // every other app, with the counselor roster's access + signup status
+        // and the "what counselors can see" toggles. Not this mobile shell.
+        if (onMainDomain && isHeadStaff()) {
+            window.location.replace('campistry_lite_admin.html');
+            return true;
+        }
         return false;
     }
 
@@ -1502,9 +1498,6 @@
     }
 
     function goHome() {
-        // campistry.org's "home" for head staff IS the control panel — there
-        // is no tile launcher to fall back to on this domain.
-        if (controlPanelOnly) { openSettings(); return; }
         currentApp = null;
         settingsOpen = false;
         applyTheme(null);
@@ -1790,10 +1783,7 @@
             <button class="lite-link-row danger" id="liteSettingsSignout">Sign out</button>
             <div class="lite-set-version">Campistry Lite${camp ? ' · ' + camp : ''}${otaVersion ? ' · build ' + esc(otaVersion) : ''}</div>`;
 
-        const backBtn = v.querySelector('#liteSettingsBack');
-        // No launcher to go back to on campistry.org — Settings is the whole page.
-        if (controlPanelOnly) backBtn.style.visibility = 'hidden';
-        else backBtn.addEventListener('click', () => { if (history.state && history.state.liteSettings) history.back(); else { settingsOpen = false; goHome(); } });
+        v.querySelector('#liteSettingsBack').addEventListener('click', () => { if (history.state && history.state.liteSettings) history.back(); else { settingsOpen = false; goHome(); } });
         v.querySelector('#liteSettingsSignout').addEventListener('click', () => document.getElementById('liteSignOut').click());
         // Changing the login email. Supabase sends a confirmation to the NEW
         // address when the project requires one, so the change lands only after

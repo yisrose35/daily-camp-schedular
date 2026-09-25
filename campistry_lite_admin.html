@@ -1,0 +1,172 @@
+<!DOCTYPE html>
+<html lang="en" data-product="lite">
+<head>
+    <meta charset="UTF-8" />
+    <title>Campistry Lite | Control Panel</title>
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <link rel="icon" type="image/png" href="Campistry_logo.png">
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=DM+Sans:opsz,wght@9..40,300;9..40,400;9..40,500;9..40,600;9..40,700;9..40,800&family=Fraunces:opsz,wght@9..144,500;9..144,600;9..144,700&display=swap" rel="stylesheet">
+    <style>html:not(.css-ready) body{opacity:0}html.css-ready body{transition:opacity .15s ease}</style>
+    <link rel="stylesheet" href="campistry-unified.css?v=20260918-25">
+    <link rel="stylesheet" href="campistry_lite_admin.css?v=20260925-01" onload="document.documentElement.classList.add('css-ready')">
+    <noscript><style>html body{opacity:1!important}</style></noscript>
+</head>
+<body>
+
+<div id="auth-loading-screen" style="position:fixed;inset:0;background:#F8FAFC;display:flex;align-items:center;justify-content:center;z-index:9999;">
+    <div style="color:#94A3B8;font-size:0.9rem;">Loading…</div>
+</div>
+
+<div id="main-app-container" style="display:none;">
+<!-- ═══ HEADER ═══ -->
+<header class="app-header">
+    <div class="header-left">
+        <button class="hamburger-btn" id="hamburgerBtn" aria-label="Toggle Navigation"><span></span><span></span><span></span></button>
+        <img src="Lite_clean.png" alt="Campistry Lite" style="height:28px;width:auto;display:block;">
+    </div>
+    <div class="app-header-center">
+        <div data-quick-switch-mount="lite"></div>
+        <script src="campistry_app_switcher.js?v=20260925-02"></script>
+    </div>
+    <div class="header-right">
+        <div class="sync-badge"><span class="sync-dot"></span> Synced</div>
+        <span class="nav-user" id="navUserEmail"></span>
+        <div style="width:34px;height:34px;border-radius:50%;background:linear-gradient(135deg,rgba(238,106,83,.12),rgba(238,106,83,.22));color:var(--lite);font-size:.75rem;font-weight:700;display:flex;align-items:center;justify-content:center;" id="liteAdmAvatar">·</div>
+    </div>
+</header>
+
+<!-- ═══ SIDEBAR ═══ -->
+<div id="sidebarBackdrop" class="sidebar-backdrop"></div>
+<aside id="sidebar" class="sidebar">
+    <div class="sidebar-label">Campistry Lite</div>
+    <button class="sidebar-item active" data-page="team"><span class="sidebar-dot"></span> Team &amp; Signups</button>
+    <button class="sidebar-item" data-page="visibility"><span class="sidebar-dot"></span> What Counselors See</button>
+</aside>
+
+<!-- ═══ MAIN CONTENT ═══ -->
+<div class="app-content">
+
+<!-- ── TEAM & SIGNUPS ── -->
+<div id="page-team" class="lite-adm-page active">
+    <div class="page-hero">
+        <div class="page-hero-icon"><svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M17 21v-2a4 4 0 00-4-4H5a4 4 0 00-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M23 21v-2a4 4 0 00-3-3.87"/><path d="M16 3.13a4 4 0 010 7.75"/></svg></div>
+        <div><h1>Team &amp; Signups</h1><p>Every counselor invited to Campistry Lite, and who's actually signed in</p></div>
+    </div>
+    <div class="stats-grid">
+        <div class="stat-card"><div class="stat-icon coral"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M17 21v-2a4 4 0 00-4-4H5a4 4 0 00-4 4v2"/><circle cx="9" cy="7" r="4"/></svg></div><div><div class="stat-value" id="laStatTotal">0</div><div class="stat-label">Counselors invited</div></div></div>
+        <div class="stat-card"><div class="stat-icon green"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="20 6 9 17 4 12"/></svg></div><div><div class="stat-value" id="laStatJoined">0</div><div class="stat-label">Signed up</div></div></div>
+        <div class="stat-card"><div class="stat-icon amber"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/></svg></div><div><div class="stat-value" id="laStatPending">0</div><div class="stat-label">Invited, not yet joined</div></div></div>
+    </div>
+    <div class="search-bar">
+        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg>
+        <input type="text" id="laTeamSearch" placeholder="Search counselors...">
+    </div>
+    <div class="card"><div id="laTeamBody"></div></div>
+</div>
+
+<!-- ── WHAT COUNSELORS SEE ── -->
+<div id="page-visibility" class="lite-adm-page">
+    <div class="page-hero">
+        <div class="page-hero-icon"><svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/><circle cx="12" cy="12" r="3"/></svg></div>
+        <div><h1>What Counselors See</h1><p>Applies to every counselor in Campistry Lite. Name, bunk, grade and division are always visible.</p></div>
+    </div>
+    <div class="card">
+        <div class="card-header"><h2 id="laVisCount"></h2></div>
+        <div class="card-body"><div id="laVisBody"></div></div>
+    </div>
+</div>
+
+</div><!-- /app-content -->
+
+<div class="toast" id="laToast"></div>
+</div><!-- /main-app-container -->
+
+<!-- AUTH CHECK (matches team_access_setup.html's pattern) -->
+<script>
+(function() {
+    'use strict';
+    var loadingScreen = document.getElementById('auth-loading-screen');
+    var mainApp = document.getElementById('main-app-container');
+    async function checkAuthAndBoot() {
+        try {
+            var attempts = 0;
+            while ((!window.supabase || !window.supabase.auth) && attempts < 50) {
+                await new Promise(function(r) { setTimeout(r, 100); });
+                attempts++;
+            }
+            var cachedUserId = localStorage.getItem('campistry_auth_user_id') || localStorage.getItem('campistry_user_id');
+            var cachedCampId = localStorage.getItem('campistry_camp_id');
+            var hasLocalAuth = !!(cachedUserId && cachedCampId);
+            if (!window.supabase || !window.supabase.auth) {
+                if (!hasLocalAuth) { window.location.href = 'index.html'; return; }
+            } else {
+                var result = await window.supabase.auth.getSession();
+                var session = result && result.data && result.data.session;
+                if (!session && !hasLocalAuth) { window.location.href = 'index.html'; return; }
+            }
+            if (loadingScreen) loadingScreen.style.display = 'none';
+            if (mainApp) mainApp.style.display = '';
+        } catch (e) {
+            console.error('[LiteAdmin] Auth error:', e);
+            if (localStorage.getItem('campistry_auth_user_id')) {
+                if (loadingScreen) loadingScreen.style.display = 'none';
+                if (mainApp) mainApp.style.display = '';
+            } else {
+                window.location.href = 'index.html';
+            }
+        }
+    }
+    if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', checkAuthAndBoot);
+    else checkAuthAndBoot();
+})();
+</script>
+
+<!-- ═══ SCRIPTS ═══ -->
+<script src="config.js?v=20260903-03"></script>
+<script src="supabase-js@2.js?v=20260903-03"></script>
+<script src="campistry_camper_id_rpc.js?v=20260923-20"></script>
+<script src="supabase_client.js?v=20260923-08"></script>
+<script src="campistry_workspace.js?v=20260917-02"></script>
+<script src="campistry_cloud_bootstrap.js?v=20260903-03"></script>
+<script src="integration_hooks.js?v=20260925-01"></script>
+<script src="campistry_workspace_ui.js?v=20260917-02"></script>
+<script src="campistry_enrollment_window.js?v=20260923-20"></script>
+<script src="campistry_presence.js?v=20260923-21"></script>
+<script src="campistry_session_scope.js?v=20260918-09"></script>
+<script src="access_control.js?v=20260924-03"></script>
+<script src="campistry_visibility.js?v=20260903-03"></script>
+<script src="campistry_lite_admin.js?v=20260925-01"></script>
+<script>
+window.showLiteAdmPage = function(pageId){
+    document.querySelectorAll('.lite-adm-page').forEach(function(x){x.classList.remove('active')});
+    var t=document.getElementById('page-'+pageId); if(t) t.classList.add('active');
+};
+(function(){
+    var h=document.getElementById('hamburgerBtn'),sb=document.getElementById('sidebar'),bd=document.getElementById('sidebarBackdrop'),sy=0;
+    function open(){sy=window.scrollY;document.body.style.top=-sy+'px';document.body.classList.add('sidebar-open')}
+    function close(){document.body.classList.remove('sidebar-open');document.body.style.top='';window.scrollTo(0,sy)}
+    h.addEventListener('click',function(){document.body.classList.contains('sidebar-open')?close():open()});
+    bd.addEventListener('click',close);
+    sb.querySelectorAll('.sidebar-item').forEach(function(b){
+        b.addEventListener('click',function(){
+            var p=b.dataset.page;
+            sb.querySelectorAll('.sidebar-item').forEach(function(x){x.classList.remove('active')});
+            b.classList.add('active');
+            showLiteAdmPage(p);
+            close();
+        });
+    });
+})();
+if (window.CampistryLiteAdmin) CampistryLiteAdmin.init();
+window.addEventListener('campistry-cloud-hydrated', function(){
+    if (window.CampistryLiteAdmin) CampistryLiteAdmin.refresh();
+});
+</script>
+<script>setTimeout(function(){document.documentElement.classList.add('css-ready')},3000)</script>
+<script src="campistry_notes_quick.js?v=20260903-03"></script>
+<script>window.__CAMPISTRY_PRODUCT__='lite';</script>
+<script src="parent_lockout_guard.js?v=20260903-03"></script>
+</body>
+</html>

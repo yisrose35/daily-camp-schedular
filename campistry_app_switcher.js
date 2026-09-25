@@ -8,12 +8,14 @@
 // means every page always shows the same complete set, in the same order,
 // with no page able to silently fall behind when a new app ships.
 //
-// Deliberately excludes Campistry Link's parent/staff-facing pages and
-// Campistry Lite (staff) and the Snacks POS screen — those are separate
-// audiences with their own logins, not owner tools an admin tab-switches
-// between. Only campistry_link_admin.html (the owner's Link management
-// view) and campistry_snacks.html (the owner's Snacks admin, not the POS
-// terminal) are in this list.
+// Deliberately excludes Campistry Link's parent/staff-facing pages, the
+// mobile campistry_lite.html (a counselor's own on-the-go app, not an owner
+// tool), and the Snacks POS screen — those are separate audiences with
+// their own logins. Only campistry_link_admin.html (the owner's Link
+// management view), campistry_snacks.html (the owner's Snacks admin, not
+// the POS terminal), and campistry_lite_admin.html (the owner's Lite
+// control panel — who has access, who's signed up, what counselors see)
+// are in this list.
 //
 // Usage: include this script anywhere on the page, then drop
 //   <div data-quick-switch-mount="me"></div>
@@ -32,7 +34,8 @@
         {key:'snacks', name:'Campistry Snacks', href:'campistry_snacks.html',     img:'Snacks_clean.png', title:'Campistry Snacks — Canteen Management'},
         {key:'link',   name:'Campistry Link',   href:'campistry_link_admin.html', img:'Link_clean.png',   title:'Campistry Link — Parent Communication'},
         {key:'notes',  name:'Campistry Notes',  href:'campistry_notes.html',      img:'Notes_clean.png',  title:'Campistry Notes'},
-        {key:'guard',  name:'Campistry Guard',  href:'campistry_guard.html',      img:'Guard_clean.png',  title:'Campistry Guard — Lifeguard & Waterfront Safety'}
+        {key:'guard',  name:'Campistry Guard',  href:'campistry_guard.html',      img:'Guard_clean.png',  title:'Campistry Guard — Lifeguard & Waterfront Safety'},
+        {key:'lite',   name:'Campistry Lite',   href:'campistry_lite_admin.html', img:'Lite_clean.png',   title:'Campistry Lite — Control Panel'}
     ];
 
     // Keyboard shortcuts: Ctrl+Shift+<letter> jumps to an app from anywhere.
@@ -42,14 +45,15 @@
     // not reach the page — most notably Ctrl+Shift+N (new incognito window),
     // and sometimes Ctrl+Shift+S. Those apps are still reachable via the Apps
     // popover; the shortcut is best-effort.
-    var SHORTCUTS={KeyF:'flow',KeyG:'go',KeyM:'me',KeyH:'health',KeyV:'live',KeyS:'snacks',KeyL:'link',KeyN:'notes'};
+    var SHORTCUTS={KeyF:'flow',KeyG:'go',KeyM:'me',KeyH:'health',KeyV:'live',KeyS:'snacks',KeyL:'link',KeyN:'notes',KeyT:'lite'};
     // Guard deliberately has no shortcut: its natural letters are taken (G=Go)
     // or browser-reserved (Ctrl+Shift+W closes the window). Reach it via Apps.
-    // Extra Ctrl+Shift targets that aren't in the app grid: Dashboard, the Help
-    // Center, and Campistry Lite. Help uses '/' (the ? key) because H is taken
-    // by Health. Values are page hrefs. Ctrl+Shift+T (Lite) is often reserved by
-    // the browser for "reopen closed tab" and may not reach the page.
-    var EXTRA_NAV={KeyD:'dashboard.html', Slash:'campistry_help.html', KeyT:'campistry_lite.html'};
+    // Ctrl+Shift+T (Lite) is often reserved by the browser for "reopen closed
+    // tab" and may not reach the page — Lite is still reachable via Apps.
+    // Extra Ctrl+Shift targets that aren't in the app grid: Dashboard and the
+    // Help Center. Help uses '/' (the ? key) because H is taken by Health.
+    // Values are page hrefs.
+    var EXTRA_NAV={KeyD:'dashboard.html', Slash:'campistry_help.html'};
     function shortcutFor(appKey){
         for(var code in SHORTCUTS){ if(SHORTCUTS[code]===appKey) return 'Ctrl+Shift+'+code.replace('Key',''); }
         return '';
