@@ -2496,6 +2496,13 @@
         if (document.getElementById('settLocale') && (userRole === 'owner' || userRole === 'admin')) {
             loadCampSettingsSection();
         }
+        // Same bug shape again: the Camp Profile card's logo status renders
+        // once, straight off _dashGetLogo()'s pre-hydration read, and was
+        // never re-painted once the real cache arrived — showing "Not set"
+        // indefinitely even though the logo was saved correctly the whole
+        // time (locally and queued to cloud). Re-read now that hydration
+        // has actually completed.
+        if (typeof window._renderProfileLogoView === 'function') window._renderProfileLogoView();
     });
     // Safety fallback — a camp with no cloud config, or a failed/unusually
     // slow hydration, must not permanently block legitimate auto-saves.
