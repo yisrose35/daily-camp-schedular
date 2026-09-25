@@ -56,7 +56,8 @@ test('Bunk Counselor sees the schedule without being able to rewrite it', () => 
 
 test('Gatehouse reaches the Guard app, which nothing else did', () => {
     const on = granted('gatehouse');
-    assert.ok(on.includes('guard.guard'), 'gatehouse should reach the Guard app');
+    // Guard's sections are its three views (roster / buddy-pairs / swim-levels).
+    assert.ok(on.includes('guard.roster'), 'gatehouse should reach the Guard app');
     // The gate needs to know who is leaving and with whom.
     assert.ok(on.includes('live.early-pickup'));
     assert.ok(on.includes('live.camper-locator'));

@@ -170,8 +170,12 @@
             sections: [{ key: 'notes', label: 'Notes', desc: 'Shared camp notes' }]
         },
         {
-            key: 'guard', label: 'Campistry Lifeguard', hint: 'Waterfront safety',
-            sections: [{ key: 'guard', label: 'Lifeguard', desc: 'Waterfront safety and incident tracking', sensitive: true }]
+            key: 'guard', label: 'Campistry Guard', hint: 'Lifeguard & waterfront safety',
+            sections: [
+                { key: 'roster',      label: 'Live Roster',  desc: 'Bunks at the pool right now, with in/out/bathroom check-ins' },
+                { key: 'buddy-pairs', label: 'Buddy Pairs',  desc: 'Pair campers with a swim buddy, per bunk' },
+                { key: 'swim-levels', label: 'Swim Levels',  desc: 'Each camper\'s shallow/deep pool clearance', sensitive: true }
+            ]
         }
     ];
 

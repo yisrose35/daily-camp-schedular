@@ -31,7 +31,8 @@
         {key:'live',   name:'Campistry Live',   href:'campistry_live.html',       img:'Live_clean.png',   title:'Campistry Live — Daily Attendance'},
         {key:'snacks', name:'Campistry Snacks', href:'campistry_snacks.html',     img:'Snacks_clean.png', title:'Campistry Snacks — Canteen Management'},
         {key:'link',   name:'Campistry Link',   href:'campistry_link_admin.html', img:'Link_clean.png',   title:'Campistry Link — Parent Communication'},
-        {key:'notes',  name:'Campistry Notes',  href:'campistry_notes.html',      img:'Notes_clean.png',  title:'Campistry Notes'}
+        {key:'notes',  name:'Campistry Notes',  href:'campistry_notes.html',      img:'Notes_clean.png',  title:'Campistry Notes'},
+        {key:'guard',  name:'Campistry Guard',  href:'campistry_guard.html',      img:'Guard_clean.png',  title:'Campistry Guard — Lifeguard & Waterfront Safety'}
     ];
 
     // Keyboard shortcuts: Ctrl+Shift+<letter> jumps to an app from anywhere.
@@ -42,6 +43,8 @@
     // and sometimes Ctrl+Shift+S. Those apps are still reachable via the Apps
     // popover; the shortcut is best-effort.
     var SHORTCUTS={KeyF:'flow',KeyG:'go',KeyM:'me',KeyH:'health',KeyV:'live',KeyS:'snacks',KeyL:'link',KeyN:'notes'};
+    // Guard deliberately has no shortcut: its natural letters are taken (G=Go)
+    // or browser-reserved (Ctrl+Shift+W closes the window). Reach it via Apps.
     // Extra Ctrl+Shift targets that aren't in the app grid: Dashboard, the Help
     // Center, and Campistry Lite. Help uses '/' (the ? key) because H is taken
     // by Health. Values are page hrefs. Ctrl+Shift+T (Lite) is often reserved by

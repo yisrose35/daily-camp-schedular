@@ -5949,6 +5949,8 @@ function editCamper(n){
 
     h+='<div class="fsec">More Details</div>';
     h+='<div class="fr">'+ff('Camper Type','ceType',d.camperType||'','select',['','New','Returning'])+ff('Swim Level','ceSwim',d.swimLevel||'','select',['','Non-swimmer','Beginner','Intermediate','Advanced'])+'</div>';
+    // Pool clearance (Guard) — shallow/deep water permission, separate from the Swim Level skill rating above.
+    h+='<div class="fr">'+ff('Pool Clearance','cePoolClearance',d.poolClearance||'shallow','select',['shallow','deep'])+'</div>';
     h+='<div class="fr">'+ff('Shirt Size','ceShirt',d.shirtSize||'','select',['','YS','YM','YL','AS','AM','AL','AXL','AXXL'])+ff('Bunkmate Request','ceBunkmate',d.bunkmateRequest||'')+'</div>';
     h+=ff('Do Not Bunk With','ceSeparate',d.separateFrom||'');
 
@@ -6097,7 +6099,7 @@ function saveCamper(){
         dietary:_v('ceDiet'),medicalNotes:_v('ceMedNotes'),
         physician:_v('cePhys'),physicianPhone:_v('cePhysPh'),
         insuranceProvider:_v('ceInsProv'),insurancePolicy:_v('ceInsPol'),
-        camperType:_v('ceType'),swimLevel:_v('ceSwim'),shirtSize:_v('ceShirt'),
+        camperType:_v('ceType'),swimLevel:_v('ceSwim'),poolClearance:_v('cePoolClearance')||'shallow',shirtSize:_v('ceShirt'),
         bunkmateRequest:_v('ceBunkmate'),separateFrom:_v('ceSeparate')
     };
     // Merge onto the old record so notes, documents, custom fields, scholarships,

@@ -211,7 +211,7 @@
             document.querySelectorAll('[data-page],[data-tab]')
         ).filter(function (n) {
             // Only nav controls, not the panes they reveal.
-            return !/(^|\s)(tab-content|snacks-page|me-page|lk-page|health-page|live-page)(\s|$)/.test(n.className || '');
+            return !/(^|\s)(tab-content|snacks-page|me-page|lk-page|health-page|live-page|guard-page)(\s|$)/.test(n.className || '');
         });
     }
 
@@ -267,7 +267,7 @@
     // (medications, allergies, sick visits, nighttime, doctor, intake) — had no
     // pane blocking and no read-only enforcement at all; only nav hiding
     // applied, so a deep link or restored tab rendered the section normally.
-    var PANE_SELECTORS = ['.tab-content', '.snacks-page', '.me-page', '.lk-page', '.health-page', '.live-page'];
+    var PANE_SELECTORS = ['.tab-content', '.snacks-page', '.me-page', '.lk-page', '.health-page', '.live-page', '.guard-page'];
 
     function paneFor(section) {
         return document.getElementById('page-' + section) ||

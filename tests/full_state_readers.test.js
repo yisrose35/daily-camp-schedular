@@ -39,6 +39,7 @@ const MUST_PREFER_FULL_STATE = {
     'campistry_snacks.js': 'the canteen: accounts, deposits, cash out',
     'campistry_snacks_shop.js': 'the Camp Shop order form’s camper picker',
     'campistry_health.js': 'medication, allergy and forms lists',
+    'campistry_guard.js': 'who is at the pool, buddy pairs and pool clearance',
     'campistry_go_luggage.js': 'the luggage booking form',
     'campistry_live.js': 'roll call and attendance',
     'campistry_live_locator.js': 'where a camper is right now',

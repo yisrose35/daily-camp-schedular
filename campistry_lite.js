@@ -3235,6 +3235,72 @@
             const close = sheetEl.querySelector('#liteCamperClose');
             if (close) close.addEventListener('click', closeSheet);
         }
+        renderBuddyBox(name, c);
+    }
+
+    // ─── Pool buddy (shared with Campistry Guard) ─────────────────────────
+    // camp_state_kv key `campistryGuard` → buddyPairs[bunk] = [[a,b],…]. The
+    // lifeguard edits the same pairs in campistry_guard.html, so always read
+    // fresh before showing/writing — a pair the lifeguard set a minute ago must
+    // not be clobbered by this sheet's stale copy.
+    async function loadGuardFresh() {
+        try {
+            const { data, error } = await window.supabase
+                .from('camp_state_kv').select('value')
+                .eq('camp_id', campId).eq('key', 'campistryGuard').maybeSingle();
+            if (error) throw error;
+            return (data && data.value) || {};
+        } catch (e) {
+            console.warn('[Lite] campistryGuard read failed:', e?.message || e);
+            return null;
+        }
+    }
+    function buddyOf(guard, bunk, name) {
+        const pairs = ((guard && guard.buddyPairs) || {})[bunk] || [];
+        for (const p of pairs) {
+            if (p[0] === name) return p[1];
+            if (p[1] === name) return p[0];
+        }
+        return null;
+    }
+    async function renderBuddyBox(name, c) {
+        const box = sheetEl && sheetEl.querySelector('#liteBuddyBox');
+        if (!box || !c || !c.bunk) return;
+        const guard = await loadGuardFresh();
+        if (!guard || !sheetEl.contains(box)) return;
+        const bunk = c.bunk;
+        const current = buddyOf(guard, bunk, name);
+        const opts = campersInBunk(bunk).filter(o => o.name !== name).map(o => {
+            const other = buddyOf(guard, bunk, o.name);
+            const taken = other && other !== name ? ` (with ${_lbl(other)})` : '';
+            return `<option value="${esc(o.name)}"${o.name === current ? ' selected' : ''}>${esc(_lbl(o.name) + taken)}</option>`;
+        }).join('');
+        box.innerHTML = dSection('Pool buddy', [dRow('Buddy', current ? _lbl(current) : 'No buddy')]) +
+            `<div class="lite-detail-section" style="margin-top:-6px;">
+                <select id="liteBuddySel" style="width:100%;min-height:40px;border-radius:10px;padding:0 10px;font:inherit;">
+                    <option value="">No buddy</option>${opts}
+                </select>
+            </div>`;
+        const sel = box.querySelector('#liteBuddySel');
+        sel.addEventListener('change', async () => {
+            sel.disabled = true;
+            try {
+                const latest = await loadGuardFresh();
+                if (!latest) throw new Error('could not read buddy pairs');
+                latest.buddyPairs = latest.buddyPairs || {};
+                const pick = sel.value;
+                // Drop any pair that involves this camper or the new buddy, then add the new one.
+                const pairs = (latest.buddyPairs[bunk] || []).filter(p => p.indexOf(name) < 0 && (!pick || p.indexOf(pick) < 0));
+                if (pick) pairs.push([name, pick]);
+                latest.buddyPairs[bunk] = pairs;
+                await saveKV('campistryGuard', latest);
+                toast(pick ? `Buddy set: ${_lbl(pick)}` : 'Buddy cleared');
+            } catch (e) {
+                console.warn('[Lite] buddy save failed:', e?.message || e);
+                toast('Could not save buddy');
+            }
+            renderBuddyBox(name, c);
+        });
     }
 
     function camperDetailHTML(name, c) {
@@ -3328,6 +3394,7 @@
             </div>
             ${medBlock}
             ${sections.join('')}
+            <div id="liteBuddyBox"></div>
             ${notesBlock}`;
     }
 
