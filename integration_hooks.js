@@ -2170,6 +2170,18 @@
                 try { localStorage.removeItem(CONFIG.LOCAL_STORAGE_KEY); } catch (_) {}
                 try { localStorage.removeItem('campistry_settings_camp_id'); } catch (_) {}
                 try { window.LocalCacheIDB?.clear?.(); } catch (_) {}
+                // Same foreign-camp mismatch also invalidates these — they're
+                // global keys with no camp_id of their own (Snacks' product/
+                // sales cache, its bunk-picker cache, Link's own settings
+                // store), so a session that reaches this branch WITHOUT going
+                // through handleLogout() first (e.g. a stale tab still open
+                // when someone logs into a different camp on the same
+                // browser) would otherwise keep serving the previous camp's
+                // data on any page that reads them before its own cloud fetch
+                // resolves.
+                try { localStorage.removeItem('campistry_snacks_data'); } catch (_) {}
+                try { localStorage.removeItem('campistry_pos_bunks'); } catch (_) {}
+                try { localStorage.removeItem('campistry_link_v1'); } catch (_) {}
                 _localCache = {};
                 return true;
             }

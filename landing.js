@@ -172,6 +172,15 @@ function handleLogout() {
     localStorage.removeItem('campistryGlobalSettings');
     localStorage.removeItem('CAMPISTRY_LOCAL_CACHE');
     localStorage.removeItem('campDailyData_v1');
+    // These three are global keys with no camp_id scoping of their own —
+    // logging into a different camp in the same browser served the
+    // PREVIOUS camp's Snacks products/sales and Link camp name/settings
+    // until (if ever) a cloud fetch happened to overwrite them, since
+    // nothing else in the app ever clears or re-keys them.
+    localStorage.removeItem('campistry_snacks_data');
+    localStorage.removeItem('campistry_pos_bunks');
+    localStorage.removeItem('campistry_link_v1');
+    try { window.LocalCacheIDB && window.LocalCacheIDB.clear && window.LocalCacheIDB.clear(); } catch (e) {}
 
     const supabase = getSupabase();
     if (supabase) {
