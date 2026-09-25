@@ -34,11 +34,18 @@
 
     var DEFAULT_COLOR = '#2A7A35';
 
-    // Only raster data URLs. An SVG data URL can carry <script>, and these
-    // strings get interpolated straight into markup.
+    // A raster data: URL (kept for anything still stored inline — the
+    // watermark's own custom-image upload still works this way) OR an https
+    // URL into the camp-logos Storage bucket (migration 292 — the camp logo
+    // itself, since Dashboard > Profile). Scoped to that one bucket path
+    // rather than "any https URL" so this can't become a way to interpolate
+    // an arbitrary attacker-supplied URL into outgoing email/preview markup.
+    // An SVG data URL can carry <script>, and these strings get interpolated
+    // straight into markup, so data: URLs stay raster-only.
     function isSafeImage(s) {
-        return typeof s === 'string' &&
-            /^data:image\/(png|jpeg|jpg|gif|webp);base64,[A-Za-z0-9+/=]+$/.test(s);
+        if (typeof s !== 'string') return false;
+        if (/^data:image\/(png|jpeg|jpg|gif|webp);base64,[A-Za-z0-9+/=]+$/.test(s)) return true;
+        return /^https:\/\/[^\s"'<>]+\/storage\/v1\/object\/public\/camp-logos\/[^\s"'<>]+$/.test(s);
     }
     LinkBranding.isSafeImage = isSafeImage;
 
@@ -332,6 +339,13 @@
 
         return new Promise(function (resolve) {
             var img = new Image();
+            // The source can now be a cross-origin camp-logos Storage URL
+            // (migration 292) instead of always a same-origin data: URL —
+            // without this, drawing it to the canvas below taints it and
+            // toDataURL() throws instead of returning the composited PNG.
+            // The bucket is public and Supabase Storage sends a permissive
+            // CORS header on object reads, so this resolves cleanly.
+            img.crossOrigin = 'anonymous';
             img.onload = function () {
                 // Rotation needs headroom or the corners clip. Grow the canvas
                 // by the rotated bounding box of the source.

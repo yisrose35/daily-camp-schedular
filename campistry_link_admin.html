@@ -1176,7 +1176,7 @@
 <script src="campistry_broadcast_core.js?v=20260903-03"></script>
 <!-- Branding/watermark renderer — must load BEFORE link_data, which seeds and
      normalizes settings.branding through it on store load. -->
-<script src="campistry_link_branding.js?v=20260903-03"></script>
+<script src="campistry_link_branding.js?v=20260925-01"></script>
 <script src="campistry_link_data.js?v=20260923-22"></script>
 <script src="face_match_core.js?v=20260923-20"></script>
 <script src="campistry_face_shared.js?v=20260903-03"></script>
@@ -2187,7 +2187,14 @@ function _linkCampName() {
     return 'Camp';
 }
 // Only accept raster data URLs — an SVG data URL can carry <script>.
-function _isSafeImg(s) { return typeof s === 'string' && /^data:image\/(png|jpeg|jpg|gif|webp);base64,[A-Za-z0-9+\/=]+$/.test(s); }
+// Mirrors LinkBranding.isSafeImage — a data: URL (still used by the
+// watermark's own custom-image upload) or an https URL into the camp-logos
+// Storage bucket (migration 292), which is what the camp logo itself is now.
+function _isSafeImg(s) {
+    if (typeof s !== 'string') return false;
+    if (/^data:image\/(png|jpeg|jpg|gif|webp);base64,[A-Za-z0-9+\/=]+$/.test(s)) return true;
+    return /^https:\/\/[^\s"'<>]+\/storage\/v1\/object\/public\/camp-logos\/[^\s"'<>]+$/.test(s);
+}
 function _LB() { return window.LinkBranding || null; }
 function _linkBranding() {
     var st = _linkStore();

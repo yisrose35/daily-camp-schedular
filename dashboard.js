@@ -1086,21 +1086,52 @@
     // ========================================
     
     // ── Camp logo ────────────────────────────────────────────────────────────
-    // Stored in the same place the emails read their branding from
-    // (campistryLink.settings.branding.logo), so a logo set here appears at the
-    // top of every branded email the camp sends — no extra wiring per send.
-    var _dashLogoData; // undefined = unchanged, '' = remove, dataURL = new pick
+    // The URL is stored in the same place the emails read their branding from
+    // (campistryLink.settings.branding.logo), so a logo set here appears at
+    // the top of every branded email the camp sends — no extra wiring per
+    // send. The bytes themselves live in the camp-logos Storage bucket
+    // (migration 292) at a fixed path per camp (upsert — a logo has no
+    // history to keep), not inline as base64 in this JSON blob anymore.
+    var _dashLogoData; // undefined = unchanged, '' = remove, dataURL = new pick (pre-upload)
+    var _dashLogoExt = 'png';
     function _dashGetLogo(){
         try{ var gs=window.loadGlobalSettings?window.loadGlobalSettings():JSON.parse(localStorage.getItem('campGlobalSettings_v1')||'{}');
             return (gs&&gs.campistryLink&&gs.campistryLink.settings&&gs.campistryLink.settings.branding&&gs.campistryLink.settings.branding.logo)||''; }
         catch(e){ return ''; }
     }
-    function _dashSaveLogo(dataUrl){
+    // dataUrl: '' removes the logo; a data: URL uploads it to Storage first
+    // and stores the resulting public URL (cache-busted so a same-path
+    // overwrite doesn't keep serving a CDN-cached older image) instead of
+    // the raw bytes.
+    async function _dashSaveLogo(dataUrl){
         try{
+            var campId = campData?.id || (window.CampistryDB && window.CampistryDB.getCampId && window.CampistryDB.getCampId());
+            var finalUrl = '';
+            if (dataUrl && campId && window.supabase) {
+                var m = /^data:image\/(png|jpeg|jpg|gif|webp);base64,(.+)$/.exec(dataUrl);
+                if (m) {
+                    var ext = m[1] === 'jpeg' ? 'jpg' : m[1];
+                    var bytes = atob(m[2]);
+                    var arr = new Uint8Array(bytes.length);
+                    for (var i = 0; i < bytes.length; i++) arr[i] = bytes.charCodeAt(i);
+                    var path = campId + '/logo.' + ext;
+                    var { error: upErr } = await window.supabase.storage
+                        .from('camp-logos')
+                        .upload(path, arr, { contentType: 'image/' + m[1], upsert: true });
+                    if (upErr) { console.warn('[Dashboard] logo upload failed', upErr); return; }
+                    var { data: pub } = window.supabase.storage.from('camp-logos').getPublicUrl(path);
+                    finalUrl = pub && pub.publicUrl ? (pub.publicUrl + '?t=' + Date.now()) : '';
+                } else {
+                    // Already a URL (e.g. re-saving without touching the logo shouldn't
+                    // reach here, but fall back to storing whatever was passed rather
+                    // than silently dropping it).
+                    finalUrl = dataUrl;
+                }
+            }
             var gs=window.loadGlobalSettings?window.loadGlobalSettings():JSON.parse(localStorage.getItem('campGlobalSettings_v1')||'{}');
             var link=(gs&&gs.campistryLink)?gs.campistryLink:{};
             link.settings=link.settings||{}; link.settings.branding=link.settings.branding||{};
-            link.settings.branding.logo=dataUrl||'';
+            link.settings.branding.logo=finalUrl;
             if(window.saveGlobalSettings) window.saveGlobalSettings('campistryLink', link);
         }catch(e){ console.warn('[Dashboard] logo save failed', e); }
     }
@@ -1302,7 +1333,7 @@
             campName = newCampName;
 
             // Persist the logo (into the branding the emails read) if it changed.
-            if (_dashLogoData !== undefined) _dashSaveLogo(_dashLogoData);
+            if (_dashLogoData !== undefined) await _dashSaveLogo(_dashLogoData);
             if (typeof window._renderProfileLogoView === 'function') window._renderProfileLogoView();
 
             // Update displays
