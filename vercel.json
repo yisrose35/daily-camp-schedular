@@ -44,6 +44,28 @@
       ],
       "destination": "/pos",
       "permanent": false
+    },
+    {
+      "source": "/",
+      "has": [
+        {
+          "type": "host",
+          "value": "lite.campistry.org"
+        }
+      ],
+      "destination": "/lite",
+      "permanent": false
+    },
+    {
+      "source": "/((?!campistry_lite|campistry_reset).*\\.html)",
+      "has": [
+        {
+          "type": "host",
+          "value": "lite.campistry.org"
+        }
+      ],
+      "destination": "/lite",
+      "permanent": false
     }
   ],
   "rewrites": [
@@ -58,6 +80,10 @@
     {
       "source": "/pos",
       "destination": "/campistry_snacks_pos.html"
+    },
+    {
+      "source": "/lite",
+      "destination": "/campistry_lite.html"
     },
     {
       "source": "/reset",

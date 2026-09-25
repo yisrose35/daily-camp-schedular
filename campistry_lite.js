@@ -288,6 +288,14 @@
                 if (dash) dash.style.display = 'none';
             }
 
+            // Split enforcement: campistry.org's Lite is the office control
+            // panel (Flow/Me/Go/Health/Live/Link/Notes/Guard — all HEAD_ROLES
+            // apps); lite.campistry.org (and the native app, which bundles
+            // this same page) is the on-the-go counselor experience. Only
+            // gates in production/native — localhost and preview deploys stay
+            // open for testing regardless of host.
+            if (enforceLiteSplit()) return;
+
             wireChrome();
             initPickupAlerts();
 
@@ -322,6 +330,33 @@
 
     function isHeadStaff() { return HEAD_ROLES.includes(role); }
     function isCounselor() { return role === 'counselor'; }
+
+    // campistry.org's Lite (dashboard tile, Ctrl+Shift+T) is the office
+    // control panel — Flow/Me/Go/Health/Live/Link/Notes/Guard, HEAD_ROLES
+    // only. lite.campistry.org, and the native app (which bundles this same
+    // page into its own www/), is the on-the-go counselor experience — the
+    // single 'counselor' app. Neither role belongs in the other's context, so
+    // gate on whichever domain this page is actually running on. Only
+    // enforced on the real production domains/native build — localhost and
+    // Vercel preview deploys stay open for testing regardless of host, since
+    // those never carry the campistry.org apex or lite subdomain.
+    function enforceLiteSplit() {
+        var host = (window.location && window.location.hostname) || '';
+        var isNative = !!(window.Capacitor && window.Capacitor.isNativePlatform && window.Capacitor.isNativePlatform());
+        var onLiteDomain = /(^|\.)lite\.campistry\.org$/i.test(host);
+        var onMainDomain = /(^|\.)campistry\.org$/i.test(host) && !onLiteDomain;
+        if (!isNative && !onLiteDomain && !onMainDomain) return false; // dev/preview — no gate
+        var onTheGo = isNative || onLiteDomain;
+        if (onTheGo && !isCounselor()) {
+            setSplash('This is the on-the-go app for counselors. Head office staff should use Lite from campistry.org instead.', true);
+            return true;
+        }
+        if (!onTheGo && isCounselor()) {
+            setSplash('Please continue in the Campistry Lite app, or visit lite.campistry.org.', true);
+            return true;
+        }
+        return false;
+    }
 
     // ════════════════════════════════════════════════════════════════════
     // DATA
