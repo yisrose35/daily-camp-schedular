@@ -1657,6 +1657,26 @@
         try { window.scrollTo({ top: 0 }); } catch (_) {}
     }
 
+    // "What counselors can see in Lite" moved here from Me's Hiring page —
+    // Lite's office view is the control panel FOR the on-the-go counselor
+    // experience, so a setting that only ever affects what a counselor's
+    // phone shows belongs here, not in Me. Lite already READ
+    // campistryMe.counselorVisibility (camp.visibility, set at load time) to
+    // enforce it for counselors; these two just add the write side. Named
+    // apart from `renderSettings`'s own local `camp` (a display-name string
+    // that shadows the module-level `camp` data object for that function) so
+    // they can safely reach the real data object.
+    function _liteVisPolicy() {
+        const V = window.CampistryVisibility;
+        return V ? (camp.visibility || V.defaults()) : {};
+    }
+    async function _liteSaveVisibility(pol) {
+        camp.visibility = pol;
+        camp.me = camp.me || {};
+        camp.me.counselorVisibility = pol;
+        await saveKV('campistryMe', camp.me);
+    }
+
     async function renderSettings() {
         const v = document.getElementById('view-settings');
         const Bio = window.CampistryLiteBio;
@@ -1735,6 +1755,22 @@
                 </div>
             </div>
 
+            ${isHeadStaff() && window.CampistryVisibility ? (function(){
+                const V = window.CampistryVisibility, pol = _liteVisPolicy(), items = V.toggleable();
+                const onCount = items.filter(f => V.isVisible(pol, f.key)).length;
+                const rows = items.map((f, i) => `
+                    <div class="lite-set-row" data-vis-key="${esc(f.key)}">
+                        <div class="lite-set-row-main"><div class="lite-set-row-title">${esc(f.label)}</div></div>
+                        <span class="lite-toggle${V.isVisible(pol, f.key) ? ' on' : ''}" data-vis-toggle="${esc(f.key)}"></span>
+                    </div>${i < items.length - 1 ? '<div class="lite-set-divider"></div>' : ''}`).join('');
+                return `
+                    <div class="lite-set-section-label">What counselors can see in Lite</div>
+                    <div class="lite-card">
+                        <div class="lite-set-row-sub" style="padding-bottom:10px;">${onCount} of ${items.length} details shared · applies to every counselor. Name, bunk, grade and division are always visible.</div>
+                        ${rows}
+                    </div>`;
+            })() : ''}
+
             ${isHeadStaff() ? '<a href="dashboard.html" class="lite-link-row">Open full Campistry ↗</a>' : ''}
             <button class="lite-link-row danger" id="liteSettingsSignout">Sign out</button>
             <div class="lite-set-version">Campistry Lite${camp ? ' · ' + camp : ''}${otaVersion ? ' · build ' + esc(otaVersion) : ''}</div>`;
@@ -1796,6 +1832,25 @@
             }
             renderSettings();
         });
+
+        if (isHeadStaff() && window.CampistryVisibility) {
+            const V = window.CampistryVisibility;
+            v.querySelectorAll('[data-vis-toggle]').forEach(t => {
+                t.addEventListener('click', async () => {
+                    haptic();
+                    const key = t.getAttribute('data-vis-toggle');
+                    const pol = Object.assign({}, _liteVisPolicy());
+                    pol[key] = !V.isVisible(pol, key);
+                    try {
+                        await _liteSaveVisibility(pol);
+                    } catch (e) {
+                        console.warn('[Lite] visibility save failed:', e?.message || e);
+                        toast('Could not save');
+                    }
+                    renderSettings();
+                });
+            });
+        }
     }
 
     function wireChrome() {

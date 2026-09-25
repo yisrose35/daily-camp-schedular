@@ -5146,7 +5146,13 @@ function _renderHiringPane(){
         +'</div></div>'
         +'</div></div>';
 
-    h+=_visibilityPanelHTML();
+    // "What counselors can see in Campistry Lite" moved to Lite's own
+    // Settings screen (campistry_lite.js renderSettings) — Lite's office
+    // view is the control panel FOR the on-the-go counselor experience, so a
+    // setting that only affects a counselor's phone belongs there. Me still
+    // loads/saves counselorVisibility as part of campistryMe (see `me.js`
+    // load/save near counselorVisibility=... above) purely as a pass-through
+    // so its own saves never clobber whatever Lite last wrote.
 
     // Hired staff intentionally drop OFF the "in progress" list the moment
     // they're hired (buildPipelineList() excludes status==='hired') — this
@@ -10694,57 +10700,12 @@ function _staffNextStage(status){
     return STAFF_ADVANCE_ORDER[idx+1];
 }
 
-// ── What counselors can see in Campistry Lite ─────────────────────────
-// The head counselor's call, per camp. Catalogue lives in
-// campistry_visibility.js so Lite enforces exactly this list.
-var _visOpen=false;
-function _vis(){ return (window.CampistryVisibility||null); }
-function visibilityPolicy(){
-    var V=_vis(); if(!V)return {};
-    return counselorVisibility||V.defaults();
-}
-function toggleVisibilityPanel(){ _visOpen=!_visOpen; _refreshPplIfActive(); }
-function setCounselorVisibility(key,on){
-    var V=_vis(); if(!V)return;
-    if(!counselorVisibility)counselorVisibility=V.defaults();
-    counselorVisibility[key]=!!on;
-    save();
-    _refreshPplIfActive();
-}
-function resetCounselorVisibility(){
-    var V=_vis(); if(!V)return;
-    counselorVisibility=V.defaults();
-    save(); _refreshPplIfActive();
-    toast('Reset to defaults');
-}
-function _visibilityPanelHTML(){
-    var V=_vis();
-    if(!V)return '';
-    var pol=visibilityPolicy();
-    var items=V.toggleable();
-    var onCount=items.filter(function(f){return V.isVisible(pol,f.key)}).length;
-    var h='<div style="background:#fff;border:1px solid var(--s200);border-radius:var(--r);margin-bottom:14px;overflow:hidden">';
-    h+='<button style="width:100%;display:flex;align-items:center;gap:10px;padding:12px 16px;background:none;border:none;cursor:pointer;text-align:left" onclick="CampistryMe.toggleVisibilityPanel()">';
-    h+='<div style="flex:1"><div style="font-size:.85rem;font-weight:700;color:var(--s700)">What counselors can see in Campistry Lite</div>';
-    h+='<div style="font-size:.76rem;color:var(--s500);margin-top:2px">'+onCount+' of '+items.length+' details shared · applies to every counselor</div></div>';
-    h+='<span style="font-size:.8rem;color:var(--s400)">'+(_visOpen?'Hide':'Change')+'</span></button>';
-    if(_visOpen){
-        h+='<div style="padding:0 16px 14px">';
-        h+='<p style="font-size:.76rem;color:var(--s500);margin:0 0 10px">Counselors always see a camper\'s name, bunk, grade and division — they can\'t do the job without it. Everything below is your call. Anything switched off is never sent to their phone, not just hidden.</p>';
-        items.forEach(function(f){
-            var on=V.isVisible(pol,f.key);
-            h+='<label style="display:flex;align-items:center;gap:10px;padding:7px 0;border-bottom:1px solid var(--s100);font-size:.84rem;cursor:pointer">'
-              +'<input type="checkbox" '+(on?'checked':'')+' onchange="CampistryMe.setCounselorVisibility(\''+je(f.key)+'\',this.checked)">'
-              +'<span style="flex:1">'+esc(f.label)+'</span>'
-              +'<span style="font-size:.7rem;font-weight:700;color:'+(on?'var(--ok)':'var(--s400)')+'">'+(on?'Shared':'Hidden')+'</span>'
-              +'</label>';
-        });
-        h+='<button class="me-btn me-btn--ghost me-btn--sm" style="margin-top:10px" onclick="CampistryMe.resetCounselorVisibility()">Reset to defaults</button>';
-        h+='</div>';
-    }
-    h+='</div>';
-    return h;
-}
+// counselorVisibility itself (declared above near line 241, loaded/saved
+// alongside the rest of campistryMe) stays as a pure pass-through — Me no
+// longer has any UI to view or edit it, only Lite does (campistry_lite.js
+// renderSettings), but Me must keep round-tripping the value unchanged
+// whenever it saves campistryMe for any other reason, or its own save would
+// silently overwrite whatever Lite last wrote.
 
 // A handful of actions (advance/decline stage, cycle a reference, save a
 // contract, place on a bunk) are shared by BOTH the still-in-pipeline
@@ -24931,8 +24892,6 @@ window.CampistryMe={
     // Hiring → bunk placement, so a hired applicant becomes a reachable
     // counselor without anyone retyping their email.
     // What counselors may see in Lite — set here, enforced there.
-    visibilityPolicy:visibilityPolicy,toggleVisibilityPanel:toggleVisibilityPanel,
-    setCounselorVisibility:setCounselorVisibility,resetCounselorVisibility:resetCounselorVisibility,
     hiredStaff:hiredStaff,allBunkNames:allBunkNames,bunksForStaffEmail:bunksForStaffEmail,
     assignHiredToBunk:assignHiredToBunk,unassignHiredFromBunk:unassignHiredFromBunk,
     fillBunkStaffFromHired:fillBunkStaffFromHired,
