@@ -189,10 +189,16 @@
         .lk-hamburger { display:flex; width:36px; height:36px; border:1px solid var(--slate-200); border-radius:var(--radius-sm); background:#fff; cursor:pointer; flex-direction:column; align-items:center; justify-content:center; gap:4px; padding:0; }
         .lk-hamburger span { display:block; width:16px; height:2px; background:var(--slate-600); border-radius:1px; }
 
-        /* Camp name / Live status / avatar move inside the sidebar (opened via
-           the hamburger) instead of permanently occupying the top bar. */
-        .lk-sidebar-identity { display:flex; align-items:center; gap:10px; padding:8px 10px 16px; margin-bottom:8px; border-bottom:1px solid rgba(15,23,42,.08); }
-        .lk-sidebar-identity .lk-camp-name { padding-left:0; border-left:none; font-size:.85rem; color:var(--slate-700); font-weight:600; flex:1; min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+        /* Dark theme for the menu — matches how it reads once it's an overlay
+           you open rather than a permanently-docked light rail; also just a
+           tighter fit (menu content is short enough that it no longer needs
+           its own scrollbar). */
+        .lk-sidebar { background:#0f172a; padding-top:8px; }
+        .lk-nav-label { color:#64748b; padding:14px 16px 6px; }
+        .lk-nav-item { color:#cbd5e1; height:42px; }
+        .lk-nav-item:hover { background:rgba(255,255,255,.07); }
+        .lk-nav-item.active { background:rgba(255,255,255,.12); color:#fff; }
+        .lk-nav-divider { background:rgba(255,255,255,.09); margin:6px 16px; }
 
         /* Top-bar search — proxies into whichever page's own search box is
            active (Messages/Forms today), so the freed header space stays
@@ -237,6 +243,7 @@
         <a href="dashboard.html" class="lk-logo">
             <img src="Link_clean.png" alt="Campistry Link" style="height:32px;width:auto;display:block;">
         </a>
+        <span class="lk-camp-name" id="campNameDisplay">Camp</span>
     </div>
     <div class="lk-header-right">
         <div data-quick-switch-mount="link"></div>
@@ -255,11 +262,6 @@
      hamburger) instead of permanently sitting in the top bar, freeing that
      row for search and giving the page itself the full width. -->
 <nav class="lk-sidebar" id="sidebar">
-    <div class="lk-sidebar-identity">
-        <div class="lk-avatar" id="adminAvatar">CA</div>
-        <span class="lk-camp-name" id="campNameDisplay">Camp</span>
-        <span class="lk-sync-badge" id="syncBadge">Live</span>
-    </div>
     <div class="lk-sidebar-nav">
         <div class="lk-nav-label">Overview</div>
         <button class="lk-nav-item active" data-page="dashboard" onclick="nav('dashboard')">
@@ -1930,10 +1932,7 @@ function renderDash() {
     var struct = cl.data.getStructure();
     var msgs   = cl.msg.getBroadcasts();
 
-    var goSetup; try { goSetup = JSON.parse(localStorage.getItem('campistry_go_data') || '{}').setup || {}; } catch(e) { goSetup = {}; }
-    var cn = goSetup.campName || '';
-    if (!cn) try { cn = JSON.parse(localStorage.getItem('campGlobalSettings_v1') || '{}').campName || ''; } catch(e) {}
-    document.getElementById('campNameDisplay').textContent = cn;
+    document.getElementById('campNameDisplay').textContent = _linkCampName();
 
     var rc = Object.keys(roster).length;
     var dc = Object.keys(struct).length;
@@ -2168,9 +2167,24 @@ function _linkStore() {
     } catch (e) { /* fall back to whatever the local store already has */ }
     return st;
 }
+// Dashboard > Profile is the one place a camp's name is actually edited
+// (dashboard.js writes it to BOTH gs.app1.campName and its own top-level
+// campName key via saveGlobalSettings('campName', ...), both cloud-synced).
+// This used to prefer campistry_go_data's own cached copy first, which goes
+// stale the moment the name changes on Dashboard without Go being reopened
+// — showing an old camp name here indefinitely. Read the authoritative
+// source first now, Go's cache only as a last resort.
 function _linkCampName() {
-    try { var s = JSON.parse(localStorage.getItem('campGlobalSettings_v1') || '{}'); return s.camp_name || s.campName || 'Camp'; }
-    catch (e) { return 'Camp'; }
+    try {
+        var gs = (typeof window.loadGlobalSettings === 'function') ? window.loadGlobalSettings() : JSON.parse(localStorage.getItem('campGlobalSettings_v1') || '{}');
+        var name = gs.campName || (gs.app1 && gs.app1.campName) || '';
+        if (name) return name;
+    } catch (e) {}
+    try {
+        var goSetup = JSON.parse(localStorage.getItem('campistry_go_data') || '{}').setup || {};
+        if (goSetup.campName) return goSetup.campName;
+    } catch (e) {}
+    return 'Camp';
 }
 // Only accept raster data URLs — an SVG data URL can carry <script>.
 function _isSafeImg(s) { return typeof s === 'string' && /^data:image\/(png|jpeg|jpg|gif|webp);base64,[A-Za-z0-9+\/=]+$/.test(s); }
@@ -2268,7 +2282,7 @@ function openLinkBranding() {
     ov.style.cssText = 'position:fixed;inset:0;z-index:1200;background:rgba(15,23,42,.5);display:flex;align-items:center;justify-content:center;padding:16px;';
     var logoPrev = _isSafeImg(b.logo)
         ? '<img id="lbLogoImg" src="' + b.logo + '" alt="logo" style="max-height:70px;max-width:200px;object-fit:contain;border:1px solid var(--border-light);border-radius:8px;padding:6px;background:#fff;">'
-        : '<div id="lbLogoImg" style="font-size:.8rem;color:var(--text-muted);">No logo yet — set one on Dashboard &gt; Profile, or upload one just for messages below.</div>';
+        : '<div id="lbLogoImg" style="font-size:.8rem;color:var(--text-muted);">No logo yet — set one on Dashboard &gt; Profile.</div>';
     var w = b.watermark || {};
     function opt(v, label, cur) { return '<option value="' + v + '"' + (cur === v ? ' selected' : '') + '>' + label + '</option>'; }
 
@@ -2283,10 +2297,7 @@ function openLinkBranding() {
             // ── left: controls ──
             '<div style="flex:1 1 380px;min-width:300px;padding:18px 20px;">' +
                 '<div class="lk-field"><label>Logo</label><div style="margin-bottom:8px;">' + logoPrev + '</div>' +
-                    (_isSafeImg(b.logo) ? '<div style="font-size:.71rem;color:var(--text-muted);margin-bottom:6px;">This is your camp logo from Dashboard &gt; Profile. Uploading a new one here replaces it everywhere, including there.</div>' : '') +
-                    '<input type="file" id="lbLogoFile" accept="image/png,image/jpeg,image/gif,image/webp" onchange="_lbUploadLogo(this)" style="font-size:.82rem;">' +
-                    (_isSafeImg(b.logo) ? ' <button class="btn btn-ghost btn-sm" style="color:#EF4444;" onclick="_lbRemoveLogo()">Remove</button>' : '') +
-                    '<div style="font-size:.7rem;color:var(--text-muted);margin-top:4px;">PNG, JPG, GIF or WebP, under 500&nbsp;KB.</div></div>' +
+                    '<div style="font-size:.71rem;color:var(--text-muted);">Set once on Dashboard &gt; Profile — it\'s used everywhere a camp logo appears, messages included, so there\'s only one to keep up to date. <a href="dashboard.html" target="_blank" style="color:var(--link-color);font-weight:600;">Open Dashboard →</a></div></div>' +
 
                 '<div style="display:flex;gap:12px;margin-top:6px;flex-wrap:wrap;">' +
                     '<div class="lk-field" style="flex:0 0 110px;"><label>Brand color</label><input type="color" id="lbColor" value="' + esc(b.brandColor) + '" oninput="_lbTouch()" style="width:100%;height:38px;border:1px solid var(--border-light);border-radius:8px;background:#fff;cursor:pointer;"></div>' +
@@ -2416,26 +2427,6 @@ function _lbDrawSample() {
     });
 }
 
-function _lbUploadLogo(input) {
-    var file = input && input.files && input.files[0]; if (!file) return;
-    if (file.size > 500 * 1024) { toast('Logo must be under 500 KB'); input.value = ''; return; }
-    var reader = new FileReader();
-    reader.onload = function (e) {
-        var url = e.target.result;
-        if (!_isSafeImg(url)) { toast('Unsupported image — use PNG, JPG, GIF or WebP'); return; }
-        var b = _linkBranding(); b.logo = url;
-        if (_linkSaveBranding(b)) {
-            if (_lbDraft) _lbDraft.logo = url;
-            var img = document.getElementById('lbLogoImg');
-            if (img) { var n = document.createElement('img'); n.id = 'lbLogoImg'; n.src = url; n.alt = 'logo'; n.style.cssText = 'max-height:70px;max-width:200px;object-fit:contain;border:1px solid var(--border-light);border-radius:8px;padding:6px;background:#fff;'; img.replaceWith(n); }
-            _lbTouch();
-            updateComposePreview();
-            toast('Logo uploaded');
-        }
-    };
-    reader.onerror = function () { toast('Could not read that file'); };
-    reader.readAsDataURL(file);
-}
 function _lbUploadWatermark(input) {
     var file = input && input.files && input.files[0]; if (!file) return;
     if (file.size > 500 * 1024) { toast('Watermark image must be under 500 KB'); input.value = ''; return; }
@@ -2448,10 +2439,6 @@ function _lbUploadWatermark(input) {
     };
     reader.onerror = function () { toast('Could not read that file'); };
     reader.readAsDataURL(file);
-}
-function _lbRemoveLogo() {
-    var b = _linkBranding(); b.logo = '';
-    if (_linkSaveBranding(b)) { closeLinkBranding(); openLinkBranding(); updateComposePreview(); toast('Logo removed'); }
 }
 function _lbSave() {
     if (!_lbDraft) { closeLinkBranding(); return; }
