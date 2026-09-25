@@ -83,6 +83,30 @@
     // =========================================================================
     // PERSISTENCE
     // =========================================================================
+    // The camp logo can be set from Dashboard > Profile, which writes
+    // straight to camp_state_kv's campistryLink.settings.branding.logo. This
+    // module's own _store is a same-browser localStorage cache (campistry_
+    // link_v1) that never otherwise re-reads that key, so a logo saved from
+    // Dashboard would sit correctly in the cloud while _store kept its own,
+    // older (often blank) copy in memory. That alone was survivable — until
+    // ANYTHING calls saveStore() for an unrelated reason (a draft, a read
+    // receipt) afterward: saveStore() persists the WHOLE _store.settings
+    // object, so it would silently overwrite the just-saved cloud logo back
+    // to whatever stale value _store still had. Pulling the cloud logo into
+    // _store itself — not just into a transient read elsewhere — closes
+    // that: every future saveStore() call carries the real value forward
+    // instead of regressing it.
+    function _syncLogoFromCloud() {
+        try {
+            var gs = (typeof window !== 'undefined' && typeof window.loadGlobalSettings === 'function') ? window.loadGlobalSettings() : null;
+            var cloudLogo = gs && gs.campistryLink && gs.campistryLink.settings && gs.campistryLink.settings.branding && gs.campistryLink.settings.branding.logo;
+            var LB = (typeof window !== 'undefined' && window.LinkBranding) || null;
+            if (cloudLogo && (!LB || LB.isSafeImage(cloudLogo)) && _store.settings && _store.settings.branding && _store.settings.branding.logo !== cloudLogo) {
+                _store.settings.branding.logo = cloudLogo;
+            }
+        } catch (e) { /* leave _store as-is */ }
+    }
+
     function loadStore() {
         try {
             var raw = localStorage.getItem(LINK_STORE);
@@ -107,10 +131,20 @@
                 }
             }
         } catch(e) { console.warn('[Link] Store load error:', e); }
+        _syncLogoFromCloud();
     }
+    // Cloud hydration finishes asynchronously, often after loadStore()'s own
+    // (synchronous, local-only) initial read — re-sync once the real value
+    // is actually available, same reasoning dashboard.js applies to its own
+    // profile-logo view for the identical race.
+    if (typeof window !== 'undefined') window.addEventListener('campistry-cloud-hydrated', _syncLogoFromCloud);
 
     function saveStore() {
         try {
+            // Always carry the freshest known logo forward before persisting
+            // — see _syncLogoFromCloud's comment for why this can't just be
+            // done once at load time.
+            _syncLogoFromCloud();
             _store.updatedAt = new Date().toISOString();
             localStorage.setItem(LINK_STORE, JSON.stringify(_store));
             // Sync settings/templates/drafts to camp_state_kv — NOT the
